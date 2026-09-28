@@ -9,6 +9,14 @@
 // authorize URL; `completeSecretOAuth` turns the pending attempt and a code into a `SecretRecord`.
 // The host (secret/durable-object.ts) signs the `state`, keeps the pending attempt and runs these.
 //
+// A CLIENT IN THE CLEAR passes `clientId` and, for a confidential client, `clientSecret`: the secret
+// itself, or one placeholder naming the secret that holds it, as egress spells it
+// (`getSecret("/secrets/<name>")`, or with `{ field }`). An agent that never handles a secret
+// collects the client secret into its own secret and passes the placeholder. The pending attempt
+// and the record keep the placeholder, never the value; the facet resolves it at the code exchange
+// and at every refresh (secrets.ts `clientSecretReferenceOf`), so a rotation there takes effect at
+// the next one.
+//
 // AN INTEGRATION'S CONNECT (src/integrations/) names whose app instead of passing a client in the
 // clear: `client: { platform: "slack" }` is the deployment's own (APP_CONFIG `integrations.<provider>`,
 // read inside the secret's facet and never copied into the record — the record holds the tokens, and
@@ -25,6 +33,8 @@ import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { consentAccountRefusal } from "./integrations/rules.ts";
 import {
   clientAuthOf,
+  clientSecretAsHeld,
+  clientSecretReferenceOf,
   isRecord,
   oauthTokenRequest,
   oauthTokensOf,
@@ -41,7 +51,7 @@ export type NormalizedSecretOAuthOptions = {
   tokenEndpoint: string;
   /** "" with `client`: the host resolves it. */
   clientId: string;
-  /** "" for a public client, and with `client`. */
+  /** "" for a public client, and with `client`. A placeholder stays one here and in the record. */
   clientSecret: string;
   client: SecretOAuthClient | null;
   clientAuth: ClientAuth;
@@ -131,11 +141,13 @@ export function normalizeSecretOAuth(
   const extra: Record<string, string> = {};
   if (isRecord(options.extra))
     for (const [key, value] of Object.entries(options.extra)) extra[key] = String(value);
+  const clientSecret = typeof options.clientSecret === "string" ? options.clientSecret : "";
+  clientSecretReferenceOf(clientSecret); // a placeholder among other text is refused here
   return {
     authorizationEndpoint: authorizationEndpoint.href,
     tokenEndpoint: tokenEndpoint.href,
     clientId: client ? "" : String(options.clientId),
-    clientSecret: typeof options.clientSecret === "string" ? options.clientSecret : "",
+    clientSecret,
     client,
     clientAuth: clientAuthOf(options.clientAuth),
     ...(typeof options.scope === "string" && options.scope && { scope: options.scope }),
@@ -198,7 +210,9 @@ export async function beginSecretOAuth(
 /** The code exchange: the pending attempt + the provider's code → the secret's record, with the
  *  `oauth-refresh-token` strategy pointing at the same token endpoint. `credentials` are the client's
  *  as the host resolved them (by default the ones passed in the clear), and `kept` the material the secret already holds that stays beside the
- *  tokens (a project's own app's). The deployment's client (`{ platform }`) is never written into
+ *  tokens (a project's own app's). `clientSecretOf` is what the exchange sends for the client
+ *  secret: the host resolves a placeholder there, and the record keeps the placeholder. The
+ *  deployment's client (`{ platform }`) is never written into
  *  the record: its tokens alone, and a refresh — when the provider issued a refresh token — that
  *  names the same client. */
 export async function completeSecretOAuth(
@@ -210,13 +224,14 @@ export async function completeSecretOAuth(
     clientSecret: pending.options.clientSecret,
     kept: {},
   },
+  clientSecretOf = clientSecretAsHeld,
 ): Promise<SecretRecord> {
   const { options } = pending;
   const response = await fetchFn(
     oauthTokenRequest({
       tokenEndpoint: options.tokenEndpoint,
       clientId: credentials.clientId,
-      clientSecret: credentials.clientSecret,
+      clientSecret: await clientSecretOf(credentials.clientSecret, options.tokenEndpoint),
       clientAuth: options.clientAuth,
       params: {
         grant_type: "authorization_code",

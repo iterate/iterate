@@ -21,7 +21,9 @@
 // `secret/deleted`, on this path and cross-posted to the owner's root) are the built-in's, attributed
 // to the caller — a facet's own appends speak for the project, so they are not made here.
 // `beginOAuth` keeps the pending attempt and hands back the authorize URL; `completeOAuth` exchanges
-// the code into the record (secret-oauth.ts). The deployment's own app at a provider (an integration's
+// the code into the record (secret-oauth.ts). A client secret another of the owner's secrets holds is
+// read from that secret's facet at the exchange and at every refresh (`clientSecretFor`), never
+// stored here. The deployment's own app at a provider (an integration's
 // `client: { platform }`, APP_CONFIG `integrations.<provider>`) is attached here, where APP_CONFIG is,
 // and only ever toward that app's own provider; a project's own app is this secret's material. The
 // two facts this facet appends itself, best-effort:
@@ -37,7 +39,7 @@ import { createAppAuth } from "@octokit/auth-app";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
 import type { SecretHmacVerification, SecretMaterial, SecretRefresh } from "iterate/api";
-import { codedError, jsonEqual, reportIssue } from "iterate/lib";
+import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
   appConfigOf,
@@ -45,6 +47,7 @@ import {
   sessionSigningSecretOf,
   type AppConfigEnv,
 } from "../app-config.ts";
+import { contextStub } from "../context-stub.ts";
 import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
 import { DROPPED_CLOSE_CODE, relayedCloseCode } from "../context/websocket-close.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -71,6 +74,7 @@ import {
   type SecretOAuthState,
 } from "../secret-oauth.ts";
 import {
+  clientSecretReferenceOf,
   isRecord,
   LEND_USE_HEADER,
   LENT_AS_HEADER,
@@ -81,6 +85,7 @@ import {
   SecretRefused,
   refreshSecretMaterial,
   SECRET_FRAMES_HEADER,
+  secretMaterialStringOf,
   secretPathsIn,
   signLendUse,
   substituteProjectSecrets,
@@ -170,9 +175,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
 > {
   /** The secret's READS alone — whether material was set and whether it was deleted, by the offsets
    *  of the facts that say so. Everything else here is the platform's: `write`, `clear`,
-   *  `beginOAuth`, `completeOAuth` and `verifyHmac` are `itx.secrets`'s (context/built-ins.ts, whose
-   *  verbs append the attributed facts), `fetch` is egress's and `exportForProjectSeed` the operator's
-   *  native RPC — each reaches this facet through the facet host's platform entry. */
+   *  `beginOAuth`, `completeOAuth`, `verifyHmac` and `clientSecretFor` are `itx.secrets`'s
+   *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
+   *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
+   *  host's platform entry. */
   static override publicMethods = ["snapshot", "liveSnapshot", "waitUntilProcessed"];
 
   processor = new SecretProcessor();
@@ -508,7 +514,9 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       exp: Date.now() + SECRET_OAUTH_TTL_MS,
       next: options.next,
     };
-    const { clientId } = await this.#oauthClientOf(options);
+    const { clientId, clientSecret } = await this.#oauthClientOf(options);
+    // a placeholder that cannot resolve is refused now, before a human is sent to consent
+    await this.#clientSecretOf(clientSecret, options.tokenEndpoint);
     const { pending, authorizationUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
@@ -597,6 +605,69 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     };
   }
 
+  /** THE CLIENT SECRET AS SENT to `tokenEndpoint` by the code exchange and every refresh: the one
+   *  held, or, when it is a placeholder (secrets.ts `clientSecretReferenceOf`), the value the secret
+   *  it names holds now. That secret is under this one's owner, never this one, and answers only
+   *  for an origin it is pinned to (`clientSecretFor`). The value is read at each request and
+   *  stored nowhere here, so a rotation takes effect at the next one. */
+  readonly #clientSecretOf = async (clientSecret: string, tokenEndpoint: string) => {
+    const reference = clientSecretReferenceOf(clientSecret);
+    if (!reference) return clientSecret;
+    const { context, path } = this.#address();
+    if (reference.path === path)
+      throw codedError(
+        "INVALID_INPUT",
+        `secrets: the client secret getSecret("${reference.path}") names ${path} itself — collect the client secret into a secret of its own`,
+      );
+    const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
+    const owner = resourceScope(projectId, contextPath);
+    const address = DurableObjectNameCodec.address({
+      projectId,
+      path: resolveContextPath(owner.rootPath, `.${reference.path}`),
+    });
+    const input = { origin: new URL(tokenEndpoint).origin, field: reference.field };
+    // The platform-only built-in answers the named secret's facet's `clientSecretFor`: a string.
+    return (await contextStub(this.env.ITERATE_CONTEXT, address, "secret.client-secret").invoke(
+      ["itx", "builtins", "secrets", ["clientSecretFor", reference.path, input]],
+      [],
+      { principal: null, platform: true },
+    )) as string;
+  };
+
+  /** A CLIENT SECRET THIS SECRET HOLDS, for another secret's token request to `origin`
+   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`): the value, or the
+   *  string at `field` of a JSON one, while `origin` is in the pin, which binds this use as it binds
+   *  every other. Only material of its own: a borrowed secret is refused. Never in `publicMethods`. */
+  async clientSecretFor(input: { origin: string; field?: string }): Promise<string> {
+    const { path } = this.#address();
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored)
+      throw codedError(
+        "INVALID_INPUT",
+        (await this.ctx.storage.get<Borrowed>("borrowed"))
+          ? `secrets: ${path} is borrowed — a client secret is one of the owner's own secrets`
+          : `secrets: ${path} holds no secret — collect the client secret there first (itx.secrets.collectFromUser)`,
+      );
+    if (!originPinned(input.origin, stored.record.urls))
+      throw codedError(
+        "INVALID_INPUT",
+        `secrets: the secret ${path} is pinned to ${stored.record.urls.join(", ")}, not ${input.origin} — the token endpoint's origin — so it is never sent there as a client secret`,
+      );
+    const record = await this.#opened(stored);
+    await this.#assertInstallationRouted(record.refresh);
+    await this.#assertWorkspaceNotMoved(record.routedAccount);
+    const value = secretMaterialStringOf(record.material, input.field);
+    if (value) return value;
+    throw codedError(
+      "INVALID_INPUT",
+      input.field
+        ? `secrets: ${path} has no string at field "${input.field}"`
+        : typeof record.material === "string"
+          ? `secrets: ${path} is empty`
+          : `secrets: ${path} is a JSON object: name its field, getSecret("${path}", { field: "…" })`,
+    );
+  }
+
   /** OAUTH, step two (the callback, through `itx.secrets.completeOAuth` on this path): the code for
    *  the pending attempt the nonce names → the exchange → the record, as a write. A stale or foreign
    *  callback (a back button, an older authorize URL, a replay with a junk code) fails without
@@ -658,6 +729,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         return response;
       },
       credentials,
+      this.#clientSecretOf,
     );
     const { client } = pending.options;
     const slackTeam =
@@ -1030,7 +1102,13 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
           source: refresh.source,
           material: record.material,
         });
-      else next = await refreshSecretMaterial(refresh, record.material, pinnedDispatch);
+      else
+        next = await refreshSecretMaterial(
+          refresh,
+          record.material,
+          pinnedDispatch,
+          this.#clientSecretOf,
+        );
     } catch (error) {
       await this.#fact({
         type: "events.iterate.com/secret/refreshed",

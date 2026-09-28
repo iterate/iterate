@@ -409,6 +409,52 @@ test("beginOAuth, confidential client, in a catalogued project: authorize URL ou
   expect(log).not.toContain("access_token");
 });
 
+// THE AGENT'S WAY: the client secret never passes through the caller. It is collected into a secret
+// of its own, pinned to the token endpoint's origin, and `beginOAuth` names it by placeholder; the
+// platform reads it from there at the exchange and at every refresh.
+test("beginOAuth, confidential client whose secret another secret holds (a getSecret placeholder, client_secret_post): the exchange and the refresh send the held value", async () => {
+  const slug = freshDnsSafeProjectSlug("secrets-connect-held");
+  const projectMember = { email: `${slug}@example.com` };
+  const projectId = await registerProject(slug, projectMember);
+  const itx = openItx(projectId);
+  const petshop = petshopBaseUrl();
+  const { authorization_endpoint: authorizationEndpoint, token_endpoint: tokenEndpoint } =
+    await petshopAuthorizationServer();
+  const client = await petshopMintClient();
+  await itx.secrets.set("/secrets/petshop-client-secret", client.clientSecret, {
+    urls: [petshop],
+  });
+
+  const { authorizationUrl } = await itx.secrets.beginOAuth("/secrets/petshop", {
+    authorizationEndpoint,
+    tokenEndpoint,
+    clientId: client.clientId,
+    clientSecret: 'getSecret("/secrets/petshop-client-secret")',
+    clientAuth: "client_secret_post",
+    scope: "pets",
+    urls: [petshop],
+  });
+  const authorize = new URL(authorizationUrl);
+  authorize.searchParams.set("user", "ada");
+  const consent = await fetch(authorize, { redirect: "manual" });
+  const back = new URL(consent.headers.get("location")!);
+  const member = {
+    headers: { authorization: `Bearer ${(await oauthSession(projectId, projectMember)).token}` },
+  };
+  const done = await fetch(back, member);
+  expect(done, await done.clone().text()).toMatchObject({ status: 200 });
+
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({
+    status: 200,
+    body: { sub: "ada", clientId: client.clientId },
+  });
+  await petshopExpireTokens(client.clientId, "ada");
+  expect(await bearerCall(itx, "/secrets/petshop", "/api/me")).toMatchObject({ status: 200 });
+  expect(await refreshedFacts(itx.cd("/secrets/petshop"))).toEqual([
+    { kind: "oauth-refresh-token", ok: true },
+  ]);
+});
+
 // THE PUBLIC CLIENT: no secret anywhere — the provider registered the platform's callback as the one
 // redirect URI, PKCE alone proves the exchange, and every later refresh identifies the client with
 // `client_id` in the body. This is how an MCP client (and any DCR-registered client) connects.
