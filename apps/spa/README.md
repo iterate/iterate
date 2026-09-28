@@ -2,7 +2,7 @@
 
 The pure-client archetype: four files in `public/` — `index.html`, `app.js`, `oauth.js`, `client-logo.svg` — served from any
 static host, no build, no server of their own. The page runs the OAuth dance itself (discovery,
-a one-time public-client registration, PKCE, refresh: `oauth.js`, the one client the Chrome
+a public-client registration at each sign-in, PKCE, refresh: `oauth.js`, the one client the Chrome
 extension runs too), then opens one WebSocket to the platform's `/api` bare and presents the
 access token IN the `authenticate` call — capnweb's own pattern:
 
