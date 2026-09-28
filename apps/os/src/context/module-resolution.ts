@@ -313,8 +313,8 @@ async function sha256(text: string): Promise<string> {
 
 /** The dependency graph for these specifiers under these versions — from the store when this exact
  *  set was resolved before (by any project), otherwise resolved from esm.sh and stored. A version
- *  that cannot be locked (`esmPackageBase`) is refused before the store is read, so a lock stored
- *  for a branch before it was refused never loads. */
+ *  that cannot be locked (`esmPackageBase`) is refused before the store is read, so no lock stored
+ *  under a branch's key can load. */
 async function lockedDependencyGraph(
   specifiers: string[],
   dependencies: Record<string, string>,

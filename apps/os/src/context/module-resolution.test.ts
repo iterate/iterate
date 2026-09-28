@@ -254,7 +254,7 @@ test.for([
 ])(
   "a pkg.pr.new ref that is %s is refused, naming the pin, before any lock stored for it is read",
   async ([, ref]) => {
-    // A store that holds a lock for every key: one a deployment stored before the refusal existed.
+    // A store that answers every key with a lock: the refusal comes before any read of it.
     const store = {
       values: new Map<string, string>(),
       get: vi.fn(async () => JSON.stringify({ modules: {}, platformModules: [] })),
