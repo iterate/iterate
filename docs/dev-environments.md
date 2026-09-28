@@ -164,14 +164,20 @@ read secrets.
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
   `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
-  (`appSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  (`testPersonSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
   person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
   `seedSignIn`). The PR body is public, so a link grants nothing. The app
   passes `login_hint` on to the issuer, whose consent page opens an admin's
   **Sign in as someone else…** with that person filled in, only for one of our
   own apps. One confirm signs the app in as them for an hour (see
   [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
-  the ordinary consent page. A deployment's admins are prd's (`envs.ts`
+  the ordinary consent page. Notes (and Docs) have no sign-in of their own:
+  they are served through a project, on the platform's session, so their link
+  is the platform's sign-in page,
+  `<platform>/login?next=/projects/pr<N>/<app>/&login_hint=pr<N>@preview.iterate.test`,
+  which offers an admin **Sign in as pr<N>@… for an hour**, and the seed gives
+  `pr<N>` a fetch route per such app to the deployment's own Worker
+  (`proxiedAppRoute`). A deployment's admins are prd's (`envs.ts`
   `admins`) plus the specs' `admin@preview.iterate.test`, and they sign in to
   the deployment as themselves with **Continue with os.iterate.com**: prd
   confirms who they are through an OAuth grant that can only read that (prd's
@@ -232,6 +238,13 @@ the permissions) and warns about anything that is not one of our apps. It works
 for any client, third parties and `/mcp` included. A link can name the person:
 an app's `/.auth/login?login_hint=<email>` opens that step with them filled in,
 for one of our own apps (the PR body's `Sign in ↗`); the admin still confirms.
+The platform's own sign-in page does the same for the platform's session, which
+an app served through a project runs on under paths ingress:
+`/login?login_hint=<email>` offers an admin signed in as themselves **Sign in as
+<email> for an hour**, only for someone already on the platform under
+`login.testEmailDomain` (so never on prd), and the page's POST checks it all
+again (`apps/os/src/sign-in-as-test-person.ts`). An app approved from that
+session is the same impersonation, and it mints no personal access token.
 The grant is the person's, for
 an hour: every event names the admin in `source.principal.impersonatedBy`, their
 Sessions list it as started by the admin, their account records

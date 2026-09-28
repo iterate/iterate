@@ -127,7 +127,9 @@ whose head would carry the result, and one suite alone never from the PR's branc
 deployment of the PR or name. CI writes each deployment's links into the PR body: per worker, a
 `Sign in ↗` that signs the app in as the PR's test person, `pr<N>@preview.iterate.test`, once one of
 prd's admins signs in to the deployment through prd (`src/admin-sign-in.ts`) and confirms "Sign in
-as someone else" on the consent page, and its Cloudflare dashboard; "New project from template"
+as someone else" on the consent page (for Notes and Docs, which run on the platform's session, "Sign
+in as … for an hour" on its sign-in page: `src/sign-in-as-test-person.ts`), and its Cloudflare
+dashboard; "New project from template"
 links into the Dash; and the previous commit's section folded while the next deploys
 ([dev environments](../../docs/dev-environments.md)). For an operational change, verify the
 deployment's resulting state and telemetry as well as its checks.
