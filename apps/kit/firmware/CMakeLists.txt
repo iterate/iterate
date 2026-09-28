@@ -16,15 +16,21 @@ endif()
 
 # The bounded C Cap'n Web peer is maintained in its first-party repository.
 # Pinning a commit keeps firmware builds reproducible without copying the
-# upstream implementation into this monorepo.
+# upstream implementation into this monorepo. The one pin is the boards' own,
+# components/voice/idf_component.yml; the host build fetches the same commit.
 include(FetchContent)
 set(CAPNWEB_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(CAPNWEB_BUILD_FUZZER OFF CACHE BOOL "" FORCE)
 set(CAPNWEB_SANITIZE ${ITERATE_KIT_SANITIZE} CACHE BOOL "" FORCE)
+file(READ components/voice/idf_component.yml ITERATE_KIT_VOICE_MANIFEST)
+if(NOT ITERATE_KIT_VOICE_MANIFEST MATCHES
+   "capnweb:\n +git: ([^\n]+)\n +path: c\n +version: ([0-9a-f]+)\n")
+  message(FATAL_ERROR "components/voice/idf_component.yml pins no capnweb commit")
+endif()
 FetchContent_Declare(
   capnweb_c
-  GIT_REPOSITORY https://github.com/iterate/capnweb.git
-  GIT_TAG a9e3703f62eb09d21d8b3af3abf666180f4609a7
+  GIT_REPOSITORY ${CMAKE_MATCH_1}
+  GIT_TAG ${CMAKE_MATCH_2}
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR c)
 FetchContent_MakeAvailable(capnweb_c)
