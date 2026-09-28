@@ -39,7 +39,7 @@ export function SomeoneElseStep({
       summary={
         <section
           aria-label="The client"
-          className="flex flex-col gap-2 rounded-xl border p-4 text-sm"
+          className="flex flex-col gap-2 text-sm sm:rounded-xl sm:border sm:p-4"
         >
           <h3 className="font-medium">{clientName}</h3>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">

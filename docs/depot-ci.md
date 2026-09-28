@@ -208,8 +208,9 @@ and every check lands on that base commit:
 - No local `origin/<branch>` (unpushed, pushed under another name, detached `HEAD`):
   `Base: origin/main`, and the checks land on main's head. Stop and push the branch under its own
   name.
-- A clean `main`: main's head with `GITHUB_REF=refs/heads/main`, sharing main's concurrency groups,
-  so it can cancel main's own run.
+- A clean `main`: main's head with `GITHUB_REF=refs/heads/main`, sharing main's branch-named
+  concurrency groups, so it can cancel main's own run of a workflow grouped by branch (not Test's or
+  Lint's: a push to main groups by its sha).
 
 `depot ci dispatch --ref <branch>` reports on the branch's head. GitHub shows a commit's latest
 check per job name, so count a soak in Depot, and check where a run's checks went:
@@ -366,7 +367,9 @@ test jobs' evidence steps read the finalizer step's outputs instead
   (`deploy-os-production`, never the branch) with `cancel-in-progress: false`: a rollout finishes,
   and Depot keeps the newest pending run behind it.
 - Tests and lint/typecheck group by source branch (falling back to `ref_name`) with
-  `cancel-in-progress: true`, `main` included.
+  `cancel-in-progress: true`, except a push to `main`, whose group is its sha: every merge commit
+  gets its own Test and Lint verdict, since one shared group cancels the run in progress or
+  replaces the pending one.
 - Main OS e2e (`main-os-e2e`), the latency guard (`os-latency`) and the real-model suite
   (`os-real-model`) each redeploy one preview, so each has one fixed group with
   `cancel-in-progress: false`: every started run reaches a verdict, and pushes meanwhile collapse
@@ -639,7 +642,7 @@ same names.
 
 A suite job with `needs: deploy` would start only once the deploy ended, so
 Depot's hand-off (about 3 s), the sandbox's boot (about 2 s), the checkout and
-setup (about 7 s), `tsx` loading
+setup (about 7 s), Node loading
 `apps/os/scripts/preview.ts` and the test runner's start would all come between
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
@@ -749,11 +752,16 @@ Every page keeps one message per incident (`scripts/ci/slack.ts`): `🚨 <what> 
 `Impact:`, `Do:`, the ids to act on and one link. A later run that finds the incident still there
 edits the page, which notifies nobody; the first run that finds it gone edits its first line to
 start `✅ resolved:` and replies once in its thread, mentioning both. Older open pages of the same
-incident are marked resolved by an edit alone. The page's first line is its state, so the channel's
-history is the only state a poster keeps; a run that sees only part of an incident (the preview
+incident are marked resolved naming no one. A page Slack can no longer edit is posted again by its
+next edit. One still in the channel (past the workspace's edit window) is closed by a reply in its
+thread sent to the channel too, starting `✅ resolved:`, which later runs read as closed: the
+resolution itself when the incident ended, else a line naming no one. A deleted page's resolution
+goes top-level. The page's first line, or that reply, is its state, so the channel's history is the
+only state a poster keeps; a run that sees only part of an incident (the preview
 sweep's stuck namespaces, the apps that failed on a commit) carries forward what the open page names.
 Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, each `notify.ts` command's
-`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse.
+`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse. `notify.ts deploy-success
+--test-run` with a merged commit's `GITHUB_SHA` replies in that merge's thread, as its deploy did.
 
 | Poster                                                  | One page per   | Resolved by                                                  |
 | ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
@@ -788,7 +796,9 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
     reply with a line per account, both edited every hour; an account with a complete hour over
     its ceiling today is a 🔴 line. An account at its page tier is one page in #error-pulse,
     edited every hour while it lasts. The first hour at 2× and at 5× the page tier is a broadcast
-    reply in its thread, and two complete hours under the ceiling resolve it.
+    reply in its thread, and two complete hours under the ceiling resolve it. A page is open for
+    48 hours: an incident that lasts longer is paged again, and the new page resolves the older
+    one naming no one.
 
 What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 

@@ -18,7 +18,10 @@ export function SelectedProjects({
   onEdit: () => void;
 }) {
   return (
-    <section aria-label="Selected projects" className="flex flex-col gap-3 rounded-xl border p-4">
+    <section
+      aria-label="Selected projects"
+      className="flex flex-col gap-3 sm:rounded-xl sm:border sm:p-4"
+    >
       <div className="flex items-center justify-between gap-4">
         <h3 className="text-sm font-medium">Project access</h3>
         <Button

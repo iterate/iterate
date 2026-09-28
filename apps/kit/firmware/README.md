@@ -205,13 +205,13 @@ says how the token is minted and revoked). A bench board, or `iterate-kit-mac
 (`src/firmware/config-image.ts`), run from `apps/kit`:
 
 ```sh
-pnpm exec tsx scripts/config-image.ts image \
+node scripts/config-image.ts image \
   --wifi-ssid <ssid> --wifi-password <password> \
   --os-base-url https://os.iterate.com \
   --project-id prj-voice --project-api-key "$KIT_TOKEN" \
   --status-voice greensleeves --out /tmp/cfg.bin
 python -m esptool --chip esp32s3 -p <port> \
-  write_flash "$(pnpm exec tsx scripts/config-image.ts offset havpe)" /tmp/cfg.bin
+  write_flash "$(node scripts/config-image.ts offset havpe)" /tmp/cfg.bin
 ```
 
 `offset <target>` reads the partition's offset from the target's partition
@@ -345,7 +345,7 @@ air-path proof:
 ```sh
 cd apps/agents
 WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… PROJECT=prj-voice \
-  pnpm exec tsx scripts/voice-board.ts --device <device_name> \
+  node scripts/voice-board.ts --device <device_name> \
     --prompt "Hello there. Please reply with the single word banana." --expect banana
 ```
 

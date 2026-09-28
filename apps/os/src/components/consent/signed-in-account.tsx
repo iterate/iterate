@@ -21,7 +21,7 @@ export function SignedInAccount({
   return (
     <section
       aria-label="Signed-in account"
-      className="flex items-start gap-3.5 rounded-xl border p-4"
+      className="flex items-start gap-3.5 sm:rounded-xl sm:border sm:p-4"
     >
       <Avatar className="size-11 rounded-lg after:rounded-lg">
         {picture ? (

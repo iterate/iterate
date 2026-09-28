@@ -18,11 +18,13 @@
 import type { WebClient } from "@slack/web-api";
 import { cloudflareAccounts } from "../../envs.ts";
 import {
+  editPage,
   findOpenPages,
   getSlackClient,
   onCallMention,
   pageChannel,
   pageText,
+  resolveOlderPages,
   resolvePage,
   slackChannelIds,
 } from "../ci/slack.ts";
@@ -33,8 +35,10 @@ const USD_PER_DO_HOUR = 0.005625;
 /** Long enough that every hour of the current UTC day is in the summary. */
 const LOOKBACK_HOURS = 26;
 /** How far back a run looks for its account's open page: an incident longer than this is paged
- *  again. */
+ *  again, and that page resolves the account's older ones (EXPIRED_PAGE_HOURS). */
 const OPEN_PAGE_HOURS = 48;
+/** How far back a new page looks for its account's older open pages, which it resolves as expired. */
+const EXPIRED_PAGE_HOURS = 30 * 24;
 /** Multiples of the page tier whose first crossing is a broadcast reply in the page's thread. */
 const ESCALATIONS = [2, 5];
 
@@ -396,7 +400,8 @@ function renderPage(input: {
 /**
  * Runs the account's page decision. A test run keeps no state: it posts the page to #ci whenever the
  * account is at its page tier and never reads #error-pulse. An escalation is posted before the edit
- * that records its peak, so a failed post is owed again by the next run.
+ * that records its peak, so a failed post is owed again by the next run. A new page first resolves
+ * the account's older open pages as expired: an incident past OPEN_PAGE_HOURS keeps one open page.
  */
 async function upkeepPage(input: {
   slack: WebClient;
@@ -413,14 +418,24 @@ async function upkeepPage(input: {
     await slack.chat.postMessage({ channel, text });
     return "post";
   }
+  const marker = `DO cost page for ${account.label}:`;
   const [open] = await findOpenPages(slack, {
     channel,
-    marker: `DO cost page for ${account.label}:`,
+    marker,
     sinceHours: OPEN_PAGE_HOURS,
     now: input.now,
   });
   const action = decidePage({ account, open, runUrl: input.runUrl });
-  if (action.kind === "post") await slack.chat.postMessage({ channel, text: action.text });
+  if (action.kind === "post") {
+    const expired = await findOpenPages(slack, {
+      channel,
+      marker,
+      sinceHours: EXPIRED_PAGE_HOURS,
+      now: input.now,
+    });
+    await resolveOlderPages(slack, channel, expired);
+    await slack.chat.postMessage({ channel, text: action.text });
+  }
   if (action.kind === "resolve")
     await resolvePage(slack, { channel, ts: action.ts, text: action.text, why: action.why });
   if (action.kind === "edit") {
@@ -431,7 +446,7 @@ async function upkeepPage(input: {
         text: action.escalation,
         reply_broadcast: true,
       });
-    await slack.chat.update({ channel, ts: action.ts, text: action.text });
+    await editPage(slack, { channel, ts: action.ts, text: action.text });
   }
   return action.kind;
 }

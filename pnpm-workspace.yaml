@@ -68,7 +68,6 @@ catalog:
   tailwindcss: ^4.3.3
   trpc-cli: 0.16.0
   tsdown: 0.23.0
-  tsx: ^4.23.15
   # TypeScript 7, the native compiler, and no 6 anywhere. typescript-eslint, under the oxlint
   # jsPlugin @tanstack/eslint-plugin-router, peers on typescript <6.1 (typescript-eslint#10940), so
   # pnpm warns of an unmet peer; the one rule lint loads from it never reaches TypeScript.

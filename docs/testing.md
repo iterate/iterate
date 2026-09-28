@@ -340,7 +340,10 @@ below. The evidence for these rules is a marathon of 50 consecutive green previe
 and today the retry telemetry and the [flake dashboard](https://github.com/iterate/iterate/issues/2580).
 
 1. **Retries live in exactly one layer: the individual test**, the smallest unit that owns its
-   state. `E2E_CI_RETRIES = 1` in CI, zero locally.
+   state. `E2E_CI_RETRIES = 1` in CI, zero locally. Below it, the e2e transport sends again only a
+   request that never reached the deployment: Cloudflare's own not-found from a server a brand-new
+   hostname has not reached yet, on a fresh connection, on `CI_HTTP`'s schedule, each resend an
+   `e2e.platform-failure-retry` warn in the run's log (`apps/os/e2e/support/not-routed.ts`).
 2. **Everything above a test is a watchdog: it fails, it never retries.** A Depot job has
    `timeout-minutes`; re-running a killed run is the outer edge's job (the re-run button, the next
    push), never automatic.

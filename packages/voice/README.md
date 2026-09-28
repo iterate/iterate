@@ -117,8 +117,8 @@ export ITERATE_BEARER_TOKEN=itk_…
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config prd --plain)
 # First prepare the project at https://k.iterate.com
 say -o ask.wav --data-format LEI16@16000 --channels=1 "What is two plus two?"
-PROJECT=prj-voice pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
-PROJECT=prj-voice pnpm exec tsx scripts/voice-board.ts --device home_assistant_voice_preview_edition --expect banana
+PROJECT=prj-voice node scripts/voice-call.ts --utterance ask.wav --out answer.wav
+PROJECT=prj-voice node scripts/voice-board.ts --device home_assistant_voice_preview_edition --expect banana
 ```
 
 Measured 2026-09-28 on a PR preview with real GPT-Live and the agent's default model, fresh
