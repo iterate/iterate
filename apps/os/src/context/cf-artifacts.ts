@@ -147,11 +147,16 @@ const isRepoAlreadyThere = (error: unknown): boolean =>
 const PROBE_TOKEN_TTL_SECONDS = 60;
 
 /** How long `create` waits for a taken name that does not read to read (a create that landed) or
- *  to come free (a deletion that landed); the waits between its rounds double from 1 s to 4 s at
- *  most. A deletion freed its name 2–5 s after the delete on the preview account (measured
- *  2026-09-25). Well inside the 30 s a caller of `itx.repos.create` waits for the creation's
- *  terminal fact (project/collection.ts `TERMINAL_WAIT_MS`), so a name still taken lands
- *  `repo/create-failed` with its reason, and the caller's next create is a new attempt. */
+ *  to come free (a deletion, or a failed create, that landed), counted from the answer that found
+ *  it taken; the waits between its rounds double from 1 s to 4 s at most. A deletion freed its name
+ *  2–5 s after the delete on the preview account (measured 2026-09-25). A create the binding
+ *  answered 10400 held its name for up to 13 s after that answer, which itself came 12.5–13.6 s
+ *  after the create began in 73 of 99 such failures (preview Workers Logs, 2026-09-26–28): the
+ *  time a create takes to answer is Artifacts', not the name's, so it is not counted. A name still
+ *  taken lands `repo/create-failed` with its reason, and the caller's next create is a new
+ *  attempt. A create Artifacts answers late can take the whole past the 30 s a caller of
+ *  `itx.repos.create` waits for the terminal fact (project/collection.ts `TERMINAL_WAIT_MS`):
+ *  that caller answers WAIT_TIMEOUT while the creation goes on to land either fact. */
 const TAKEN_NAME_WAIT_MS = 20_000;
 
 /** A verb, and ONE retry of it a second later after the binding's platform failure — Artifacts API
@@ -228,7 +233,7 @@ export function projectScopedArtifacts(input: {
       // binding's own word that the name is a live repo, and a taken name counts as the repo only once
       // it reads. Until then it is a create that landed and does not read yet, or a deletion that has
       // not landed (`isRepoAlreadyThere`): waited out, bounded (`TAKEN_NAME_WAIT_MS`).
-      const started = Date.now();
+      let takenSince: number | undefined;
       let created = false;
       for (let round = 1, waitMs = 1000; ; round++, waitMs = Math.min(waitMs * 2, 4000)) {
         const answer = await retryingOnePlatformFailure("create", name, async (isRetry) => {
@@ -239,13 +244,14 @@ export function projectScopedArtifacts(input: {
             return { created: true, taken: false };
           } catch (error) {
             if (!isRepoAlreadyThere(error)) throw error;
+            takenSince ??= Date.now();
             // after a failed create, the name may be taken by that create, landed all the same
             return { created: isRetry, taken: true };
           }
         });
         created ||= answer.created;
         const settled = !answer.taken || (await reads());
-        const waitedMs = Date.now() - started;
+        const waitedMs = takenSince === undefined ? 0 : Date.now() - takenSince;
         const givingUp = !settled && waitedMs + waitMs > TAKEN_NAME_WAIT_MS;
         // one line per create that met a taken name it could not read: how it ended, and how long it took
         if ((settled && round > 1) || givingUp)

@@ -314,6 +314,48 @@ test("after a platform failure, a create that landed all the same answers create
   ]);
 });
 
+test("a create the binding fails after 13 s, whose name the failed create holds 7 s more, ends with a live repo", async () => {
+  // Measured on the preview (Workers Logs, 2026-09-26–28): the binding answers a slow create 10400
+  // 12.5–13.6 s after it began, and its name then answers "already exists" while `get` answers
+  // "not found" for up to 13 s more, until it comes free. The wait for the name counts from the
+  // answer that found it taken, not from the create that took 13 s to fail.
+  const recording = recordingNamespace();
+  let heldUntil = 0;
+  let creates = 0;
+  const slowToFail: ArtifactsNamespace = {
+    ...recording.namespace,
+    create: async (name) => {
+      if (++creates === 1) {
+        await new Promise((resolve) => setTimeout(resolve, 13_000));
+        heldUntil = Date.now() + 7_000;
+        recording.calls.push({ method: "create (failed after 13 s)", name });
+        throw new Error("An internal error occurred.");
+      }
+      if (Date.now() < heldUntil) {
+        recording.calls.push({ method: "create (taken)", name });
+        throw new Error(`repo already exists: ${name}`);
+      }
+      return recording.namespace.create(name);
+    },
+  };
+  expect(await settle(() => scoped(slowToFail, "prj_a").create("/repos/config"))).toMatchObject({
+    value: { created: true },
+    retries: [{ event: "cfartifacts.platform-failure-retry", verb: "create" }],
+    logs: [{ event: "cfartifacts.create-waited-for-taken-name", outcome: "created" }],
+  });
+  expect(recording.live("prj_a.repos--config")).toBe(true);
+  expect(recording.calls.map((call) => call.method)).toEqual([
+    "create (failed after 13 s)",
+    "create (taken)", // the retry, a second later
+    "get", // not found: the failed create's name, not a repo
+    "create (taken)",
+    "get",
+    "create (taken)",
+    "get",
+    "create",
+  ]);
+});
+
 test("a create answered anything but 'already exists' surfaces, and no one retries", async () => {
   const refusing: ArtifactsNamespace = {
     ...recordingNamespace().namespace,
