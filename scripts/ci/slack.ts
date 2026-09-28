@@ -85,7 +85,7 @@ export function pageText(input: {
 }
 
 /** The thread reply that closes an incident. */
-export function resolvedText(why: string) {
+function resolvedText(why: string) {
   return `✅ resolved: ${why} ${onCallMention}`;
 }
 
