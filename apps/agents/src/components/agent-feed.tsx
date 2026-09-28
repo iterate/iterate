@@ -1,7 +1,7 @@
 // The feed rows: a person's message, the assistant's prose, and the quiet "Ran code 2× · 3
 // requests · 7.4 s" activity row that opens into rounds — the LLM step that wrote a script and the
 // code step that ran it, each a `Script | Result | Meta` tab group. Items come from the shared
-// reducer (packages/ui); this file owns only their look.
+// reducer (lib/events/agent-ui-reducer.ts); this file owns only their look.
 import { useCallback, useEffect, useState } from "react";
 import {
   BanIcon,
@@ -47,10 +47,10 @@ import { useTickingNowMs } from "../lib/use-ticking-now-ms.ts";
 import { Message, MessageContent, MessageResponse } from "./message.tsx";
 import { StreamingCodeBlock, StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
-/** The two traces a row can open: an LLM request (by its offset) and a script run (by id). */
+/** The two traces a row can open: an LLM request and a script run, each by its request's offset. */
 export type Inspect = {
   llmRequest: (llmRequestOffset: number) => void;
-  scriptExecution: (executionId: string) => void;
+  scriptRun: (requestOffset: number) => void;
 };
 /** A signed download URL for a file under the agent's path — the page's `itx.files` call. */
 export type SignedUrl = (path: string) => Promise<string>;
@@ -424,7 +424,7 @@ function RoundTabs({
           variant="ghost"
           size="xs"
           title="Open this script's execution trace"
-          onClick={() => inspect.scriptExecution(code.executionId)}
+          onClick={() => inspect.scriptRun(code.requestOffset)}
           className="-ml-2 self-start font-normal text-muted-foreground"
         >
           Execution trace
@@ -454,8 +454,8 @@ function RoundTabs({
             {code.durationMs == null ? "running" : formatAgentUiDuration(code.durationMs)}
             {code.success === false ? " · failed" : ""}
           </dd>
-          <dt className="text-muted-foreground">execution</dt>
-          <dd className="truncate">{code.executionId}</dd>
+          <dt className="text-muted-foreground">run</dt>
+          <dd className="truncate">#{code.requestOffset}</dd>
         </dl>
         {llm ? <FullTraceButton onClick={() => inspect.llmRequest(llm.llmRequestOffset)} /> : null}
       </TabsContent>
@@ -547,7 +547,7 @@ export function AgentLiveActivity({
     liveStep?.kind === "llm"
       ? () => inspect.llmRequest(liveStep.llmRequestOffset)
       : liveStep?.kind === "code"
-        ? () => inspect.scriptExecution(liveStep.executionId)
+        ? () => inspect.scriptRun(liveStep.requestOffset)
         : undefined;
 
   return (
@@ -610,7 +610,7 @@ export function AgentLiveActivity({
       <AgentLiveStatus
         label={currentLabel}
         startedAtMs={currentStartedAtMs}
-        deadlineMs={liveStep?.kind === "code" ? liveStep.expiresAtMs : null}
+        deadlineMs={liveStep?.kind === "code" ? liveStep.deadlineAtMs : null}
         onInspect={inspectCurrentWork}
       />
     </div>
@@ -639,7 +639,7 @@ function AgentLiveStatus({
       onClick={onInspect}
       title={
         phaseClock.deadlineExceeded
-          ? "The script has no durable settlement after its absolute deadline"
+          ? "The script is past its deadline; the platform's settlement has not landed yet"
           : onInspect
             ? "Open the current operation's trace"
             : undefined
@@ -682,8 +682,8 @@ function liveStepHasVisibleContent(step: AgentUiStep) {
 }
 
 /** Live CLI-style elapsed counter (`0.9s`) for the current agent phase, ticking every 100ms. A
- *  script clock stops at its absolute deadline and flips to an explicit failure state even if the
- *  durable completion is delayed. */
+ *  script clock stops at its deadline and flips to an explicit failure state while the platform's
+ *  `deadline` settlement is on its way; only that settlement closes the step. */
 function useLivePhaseClock(
   startedAtMs: number,
   deadlineMs: number | null,

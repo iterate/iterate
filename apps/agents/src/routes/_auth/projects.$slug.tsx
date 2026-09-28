@@ -1,4 +1,6 @@
-import type { IterateContextApi } from "iterate/api";
+// registers `itx.agents` on InstalledAppRoots
+import type {} from "@iterate-com/agents";
+import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
 import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
@@ -35,26 +37,26 @@ import { agentEventInspectors, agentEventRenderers } from "../../lib/agent-event
 import { AgentsNav } from "../../components/agents-nav.tsx";
 import { AgentComposer, type StreamInterrupt } from "../../components/composer.tsx";
 import { QueuedMessagesPanel } from "../../components/queued-messages.tsx";
-import {
-  adaptContextRuns,
-  reduceAgentFeed,
-  toAgentEvent,
-  traceOffsetByMessage,
-} from "../../lib/agent-events.ts";
+import { reduceAgentFeed, toAgentEvent, traceOffsetByMessage } from "../../lib/agent-events.ts";
 import { newWebAgentPath } from "../../lib/web-agent.ts";
 import { useAgentSummaries } from "../../lib/use-agent-summaries.ts";
 
 // An agent is a conversation on its own path (`/agents/...`); everything it does is an event
 // there. This page is a window onto that log: the CHAT (the shared agent-UI reducer's items:
 // messages, and the activities that open into rounds of script + result), the EVENTS (the raw
-// log), and the TRACES (one sheet, URL-backed: an LLM request or a script execution). The project
+// log), and the TRACES (one sheet, URL-backed: an LLM request or a script run). The project
 // stub is held for the page's life; the agent's context is `project.cd(path)`, subscribed for
 // every committed event and caught up with `readEvents`. The header's status is the agent facet's
 // LIVE STATE.
 type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 type Context = Awaited<ReturnType<Project["cd"]>>;
 
-const AgentList = z.array(z.object({ path: z.string(), createdAt: z.string() }));
+/** The project with its `itx.agents` root typed (@iterate-com/agents api.ts). The root is there
+ *  only by the project's rewrite rule, so the session's project stub cannot name it; the page calls
+ *  it only where the rule is known to be there: the loader after reading it, the sidebar's create
+ *  after its install branch, the composer only beside an agent. */
+const withAgents = (itx: Project) =>
+  itx as Project & Pick<IterateContextApiWith<"agents">, "agents">;
 
 /** What the page's subscription receives: every durable event (the Events view is the whole log)
  *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
@@ -69,18 +71,18 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     agent: z.string().optional().catch(undefined),
     view: z.enum(["chat", "events"]).optional().catch(undefined),
     llmRequest: z.number().int().positive().optional().catch(undefined),
-    scriptExecution: z.string().optional().catch(undefined),
+    scriptRun: z.number().int().positive().optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ agent: search.agent }),
   loader: async ({ context, params, deps }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
-    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    // the URL names the project by slug; one this sign-in lacks → sign in again
+    const project = projects.find((item) => item.slug === params.slug);
     if (!project) return context.signInFor(params.slug);
     using itx = await context.api.projects.get(project.id);
     const rule = await itx.rewriteRules.get("itx.agents");
     if (!rule?.target) return { projects, project, agents: [], agent: undefined, installed: false };
-    const agents = AgentList.parse(await itx.invoke(["itx", "agents", ["list"]]));
+    const agents = await withAgents(itx).agents.list();
     return { projects, project, agents, agent: deps.agent || agents[0]?.path, installed: true };
   },
   component: AgentsPage,
@@ -125,7 +127,7 @@ function AgentsPage() {
               await router.invalidate({ sync: true });
               return;
             }
-            await itx.invoke(["itx", "agents", ["create", path]]);
+            await withAgents(itx).agents.create(path);
             await router.invalidate();
             await navigate({
               to: "/projects/$slug",
@@ -215,9 +217,8 @@ function useAgentContext(
 /** The agent's log, from the SDK's ONE `useIterateContext` over its context (subscribed for every
  *  committed event and the streamed chunk windows, caught up with `readEvents`; the processors
  *  table, who is here, and the live state of `core` and every hosted facet ride the same
- *  subscription), then — for the chat and its traces — as the shared reducer reads it: the wire
- *  envelope tagged with the path, the context's script runs in the reducer's vocabulary
- *  (agent-events.ts). The raw log itself feeds the Events view untouched. */
+ *  subscription), then — for the chat and its traces — each committed row as the shared reducer
+ *  reads it (agent-events.ts). The raw log itself feeds the Events view untouched. */
 function useAgentLog(context: Context | undefined) {
   // "all": the chat folds the whole log, so it reads every page, not only the newest
   const iterateContext = useIterateContext(context, {
@@ -226,12 +227,10 @@ function useAgentLog(context: Context | undefined) {
   });
   const events = useMemo(
     () =>
-      adaptContextRuns(
-        iterateContext.events.flatMap((event) => {
-          const committed = toAgentEvent(event);
-          return committed ? [committed] : [];
-        }),
-      ),
+      iterateContext.events.flatMap((event) => {
+        const committed = toAgentEvent(event);
+        return committed ? [committed] : [];
+      }),
     [iterateContext.events],
   );
   return {
@@ -321,8 +320,8 @@ function AgentConversation({ project, path }: { project: string; path: string })
   );
   const inspected: Inspected = search.llmRequest
     ? { kind: "llmRequest", llmRequestOffset: search.llmRequest }
-    : search.scriptExecution
-      ? { kind: "scriptExecution", executionId: search.scriptExecution }
+    : search.scriptRun
+      ? { kind: "scriptRun", requestOffset: search.scriptRun }
       : null;
   const onInspect = useCallback(
     (next: Inspected) =>
@@ -333,7 +332,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
           ...prev,
           ...RIGHT_EDGE_CLOSED, // one right edge: a trace closes the Events tab's inspector and sheet
           llmRequest: next?.kind === "llmRequest" ? next.llmRequestOffset : undefined,
-          scriptExecution: next?.kind === "scriptExecution" ? next.executionId : undefined,
+          scriptRun: next?.kind === "scriptRun" ? next.requestOffset : undefined,
         }),
         replace: true,
       }),
@@ -342,16 +341,14 @@ function AgentConversation({ project, path }: { project: string; path: string })
   const inspect = useMemo<Inspect>(
     () => ({
       llmRequest: (llmRequestOffset) => onInspect({ kind: "llmRequest", llmRequestOffset }),
-      scriptExecution: (executionId) => onInspect({ kind: "scriptExecution", executionId }),
+      scriptRun: (requestOffset) => onInspect({ kind: "scriptRun", requestOffset }),
     }),
     [onInspect],
   );
   const signedUrl = useCallback(
     async (filePath: string) => {
       if (!context) throw new Error("not connected");
-      return z
-        .object({ url: z.string() })
-        .parse(await context.invoke(["itx", "files", ["get", filePath], ["url"]])).url;
+      return (await context.files.get(filePath).url()).url;
     },
     [context],
   );
@@ -465,7 +462,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
                   // one right edge: the view's inspector or sheet opening closes the page's traces
                   ...((patch.event !== undefined || patch.processors) && {
                     llmRequest: undefined,
-                    scriptExecution: undefined,
+                    scriptRun: undefined,
                   }),
                   ...patch,
                 }),
@@ -528,12 +525,7 @@ function AgentConversation({ project, path }: { project: string; path: string })
                 interrupt={interrupt}
                 onSubmit={async ({ message, files }) => {
                   using itx = await api.projects.get(project);
-                  await itx.invoke([
-                    "itx",
-                    "agents",
-                    ["get", path],
-                    ["message", { message, files }],
-                  ]);
+                  await withAgents(itx).agents.get(path).message({ message, files });
                 }}
                 onAppendRaw={async (events) => {
                   if (!context) throw new Error("not connected");

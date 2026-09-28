@@ -7,16 +7,17 @@
 // THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
 // library/*.ts import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers, zod), the SDK's pure `iterate/expression` (the codec and the pipelinable
-// handle) and `iterate/lib`, the entities' contracts (pure zod, the vocabulary a handle's typed
-// `append` validates against) and each other. Type-only imports are free. Anything else (the
-// stream, the DO, the rest of context/) would make the library un-movable to userspace, which is
-// the whole point of the tier. Lint enforces it (`no-restricted-imports` in .oxlintrc.json).
+// handle), `iterate/lib` and `iterate/stream/run` (the run contract and its deadline), the
+// entities' contracts (pure zod, the vocabulary a handle's typed `append` validates against) and
+// each other. Type-only imports are free. Anything else (the stream, the DO, the rest of context/)
+// would make the library un-movable to userspace, which is the whole point of the tier. Lint
+// enforces it (`no-restricted-imports` in .oxlintrc.json).
 
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
 import type { EventInput, StreamEvent } from "iterate/stream/processor";
-import type { RunSettled, RunSettlement } from "iterate/stream/run";
+import { RUN_DEADLINE_MS, type RunSettled, type RunSettlement } from "iterate/stream/run";
 import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
@@ -202,14 +203,11 @@ export function buildLibrary(
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
-/** THE RUN DEADLINE: ten minutes from the moment the runner starts a script. A run that has not
- *  finished by then is settled `failed` / `deadline`, and nothing it started stays in flight: the
- *  loaded `run()` gives up on its own (the module below — the runner cannot cancel a Workers-RPC call
- *  it made, and a call in flight keeps this context resident and billed), the runner stops waiting
- *  (`runSettlementOf`) and a caller's `itx.run` returns. Ten minutes is what an agent's turn already
- *  allows: its model request expires after ten, and its feed closes a code step at ten
- *  (apps/agents `adaptContextRuns`). */
-export const RUN_DEADLINE_MS = 10 * 60_000;
+// THE RUN DEADLINE (RUN_DEADLINE_MS, iterate/stream/run's, ten minutes from the moment the runner
+// starts a script): a run that has not finished by then is settled `failed` / `deadline`, and nothing
+// it started stays in flight: the loaded `run()` gives up on its own (the module below — the runner
+// cannot cancel a Workers-RPC call it made, and a call in flight keeps this context resident and
+// billed), the runner stops waiting (`runSettlementOf`) and a caller's `itx.run` returns.
 
 /** The module `run` loads: `script` spliced in as `const script = (…)`, run inside ONE `withItx`
  *  round trip (`iterate/with-itx`, the platform's ~1.5 KB module: a script's isolate never loads the

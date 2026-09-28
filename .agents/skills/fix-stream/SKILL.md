@@ -21,7 +21,7 @@ shrink the fixture.
   the browser, `/agents/voice/<version>/<device>/<call>` for a voice call. With no `agent`,
   the page shows the first agent the project lists.
 - `view=events` is the raw log and `event=<offset>` the inspected row. `llmRequest=<offset>`
-  and `scriptExecution=<id>` open a trace sheet. Those offsets are where to look first.
+  and `scriptRun=<offset>` open a trace sheet. Those offsets are where to look first.
 - A Dash link (`dash.iterate.com/projects/<slug>`) names only the project. Ask for the
   Agents link, or list the agents (step 2) and match the time of the complaint.
 
@@ -82,8 +82,8 @@ Print the conversation with offsets and times before reading product code. Every
   An assistant item carries `llmRequestOffset`.
 - `agent/llm-request-requested` (`triggerOffset`) and `agent/llm-request-settled`
   (`requestOffset`, `result.status`): the model calls.
-- `itx/run-requested` and `itx/run-settled`: the scripts the assistant's codemode ran.
-  The UI renames them (`adaptContextRuns` in `apps/agents/src/lib/agent-events.ts`).
+- `itx/run-requested` and `itx/run-settled`: the scripts the assistant's codemode ran. The
+  request's offset is the run; the settlement names it back (`requestOffset`).
 - `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
   or an operator.
 - `voice-agent/*`: a call's transcripts, delegations and commentary (`packages/voice/src/`).
@@ -99,13 +99,13 @@ provider error the loop recovered from is usually not the complaint.
 Pick the narrowest layer that shows the complaint. Every layer here runs in node, with no
 deployment and no real model.
 
-| The complaint is about…                                               | Test next to                                                                                                           |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `adaptContextRuns` → `reduceAgentFeed`, with real offsets |
-| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                                  |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                                        |
-| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                                   |
-| an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`)          |
+| The complaint is about…                                               | Test next to                                                                                                  |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets             |
+| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                         |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                               |
+| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                          |
+| an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
   (`<complaint>.repro.json`, with the test in `<complaint>.repro.test.ts`). At dump time,

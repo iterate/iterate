@@ -1,4 +1,4 @@
-import { RunSettled } from "iterate/stream/run";
+import { RUN_DEADLINE_MS, RunRequested, RunSettled } from "iterate/stream/run";
 import { AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
 import type { StreamEvent } from "./stream-event.ts";
@@ -6,7 +6,9 @@ import type { StreamEvent } from "./stream-event.ts";
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
 // requests · 7.4 s") → assistant message, with pause and resume dividers.
 // Reduced from raw events: settled items, plus the in-flight activity and its
-// streamed text.
+// streamed text. Only a durable fact closes a step: `agent/llm-request-settled`
+// a model call, the context's `itx/run-settled` a script (the platform settles
+// every run, `deadline` or `interrupted` included).
 
 export type AgentUiLlmStep = {
   kind: "llm";
@@ -40,18 +42,19 @@ export type AgentUiLlmStep = {
 export type AgentUiCodeStep = {
   kind: "code";
   id: string;
-  executionId: string;
+  /** Offset of the `itx/run-requested` event: the run's identity, which its
+   * `itx/run-settled` names back. */
+  requestOffset: number;
   status: "running" | "done";
   code: string;
   result?: unknown;
   errorMessage?: string;
   durationMs?: number;
   success?: boolean;
-  /** Whether the outcome came from the durable settlement or a UI boundary inference. */
-  outcomeSource?: "durable" | "inferred";
   startedAtMs: number;
-  /** Absolute server-side execution deadline from the strict request contract. */
-  expiresAtMs: number;
+  /** When the platform gives up on the run and settles it `deadline`: the
+   * request's time plus RUN_DEADLINE_MS. */
+  deadlineAtMs: number;
   /**
    * The agent's summary `activity` line as of this step (the latest
    * agent/summary-updated fold when the step settled — scripts usually append
@@ -212,7 +215,7 @@ export type AgentUiLiveStatus = {
  * - the last step is a script that durably settled WITH a returned value
  *   (codemode contract: a returned value means another LLM round follows);
  * - the last step is a COMPLETED llm response whose text carries a codemode
- *   script block — the extraction's script-run-requested event is coming,
+ *   script block — the agent's `itx/run-requested` is coming,
  *   and without this the card flashed settled between "writing code" and
  *   "running code".
  */
@@ -236,18 +239,13 @@ export function deriveAgentUiLiveStatus(state: AgentUiState): AgentUiLiveStatus 
     // pause folded mid-request must not leave a permanent claim after that
     // request's outcome lands.
     if (!state.paused && last?.kind === "code") {
-      if (
-        last.status === "done" &&
-        last.outcomeSource === "durable" &&
-        last.success === true &&
-        last.result !== undefined
-      ) {
+      if (last.status === "done" && last.success && last.result !== undefined) {
         return "processing";
       }
     }
     if (!state.paused && last?.kind === "llm") {
       // The response finished and visibly contains a script: what follows is
-      // a journal fact either way — script-run-requested when it extracts,
+      // a journal fact either way — itx/run-requested when it extracts,
       // or the format's rejection feedback driving another llm request — so
       // the turn is not over.
       if (
@@ -274,6 +272,8 @@ export type AgentUiFileAttachment = {
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
+  /** Offset of the event that carried the message. */
+  offset: number;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
@@ -294,14 +294,8 @@ export type AgentUiState = {
   live: AgentUiActivity | null;
   /** Assistant bubbles held until the grouped activity closes. */
   deferredAssistantMessages: AgentUiMessageItem[];
-  /** User messages that landed while the current request was already running. */
+  /** User messages that landed while a step ran and that no request has taken up yet. */
   queuedUserMessages: AgentUiMessageItem[];
-  /**
-   * Settled activities whose script outcome was inferred at a boundary rather
-   * than supplied by a durable completion. A late completion replaces the
-   * same feed item instead of leaving the inferred failure as permanent truth.
-   */
-  provisionalActivities: Record<string, AgentUiActivity>;
   /** Latest agent/summary-updated `activity` text — stamped onto code steps. */
   summaryActivity: string | null;
   /** When that text was folded. Compared against the live activity's start
@@ -314,19 +308,11 @@ export type AgentUiState = {
   paused: boolean;
 };
 
-/**
- * A durable completion normally follows its idle boundary immediately. Keep a
- * small correction window, but never let malformed streams with permanently
- * missing completions grow the reducer state without bound.
- */
-export const AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT = 32;
-
 export function initialAgentUiState(): AgentUiState {
   return {
     live: null,
     deferredAssistantMessages: [],
     queuedUserMessages: [],
-    provisionalActivities: {},
     summaryActivity: null,
     summaryActivityUpdatedAtMs: null,
     paused: false,
@@ -349,23 +335,22 @@ export function reduceAgentUi(
 }
 
 /**
- * Close the journal-reduced UI state at an idle boundary the agent reports
- * outside the journal, dated `since`: overdue scripts expire, the live
- * activity settles and deferred messages flush. Callers render the returned
- * items as a transient tail; the reduction itself stays journal facts only.
+ * Flush at an idle boundary the agent reports outside the journal, dated
+ * `since`: once no step is running, the live activity closes and the deferred
+ * and queued messages follow it. A running step stays running — only its own
+ * settlement closes it. Callers render the returned items as a transient tail;
+ * the reduction itself stays journal facts only.
  */
 export function settleAgentUiAtIdleBoundary(
   start: AgentUiState,
   since: string,
 ): { endState: AgentUiState; items: AgentUiItem[] } {
   const boundaryAtMs = Date.parse(since);
-  if (!Number.isFinite(boundaryAtMs)) {
+  if (!Number.isFinite(boundaryAtMs) || isAgentUiActivityWorking(start.live)) {
     return { endState: start, items: [] };
   }
-
   const items: AgentUiItem[] = [];
-  const expired = expireOverdueCodeSteps(start, boundaryAtMs);
-  const endState = flushDeferredMessages(settleLive(expired, boundaryAtMs, items), items);
+  const endState = flushDeferredMessages(settleLive(start, boundaryAtMs, items), items);
   return { endState, items };
 }
 
@@ -376,9 +361,8 @@ function reduceAgentUiEvent(
 ): AgentUiState {
   const timestampMs = Date.parse(event.createdAt);
   // Committed events are expected to carry an ISO timestamp. A malformed
-  // timestamp must not manufacture NaN durations or accidentally trip a
-  // script deadline comparison; keep the raw event visible, but do not fold
-  // it into the typed agent projection.
+  // timestamp must not manufacture NaN durations or deadlines; keep the raw
+  // event visible, but do not fold it into the typed agent projection.
   if (!Number.isFinite(timestampMs)) return state;
 
   switch (event.type) {
@@ -414,6 +398,7 @@ function reduceAgentUiEvent(
         return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
+          offset: event.offset,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
@@ -423,6 +408,7 @@ function reduceAgentUiEvent(
         return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
+          offset: event.offset,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
@@ -447,6 +433,7 @@ function reduceAgentUiEvent(
       const item: AgentUiMessageItem = {
         kind: "assistant",
         id: `assistant-${event.offset}`,
+        offset: event.offset,
         text,
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
@@ -455,13 +442,16 @@ function reduceAgentUiEvent(
     }
 
     case "events.iterate.com/agent/llm-request-requested": {
-      const base =
-        state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
+      // The agent builds a request's prompt from the log, so this request
+      // answers every queued input: the activity it waited behind closes, and
+      // every held message moves into the transcript in log order. A step
+      // that still runs (a script outlives the request that wrote it) keeps
+      // its activity live, since only its settlement ends it; this request
+      // joins that activity, and the script's later replies wait for it.
       const ready =
-        !base.live &&
-        (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
-          ? flushDeferredMessages(base, items)
-          : base;
+        state.queuedUserMessages.length === 0 && state.live
+          ? state
+          : flushDeferredMessages(settleLive(state, timestampMs, items), items);
       const live = ensureLive(ready, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
@@ -551,64 +541,57 @@ function reduceAgentUiEvent(
       );
     }
 
-    case "events.iterate.com/capability-host/script-run-requested": {
-      const payload = readPayloadRecord(event);
-      const executionId = typeof payload?.executionId === "string" ? payload.executionId : null;
-      const code = typeof payload?.code === "string" ? payload.code : null;
-      const expiresAtMs = payload?.expiresAt;
-      if (
-        !executionId ||
-        !code ||
-        typeof expiresAtMs !== "number" ||
-        !Number.isSafeInteger(expiresAtMs) ||
-        expiresAtMs <= 0
-      ) {
-        return state;
-      }
-      // A script extracted from an assistant response (`agent-output:<offset>`)
-      // marks that response's llm step interpreted: the Script tab now carries
-      // the code, so pretty rendering can fold the raw response away.
-      const extractedFromAssistantOffset = /^agent-output:(\d+)$/.exec(executionId);
-      const interpretedState = extractedFromAssistantOffset
-        ? markLlmStepInterpretedByAssistantOffset(state, Number(extractedFromAssistantOffset[1]))
-        : state;
+    // The CONTEXT's script run (apps/os runs it): the request's offset is the
+    // run, and its settlement names that offset back.
+    case "events.iterate.com/itx/run-requested": {
+      const parsed = RunRequested.safeParse(event.payload);
+      if (!parsed.success) return state;
+      // The agent asks for a run while processing the assistant item that
+      // wrote it (the engine's `whileProcessing` stamp): that response's llm
+      // step is interpreted — the Script tab now carries the code, so pretty
+      // rendering can fold the raw response away.
+      const askedWhile = event.source?.processor?.whileProcessing?.offset;
+      const interpretedState =
+        askedWhile === undefined
+          ? state
+          : markLlmStepInterpretedByAssistantOffset(state, askedWhile);
       const live = ensureLive(interpretedState, event.offset, timestampMs);
       const step: AgentUiCodeStep = {
         kind: "code",
-        id: `code-${executionId}`,
-        executionId,
+        id: `code-${event.offset}`,
+        requestOffset: event.offset,
         status: "running",
-        code,
+        code: parsed.data.code,
         startedAtMs: timestampMs,
-        expiresAtMs,
-        // Inherit the stream's summary status from birth, so live headers and
-        // inferred (deadline/idle) closes carry it — not only durable settles.
+        deadlineAtMs: timestampMs + RUN_DEADLINE_MS,
+        // Inherit the stream's summary status from birth, so live headers
+        // carry it — not only settled rounds.
         activitySummary: state.summaryActivity || undefined,
       };
       return { ...interpretedState, live: { ...live, steps: [...live.steps, step] } };
     }
 
-    case "events.iterate.com/capability-host/script-run-settled": {
-      const payload = readPayloadRecord(event);
-      if (!payload) return state;
-      const executionId = typeof payload.executionId === "string" ? payload.executionId : null;
-      // Completion identity is mandatory in the current contract. Guessing
-      // the last running step can stamp one script's result onto another.
-      if (!executionId) return state;
-      const outcome = readCodeOutcome(payload);
-      if (!state.live) {
-        return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
-      }
+    case "events.iterate.com/itx/run-settled": {
+      const parsed = RunSettled.safeParse(event.payload);
+      if (!parsed.success || !state.live) return state;
+      const { requestOffset, settlement } = parsed.data;
       const steps = [...state.live.steps];
       const index = steps.findIndex(
-        (step) => step.kind === "code" && step.executionId === executionId,
+        (step) => step.kind === "code" && step.requestOffset === requestOffset,
       );
       const step = steps[index];
-      if (!step || step.kind !== "code") {
-        return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
-      }
+      // The first settlement wins; a run this feed never saw requested is not a step.
+      if (!step || step.kind !== "code" || step.status !== "running") return state;
       steps[index] = {
-        ...applyDurableCodeOutcome(step, outcome, timestampMs),
+        ...step,
+        status: "done",
+        durationMs: Math.max(0, timestampMs - step.startedAtMs),
+        ...(settlement.status === "succeeded"
+          ? {
+              success: true,
+              ...(Object.hasOwn(settlement, "result") && { result: settlement.result }),
+            }
+          : { success: false, errorMessage: settlement.error }),
         // The stream's summary status as of this round — inherited from an
         // earlier round when this one's script didn't update it.
         activitySummary: state.summaryActivity || undefined,
@@ -627,7 +610,7 @@ function reduceAgentUiEvent(
         (next.deferredAssistantMessages.length > 0 ||
           next.queuedUserMessages.length > 0 ||
           next.paused) &&
-        !steps.some((candidate) => candidate.status === "running")
+        !isAgentUiActivityWorking(next.live)
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
       }
@@ -667,7 +650,7 @@ function reduceAgentUiEvent(
     // open, and that request settles normally.
     case "events.iterate.com/itx/paused":
     case "events.iterate.com/agent/paused": {
-      const settled = settleActivityAtBoundary({ ...state, paused: true }, timestampMs, items);
+      const settled = settleLive({ ...state, paused: true }, timestampMs, items);
       const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
       items.push({
         kind: "stream-paused",
@@ -707,114 +690,29 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
   };
 }
 
-function settleLiveIfIdle(
-  state: AgentUiState,
-  endedAtMs: number,
-  items: AgentUiItem[],
-): AgentUiState {
-  if (isAgentUiActivityWorking(state.live)) return state;
-  return settleLive(state, endedAtMs, items);
-}
-
 /**
- * A requested code step whose server-side deadline passed without a durable
- * completion cannot remain live forever. At a visible run boundary, preserve
- * the uncertain side-effect outcome and close the UI step explicitly.
+ * Close the live activity once nothing in it runs — every step closed by its
+ * own settlement — and emit it as a settled item. A working activity stays
+ * live: nothing but a step's settlement ends it.
  */
-function expireOverdueCodeSteps(state: AgentUiState, boundaryAtMs: number): AgentUiState {
-  if (!state.live) return state;
-  let changed = false;
-  const steps = state.live.steps.map((step): AgentUiStep => {
-    if (step.kind !== "code" || step.status !== "running" || boundaryAtMs < step.expiresAtMs) {
-      return step;
-    }
-    changed = true;
-    return {
-      ...step,
-      status: "done",
-      success: false,
-      outcomeSource: "inferred",
-      durationMs: Math.max(0, step.expiresAtMs - step.startedAtMs),
-      errorMessage:
-        "Script execution exceeded its deadline without a completion event. It may have partially executed and was NOT re-run.",
-    };
-  });
-  if (!changed) return state;
-
-  return {
-    ...state,
-    live: {
-      ...state.live,
-      steps,
-    },
-  };
-}
-
-function settleActivityAtBoundary(
-  state: AgentUiState,
-  boundaryAtMs: number,
-  items: AgentUiItem[],
-): AgentUiState {
-  return settleLiveIfIdle(expireOverdueCodeSteps(state, boundaryAtMs), boundaryAtMs, items);
-}
-
-/** Closes the live activity (if any) and emits it as a settled item. */
 function settleLive(state: AgentUiState, endedAtMs: number, items: AgentUiItem[]): AgentUiState {
-  if (!state.live) return state;
-  if (state.live.steps.length === 0) return { ...state, live: null };
-  const settled: AgentUiActivity = {
-    ...state.live,
-    status: "done",
-    endedAtMs,
-    steps: state.live.steps.map((step): AgentUiStep => {
-      if (step.status !== "running") return step;
-      const durationMs = Math.max(0, endedAtMs - step.startedAtMs);
-      return step.kind === "llm"
-        ? {
-            ...step,
-            status: "done",
-            outcome: "failed",
-            durationMs,
-            errorMessage:
-              "The agent became idle without a durable LLM completion or cancellation event.",
-          }
-        : {
-            ...step,
-            status: "done",
-            success: false,
-            outcomeSource: "inferred",
-            durationMs,
-            errorMessage:
-              "The agent became idle without a durable script completion event. Its execution outcome is unknown; do not assume it is safe to re-run.",
-          };
-    }),
-  };
-  const provisionalActivities = { ...state.provisionalActivities };
-  if (settled.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")) {
-    provisionalActivities[settled.id] = settled;
-    while (Object.keys(provisionalActivities).length > AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT) {
-      const oldestId = Object.keys(provisionalActivities)[0];
-      if (!oldestId) break;
-      delete provisionalActivities[oldestId];
-    }
-  }
-  items.push(settled);
-  return { ...state, live: null, provisionalActivities };
-}
-
-function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  items.push(...state.queuedUserMessages);
-  return { ...state, queuedUserMessages: [] };
+  if (!state.live || isAgentUiActivityWorking(state.live)) return state;
+  if (state.live.steps.length > 0) items.push({ ...state.live, status: "done", endedAtMs });
+  return { ...state, live: null };
 }
 
 /**
- * Emit the current turn's assistant output before user messages queued for the
- * next turn. Keeping the two queues separate also prevents assistant bubbles
- * from appearing in the composer's "queued messages" affordance.
+ * Emit the held assistant and user messages in log order, so a reply never
+ * lands above the question before it. The two queues stay separate so that
+ * assistant bubbles never show in the composer's "queued messages" panel.
  */
 function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  items.push(...state.deferredAssistantMessages);
-  return flushQueuedUserMessages({ ...state, deferredAssistantMessages: [] }, items);
+  items.push(
+    ...[...state.deferredAssistantMessages, ...state.queuedUserMessages].sort(
+      (a, b) => a.offset - b.offset,
+    ),
+  );
+  return { ...state, deferredAssistantMessages: [], queuedUserMessages: [] };
 }
 
 // A user message while steps are still running must not archive those steps
@@ -826,7 +724,7 @@ function emitUserMessageItem(
   items: AgentUiItem[],
   item: AgentUiMessageItem,
 ): AgentUiState {
-  const settled = settleActivityAtBoundary(state, item.timestampMs, items);
+  const settled = settleLive(state, item.timestampMs, items);
   if (isAgentUiActivityWorking(settled.live)) {
     return { ...settled, queuedUserMessages: [...settled.queuedUserMessages, item] };
   }
@@ -845,7 +743,7 @@ function emitAssistantMessageItem(
   items: AgentUiItem[],
   item: AgentUiMessageItem,
 ): AgentUiState {
-  const settled = settleActivityAtBoundary(state, item.timestampMs, items);
+  const settled = settleLive(state, item.timestampMs, items);
   if (isAgentUiActivityWorking(settled.live)) {
     return {
       ...settled,
@@ -857,61 +755,8 @@ function emitAssistantMessageItem(
   return flushed;
 }
 
-function correctProvisionalCodeStep(
-  state: AgentUiState,
-  executionId: string,
-  outcome: Partial<AgentUiCodeStep>,
-  completedAtMs: number,
-  items: AgentUiItem[],
-): AgentUiState {
-  const activity = Object.values(state.provisionalActivities).find((candidate) =>
-    candidate.steps.some(
-      (step) =>
-        step.kind === "code" &&
-        step.executionId === executionId &&
-        step.outcomeSource === "inferred",
-    ),
-  );
-  if (!activity) return state;
-  const steps = activity.steps.map((step): AgentUiStep => {
-    if (step.kind !== "code" || step.executionId !== executionId) return step;
-    return applyDurableCodeOutcome(step, outcome, completedAtMs);
-  });
-  const corrected: AgentUiActivity = { ...activity, steps };
-  const provisionalActivities = { ...state.provisionalActivities };
-  if (corrected.steps.some((step) => step.kind === "code" && step.outcomeSource === "inferred")) {
-    provisionalActivities[corrected.id] = corrected;
-  } else {
-    delete provisionalActivities[corrected.id];
-  }
-  items.push(corrected);
-  return { ...state, provisionalActivities };
-}
-
-function applyDurableCodeOutcome(
-  step: AgentUiCodeStep,
-  outcome: Partial<AgentUiCodeStep>,
-  completedAtMs: number,
-): AgentUiCodeStep {
-  // A provisional boundary writes a failure. A later durable success must
-  // replace that outcome, not produce the impossible combination
-  // `success: true` plus the stale inferred error (or stale result fields in
-  // the opposite direction).
-  const base = { ...step };
-  delete base.errorMessage;
-  delete base.result;
-  delete base.success;
-  return {
-    ...base,
-    status: "done",
-    durationMs: outcome.durationMs ?? Math.max(0, completedAtMs - step.startedAtMs),
-    outcomeSource: "durable",
-    ...outcome,
-  };
-}
-
 /** Mark the llm step whose committed assistant event is `assistantEventOffset`
- * as interpreted (a script was extracted from it). */
+ * as interpreted (the agent asked for its script's run). */
 function markLlmStepInterpretedByAssistantOffset(
   state: AgentUiState,
   assistantEventOffset: number,
@@ -976,24 +821,6 @@ function llmChunkDeltas(chunk: unknown): {
     };
   }
   return { responseDelta: "", thinkingDelta: "" };
-}
-
-function readCodeOutcome(payload: Record<string, unknown>): Partial<AgentUiCodeStep> {
-  const parsed = RunSettled.shape.settlement.safeParse(payload.settlement);
-  if (!parsed.success) {
-    return {
-      success: false,
-      errorMessage: "The durable script settlement is invalid.",
-    };
-  }
-  const settlement = parsed.data;
-  if (settlement.status === "succeeded") {
-    return {
-      success: true,
-      ...(Object.hasOwn(settlement, "result") && { result: settlement.result }),
-    };
-  }
-  return { success: false, errorMessage: settlement.error };
 }
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {

@@ -1,5 +1,5 @@
 // The traces, inspector sheets built over the page's own event array: the LLM request (what the
-// model was sent, what it answered, what the loop derived) and the script execution (the code, its
+// model was sent, what it answered, what the loop derived) and the script run (the code, its
 // settlement, what the agent was told). One Sheet, URL-backed by the route's search params, so any
 // trace is a shareable link. The Events view is the raw log: one row per event, click to inspect.
 import { useState } from "react";
@@ -25,20 +25,14 @@ import {
   type AgentUiLlmStep,
 } from "../lib/events/agent-ui-reducer.ts";
 import { sliceText, type StreamText } from "../lib/chunked-text.ts";
-import {
-  formatDateTime,
-  isRecord,
-  llmTrace,
-  scriptTrace,
-  type LlmTrace,
-} from "../lib/agent-events.ts";
+import { formatDateTime, llmTrace, scriptTrace, type LlmTrace } from "../lib/agent-events.ts";
 import { MessageResponse } from "./message.tsx";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
 
 /** Which trace the sheet shows — at most one; the route's search params carry it. */
 export type Inspected =
   | { kind: "llmRequest"; llmRequestOffset: number }
-  | { kind: "scriptExecution"; executionId: string }
+  | { kind: "scriptRun"; requestOffset: number }
   | null;
 
 export function InspectorSheet({
@@ -77,8 +71,8 @@ export function InspectorSheet({
             liveStep={liveStep}
             onInspect={onInspect}
           />
-        ) : inspected?.kind === "scriptExecution" ? (
-          <ScriptTraceContent events={events} executionId={inspected.executionId} />
+        ) : inspected?.kind === "scriptRun" ? (
+          <ScriptTraceContent events={events} requestOffset={inspected.requestOffset} />
         ) : null}
       </SheetContent>
     </Sheet>
@@ -173,9 +167,9 @@ function LlmTraceContent({
           liveStep={liveStep}
           outcome={trace.outcome}
           onInspect={onInspect}
-          scriptExecutionId={trace.derived.scriptExecutionId}
+          scriptRequestOffset={trace.derived.scriptRequestOffset}
         />
-        {trace.derived.prose || trace.derived.scriptExecutionId ? (
+        {trace.derived.prose || trace.derived.scriptRequestOffset ? (
           <section className="px-5 py-3">
             <div className="mb-2 flex items-baseline gap-2">
               <RoleChip name="derived" />
@@ -196,15 +190,15 @@ function LlmTraceContent({
                   </MessageResponse>
                 </div>
               ) : null}
-              {trace.derived.scriptExecutionId ? (
+              {trace.derived.scriptRequestOffset ? (
                 <Button
                   variant="outline"
                   size="sm"
                   className="self-start"
                   onClick={() =>
                     onInspect({
-                      kind: "scriptExecution",
-                      executionId: trace.derived.scriptExecutionId!,
+                      kind: "scriptRun",
+                      requestOffset: trace.derived.scriptRequestOffset!,
                     })
                   }
                 >
@@ -228,12 +222,12 @@ function ResponseView({
   liveStep,
   outcome,
   onInspect,
-  scriptExecutionId,
+  scriptRequestOffset,
 }: {
   liveStep: AgentUiLlmStep | undefined;
   outcome: LlmTrace["outcome"];
   onInspect: (next: Inspected) => void;
-  scriptExecutionId: string | undefined;
+  scriptRequestOffset: number | undefined;
 }) {
   const streaming = Boolean(liveStep);
   const thinking: StreamText | null =
@@ -289,14 +283,12 @@ function ResponseView({
             <p className="font-mono text-[10px] uppercase tracking-wider text-emerald-700">
               parsed script
             </p>
-            {scriptExecutionId ? (
+            {scriptRequestOffset ? (
               <Button
                 variant="ghost"
                 size="xs"
                 className="font-normal text-muted-foreground"
-                onClick={() =>
-                  onInspect({ kind: "scriptExecution", executionId: scriptExecutionId })
-                }
+                onClick={() => onInspect({ kind: "scriptRun", requestOffset: scriptRequestOffset })}
               >
                 Execution trace
                 <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
@@ -387,29 +379,31 @@ function Body({ text, renderMode }: { text: string; renderMode: "markdown" | "pl
   );
 }
 
-// ── the script execution ──
+// ── the script run ──
 
 function ScriptTraceContent({
   events,
-  executionId,
+  requestOffset,
 }: {
   events: readonly StreamEvent[];
-  executionId: string;
+  requestOffset: number;
 }) {
-  const trace = scriptTrace(events, executionId);
+  const trace = scriptTrace(events, requestOffset);
   if (!trace)
     return (
       <SheetHeader>
-        <SheetTitle>Script execution</SheetTitle>
-        <SheetDescription>No script run named {executionId} on this path.</SheetDescription>
+        <SheetTitle>Script run #{requestOffset}</SheetTitle>
+        <SheetDescription>
+          No script run requested at offset #{requestOffset} on this path.
+        </SheetDescription>
       </SheetHeader>
     );
-  const settlement = isRecord(trace.settlement?.value) ? trace.settlement.value : null;
+  const settlement = trace.settlement?.value;
   const failed = settlement?.status === "failed";
   return (
     <>
       <SheetHeader className="shrink-0 pr-12">
-        <SheetTitle className="truncate">Script execution · {executionId}</SheetTitle>
+        <SheetTitle className="truncate">Script run #{requestOffset}</SheetTitle>
         <SheetDescription>
           {formatDateTime(trace.requestedAtMs)}
           {trace.settlement ? (

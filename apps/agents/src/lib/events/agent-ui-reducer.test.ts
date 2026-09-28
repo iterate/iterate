@@ -1,12 +1,12 @@
 // Reducer coverage for the browser-side agent UI fold: a full simulated
 // turn — user message, LLM request with streamed thinking + response deltas,
-// code execution, completion, assistant reply — must reduce into the chat
-// items and live active-work tail the agent feed renders.
+// the context's script run, completion, assistant reply — must reduce into the
+// chat items and live active-work tail the agent feed renders.
 import { expect, test } from "vitest";
+import { RUN_DEADLINE_MS, type RunSettlement } from "iterate/stream/run";
 import { appendText } from "../chunked-text.ts";
 import type { StreamEvent } from "./stream-event.ts";
 import {
-  AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
   deriveAgentUiLiveStatus,
   initialAgentUiState,
   reduceAgentUi,
@@ -14,8 +14,6 @@ import {
   summarizeAgentUiActivity,
   type AgentUiItem,
 } from "./agent-ui-reducer.ts";
-
-const SCRIPT_EXPIRES_AT = Date.parse("2026-06-11T00:15:00.000Z");
 
 test("streams thinking and response deltas into the live llm step", () => {
   const state = reduceAll([
@@ -203,18 +201,8 @@ test("settles the activity into items when all work completes", () => {
       offset: 5,
       payload: { model: "gpt-test" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "x1",
-        code: "await stream.read()",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 12 } },
-    },
+    runRequested(3, "await stream.read()"),
+    runSettled(3, { status: "succeeded", result: 12 }),
     {
       type: "events.iterate.com/agent/llm-request-settled",
       payload: {
@@ -249,6 +237,7 @@ test("settles the activity into items when all work completes", () => {
   });
   expect(activity.steps[1]).toMatchObject({
     kind: "code",
+    requestOffset: 3,
     status: "done",
     code: "await stream.read()",
     result: 12,
@@ -264,21 +253,12 @@ test("a run the context's restart interrupted shows the platform's error, not an
       offset: 5,
       payload: { model: "gpt-test" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "x1", code: "await stream.read()", expiresAt: SCRIPT_EXPIRES_AT },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: {
-        executionId: "x1",
-        settlement: {
-          status: "failed",
-          error: "the context restarted before the script finished",
-          failureKind: "interrupted",
-        },
-      },
-    },
+    runRequested(2, "await stream.read()"),
+    runSettled(2, {
+      status: "failed",
+      error: "the context restarted before the script finished",
+      failureKind: "interrupted",
+    }),
     {
       type: "events.iterate.com/agent/llm-request-settled",
       payload: { requestOffset: 5, durationMs: 100, result: { status: "succeeded", text: "ok" } },
@@ -301,10 +281,7 @@ test("stamps the summary activity onto the running code step as it lands", () =>
       offset: 5,
       payload: { model: "gpt-test" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "x1", code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
-    },
+    runRequested(2),
     {
       type: "events.iterate.com/agent/summary-updated",
       payload: { title: "FirstFT roundup", activity: "Searching the five most recent emails" },
@@ -326,41 +303,26 @@ test("a round that never updates the summary inherits the stream status as of th
       offset: 5,
       payload: { model: "gpt-test" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "x1", code: "await round1()", expiresAt: SCRIPT_EXPIRES_AT },
-    },
+    runRequested(2, "await round1()"),
     {
       type: "events.iterate.com/agent/summary-updated",
       payload: { activity: "Running script 1 of 2" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "x2", code: "await round2()", expiresAt: SCRIPT_EXPIRES_AT },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x2", settlement: { status: "succeeded", result: 2 } },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "x3", code: "await round3()", expiresAt: SCRIPT_EXPIRES_AT },
-    },
+    runSettled(2, { status: "succeeded", result: 1 }),
+    runRequested(5, "await round2()"),
+    runSettled(5, { status: "succeeded", result: 2 }),
+    runRequested(7, "await round3()"),
   ]);
 
   const codeSteps = state.live?.steps.filter((step) => step.kind === "code");
   expect(codeSteps).toMatchObject([
-    { executionId: "x1", activitySummary: "Running script 1 of 2" },
-    // x2's script appended no summary — the round's status is whatever the
-    // stream's summary said as of that round.
-    { executionId: "x2", activitySummary: "Running script 1 of 2" },
-    // x3 inherits from BIRTH, so live headers and inferred (deadline/idle)
-    // closes carry the status too — not only durable settles.
-    { executionId: "x3", status: "running", activitySummary: "Running script 1 of 2" },
+    { requestOffset: 2, activitySummary: "Running script 1 of 2" },
+    // The second script appended no summary — the round's status is whatever
+    // the stream's summary said as of that round.
+    { requestOffset: 5, activitySummary: "Running script 1 of 2" },
+    // The third inherits from BIRTH, so the live header carries the status
+    // too — not only settled rounds.
+    { requestOffset: 7, status: "running", activitySummary: "Running script 1 of 2" },
   ]);
 });
 
@@ -473,81 +435,51 @@ test("llm-request-settled failed and cancelled map to step outcomes", () => {
   });
 });
 
-test("keeps running script source and start time in the live activity", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "x1",
-        code: "await itx.repo.readFile({ path: 'README.md' })",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-  ]);
+test("keeps running script source, start time and deadline in the live activity", () => {
+  const state = reduceAll([runRequested(1, "await itx.repo.readFile({ path: 'README.md' })")]);
 
   expect(state.items).toHaveLength(0);
   expect(state.live?.steps).toHaveLength(1);
+  const startedAtMs = Date.parse("2026-06-11T00:00:01.000Z");
   expect(state.live?.steps[0]).toMatchObject({
     kind: "code",
-    executionId: "x1",
+    id: "code-1",
+    requestOffset: 1,
     status: "running",
     code: "await itx.repo.readFile({ path: 'README.md' })",
-    startedAtMs: Date.parse("2026-06-11T00:00:01.000Z"),
+    startedAtMs,
+    // the platform settles a run still going then `deadline` — the feed counts down to it
+    deadlineAtMs: startedAtMs + RUN_DEADLINE_MS,
   });
 });
 
-test("does not guess which script a malformed completion belongs to", () => {
+test("does not guess which script a settlement without its request's offset belongs to", () => {
   const state = reduceAll([
+    runRequested(1, "async () => mutate()"),
     {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "exact-id-required",
-        code: "async () => mutate()",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
+      type: "events.iterate.com/itx/run-settled",
       payload: { settlement: { status: "succeeded", result: "wrong target" } },
     },
   ]);
 
-  expect(state.live?.steps).toMatchObject([
-    { kind: "code", executionId: "exact-id-required", status: "running" },
-  ]);
+  expect(state.live?.steps).toMatchObject([{ kind: "code", requestOffset: 1, status: "running" }]);
 });
 
 test("does not derive agent state or durations from a malformed event timestamp", () => {
   const state = reduceAll([
+    runRequested(1, "async () => mutate()"),
     {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "valid-start",
-        code: "async () => mutate()",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
+      ...runSettled(1, { status: "succeeded", result: "must be ignored" }),
       createdAt: "not-a-timestamp",
-      payload: {
-        executionId: "valid-start",
-        settlement: { status: "succeeded", result: "must be ignored" },
-      },
     },
   ]);
 
-  expect(state.live?.steps).toMatchObject([
-    { kind: "code", executionId: "valid-start", status: "running" },
-  ]);
+  expect(state.live?.steps).toMatchObject([{ kind: "code", requestOffset: 1, status: "running" }]);
 });
 
-test("rejects script requests that do not satisfy the current deadline contract", () => {
+test("a run request RunRequested refuses (no code) is no step", () => {
   const state = reduceAll([
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: { executionId: "missing-deadline", code: "return 1" },
-    },
+    { type: "events.iterate.com/itx/run-requested", payload: { code: "" } },
   ]);
 
   expect(state).toMatchObject({ items: [] });
@@ -570,14 +502,11 @@ test("keeps the live indicator while a running script emits chat messages", () =
           "<codemode>\nawait itx.chat.sendMessage('20');\nawait new Promise((resolve) => setTimeout(resolve, 1000));\n</codemode>",
       },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "agent-output:11",
-        code: "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
+    runRequested(
+      3,
+      "async (itx) => {\n  await itx.chat.sendMessage('20');\n  await new Promise((resolve) => setTimeout(resolve, 1000));\n}",
+      2,
+    ),
     {
       type: "events.iterate.com/agent/llm-request-settled",
       payload: { requestOffset: 10, result: { status: "succeeded", text: "20" } },
@@ -594,20 +523,11 @@ test("keeps the live indicator while a running script emits chat messages", () =
   expect(running).toMatchObject({ queuedUserMessages: [] });
   expect(running.live?.steps.at(-1)).toMatchObject({
     kind: "code",
-    executionId: "agent-output:11",
+    requestOffset: 3,
     status: "running",
   });
 
-  const completed = settleAtIdle(
-    reduceAll([
-      ...countdownEvents,
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        payload: { executionId: "agent-output:11", settlement: { status: "succeeded" } },
-      },
-    ]),
-    20,
-  );
+  const completed = settleAtIdle(reduceAll([...countdownEvents, runSettled(3)]), 20);
 
   expect(completed.live).toBeNull();
   expect(completed.items.map((item) => item.kind)).toEqual(["activity", "assistant"]);
@@ -616,7 +536,7 @@ test("keeps the live indicator while a running script emits chat messages", () =
     status: "done",
     steps: [
       { kind: "llm", status: "done" },
-      { kind: "code", executionId: "agent-output:11", status: "done" },
+      { kind: "code", requestOffset: 3, status: "done" },
     ],
   });
 });
@@ -652,22 +572,12 @@ test("flushes a script-sent reply when its script settles and nothing else is ru
       type: "events.iterate.com/agent/llm-request-settled",
       payload: { requestOffset: 10, result: { status: "succeeded", text: "…" } },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        executionId: "agent-output:12",
-        code: "async (itx) => {\n  await itx.chat.sendMessage('grok');\n}",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
+    runRequested(5, "async (itx) => {\n  await itx.chat.sendMessage('grok');\n}", 3),
     {
       type: "events.iterate.com/agent/web-message-sent",
       payload: { message: "I'm using **xai/grok-4.5**." },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "agent-output:12", settlement: { status: "succeeded" } },
-    },
+    runSettled(5),
   ]);
 
   expect(state.live).toBeNull();
@@ -682,7 +592,7 @@ test("flushes a script-sent reply when its script settles and nothing else is ru
     status: "done",
     steps: [
       { kind: "llm", status: "done", outcome: "completed" },
-      { kind: "code", executionId: "agent-output:12", status: "done", success: true },
+      { kind: "code", requestOffset: 5, status: "done", success: true },
     ],
   });
 });
@@ -854,137 +764,97 @@ test("settles a completed LLM request at run-level idle even without an assistan
   ]);
 });
 
-test("makes missing durable completions explicit when run-level idle closes work", () => {
-  const state = settleAtIdle(
+test("the reported idle boundary closes no running step: the model call and the script stay running until their own settlements land", () => {
+  const events = [
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 1, payload: { model: "m" } },
+    runRequested(2, "async () => mutateExternalState()"),
+  ];
+  const idle = settleAtIdle(reduceAll(events), 8);
+
+  expect(idle).toMatchObject({ items: [] });
+  expect(idle.live?.steps).toMatchObject([
+    { kind: "llm", status: "running" },
+    { kind: "code", status: "running" },
+  ]);
+
+  // The platform settles every run: one still going at RUN_DEADLINE_MS is settled `deadline`.
+  const settled = settleAtIdle(
     reduceAll([
+      ...events,
       {
-        type: "events.iterate.com/agent/llm-request-requested",
-        offset: 7,
-        payload: { model: "gpt-test" },
+        type: "events.iterate.com/agent/llm-request-settled",
+        payload: { requestOffset: 1, result: { status: "succeeded", text: "…" } },
       },
-      {
-        type: "events.iterate.com/capability-host/script-run-requested",
-        payload: {
-          executionId: "script-without-completion",
-          code: "async () => mutateExternalState()",
-          expiresAt: Date.parse("2026-06-11T00:15:00.000Z"),
-        },
-      },
+      runSettled(2, {
+        status: "failed",
+        error:
+          "itx.run: the script did not finish within 10 minutes; it may have partly run, and it is not run again",
+        failureKind: "deadline",
+      }),
     ]),
     8,
   );
-
-  const activity = state.items[0];
-  if (activity?.kind !== "activity") throw new Error("expected activity item");
-  expect(activity.steps).toMatchObject([
+  expect(settled.live).toBeNull();
+  expect(settled.items).toMatchObject([
     {
-      kind: "llm",
+      kind: "activity",
       status: "done",
-      outcome: "failed",
-      errorMessage: expect.stringMatching(/without a durable LLM completion/i),
-    },
-    {
-      kind: "code",
-      status: "done",
-      success: false,
-      errorMessage: expect.stringMatching(/outcome is unknown.*safe to re-run/i),
+      steps: [
+        { kind: "llm", status: "done", outcome: "completed" },
+        {
+          kind: "code",
+          status: "done",
+          success: false,
+          errorMessage: expect.stringMatching(/did not finish within 10 minutes/),
+        },
+      ],
     },
   ]);
 });
 
-test("emits a same-id correction when a durable script settlement arrives after idle", () => {
-  const requested = {
-    type: "events.iterate.com/capability-host/script-run-requested",
-    offset: 10,
-    payload: {
-      executionId: "late-script",
-      code: "async () => mutate()",
-      expiresAt: SCRIPT_EXPIRES_AT,
-    },
-  };
-  const provisional = settleAtIdle(reduceAll([requested]), 10).items.at(-1);
-  const corrected = settleAtIdle(
-    reduceAll([
-      requested,
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        offset: 11,
-        payload: {
-          executionId: "late-script",
-          settlement: { status: "succeeded", result: { committed: true } },
-        },
-      },
-    ]),
-    11,
-  ).items.at(-1);
+test("a script settlement that lands after the idle report closes the step it names", () => {
+  const requested = runRequested(10, "async () => mutate()");
+  const idle = settleAtIdle(reduceAll([requested]), 10);
+  expect(idle).toMatchObject({ items: [] });
+  expect(idle.live?.steps).toMatchObject([{ kind: "code", requestOffset: 10, status: "running" }]);
 
-  expect(provisional).toMatchObject({
-    kind: "activity",
-    steps: [{ kind: "code", outcomeSource: "inferred", success: false }],
-  });
-  expect(corrected).toMatchObject({
-    kind: "activity",
-    id: provisional?.id,
-    steps: [
-      {
-        kind: "code",
-        outcomeSource: "durable",
-        success: true,
-        result: { committed: true },
-      },
-    ],
-  });
-  if (corrected?.kind !== "activity" || corrected.steps[0]?.kind !== "code") {
-    throw new Error("expected corrected code activity");
-  }
-  expect(corrected.steps[0]).not.toHaveProperty("errorMessage");
+  const settled = settleAtIdle(
+    reduceAll([requested, runSettled(10, { status: "succeeded", result: { committed: true } })]),
+    11,
+  );
+  expect(settled.items).toMatchObject([
+    {
+      kind: "activity",
+      id: "activity-10",
+      steps: [{ kind: "code", status: "done", success: true, result: { committed: true } }],
+    },
+  ]);
+  const [activity] = settled.items;
+  if (activity?.kind !== "activity") throw new Error("expected the settled activity");
+  expect(activity.steps[0]).not.toHaveProperty("errorMessage");
 });
 
-test("projects several unsettled scripts as one provisional activity", () => {
-  const requestedEvents = [
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      offset: 10,
-      payload: {
-        executionId: "late-a",
-        code: "async () => mutateA()",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      offset: 11,
-      payload: {
-        executionId: "late-b",
-        code: "async () => mutateB()",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
-  ];
+test("an activity with one of its two scripts still running stays live at the idle report", () => {
   const state = settleAtIdle(
     reduceAll([
-      ...requestedEvents,
-      {
-        type: "events.iterate.com/capability-host/script-run-settled",
-        offset: 12,
-        payload: { executionId: "late-a", settlement: { status: "succeeded", result: "a" } },
-      },
+      runRequested(10, "async () => mutateA()"),
+      runRequested(11, "async () => mutateB()"),
+      runSettled(10, { status: "succeeded", result: "a" }),
     ]),
     12,
   );
 
-  expect(Object.values(state.provisionalActivities)).toHaveLength(1);
-  expect(Object.keys(state.provisionalActivities)).toEqual(["activity-10"]);
-  expect(state.items.at(-1)).toMatchObject({
+  expect(state).toMatchObject({ items: [] });
+  expect(state.live).toMatchObject({
     id: "activity-10",
     steps: [
-      { kind: "code", executionId: "late-a", outcomeSource: "durable" },
-      { kind: "code", executionId: "late-b", outcomeSource: "inferred" },
+      { kind: "code", requestOffset: 10, status: "done", result: "a" },
+      { kind: "code", requestOffset: 11, status: "running" },
     ],
   });
 });
 
-test("the reported idle boundary settles the activity even when the journal fold is newer", () => {
+test("the reported idle boundary never closes a running model call: only its llm-request-settled does", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/llm-request-requested",
@@ -994,33 +864,19 @@ test("the reported idle boundary settles the activity even when the journal fold
   ]);
   const projected = settleAtIdle(state, 11);
 
-  expect(projected.live).toBeNull();
-  expect(projected.items).toMatchObject([
-    { kind: "activity", steps: [{ kind: "llm", status: "done" }] },
-  ]);
+  expect(projected).toMatchObject({ items: [] });
+  expect(projected.live?.steps).toMatchObject([{ kind: "llm", status: "running" }]);
 });
 
 test("the reported idle boundary settles the activity after a later journal event", () => {
   const state = reduceAll([
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      offset: 1,
-      payload: {
-        executionId: "reply-script",
-        code: 'async (itx) => itx.chat.sendMessage("kumquat")',
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
+    runRequested(1, 'async (itx) => itx.chat.sendMessage("kumquat")'),
     {
       type: "events.iterate.com/agent/web-message-sent",
       offset: 2,
       payload: { message: "kumquat" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      offset: 3,
-      payload: { executionId: "reply-script", settlement: { status: "succeeded" } },
-    },
+    { ...runSettled(1), offset: 3 },
     {
       type: "events.iterate.com/agent/context-added",
       offset: 4,
@@ -1041,42 +897,48 @@ test("the reported idle boundary settles the activity after a later journal even
   ]);
 });
 
-test("bounds provisional corrections when later input closes expired work", () => {
+test("a script past its deadline stays running through later input, which queues, until the platform's `deadline` settlement closes it", () => {
   const baseMs = Date.parse("2026-06-11T00:00:00.000Z");
-  const eventCount = AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT + 8;
-  const events = Array.from({ length: eventCount }, (_, index) => {
-    const requestedOffset = index * 2 + 1;
-    return [
-      {
-        type: "events.iterate.com/capability-host/script-run-requested",
-        offset: requestedOffset,
-        createdAt: new Date(baseMs + requestedOffset * 1_000).toISOString(),
-        payload: {
-          executionId: `missing-${index}`,
-          code: "async () => mutate()",
-          expiresAt: baseMs + requestedOffset * 1_000 + 500,
-        },
-      },
-      {
-        type: "events.iterate.com/agent/context-added",
-        offset: requestedOffset + 1,
-        createdAt: new Date(baseMs + (requestedOffset + 1) * 1_000).toISOString(),
-        payload: {
-          role: "user",
-          actor: { type: "user", origin: "web" },
-          content: `next-${index}`,
-        },
-      },
-    ];
-  }).flat();
+  const at = (ms: number) => new Date(baseMs + ms).toISOString();
+  const pastDeadline = reduceAll([
+    { ...runRequested(1, "async () => mutate()"), createdAt: at(0) },
+    {
+      type: "events.iterate.com/agent/context-added",
+      offset: 2,
+      createdAt: at(RUN_DEADLINE_MS + 1_000),
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "still there?" },
+    },
+  ]);
+  expect(pastDeadline).toMatchObject({ items: [] });
+  expect(pastDeadline.queuedUserMessages).toMatchObject([{ text: "still there?" }]);
+  expect(pastDeadline.live?.steps).toMatchObject([{ kind: "code", status: "running" }]);
 
-  const state = reduceAll(events);
-
-  expect(Object.keys(state.provisionalActivities)).toHaveLength(
-    AGENT_UI_PROVISIONAL_ACTIVITY_LIMIT,
-  );
-  expect(state.provisionalActivities["activity-1"]).toBeUndefined();
-  expect(state.provisionalActivities[`activity-${(eventCount - 1) * 2 + 1}`]).toBeDefined();
+  const settled = reduceAll([
+    { ...runRequested(1, "async () => mutate()"), createdAt: at(0) },
+    {
+      type: "events.iterate.com/agent/context-added",
+      offset: 2,
+      createdAt: at(RUN_DEADLINE_MS + 1_000),
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "still there?" },
+    },
+    {
+      ...runSettled(1, {
+        status: "failed",
+        error: "itx.run: the script did not finish within 10 minutes",
+        failureKind: "deadline",
+      }),
+      offset: 3,
+      createdAt: at(RUN_DEADLINE_MS + 2_000),
+    },
+  ]);
+  expect(settled.live).toBeNull();
+  expect(settled.items).toMatchObject([
+    {
+      kind: "activity",
+      steps: [{ kind: "code", success: false, durationMs: RUN_DEADLINE_MS + 2_000 }],
+    },
+    { kind: "user", text: "still there?" },
+  ]);
 });
 
 test("queues a user message that arrives mid-turn", () => {
@@ -1145,6 +1007,102 @@ test("settles queued user messages before the next LLM request starts", () => {
   expect(state.queuedUserMessages).toHaveLength(0);
   expect(state.live?.steps).toHaveLength(1);
   expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestOffset: 12 });
+});
+
+test("a request that input starts while a script still runs moves the input into the transcript and joins the script's activity", () => {
+  const events = [
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "do X" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 2, payload: { model: "m" } },
+    requestSettled(2),
+    runRequested(4, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 6, payload: { model: "m" } },
+    requestSettled(6),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "still working on X", llmRequestOffset: 6 },
+    },
+    runSettled(4),
+  ];
+
+  // The second request answers "and then?": the composer no longer shows it
+  // queued, and the request joins the activity the script keeps running.
+  const answering = reduceAll(events.slice(0, 6));
+  expect(answering).toMatchObject({
+    queuedUserMessages: [],
+    items: [
+      { kind: "user", text: "do X" },
+      { kind: "user", text: "and then?" },
+    ],
+  });
+  expect(answering.live?.steps).toMatchObject([
+    { kind: "llm", llmRequestOffset: 2, status: "done" },
+    { kind: "code", requestOffset: 4, status: "running" },
+    { kind: "llm", llmRequestOffset: 6, status: "running" },
+  ]);
+
+  const settled = reduceAll(events);
+  expect(settled.live).toBeNull();
+  expect(settled.items).toMatchObject([
+    { kind: "user", text: "do X" },
+    { kind: "user", text: "and then?" },
+    { kind: "activity", id: "activity-2", status: "done" },
+    { kind: "assistant", text: "still working on X" },
+  ]);
+});
+
+test("a request that input starts while a script still runs moves the script's earlier reply into the transcript before that input", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "still on X" } },
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 4, payload: { model: "m" } },
+    requestSettled(4),
+    runSettled(1),
+  ]);
+
+  expect(state).toMatchObject({
+    items: [
+      { kind: "assistant", text: "still on X" },
+      { kind: "user", text: "and then?" },
+    ],
+    deferredAssistantMessages: [],
+    queuedUserMessages: [],
+    live: {
+      steps: [
+        { kind: "code", status: "done" },
+        { kind: "llm", llmRequestOffset: 4, status: "done" },
+      ],
+    },
+  });
+});
+
+test("a settling script flushes its held reply and the input that queued behind it in log order", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "X is done" } },
+    runSettled(1),
+  ]);
+
+  expect(state.items).toMatchObject([
+    { kind: "activity", steps: [{ kind: "code", status: "done", success: true }] },
+    { kind: "user", text: "and then?" },
+    { kind: "assistant", text: "X is done" },
+  ]);
+  expect(state).toMatchObject({ deferredAssistantMessages: [], queuedUserMessages: [] });
 });
 
 test("does not append late chunks from an interrupted request into the next turn", () => {
@@ -1348,7 +1306,7 @@ test("the first settlement wins when a duplicate races in", () => {
 });
 
 test("derived events mark the llm step interpreted; uninterpreted turns stay plain", () => {
-  const reduced = reduceAll([
+  const answered = [
     { type: "events.iterate.com/agent/llm-request-requested", payload: { model: "m" } },
     {
       type: "events.iterate.com/agent/context-added",
@@ -1358,18 +1316,20 @@ test("derived events mark the llm step interpreted; uninterpreted turns stay pla
         llmRequestOffset: 1,
       },
     },
-    // The userland interpreter's derived events, in its committed order:
-    // the script extracted from the assistant event (offset 2) FIRST — so
-    // the code step joins the request's still-open activity — then the
-    // extracted prose (marked with the request offset).
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        code: "async (itx) => {\nreturn 1\n}",
-        executionId: "agent-output:2",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
+    // The agent's derived events, in its committed order: the run it asked
+    // for while processing the assistant event (offset 2) FIRST — so the code
+    // step joins the request's still-open activity — then the extracted prose
+    // (marked with the request offset).
+    runRequested(3, "async (itx) => {\nreturn 1\n}", 2),
+  ];
+  // the run alone marks the response interpreted: the Script tab carries the code
+  expect(reduceAll(answered).live?.steps[0]).toMatchObject({
+    kind: "llm",
+    assistantEventOffset: 2,
+    interpreted: true,
+  });
+  const reduced = reduceAll([
+    ...answered,
     {
       type: "events.iterate.com/agent/web-message-sent",
       payload: { message: "Hi!", llmRequestOffset: 1 },
@@ -1409,16 +1369,9 @@ test("script-before-prose keeps the whole turn in ONE activity, rounds paired", 
       type: "events.iterate.com/agent/llm-request-settled",
       payload: { requestOffset: 1, result: { status: "succeeded", text: "…" } },
     },
-    // Userland order: script first (joins the request's activity), prose
+    // The agent's order: script first (joins the request's activity), prose
     // second (defers — the activity is now working again).
-    {
-      type: "events.iterate.com/capability-host/script-run-requested",
-      payload: {
-        code: "async (itx) => 1",
-        executionId: "agent-output:2",
-        expiresAt: SCRIPT_EXPIRES_AT,
-      },
-    },
+    runRequested(4, "async (itx) => 1", 2),
     {
       type: "events.iterate.com/agent/web-message-sent",
       payload: { message: "Hi!", llmRequestOffset: 1 },
@@ -1462,51 +1415,32 @@ test("phases follow the running step: waiting → thinking → writing → runni
   ]);
   expect(deriveAgentUiLiveStatus(writing)).toMatchObject({ phase: "writing" });
 
-  const running = reduceAll([{ ...request, offset: 5 }, scriptRequested("x1")]);
+  const running = reduceAll([{ ...request, offset: 5 }, runRequested(2)]);
   expect(deriveAgentUiLiveStatus(running)).toMatchObject({ phase: "running" });
 });
 
-test("a script that durably settled WITH a value means another round: processing", () => {
+test("a script that settled WITH a value means another round: processing", () => {
   const state = reduceAll([
     { ...request, offset: 5 },
     requestSettled(5),
-    scriptRequested("x1"),
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
-    },
+    runRequested(3),
+    runSettled(3, { status: "succeeded", result: 42 }),
   ]);
   expect(deriveAgentUiLiveStatus(state)).toMatchObject({ phase: "processing" });
   // A value-less settle (`return;`) ends the turn — no round is owed.
   const returned = reduceAll([
     { ...request, offset: 5 },
     requestSettled(5),
-    scriptRequested("x1"),
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded" } },
-    },
+    runRequested(3),
+    runSettled(3),
   ]);
   expect(deriveAgentUiLiveStatus(returned)).toMatchObject({ phase: "working" });
   // A failed settle isn't a promise of another round either.
   const failed = reduceAll([
     { ...request, offset: 5 },
     requestSettled(5),
-    scriptRequested("x1"),
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: {
-        executionId: "x1",
-        settlement: {
-          status: "failed",
-          error: "boom",
-          failureKind: "runtime",
-          phase: "execution",
-          executionMayHaveOccurred: true,
-          cancellation: "not-applicable",
-        },
-      },
-    },
+    runRequested(3),
+    runSettled(3, { status: "failed", error: "boom", failureKind: "runtime" }),
   ]);
   expect(deriveAgentUiLiveStatus(failed)).toMatchObject({ phase: "working" });
 });
@@ -1515,15 +1449,12 @@ test("statusText is this turn's summary only — a previous turn's text stays ge
   const turnOne = [
     { ...request, offset: 5 },
     requestSettled(5),
-    scriptRequested("x1"),
+    runRequested(3),
     {
       type: "events.iterate.com/agent/summary-updated",
       payload: { activity: "Sweeping March refunds" },
     },
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
-    },
+    runSettled(3, { status: "succeeded", result: 1 }),
   ];
   expect(deriveAgentUiLiveStatus(reduceAll(turnOne))).toMatchObject({
     phase: "processing",
@@ -1568,11 +1499,8 @@ test("agent/paused settles an idle live activity from journal facts alone", () =
   const state = reduceAll([
     { ...request, offset: 5 },
     requestSettled(5),
-    scriptRequested("x1"),
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
-    },
+    runRequested(3),
+    runSettled(3, { status: "succeeded", result: 42 }),
     {
       type: "events.iterate.com/agent/paused",
       payload: { reason: "autonomous turn limit reached" },
@@ -1603,11 +1531,8 @@ test("a value-settled script on a PAUSED loop settles the activity — never pro
     { ...request, offset: 5 },
     { type: "events.iterate.com/agent/paused", payload: { reason: "operator hold" } },
     requestSettled(5),
-    scriptRequested("x1"),
-    {
-      type: "events.iterate.com/capability-host/script-run-settled",
-      payload: { executionId: "x1", settlement: { status: "succeeded", result: 42 } },
-    },
+    runRequested(4),
+    runSettled(4, { status: "succeeded", result: 42 }),
   ]);
   expect(state).toMatchObject({ paused: true });
   expect(state.live).toBeNull();
@@ -1659,7 +1584,27 @@ const requestSettled = (requestOffset: number) => ({
   type: "events.iterate.com/agent/llm-request-settled",
   payload: { requestOffset, result: { status: "succeeded", text: "await work()" } },
 });
-const scriptRequested = (executionId: string) => ({
-  type: "events.iterate.com/capability-host/script-run-requested",
-  payload: { executionId, code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+/** The context's `itx/run-requested` at `offset`; `askedWhile` is the assistant item the agent was
+ *  processing when it asked (the engine's `whileProcessing` stamp). */
+const runRequested = (offset: number, code = "await work()", askedWhile?: number) => ({
+  type: "events.iterate.com/itx/run-requested",
+  offset,
+  payload: { code },
+  ...(askedWhile !== undefined && {
+    source: {
+      processor: {
+        slug: "agent",
+        version: "1",
+        whileProcessing: { offset: askedWhile, type: "events.iterate.com/agent/context-added" },
+      },
+    },
+  }),
+});
+/** The platform's `itx/run-settled` for the run requested at `requestOffset`. */
+const runSettled = (
+  requestOffset: number,
+  settlement: RunSettlement = { status: "succeeded" },
+) => ({
+  type: "events.iterate.com/itx/run-settled",
+  payload: { requestOffset, settlement },
 });

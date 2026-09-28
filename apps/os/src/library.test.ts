@@ -5,13 +5,13 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
 import type { OpenApiDocument, WaitForEventFilter } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { RUN_DEADLINE_MS } from "iterate/stream/run";
 import { committedEvent } from "iterate/stream/test-support";
 import {
   buildLibrary,
   type LibraryItx,
   type LibraryRoots,
   executeScript,
-  RUN_DEADLINE_MS,
   runScript,
   runScriptModule,
   runSettlementOf,
