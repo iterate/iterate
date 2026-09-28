@@ -88,10 +88,16 @@ function ProjectOverview() {
   const host = projectHostOf(info, project.slug);
   // the project's root context, held for the page's life; the route resolved the project already,
   // so a refusal leaves the plain overview
-  const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
+  const opened = useContextStub(() => api.projects.get(project.id), [api, project.id]);
+  const context = opened.stub;
   const live = useFacetLiveState(context, "project");
   const parsed = ProjectLive.safeParse(live.value).data;
   const creation = parsed?.creation ?? null;
+  // Until the facet's first value lands the page cannot tell a project still being created from
+  // one that is done: `projects.create` answers before its saga does. A refused context, or a live
+  // state that failed, leaves the plain overview.
+  const creationKnown = live.status !== "connecting" || Boolean(opened.error);
+  const creating = creation?.status === "requested" || creation?.status === "failed";
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
   const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
     (row) => row.provider === "github",
@@ -134,8 +140,10 @@ function ProjectOverview() {
         </dd>
       </dl>
       {/* a project still being created, or whose creation failed, may have no config repo yet */}
-      {creation?.status === "requested" || creation?.status === "failed" ? null : (
+      {creating ? null : creationKnown ? (
         <ConfigRepo key={project.id} project={project} githubConnections={githubConnections} />
+      ) : (
+        <p className="text-sm text-muted-foreground">Loading…</p>
       )}
       {org?.role === "owner" ? <DeleteProject project={project} /> : null}
     </div>
@@ -177,19 +185,22 @@ function ConfigRepo({
     () => api.projects.get(project.id).repos.get("/repos/config"),
     [api, project.id],
   );
-  const readOrigin = useCallback(
-    () =>
-      configRepo()
-        .origin()
-        .then(
-          (origin) => {
-            setRead({ origin });
-            setChoice((pending) => (pending?.remote.url === origin ? pending : null));
-          },
-          (caught: unknown) => setError(messageOf(caught)),
-        ),
-    [configRepo],
-  );
+  /** Counts origin reads and actions: a read answers for the page only while no later read or
+   *  action started, so one that answers late never overwrites what a later action did. */
+  const originRequests = useRef(0);
+  const readOrigin = useCallback(() => {
+    const request = ++originRequests.current;
+    return configRepo()
+      .origin()
+      .then(
+        (origin) => {
+          if (request !== originRequests.current) return;
+          setRead({ origin });
+          setChoice((pending) => (pending?.remote.url === origin ? pending : null));
+        },
+        (caught: unknown) => request === originRequests.current && setError(messageOf(caught)),
+      );
+  }, [configRepo]);
   useEffect(() => void readOrigin(), [readOrigin]);
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
@@ -215,13 +226,16 @@ function ConfigRepo({
       setChoice({ kind: verb === "pull" ? "diverged" : "behind", remote: describeOrigin(url) });
     }
   };
+  /** One action, busy while its own calls run. The origin read after it runs with the buttons
+   *  enabled: the action's button, and its spinner, may be gone with the sheet by then. */
   const run = async (action: ConfigRepoAction, work: () => Promise<unknown>) => {
+    originRequests.current += 1;
     setBusy(action);
     setError(null);
     setOutcome(null);
     await work().catch((caught: unknown) => setError(messageOf(caught)));
-    await readOrigin();
     setBusy(null);
+    await readOrigin();
   };
   const link = (url: string) =>
     run("link", async () => {
@@ -287,7 +301,9 @@ function ConfigRepo({
               >
                 Replace with {remote.name}&apos;s
               </Button>
-              {actionButton("unlink", "Unlink", () => configRepo().setOrigin(null))}
+              {actionButton("unlink", "Unlink", async () =>
+                setRead(await configRepo().setOrigin(null)),
+              )}
             </>
           ) : read ? (
             <Button onClick={() => void navigate({ search: { configRepo: "link" } })}>Link</Button>
