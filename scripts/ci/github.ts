@@ -110,6 +110,7 @@ export type GithubEventPayload = {
     head?: { ref?: string; sha: string };
   };
   sender?: { login?: string | null };
+  repository?: { default_branch?: string };
 };
 
 export function readEventPayload() {
