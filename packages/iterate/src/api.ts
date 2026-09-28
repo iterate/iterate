@@ -1154,6 +1154,9 @@ export interface IterateSessionApi {
   /** One project secret's encrypted cell, as a project seed archives it — the operator's alone
    *  (apps/os scripts/project-seed.ts). */
   exportProjectSecretForSeed(project: string, path: string): Promise<unknown>;
+  /** The version this edge runs and the one each named project's root context runs, at most eight
+   *  — the operator's alone (apps/os scripts/preview-readiness.ts). */
+  versions(projectIds: string[]): Promise<{ edge: string; contexts: string[] }>;
   logout(): unknown;
 }
 

@@ -111,8 +111,12 @@ or as a bearer. Every other entry point refuses it and logs
 
 People and agents use personal access tokens instead. The one exception is a project you are not
 a member of: a key can't reach it, so debugging a customer's project in production takes the
-bearer, on `/api`, through the CLI. The CLI and the repo's scripts read it from
-`APP_CONFIG_SECRETS__ADMIN_BEARER`, the worker's own override of `secrets.adminBearer`, before
-`ITERATE_BEARER_TOKEN`:
+bearer, on `/api`, through the CLI:
 `APP_CONFIG_SECRETS__ADMIN_BEARER=… pnpm exec iterate --config prd itx run --project <slug> …`
 ([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
+
+The CLI and `apps/agents/scripts/client.ts` read `APP_CONFIG_SECRETS__ADMIN_BEARER`, the worker's
+own override of `secrets.adminBearer`, before `ITERATE_BEARER_TOKEN`; `scripts/control-plane-load.ts`
+and `examples/serve-localhost.mjs` read that name too. `project-seed.ts`, `seed-instance-secrets.ts`,
+`preview.ts` and the root's `scripts/ci/context-sweep.ts` read `secrets.adminBearer` out of the
+target's Doppler `APP_CONFIG`.

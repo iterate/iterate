@@ -8,7 +8,7 @@ import { osEnvs } from "../../../../envs.ts";
 import { parseAppConfig } from "../../src/app-config.ts";
 
 export function deployedTarget(workerBaseUrl: string): {
-  adminApiSecret: string;
+  adminBearer: string;
   loginPassword: string;
   /** JSON, as the specs and support/project-host.ts read it. */
   ingressRouting: string;
@@ -24,8 +24,8 @@ export function deployedTarget(workerBaseUrl: string): {
     APP_CONFIG: process.env.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
   });
-  const adminApiSecret = appConfig.secrets.adminBearer.exposeSecret();
-  if (!adminApiSecret)
+  const adminBearer = appConfig.secrets.adminBearer.exposeSecret();
+  if (!adminBearer)
     throw new Error(
       "The deployment's APP_CONFIG sets no secrets.adminBearer — every e2e session authenticates with it",
     );
@@ -40,7 +40,7 @@ export function deployedTarget(workerBaseUrl: string): {
     host.endsWith(new URL(candidate.baseUrl).host),
   );
   return {
-    adminApiSecret,
+    adminBearer,
     loginPassword,
     ingressRouting: JSON.stringify(env?.ingressRouting ?? null),
     // MCP on an origin of its own (prd's mcp.iterate.com) is the deployment's; on the platform

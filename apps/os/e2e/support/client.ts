@@ -17,7 +17,7 @@ const baseUrl = (): string => {
 };
 
 /** The worker's admin bearer (global-setup: the local worker's, or a deployed worker's from its APP_CONFIG). */
-const adminApiSecret = (): string => {
+const adminBearer = (): string => {
   const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER;
   if (!secret)
     throw new Error(
@@ -44,7 +44,7 @@ export const adminCredentials = (as?: {
   email: string;
 }): Extract<SessionCredentials, { type: "admin-secret" }> => ({
   type: "admin-secret",
-  secret: adminApiSecret(),
+  secret: adminBearer(),
   as,
 });
 

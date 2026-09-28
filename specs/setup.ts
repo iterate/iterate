@@ -41,7 +41,7 @@ function osTargetEnv(): Record<string, string> {
   }
   const target = deployedTarget(workerBaseUrl);
   return {
-    APP_CONFIG_SECRETS__ADMIN_BEARER: target.adminApiSecret,
+    APP_CONFIG_SECRETS__ADMIN_BEARER: target.adminBearer,
     LOGIN_PASSWORD: target.loginPassword,
     PROJECT_INGRESS_ROUTING: target.ingressRouting,
     MCP_BASE_URL: target.mcpBaseUrl,

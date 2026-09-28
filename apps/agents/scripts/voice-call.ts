@@ -102,13 +102,13 @@ export default async function voiceCall(
   const micPcm = UTTERANCE ? pcmFromWav(UTTERANCE) : Buffer.alloc(FRAME_MS * BYTES_PER_MS);
 
   // ONE warm authenticated session and the project root — what a connected device holds.
+  const warm0 = now();
   using connection = await connect();
   // The project installed voice (https://k.iterate.com prepares it), so its root has `voice`: the
   // assertion iterate/api's `IterateContextApiWith` documents for a root that knows an app is there.
   const root = connection.session.projects.get(PROJECT) as RpcPromise<
     IterateContextApiWith<"voice">
   >;
-  const warm0 = now();
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);
 

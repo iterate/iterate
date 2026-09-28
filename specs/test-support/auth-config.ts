@@ -24,7 +24,7 @@ export const OsPlaywrightAuthEnv = z.object({
 export function readOsPlaywrightAuthConfig() {
   const env = OsPlaywrightAuthEnv.parse(process.env);
   return {
-    adminApiSecret: env.APP_CONFIG_SECRETS__ADMIN_BEARER,
+    adminBearer: env.APP_CONFIG_SECRETS__ADMIN_BEARER,
     loginPassword: env.LOGIN_PASSWORD,
     // the deployment's own `urls.ingressRouting`, as setup.ts read it (deployed-target.ts)
     ingressRouting: JSON.parse(env.PROJECT_INGRESS_ROUTING) as IngressRouting,
