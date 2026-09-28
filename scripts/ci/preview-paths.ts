@@ -14,10 +14,15 @@
 // parent is main as merged. It writes `preview=true` or `preview=false` to GITHUB_OUTPUT, and
 // `true` whenever it cannot tell (the head alone, or main's commit could not be fetched): a preview
 // that was not needed costs a few minutes, a skipped one would pass untested code.
+//
+// A pull request that changes a preview path can still need no preview on this push: when each
+// suite the job is for (PREVIEW_SUITES) inherits an earlier head's green, because the push changed
+// nothing it depends on (scripts/ci/preview-inherit.ts). Then it writes `preview=false` too.
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { matchesGlob } from "node:path";
 import process from "node:process";
+import { inheritFromGitHub, SUITE_CHECKS } from "./preview-inherit.ts";
+import { matchesPaths, type PreviewSuite } from "./preview-units.ts";
 
 /**
  * The paths whose change gets a pull request a preview: GitHub `paths` syntax, where the last
@@ -72,17 +77,6 @@ export function touchesPreview(files: string[]) {
   return files.some((file) => matchesPaths(previewPaths, file));
 }
 
-/** Whether GitHub's `paths` filter `patterns` takes `file`: the last pattern it matches decides, and
- *  a `!` pattern excludes. */
-export function matchesPaths(patterns: string[], file: string) {
-  let included = false;
-  for (const pattern of patterns) {
-    const negated = pattern.startsWith("!");
-    if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
-  }
-  return included;
-}
-
 /** Whether the checked-out commit, a merge into main, changes a preview path, or why it cannot
  *  tell. The raw commit object names its parents even in a depth-1 checkout; main's commit is
  *  fetched at depth 1 when it is not there, which transfers only what differs from the merge. */
@@ -121,12 +115,57 @@ function git(...args: string[]) {
   return result.stdout.trim();
 }
 
+/** Whether the job still needs the preview once `suites` have each had the chance to inherit an
+ *  earlier head's verdict (preview-inherit.ts): not when every one of them inherits. A failure to
+ *  decide is a warning and a run: a run that was not needed costs a few minutes. */
+async function inheritsEverySuite(suites: PreviewSuite[]) {
+  const number = process.env.PREVIEW_PR_NUMBER || "";
+  const headSha = process.env.PREVIEW_HEAD_SHA || "";
+  try {
+    const decisions = await inheritFromGitHub({ number, headSha, suites });
+    for (const decision of decisions)
+      console.log(
+        `${SUITE_CHECKS[decision.suite]} ${decision.inherit ? "inherits" : "runs"}: ${decision.reason}`,
+      );
+    if (!decisions.every((decision) => decision.inherit)) return false;
+    const lines = decisions.flatMap((decision) =>
+      decision.inherit
+        ? [
+            `${SUITE_CHECKS[decision.suite]} inherits [\`${decision.from.sha.slice(0, 7)}\`'s green](${decision.from.url}): ${decision.reason}.`,
+          ]
+        : [],
+    );
+    for (const line of lines) console.log(`::notice title=Inherited::${line}`);
+    if (process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n\n")}\n`);
+    return true;
+  } catch (error) {
+    console.log(
+      `::warning title=Inherit::could not decide whether to inherit, so the suites run: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+}
+
 if (process.argv[1]?.endsWith("preview-paths.ts")) {
   if (process.argv[2] !== "changes") {
     console.error("Usage: node scripts/ci/preview-paths.ts changes");
     process.exit(1);
   }
   const { preview, reason } = changesPreview();
-  console.log(`${reason}: ${preview ? "deploying the preview" : "no preview to deploy or test"}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `preview=${preview}\n`);
+  console.log(
+    `${reason}: ${preview ? "the PR needs the preview" : "no preview to deploy or test"}`,
+  );
+  // PREVIEW_SUITES names the suites this job is for: both in Deploy preview, one in a suite job
+  const suites = (process.env.PREVIEW_SUITES || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((suite) => {
+      if (suite !== "e2e" && suite !== "specs")
+        throw new Error(`PREVIEW_SUITES names e2e and specs, not ${JSON.stringify(suite)}`);
+      return suite;
+    });
+  const needed = preview && !(suites.length > 0 && (await inheritsEverySuite(suites)));
+  if (preview && !needed) console.log("every suite inherits: no preview to deploy or test");
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `preview=${needed}\n`);
 }

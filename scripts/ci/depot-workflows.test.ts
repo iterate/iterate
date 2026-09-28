@@ -303,7 +303,7 @@ test.each([
   },
   {
     file: ".depot/workflows/preview-os.yml",
-    permissions: { contents: "read", "pull-requests": "write", statuses: "write" },
+    permissions: { contents: "read", "pull-requests": "write", statuses: "write", checks: "read" },
   },
   {
     file: ".depot/workflows/main-os-e2e.yml",
@@ -1014,7 +1014,7 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   const previewSteps = preview.jobs.e2e?.steps || [];
   const prOnly = [
     "Require a preview to test",
-    "Decide whether the PR changes a preview path",
+    "Decide whether this push needs the preview",
     "Record the PR head for test telemetry",
     "Check out the PR merged into main",
   ];

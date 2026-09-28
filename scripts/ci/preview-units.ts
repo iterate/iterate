@@ -11,9 +11,9 @@
 // change to how previews deploy has to deploy one. A suite's inputs are the product of the units it
 // tests, the machinery, and its own test files.
 //
-// Node runs this by its own type stripping before anything is installed (preview-inherit.ts), so it
-// imports nothing but preview-paths.ts, which does the same.
-import { matchesPaths } from "./preview-paths.ts";
+// Node runs this by its own type stripping before anything is installed (preview-paths.ts), so it
+// imports nothing.
+import { matchesGlob } from "node:path";
 
 /** apps/os, then the apps on top in envs.ts `PREVIEW_DEPLOYMENT_APPS` order. */
 export const PREVIEW_UNITS = ["os", "dash", "agents", "notes", "admin", "voice", "kit"] as const;
@@ -172,4 +172,15 @@ export function touchesSuite(suite: PreviewSuite, files: string[]) {
     changedUnits(files).some((unit) => units.includes(unit)) ||
     files.some((file) => matchesPaths(tests, file))
   );
+}
+
+/** Whether GitHub's `paths` filter `patterns` takes `file`: the last pattern it matches decides, and
+ *  a `!` pattern excludes. */
+export function matchesPaths(patterns: string[], file: string) {
+  let included = false;
+  for (const pattern of patterns) {
+    const negated = pattern.startsWith("!");
+    if (matchesGlob(file, negated ? pattern.slice(1) : pattern)) included = !negated;
+  }
+  return included;
 }

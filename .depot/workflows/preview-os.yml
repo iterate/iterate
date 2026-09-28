@@ -4,7 +4,8 @@
 # jobs, each a check named for what it proves:
 #   Deploy preview      every push: first whether the PR changes a preview path
 #                       (scripts/ci/preview-paths.ts `previewPaths`); a PR that changes none deploys
-#                       nothing and passes. Otherwise it deploys the PR merged into main (the run's own
+#                       nothing and passes, and so does a push after which both suites inherit an
+#                       earlier head's green (scripts/ci/preview-inherit.ts). Otherwise it deploys the PR merged into main (the run's own
 #                       commit, the merge commit Depot read this file from; the head alone on a
 #                       dispatch whose PR conflicts, scripts/ci/preview-tested-commit.ts) as
 #                       `pr<n>-<sha7>`: it folds the PR body's section into a previous commit's
@@ -69,6 +70,9 @@ permissions:
   pull-requests: write
   # The trace job's "CI trace" and "Playwright report" commit statuses.
   statuses: write
+  # Each suite's check on the PR's earlier heads, which a push that changes nothing it depends on
+  # inherits (scripts/ci/preview-inherit.ts).
+  checks: read
 
 on:
   # Every pull request, without a `paths` filter: Deploy preview decides whether it gets a preview.
@@ -154,12 +158,19 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: node scripts/ci/preview-tested-commit.ts
-      # A push that changes no preview path deploys nothing, and the steps after this skip; a
-      # dispatch deploys whatever it changes. This and the step before run on the stock image's own
-      # Node, before the setup: the PR head they start from may predate it.
-      - name: Decide whether the PR changes a preview path
+      # A push that changes no preview path deploys nothing, and the steps after this skip; so does
+      # one after which both suites inherit an earlier head's green, having changed nothing either
+      # depends on (scripts/ci/preview-inherit.ts). A dispatch deploys whatever it changes. This and
+      # the step before run on the stock image's own Node, before the setup: the PR head they start
+      # from may predate it.
+      - name: Decide whether this push needs the preview
         id: changes
         if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_SUITES: e2e specs
         run: node scripts/ci/preview-paths.ts changes
       - name: Setup
         if: steps.changes.outputs.preview != 'false'
@@ -263,11 +274,17 @@ jobs:
           PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
           PREVIEW_RUN_SHA: ${{ github.event_name == 'pull_request' && github.sha || '' }}
         run: node scripts/ci/preview-tested-commit.ts
-      # Deploy preview's own step, on the same commit: a push that changes no preview path deploys
-      # nothing, and this job passes here, testing nothing.
-      - name: Decide whether the PR changes a preview path
+      # Deploy preview's own step, on the same commit, for this job's suite alone: a push that
+      # changes no preview path, or nothing this suite depends on since a green head, passes here,
+      # testing nothing.
+      - name: Decide whether this push needs the preview
         id: changes
         if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          PREVIEW_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREVIEW_SUITES: ${{ env.SUITE }}
         run: node scripts/ci/preview-paths.ts changes
       # Telemetry is labelled with the PR head, whatever merge commit was tested.
       - name: Record the PR head for test telemetry

@@ -199,7 +199,14 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
   const deploySteps = preview.jobs.deploy!.steps || [];
   const steps = preview.jobs.e2e!.steps || [];
   const changes = steps.findIndex((step) => step.id === "changes");
-  expect(steps[changes]).toEqual(deploySteps.find((step) => step.id === "changes"));
+  // for this job's suite alone, where Deploy preview's is for both (scripts/ci/preview-inherit.ts)
+  expect(steps[changes]).toEqual({
+    ...deploySteps.find((step) => step.id === "changes"),
+    env: {
+      ...deploySteps.find((step) => step.id === "changes")?.env,
+      PREVIEW_SUITES: "${{ env.SUITE }}",
+    },
+  });
   // on the commit deploy tests, resolved right after the checkout, as in deploy
   expect(changes).toBe(steps.findIndex((step) => step.id === "tested") + 1);
   expect(changes).toBe(steps.findIndex((step) => step.uses === "actions/checkout@v4") + 2);

@@ -4,9 +4,10 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { PREVIEW_DEPLOYMENT_APPS } from "../../envs.ts";
-import { matchesPaths, touchesPreview } from "./preview-paths.ts";
+import { touchesPreview } from "./preview-paths.ts";
 import {
   changedUnits,
+  matchesPaths,
   PREVIEW_UNITS,
   previewMachineryPaths,
   previewSuites,
