@@ -623,7 +623,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
          * script: those words can guess at a result the script has not produced yet. */
         const dial = this.#dial;
         const { message, llmRequestOffset, besideScript } = event.payload;
-        if (!dial || besideScript || llmRequestOffset === undefined) return;
+        if (!dial || besideScript || !llmRequestOffset) return;
         if (message.includes(HANG_UP_TOKEN)) {
           dial.hangUpReason = "the Agent hung up";
           dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
