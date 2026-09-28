@@ -301,6 +301,14 @@ void waveshare_avatar_set_listening(bool listening) {
   face_animator_push_event(&face.animator, &event);
 }
 
+bool waveshare_avatar_request_face(size_t index) {
+  if (!face.ready || index >= face_avatar_registry_count()) return false;
+  face.requested_index = index;
+  /* Released after the index, so the renderer that sees the new epoch sees it. */
+  __atomic_add_fetch(&face.request_epoch, 1U, __ATOMIC_RELEASE);
+  return true;
+}
+
 /* --- reader: LVGL task ----------------------------------------------------- */
 
 bool waveshare_avatar_render(
@@ -310,7 +318,8 @@ bool waveshare_avatar_render(
 
   if (!face.ready || rgb565 == NULL) return false;
   /* Adopt a requested face here, on the only task that may touch the registry. */
-  if (face.request_epoch != face.applied_epoch) {
+  if (__atomic_load_n(&face.request_epoch, __ATOMIC_ACQUIRE) !=
+      face.applied_epoch) {
     const size_t wanted = face.requested_index;
     face.applied_epoch = face.request_epoch;
     if (face_avatar_registry_select(&face.registry, wanted)) {

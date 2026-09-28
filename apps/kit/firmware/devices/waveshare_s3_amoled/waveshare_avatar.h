@@ -95,6 +95,13 @@ void waveshare_avatar_tick(void);
  */
 void waveshare_avatar_note_abandoned(void);
 
+/**
+ * Latest-only request to wear catalogue face `index` (the face capability
+ * resolves `face.set`'s slug to it); false until the face is up. The LVGL
+ * task adopts it before its next frame. Callable from any task.
+ */
+bool waveshare_avatar_request_face(size_t index);
+
 /** Enter or leave the user-facing listening pose, which keeps the mouth shut. */
 void waveshare_avatar_set_listening(bool listening);
 

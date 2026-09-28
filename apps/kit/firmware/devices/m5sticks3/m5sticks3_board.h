@@ -65,11 +65,11 @@ uint32_t m5sticks3_board_face_failures(void);
 void m5sticks3_board_observe_playout(const int16_t *samples, size_t count);
 
 /**
- * Latest-only request to wear a catalogue face by slug. Validates against
- * the compiled catalogue and returns false for a slug it does not hold;
- * the render tick applies the newest accepted request between frames.
+ * Latest-only request to wear catalogue face `index` (the face capability
+ * resolves `face.set`'s slug to it); false until the face is up. The render
+ * tick applies the newest accepted request between frames.
  */
-bool m5sticks3_board_request_face(const char *slug, size_t slug_length);
+bool m5sticks3_board_wear_face(size_t index);
 
 void m5sticks3_ui_tick(void);
 

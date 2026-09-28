@@ -415,20 +415,11 @@ void m5sticks3_board_observe_playout(const int16_t *samples, size_t count) {
   face_animator_push_pcm(&face.animator, samples, count);
 }
 
-bool m5sticks3_board_request_face(const char *slug, size_t slug_length) {
-  if (slug == nullptr || slug_length == 0U || !face.ready) return false;
-  const size_t count = face_avatar_registry_count();
-  for (size_t index = 0U; index < count; ++index) {
-    const char *const candidate = face_avatar_registry_slug_at(index);
-    if (candidate == nullptr) continue;
-    if (std::strlen(candidate) == slug_length &&
-        std::memcmp(candidate, slug, slug_length) == 0) {
-      face.pending_face_index_plus_one.store(
-          static_cast<uint32_t>(index) + 1U, std::memory_order_release);
-      return true;
-    }
-  }
-  return false;
+bool m5sticks3_board_wear_face(size_t index) {
+  if (!face.ready || index >= face_avatar_registry_count()) return false;
+  face.pending_face_index_plus_one.store(
+      static_cast<uint32_t>(index) + 1U, std::memory_order_release);
+  return true;
 }
 
 void m5sticks3_ui_tick(void) {

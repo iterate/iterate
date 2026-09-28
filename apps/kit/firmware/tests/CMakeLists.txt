@@ -308,3 +308,6 @@ iterate_kit_add_core_test(iterate-kit-itx-multiplex-test itx_multiplex_test.c)
 
 iterate_kit_add_test(iterate-kit-screen-test screen_test.c
   LINK iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-face-capability-test face_capability_test.c
+  LINK iterate-kit-capabilities iterate-kit-avatar)
