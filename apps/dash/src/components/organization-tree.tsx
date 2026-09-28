@@ -48,7 +48,7 @@ const EMPTY: OrganizationTreeState = {
 };
 
 // ── the store: what the mounted `<OrganizationTree>` last published ──
-let published: OrganizationTreeState = EMPTY;
+let published = EMPTY;
 const listeners = new Set<() => void>();
 function publish(tree: OrganizationTreeState) {
   published = tree;

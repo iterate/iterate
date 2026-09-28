@@ -11,7 +11,7 @@ import {
 } from "@iterate-com/ui/lib/environment-favicon";
 import { isSameOriginBrowserRequest } from "iterate/lib";
 import type { Env, Handler } from "./env.ts";
-import { withIssuerRequest } from "./issuer-request-context.server.ts";
+import { issuerRequests } from "./issuer-request-context.server.ts";
 
 /** The Start routes, with the methods each answers (POST is the page's own form). */
 const issuerPageMethods = new Map([
@@ -50,7 +50,10 @@ async function startResponse(request: Request, env: Env, ctx: ExecutionContext) 
   const nonce = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
   // API and OAuth traffic bypasses the React server runtime entirely.
   const { default: entry } = await import("@tanstack/react-start/server-entry");
-  const rendered = await withIssuerRequest(env, ctx, nonce, () => entry.fetch(request));
+  const rendered = await issuerRequests.run(
+    { env, ctx, nonce, serverFunctionInputDecoded: false },
+    () => entry.fetch(request),
+  );
   const response = new Response(rendered.body, rendered);
   response.headers.set("cache-control", "no-store");
   response.headers.set(

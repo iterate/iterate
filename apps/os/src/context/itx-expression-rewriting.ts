@@ -612,7 +612,7 @@ export function refuseLiftingAJail(
   rules: Readonly<Record<string, ItxExpressionRewriteRule>>,
   caller: Caller,
 ): void {
-  if (caller.principal || rules.itx?.target !== null) return;
+  if (caller.principal || !rules.itx || rules.itx.target) return;
   for (const event of events) {
     if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
     // Normalized at the append boundary (`normalizeRewriteRuleConfigured`): the match is the parsed

@@ -26,7 +26,7 @@ import {
 import { usePosthogIdentity, type PosthogGroup } from "@iterate-com/ui/components/posthog";
 import { Identifier } from "../components/identifier.tsx";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
-import { DashNav } from "../components/dash-nav.tsx";
+import { ProjectNav, TopLevelNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";
 import { projectHostOf } from "../lib/origins.ts";
 import { dashScopes } from "../lib/scopes.ts";
@@ -130,10 +130,11 @@ function Shell() {
           </>
         }
         nav={
-          <DashNav
-            project={active || null}
-            host={active ? projectHostOf(info, active.slug) : null}
-          />
+          active ? (
+            <ProjectNav project={active} host={projectHostOf(info, active.slug)} />
+          ) : (
+            <TopLevelNav />
+          )
         }
         header={
           <>

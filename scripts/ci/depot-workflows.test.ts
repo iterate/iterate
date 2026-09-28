@@ -216,7 +216,7 @@ test.each(
   ),
 )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
   const workflow = loadWorkflow(file);
-  const steps = workflow.jobs.deploy?.steps ?? [];
+  const steps = workflow.jobs.deploy?.steps || [];
 
   expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
@@ -531,7 +531,7 @@ test.for([
   const [measured] = depotWorkflowFiles
     .map((file) => loadWorkflow(file))
     .filter((candidate) => candidate.name === workflow);
-  const steps = Object.values(measured?.jobs ?? {}).flatMap((job) => job.steps || []);
+  const steps = Object.values(measured?.jobs || {}).flatMap((job) => job.steps || []);
   expect(steps.find((step) => step.with?.name === artifact)).toMatchObject({
     if: "always()",
     uses: "actions/upload-artifact@v4",

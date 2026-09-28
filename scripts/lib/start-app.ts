@@ -126,7 +126,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
   } satisfies z.input<typeof StartAppConfig>;
   return {
-    name: env?.workerName ?? app.name,
+    name: env?.workerName || app.name,
     main: "src/server.ts",
     compatibility_date: COMPATIBILITY_DATE,
     compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],

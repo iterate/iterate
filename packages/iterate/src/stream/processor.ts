@@ -190,7 +190,7 @@ export class ProcessorEngine<State> {
   readonly #storage: ReduceCheckpointTable;
 
   /** Rule 1: every batch runs on this chain, one after another. */
-  #serialBatchChain: Promise<void> = Promise.resolve();
+  #serialBatchChain = Promise.resolve();
   /** The reduced state and the durable offset it was reduced through — checkpointed on the batches
    *  that carried a durable. */
   #reducedState: State;

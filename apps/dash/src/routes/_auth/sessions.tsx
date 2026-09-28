@@ -499,7 +499,7 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const live = useFacetLiveState(person.stub, "account");
   const read = live.value ? AccountConnections.safeParse(live.value) : undefined;
   const state = read?.data;
-  const accounts = Object.values(state?.integrations ?? {});
+  const accounts = Object.values(state?.integrations || {});
   const slugOf = new Map(projects.map((project) => [project.id, project.slug]));
   /** The projects a connection is connected to, by slug. */
   const usedBy = (row: { provider: string; connection: string }) =>

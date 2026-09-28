@@ -555,7 +555,7 @@ class VoiceAgentProcessor extends StreamProcessor<VoiceState, ConsumedEvent<Voic
         : state.lastEnd
           ? "ended"
           : "idle",
-      activation: state.call?.activation ?? null,
+      activation: state.call?.activation || null,
       answering: Boolean(dial?.ready) && dial?.answer.phase === "speaking",
       transcript: state.transcript,
       lastEnd: state.lastEnd,

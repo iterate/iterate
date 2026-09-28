@@ -340,7 +340,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const host = await held();
     return Response.json(
-      { issuer: host?.issuer ?? null, defaultIssuer: issuer },
+      { issuer: host?.issuer || null, defaultIssuer: issuer },
       { headers: { "Cache-Control": "no-store" } },
     );
   }

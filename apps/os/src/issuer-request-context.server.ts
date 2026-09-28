@@ -10,23 +10,10 @@ interface IssuerRequest {
   serverFunctionInputDecoded: boolean;
 }
 
-const issuerRequests = new AsyncLocalStorage<IssuerRequest>();
-
-export function withIssuerRequest<T>(
-  env: Env,
-  ctx: ExecutionContext,
-  nonce: string,
-  render: () => T,
-): T {
-  return issuerRequests.run({ env, ctx, nonce, serverFunctionInputDecoded: false }, render);
-}
+export const issuerRequests = new AsyncLocalStorage<IssuerRequest>();
 
 export function issuerRequestContext() {
   const context = issuerRequests.getStore();
   if (!context) throw new Error("Issuer page rendered outside the OS worker");
   return context;
-}
-
-export function issuerRequestNonce() {
-  return issuerRequestContext().nonce;
 }

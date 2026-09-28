@@ -282,7 +282,7 @@ export function triageIncidents(
   state: AlarmState | null,
 ) {
   const open = Object.fromEntries(
-    Object.entries(state?.incidents ?? {}).filter(
+    Object.entries(state?.incidents || {}).filter(
       ([, incident]) => Date.parse(incident.lastSeen) > window.to.getTime() - 24 * 3_600_000,
     ),
   );

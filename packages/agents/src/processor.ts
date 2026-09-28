@@ -405,7 +405,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return {
           ...state,
           config: {
-            llm: { model: patch.llm?.model ?? state.config.llm.model },
+            llm: { model: patch.llm?.model || state.config.llm.model },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
@@ -868,7 +868,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       let windowChars = 0;
       let windowOpen = false;
       let sequence = 0;
-      let windows: Promise<void> = Promise.resolve();
+      let windows = Promise.resolve();
       const closeWindow = () => {
         windowOpen = false;
         if (window.length === 0) return;
@@ -1007,7 +1007,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     if (model.startsWith("@cf/")) {
       // The model is configuration, so the transport result is validated below rather than trusted.
       const { path } = await this.#identity();
-      const raw: unknown = await this.deps.runModel(
+      const raw = await this.deps.runModel(
         path,
         model,
         { messages, stream: true },
@@ -1045,7 +1045,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
     // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
-    const raw: unknown = await this.deps.runModel(
+    const raw = await this.deps.runModel(
       path,
       `openai/${model}`,
       {

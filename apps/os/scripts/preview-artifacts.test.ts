@@ -215,7 +215,7 @@ function fakeArtifactsApi(
   const requests: string[] = [];
   // a fake of the generic `cf<T>`: every answer is the JSON the real API returns for that route
   const cf = (async (path: string, init?: RequestInit) => {
-    const method = init?.method ?? "GET";
+    const method = init?.method || "GET";
     requests.push(`${method} ${path}`);
     const failure = fault(method, path);
     if (failure) throw failure;

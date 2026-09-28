@@ -2,7 +2,11 @@
 
 Every other `.md` file in this folder is a review rule. Agents follow the rules whose `files` globs
 match what they change, and the iterate project's AI linter (iterate/config `ai-linter/`) reviews
-each pull request against `rules/` at the pull request's base.
+each pull request against `rules/` at the pull request's base. A rule a program can decide is an
+Oxlint rule in `lint/` instead, which CI enforces for free: truthiness checks
+(`iterate/simple-truthiness-check`), inferable type annotations
+(`iterate/no-inferable-type-annotation`) and single-use helpers (`iterate/no-single-use-helpers`)
+moved there from this folder.
 
 A rule is YAML frontmatter, then prose:
 

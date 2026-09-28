@@ -491,7 +491,7 @@ export class ConsentRpcTarget extends RpcTarget {
         idempotencyKey: `account/consent-approved/${grantIdOf(approved)}`,
         payload: {
           clientId: request.clientId,
-          clientName: client?.clientName ?? request.clientId,
+          clientName: client?.clientName || request.clientId,
           projects,
           scopes: scope,
         } satisfies ConsentApproved,

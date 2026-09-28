@@ -205,7 +205,7 @@ export class ProjectProcessor extends StreamProcessor<
             ...state.hostnames,
             [event.payload.hostname]: {
               requested: { verb: "add", offset: event.offset },
-              cloudflare: known?.cloudflare ?? null,
+              cloudflare: known?.cloudflare || null,
               error: null,
             },
           },

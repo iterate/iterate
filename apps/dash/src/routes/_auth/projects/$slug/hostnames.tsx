@@ -57,8 +57,8 @@ function ProjectHostnames() {
   const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
   const live = useFacetLiveState(context, "project");
   const read = live.value ? HostnamesLive.safeParse(live.value) : undefined;
-  const hostnames = Object.entries(read?.data?.hostnames ?? {});
-  const primaryHostname = read?.data?.primaryHostname ?? null;
+  const hostnames = Object.entries(read?.data?.hostnames || {});
+  const primaryHostname = read?.data?.primaryHostname || null;
   const loadError = live.error || (read?.error && z.prettifyError(read.error));
   const [error, setError] = useState<string | null>(null);
   const append = (event: { type: string; payload: { hostname: string | null } }) =>

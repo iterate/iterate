@@ -162,13 +162,13 @@ export async function run(options: {
   const ttg = await attempt("PR time to green", () =>
     checkTtg({ depot, memory: state.ttg, now: Date.now(), testRun, runUrl }),
   );
-  failures.push(...(real?.failures ?? []), ...(latency?.failures ?? []));
+  failures.push(...(real?.failures || []), ...(latency?.failures || []));
 
-  const realModel = real?.memory ?? state.e2e;
+  const realModel = real?.memory || state.e2e;
   const next: HealthState = {
     schemaVersion: 1,
-    ttg: ttg?.memory ?? state.ttg,
-    latency: latency?.memory ?? state.latency,
+    ttg: ttg?.memory || state.ttg,
+    latency: latency?.memory || state.latency,
     // real-model e2e's alone: Main OS e2e keeps main e2e's
     e2e: {
       suites: { "real-model e2e": realModel.suites["real-model e2e"] },
@@ -176,8 +176,8 @@ export async function run(options: {
     },
   };
   const pages = [
-    ...(real?.pages ?? []),
-    ...(latency?.pages ?? []),
+    ...(real?.pages || []),
+    ...(latency?.pages || []),
     ...(ttg?.page ? [ttg.page] : []),
   ];
   const text =
@@ -197,12 +197,12 @@ export async function run(options: {
           name: "latency",
           tone: next.latency.red.length > 0 ? "red" : "green",
         },
-        { name: "PR time to green", tone: ttg?.status ?? "none" },
+        { name: "PR time to green", tone: ttg?.status || "none" },
       ],
       testRun,
     });
   await postThenKeep({ text, dryRun, keep, stateOut: options.stateOut, next });
-  const events = [...(ttg?.events ?? []), ...(latency?.events ?? [])];
+  const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
   else

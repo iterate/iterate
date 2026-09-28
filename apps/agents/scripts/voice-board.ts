@@ -135,7 +135,7 @@ export default async function voiceBoard(
   console.log(`speaking: ${PROMPT}`);
   await run("say", ["-r", "170", PROMPT]);
 
-  let after: Health = before;
+  let after = before;
   let framesSent = 0;
   let spkWrites = 0;
   for (let attempt = 0; attempt < 40; attempt++) {

@@ -259,7 +259,7 @@ function expectedStateOf(
 
 /** Keep retry evidence useful in one-line logs, annotations, and PR tables. */
 export function compactRetryFailure(error: unknown): string | undefined {
-  let value: unknown = error;
+  let value = error;
   if (typeof error === "object" && error) {
     const record = error as Record<string, unknown>;
     value = record.message ?? record.stack ?? record.name;

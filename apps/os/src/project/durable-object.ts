@@ -123,7 +123,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     const controlPlane = new ControlPlane(this.env);
     const config = appConfigOf(this.env);
     return {
-      reservedZones: config.customHostnames?.reservedZones ?? [],
+      reservedZones: config.customHostnames?.reservedZones || [],
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),

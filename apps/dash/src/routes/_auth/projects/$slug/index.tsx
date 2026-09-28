@@ -90,14 +90,14 @@ function ProjectOverview() {
   const context = opened.stub;
   const live = useFacetLiveState(context, "project");
   const parsed = ProjectLive.safeParse(live.value).data;
-  const creation = parsed?.creation ?? null;
+  const creation = parsed?.creation || null;
   // Until the facet's first value lands the page cannot tell a project still being created from
   // one that is done: `projects.create` answers before its saga does. A refused context, or a live
   // state that failed or does not parse, leaves the plain overview.
   const creationKnown = live.status !== "connecting" || Boolean(opened.error);
   const creating = creation?.status === "requested" || creation?.status === "failed";
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
-  const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
+  const githubConnections = Object.values(parsed?.integrations || {}).filter(
     (row) => row.provider === "github",
   );
   return (
@@ -671,7 +671,7 @@ function ProjectCreationFailed({ context, offset }: { context: ProjectContext; o
       .then((page) => {
         if (disposed) return;
         const read = z.object({ error: z.string() }).safeParse(page.events[0]?.payload);
-        setError(read.data?.error ?? "The failure's event could not be read.");
+        setError(read.data?.error || "The failure's event could not be read.");
       })
       .catch(
         (caught: unknown) =>
