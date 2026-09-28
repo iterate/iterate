@@ -134,8 +134,8 @@ async function pongTurn(ctx: string, ai?: FakeAi) {
 }
 
 /** What a streamed default-model turn leaves, whoever answered it: the answer; at least one window
- *  of Responses API events, in order, for the request that answered (an earlier attempt the model
- *  refused streamed nothing, and the agent asked again); the usage on the settlement and as the
+ *  of its text, in order, for the request that answered (an attempt the model refuses streams
+ *  nothing, and the agent asks again); the usage on the settlement and as the
  *  context report a feed shows the context's fullness by. */
 function expectStreamedTurn(log: any[], chunkEvents: any[]) {
   expect(assistantWords(log).join("\n")).toMatch(/pong/i);
@@ -148,11 +148,7 @@ function expectStreamedTurn(log: any[], chunkEvents: any[]) {
     chunkEvents.every((e) => e.payload.llmRequestOffset === settled.payload.requestOffset),
   ).toBe(true);
   expect(chunkEvents.map((e) => e.payload.sequence)).toEqual(chunkEvents.map((_, index) => index));
-  const deltas = chunkEvents.flatMap((e) =>
-    e.payload.chunks.filter((c: { type?: string }) => c.type === "response.output_text.delta"),
-  );
-  expect(deltas.length).toBeGreaterThan(0);
-  expect(deltas.map((c: { delta: string }) => c.delta).join("")).toMatch(/pong/i);
+  expect(chunkEvents.map((e) => e.payload.responseDelta).join("")).toMatch(/pong/i);
   expect(settled.payload.result).toMatchObject({
     status: "succeeded",
     usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) },

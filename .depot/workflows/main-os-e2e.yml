@@ -183,6 +183,8 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          # the agents rows' GitHub calls (apps/agents/e2e/support.ts `publishedPackage`)
+          GITHUB_TOKEN: ${{ github.token }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # the job whose end starts the suite (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: deploy

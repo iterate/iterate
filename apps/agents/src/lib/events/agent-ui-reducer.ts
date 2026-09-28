@@ -1,5 +1,5 @@
 import { RUN_DEADLINE_MS, RunRequested, RunSettled } from "iterate/stream/run";
-import { AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
+import { AgentContract, AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
 import type { StreamEvent } from "./stream-event.ts";
 
@@ -9,6 +9,10 @@ import type { StreamEvent } from "./stream-event.ts";
 // streamed text. Only a durable fact closes a step: `agent/llm-request-settled`
 // a model call, the context's `itx/run-settled` a script (the platform settles
 // every run, `deadline` or `interrupted` included).
+
+/** One streamed window of an answer, as the agent's contract spells it. */
+const LlmResponseFrame =
+  AgentContract.events["events.iterate.com/agent/llm-response-frame"].payloadSchema;
 
 export type AgentUiLlmStep = {
   kind: "llm";
@@ -471,19 +475,11 @@ function reduceAgentUiEvent(
     }
 
     case "events.iterate.com/agent/llm-response-frame": {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      if (llmRequestOffset == null) return state;
-      const payload = readPayloadRecord(event);
-      // One coalesced window: the provider chunks it carries, in order.
-      const chunks = Array.isArray(payload?.chunks) ? payload.chunks : [];
-      let responseDelta = "";
-      let thinkingDelta = "";
-      for (const chunk of chunks) {
-        const deltas = llmChunkDeltas(chunk);
-        responseDelta += deltas.responseDelta;
-        thinkingDelta += deltas.thinkingDelta;
-      }
-      if (responseDelta === "" && thinkingDelta === "") return state;
+      // One coalesced window: the text and thinking it adds, as the processor extracted them.
+      const frame = LlmResponseFrame.safeParse(event.payload);
+      if (!frame.success) return state;
+      const { llmRequestOffset, responseDelta, thinkingDelta } = frame.data;
+      if (!responseDelta && !thinkingDelta) return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
@@ -825,44 +821,6 @@ function updateLlmStep(
   const steps = [...state.live.steps];
   steps[index] = update(step);
   return { ...state, live: { ...state.live, steps } };
-}
-
-/**
- * The response/thinking text deltas inside one streamed LLM chunk, in the
- * shapes @iterate-com/agents processor.ts puts into `llm-response-frame`:
- * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
- * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
- * that speaks the OpenAI chat format).
- */
-function llmChunkDeltas(chunk: unknown): {
-  responseDelta: string;
-  thinkingDelta: string;
-} {
-  if (typeof chunk === "string") return { responseDelta: chunk, thinkingDelta: "" };
-  if (!isRecord(chunk)) return { responseDelta: "", thinkingDelta: "" };
-
-  // OpenAI Responses API stream events: { type: "response.output_text.delta", delta } and the
-  // reasoning summary's { type: "response.reasoning_summary_text.delta", delta }.
-  if (typeof chunk.type === "string" && typeof chunk.delta === "string") {
-    if (chunk.type === "response.output_text.delta")
-      return { responseDelta: chunk.delta, thinkingDelta: "" };
-    if (chunk.type === "response.reasoning_summary_text.delta")
-      return { responseDelta: "", thinkingDelta: chunk.delta };
-    return { responseDelta: "", thinkingDelta: "" };
-  }
-  // Workers AI: { response: "tok" }
-  if (typeof chunk.response === "string") {
-    return { responseDelta: chunk.response, thinkingDelta: "" };
-  }
-  // OpenAI-compatible chat completions: { choices: [{ delta: { content, reasoning_content } }] }
-  if (Array.isArray(chunk.choices) && isRecord(chunk.choices[0])) {
-    const delta = isRecord(chunk.choices[0].delta) ? chunk.choices[0].delta : undefined;
-    return {
-      responseDelta: typeof delta?.content === "string" ? delta.content : "",
-      thinkingDelta: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : "",
-    };
-  }
-  return { responseDelta: "", thinkingDelta: "" };
 }
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {

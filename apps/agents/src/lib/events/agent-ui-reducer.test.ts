@@ -36,7 +36,8 @@ test("streams thinking and response deltas into the live llm step", () => {
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { reasoning_content: "Reading the stream" } }] }],
+        responseDelta: "",
+        thinkingDelta: "Reading the stream",
       },
     },
     {
@@ -44,7 +45,8 @@ test("streams thinking and response deltas into the live llm step", () => {
       payload: {
         llmRequestOffset: 10,
         sequence: 1,
-        chunks: [{ choices: [{ delta: { content: "const n = await " } }] }],
+        responseDelta: "const n = await ",
+        thinkingDelta: "",
       },
     },
     {
@@ -52,7 +54,8 @@ test("streams thinking and response deltas into the live llm step", () => {
       payload: {
         llmRequestOffset: 10,
         sequence: 2,
-        chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
+        responseDelta: "stream.count();",
+        thinkingDelta: "",
       },
     },
   ]);
@@ -70,7 +73,7 @@ test("streams thinking and response deltas into the live llm step", () => {
   });
 });
 
-test("streams coalesced multi-chunk windows (llm-response-frame) into the live llm step", () => {
+test("a window that adds thinking and text at once streams both into the live llm step", () => {
   const state = reduceAll([
     {
       type: "events.iterate.com/agent/context-added",
@@ -90,10 +93,8 @@ test("streams coalesced multi-chunk windows (llm-response-frame) into the live l
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
-        chunks: [
-          { choices: [{ delta: { reasoning_content: "Reading the stream" } }] },
-          { choices: [{ delta: { content: "const n = await " } }] },
-        ],
+        responseDelta: "const n = await ",
+        thinkingDelta: "Reading the stream",
       },
     },
     {
@@ -101,7 +102,8 @@ test("streams coalesced multi-chunk windows (llm-response-frame) into the live l
       payload: {
         llmRequestOffset: 10,
         sequence: 1,
-        chunks: [{ choices: [{ delta: { content: "stream.count();" } }] }],
+        responseDelta: "stream.count();",
+        thinkingDelta: "",
       },
     },
   ]);
@@ -130,7 +132,8 @@ test("committed assistant text extends streamed windows when the tail flush was 
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        responseDelta: "The lighthouse",
+        thinkingDelta: "",
       },
     },
     // The tail flush was swallowed; the committed assistant item carries
@@ -163,7 +166,8 @@ test("a cancelled settle's partialText extends streamed windows with the unflush
       payload: {
         llmRequestOffset: 10,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { content: "The lighthouse" } }] }],
+        responseDelta: "The lighthouse",
+        thinkingDelta: "",
       },
     },
     {
@@ -595,38 +599,6 @@ test("flushes a script-sent reply when its script settles and nothing else is ru
       { kind: "llm", status: "done", outcome: "completed" },
       { kind: "code", requestOffset: 5, status: "done", success: true },
     ],
-  });
-});
-
-test("accumulates agent llm-response-frame deltas", () => {
-  const state = reduceAll([
-    {
-      type: "events.iterate.com/agent/llm-request-requested",
-      offset: 3,
-      payload: { model: "test-model" },
-    },
-    {
-      type: "events.iterate.com/agent/llm-response-frame",
-      payload: { llmRequestOffset: 3, sequence: 0, chunks: [{ response: "Hel" }] },
-    },
-    {
-      type: "events.iterate.com/agent/llm-response-frame",
-      payload: { llmRequestOffset: 3, sequence: 1, chunks: [{ response: "lo" }] },
-    },
-    {
-      type: "events.iterate.com/agent/llm-response-frame",
-      payload: {
-        llmRequestOffset: 3,
-        sequence: 2,
-        chunks: [{ choices: [{ delta: { reasoning_content: "hmm" } }] }],
-      },
-    },
-  ]);
-
-  expect(state.live?.steps[0]).toMatchObject({
-    kind: "llm",
-    responseText: appendText(appendText("", "Hel"), "lo"),
-    thinkingText: appendText("", "hmm"),
   });
 });
 
@@ -1280,7 +1252,8 @@ test("does not append late chunks from an interrupted request into the next turn
       payload: {
         llmRequestOffset: 7,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { content: "old partial" } }] }],
+        responseDelta: "old partial",
+        thinkingDelta: "",
       },
     },
     {
@@ -1307,7 +1280,8 @@ test("does not append late chunks from an interrupted request into the next turn
       payload: {
         llmRequestOffset: 7,
         sequence: 1,
-        chunks: [{ choices: [{ delta: { content: " stale chunk" } }] }],
+        responseDelta: " stale chunk",
+        thinkingDelta: "",
       },
     },
     {
@@ -1559,7 +1533,8 @@ test("phases follow the running step: waiting → thinking → writing → runni
       payload: {
         llmRequestOffset: 5,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { reasoning_content: "hmm" } }] }],
+        responseDelta: "",
+        thinkingDelta: "hmm",
       },
     },
   ]);
@@ -1572,7 +1547,8 @@ test("phases follow the running step: waiting → thinking → writing → runni
       payload: {
         llmRequestOffset: 5,
         sequence: 0,
-        chunks: [{ choices: [{ delta: { content: "await work()" } }] }],
+        responseDelta: "await work()",
+        thinkingDelta: "",
       },
     },
   ]);

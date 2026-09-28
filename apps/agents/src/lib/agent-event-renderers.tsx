@@ -106,10 +106,10 @@ export const agentEventRenderers: EventRenderers = {
   },
   "events.iterate.com/agent/llm-response-frame": (e) => {
     const p = record(e.payload);
-    const chunks = Array.isArray(p.chunks) ? p.chunks.length : 0;
+    const chars = str(p.responseDelta).length + str(p.thinkingDelta).length;
     return (
       <span className="text-muted-foreground">
-        Streaming {String(chunks)} chunk{chunks === 1 ? "" : "s"} for{" "}
+        Streaming {String(chars)} character{chars === 1 ? "" : "s"} for{" "}
         {mono(`#${num(p.llmRequestOffset)}`)}
       </span>
     );
