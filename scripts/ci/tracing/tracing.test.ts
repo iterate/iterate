@@ -938,15 +938,24 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
   ]);
 });
 
-test("a specs shard's job is in the trace by its own name, with its Test phase", () => {
+test("the Browser specs shards are one span, from the first shard's start to the last one's end, red when one is", () => {
   const workflow = osPreviewWorkflow();
   const specs = workflow.jobs[2]!;
   const shard = {
     ...specs,
     jobId: "specs-shard-2",
     jobKey: "preview-os.yml:specs-shard:matrix-0",
-    jobDisplayName: "Browser specs 2/10",
-    attempts: [{ ...specs.attempts[0]!, attemptId: "shard-2-attempt" }],
+    jobDisplayName: "Browser specs 2/2",
+    status: "failed",
+    attempts: [
+      {
+        ...specs.attempts[0]!,
+        attemptId: "shard-2-attempt",
+        status: "failed",
+        startedAt: at(43),
+        finishedAt: at(130),
+      },
+    ],
   };
 
   const trace = assembleTrace(
@@ -956,17 +965,36 @@ test("a specs shard's job is in the trace by its own name, with its Test phase",
         "shard-2-attempt",
         [
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
-          line("suite", { kind: "shell-end", id: "suite", time: ms(100), exitCode: 0 }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(100), exitCode: 1 }),
         ],
       ],
     ]),
   );
 
   const spans = trace.resourceSpans[0].scopeSpans[0].spans;
-  const shardSpan = spans.find((span) => span.name === "Browser specs 2/10");
-  expect(
-    spans.filter((span) => span.parentSpanId === shardSpan?.spanId).map((span) => span.name),
-  ).toEqual(["Setup", "Test", "Finish"]);
+  const children = (name: string) => {
+    const parent = spans.find((span) => span.name === name);
+    return spans.filter((span) => span.parentSpanId === parent?.spanId).map((span) => span.name);
+  };
+  expect({
+    workflow: children("Preview OS"),
+    group: children("Browser specs"),
+    shard: children("Browser specs 2/2"),
+  }).toEqual({
+    // the group before the jobs; the viewer orders the rows itself
+    workflow: ["Workflow queue", "Browser specs", "Deploy preview", "E2E tests"],
+    group: ["Browser specs 1/2", "Browser specs 2/2"],
+    shard: ["Setup", "Test", "Finish"],
+  });
+  expect(spans.find((span) => span.name === "Browser specs")).toMatchObject({
+    startTimeUnixNano: String(BigInt(ms(41)) * 1_000_000n),
+    endTimeUnixNano: String(BigInt(ms(130)) * 1_000_000n),
+    status: { code: 2 },
+    attributes: expect.arrayContaining([
+      { key: "ci.kind", value: { stringValue: "group" } },
+      { key: "ci.status", value: { stringValue: "failed" } },
+    ]),
+  });
 });
 
 test("a failed deploy is red at its completion and neither suite ran", () => {

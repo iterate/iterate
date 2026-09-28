@@ -128,12 +128,7 @@ export function assembleTrace(
     ]),
   );
   workflow.workflowFinishedAt = new Date(rootEnd).toISOString();
-  if (workflow.jobs.some((job) => job.status === "failed")) workflow.workflowStatus = "failed";
-  else if (workflow.jobs.some((job) => job.status === "cancelled"))
-    workflow.workflowStatus = "cancelled";
-  else if (workflow.jobs.length && workflow.jobs.every((job) => job.status === "skipped"))
-    workflow.workflowStatus = "skipped";
-  else if (workflow.jobs.length) workflow.workflowStatus = "finished";
+  if (workflow.jobs.length) workflow.workflowStatus = settledStatus(workflow.jobs);
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
   const add = (
@@ -215,19 +210,58 @@ export function assembleTrace(
       false,
     );
   }
-  for (const job of workflow.jobs) {
-    const key = jobKeyInWorkflow(job.jobKey);
-    // a matrix leg by its own name, `Browser specs 3/10`
-    const name = jobLabels.get(key) || job.jobDisplayName || key;
-    const attempts = job.attempts.filter(
+  /** A job's attempts in this execution: those that started, and did not end before it began. */
+  const tracedAttempts = (job: (typeof workflow.jobs)[number]) =>
+    job.attempts.filter(
       (attempt) =>
         attempt.startedAt &&
         Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
     );
+  // THE BROWSER SPECS SHARDS, one check's jobs, under one span from the first shard's start to the
+  // last one's end: `specs`, the first, and the legs of `specs-shard` (preview-os.yml SHARDS). The
+  // span's own status is the worst of theirs. A run from before the shards has no group.
+  const shards = workflow.jobs.filter((job) =>
+    SPECS_SHARD_JOBS.includes(jobKeyInWorkflow(job.jobKey)),
+  );
+  let shardGroup: string | undefined;
+  if (shards.some((job) => jobKeyInWorkflow(job.jobKey) === "specs-shard")) {
+    const times = shards.flatMap((job) => {
+      const attempts = tracedAttempts(job);
+      if (!attempts.length) return [rootEnd];
+      return attempts.flatMap((attempt) => [
+        Date.parse(attempt.startedAt),
+        Date.parse(attempt.finishedAt || workflow.workflowFinishedAt),
+      ]);
+    });
+    const status = settledStatus(shards);
+    shardGroup = add(
+      "specs-shards",
+      root,
+      "Browser specs",
+      Math.min(...times),
+      Math.max(...times),
+      {
+        "ci.kind": "group",
+        "ci.status": status,
+        "ci.shards": String(shards.length),
+        "ci.evidence": "The first shard's start to the last one's end (Depot timestamps)",
+      },
+      status === "failed",
+    );
+  }
+  for (const job of workflow.jobs) {
+    const key = jobKeyInWorkflow(job.jobKey);
+    const parent = shardGroup && SPECS_SHARD_JOBS.includes(key) ? shardGroup : root;
+    // a shard by its number, `Browser specs 1/10`; a matrix leg by its own name, `Browser specs 3/10`
+    const name =
+      shardGroup && key === "specs"
+        ? `Browser specs 1/${shards.length}`
+        : jobLabels.get(key) || job.jobDisplayName || key;
+    const attempts = tracedAttempts(job);
     if (!attempts.length) {
       add(
         job.jobId,
-        root,
+        parent,
         name,
         rootEnd,
         rootEnd,
@@ -240,7 +274,7 @@ export function assembleTrace(
       const end = Date.parse(attempt.finishedAt || workflow.workflowFinishedAt);
       const jobSpan = add(
         attempt.attemptId,
-        root,
+        parent,
         `${name}${attempt.attempt > 1 ? ` (attempt ${attempt.attempt})` : ""}`,
         start,
         end,
@@ -626,6 +660,18 @@ function hash(value: string, length: number) {
 const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
 });
+/** What a set of settled jobs came to: failed if one failed, else cancelled if one was, skipped if
+ *  all were, else finished. */
+function settledStatus(jobs: { status: string }[]) {
+  if (jobs.some((job) => job.status === "failed")) return "failed";
+  if (jobs.some((job) => job.status === "cancelled")) return "cancelled";
+  if (jobs.every((job) => job.status === "skipped")) return "skipped";
+  return "finished";
+}
+
+/** The Browser specs shards' jobs, drawn under one span: `specs`, the first shard, and
+ *  `specs-shard`, whose legs are the rest (scripts/ci/specs-shards.ts SHARD_JOB). */
+const SPECS_SHARD_JOBS = ["specs", "specs-shard"];
 const jobLabels = new Map([
   ["deploy", "Deploy preview"],
   ["e2e", "E2E tests"],

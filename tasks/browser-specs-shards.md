@@ -48,6 +48,7 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 - [x] `main-os-e2e.yml`: same shape _plus the alert job needs the legs; only shard 1 saves Playwright's browser cache_
 - [x] Collector: wait for the legs, download their blobs, merge the HTML report, fail on any red leg (a script under `scripts/ci/`, tested through a fake Depot) _`scripts/ci/specs-shards.ts`, reusing the deploy wait's poll loop (`pollWorkflow` in await-deploy.ts)_
 - [x] Trace: label shard legs; time to green still ends at the last suite job _`jobKeyInWorkflow` drops `:matrix-<n>`; legs use their display name_
+- [x] Trace: the shards under one **Browser specs** parent span (Misha, follow-up) _`assembleTrace` adds a `ci.kind: group` span over `specs` + `specs-shard` jobs; the viewer lists its shards 1–10 in order, each collapsed until opened. Last week's traces had no such parent: the old CI tracer showed "Playwright N/6" as siblings, and the explainer's "grouped shard phases" meant each shard's Setup → Wait → Run → Upload_
 - [x] Workflow tests (`preview-os-workflow.test.ts`, `depot-workflows.test.ts`) pin the new shape
 - [x] Docs: `docs/depot-ci.md` (preview job shape, reliability defaults), `docs/testing.md` _new section "Browser specs in shards"_
 - [x] Main's alert page and the CI telemetry sync read every shard _`scripts/monitors/e2e.ts` names failing rows from any leg; `testEvidenceJobs` lists `specs-shard`_

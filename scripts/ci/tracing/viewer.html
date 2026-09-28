@@ -364,13 +364,26 @@
                   rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
                 );
               }
+              // a group's jobs, the Browser specs shards, by their number
+              if (s.a["ci.kind"] === "group")
+                return a.name.localeCompare(b.name, undefined, { numeric: true });
               return a.start - b.start;
             }),
         ]),
       );
-      let open = new Set(
-        spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-      );
+      // Opened at first and by "Show phases": the workflow and each job's phases, but a group's
+      // jobs (the Browser specs shards) one row each until opened.
+      const phasesOpen = () =>
+        new Set(
+          spans
+            .filter(
+              (s) =>
+                s.a["ci.kind"] === "workflow" ||
+                (s.a["ci.kind"] === "job" && byId.get(s.parentSpanId)?.a["ci.kind"] !== "group"),
+            )
+            .map((s) => s.spanId),
+        );
+      let open = phasesOpen();
       // Cancellation can finish the workflow before its cleanup markers stop.
       const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
@@ -566,9 +579,7 @@
         render();
       };
       document.getElementById("phases").onclick = () => {
-        open = new Set(
-          spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-        );
+        open = phasesOpen();
         document.getElementById("search").value = "";
         render();
       };

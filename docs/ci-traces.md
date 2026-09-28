@@ -33,7 +33,9 @@ artifact's path.
 
 The report shows the workflow, its jobs, each test job's Setup, Test and Finish
 phases, the measured shell steps, and individual Playwright attempts and Vitest
-tests.
+tests. The Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) are one
+**Browser specs** row, from the first shard's start to the last one's end and red when any shard
+failed; it opens into **Browser specs 1/10** to **10/10**, in order, each one row until opened.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
 
