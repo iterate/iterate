@@ -327,7 +327,7 @@ test("a Durable Object namespace whose worker is gone is paged with its id, what
   expect(
     renderWorkerlessNamespacesPage(workerless, "https://depot.dev/orgs/x/workflows/y").split("\n"),
   ).toEqual([
-    "🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker <@U067G4QRFK2>",
+    "🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker <@U067G4QRFK2> <@U099JH9TAF2>",
     "• os-preview_ProjectDurableObject (n2), worker os-preview",
     "• LegacyDurableObject (n4), worker unnamed",
     "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",

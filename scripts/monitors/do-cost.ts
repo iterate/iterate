@@ -1,22 +1,20 @@
 // Hourly Durable Objects cost alarm, one check of the health job (./health.ts). Runs the
 // duration probe (scripts/monitors/do-duration-probe.ts --json) against both
-// Cloudflare accounts and keeps ONE Slack thread per UTC day in #error-pulse.
+// Cloudflare accounts and keeps ONE Slack thread per UTC day in #ci, a routine post.
 // The headline is one sentence, rewritten every hour: "We're spending $X/day
 // on durable objects based on current usage ($A dev/preview, $B prd)". The
 // thread's first reply is the per-account table (latest hour, today so far,
-// hours over the ceiling, pinned invocations), also rewritten every hour;
-// anything that needs a human — an hour over the ceiling, a probe that could
-// not run — is a further reply. An account at its page tier ($/hour) also gets
-// a NEW top-level message that @-mentions Jonas and names the top spenders,
-// repeated every PAGE_REPEAT_HOURS while it lasts: edits and thread replies
-// notify nobody.
-// Exists because the 2026-09-01 preview stream-DO wake loop burned ~$300/hour
-// for 28 hours before a human noticed it on the bill — and the 2026-09-21
-// os-next preview pin runaway reached $87/hour with this alarm red for a day,
-// its replies unread in the thread.
+// hours over the ceiling, pinned invocations), also rewritten every hour; an
+// hour over the ceiling or a probe that could not run is a further reply, a
+// routine reading that pages nobody. Only an account at its page tier ($/hour)
+// reaches a human: a NEW top-level message in #error-pulse that @-mentions Jonas
+// and Misha and names the top spenders, repeated every PAGE_REPEAT_HOURS while it
+// lasts.
+// It exists because a runaway Durable Object can cost hundreds of dollars an
+// hour while every request stays green, and the bill shows it only days later.
 // Its own thread and pages, not the health job's message: its state is the channel's history.
-// A health test page runs it with a ceiling of 1 DO-hour, which forces an alert and a page without
-// the mention, marked 🧪 TEST RUN.
+// A health test page runs it with a ceiling of 1 DO-hour, which forces an alert and a page, marked
+// 🧪 TEST RUN.
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { cloudflareAccounts } from "../../envs.ts";
@@ -108,7 +106,7 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
   }
   await postDailyThread({
     slack: getSlackClient(),
-    channel: slackChannelIds["#error-pulse"],
+    channels: { thread: slackChannelIds["#ci"], pages: slackChannelIds["#error-pulse"] },
     now,
     readings,
     runUrl,
@@ -124,13 +122,15 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
  */
 export async function postDailyThread(input: {
   slack: WebClient;
-  channel: string;
+  /** The day's thread is routine; a page is not. */
+  channels: { thread: string; pages: string };
   now: Date;
   readings: AccountReading[];
   runUrl: string | null;
   testRun: boolean;
 }) {
-  const { slack, channel, now, testRun } = input;
+  const { slack, channels, now, testRun } = input;
+  const channel = channels.thread;
   const thread = renderDailyThread(input);
   console.log(`\n${thread.headline}\n\n${thread.details}\n`);
   for (const reply of thread.replies) console.log(`\n${reply}\n`);
@@ -139,7 +139,13 @@ export async function postDailyThread(input: {
   // Pages first: a Slack error in the thread upkeep below must not swallow one.
   let pagesPosted = 0;
   for (const page of thread.pages) {
-    const posted = await postPageUnlessRecent({ slack, channel, now, page, testRun });
+    const posted = await postPageUnlessRecent({
+      slack,
+      channel: channels.pages,
+      now,
+      page,
+      testRun,
+    });
     if (posted) pagesPosted++;
   }
   const headlineTs = await findOrCreateHeadline({
@@ -293,12 +299,11 @@ export function renderDailyThread(input: {
       pages.push({
         label: reading.label,
         text: [
-          // "DO cost page for <label>:" is how postPageUnlessRecent finds it; a test run mentions
-          // nobody.
-          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling.${input.testRun ? "" : ` ${onCallMention}`}`,
+          // "DO cost page for <label>:" is how postPageUnlessRecent finds it.
+          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling. ${onCallMention}`,
           "Top spenders, trailing hour:",
           ...activeTime.topNamespaces.map((row) => `• ${row.namespace}  ~${usd(row.doHours)}/h`),
-          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread in #ci.`,
           links(input.runUrl),
         ].join("\n"),
       });
@@ -364,8 +369,10 @@ function links(runUrl: string | null) {
  * Today's headline message, created on the day's first run. Found by text:
  * the bot's own messages since 00:00 UTC that read "We're spending …"
  * (Slack rewrites emoji as :shortcodes: in history, so the test-run prefix
- * is matched by its words). A forced-threshold test run keeps its own thread:
- * it must never rewrite the real day's headline with test text.
+ * is matched by its words), read page by page: #ci takes every pull request
+ * event and deploy, far more than one page a day. A forced-threshold test run
+ * keeps its own thread: it must never rewrite the real day's headline with
+ * test text.
  */
 async function findOrCreateHeadline(input: {
   slack: WebClient;
@@ -376,20 +383,25 @@ async function findOrCreateHeadline(input: {
 }): Promise<string> {
   const date = input.now.toISOString().slice(0, 10);
   const dayStart = Date.parse(`${date}T00:00:00Z`) / 1000;
-  const history = await input.slack.conversations.history({
-    channel: input.channel,
-    oldest: String(dayStart),
-    limit: 200,
-  });
-  const existing = (history.messages || []).find(
-    (message) =>
-      message.bot_id &&
-      message.ts &&
-      message.text?.includes("spending") &&
-      message.text.includes("/day on durable objects") &&
-      message.text.includes("TEST RUN") === input.testRun,
-  );
-  if (existing?.ts) return existing.ts;
+  let cursor: string | undefined;
+  do {
+    const history = await input.slack.conversations.history({
+      channel: input.channel,
+      oldest: String(dayStart),
+      limit: 200,
+      cursor,
+    });
+    const existing = (history.messages || []).find(
+      (message) =>
+        message.bot_id &&
+        message.ts &&
+        message.text?.includes("spending") &&
+        message.text.includes("/day on durable objects") &&
+        message.text.includes("TEST RUN") === input.testRun,
+    );
+    if (existing?.ts) return existing.ts;
+    cursor = history.response_metadata?.next_cursor || undefined;
+  } while (cursor);
   const posted = await input.slack.chat.postMessage({
     channel: input.channel,
     text: input.headline,
