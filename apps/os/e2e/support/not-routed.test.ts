@@ -145,7 +145,7 @@ test("resend: a WebSocket upgrade answered with the not-found page opens on a fr
 test("resend: a WebSocket upgrade refused with the page over HTTP/2 opens on an HTTP/1.1 connection to another server", async () => {
   await using h2 = await fakeHttp2Edge();
   await using edge = await fakeEdge(["worker"]);
-  const agent = new Agent({ allowH2: true, useH2c: true });
+  const agent = cleartextHttp2Agent();
   onTestFinished(() => agent.close());
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const dispatcher = agent.compose(
@@ -155,7 +155,7 @@ test("resend: a WebSocket upgrade refused with the page over HTTP/2 opens on an 
       connect: (origin) =>
         new Client(origin, {
           allowH2: false,
-          connect: (options, callback) => dial({ ...options, port: edge.port }, callback),
+          connect: (options, callback) => dial({ ...options, port: String(edge.port) }, callback),
         }),
     }),
   );
@@ -394,3 +394,10 @@ async function fakeHttp2Edge() {
 }
 
 const dial = buildConnector({});
+
+/** An Agent that speaks HTTP/2 over cleartext, as undici's own WebSocket speaks it to Cloudflare over
+ *  TLS. undici 8.11.2 reads the top-level `useH2c`, which its types list under `h2Options` alone:
+ *  with `h2Options.useH2c` the session opens and the extended CONNECT is never sent. */
+function cleartextHttp2Agent() {
+  return new Agent({ allowH2: true, useH2c: true } as Agent.Options);
+}
