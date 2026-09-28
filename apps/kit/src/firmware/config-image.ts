@@ -1,6 +1,7 @@
 /**
  * Kit writes this image only to a board's newest firmware release, so it matches the decoder on
- * main and nothing older; see apps/kit/firmware/AGENTS.md.
+ * main and nothing older once that board's release catches up (a few minutes after Kit deploys);
+ * see apps/kit/firmware/AGENTS.md.
  */
 const CONFIG_MAGIC = "ITERKIT1";
 const CONFIG_HEADER_BYTES = 16;
