@@ -4,3 +4,5 @@ export function readPayload(raw: string) {
   const parsed = JSON.parse(raw);
   return parsed as { id: string; count: number };
 }
+
+export const proofHead = 2;
