@@ -1,36 +1,43 @@
 // Hourly Durable Objects cost alarm, one check of the health job (./health.ts). Runs the
 // duration probe (scripts/monitors/do-duration-probe.ts --json) against both
 // Cloudflare accounts and keeps ONE Slack thread per UTC day in #ci, a routine post.
-// The headline is one sentence, rewritten every hour: "We're spending $X/day
-// on durable objects based on current usage ($A dev/preview, $B prd)". The
-// thread's first reply is the per-account table (latest hour, today so far,
-// hours over the ceiling, pinned invocations), also rewritten every hour; an
-// hour over the ceiling or a probe that could not run is a further reply, a
-// routine reading that pages nobody. Only an account at its page tier ($/hour)
-// reaches a human: a NEW top-level message in #error-pulse that @-mentions Jonas
-// and Misha and names the top spenders, repeated every PAGE_REPEAT_HOURS while it
-// lasts.
+// The headline is one sentence, rewritten every hour: "We're spending $X/day on
+// durable objects at 13:00's rate · today so far $Y". The thread's one reply is a
+// line per account (the hour the headline used, today so far, the complete hours
+// over the ceiling, 🔴 when any was), also rewritten every hour.
+// Only an account at its page tier ($/hour) reaches a human: ONE page per incident in
+// #error-pulse, with both mentions and the top spenders. While it lasts, each run
+// edits the page with the rate now and the peak; the first run at 2× and at 5× the
+// page tier also replies in its thread, broadcast to the channel. Two complete
+// hours under the ceiling resolve it. The probe's hourly series and the page's own
+// text are the whole state: the page says the peak it has shown.
 // It exists because a runaway Durable Object can cost hundreds of dollars an
 // hour while every request stays green, and the bill shows it only days later.
-// Its own thread and pages, not the health job's message: its state is the channel's history.
-// A health test page runs it with a ceiling of 1 DO-hour, which forces an alert and a page, marked
-// 🧪 TEST RUN.
+// A health test page runs it with a ceiling of 1 DO-hour, which forces a page: the
+// thread and the page both go to #ci, marked 🧪 TEST RUN, and keep no state.
 import { execFileSync } from "node:child_process";
 import type { WebClient } from "@slack/web-api";
 import { cloudflareAccounts } from "../../envs.ts";
-import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
+import {
+  findOpenPage,
+  getSlackClient,
+  onCallMention,
+  pageChannel,
+  pageText,
+  resolvePage,
+  slackChannelIds,
+} from "../ci/slack.ts";
 import type { ProbeSummary } from "./do-duration-probe.ts";
 
 /** $12.50 per million GB-seconds at 128 MB: one DO-hour is 450 GB-s. */
 const USD_PER_DO_HOUR = 0.005625;
-/** The probe runs at :41 and analytics lag ~15–20 minutes, so the previous
- * hour is complete and the current one partial: a breach in either is "now".
- * Older breaches are today's history — in the headline, not re-alerted. */
-const RECENT_HOURS = 2;
 /** Long enough that every hour of the current UTC day is in the summary. */
 const LOOKBACK_HOURS = 26;
-/** A breach that lasts pages every third hourly run. */
-const PAGE_REPEAT_HOURS = 3;
+/** How far back a run looks for its account's open page: an incident longer than this is paged
+ *  again. */
+const OPEN_PAGE_HOURS = 48;
+/** Multiples of the page tier whose first crossing is a broadcast reply in the page's thread. */
+const ESCALATIONS = [2, 5];
 
 export const ACCOUNTS = [
   {
@@ -64,16 +71,16 @@ export const ACCOUNTS = [
 export type AccountReading = {
   label: string;
   ceilingDoHours: number;
-  /** Current usage at or above this pages: a new top-level message. */
+  /** Current usage at or above this pages. */
   pageUsdPerHour: number;
   summary: ProbeSummary | null;
   /** Why the probe printed no summary (bad creds, GraphQL outage). */
   failure: string | null;
 };
 
-/** Probe both accounts and upkeep the day's thread (postDailyThread). A test run overrides BOTH
- *  accounts' active-time ceiling with 1 DO-hour an hour, which forces an alert and a page and proves
- *  the Slack hookup end to end; a dry run prints the thread and posts nothing. */
+/** Probe both accounts and upkeep the day's thread and the pages (postDailyThread). A test run
+ *  overrides BOTH accounts' active-time ceiling with 1 DO-hour an hour, which forces a page and
+ *  proves the Slack hookup end to end; a dry run prints the thread and posts nothing. */
 export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; runUrl?: string }) {
   const override = options.testRun ? 1 : undefined;
   const runUrl = options.runUrl || null;
@@ -99,14 +106,16 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
       [
         thread.headline,
         thread.details,
-        ...thread.replies,
-        ...thread.pages.map((page) => page.text),
+        ...thread.accounts
+          .filter((account) => tier(account, account.doHoursPerHour) > 0)
+          .map((account) =>
+            renderPage({ account, peak: account, runUrl, testRun: options.testRun }),
+          ),
       ].join("\n\n"),
     );
   }
-  await postDailyThread({
+  return await postDailyThread({
     slack: getSlackClient(),
-    channels: { thread: slackChannelIds["#ci"], pages: slackChannelIds["#error-pulse"] },
     now,
     readings,
     runUrl,
@@ -115,38 +124,28 @@ export async function checkDoCost(options: { testRun: boolean; dryRun: boolean; 
 }
 
 /**
- * Posts this run's pages, upkeeps the day's thread, then ends. A breach ends it quietly: the page
- * and the reply are the alarm. A probe that could not run throws once its reply is posted, so a
- * broken token never passes for a quiet account; so does any Slack error. The health job fails its
- * run on either, after its other checks.
+ * Upkeeps each account's page, then the day's thread, then ends. A page ends it quietly: the page
+ * is the alarm. A probe that could not run throws once the thread says so, so a broken token never
+ * passes for a quiet account; so does any Slack error. The health job fails its run on either,
+ * after its other checks. Returns what each account's page did.
  */
 export async function postDailyThread(input: {
   slack: WebClient;
-  /** The day's thread is routine; a page is not. */
-  channels: { thread: string; pages: string };
   now: Date;
   readings: AccountReading[];
   runUrl: string | null;
   testRun: boolean;
 }) {
-  const { slack, channels, now, testRun } = input;
-  const channel = channels.thread;
+  const { slack, now, testRun } = input;
+  const channel = slackChannelIds["#ci"];
   const thread = renderDailyThread(input);
   console.log(`\n${thread.headline}\n\n${thread.details}\n`);
-  for (const reply of thread.replies) console.log(`\n${reply}\n`);
-  for (const page of thread.pages) console.log(`\n${page.text}\n`);
 
   // Pages first: a Slack error in the thread upkeep below must not swallow one.
-  let pagesPosted = 0;
-  for (const page of thread.pages) {
-    const posted = await postPageUnlessRecent({
-      slack,
-      channel: channels.pages,
-      now,
-      page,
-      testRun,
-    });
-    if (posted) pagesPosted++;
+  const pages: Array<{ label: string; action: PageAction["kind"] }> = [];
+  for (const account of thread.accounts) {
+    const action = await upkeepPage({ slack, now, account, runUrl: input.runUrl, testRun });
+    pages.push({ label: account.label, action });
   }
   const headlineTs = await findOrCreateHeadline({
     slack,
@@ -156,9 +155,6 @@ export async function postDailyThread(input: {
     testRun,
   });
   await upsertDetailsReply({ slack, channel, headlineTs, details: thread.details });
-  for (const text of thread.replies) {
-    await slack.chat.postMessage({ channel, thread_ts: headlineTs, text });
-  }
   await slack.chat.update({ channel, ts: headlineTs, text: thread.headline });
 
   const unmeasured = input.readings.flatMap((reading) =>
@@ -168,15 +164,8 @@ export async function postDailyThread(input: {
   // 2026-09-02 dispatch test, where a breach concluded "success").
   if (unmeasured.length > 0)
     throw new Error(`DO duration probe could not run: ${unmeasured.join("; ")}`);
-  if (thread.replies.length === 0 && thread.pages.length === 0) {
-    console.log("✅ both accounts under their ceilings; headline updated");
-    return { breached: false, pagesPosted };
-  }
-  console.log(
-    `🚨 ${thread.replies.length} alert(s) posted to the daily thread, ` +
-      `${thread.pages.length} account(s) at the page tier (${pagesPosted} paged now)`,
-  );
-  return { breached: true, pagesPosted };
+  console.log(`DO cost pages: ${pages.map((page) => `${page.label} ${page.action}`).join(", ")}`);
+  return { pages };
 }
 
 /** The probe under the account's own Doppler config (envs.ts `cloudflareAccounts`). */
@@ -215,11 +204,31 @@ function probe(account: { dopplerProject: string; dopplerConfig: string }, ceili
   }
 }
 
+/** One measured account as this run judged it. */
+export type AccountNow = {
+  label: string;
+  ceilingDoHours: number;
+  pageUsdPerHour: number;
+  /** Current usage, whole DO-hours an hour: the last complete hour, or this partial hour projected
+   *  to a full one if that is higher. */
+  doHoursPerHour: number;
+  /** The hour that rate is from ("13:00"), and whether it is this partial hour projected; null when
+   *  neither hour has a row, which means nothing ran. */
+  basis: { hour: string; projected: boolean } | null;
+  todayDoHours: number;
+  /** Today's complete hours, and how many of them were over the ceiling. */
+  completeHoursToday: number;
+  overToday: number;
+  /** The two complete hours before this one and the rate now are all under the ceiling. */
+  underCeilingSince: string | null;
+  topNamespaces: Array<{ namespace: string; doHours: number }>;
+  /** Today's invocations pinned longer than the probe's --threshold-hours. */
+  pinnedToday: string[];
+};
+
 /**
- * The day's Slack thread as text: the one-sentence headline, the per-account
- * details table that lives in the thread's first reply, the alert replies
- * this run has to add (only what a human should look at now), and a page per
- * account at its page tier. Pure, so the wording is testable.
+ * The day's Slack thread as text: the one-sentence headline, the reply with a line per account,
+ * and each measured account as this run judged it, for its page. Pure, so the wording is testable.
  */
 export function renderDailyThread(input: {
   now: Date;
@@ -228,137 +237,255 @@ export function renderDailyThread(input: {
   testRun: boolean;
 }) {
   const date = input.now.toISOString().slice(0, 10);
-  const currentHour = input.now.toISOString().slice(0, 13);
-  const lastCompleteHour = new Date(input.now.getTime() - 3600_000).toISOString().slice(0, 13);
-  const recentSince = new Date(input.now.getTime() - RECENT_HOURS * 3600_000).toISOString();
   const testPrefix = input.testRun ? "🧪 TEST RUN — " : "";
-  const hourOf = (row: { hour: string; doHours: number }) =>
-    `${row.hour.slice(11, 16)} → ${row.doHours.toLocaleString("en-US")} (~${usd(row.doHours)}/h)`;
 
-  let usdPerDay = 0;
+  const accounts: AccountNow[] = [];
   const perAccount: string[] = [];
-  const tableRows: string[][] = [];
-  const replies: string[] = [];
-  const pages: Array<{ label: string; text: string }> = [];
+  const lines: string[] = [];
   for (const reading of input.readings) {
     if (!reading.summary) {
       perAccount.push(`${reading.label}: probe failed`);
-      tableRows.push([reading.label, `probe failed: ${reading.failure}`]);
-      replies.push(
-        `${testPrefix}⚠️ DO duration probe FAILED to run. account: ${reading.label}.\n${reading.failure}\n${links(input.runUrl)}`,
-      );
+      lines.push(`⚠️ ${reading.label}: probe failed: ${reading.failure}`);
       continue;
     }
-    const { activeTime, pinnedInvocations } = reading.summary;
-    // Current usage: the last complete hour, or this partial hour projected
-    // to a full one if that is higher, so a runaway that started this hour
-    // pages now rather than at the next run. Analytics lag only makes the
-    // projection low. It divides by at least 30 minutes: a dispatch early in
-    // the hour must not turn a few minutes' burst into a page. Rows exist
-    // only for hours with activity: no row means nothing ran in that hour.
-    const lastComplete = activeTime.hours.find((row) => row.hour.startsWith(lastCompleteHour));
-    const thisHour = activeTime.hours.find((row) => row.hour.startsWith(currentHour));
-    const doHoursPerHour = Math.max(
-      lastComplete ? lastComplete.doHours : 0,
-      thisHour ? (thisHour.doHours * 60) / Math.max(input.now.getUTCMinutes(), 30) : 0,
-    );
-    const accountUsdPerHour = doHoursPerHour * USD_PER_DO_HOUR;
-    const accountUsdPerDay = doHoursPerHour * 24 * USD_PER_DO_HOUR;
-    const ceilingMultiple = `${(doHoursPerHour / reading.ceilingDoHours).toFixed(1)}×`;
-    usdPerDay += accountUsdPerDay;
-    perAccount.push(`${money(accountUsdPerDay)} ${reading.label}`);
-
-    const today = activeTime.hours.filter((row) => row.hour.startsWith(date));
-    const todayTotal = today.reduce((total, row) => total + row.doHours, 0);
-    const breachedToday = activeTime.breachedHours.filter((row) => row.hour.startsWith(date));
-    const recent = activeTime.breachedHours.filter((row) => row.hour >= recentSince);
-    const latest = activeTime.hours.at(-1);
-    const pinned = pinnedInvocations.rows[0];
-    tableRows.push([
-      reading.label,
-      latest ? hourOf(latest) : "no activity in the lookback",
-      `${todayTotal.toLocaleString("en-US")} ≈ ${usd(todayTotal)}`,
-      `${breachedToday.length}/${today.length} over ${reading.ceilingDoHours}`,
-      pinned ? `${pinned.script} P99=${pinned.wallTimeP99Hours}h` : "—",
-    ]);
-
-    const worst = recent.at(-1);
-    if (worst) {
-      replies.push(
-        [
-          `${testPrefix}🚨 Durable Objects hours over ${reading.ceilingDoHours}. account: ${reading.label}. Now ${ceilingMultiple} the ceiling (~${money(accountUsdPerHour)}/h).`,
-          `Latest: ${hourOf(worst)}`,
-          pinned ? `Also pinned: ${pinned.script}  wallTimeP99=${pinned.wallTimeP99Hours}h` : null,
-          links(input.runUrl),
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
-    }
-    if (accountUsdPerHour >= reading.pageUsdPerHour) {
-      pages.push({
-        label: reading.label,
-        text: [
-          // "DO cost page for <label>:" is how postPageUnlessRecent finds it.
-          `${testPrefix}🚨 DO cost page for ${reading.label}: ~${money(accountUsdPerHour)}/h (≈ ${money(accountUsdPerDay)}/day), ${ceilingMultiple} the ceiling. ${onCallMention}`,
-          "Top spenders, trailing hour:",
-          ...activeTime.topNamespaces.map((row) => `• ${row.namespace}  ~${usd(row.doHours)}/h`),
-          `Pages again in ${PAGE_REPEAT_HOURS}h while it lasts; hourly readings are in today's "We're spending" thread in #ci.`,
-          links(input.runUrl),
-        ].join("\n"),
-      });
-    }
+    const account = judge(reading, reading.summary, input.now);
+    accounts.push(account);
+    perAccount.push(`${money(usdPerDay(account.doHoursPerHour))} ${reading.label}`);
+    lines.push(accountLine(account));
   }
 
-  const headline = `${testPrefix}We're spending ${money(usdPerDay)}/day on durable objects based on current usage (${perAccount.join(", ")})`;
-  const details = [
-    "```",
-    ...table([DETAILS_HEADER, ...tableRows]),
-    "```",
-    links(input.runUrl),
-  ].join("\n");
-  return { date, headline, details, replies, pages };
+  const usdNowPerDay = accounts.reduce(
+    (total, account) => total + usdPerDay(account.doHoursPerHour),
+    0,
+  );
+  const todayUsd =
+    accounts.reduce((total, account) => total + account.todayDoHours, 0) * USD_PER_DO_HOUR;
+  const bases = new Set(accounts.flatMap((account) => (account.basis ? [account.basis.hour] : [])));
+  const basis =
+    bases.size > 1
+      ? "the latest hour's rate"
+      : `${[...bases][0] || hourOf(new Date(input.now.getTime() - 3600_000))}'s rate`;
+  const headline = `${testPrefix}We're spending ${money(usdNowPerDay)}/day on durable objects at ${basis} · today so far ${money(todayUsd)} (${perAccount.join(", ")})`;
+  const details = [`${DETAILS_TITLE}, ${date} UTC`, ...lines, links(input.runUrl)].join("\n");
+  return { date, headline, details, accounts };
 }
 
-/** The details table's header row; also how the reply is recognised in the thread. */
-const DETAILS_HEADER = [
-  "account",
-  "latest hour",
-  "today (DO-hours)",
-  "hours over ceiling",
-  "pinned invocations",
-];
+/** The details reply's first words; also how the reply is recognised in the thread. */
+const DETAILS_TITLE = "DO cost by account";
 
-/** Rows padded into aligned columns for a Slack code block. */
-function table(rows: string[][]) {
-  const widths = rows[0]!.map((_, column) =>
-    Math.max(...rows.map((row) => (row[column] || "").length)),
+function judge(reading: AccountReading, summary: ProbeSummary, now: Date): AccountNow {
+  const { activeTime, pinnedInvocations } = summary;
+  const date = now.toISOString().slice(0, 10);
+  const hourAgo = (hours: number) =>
+    new Date(now.getTime() - hours * 3600_000).toISOString().slice(0, 13);
+  const doHoursAt = (hour: string) =>
+    activeTime.hours.find((row) => row.hour.startsWith(hour))?.doHours || 0;
+  // Rows exist only for hours with activity: no row means nothing ran in that hour. The projection
+  // divides by at least 30 minutes, so a dispatch early in the hour cannot turn a few minutes'
+  // burst into a page; analytics lag only makes it low.
+  const lastComplete = doHoursAt(hourAgo(1));
+  const projected = Math.floor((doHoursAt(hourAgo(0)) * 60) / Math.max(now.getUTCMinutes(), 30));
+  const doHoursPerHour = Math.max(lastComplete, projected);
+  const basis =
+    doHoursPerHour === 0
+      ? null
+      : projected > lastComplete
+        ? { hour: hourOf(now), projected: true }
+        : { hour: hourOf(new Date(now.getTime() - 3600_000)), projected: false };
+  const currentHour = hourAgo(0);
+  const completeToday = activeTime.hours.filter(
+    (row) => row.hour.startsWith(date) && row.hour < currentHour,
   );
-  return rows.map((row) =>
-    row
-      .map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column]!)))
-      .join("  ")
-      .trimEnd(),
+  const under = (doHours: number) => doHours <= reading.ceilingDoHours;
+  return {
+    label: reading.label,
+    ceilingDoHours: reading.ceilingDoHours,
+    pageUsdPerHour: reading.pageUsdPerHour,
+    doHoursPerHour,
+    basis,
+    todayDoHours: activeTime.hours
+      .filter((row) => row.hour.startsWith(date))
+      .reduce((total, row) => total + row.doHours, 0),
+    completeHoursToday: now.getUTCHours(),
+    overToday: completeToday.filter((row) => !under(row.doHours)).length,
+    underCeilingSince:
+      under(doHoursAt(hourAgo(2))) && under(lastComplete) && under(doHoursPerHour)
+        ? hourOf(new Date(now.getTime() - 2 * 3600_000))
+        : null,
+    topNamespaces: activeTime.topNamespaces,
+    pinnedToday: pinnedInvocations.rows
+      .filter((row) => row.date === date)
+      .map(
+        (row) =>
+          `${row.script} P99 ${row.wallTimeP99Hours} h > ${pinnedInvocations.thresholdHours} h`,
+      ),
+  };
+}
+
+/** One account's line in the details reply, short enough for a phone. */
+function accountLine(account: AccountNow) {
+  const rate = account.basis
+    ? `${account.basis.hour}${account.basis.projected ? " (projected)" : ""} → ${account.doHoursPerHour.toLocaleString("en-US")} DO-hours (~${money(usd(account.doHoursPerHour))}/h)`
+    : "idle";
+  return [
+    `${account.overToday > 0 ? "🔴 " : ""}${account.label}: ${rate}`,
+    `today ${account.todayDoHours.toLocaleString("en-US")} ≈ ${money(usd(account.todayDoHours))}`,
+    `${account.overToday} of ${account.completeHoursToday} h over ${account.ceilingDoHours}`,
+    ...account.pinnedToday.map((pinned) => `pinned: ${pinned}`),
+  ].join(" · ");
+}
+
+/** What one run does to an account's page. */
+export type PageAction =
+  | { kind: "none" }
+  | { kind: "post"; text: string }
+  | { kind: "edit"; ts: string; text: string; escalation: string | null }
+  | { kind: "resolve"; ts: string; text: string; why: string };
+
+/**
+ * One incident per account: none open and at the page tier posts a page; open and under the ceiling
+ * for two complete hours resolves it; open otherwise edits it with the rate now and the peak it has
+ * shown, and the first run past 2× or 5× the page tier also replies. `open` is the page as Slack's
+ * history returns it. Pure.
+ */
+export function decidePage(input: {
+  account: AccountNow;
+  open: { ts: string; text: string } | undefined;
+  runUrl: string | null;
+}): PageAction {
+  const { account, open, runUrl } = input;
+  if (!open) {
+    if (tier(account, account.doHoursPerHour) === 0) return { kind: "none" };
+    return { kind: "post", text: renderPage({ account, peak: account, runUrl, testRun: false }) };
+  }
+  if (account.underCeilingSince)
+    return {
+      kind: "resolve",
+      ts: open.ts,
+      text: open.text,
+      why: `back under ${account.ceilingDoHours} DO-hours/h since ${account.underCeilingSince}`,
+    };
+  const shown = Number(/peak ([\d,]+) DO-hours\/h/.exec(open.text)?.[1]?.replaceAll(",", "") || 0);
+  const peak = Math.max(shown, account.doHoursPerHour);
+  const crossed = tier(account, account.doHoursPerHour);
+  return {
+    kind: "edit",
+    ts: open.ts,
+    text: renderPage({ account, peak: { doHoursPerHour: peak }, runUrl, testRun: false }),
+    escalation:
+      crossed > 1 && crossed > tier(account, shown)
+        ? `🚨 DO cost for ${account.label} passed ${crossed}× its page tier: ~${money(usd(account.doHoursPerHour))}/h (≈ ${money(usdPerDay(account.doHoursPerHour))}/day) ${onCallMention}`
+        : null,
+  };
+}
+
+/** The highest of 1 (the page tier) and ESCALATIONS that `doHours` an hour reaches; 0 under it. */
+function tier(account: AccountNow, doHours: number) {
+  // The page tier is a product of the same float constant, so an exact multiple can land one ulp
+  // under it.
+  return (
+    [1, ...ESCALATIONS].findLast(
+      (multiple) => usd(doHours) >= multiple * account.pageUsdPerHour * (1 - 1e-9),
+    ) || 0
   );
 }
 
-/** Dollars for a headline: whole dollars, cents only under $10, $0 when nothing. */
+/** The account's page as it reads now. `peak` is the highest rate the page has shown: the page
+ *  keeps it in its text, which is how the next run knows which escalations it has sent. */
+function renderPage(input: {
+  account: AccountNow;
+  peak: { doHoursPerHour: number };
+  runUrl: string | null;
+  testRun: boolean;
+}) {
+  const { account } = input;
+  const rate = account.doHoursPerHour;
+  const peak = input.peak.doHoursPerHour;
+  const spenders = account.topNamespaces
+    .slice(0, 3)
+    .map((row) => `${row.namespace} ~${money(usd(row.doHours))}/h`);
+  return pageText({
+    // "DO cost page for <label>:" is how findOpenPage finds it.
+    what: `DO cost page for ${account.label}: ~${money(usd(rate))}/h (≈ ${money(usdPerDay(rate))}/day), ${(rate / account.ceilingDoHours).toFixed(1)}× the ceiling`,
+    impact: [
+      `peak ${peak.toLocaleString("en-US")} DO-hours/h (~${money(usd(peak))}/h)`,
+      spenders.length > 0 ? `top spenders, trailing hour: ${spenders.join(", ")}` : null,
+    ]
+      .filter(Boolean)
+      .join("; "),
+    action: "stop the top spender: find its preview or pinned facet",
+    link: input.runUrl,
+    testRun: input.testRun,
+  });
+}
+
+/**
+ * Runs the account's page decision. A test run keeps no state: it posts the page to #ci whenever the
+ * account is at its page tier and never reads #error-pulse. An escalation is posted before the edit
+ * that records its peak, so a failed post is owed again by the next run.
+ */
+async function upkeepPage(input: {
+  slack: WebClient;
+  now: Date;
+  account: AccountNow;
+  runUrl: string | null;
+  testRun: boolean;
+}): Promise<PageAction["kind"]> {
+  const { slack, account, testRun } = input;
+  const channel = pageChannel(testRun);
+  if (testRun) {
+    if (tier(account, account.doHoursPerHour) === 0) return "none";
+    const text = renderPage({ account, peak: account, runUrl: input.runUrl, testRun });
+    await slack.chat.postMessage({ channel, text });
+    return "post";
+  }
+  const open = await findOpenPage(slack, {
+    channel,
+    marker: `DO cost page for ${account.label}:`,
+    sinceHours: OPEN_PAGE_HOURS,
+    now: input.now,
+  });
+  const action = decidePage({ account, open, runUrl: input.runUrl });
+  if (action.kind === "post") await slack.chat.postMessage({ channel, text: action.text });
+  if (action.kind === "resolve")
+    await resolvePage(slack, { channel, ts: action.ts, text: action.text, why: action.why });
+  if (action.kind === "edit") {
+    if (action.escalation)
+      await slack.chat.postMessage({
+        channel,
+        thread_ts: action.ts,
+        text: action.escalation,
+        reply_broadcast: true,
+      });
+    await slack.chat.update({ channel, ts: action.ts, text: action.text });
+  }
+  return action.kind;
+}
+
+/** "13:00" for the UTC hour `at` is in. */
+function hourOf(at: Date) {
+  return `${at.toISOString().slice(11, 13)}:00`;
+}
+
+function usd(doHours: number) {
+  return doHours * USD_PER_DO_HOUR;
+}
+
+function usdPerDay(doHoursPerHour: number) {
+  return usd(doHoursPerHour * 24);
+}
+
+/** Dollars: whole dollars, cents only under $10, $0 when nothing. */
 function money(usdAmount: number) {
   if (usdAmount === 0) return "$0";
   if (usdAmount < 10) return `$${usdAmount.toFixed(2)}`;
   return `$${Math.round(usdAmount).toLocaleString("en-US")}`;
 }
 
-/** Dollars for a DO-hours figure inside the table. */
-function usd(doHours: number) {
-  const usdAmount = doHours * USD_PER_DO_HOUR;
-  return `$${usdAmount.toFixed(usdAmount < 10 ? 2 : 0)}`;
-}
-
 function links(runUrl: string | null) {
   return [
-    `<https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak|incident docs>`,
-    runUrl ? `<${runUrl}|workflow run>` : null,
+    `<https://github.com/iterate/iterate/blob/main/docs/depot-ci.md#health|how this alarm works>`,
+    runUrl ? `<${runUrl}|run>` : null,
     "($12.50/M GB-s, 1000 DO-hours ≈ $5.60)",
   ]
     .filter(Boolean)
@@ -411,11 +538,8 @@ async function findOrCreateHeadline(input: {
 }
 
 /**
- * The thread's first reply is the per-account table: posted on the day's
- * first run, rewritten in place on every run after. Recognised among the
- * bot's replies by every cell of the table's header row — never the joined
- * row: the table pads cells into columns, so the joined header never appears
- * verbatim.
+ * The thread's one reply is the line per account: posted on the day's first run, rewritten in
+ * place on every run after. Recognised among the bot's replies by its first words.
  */
 export async function upsertDetailsReply(input: {
   slack: WebClient;
@@ -430,9 +554,7 @@ export async function upsertDetailsReply(input: {
   });
   const existing = (replies.messages || []).find(
     (message) =>
-      message.bot_id &&
-      message.ts !== input.headlineTs &&
-      DETAILS_HEADER.every((cell) => message.text?.includes(cell)),
+      message.bot_id && message.ts !== input.headlineTs && message.text?.startsWith(DETAILS_TITLE),
   );
   if (existing?.ts) {
     await input.slack.chat.update({ channel: input.channel, ts: existing.ts, text: input.details });
@@ -443,40 +565,4 @@ export async function upsertDetailsReply(input: {
     thread_ts: input.headlineTs,
     text: input.details,
   });
-}
-
-/**
- * A page is a NEW top-level message — an edit or a thread reply notifies
- * nobody — posted unless the same account was paged by one of the last two
- * runs: a breach that lasts pages every PAGE_REPEAT_HOURS, not every hour.
- * Found by text like the headline (the words, since Slack rewrites emoji in
- * history); a test run's page never suppresses a real one. Returns whether
- * it posted.
- */
-export async function postPageUnlessRecent(input: {
-  slack: WebClient;
-  channel: string;
-  now: Date;
-  page: { label: string; text: string };
-  testRun: boolean;
-}) {
-  const history = await input.slack.conversations.history({
-    channel: input.channel,
-    // Half an hour short of PAGE_REPEAT_HOURS, so the page three runs ago
-    // no longer counts even when this run starts a few minutes early.
-    oldest: String(input.now.getTime() / 1000 - (PAGE_REPEAT_HOURS - 0.5) * 3600),
-    limit: 200,
-  });
-  const recentPage = (history.messages || []).find(
-    (message) =>
-      message.bot_id &&
-      message.text?.includes(`DO cost page for ${input.page.label}:`) &&
-      message.text.includes("TEST RUN") === input.testRun,
-  );
-  if (recentPage) {
-    console.log(`${input.page.label} was paged at ts ${recentPage.ts}; not paging again yet`);
-    return false;
-  }
-  await input.slack.chat.postMessage({ channel: input.channel, text: input.page.text });
-  return true;
 }
