@@ -10,7 +10,7 @@ const now = [
   { name: "PR time to green", tone: "red" as const },
 ];
 
-test("one message: each page as a block, the first red one mentioning Jonas, then every signal now", () => {
+test("one message: each page as a block, the first mentioning Jonas and Misha, then every signal now", () => {
   expect(
     renderMessage({
       pages: [
@@ -37,10 +37,10 @@ test("one message: each page as a block, the first red one mentioning Jonas, the
     }),
   ).toBe(
     [
-      "🟢 latency back under its lines at `3b6b1c8b0`",
+      "🟢 latency back under its lines at `3b6b1c8b0` <@U067G4QRFK2> <@U099JH9TAF2>",
       "• sign-in median 400 ms (budget 1,500, baseline 380 ms, 1.1×)",
       "<https://depot.dev/latency|the run>",
-      "🔴 main e2e red at `012345678` (A change) <@U067G4QRFK2>",
+      "🔴 main e2e red at `012345678` (A change)",
       "• failed: E2E tests",
       "• failing rows: a row",
       "<https://depot.dev/main|the run>",
@@ -50,14 +50,18 @@ test("one message: each page as a block, the first red one mentioning Jonas, the
   );
 });
 
-test("a test page is marked and mentions nobody", () => {
+test.for([
+  { name: "a test page is marked", tone: "red" as const, testRun: true, first: "🧪 TEST RUN 🔴" },
+  { name: "a green page", tone: "green" as const, testRun: false, first: "🟢" },
+])("$name mentions Jonas and Misha too", ({ tone, testRun, first }) => {
   const text = renderMessage({
-    pages: [{ tone: "red", headline: "main e2e red at `012345678`", details: [] }],
+    pages: [{ tone, headline: "main e2e at `012345678`", details: [] }],
     now,
-    testRun: true,
+    testRun,
   });
-  expect(text.split("\n")[0]).toBe("🧪 TEST RUN 🔴 main e2e red at `012345678`");
-  expect(text).not.toContain("<@");
+  expect(text.split("\n")[0]).toBe(
+    `${first} main e2e at \`012345678\` <@U067G4QRFK2> <@U099JH9TAF2>`,
+  );
 });
 
 test.for([
@@ -124,7 +128,7 @@ test("Main OS e2e's page job posts its own run's change of state in the health j
 
   expect(judged).toEqual({
     text: [
-      "🔴 main e2e red at `redaaaaaa` (the subject of red) <@U067G4QRFK2>",
+      "🔴 main e2e red at `redaaaaaa` (the subject of red) <@U067G4QRFK2> <@U099JH9TAF2>",
       "• failed: E2E tests",
       "• failing rows: a plain row",
       "<https://depot.dev/orgs/0p91s0lz49/workflows/wf-red|the run>",
@@ -170,7 +174,7 @@ test("Main OS e2e's page job pages a broken slow-rows probe of a green run, and 
   });
   expect(judged).toEqual({
     text: [
-      "⚪ slow e2e rows unjudged at `currentaa` (the subject of cur)",
+      "⚪ slow e2e rows unjudged at `currentaa` (the subject of cur) <@U067G4QRFK2> <@U099JH9TAF2>",
       "• broken probe: an incomplete run: Test did not finish: Sign in with Cloudflare and with GitHub",
       "<https://depot.dev/orgs/0p91s0lz49/workflows/wf-current|the run>",
       "now: 🟢 main e2e · ⚪ slow e2e rows",

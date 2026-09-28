@@ -13,19 +13,19 @@
 //                             its own daily thread and pages
 //
 // A page is one block, `🔴 <what> at <commit>` or `🟢 …`, its details as bullets and a link to the
-// run that measured it; a red one mentions Jonas once. The message ends with the state now of every
-// signal the job pages; the health job's also names main e2e's, from Main OS e2e's state. A check
-// that could not read what it judges, or found its probe broken, fails the job after the others have
-// paged: a scheduled run reports on main's head, where red reads as "this commit broke", so a page
-// never turns a job red. Main OS e2e's page job reports on the commit its run tested, so a broken
-// probe of the slow rows is a ⚪ page there, on its change of state (./e2e.ts), and the job fails only
-// when it cannot judge its run or post.
+// run that measured it; the first mentions Jonas and Misha, as every #error-pulse message does. The
+// message ends with the state now of every signal the job pages; the health job's also names main
+// e2e's, from Main OS e2e's state. A check that could not read what it judges, or found its probe
+// broken, fails the job after the others have paged: a scheduled run reports on main's head, where
+// red reads as "this commit broke", so a page never turns a job red. Main OS e2e's page job reports
+// on the commit its run tested, so a broken probe of the slow rows is a ⚪ page there, on its change
+// of state (./e2e.ts), and the job fails only when it cannot judge its run or post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes. A state of another `schemaVersion`
 // is not read: the job starts over, as a first run does. A run off main pages nothing and prints what
-// it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, mentioning nobody,
-// keeping no state and sending nothing to PostHog.
+// it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, keeping no state and
+// sending nothing to PostHog.
 //
 //   pnpm tsx scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
 //   DEPOT_TOKEN=… pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
@@ -106,12 +106,11 @@ function suiteTone(state: SuiteState | undefined): Page["tone"] {
   return state === "red" || state === "green" ? state : "none";
 }
 
-/** The run's one message: each page as a block, the first red one mentioning Jonas (a test run
- *  mentions nobody), then every signal's state now. Pure. */
+/** The run's one message: each page as a block, the first mentioning Jonas and Misha, then every
+ *  signal's state now. Pure. */
 export function renderMessage(input: { pages: Page[]; now: Signal[]; testRun: boolean }) {
-  const mentioned = input.testRun ? undefined : input.pages.find((page) => page.tone === "red");
-  const blocks = input.pages.flatMap((page) => [
-    `${EMOJI[page.tone]} ${page.headline}${page === mentioned ? ` ${onCallMention}` : ""}`,
+  const blocks = input.pages.flatMap((page, index) => [
+    `${EMOJI[page.tone]} ${page.headline}${index === 0 ? ` ${onCallMention}` : ""}`,
     ...page.details.map((detail) => `• ${detail}`),
     ...(page.link ? [`<${page.link}|the run>`] : []),
   ]);
@@ -130,7 +129,7 @@ export async function run(options: {
   mainE2eState?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post every check's verdict now, marked 🧪, mentioning nobody. */
+  /** Post every check's verdict now, marked 🧪. */
   testPage?: boolean;
   /** Print the message instead of posting it. */
   dryRun?: boolean;
@@ -226,7 +225,7 @@ export async function mainE2e(options: {
   state?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post this run's verdicts now, marked 🧪, mentioning nobody. */
+  /** Post this run's verdicts now, marked 🧪. */
   testPage?: boolean;
   /** Print the message instead of posting it. */
   dryRun?: boolean;

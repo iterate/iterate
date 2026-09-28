@@ -44,8 +44,12 @@ function getSlackBotToken() {
   );
 }
 
-/** Who a page mentions: Jonas, on call for prd and main. */
-export const onCallMention = `<@${slackUsers.find((user) => user.handle === "jonas")!.id}>`;
+/** What every message to #error-pulse mentions: Jonas and Misha, on call for prd and main, by Slack
+ *  user id. Routine posts (deploys that succeeded, pull request events, the dashboards) go to #ci and
+ *  mention nobody. */
+export const onCallMention = ["jonas", "misha"]
+  .map((handle) => `<@${slackUsers.find((user) => user.handle === handle)!.id}>`)
+  .join(" ");
 
 export function getSlackClient() {
   return new WebClient(getSlackBotToken());

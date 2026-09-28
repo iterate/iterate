@@ -5,8 +5,8 @@
 // and our recovery kept most requests green, so only the logs knew.
 //
 // Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
-// at the top level, mentioning Jonas; its repeats go quietly into that page's thread, back in the
-// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. The memory is the
+// at the top level; its repeats go into that page's thread, back in the channel once it grows
+// tenfold; a day unseen closes it. Every post mentions Jonas and Misha. The memory is the
 // run's `prd-fault-alarm-state` artifact: where the next read starts and the open incidents'
 // threads. Without it a run reads the last half hour and pages everything as new — a repeat, never
 // a miss.
@@ -341,7 +341,7 @@ export function triageIncidents(
     thread,
     broadcast,
     text: [
-      broadcast ? `🚨 grew tenfold, ${span} ${onCallMention}` : `still failing, ${span}`,
+      `${broadcast ? "🚨 grew tenfold" : "still failing"}, ${span} ${onCallMention}`,
       ...lines,
       recovery,
     ]

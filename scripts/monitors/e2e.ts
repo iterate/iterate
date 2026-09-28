@@ -174,7 +174,7 @@ export function telemetryRows(
 }
 
 /** The page for a change of state, or null; on a test page, the suite's state whatever it was: ⚪
- *  `broken` naming why its run proved nothing, which mentions nobody. Pure. */
+ *  `broken` naming why its run proved nothing. Pure. */
 export function suitePage(input: {
   suite: (typeof SUITES)[number];
   previous: SuiteState | undefined;

@@ -2,7 +2,7 @@
 // (≤ 60 s) for `/version` to name a version other than the one live before the deploy, so the hosts
 // are read on the new one, then one GET of each production project host, four tries 10 s apart while
 // it looks down. A `/version` that never moves, or a host still answering 421 or 5xx or not at all,
-// pages #error-pulse (top-level, mentioning Jonas) and fails the workflow. On 2026-09-23 #2888 moved
+// pages #error-pulse (top-level) and fails the workflow. On 2026-09-23 #2888 moved
 // the project catalog and its post-merge replay did not run: every project host answered 421 for ~20
 // minutes while /version, the OAuth metadata smokes and the fault alarm (a 421 is no error) stayed
 // green. Faults on the new version are the prd fault alarm's (scripts/ci/prd-fault-alarm.ts, every 15

@@ -190,7 +190,7 @@ test("the sweep's page names each stuck namespace, what to escalate, and the run
   );
 
   expect(page.split("\n")).toEqual([
-    "🚨 preview sweep: Cloudflare will not delete 1 Artifacts namespace(s) <@U067G4QRFK2>",
+    "🚨 preview sweep: Cloudflare will not delete 1 Artifacts namespace(s) <@U067G4QRFK2> <@U099JH9TAF2>",
     `• ${NAMESPACE}: repo_count 1 but no repos listed; the namespace DELETE answers 409/10202 "Namespace is not empty" (created 2026-09-22)`,
     "A Cloudflare Artifacts fault, not a commit's: escalate it to Cloudflare with these names. The sweep tries again each night.",
     "<https://depot.dev/orgs/x/workflows/y|sweep run>",

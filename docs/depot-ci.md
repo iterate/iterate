@@ -707,6 +707,15 @@ has started. A dispatch of `test`, `e2e` or `specs` runs its own trace job. See
 [CI traces](./ci-traces.md) for the timing model, the viewer, replay commands
 and OTLP JSON export.
 
+## Slack channels
+
+#error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
+(`onCallMention` in `scripts/ci/slack.ts`), thread replies and 🧪 test pages included: the pages
+below, the prd fault alarm, a failed prd deploy and a failed scheduled workflow
+(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
+succeeded, each pull request event, the PR dashboard and the Durable Object cost alarm's daily
+thread.
+
 ## Health
 
 Two jobs page #error-pulse on a change of state, with `scripts/monitors/health.ts`,
@@ -723,14 +732,15 @@ link to the run, then the state now of every signal the job pages:
   - **latency**: each new scheduled OS latency report, against the budgets and a
     rolling baseline, red once two runs in a row cross a line.
   - **PR time to green** ([below](#pr-time-to-green)).
-  - **DO cost**: the Durable Object cost alarm, in its own daily thread and pages.
+  - **DO cost**: the Durable Object cost alarm, in its own daily thread in #ci and its own
+    pages.
 
   Its message's last line names main e2e's and slow e2e rows' state too, from
   Main OS e2e's state, or none when it cannot read that state.
 
-A red page mentions Jonas once. A page leaves the job green; a check that could
-not read Depot, or found its probe broken (a report with no rows, a suite that
-did not run), fails the job once the others have paged. Main OS e2e's page job
+A page leaves the job green; a check that could not read Depot, or found its
+probe broken (a report with no rows, a suite that did not run), fails the job
+once the others have paged. Main OS e2e's page job
 reports on the commit its run tested, where red reads as "main e2e broke": a
 broken probe of its slow rows (a slow row not run, an incomplete or missing suite
 summary) is a ⚪ "unjudged" page on its change of state instead, and the job
@@ -742,8 +752,8 @@ verdict. A re-run keeps its creation time and is not judged again, so the
 next push's run pages it. Each job's memory is its own artifact, `health-state`
 and `main-e2e-state`; a state of another `schemaVersion` is not read, and the job
 starts over. Dispatch `health.yml` with `--input test-page=true` to post every
-one of its checks' verdicts as a 🧪 test page that mentions nobody, keeps no
-state and sends PostHog nothing; a run off main without it posts nothing. A
+one of its checks' verdicts as a 🧪 test page, which keeps no state and sends
+PostHog nothing; a run off main without it posts nothing. A
 dispatch of Main OS e2e pages nothing.
 
 ### PR time to green

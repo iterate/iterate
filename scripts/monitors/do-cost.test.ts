@@ -307,7 +307,7 @@ test.for([
   }).toEqual(expected);
 });
 
-test("a page names the rate, the multiple, Jonas and the top spenders; a test run mentions nobody", () => {
+test("a page names the rate, the multiple, Jonas and Misha and the top spenders; a test run's is marked", () => {
   const hours = [
     { hour: "2026-09-21T21:00:00Z", doHours: 8307 },
     { hour: "2026-09-21T22:00:00Z", doHours: 5000 },
@@ -335,7 +335,7 @@ test("a page names the rate, the multiple, Jonas and the top spenders; a test ru
       {
         label: "dev/preview",
         text: [
-          "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2>",
+          "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2> <@U099JH9TAF2>",
           "Top spenders, trailing hour:",
           "• os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject  ~$31/h",
           "• os-next-preview_pr2847-investigate-li-e10d90_IterateContextDurableObject  ~$13/h",
@@ -347,7 +347,7 @@ test("a page names the rate, the multiple, Jonas and the top spenders; a test ru
     ],
   });
   expect(renderDailyThread({ ...input, testRun: true }).pages[0]?.text.split("\n")[0]).toBe(
-    "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling.",
+    "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2> <@U099JH9TAF2>",
   );
 });
 
@@ -450,32 +450,51 @@ test.for([
     name: "a quiet hour",
     hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 20 }],
     expected: { breached: false, pagesPosted: 0 },
+    posts: [
+      { channel: "CI", text: "We're spending" },
+      { channel: "CI", thread_ts: "999.0", text: "```" },
+    ],
   },
   {
     name: "an hour over the page tier, paged",
     hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 2789 }],
     expected: { breached: true, pagesPosted: 1 },
+    posts: [
+      { channel: "PULSE", text: "🚨 DO cost page for dev/preview" },
+      { channel: "CI", text: "We're spending" },
+      { channel: "CI", thread_ts: "999.0", text: "```" },
+      { channel: "CI", thread_ts: "999.0", text: "🚨 Durable Objects hours over 500" },
+    ],
   },
-])("the run resolves: $name", async ({ hours, expected }) => {
-  const slack = fakeSlack([]);
-  await expect(
-    postDailyThread({
-      slack: slack.client,
-      channel: "C1",
-      now: new Date("2026-09-21T21:41:00Z"),
-      readings: [reading("dev/preview", hours)],
-      runUrl,
-      testRun: false,
-    }),
-  ).resolves.toEqual(expected);
-});
+])(
+  "the run resolves: $name; the day's thread is in #ci, a page in #error-pulse",
+  async ({ hours, expected, posts }) => {
+    const slack = fakeSlack([]);
+    await expect(
+      postDailyThread({
+        slack: slack.client,
+        channels: { thread: "CI", pages: "PULSE" },
+        now: new Date("2026-09-21T21:41:00Z"),
+        readings: [reading("dev/preview", hours)],
+        runUrl,
+        testRun: false,
+      }),
+    ).resolves.toEqual(expected);
+    expect(slack.writes.filter(([method]) => method === "chat.postMessage")).toMatchObject(
+      posts.map(({ text, ...post }) => [
+        "chat.postMessage",
+        { ...post, text: expect.stringContaining(text) },
+      ]),
+    );
+  },
+);
 
 test("a probe that could not run fails the run once its reply is posted", async () => {
   const slack = fakeSlack([]);
   await expect(
     postDailyThread({
       slack: slack.client,
-      channel: "C1",
+      channels: { thread: "CI", pages: "PULSE" },
       now,
       readings: [
         {
