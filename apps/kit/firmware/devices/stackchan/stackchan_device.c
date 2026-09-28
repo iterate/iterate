@@ -23,11 +23,13 @@
  * The status STRINGS go to the console log rather than the screen: the face
  * owns the glass and a semantic snapshot owns the rail, so there is nowhere a
  * sentence would go. Opening the USB console reboots this board, which is why
- * `health()` and `screen.take()` exist.
+ * `health()` exists. The face lends the glass to the shared screen capability
+ * (`screen.setImage`) and gets it back on `setImage(null)`.
  */
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -36,6 +38,7 @@
 #include "iterate/kit/avatar/face_avatar_registry.h"
 #include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/face.h"
+#include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
@@ -47,7 +50,6 @@
 #include "stackchan_avatar.h"
 #include "stackchan_body.h"
 #include "stackchan_camera.h"
-#include "stackchan_image.h"
 #include "stackchan_processor.h"
 
 /* The baked wake and end chimes; see tools/baked-sounds.cmake. */
@@ -80,6 +82,49 @@ static struct iterate_kit_rgb8 body_shown[ITERATE_KIT_STACKCHAN_LED_COUNT];
 static bool body_shown_valid;
 static uint64_t last_body_write_ms;
 static uint64_t last_present_ms;
+
+/*
+ * THE SHARED SCREEN, on the face's glass. A frame arrives at the panel's own
+ * 320x240 in big-endian RGB565, which is the ILI9341's wire order, so the
+ * avatar paints it straight from this PSRAM buffer (150 KiB, which internal
+ * memory cannot spare) and holds it until `setImage(null)`, which `present`
+ * turns back into the face.
+ */
+EXT_RAM_BSS_ATTR static struct iterate_kit_screen screen;
+static bool screen_ready;
+static bool image_lent;
+
+static bool submit_image(void *context, enum iterate_kit_screen_format format,
+                         const uint8_t *bytes, size_t length) {
+  (void)context;
+  (void)length;
+  if (format != ITERATE_KIT_SCREEN_RGB565 ||
+      !iterate_kit_stackchan_avatar_display_active()) return false;
+  iterate_kit_stackchan_avatar_show_image(bytes);
+  image_lent = true;
+  return true;
+}
+
+static enum iterate_kit_screen_state image_state(void *context) {
+  (void)context;
+  if (!iterate_kit_stackchan_avatar_display_active()) return ITERATE_KIT_SCREEN_FAILED;
+  return iterate_kit_stackchan_avatar_image_painted() ? ITERATE_KIT_SCREEN_SHOWN
+                                                      : ITERATE_KIT_SCREEN_PENDING;
+}
+
+static void screen_start(void) {
+  const struct iterate_kit_screen_driver display = {
+    .width = 320, .height = 240, .formats = ITERATE_KIT_SCREEN_RGB565,
+    .preferred_format = ITERATE_KIT_SCREEN_RGB565, .refresh_timeout_ms = 1000,
+    .submit = submit_image, .state = image_state,
+  };
+  const size_t bytes = iterate_kit_screen_frame_bytes(
+      display.width, display.height, ITERATE_KIT_SCREEN_RGB565);
+  uint8_t *const buffer = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  screen_ready = buffer != NULL &&
+      iterate_kit_screen_init(&screen, &display, buffer, bytes);
+  if (!screen_ready) ESP_LOGW(tag, "no PSRAM for the screen: setImage disabled");
+}
 
 /*
  * THE HEAD GESTURES, stepped from `poll` on the app task: a gesture is a
@@ -136,6 +181,7 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
    * anything on until it is up, and nothing left to say it about if it fails.
    */
   if (iterate_kit_stackchan_avatar_start() != ESP_OK) return false;
+  screen_start();
   if (iterate_kit_stackchan_body_start(&body_mcu) == ESP_OK) {
     body = &body_mcu;
   } else {
@@ -193,6 +239,10 @@ static void present(
       last_status = view->status;
       ESP_LOGI(tag, "status: %s", view->status);
     }
+  }
+  if (image_lent && !screen.showing_image) {
+    iterate_kit_stackchan_avatar_show_image(NULL);
+    image_lent = false;
   }
   if (last_present_ms != 0U &&
       iterate_kit_voice_elapsed_ms(now, last_present_ms) < 50U) {
@@ -297,141 +347,6 @@ static enum iterate_kit_status servo_move(
       moving, (int16_t)yaw_degrees, (int16_t)pitch_degrees, speed);
 }
 
-/*
- * The screen's own copy of the frame, because the loan outlives the dispatch.
- *
- * The image module borrows these bytes into a reply serialised after the
- * dispatch returns, so this cannot be the avatar's live surface — the render
- * task would be writing the next face into it mid-send. PSRAM for the same
- * reason the source surface is there: 38.4 KiB of internal DMA memory is the
- * pool TLS and Wi-Fi compete for, and losing that argument drops calls.
- *
- * Allocated on first use and kept. A screenshot is rare, but a board asked for
- * one twice must not fail the second time because the heap moved in between.
- */
-static uint16_t *screen_pixels;
-
-static enum iterate_kit_status capture_screen(
-    void *context, struct iterate_kit_photo *photo) {
-  uint16_t width = 0U;
-  uint16_t height = 0U;
-  (void)context;
-  if (screen_pixels == NULL) {
-    screen_pixels = heap_caps_malloc(
-        (size_t)FACE_RENDER_PIXEL_COUNT * sizeof(*screen_pixels),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (screen_pixels == NULL) return ITERATE_KIT_LIMIT;
-  }
-  if (iterate_kit_stackchan_avatar_capture(
-          screen_pixels,
-          (size_t)FACE_RENDER_PIXEL_COUNT,
-          &width,
-          &height) != ESP_OK) {
-    /*
-     * The avatar is not running, or a render held the surface for two whole
-     * visual ticks. Both are worth retrying and neither is this module's to
-     * fix, so it says "busy" rather than inventing a frame.
-     */
-    return ITERATE_KIT_BACKPRESSURE;
-  }
-  photo->bytes = (const uint8_t *)screen_pixels;
-  photo->length = (size_t)FACE_RENDER_PIXEL_COUNT * sizeof(*screen_pixels);
-  photo->width = width;
-  photo->height = height;
-  /*
-   * Not a MIME type anyone will decode by name: these are raw host-order
-   * RGB565 pixels, and the caller wraps them in a PNG. Saying so beats
-   * "application/octet-stream", which would be true and useless.
-   */
-  photo->content_type = "image/x-rgb565";
-  photo->release_context = NULL;
-  photo->release = NULL;
-  return ITERATE_KIT_OK;
-}
-
-/*
- * `screen.fill({colour})` — the separator of last resort for a dark panel.
- *
- * Every counter this board publishes can read healthy while the glass stays
- * dark: `screen.take()` proves the source surface holds a face, and
- * `displayTransfers` proves bands are pushed and acknowledged. Both are true
- * and the screen still shows nothing, so what remains is either the content
- * arriving wrong or the panel showing nothing at all — indistinguishable from
- * inside, and one glance from outside.
- */
-static const char *const screen_fill_path[] = {"screen", "fill"};
-
-static enum capnweb_status screen_fill(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  struct capnweb_value object = {0};
-  int64_t colour = 0;
-  (void)context;
-  if (!iterate_kit_read_object_argument(call, &object) ||
-      !iterate_kit_read_int_field(&object, "colour", &colour) ||
-      colour < 0 || colour > 0xffff) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "screen.fill needs {colour} as RGB565 0..65535");
-  }
-  if (iterate_kit_stackchan_avatar_fill((uint16_t)colour) != ESP_OK) {
-    return capnweb_reply_set_error(
-        reply, "Error", "the display refused the fill");
-  }
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-/*
- * `screen.show({url, seconds})` — fetch a JPEG from the web and wear it
- * full-screen for a while, then let the face return on its own.
- *
- * FIRE-AND-FORGET, like head.nod(): the reply resolves `true` as soon as the
- * fetch task is ACCEPTED, because the fetch and decode run on a one-shot
- * background task and a voice tool cannot wait on a download. Failures past
- * acceptance land in the imageFetchFailures health counter and the console
- * log; imageShowsCompleted is the render task's proof the face came back.
- */
-static const char *const screen_show_path[] = {"screen", "show"};
-
-static enum capnweb_status screen_show(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  struct capnweb_value object = {0};
-  struct capnweb_value url_value = {0};
-  char url[512];
-  size_t url_length = 0U;
-  int64_t seconds = 0;
-  (void)context;
-  if (!iterate_kit_read_object_argument(call, &object) ||
-      !capnweb_value_object_get(&object, "url", &url_value) ||
-      capnweb_value_copy_string(&url_value, url, sizeof(url), &url_length) !=
-          CAPNWEB_OK ||
-      !iterate_kit_read_int_field(&object, "seconds", &seconds)) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "screen.show needs {url, seconds}");
-  }
-  if (seconds < 0) seconds = 0;
-  if (seconds > 300) seconds = 300;
-  switch (iterate_kit_stackchan_image_show(url, url_length, (uint32_t)seconds)) {
-    case ITERATE_KIT_OK:
-      return capnweb_reply_set_boolean(reply, true);
-    case ITERATE_KIT_INVALID_ARGUMENT:
-      return capnweb_reply_set_error(
-          reply,
-          "TypeError",
-          "screen.show needs an http(s) url under 512 bytes");
-    case ITERATE_KIT_BACKPRESSURE:
-      return capnweb_reply_set_error(
-          reply,
-          "Error",
-          "busy — an image is already being fetched or shown");
-    default:
-      return capnweb_reply_set_error(
-          reply, "Error", "not enough memory for an image right now");
-  }
-}
-
 static bool wear_face(void *context, size_t index) {
   (void)context;
   return iterate_kit_stackchan_avatar_request_sprite_set(index) == ESP_OK;
@@ -509,17 +424,13 @@ static enum capnweb_status head_shake(
 }
 
 /*
- * What this board has that no other does: a head (raw moves and the two
- * named gestures), a camera, its own screen as an image source, the fill,
- * and a face that can be asked for by name. Conversation control, the
- * speaker and health are the loop's.
- * control because its microphone stays open during the call.
+ * What this board lends: a head (raw moves and the two named gestures), a
+ * camera, the shared screen, and a face that can be asked for by name.
+ * Conversation control, the speaker and health are the loop's.
  */
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method board_methods[] = {
-    {screen_fill_path, 2U, screen_fill},
-    {screen_show_path, 2U, screen_show},
     {button_press_path, 2U, button_press},
     {touch_tap_path, 2U, touch_tap},
     {head_nod_path, 2U, head_nod},
@@ -527,7 +438,6 @@ static size_t modules(
   };
   static struct iterate_kit_servos servos;
   static struct iterate_kit_camera camera;
-  static struct iterate_kit_camera screen;
   static struct iterate_kit_face face;
   static const struct iterate_kit_face_driver face_driver = {
     .context = NULL,
@@ -567,34 +477,12 @@ static size_t modules(
   {
     const struct iterate_kit_camera_driver driver =
         iterate_kit_stackchan_camera_driver();
-    if (iterate_kit_camera_init(&camera, &driver, "camera") ==
+    if (iterate_kit_camera_init(&camera, &driver) ==
         ITERATE_KIT_OK) {
       out[count++] = iterate_kit_camera_module(&camera);
     }
   }
-  /*
-   * THE SCREEN, ASKABLE, for the same reason health() is.
-   *
-   * "The StackChan's screen is black the whole time but the LEDs are green"
-   * was reported three times and could not be answered from here: every
-   * instrument this board publishes about its display measures the PIPE — is
-   * the panel active, how many transfers, how many failed — and all of them
-   * read healthy while a face drawn in the background colour would too. The
-   * pixels themselves were the one thing nobody could ask for.
-   *
-   * Same protocol as the camera, and deliberately the same code: hold one
-   * frame, drain it in chunks that fit a control message.
-   */
-  {
-    const struct iterate_kit_camera_driver driver = {
-      .context = NULL,
-      .capture = capture_screen,
-    };
-    if (iterate_kit_camera_init(&screen, &driver, "screen") ==
-        ITERATE_KIT_OK) {
-      out[count++] = iterate_kit_camera_module(&screen);
-    }
-  }
+  if (screen_ready) out[count++] = iterate_kit_screen_module(&screen);
   /*
    * `face.set({face})`, the ONLY face changer this board has: the side button
    * opens conversations, so a face nobody can ask for by name is a face the
@@ -697,15 +585,12 @@ static size_t health(void *context, char *out, size_t capacity) {
       {"displayTransferTimeouts", face_metrics.display_transfer_timeouts},
       {"faceDroppedFrames", face_metrics.mailbox_overwrites},
       /*
-       * screen.show()'s asynchronous half. The RPC resolves at acceptance,
-       * so a fetch that later failed has nowhere else to say so: fetches
-       * minus failures minus completed is at most the one show in progress,
-       * and any other arithmetic here is the account of what went wrong.
+       * Two of the screen counters the other screens publish, not five: this
+       * board's stats line already runs close to the loop's 2816-byte bound,
+       * and one that does not fit is not sent at all.
        */
-      {"imageFetches", iterate_kit_stackchan_image_fetches()},
-      {"imageFetchFailures", iterate_kit_stackchan_image_fetch_failures()},
-      {"imageShowsCompleted",
-       iterate_kit_stackchan_avatar_image_shows_completed()},
+      {"screenUploadFailures", screen.upload_failures},
+      {"screenImageShown", screen.showing_image ? 1U : 0U},
     };
     return iterate_kit_health_append_fields(
         out, capacity, fields, sizeof(fields) / sizeof(fields[0]));

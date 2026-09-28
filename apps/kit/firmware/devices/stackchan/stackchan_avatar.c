@@ -103,7 +103,7 @@ _Static_assert(
  *
  * Only `scaled_strip` is ever handed to the SPI driver. The 38.4 KiB source
  * frame is touched exclusively by the CPU — rendered into, byte-swapped,
- * read by the scaler, copied by a screenshot — so it has no business in the
+ * read by the scaler — so it has no business in the
  * one pool TLS, Wi-Fi and DMA all compete for. It sat there anyway, and the
  * measurement that finally said so was internalFree: 4,603 bytes with a
  * largest free block of 3,328, at which point mbedtls could not allocate an
@@ -140,6 +140,9 @@ _Static_assert(
     BSP_LCD_H_RES == STACKCHAN_AVATAR_SCALED_WIDTH &&
         BSP_LCD_V_RES == STACKCHAN_AVATAR_SCALED_HEIGHT,
     "StackChan exact 2x output must cover the complete physical LCD");
+_Static_assert(
+    STACKCHAN_AVATAR_SCALED_HEIGHT % STACKCHAN_AVATAR_SCALE_STRIP_HEIGHT == 0U,
+    "a lent image is painted in whole strips");
 static const char *const TAG = "iterate-stackchan-avatar";
 
 struct stackchan_avatar_frame {
@@ -198,14 +201,6 @@ struct stackchan_avatar_owner {
   uint16_t *framebuffer;
   uint16_t *scaled_strip;
 
-  /*
-   * A mutex protects the source-surface mutation/copy. If another owner holds
-   * the surface at a visual tick, the face skips that tick instead of
-   * delaying audio or queueing a stale render.
-   */
-  StaticSemaphore_t framebuffer_access_control;
-  SemaphoreHandle_t framebuffer_access;
-
   StaticSemaphore_t display_transfer_control;
   struct iterate_kit_lcd_transfer display_transfer;
 
@@ -254,17 +249,14 @@ struct stackchan_avatar_owner {
   volatile uint32_t last_face_tap_left;
   volatile uint32_t last_touch_x;
   /*
-   * THE IMAGE OVERLAY, following the menu's latest-state pattern. The staging
-   * surface is a second 160x120 host-order RGB565 frame in PSRAM, written by
-   * the fetch task only while no deadline is active; while the deadline is in
-   * the future the render task copies it over the framebuffer instead of
-   * rendering the face. When it passes, the face simply returns.
+   * THE GLASS ON LOAN (iterate_kit_stackchan_avatar_show_image). `image` is
+   * the lent 320x240 frame, NULL while the face owns the glass; each loan or
+   * return bumps `image_requested`, and the render task copies it to
+   * `image_painted` once that state is on the panel.
    */
-  uint16_t *image_staging; /* atomically published; NULL until first use */
-  volatile uint64_t image_visible_through_us;
-  volatile uint32_t image_shows_completed;
-  /* Render-task-local edge detector for the completed count. */
-  bool image_was_visible;
+  const uint8_t *volatile image;
+  volatile uint32_t image_requested;
+  volatile uint32_t image_painted;
   bool face_button_baseline_established;
   volatile uint64_t speaker_status_active_through_us;
   volatile uint32_t started;
@@ -381,7 +373,7 @@ static void swap_rgb565_bytes_for_panel(void) {
   }
 }
 
-/* Analyzer task only (prepare_avatar_frame_under_lock), so no lock. */
+/* Analyzer task only (prepare_avatar_frame), so no lock. */
 static bool face_dozing_now(void) {
   static struct iterate_kit_face_wake wake;
   return !iterate_kit_face_awake(
@@ -390,7 +382,7 @@ static bool face_dozing_now(void) {
       now_us_wide() / 1000U);
 }
 
-static bool prepare_avatar_frame_under_lock(
+static bool prepare_avatar_frame(
     face_render_key_t *render_key,
     uint64_t *render_cpu_us) {
   if (render_key == NULL || render_cpu_us == NULL) return false;
@@ -417,57 +409,29 @@ static bool prepare_avatar_frame_under_lock(
   owner.latest_pose.playout_samples = __atomic_load_n(
       &owner.metrics.physical_playout_sample_clock, __ATOMIC_RELAXED);
   face_render_key_from_pose(&owner.latest_pose, render_key);
-  {
+  const bool dozing = face_dozing_now();
+  if (dozing) face_doze_prepare_render_key(render_key);
+  if (!face_avatar_registry_render(
+          &owner.registry,
+          render_key,
+          owner.latest_pose.playout_samples,
+          owner.framebuffer,
+          FACE_RENDER_PIXEL_COUNT)) {
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
+    return false;
+  }
+  if (dozing && !face_doze_apply_overlay(
+                     owner.framebuffer,
+                     FACE_RENDER_PIXEL_COUNT,
+                     owner.latest_pose.playout_samples)) {
     /*
-     * A FETCHED IMAGE OWNS THE GLASS while its deadline is in the future:
-     * copy the staged picture over the framebuffer and skip the face render
-     * entirely — the menu overlay, the byte swap and the strip transfer
-     * below stay exactly the machinery the face uses. The completed count
-     * is an edge, noticed here at 15 Hz, because publish time can only
-     * promise an expiry and this task is the one that watches it happen.
+     * The doze sprite is part of the user-visible lifecycle contract.
+     * Failing closed here prevents a plausible awake-looking frame from
+     * replacing the last coherent display when buffer geometry and
+     * renderer assumptions diverge.
      */
-    uint16_t *const image =
-        __atomic_load_n(&owner.image_staging, __ATOMIC_ACQUIRE);
-    const bool image_visible = image != NULL &&
-        now_us_wide() < __atomic_load_n(
-            &owner.image_visible_through_us, __ATOMIC_ACQUIRE);
-    if (owner.image_was_visible && !image_visible) {
-      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.image_shows_completed);
-    }
-    owner.image_was_visible = image_visible;
-    if (image_visible) {
-      /*
-       * Zero the key: `mouth_open_rendered_frames` counts mouths that
-       * reached the panel, and this frame's mouth did not.
-       */
-      memset(render_key, 0, sizeof(*render_key));
-      memcpy(owner.framebuffer, image, FACE_RENDER_FRAME_BYTES);
-    } else {
-      const bool dozing = face_dozing_now();
-      if (dozing) face_doze_prepare_render_key(render_key);
-      if (!face_avatar_registry_render(
-              &owner.registry,
-              render_key,
-              owner.latest_pose.playout_samples,
-              owner.framebuffer,
-              FACE_RENDER_PIXEL_COUNT)) {
-        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
-        return false;
-      }
-      if (dozing && !face_doze_apply_overlay(
-                         owner.framebuffer,
-                         FACE_RENDER_PIXEL_COUNT,
-                         owner.latest_pose.playout_samples)) {
-        /*
-         * The doze sprite is part of the user-visible lifecycle contract.
-         * Failing closed here prevents a plausible awake-looking frame from
-         * replacing the last coherent display when buffer geometry and
-         * renderer assumptions diverge.
-         */
-        iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
-        return false;
-      }
-    }
+    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
+    return false;
   }
   swap_rgb565_bytes_for_panel();
   *render_cpu_us = saturating_elapsed_us(now_us_wide(), started_at_us);
@@ -527,34 +491,51 @@ static bool transfer_avatar_frame(
   return true;
 }
 
-static bool render_avatar(void) {
-  if (owner.framebuffer_access == NULL) return false;
-  if (xSemaphoreTake(owner.framebuffer_access, 0U) != pdPASS) {
-    /*
-     * A screenshot copies only one 38.4 KiB source surface before releasing
-     * this lock. Visual state is latest-only, so skipping one 15 Hz frame is
-     * more truthful than blocking or replaying it later. This is not a render
-     * failure and must not disable the display sidecar.
-     */
-    return true;
+/*
+ * A lent image is already big-endian RGB565 at the panel's own size, which is
+ * the ILI9341's wire order, so each band is a straight copy into the DMA strip:
+ * no scaling and no byte swap. It is painted once; the panel holds it after.
+ */
+static bool paint_image(const uint8_t *image) {
+  const size_t band_bytes = (size_t)STACKCHAN_AVATAR_SCALED_WIDTH *
+      STACKCHAN_AVATAR_SCALE_STRIP_HEIGHT * sizeof(uint16_t);
+  for (uint32_t y = 0U; y < STACKCHAN_AVATAR_SCALED_HEIGHT;
+       y += STACKCHAN_AVATAR_SCALE_STRIP_HEIGHT) {
+    memcpy(owner.scaled_strip,
+           image + (size_t)y * STACKCHAN_AVATAR_SCALED_WIDTH * sizeof(uint16_t),
+           band_bytes);
+    if (!draw_region_and_wait(
+            0U, y, STACKCHAN_AVATAR_SCALED_WIDTH,
+            STACKCHAN_AVATAR_SCALE_STRIP_HEIGHT, owner.scaled_strip)) {
+      iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
+      return false;
+    }
   }
-  face_render_key_t render_key;
-  uint64_t render_cpu_us = 0U;
-  const bool prepared = prepare_avatar_frame_under_lock(
-      &render_key, &render_cpu_us);
-  (void)xSemaphoreGive(owner.framebuffer_access);
-  if (!prepared) return false;
+  return true;
+}
 
-  /*
-   * The mutex protects writes to the portable source frame, not the slow LCD
-   * transfer. This render task is the only writer and cannot begin its next
-   * frame until the transfer below completes, so screenshot capture and strip
-   * scaling may safely read the immutable frame together. Holding the lock
-   * across all 320x240 SPI transactions previously made capture wait longer
-   * than 100 ms even though copying the actual 38.4 KiB source takes only a
-   * small fraction of one visual tick.
-   */
-  return transfer_avatar_frame(&render_key, render_cpu_us);
+static bool render_avatar(void) {
+  /* The request before the pointer: a pointer newer than the request only
+   * costs one more paint, never a paint marked done that was not. */
+  const uint32_t requested =
+      __atomic_load_n(&owner.image_requested, __ATOMIC_ACQUIRE);
+  const uint8_t *const image =
+      __atomic_load_n(&owner.image, __ATOMIC_ACQUIRE);
+  if (image != NULL) {
+    if (__atomic_load_n(&owner.image_painted, __ATOMIC_RELAXED) == requested) {
+      return true; /* On the glass already; the lender may reuse its buffer. */
+    }
+    if (!paint_image(image)) return false;
+  } else {
+    face_render_key_t render_key;
+    uint64_t render_cpu_us = 0U;
+    if (!prepare_avatar_frame(&render_key, &render_cpu_us) ||
+        !transfer_avatar_frame(&render_key, render_cpu_us)) {
+      return false;
+    }
+  }
+  __atomic_store_n(&owner.image_painted, requested, __ATOMIC_RELEASE);
+  return true;
 }
 
 static void analyze_frame(
@@ -907,11 +888,6 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
           &owner.display_transfer, &owner.display_transfer_control)) {
     return ESP_ERR_NO_MEM;
   }
-  owner.framebuffer_access = xSemaphoreCreateMutexStatic(
-      &owner.framebuffer_access_control);
-  if (owner.framebuffer_access == NULL) {
-    return ESP_ERR_NO_MEM;
-  }
   owner.framebuffer = heap_caps_aligned_alloc(
       64U,
       FACE_RENDER_FRAME_BYTES,
@@ -1202,145 +1178,12 @@ bool iterate_kit_stackchan_avatar_display_active(void) {
   return __atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) != 0U;
 }
 
-/*
- * READING THE SCREEN BACK, which is the only honest answer to "it is black".
- *
- * The display counters can say `displayTransfers: 5625` with zero failures and
- * still not say what was IN those transfers — a face rendered entirely in the
- * background colour is a perfect success by every number this board publishes.
- * So the source surface itself is copyable, and `screen.take()` upstairs hands
- * it out.
- *
- * The 320x240 panel is never copied: the source is 160x120 and the strip
- * scaler doubles it on the way to the glass, so this returns exactly the
- * pixels the renderer produced and nothing the scaler invented.
- *
- * Byte order is undone on the way out. The surface sits in the ILI9341's
- * big-endian wire order between frames (see swap_rgb565_bytes_for_panel), and
- * a caller decoding RGB565 has no reason to know that — host order is what the
- * portable renderer emits and what the host tests hash.
- */
-esp_err_t iterate_kit_stackchan_avatar_capture(
-    uint16_t *destination,
-    size_t capacity_pixels,
-    uint16_t *width,
-    uint16_t *height) {
-  if (destination == NULL || width == NULL || height == NULL) {
-    return ESP_ERR_INVALID_ARG;
-  }
-  if (capacity_pixels < (size_t)FACE_RENDER_PIXEL_COUNT) {
-    return ESP_ERR_INVALID_SIZE;
-  }
-  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
-      owner.framebuffer == NULL || owner.framebuffer_access == NULL) {
-    return ESP_ERR_INVALID_STATE;
-  }
-  /*
-   * Waiting, unlike the render task, which skips its tick instead. A caller
-   * asking what is on screen wants an answer rather than a miss, and the
-   * longest anyone can hold this lock is one frame's render. Two visual ticks
-   * is generous and still far inside the caller's RPC deadline.
-   */
-  if (xSemaphoreTake(owner.framebuffer_access, pdMS_TO_TICKS(200)) != pdPASS) {
-    return ESP_ERR_TIMEOUT;
-  }
-  for (size_t index = 0U; index < (size_t)FACE_RENDER_PIXEL_COUNT; ++index) {
-    const uint16_t pixel = owner.framebuffer[index];
-    destination[index] = (uint16_t)((pixel << 8U) | (pixel >> 8U));
-  }
-  (void)xSemaphoreGive(owner.framebuffer_access);
-  *width = (uint16_t)FACE_RENDER_WIDTH;
-  *height = (uint16_t)FACE_RENDER_HEIGHT;
-  return ESP_OK;
+void iterate_kit_stackchan_avatar_show_image(const uint8_t *pixels) {
+  __atomic_store_n(&owner.image, pixels, __ATOMIC_RELEASE);
+  (void)__atomic_add_fetch(&owner.image_requested, 1U, __ATOMIC_RELEASE);
 }
 
-/*
- * PAINT THE WHOLE PANEL ONE COLOUR, bypassing the face entirely.
- *
- * The counters cannot separate the last two possibilities. `screen.take()`
- * proves the SOURCE surface holds a face; `displayTransfers` proves bands are
- * being pushed and acknowledged. Both are true and the glass is still dark, so
- * what is left is either the content arriving wrong at the panel or the panel
- * not showing anything at all — and no instrument on this device can tell
- * those apart, because both look identical from the inside.
- *
- * A person looking at it can. If a solid colour appears, the panel, the
- * backlight, the SPI path and the coordinates are all fine and the fault is in
- * what the avatar draws. If nothing appears, it never got as far as the face.
- *
- * Deliberately reuses the real transfer path — same strip buffer, same
- * band loop, same draw_region_and_wait — so a pass here exonerates exactly the
- * machinery the face uses, rather than proving some other path works.
- */
-esp_err_t iterate_kit_stackchan_avatar_fill(uint16_t colour) {
-  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
-      owner.scaled_strip == NULL || owner.framebuffer_access == NULL) {
-    return ESP_ERR_INVALID_STATE;
-  }
-  /* The panel's wire order, matching what the renderer's swap produces. */
-  const uint16_t wire = (uint16_t)((colour << 8U) | (colour >> 8U));
-  if (xSemaphoreTake(owner.framebuffer_access, pdMS_TO_TICKS(400)) != pdPASS) {
-    return ESP_ERR_TIMEOUT;
-  }
-  /* A timed-out transfer may still own the strip. Check under the renderer's
-   * lock before writing any pixels, including for this diagnostic path. */
-  if (__atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) == 0U) {
-    (void)xSemaphoreGive(owner.framebuffer_access);
-    return ESP_ERR_INVALID_STATE;
-  }
-  esp_err_t status = ESP_OK;
-  for (uint32_t source_y = 0U; source_y < FACE_RENDER_HEIGHT;
-       source_y += STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER) {
-    const uint32_t remaining = FACE_RENDER_HEIGHT - source_y;
-    const uint32_t rows =
-        remaining < STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER
-        ? remaining
-        : STACKCHAN_AVATAR_SCALE_SOURCE_ROWS_PER_TRANSFER;
-    const size_t pixels = (size_t)rows * STACKCHAN_AVATAR_SCALE *
-        (size_t)STACKCHAN_AVATAR_SCALED_WIDTH;
-    for (size_t index = 0U; index < pixels; ++index) {
-      owner.scaled_strip[index] = wire;
-    }
-    if (!draw_region_and_wait(
-            0U,
-            source_y * STACKCHAN_AVATAR_SCALE,
-            STACKCHAN_AVATAR_SCALED_WIDTH,
-            rows * STACKCHAN_AVATAR_SCALE,
-            owner.scaled_strip)) {
-      status = ESP_FAIL;
-      break;
-    }
-  }
-  (void)xSemaphoreGive(owner.framebuffer_access);
-  return status;
-}
-
-/*
- * THE STAGED IMAGE, lazily bought and kept, in the same PSRAM pool as the
- * source surface and for the same reason: a picture must never cost the
- * internal DMA memory TLS and Wi-Fi live on. Allocation happens on the
- * control-plane dispatch path (the only caller that can create it), so the
- * publish below and the render task's read need only the pointer's
- * acquire/release pairing.
- */
-uint16_t *iterate_kit_stackchan_avatar_image_staging(void) {
-  uint16_t *image =
-      __atomic_load_n(&owner.image_staging, __ATOMIC_ACQUIRE);
-  if (image != NULL) return image;
-  image = heap_caps_malloc(
-      FACE_RENDER_FRAME_BYTES, STACKCHAN_AVATAR_SOURCE_CAPS);
-  if (image == NULL) return NULL;
-  __atomic_store_n(&owner.image_staging, image, __ATOMIC_RELEASE);
-  return image;
-}
-
-void iterate_kit_stackchan_avatar_show_image(uint32_t show_for_ms) {
-  __atomic_store_n(
-      &owner.image_visible_through_us,
-      now_us_wide() + (uint64_t)show_for_ms * 1000U,
-      __ATOMIC_RELEASE);
-}
-
-uint32_t iterate_kit_stackchan_avatar_image_shows_completed(void) {
-  return __atomic_load_n(&owner.image_shows_completed, __ATOMIC_RELAXED);
+bool iterate_kit_stackchan_avatar_image_painted(void) {
+  return __atomic_load_n(&owner.image_painted, __ATOMIC_ACQUIRE) ==
+      __atomic_load_n(&owner.image_requested, __ATOMIC_ACQUIRE);
 }

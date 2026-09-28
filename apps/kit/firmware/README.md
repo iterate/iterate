@@ -109,7 +109,9 @@ each row padded to whole bytes. Panel-native packing belongs to the driver.
 `packages/voice/src/screen.ts` validates metadata and converts
 browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
 refresh acknowledgment. E-paper submits to a separate task so image updates
-cannot stall voice capture, playback or button handling. The voice loop checks
+cannot stall voice capture, playback or button handling. StackChan lends its
+face's 320x240 glass: an RGB565 frame is painted from PSRAM and stays until
+`setImage(null)` gives the glass back to the face. The voice loop checks
 registered capabilities to include screen guidance in a call. See the
 [NOTE4 adapter](devices/zectrix_note4/README.md) and
 [Waveshare adapter](devices/waveshare_s3_rlcd/README.md).
