@@ -783,7 +783,17 @@ export interface IterateContextApi {
             scopes?: string[];
             next?: string;
             connection?: string;
-            client?: "iterate" | "project";
+            client?: "iterate";
+            installationId?: string;
+            appSlug?: never;
+            clientId?: never;
+            account?: never;
+          }
+        | {
+            scopes?: string[];
+            next?: string;
+            connection: string;
+            client: "project";
             appSlug?: string;
             clientId?: string;
             installationId?: string;

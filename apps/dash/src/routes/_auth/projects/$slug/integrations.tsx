@@ -157,7 +157,6 @@ function ProjectIntegrations() {
   const [failedUse, setFailedUse] = useState<{ connection: string; message: string } | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
 
-  const integrations = () => api.projects.get(project.id).integrations;
   /** One verb at a time. A connect that leaves for the provider keeps its spinner up until the
    *  browser has gone. */
   const run = async (key: string, work: () => Promise<"leaving" | void>) => {
@@ -177,7 +176,11 @@ function ProjectIntegrations() {
   const connectAnother = async (input: { provider: IterateAppProvider; scopes?: string[] }) =>
     z
       .object({ authorizationUrl: z.string().url() })
-      .parse(await integrations().connect(input.provider, { scopes: input.scopes, next: here }));
+      .parse(
+        await api.projects
+          .get(project.id)
+          .integrations.connect(input.provider, { scopes: input.scopes, next: here }),
+      );
   /** One of the person's own accounts connected to this project: at once, or through the
    *  provider's consent for what it lacks, back here. */
   const connectYourAccount = async (row: Connection) => {
@@ -188,7 +191,7 @@ function ProjectIntegrations() {
       const { authorizationUrl } = z
         .object({ authorizationUrl: z.string().url().optional() })
         .parse(
-          await integrations().connect(row.provider, {
+          await api.projects.get(project.id).integrations.connect(row.provider, {
             account: row.account,
             scopes: askedScopes,
             next: here,
@@ -311,7 +314,9 @@ function ProjectIntegrations() {
                       busy={busy}
                       onDisconnect={() =>
                         run(`disconnect:${row.connection}`, () =>
-                          integrations().disconnect(provider, row.connection),
+                          api.projects
+                            .get(project.id)
+                            .integrations.disconnect(provider, row.connection),
                         )
                       }
                     />
@@ -472,7 +477,7 @@ function ProjectIntegrations() {
                           const { authorizationUrl } = z
                             .object({ authorizationUrl: z.string().url() })
                             .parse(
-                              await integrations().connect("github", {
+                              await api.projects.get(project.id).integrations.connect("github", {
                                 installationId,
                                 next: here,
                               }),
@@ -577,7 +582,7 @@ function ProjectIntegrations() {
                     const { authorizationUrl } = z
                       .object({ authorizationUrl: z.string().url() })
                       .parse(
-                        await integrations().connect(own.provider, {
+                        await api.projects.get(project.id).integrations.connect(own.provider, {
                           connection: own.connection,
                           client: "project",
                           // an agent's ask rides through to the consent

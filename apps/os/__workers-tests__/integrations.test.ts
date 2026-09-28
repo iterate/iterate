@@ -213,6 +213,9 @@ test("Slack: the built-in on any context of the project connects and disconnects
   await expect(
     below.integrations.disconnect("slack", "acme", { movedExternalId: "T4ANY" }),
   ).rejects.toThrow(/the platform's own/);
+  await expect(
+    below.integrations.disconnect("slack", "acme", { movedExternalId: "" }),
+  ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   await below.integrations.disconnect("slack", "acme");
   await vi.waitFor(async () => expect(await integrationsOf(member.itx)).toEqual({}));
   expect(await catalog().integrationRoute("slack", "T4ANY")).toBeNull();
@@ -474,7 +477,10 @@ test("Slack: a holder that disconnects while its cleanup is pending revokes noth
     { ...app, signingSecret: "own-signing-secret" },
     { urls: ["https://slack.test"] },
   );
-  await connected(petshop, holder, "slack", "team=T13LATE", { client: "project" });
+  await connected(petshop, holder, "slack", "team=T13LATE", {
+    client: "project",
+    connection: "acme",
+  });
   await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(async () =>
     expect(await integrationsOf(holder.itx)).toMatchObject({
@@ -613,7 +619,10 @@ test("Slack: a holder that connects its own app to the same workspace while its 
     { ...app, signingSecret: "own-signing-secret" },
     { urls: ["https://slack.test"] },
   );
-  await connected(petshop, holder, "slack", "team=T19OWN", { client: "project" });
+  await connected(petshop, holder, "slack", "team=T19OWN", {
+    client: "project",
+    connection: "acme",
+  });
   vi.useRealTimers();
   await projectFacet(mover.itx).confirmIntegrationMove({ offer });
   await vi.waitFor(async () =>
@@ -956,7 +965,10 @@ test("Google, the project's own client: the refresh uses the client in the secre
   const petshop = petshopFakes();
   const app = await petshop.state.createClient({});
   await member.itx.secrets.set("/secrets/google-acme", app, { urls: ["https://google.test"] });
-  await connected(petshop, member, "google", "email=jonas@example.test", { client: "project" });
+  await connected(petshop, member, "google", "email=jonas@example.test", {
+    client: "project",
+    connection: "acme",
+  });
   await petshop.state.expireAccessTokens(app.clientId, "jonas@example.test");
   expect(await gmailProfile(member.itx)).toMatchObject({ emailAddress: "jonas@example.test" });
   expect(tokenGrantsOf(petshop)).toEqual([
@@ -1546,7 +1558,10 @@ async function slackOwnApp(slug: string) {
   const app = await petshop.state.createClient({});
   const material = { ...app, signingSecret: "own-signing-secret" };
   await member.itx.secrets.set("/secrets/slack-acme", material, { urls: ["https://slack.test"] });
-  await connected(petshop, member, "slack", "team=T3OWN", { client: "project" });
+  await connected(petshop, member, "slack", "team=T3OWN", {
+    client: "project",
+    connection: "acme",
+  });
   return { member, petshop, app };
 }
 
@@ -1652,7 +1667,12 @@ async function githubOwnApp(slug: string) {
     account: { login: "own-org" },
     users: [{ login: "own-admin", role: "admin" }],
   });
-  const own = { client: "project", appSlug: "own-bot", clientId: client.clientId } as const;
+  const own = {
+    client: "project",
+    connection: "acme",
+    appSlug: "own-bot",
+    clientId: client.clientId,
+  } as const;
   await connected(petshop, member, "github", "installation_id=9401", own);
   return { member, petshop, app };
 }

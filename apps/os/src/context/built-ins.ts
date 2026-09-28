@@ -1705,7 +1705,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             ...input,
             account: input.account,
           });
-        return onIntegrationsRoot("connect", [provider, options], async (facet) => {
+        return onIntegrationsRoot("connect", [provider, input], async (facet) => {
           // the owner facet's snapshot is its contract's state
           const { state } = (await deps.callFacetAsPlatform(facet, [["snapshot"]])) as {
             state: { integrations: AccountState["integrations"] };
@@ -1746,9 +1746,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       disconnect: (provider, connection, options = {}) =>
         onIntegrationsRoot("disconnect", [provider, connection, options], async (facet) => {
-          const { movedExternalId } = z
+          const parsed = z
             .object({ movedExternalId: z.string().min(1).optional() })
-            .parse(options);
+            .safeParse(options);
+          if (!parsed.success)
+            throw codedError(
+              "INVALID_INPUT",
+              `itx.integrations.disconnect: ${z.prettifyError(parsed.error)}`,
+            );
+          const { movedExternalId } = parsed.data;
           if (movedExternalId) assertPlatformCaller("integrations.disconnect's movedExternalId");
           await deps.callFacetAsPlatform(facet, [
             ["disconnectIntegration", { provider, connection, movedExternalId }],
