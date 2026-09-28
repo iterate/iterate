@@ -1,3 +1,5 @@
+import { existsSync, globSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ProjectProcessor } from "./processor.ts";
 import { ProjectContract } from "./contract.ts";
@@ -19,6 +21,21 @@ test("omitting a template seeds the minimal project without an agent or lifecycl
   expect(fixture.repo.readFile).toHaveBeenCalledExactlyOnceWith("iterate.json", {
     commitOid: "b".repeat(40),
   });
+});
+
+test("every package.json under configs/ names its folder's main module", () => {
+  const configs = path.resolve(import.meta.dirname, "../../../../configs");
+  const manifests = globSync("*/**/package.json", { cwd: configs });
+  expect(manifests).toEqual(
+    expect.arrayContaining(["default/package.json", "with-agents/agents/package.json"]),
+  );
+  for (const manifest of manifests) {
+    const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
+      main?: string;
+    };
+    expect(main, manifest).toBeTruthy();
+    expect(existsSync(path.join(configs, path.dirname(manifest), main!)), manifest).toBe(true);
+  }
 });
 
 test("copies the pinned subdirectory into a fresh root commit and subscribes before project/created", async () => {
@@ -108,7 +125,12 @@ test.for([
   {
     name: "missing entrypoint",
     files: [{ path: "README.md", content: "not a config" }],
-    error: "worker.ts entrypoint",
+    error: 'The config template: no entry — name the entry module in package.json "main"',
+  },
+  {
+    name: "a main that is not a file",
+    files: [{ path: "package.json", content: '{"main":"src/worker.ts"}' }],
+    error: `The config template: no entry — package.json's main "src/worker.ts" is not a file`,
   },
 ])("$name is one durable failure without activation or success", async ({ files, error }) => {
   const fixture = project(undefined, async () => {

@@ -32,6 +32,7 @@ import {
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import { defaultFiles } from "../generated/config-templates.js";
+import { readPackage } from "../context/module-resolution.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
@@ -39,9 +40,9 @@ import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 
 /** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
- *  commit as the worker's modules (`worker.ts` the main module, every `.js` file under its own path,
- *  so relative imports resolve as in the tree — the repo facet's `modules`), cached under the
- *  commit. The saga writes it for the seed and the follower for every later commit — the same
+ *  commit as the worker's modules (package.json's `main` the main module, every `.js` file under
+ *  its own path, so relative imports resolve as in the tree — the repo facet's `modules`), cached
+ *  under the commit. The saga writes it for the seed and the follower for every later commit — the same
  *  target under the same key, so the two appends land one event. */
 function configRepoIngressTarget(commitOid: string) {
   return [
@@ -510,8 +511,11 @@ export class ProjectProcessor extends StreamProcessor<
           const changes = reference
             ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
             : defaultFiles;
-          if (!changes.some((file) => file.path === "worker.ts"))
-            throw new Error("The config template needs a worker.ts entrypoint");
+          // The loader's own rule for the entry, so a template the seed accepts is one that loads.
+          readPackage(
+            Object.fromEntries(changes.map((file) => [file.path, file.content])),
+            "The config template",
+          );
           const seeded = (await this.withItx((itx) =>
             config(itx).commitFiles({
               message: reference ? `seed: ${reference}` : "seed: minimal project config",

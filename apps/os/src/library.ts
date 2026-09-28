@@ -209,13 +209,14 @@ export function buildLibrary(
 // cannot cancel a Workers-RPC call it made, and a call in flight keeps this context resident and
 // billed), the runner stops waiting (`runSettlementOf`) and a caller's `itx.run` returns.
 
-/** The module `run` loads: `script` spliced in as `const script = (…)`, run inside ONE `withItx`
- *  round trip (`iterate/with-itx`, the platform's ~1.5 KB module: a script's isolate never loads the
- *  whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
+/** The source `run` loads, one module that package.json names as its `main`: `script` spliced in
+ *  as `const script = (…)`, run inside ONE `withItx` round trip (`iterate/with-itx`, the platform's
+ *  ~1.5 KB module: a script's isolate never loads the whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
  *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
  *  unit pin. */
-export function runScriptModule(script: string): { "worker.js": string } {
+export function runScriptModule(script: string): { "package.json": string; "worker.js": string } {
   return {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": [
       'import { WorkerEntrypoint } from "cloudflare:workers";',
       'import { withItx } from "iterate/with-itx";',
