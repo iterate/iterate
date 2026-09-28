@@ -1,8 +1,10 @@
 // src/project/dns-provider.ts — WHO HOSTS A HOSTNAME'S DNS, so the dash can say where and how to add
-// its records when Domain Connect can't (domain-connect.ts): the nameservers of the nearest zone
-// above the hostname (DNS-over-HTTPS NS lookups, the same zone walk), matched against the providers
-// below by their customer-facing nameserver names. The answer is a provider id the dash's Hostnames
-// page keys its instructions by (apps/dash `DNS_PROVIDER_GUIDES`); null for anything not listed.
+// its records when Domain Connect can't (domain-connect.ts): the zone the hostname lives in — the
+// nearest name at or above it with nameservers (DNS-over-HTTPS NS lookups) — and its provider, by
+// matching those nameservers against the providers below by their customer-facing names. The zone
+// lets the dash show each record's name as the provider's form wants it (`iterate`, or `@` for the
+// zone itself); the provider is an id the dash keys its instructions by (apps/dash
+// `DNS_PROVIDER_GUIDES`), null for anything not listed.
 // Best effort like Domain Connect: every request bounded, a failure throws for the caller to log.
 
 import { z } from "zod";
@@ -38,7 +40,7 @@ const PROVIDERS: { id: string; nameservers: RegExp }[] = [
 /** A DNS-over-HTTPS answer (RFC 8484's JSON form), as far as NS records go. */
 const DohNsAnswer = z.object({
   Status: z.number(),
-  Answer: z.array(z.object({ type: z.number(), data: z.string() })).optional(),
+  Answer: z.array(z.object({ name: z.string(), type: z.number(), data: z.string() })).optional(),
 });
 
 /** The provider a set of nameservers belongs to, or null. Pure. */
@@ -50,13 +52,15 @@ export function dnsProviderOfNameservers(nameservers: readonly string[]): string
   );
 }
 
-/** The provider hosting `hostname`'s DNS: the nameservers of the nearest zone above it that has
- *  any. Throws on a DNS error or a timeout. `fetcher` reaches DNS-over-HTTPS (a test hands a fake). */
-export async function dnsProviderOf(
+/** The zone `hostname` lives in — the nearest name at or above it with nameservers — and the
+ *  provider those nameservers belong to; null when no zone answers. Throws on a DNS error or a
+ *  timeout. `fetcher` reaches DNS-over-HTTPS (a test hands a fake). */
+export async function dnsZoneOf(
   hostname: string,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
-): Promise<string | null> {
-  for (const { domain } of domainConnectZonesOf(hostname)) {
+): Promise<{ zone: string; provider: string | null } | null> {
+  const zones = [hostname, ...domainConnectZonesOf(hostname).map(({ domain }) => domain)];
+  for (const domain of zones) {
     const response = await fetcher(
       `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`,
       { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
@@ -64,8 +68,15 @@ export async function dnsProviderOf(
     const dns = DohNsAnswer.parse(await response.json());
     if (dns.Status !== 0 && dns.Status !== 3)
       throw new Error(`DNS status ${dns.Status} for ${domain} NS`);
-    const nameservers = (dns.Answer || []).filter((record) => record.type === 2);
-    if (nameservers.length) return dnsProviderOfNameservers(nameservers.map((ns) => ns.data));
+    // the zone's own NS records only: a resolver follows a CNAME, and the target's zone is not ours
+    const nameservers = (dns.Answer || []).filter(
+      (record) => record.type === 2 && record.name.replace(/\.$/, "").toLowerCase() === domain,
+    );
+    if (nameservers.length)
+      return {
+        zone: domain,
+        provider: dnsProviderOfNameservers(nameservers.map((ns) => ns.data)),
+      };
   }
   return null;
 }

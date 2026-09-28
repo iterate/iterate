@@ -93,9 +93,9 @@ export type ProjectHostnames = {
   /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
    *  (domain-connect.ts `domainConnectLinkOf`). */
   connect(hostname: string): Promise<DomainConnectLink | null>;
-  /** Who hosts `hostname`'s DNS, by a provider id the dash has instructions for, or null
-   *  (dns-provider.ts `dnsProviderOf`). */
-  dnsProvider(hostname: string): Promise<string | null>;
+  /** The zone `hostname` lives in and who hosts it, by a provider id the dash has instructions
+   *  for (dns-provider.ts `dnsZoneOf`). */
+  dnsZone(hostname: string): Promise<{ zone: string; provider: string | null } | null>;
 };
 
 /** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
@@ -215,6 +215,7 @@ export class ProjectProcessor extends StreamProcessor<
               requested: { verb: "add", offset: event.offset },
               cloudflare: known?.cloudflare || null,
               error: null,
+              connectedAt: event.payload.connected ? event.createdAt : known?.connectedAt || null,
             },
           },
         };
@@ -226,7 +227,7 @@ export class ProjectProcessor extends StreamProcessor<
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
         const requested = known.requested?.offset === requestOffset ? null : known.requested;
-        const settled = { requested, cloudflare: cloudflare || known.cloudflare, error };
+        const settled = { ...known, requested, cloudflare: cloudflare || known.cloudflare, error };
         return {
           ...state,
           hostnames: { ...state.hostnames, [hostname]: settled },
@@ -617,11 +618,11 @@ export class ProjectProcessor extends StreamProcessor<
               console.warn(`${what} for ${hostname}: ${String(caught)}`);
               return null;
             });
-      const [connect, dnsProvider] = await Promise.all([
+      const [connect, dns] = await Promise.all([
         bestEffort("domain connect", () => hostnames.connect(hostname)),
-        bestEffort("dns provider", () => hostnames.dnsProvider(hostname)),
+        bestEffort("dns zone", () => hostnames.dnsZone(hostname)),
       ]);
-      cloudflare = { ...observed, connect, dnsProvider };
+      cloudflare = { ...observed, connect, dns };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
       if (claimed && !provisioned) await hostnames!.release(hostname);

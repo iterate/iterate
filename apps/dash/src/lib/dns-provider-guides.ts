@@ -16,6 +16,8 @@ export type DnsProviderGuide = {
   trailingDot?: boolean;
   /** What trips people up there. */
   notes?: string[];
+  /** false: its DNS can't point a bare domain at another name (no CNAME flattening or ALIAS). */
+  apex?: false;
 };
 
 const NAME = "the part of each name before your domain (like `iterate`)";
@@ -43,6 +45,7 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     notes: ["This works while the domain uses Namecheap BasicDNS or PremiumDNS."],
   },
   godaddy: {
+    apex: false,
     name: "GoDaddy",
     url: "https://dcc.godaddy.com/control/portfolio",
     steps: [
@@ -51,6 +54,7 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     ],
   },
   route53: {
+    apex: false,
     name: "Amazon Route 53",
     url: "https://console.aws.amazon.com/route53/v2/hostedzones",
     steps: [
@@ -59,6 +63,7 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     ],
   },
   "google-cloud-dns": {
+    apex: false,
     name: "Google Cloud DNS",
     url: "https://console.cloud.google.com/net-services/dns/zones",
     steps: [
@@ -110,6 +115,7 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     ],
   },
   digitalocean: {
+    apex: false,
     name: "DigitalOcean",
     url: "https://cloud.digitalocean.com/networking/domains",
     steps: [
@@ -134,12 +140,14 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     ],
   },
   hetzner: {
+    apex: false,
     name: "Hetzner DNS",
     url: "https://dns.hetzner.com/",
     steps: ["Your zone → Add record.", `Type CNAME, Name: ${NAME}, Value as shown.`],
     trailingDot: true,
   },
   ionos: {
+    apex: false,
     name: "IONOS",
     url: "https://my.ionos.com/domains",
     steps: [
@@ -173,11 +181,13 @@ export const DNS_PROVIDER_GUIDES: Record<string, DnsProviderGuide> = {
     notes: ["If Wix refuses the `*.` record, your site works but its apps get no addresses."],
   },
   azure: {
+    apex: false,
     name: "Azure DNS",
     url: "https://portal.azure.com/#browse/Microsoft.Network%2FdnsZones",
     steps: ["Your DNS zone → Record sets → + Add.", `Name: ${NAME}, Type CNAME, Alias as shown.`],
   },
   linode: {
+    apex: false,
     name: "Linode (Akamai)",
     url: "https://cloud.linode.com/domains",
     steps: [

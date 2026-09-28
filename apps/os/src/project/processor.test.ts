@@ -16,7 +16,10 @@ const requested = {
   payload: { slug: "acme", orgId: "org_1" },
 };
 const created = { type: "events.iterate.com/project/created", payload: {} };
-const failed = { type: "events.iterate.com/project/create-failed", payload: { error: "boom" } };
+const failed = {
+  type: "events.iterate.com/project/create-failed",
+  payload: { error: "boom" },
+};
 const deleted = { type: "events.iterate.com/project/deleted", payload: {} };
 
 /** The empty state; a row spreads it and names only what its events changed. */
@@ -154,6 +157,7 @@ const reduceRows: {
           requested: { verb: "add", offset: 3 },
           cloudflare: observation("pending"),
           error: null,
+          connectedAt: null,
         },
       },
     },
@@ -169,7 +173,12 @@ const reduceRows: {
     state: {
       ...empty,
       hostnames: {
-        "www.acme.test": { requested: null, cloudflare: observation("active"), error: "boom" },
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("active"),
+          error: "boom",
+          connectedAt: null,
+        },
       },
     },
   },
@@ -186,6 +195,25 @@ const reduceRows: {
     state: empty,
   },
   {
+    name: "an add asked on the way back from the DNS provider's Domain Connect page records when, and its answer keeps it",
+    events: [
+      hostname("add-requested"),
+      { ...hostname("add-requested"), payload: { hostname: "www.acme.test", connected: true } },
+      addSettled(2, "pending"),
+    ],
+    state: {
+      ...empty,
+      hostnames: {
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: expect.any(String),
+        },
+      },
+    },
+  },
+  {
     name: "an answer settles only its own request: an add asked while another ran stays owed, with the older answer's observation",
     events: [hostname("add-requested"), hostname("add-requested"), addSettled(1, "pending")],
     state: {
@@ -195,6 +223,7 @@ const reduceRows: {
           requested: { verb: "add", offset: 2 },
           cloudflare: observation("pending"),
           error: null,
+          connectedAt: null,
         },
       },
     },
@@ -211,7 +240,12 @@ const reduceRows: {
     state: {
       ...empty,
       hostnames: {
-        "www.acme.test": { requested: { verb: "add", offset: 4 }, cloudflare: null, error: null },
+        "www.acme.test": {
+          requested: { verb: "add", offset: 4 },
+          cloudflare: null,
+          error: null,
+          connectedAt: null,
+        },
       },
     },
   },
@@ -293,6 +327,7 @@ const reduceRows: {
           requested: { verb: "add", offset: 5 },
           cloudflare: null,
           error: null,
+          connectedAt: null,
         },
       },
       primaryHostname: "www.acme.test",
@@ -304,7 +339,12 @@ const reduceRows: {
     state: {
       ...empty,
       hostnames: {
-        "www.acme.test": { requested: null, cloudflare: observation("pending"), error: null },
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+        },
       },
     },
   },
@@ -331,7 +371,12 @@ const reduceRows: {
     state: {
       ...empty,
       hostnames: {
-        "www.acme.test": { requested: null, cloudflare: observation("pending"), error: null },
+        "www.acme.test": {
+          requested: null,
+          cloudflare: observation("pending"),
+          error: null,
+          connectedAt: null,
+        },
       },
     },
   },
@@ -514,7 +559,7 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
       setPrimaryHostname: async (hostname) => void written.push(hostname),
       provider: null,
       connect: async () => null,
-      dnsProvider: async () => null,
+      dnsZone: async () => null,
     }),
   );
   const blockers: (() => Promise<unknown>)[] = [];
@@ -548,7 +593,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
-      dnsProvider: async () => "cloudflare",
+      dnsZone: async () => ({ zone: "acme.test", provider: "cloudflare" }),
       provider: {
         provision: async (name) => {
           calls.push(`provision ${name}`);
@@ -570,7 +615,9 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
     { on = processor, serving = false } = {},
   ) => {
     const cloudflare = serving ? observation("active") : null;
-    const hostnames = { [name]: { requested: { verb, offset }, cloudflare, error: null } };
+    const hostnames = {
+      [name]: { requested: { verb, offset }, cloudflare, error: null, connectedAt: null },
+    };
     deliver(on, { ...empty, hostnames }, async (...events) => {
       appended.push(...(events as typeof appended));
     });
@@ -608,7 +655,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   expect(appended[0]!.payload.cloudflare).toMatchObject({
     status: "pending",
     connect: { provider: "Cloudflare", url: "https://dc.test/apply/www.acme.test" },
-    dnsProvider: "cloudflare",
+    dns: { zone: "acme.test", provider: "cloudflare" },
   });
 });
 
@@ -625,7 +672,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
-      dnsProvider: async () => null,
+      dnsZone: async () => null,
       provider: {
         provision: async () => {
           await held;
@@ -641,7 +688,12 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       {
         ...empty,
         hostnames: {
-          "www.acme.test": { requested: { verb, offset }, cloudflare: null, error: null },
+          "www.acme.test": {
+            requested: { verb, offset },
+            cloudflare: null,
+            error: null,
+            connectedAt: null,
+          },
         },
       },
       async () => [],
@@ -670,7 +722,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
-      dnsProvider: async () => null,
+      dnsZone: async () => null,
       provider: {
         provision: async () => {
           provisions += 1;
@@ -688,7 +740,12 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       {
         ...empty,
         hostnames: {
-          "www.acme.test": { requested: { verb: "add", offset }, cloudflare: null, error: null },
+          "www.acme.test": {
+            requested: { verb: "add", offset },
+            cloudflare: null,
+            error: null,
+            connectedAt: null,
+          },
         },
       },
       async () => [],
@@ -717,7 +774,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
       connect: async () => null,
-      dnsProvider: async () => null,
+      dnsZone: async () => null,
       provider: {
         provision: async () => observation("active"),
         remove: async (name) => void calls.push(`remove ${name}`),
@@ -745,7 +802,12 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
     creation: { status: "requested", offset: 1 }, // would run the creation saga, were it not deleted
     deletion: { offset: 9 },
     hostnames: {
-      "www.acme.test": { requested: null, cloudflare: observation("active"), error: null },
+      "www.acme.test": {
+        requested: null,
+        cloudflare: observation("active"),
+        error: null,
+        connectedAt: null,
+      },
     },
   };
   deliver(processor, state, async (...events) => {
@@ -872,7 +934,10 @@ test("ProjectProcessor — the deletion: a pass that keeps failing runs again af
   await vi.advanceTimersByTimeAsync(30_000);
   expect(passes).toBe(3);
   expect(appended).toMatchObject([
-    { type: "events.iterate.com/project/delete-failed", payload: { error: "Cloudflare said no" } },
+    {
+      type: "events.iterate.com/project/delete-failed",
+      payload: { error: "Cloudflare said no" },
+    },
   ]);
   expect(reported).toMatchObject([{ message: "Cloudflare said no" }]);
   // its own delete-failed, delivered to it, does not start it again: no retry storm
@@ -973,7 +1038,7 @@ function primary(hostname: string | null) {
 }
 
 function liveHostname() {
-  return { requested: null, cloudflare: observation("active"), error: null };
+  return { requested: null, cloudflare: observation("active"), error: null, connectedAt: null };
 }
 
 function removed(requestOffset: number) {
@@ -1013,7 +1078,7 @@ function observation(status: string) {
     sslStatus: status,
     records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
     connect: null,
-    dnsProvider: null,
+    dns: null,
   };
 }
 

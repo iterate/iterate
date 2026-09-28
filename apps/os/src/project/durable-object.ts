@@ -38,7 +38,7 @@ import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
-import { dnsProviderOf } from "./dns-provider.ts";
+import { dnsZoneOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
@@ -136,12 +136,13 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
         const slug = (await controlPlane.getProject(projectId))?.slug;
         return config.domainConnect && config.urls.dash && slug
           ? domainConnectLinkOf(hostname, {
+              project: projectId,
               privateKey: config.domainConnect.privateKey.exposeSecret(),
               redirectUri: `${config.urls.dash}/projects/${slug}/hostnames?connected=${encodeURIComponent(hostname)}`,
             })
           : null;
       },
-      dnsProvider: (hostname) => dnsProviderOf(hostname),
+      dnsZone: (hostname) => dnsZoneOf(hostname),
     };
   }
 

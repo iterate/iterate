@@ -1,7 +1,7 @@
 // src/project/dns-provider.test.ts — which provider a zone's nameservers name (a table of the
 // customer-facing nameserver names), and the zone walk over DNS-over-HTTPS against a fake.
 import { expect, test } from "vitest";
-import { dnsProviderOf, dnsProviderOfNameservers } from "./dns-provider.ts";
+import { dnsProviderOfNameservers, dnsZoneOf } from "./dns-provider.ts";
 
 test.for([
   { name: "Cloudflare", nameservers: ["giancarlo.ns.cloudflare.com."], provider: "cloudflare" },
@@ -37,24 +37,43 @@ test.for([
   expect(dnsProviderOfNameservers(nameservers)).toBe(provider);
 });
 
-test("the nearest zone above the hostname with nameservers names the provider", async () => {
+test("the zone is the nearest name at or above the hostname with nameservers, and names the provider", async () => {
   const asked: string[] = [];
-  const provider = await dnsProviderOf("iterate.shop.example.com", (async (input: string) => {
+  const found = await dnsZoneOf("iterate.shop.example.com", (async (input: string) => {
     const name = new URL(input).searchParams.get("name")!;
     asked.push(name);
     return Response.json(
       name === "example.com"
-        ? { Status: 0, Answer: [{ type: 2, data: "ns51.domaincontrol.com." }] }
-        : { Status: 0, Answer: [{ type: 5, data: "cname.iterate.app." }] },
+        ? {
+            Status: 0,
+            Answer: [{ name: "example.com.", type: 2, data: "ns51.domaincontrol.com." }],
+          }
+        : // a CNAME the resolver followed into another zone's NS: not this zone's
+          {
+            Status: 0,
+            Answer: [
+              { name: name, type: 5, data: "cname.iterate.app." },
+              { name: "iterate.app.", type: 2, data: "ns1.elsewhere.test." },
+            ],
+          },
     );
   }) as unknown as typeof fetch);
-  expect(provider).toBe("godaddy");
-  expect(asked).toEqual(["shop.example.com", "example.com"]);
+  expect(found).toEqual({ zone: "example.com", provider: "godaddy" });
+  expect(asked).toEqual(["iterate.shop.example.com", "shop.example.com", "example.com"]);
+});
+
+test("a bare domain is its own zone", async () => {
+  const found = await dnsZoneOf("effect.ninja", (async () =>
+    Response.json({
+      Status: 0,
+      Answer: [{ name: "effect.ninja.", type: 2, data: "ingrid.ns.cloudflare.com." }],
+    })) as unknown as typeof fetch);
+  expect(found).toEqual({ zone: "effect.ninja", provider: "cloudflare" });
 });
 
 test("a DNS error throws (the caller logs it)", async () => {
   await expect(
-    dnsProviderOf("iterate.example.com", (async () =>
+    dnsZoneOf("iterate.example.com", (async () =>
       Response.json({ Status: 2 })) as unknown as typeof fetch),
   ).rejects.toThrow(/DNS status 2/);
 });
