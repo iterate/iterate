@@ -7,21 +7,21 @@ description: Add a new first-party app under apps/, which is a TanStack Start ap
 
 A first-party app is a TanStack Start app on its own Worker. It is an ordinary OAuth client of
 the platform, with no secrets and no data of its own. `scripts/lib/start-app.ts` provides every
-script and the Worker config, and the app only declares itself. Copy `apps/notes`, which is the
-smallest one, and rename.
+script and the Worker config, and the app only declares itself. Copy `apps/voice`, a small one that
+opens a project, and rename. (Notes has no sign-in of its own: a project's config worker serves it.)
 
 A plain Worker with no UI (such as `apps/dummy-petshop`) has a different shape. Copy that app
 instead.
 
 ## 1. The app
 
-Copy `scripts/app.ts` and `src/routes/` from `apps/notes`:
+Copy `scripts/app.ts` and `src/routes/` from `apps/voice`:
 
 - `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`) plus the CLI line. `name` is
   the directory, the Doppler project and the local Worker name.
 - `src/routes/`: `__root.tsx` (`AppDocument`), the landing page `index.tsx`, and `_auth.tsx`, which
-  is `ssr: false` with `createIterateClient({ scopes })` in `beforeLoad`. Keep Notes' `basePath`
-  only if a project proxies the app under paths ingress, as one does Notes (`src/base-path.ts`).
+  is `ssr: false` with `createIterateClient({ scopes })` in `beforeLoad`. An app a project proxies
+  under paths ingress needs Notes' `basePath` too (`apps/notes/src/base-path.ts`).
 
 The rest is the shared shell called with the app's own values: `vite.config.ts` is
 `startAppVitePlugins` (`scripts/lib/start-app-vite.ts`; there is no wrangler file, #2904),
@@ -72,4 +72,4 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
   with its password, confirm **Sign in as someone else**, and check that the app lands inside
   project `pr<n>`.
 - Browser specs go under `specs/<app>/`, with a Playwright project in `playwright.config.ts`
-  and a base URL that `runSuite` (`apps/os/scripts/preview.ts`) passes. Notes is the example.
+  and a base URL that `runSuite` (`apps/os/scripts/preview.ts`) passes. Voice is the example.

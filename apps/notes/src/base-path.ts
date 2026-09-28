@@ -1,11 +1,12 @@
-// base-path.ts — THE PATH NOTES IS SERVED UNDER in the browser: "" on its own origin, and
-// `/projects/<project>/<routingSlug>` when a project's config worker (config-worker.ts) proxies it
-// under paths ingress. There the platform's edge strips that prefix from the URL Notes sees and
+// base-path.ts — THE PATH NOTES IS SERVED UNDER in the browser. A project's config worker
+// (config-worker.ts) proxies Notes: on a host of its own under subdomains ingress
+// (`notes--<project>.<base>`) the base path is "", and under paths ingress it is
+// `/projects/<project>/<routingSlug>`. There the platform's edge strips that prefix from the URL Notes sees and
 // says it in `x-iterate-base-path` (iterate/project-ingress), while the browser's URLs keep it. So
 // every path the page names carries it — its links, its assets (server.ts `transformAssets`), its
 // server functions (start.ts) — and the router drops it on the way in (`basePathRewrite`). The
-// browser adapter's `/.auth/*` and `/api` stay root paths: under paths they are the platform's own,
-// on the origin the page shares with it (apps/os/src/worker.ts).
+// browser adapter's `/.auth/*` and `/api` stay root paths: the host's, which the platform answers
+// (apps/os/src/worker.ts); under paths they are its own, on the origin the page shares with it.
 //
 // A dev server behind `iterate tunnel` under paths starts under the tunnel's base path (README):
 // Vite's `base`, which its module URLs and its HMR socket carry. The page's base path takes the
@@ -19,7 +20,7 @@ import { ITERATE_BASE_PATH_HEADER } from "iterate/project-ingress";
 export const buildBasePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 /** The base path a request says, else the build's — plain path segments only: the header reaches
- *  Notes' own origin from anyone, and what it says is written into the page's links. */
+ *  the Notes Worker from anyone who fetches it, and what it says is written into the page's links. */
 export function basePathOf(headers: Headers) {
   const value = headers.get(ITERATE_BASE_PATH_HEADER) || "";
   return /^(?:\/[a-z0-9-]+)+$/.test(value) ? value : buildBasePath;

@@ -245,8 +245,10 @@ export const agentsEnvs = {
   },
 };
 
+/** apps/notes — served only under a project's hosts: its config worker (apps/notes/config-worker.ts)
+ *  fetches through to this Worker, whose own URL no one signs in on. */
 export const notesEnvs = {
-  // NOTES AT MAIN on the dev/preview account, signed in against osEnvs.preview and
+  // NOTES AT MAIN on the dev/preview account, linked to osEnvs.preview and
   // redeployed in place with it (preview-parents.yml). A PR's notes is its own worker (`previewDeployment`).
   preview: {
     cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,

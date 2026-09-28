@@ -88,6 +88,27 @@ test.for([
   expect(await response.json()).toMatchObject(expected);
 });
 
+test("a proxied app has no sign-in gate: /.auth/*, and a signed-in landing, are its pages", async () => {
+  const entry = testEntry({ proxied: true });
+  const answer = async (path: string) => {
+    const response = await entry.fetch(
+      new Request(`https://app.example${path}`, {
+        headers: { cookie: `__Host-itx-session=${SIGNED_IN}` },
+      }),
+    );
+    return { status: response.status, body: await response.text() };
+  };
+  expect({
+    client: await answer("/.auth/client.json"),
+    login: await answer("/.auth/login"),
+    landing: await answer("/"),
+  }).toEqual({
+    client: { status: 200, body: "page /.auth/client.json" },
+    login: { status: 200, body: "page /.auth/login" },
+    landing: { status: 200, body: "page /" },
+  });
+});
+
 const SIGNED_IN = "00000000-0000-4000-8000-000000000001";
 
 /** The entry over the shim's `env` (vitest.config.ts): the platform at os.example, one built file,
