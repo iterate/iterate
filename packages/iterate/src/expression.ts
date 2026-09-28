@@ -315,18 +315,19 @@ type InvokeTarget = {
 
 /** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
  *  a plain property probe into a live capability call. Enforced at the prototype-chain hop and at
- *  every depth of the path proxies it hands out. Two kinds, one set: */
-const RESERVED_SEGMENT_NAMES: ReadonlySet<string> = new Set([
+ *  every depth of the path proxies it hands out, and by the library's connectors, which never grow
+ *  a method by one of these names (apps/os library/connection.ts). Two kinds, one set: */
+export const RESERVED_SEGMENT_NAMES: ReadonlySet<string> = new Set([
   // JS/RPC protocol machinery a framework or capnweb probes on any object (`then` above all: an
   // instance must never look thenable, or every `await` of it would resolve a capability).
+  // Function.prototype's `call`, `apply` and `bind` are NOT among them: workerd's and capnweb's
+  // stubs both send them as remote names, so a handle does too — an OpenAPI connection's
+  // `call(operationId, input)` is a method like any other.
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
   "__lookupSetter__",
   "__proto__",
-  "apply",
-  "bind",
-  "call",
   "catch",
   "constructor",
   "dup",

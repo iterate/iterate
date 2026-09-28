@@ -677,12 +677,16 @@ test("connectToMcp: a connection closed by a holder re-runs its handshake on the
   expect(requests.filter((r) => r.body?.method === "initialize")).toHaveLength(2);
 });
 
-test("connectToMcp: a tool named `then` never makes the connection THENABLE (an await would adopt it and call the tool, never settling): connect settles, no tools/call, and the tool stays reachable through callTool", async () => {
-  const { itx, requests } = mcpItx(plainServer([{ name: "then" }, { name: "echo" }]));
+test("connectToMcp: tools named `then` and `toJSON` grow no method (an await would adopt a THENABLE connection and call the tool, never settling; JSON.stringify would call `toJSON`): connect settles, no tools/call, and callTool reaches both", async () => {
+  const { itx, requests } = mcpItx(
+    plainServer([{ name: "then" }, { name: "toJSON" }, { name: "echo" }]),
+  );
   const conn = await connectToMcp(itx, "https://mcp.example/rpc");
   expect(requests.map((r) => r.body?.method)).not.toContain("tools/call");
   expect((conn as { then?: unknown }).then).toBeUndefined();
+  expect((conn as { toJSON?: unknown }).toJSON).toBeUndefined();
   expect(await conn.callTool("then")).toBe("answered");
+  expect(await conn.callTool("toJSON")).toBe("answered");
 });
 
 test("connectToMcp: an SSE answer the server leaves OPEN still connects — read as it arrives and left at the matching id, never awaited to EOF", async () => {

@@ -161,6 +161,21 @@ test("JSON.stringify and test-framework probes must not fire dispatches", () => 
   });
 });
 
+test("`call`, `apply` and `bind` dispatch at both levels and over RPC, as workerd's and capnweb's own stubs send them", async () => {
+  const target = new HostTarget();
+  const surface = target as unknown as Record<"call" | "apply" | "bind", (v: string) => unknown> & {
+    mount: { call(v: string): unknown };
+  };
+  expect([
+    surface.call("a"),
+    surface.apply("b"),
+    surface.bind("c"),
+    surface.mount.call("d"),
+  ]).toEqual(["dynamic:call:a", "dynamic:apply:b", "dynamic:bind:c", "dynamic:mount.call:d"]);
+  const stub = new RpcStub(target as never) as unknown as { call(v: string): Promise<string> };
+  await expect(stub.call("e")).resolves.toBe("dynamic:call:e");
+});
+
 test("probes are blocked at DEPTH too — stringify of a path proxy must not dispatch", () => {
   const target = new HostTarget();
   const mount = (target as unknown as Record<string, unknown>).someMount as Record<string, unknown>;
