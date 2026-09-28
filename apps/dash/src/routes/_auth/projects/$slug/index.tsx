@@ -187,26 +187,31 @@ function ConfigRepo({
     () => api.projects.get(project.id).repos.get("/repos/config"),
     [api, project.id],
   );
-  const readOrigin = useCallback(
-    () =>
-      configRepo()
-        .origin()
-        .then(
-          (origin) => {
-            setRead({ origin });
-            setChoice((pending) => (pending?.remote.url === origin ? pending : null));
-          },
-          (caught: unknown) => setError(messageOf(caught)),
-        ),
-    [configRepo],
-  );
+  /** Counts origin reads and writes: a read answers for the page only while nothing newer started,
+   *  so one that answers late never overwrites a later link or unlink. */
+  const originRequests = useRef(0);
+  const readOrigin = useCallback(() => {
+    const request = ++originRequests.current;
+    return configRepo()
+      .origin()
+      .then(
+        (origin) => {
+          if (request !== originRequests.current) return;
+          setRead({ origin });
+          setChoice((pending) => (pending?.remote.url === origin ? pending : null));
+        },
+        (caught: unknown) => request === originRequests.current && setError(messageOf(caught)),
+      );
+  }, [configRepo]);
   useEffect(() => void readOrigin(), [readOrigin]);
+  /** Link the remote at `url`, or unlink with null: the page shows the origin the write answers. */
+  const writeOrigin = async (url: string | null) => {
+    originRequests.current += 1;
+    setRead(await configRepo().setOrigin(url));
+  };
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
-  // The link form, its spinner on, stays until the link is done: a pull that met a diverged main
-  // asks its choice only once the origin is read again, when the choice's buttons are enabled.
-  const linking = search.configRepo === "link" && (!choice || busy === "link");
-  const asking = linking ? null : choice;
+  const linking = !choice && search.configRepo === "link";
   const closeSheet = async () => {
     setChoice(null);
     setError(null);
@@ -228,17 +233,19 @@ function ConfigRepo({
       setChoice({ kind: verb === "pull" ? "diverged" : "behind", remote: describeOrigin(url) });
     }
   };
+  /** One action, busy while its own calls run. The origin read after it runs with the buttons
+   *  enabled: the action's button, and its spinner, may be gone with the sheet by then. */
   const run = async (action: ConfigRepoAction, work: () => Promise<unknown>) => {
     setBusy(action);
     setError(null);
     setOutcome(null);
     await work().catch((caught: unknown) => setError(messageOf(caught)));
-    await readOrigin();
     setBusy(null);
+    await readOrigin();
   };
   const link = (url: string) =>
     run("link", async () => {
-      setRead(await configRepo().setOrigin(url));
+      await writeOrigin(url);
       await sync("pull", url);
     });
   /** A button that runs one action: disabled while any runs, its spinner while it does. */
@@ -258,9 +265,9 @@ function ConfigRepo({
       {label}
     </Button>
   );
-  const name = asking?.remote.name;
+  const name = choice?.remote.name;
   const copy =
-    asking &&
+    choice &&
     {
       diverged: {
         title: `${name}'s main and iterate's have diverged`,
@@ -274,7 +281,7 @@ function ConfigRepo({
         title: `Replace iterate's main with ${name}'s?`,
         description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${name}'s version.`,
       },
-    }[asking.kind];
+    }[choice.kind];
 
   return (
     <section aria-labelledby="config-repo-heading" className="flex flex-col gap-3">
@@ -300,7 +307,7 @@ function ConfigRepo({
               >
                 Replace with {remote.name}&apos;s
               </Button>
-              {actionButton("unlink", "Unlink", () => configRepo().setOrigin(null))}
+              {actionButton("unlink", "Unlink", () => writeOrigin(null))}
             </>
           ) : read ? (
             <Button onClick={() => void navigate({ search: { configRepo: "link" } })}>Link</Button>
@@ -322,9 +329,9 @@ function ConfigRepo({
           {outcome}
         </p>
       ) : null}
-      {asking || linking ? null : <Failure error={error} />}
+      {choice || linking ? null : <Failure error={error} />}
       <Sheet
-        open={Boolean(asking) || linking}
+        open={Boolean(choice) || linking}
         onOpenChange={(open) => !open && !busy && void closeSheet()}
       >
         <SheetContent
@@ -391,31 +398,31 @@ function ConfigRepo({
                   </Field>
                 </>
               ) : null}
-              {asking ? (
+              {choice ? (
                 <div className="flex flex-col items-start gap-3">
-                  {asking.kind === "diverged" ? (
+                  {choice.kind === "diverged" ? (
                     <Button
                       type="button"
                       variant="destructive"
                       disabled={Boolean(busy)}
-                      onClick={() => setChoice({ ...asking, kind: "replace" })}
+                      onClick={() => setChoice({ ...choice, kind: "replace" })}
                     >
-                      Replace with {asking.remote.name}&apos;s main
+                      Replace with {choice.remote.name}&apos;s main
                     </Button>
                   ) : null}
-                  {asking.kind === "replace"
+                  {choice.kind === "replace"
                     ? actionButton(
                         "replace",
                         "Replace",
-                        () => sync("pull", asking.remote.url, true),
+                        () => sync("pull", choice.remote.url, true),
                         "destructive",
                       )
                     : actionButton(
                         "force-push",
-                        asking.kind === "diverged"
-                          ? `Push iterate's to ${asking.remote.name}`
+                        choice.kind === "diverged"
+                          ? `Push iterate's to ${choice.remote.name}`
                           : "Push iterate's anyway",
-                        () => sync("push", asking.remote.url, true),
+                        () => sync("push", choice.remote.url, true),
                         "destructive",
                       )}
                 </div>
