@@ -38,7 +38,7 @@ test("a message lands once per project address on /integrations/email with its a
   ].join("\r\n");
   // delivered twice to one address, and once to another of the project's
   for (const to of ["mailbox@projects.test", "mailbox@projects.test", "mailbox+cc@projects.test"])
-    expect(await deliver(to, invoice)).toMatchObject({ rejected: [] });
+    expect(await deliver(to, invoice)).toMatchObject({ rejected: [], forwarded: [] });
 
   const [received, copy, ...again] = mailOf(await readLog(inbox));
   expect(again).toEqual([]);
@@ -152,15 +152,30 @@ test("the project wildcard's project receives mail at any address on its domain,
   const member = await projectWithMember("wildcard-mail");
   const hello =
     "From: ann@example.com\r\nSubject: Hi\r\nMessage-ID: <hello@example.com>\r\n\r\nHello";
-  expect(await deliver("hello@wildcard.test", hello)).toMatchObject({ rejected: [] });
+  // recorded for the project, and forwarded as it arrived to the wildcard's forwardEmailTo
+  expect(await deliver("hello@wildcard.test", hello)).toMatchObject({
+    rejected: [],
+    forwarded: ["everything@example.test"],
+  });
   const inbox = DurableObjectNameCodec.stringify({
     projectId: member.projectId,
     path: "/integrations/email",
   });
-  const [received] = mailOf(await readLog(inbox));
+  // mail Email Routing will not forward (no SPF or DKIM pass) is recorded all the same
+  const unforwardable =
+    "From: ann@example.com\r\nSubject: Psst\r\nMessage-ID: <psst@example.com>\r\n\r\nPsst";
+  expect(
+    await deliver("someone@wildcard.test", unforwardable, () => {
+      throw new Error("non-authenticated emails cannot be forwarded");
+    }),
+  ).toMatchObject({ rejected: [] });
+  const [received, unforwarded] = mailOf(await readLog(inbox));
   expect(received).toMatchObject({
     type: "events.iterate.com/email/received",
     payload: { messageId: "hello@example.com", envelope: { to: "hello@wildcard.test" } },
+  });
+  expect(unforwarded).toMatchObject({
+    payload: { messageId: "psst@example.com", envelope: { to: "someone@wildcard.test" } },
   });
 
   const reply = (await member.itx.email.send({
@@ -204,9 +219,11 @@ test("mail for no project, or on another domain, bounces", async () => {
   });
 });
 
-/** One delivery by Cloudflare Email Routing to `to`, and what `receiveEmail` rejected it with. */
-async function deliver(to: string, mime: string) {
+/** One delivery by Cloudflare Email Routing to `to`: what `receiveEmail` rejected it with, and the
+ *  addresses it forwarded it to (`forward` runs first and may throw, as Email Routing's does). */
+async function deliver(to: string, mime: string, forward = (_to: string) => {}) {
   const rejected: string[] = [];
+  const forwarded: string[] = [];
   const raw = new TextEncoder().encode(mime);
   // the fields of a ForwardableEmailMessage that `receiveEmail` reads
   const message = {
@@ -216,9 +233,13 @@ async function deliver(to: string, mime: string) {
     rawSize: raw.byteLength,
     headers: new Headers(),
     setReject: (reason: string) => void rejected.push(reason),
+    forward: async (address: string) => {
+      forward(address);
+      forwarded.push(address);
+    },
   } as unknown as ForwardableEmailMessage;
   await receiveEmail(message, env as unknown as Env);
-  return { rejected };
+  return { rejected, forwarded };
 }
 
 function mailOf(events: StreamEvent[]) {
