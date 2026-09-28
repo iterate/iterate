@@ -74,10 +74,18 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   await expect(agent.message("hi")).rejects.toThrow(
     /not created — itx\.agents\.create\("\/agents\/support"\) first/,
   );
+  // anyone may append anywhere: a birth certificate appended on `/` ahead of the agent, under the
+  // key the agent's own certificate carries on its path, counts for nothing and takes nothing away
+  await itx.append({
+    type: "events.iterate.com/agent/created",
+    payload: { path: "/agents/support" },
+    idempotencyKey: "agent/created:/agents/support",
+  });
+  expect(await itx.agents.list()).toEqual([]);
   expect(await itx.agents.create("/agents/support")).toEqual({ path: "/agents/support" });
   // The operator's instructions ADD to the default prompt — their own keyed item after the
-  // birth, through the handle's typed append; a system item raises no turn.
-  await agent.append({
+  // birth, a plain append on the agent's context; a system item raises no turn.
+  await itx.cd("/agents/support").append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "system", content: "Be terse." },
     idempotencyKey: "operator-prompt:v1",
@@ -106,7 +114,19 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
       .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
       .map((e) => e.payload.name),
   ).toEqual(["agent"]);
-  expect(short(await readAll(itx))).toEqual(["agent/created"]); // only the certificate crosses to /
+  // only the certificate crosses to /, stamped with the agent it names (after the one from `/`)
+  const rootLog = await readAll(itx);
+  expect(short(rootLog)).toEqual(["agent/created", "agent/created"]);
+  expect(
+    rootLog
+      .filter((e) => e.type === "events.iterate.com/agent/created")
+      .map((e) => e.source.origin),
+  ).toEqual(["/", "/agents/support"]);
+  // …and a death appended from anywhere but the agent lands, and changes nothing
+  await itx.append({
+    type: "events.iterate.com/agent/deleted",
+    payload: { path: "/agents/support" },
+  });
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
@@ -125,7 +145,7 @@ test("the loop: a person's words → the model → a script run against itx → 
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   const asked = await agent.message("Store 42 under the key answer and tell me when done.");
   expect(asked).toMatchObject({
@@ -217,6 +237,37 @@ test("the loop: a person's words → the model → a script run against itx → 
   expect(await itx.agents.list()).toHaveLength(1);
 });
 
+/** The sender's label: packages/agents collection.ts `AgentReference.message` and the fold (processor.ts). */
+test("an agent's words to another say who sent them, by message() or by a plain append: the other's model reads `[from /agents/a/sandbox]`, a person's words no sender", async () => {
+  const itx = await openAgentItx(freshCtx("agent-to-agent"));
+  const b = JSON.stringify("/agents/b");
+  const aAi = new FakeAi([
+    `<codemode status="Telling b">\nawait itx.agents.get(${b}).message("by message");\nawait itx.cd(${b}).append({ type: "events.iterate.com/agent/context-added", payload: { role: "user", content: "by append" } });\n</codemode>`,
+    "Told b.",
+  ]);
+  const bAi = new FakeAi(["Heard."]);
+  await itx.cd("/agents/a").provide("itx.ai", aAi);
+  await itx.cd("/agents/b").provide("itx.ai", bAi);
+  for (const path of ["/agents/a", "/agents/b"]) {
+    await itx.agents.create(path);
+    await configureModel(itx.cd(path));
+  }
+  await itx.agents.get("/agents/a").message("Tell b.");
+  const userWords = (ai: FakeAi) =>
+    (ai.calls.at(-1)?.inputs.messages ?? [])
+      .filter((message) => message.role === "user")
+      .map((message) => message.content);
+  expect(
+    await untilValue(
+      "b's model reads both words",
+      async () => userWords(bAi),
+      (words) => words.length === 2,
+      { timeoutMs: 40_000 },
+    ),
+  ).toEqual(["[from /agents/a/sandbox] by message", "[from /agents/a/sandbox] by append"]);
+  expect(userWords(aAi)[0]).toBe("Tell b.");
+});
+
 test("debounced: two messages inside the window are answered by ONE request that saw both; a message after the answer is another turn", async () => {
   const itx = await openAgentItx(freshCtx("agent-debounce"));
   const support = itx.cd("/agents/support");
@@ -224,7 +275,7 @@ test("debounced: two messages inside the window are answered by ONE request that
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   // The window is the story's premise — the second words must land inside it, a full round trip
   // after the first — so it is generous: at 1.5 s a loaded run's second message landed after it
   // closed, and the one request saw the first words alone (soak 2026-09-24, agents.e2e).
@@ -287,7 +338,7 @@ test("a script that returns nothing ends the turn: no result item, no further re
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("Write the note.");
   // a wait that runs out names the turn's log so far (which hop it stopped at)
@@ -328,7 +379,7 @@ test("bounded: a model that never stops scripting trips the autonomous-turn brea
   await support.provide("itx.ai", new FakeAi([script, script, script, new Error("model down")]));
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await support.append({
     type: "events.iterate.com/agent/configured",
     payload: {
@@ -402,7 +453,7 @@ test("an attached image is stored under the agent's path and SHOWN to the model 
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   const asked = await agent.message({
     message: "What do you see?",
@@ -470,7 +521,7 @@ test("interrupted: the person's next words cut the running answer short — sett
   await support.provide("itx.ai", ai);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("Tell me everything.");
   // The interrupt lands MID-CALL: the fake holds the first request, so the runner is awaiting its
@@ -533,7 +584,7 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   });
   const agent = itx.agents.get("/agents/support");
   await itx.agents.create("/agents/support");
-  await operatorPrompt(agent);
+  await operatorPrompt(support);
   await configureModel(support);
   await agent.message("hello");
   await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
@@ -571,6 +622,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     "await itx.subscribe({ target: () => {} }); return 'subscribed'",
     "return await itx.catalogue.search({ q: 'ship' })",
     "return await itx.repos.list()",
+    "return await itx.repos.get('/repos/config').append({ type: 'events.iterate.com/repo/delete-requested', payload: {} })",
   ];
   const ai = new FakeAi([
     ...scripts.map((code) => `<codemode status="probing">\n${code}\n</codemode>`),
@@ -669,6 +721,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       "failed",
       "succeeded",
       "succeeded",
+      "failed",
     ]);
     expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
     expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
@@ -680,6 +733,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
     expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
     expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
+    expect(settled[10]!.error).toMatch(/is masked/); // …but for its typed append, the script's own write: through the table
     // nothing moved: the root's table and the sandbox's are what the owner wrote
     expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);
     expect(await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list()).toEqual(
@@ -792,10 +846,10 @@ test("itx.agents.delete(path) lands the request and the death certificate on the
       "NO_FACET",
     );
   await noAgentFacet();
-  // Words appended PAST the verb (the handle's typed append lands under the caller's principal, no
-  // guard) raise no turn: no row, no facet, nothing folds them — no request is recorded long after
-  // the debounce window (250 ms) would have closed.
-  await agent.append({
+  // Words appended PAST the verb (a plain append lands under the caller's principal, no guard)
+  // raise no turn: no row, no facet, nothing folds them — no request is recorded long after the
+  // debounce window (250 ms) would have closed.
+  await itx.cd("/agents/gone").append({
     type: "events.iterate.com/agent/context-added",
     payload: { role: "user", content: "anyone there?", actor: { type: "user" } },
   });

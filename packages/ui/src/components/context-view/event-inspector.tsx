@@ -117,6 +117,7 @@ export function EventInspector({
   const envelope: [label: string, value: string][] = event
     ? [
         ["Who", actorLabel(event)],
+        ["From", event.source?.origin || ""],
         ["Grant", event.source?.grant || ""],
         [
           "Processor",

@@ -94,6 +94,7 @@ import {
   ItxExpressionResolver,
   describeRewriteRules,
   rowsNamingRpcStub,
+  refuseLiftingAJail,
   rpcStubKeysNamed,
   implicitRootsAt,
   type ItxExpressionRewriteRule,
@@ -257,11 +258,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ctx: this.ctx,
     // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
     // carries are committed like any append, in the turn the pager is accepted (the
-    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: `source.principal` is
-    // dropped — the DO owns that field, and a lent stub's rule is unattributed.
+    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: their `source` is the
+    // DO's — this context's own, and a lent stub's rule is unattributed.
     appendEvents: (events) =>
       void this.#appendAndRunCommittedEffects(
-        events.map((event) => stampCaller(event, { principal: null })),
+        events.map((event) =>
+          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
+        ),
       ),
     // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
     // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
@@ -483,6 +486,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           type: "events.iterate.com/itx/child-created",
           idempotencyKey: `itx/child-created:${path}`,
           payload: { childPath: path },
+          source: { origin: path },
         }),
       ),
     ).then(
@@ -562,9 +566,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
     // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
     // in parsed form — call sites append LITERAL `{ type, payload }`, never an event-builder helper.
-    const committedEvents = this.#stream.append(
-      ...events.map((event) => normalizeControlEvent(event, this.#durableObjectAddress.path)),
+    const normalized = events.map((event) =>
+      normalizeControlEvent(event, this.#durableObjectAddress.path),
     );
+    refuseLiftingAJail(
+      normalized,
+      this.#stream.coreReducedState.itxExpressionRewriteRules,
+      this.#caller,
+    );
+    const committedEvents = this.#stream.append(...normalized);
     // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
     // is <= the pre-append head), and re-running an effect on an echo could revert state a later event
     // already moved on — configure A, replace with B, retry A would restore A's facet startup memo.
@@ -690,14 +700,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #executeRun(requestOffset: number, code: string): Promise<void> {
+    // The platform's own record (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`), straight onto the
+    // stream as the wake record's `interrupted` settlements are: no writer can append one.
     const settle = (settlement: RunSettlement) =>
-      this.#appendAndRunCommittedEffects([
-        {
-          type: "events.iterate.com/itx/run-settled",
-          idempotencyKey: `itx/run-settled:${requestOffset}`,
-          payload: { requestOffset, settlement },
-        },
-      ]);
+      this.#stream.append({
+        type: "events.iterate.com/itx/run-settled",
+        idempotencyKey: `itx/run-settled:${requestOffset}`,
+        payload: { requestOffset, settlement },
+      });
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(this.#scriptExecution(code));
@@ -1171,6 +1181,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               ...row.events.map((event) => ({
                 ...event,
                 source: {
+                  // Where the definition came from: a schedule set here from another context
+                  // fires as that context's words, never as this one's.
+                  ...(row.source?.origin && { origin: row.source.origin }),
                   schedule: {
                     ...payload,
                     ...((row.source?.processor || row.source?.principal) && {

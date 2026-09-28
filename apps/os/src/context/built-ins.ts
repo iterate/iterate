@@ -33,7 +33,7 @@ import type {
 } from "iterate/api";
 import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { stampCaller, type Caller } from "../caller.ts";
+import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import { ScheduleKey, ScheduleReceipt, type ScheduledAppend } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
@@ -543,24 +543,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const kvPrefix = `${owner.id}:`;
   const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
-  /** THE append: every event appended through this scope carries WHO appended it — the DO's own
-   *  stamp, never a client's (src/caller.ts `stampCaller`): the session's verified principal, or none. */
+  /** THE append: every event appended through this scope carries WHO appended it and FROM WHERE —
+   *  the DO's own stamp, never a client's (src/caller.ts `stampCaller`): the context the call started
+   *  at, and the session's verified principal, or none. */
   const append = (...events: StreamEventInput[]) => {
     const caller = deps.caller();
     // Loaded code can delegate its scope to descendants through durable rows; child code
     // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app) for (const event of events) admitLoadedCodeRow(event, caller.path || path);
-    // `account/…` and `organization/…` keys are the platform's facts on a global context (grants.ts,
-    // session.ts): a key a person took first would answer the platform's fact with theirs, which the
-    // owner's fold ignores (a grant that never ends).
-    if (projectId === GLOBAL_PROJECT_ID && !caller.platform)
-      for (const { idempotencyKey } of events)
-        if (/^(?:account|organization)\//.test(String(idempotencyKey)))
-          throw codedError(
-            "FORBIDDEN",
-            `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
-          );
-    return ownContext().append(...events.map((event) => stampCaller(event, caller)));
+    if (caller.app)
+      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
+    refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
+    return ownContext().append(...events.map((event) => stampCaller(event, caller, path)));
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -768,7 +761,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     });
   };
   const secretFact = async (secret: ReachableContext, event: StreamEventInput): Promise<void> => {
-    await secret.append(stampCaller(event, deps.caller()));
+    await secret.append(stampCaller(event, deps.caller(), path));
     await crossPostSecretFact(event);
   };
   /** A person's account the project stops using — its path's lend ended: the project deleted the

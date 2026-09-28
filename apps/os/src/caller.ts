@@ -3,7 +3,9 @@
 // stored with), and the token crypto, WebCrypto only: the signed-claims codec, `sha256Hex` and
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
+import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
+import type { StreamEventInput } from "iterate/stream/processor";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -24,8 +26,9 @@ export type Caller = {
    *  rewrites as loaded code's input. Fresh env.ITX calls never inherit this stamp. */
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
-   *  `env.ITX`. Under it the resolver refuses the fixed point (`itx.builtins…`) and any `cd` above
-   *  the caller's own context on the INPUT expression; rewrites the owner wrote are never subject. */
+   *  `env.ITX`. Under it the resolver walls the INPUT expression (itx-expression-rewriting.ts
+   *  `#admit`: no fixed point, `cd` down only but for `itx.cd(path).append(…)`); rewrites the owner
+   *  wrote are never subject. */
   app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
    *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
@@ -54,26 +57,48 @@ export const ITX_APP_HEADER = "x-itx-app";
 /** Originating context of a native fetch forwarded by a trusted context. */
 export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
-/** The event as the log stores it: `source.principal`, `source.grant` and `source.platform` are the
- *  platform's — set from the admitted caller, client-supplied ones dropped (an anonymous session's
- *  event carries none, the kernel's none). */
-export function stampCaller<E extends { source?: Record<string, unknown> }>(
+/** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
+ *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
+ *  runs); `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
+ *  dropped, all but `processor`, the SDK engine's label for which processor wrote it: the writer's
+ *  word, filed under the stamped `origin`. `origin` names the context whose code ran, not who asked
+ *  it to run: a `run-requested` anyone appends runs at the context it lands on, and what that script
+ *  appends is stamped there. So `origin` is advisory, and a jail is the one boundary in a project. */
+export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   event: E,
   caller: Caller,
-): E {
-  const {
-    principal: _clientPrincipal,
-    grant: _clientGrant,
-    platform: _clientPlatform,
-    ...source
-  } = event.source || {};
-  const stamped: Record<string, unknown> = { ...source };
-  if (caller.principal) stamped.principal = caller.principal;
-  if (caller.principal && caller.grant) stamped.grant = caller.grant;
-  if (caller.platform) stamped.platform = true;
-  return Object.keys(stamped).length > 0
-    ? { ...event, source: stamped }
-    : (({ source: _dropped, ...rest }) => rest as E)(event);
+  here: string,
+): E & { source: NonNullable<StreamEventInput["source"]> } {
+  const source: NonNullable<StreamEventInput["source"]> = { origin: caller.path || here };
+  if (event.source?.processor) source.processor = event.source.processor;
+  if (caller.principal) source.principal = caller.principal;
+  if (caller.principal && caller.grant) source.grant = caller.grant;
+  if (caller.platform) source.platform = true;
+  return { ...event, source };
+}
+
+/** THE PLATFORM'S IDEMPOTENCY KEYS, which no other writer takes first: a key taken first answers the
+ *  platform's fact with the taker's event (a deletion that never starts, a grant that never ends) or
+ *  refuses it (a run that never settles, a repo never born). On a global context `account/…` and
+ *  `organization/…` are the platform's facts (grants.ts, session.ts), whoever else writes; on a
+ *  project's, `itx/…` (a run's settlement, a child's announcement, the apex), `project/…`, an
+ *  entity's lifecycle and a secret's lends are, and loaded code — anyone's, since anyone appends
+ *  anywhere — writes none of them. */
+export function refusePlatformIdempotencyKeys(
+  events: readonly { idempotencyKey?: string }[],
+  caller: Caller,
+  onGlobalContext: boolean,
+): void {
+  const platformKey = onGlobalContext
+    ? !caller.platform && /^(?:account|organization)\//
+    : caller.app && /^(?:itx|project|repo|workspace|secret)[/@]/;
+  if (!platformKey) return;
+  for (const { idempotencyKey } of events)
+    if (idempotencyKey && platformKey.test(idempotencyKey))
+      throw codedError(
+        "FORBIDDEN",
+        `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
+      );
 }
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

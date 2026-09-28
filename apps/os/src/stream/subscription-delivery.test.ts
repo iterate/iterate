@@ -508,6 +508,7 @@ test.for([
   const overhead = JSON.stringify({
     type: "blob",
     payload: { blob: "" },
+    source: { origin: "/" }, // the stream's own stamp of where an unstamped event came from
     createdAt: new Date().toISOString(),
   }).length;
   const [big] = rig.stream.append({

@@ -714,10 +714,14 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** Provenance: which processor (while processing what) appended this — stamped by the engine's
-   *  `append` — and WHO: the session's verified principal (src/principal.ts), set by the DO's append
-   *  root from the session's project token and never taken from a client. */
+  /** PROVENANCE, stamped by the platform as the event commits (apps/os caller.ts `stampCaller`): a
+   *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
+    /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
+     *  at, whichever context it was appended to. On every event committed since the stamp: the
+     *  platform's own records of a context (its birth, a wake, a run's settlement) carry the
+     *  context's own path. */
+    origin?: string;
     /** The durable schedule definition responsible for this occurrence. */
     schedule?: {
       key: string;
@@ -726,6 +730,8 @@ export type StreamEventInput = {
       /** Attribution of the definition, distinct from the platform writing the occurrence. */
       definedBy?: Omit<NonNullable<StreamEventInput["source"]>, "schedule">;
     };
+    /** Which processor wrote it, while processing what — the engine's own label (below), the one
+     *  field a writer keeps: its word, under the platform's `origin`. */
     processor?: {
       slug: string;
       version: string;

@@ -65,10 +65,11 @@ function retryBackoffMs(state: Pick<AgentState, "consecutiveLlmFailures" | "conf
   return Math.min(2 ** (state.consecutiveLlmFailures - 1) * backoffBaseMs, backoffMaxMs);
 }
 
-/** The conversation as the model reads it. An item's images become image parts (a data: URL of the
- *  bytes in `images`, keyed by path — a vision model sees the pixels); any other attachment, or an
- *  image whose bytes are gone, is a line naming it and how a script reads it (a hint line).
- *  The developer's notes read as system instructions. */
+/** The conversation as the model reads it. An item another context appended opens with
+ *  `[from <context>]`. An item's images become image parts (a data: URL of the bytes in `images`,
+ *  keyed by path — a vision model sees the pixels); any other attachment, or an image whose bytes
+ *  are gone, is a line naming it and how a script reads it (a hint line). The developer's notes
+ *  read as system instructions. */
 export function buildChatMessages(
   items: AgentState["contextItems"],
   images: Map<string, { contentType: string; base64: string }>,
@@ -76,7 +77,8 @@ export function buildChatMessages(
 ): ChatMessage[] {
   const messages = items.map((item): ChatMessage => {
     const role = item.role === "developer" ? "system" : item.role;
-    if (!item.files?.length) return { role, content: item.content };
+    const content = item.from ? `[from ${item.from}] ${item.content}` : item.content;
+    if (!item.files?.length) return { role, content };
     const parts: Extract<ChatMessage["content"], unknown[]> = [];
     const hints: string[] = [];
     for (const file of item.files) {
@@ -88,7 +90,7 @@ export function buildChatMessages(
         });
       else hints.push(fileHintLine(file));
     }
-    const text = [item.content, ...hints].filter((line) => line !== "").join("\n");
+    const text = [content, ...hints].filter(Boolean).join("\n");
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
@@ -353,6 +355,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     return (this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami()));
   }
 
+  /** A certificate on `/`, where the catalog folds it (catalog.ts): stamped with this agent's path,
+   *  which is all the catalog trusts. Unkeyed there: a key on `/` is anyone's to take first, and a
+   *  same-body event under it would swallow this one; the catalog's fold is idempotent, so a retry
+   *  that lands it twice changes nothing. */
+  #postToTheCatalog({ type, payload }: AgentEmitted): Promise<unknown> {
+    return this.deps.withItx((itx) => itx.cd("/").append({ type, payload }));
+  }
+
   /** Every change the facts make is stamped with the event's time: `lastActivityAt` moves exactly
    *  when the state does, so a harmless fact (a late intent, a repeated certificate) never reorders
    *  the sidebar. */
@@ -416,6 +426,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
       case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
+        // WHO SENT IT: another context's stamp (apps/os caller.ts `stampCaller`), else the sender
+        // the collection relayed through this agent's own facet (`message`; its base is the
+        // caller's to choose through the public `at(base)`, collection.ts). `/` is the people's
+        // (the dash, a member's session, the root's collection): a person's words carry no sender.
+        // The sender signs nothing, so the label is advisory.
+        const origin = event.source?.origin;
+        const sender = origin && origin !== event.path ? origin : event.payload.from;
         const next: AgentState = {
           ...state,
           contextItems: [
@@ -427,6 +444,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
               actor,
               llmRequestOffset,
               files: event.payload.files,
+              from: sender === "/" ? undefined : sender,
             },
           ],
         };
@@ -642,7 +660,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // THE SAGA — the birth, from state at head, in the background: at most once per incarnation,
     // and any later delivery over the same state runs it again, so an attempt lost to an eviction
     // costs nothing. Nothing to provision: the certificate goes to `/` (the project catalog) first,
-    // then lands here in ONE append with the default system prompt beside it — both keyed, so a
+    // then lands here in ONE append with the default system prompt beside it — keyed here, so a
     // retry appends nothing twice. An operator's instructions are their own `context-added` after.
     if (state.creation?.status === "requested") {
       if (this.#creating) return;
@@ -656,9 +674,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/created:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          await this.#postToTheCatalog(certificate); // the project catalog first
           await append(certificate, {
             // this path last: the certificate closes the obligation, the prompt rides with it
             type: "events.iterate.com/agent/context-added",
@@ -697,9 +713,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             payload: { path },
             idempotencyKey: `agent/deleted:${path}`,
           };
-          await this.deps.withItx((itx) =>
-            itx.invoke(["itx", "agents", ["announce", certificate]]),
-          ); // the project catalog first
+          await this.#postToTheCatalog(certificate); // the project catalog first
           await append(certificate); // this path last: closes the obligation
         } finally {
           this.#deleting = false;
