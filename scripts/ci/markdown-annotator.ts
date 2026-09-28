@@ -16,13 +16,11 @@ function markerLines(lines: string[], label: string) {
 export function markedSection(body: string, label: string) {
   const lines = body.split("\n");
   const markers = markerLines(lines, label);
-  return (
-    markers &&
-    lines
-      .slice(markers.start + 1, markers.end)
-      .join("\n")
-      .trim()
-  );
+  if (!markers) return undefined;
+  return lines
+    .slice(markers.start + 1, markers.end)
+    .join("\n")
+    .trim();
 }
 
 /** `body` with its section `label` holding `contents`: the section replaced in place, or appended
