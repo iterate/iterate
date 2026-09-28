@@ -208,8 +208,9 @@ and every check lands on that base commit:
 - No local `origin/<branch>` (unpushed, pushed under another name, detached `HEAD`):
   `Base: origin/main`, and the checks land on main's head. Stop and push the branch under its own
   name.
-- A clean `main`: main's head with `GITHUB_REF=refs/heads/main`, sharing main's concurrency groups,
-  so it can cancel main's own run.
+- A clean `main`: main's head with `GITHUB_REF=refs/heads/main`, sharing main's branch-named
+  concurrency groups, so it can cancel main's own run of a workflow grouped by branch (not Test's or
+  Lint's: a push to main groups by its sha).
 
 `depot ci dispatch --ref <branch>` reports on the branch's head. GitHub shows a commit's latest
 check per job name, so count a soak in Depot, and check where a run's checks went:
@@ -366,7 +367,9 @@ test jobs' evidence steps read the finalizer step's outputs instead
   (`deploy-os-production`, never the branch) with `cancel-in-progress: false`: a rollout finishes,
   and Depot keeps the newest pending run behind it.
 - Tests and lint/typecheck group by source branch (falling back to `ref_name`) with
-  `cancel-in-progress: true`, `main` included.
+  `cancel-in-progress: true`, except a push to `main`, whose group is its sha: every merge commit
+  gets its own Test and Lint verdict, since one shared group cancels the run in progress or
+  replaces the pending one.
 - Main OS e2e (`main-os-e2e`), the latency guard (`os-latency`) and the real-model suite
   (`os-real-model`) each redeploy one preview, so each has one fixed group with
   `cancel-in-progress: false`: every started run reaches a verdict, and pushes meanwhile collapse
