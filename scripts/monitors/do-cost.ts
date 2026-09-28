@@ -10,10 +10,8 @@
 // reaches a human: a NEW top-level message in #error-pulse that @-mentions Jonas
 // and Misha and names the top spenders, repeated every PAGE_REPEAT_HOURS while it
 // lasts.
-// Exists because the 2026-09-01 preview stream-DO wake loop burned ~$300/hour
-// for 28 hours before a human noticed it on the bill — and the 2026-09-21
-// os-next preview pin runaway reached $87/hour with this alarm red for a day,
-// its replies unread in the thread.
+// It exists because a runaway Durable Object can cost hundreds of dollars an
+// hour while every request stays green, and the bill shows it only days later.
 // Its own thread and pages, not the health job's message: its state is the channel's history.
 // A health test page runs it with a ceiling of 1 DO-hour, which forces an alert and a page, marked
 // 🧪 TEST RUN.
