@@ -37,10 +37,13 @@ test("a project deleted on another isolate is refused here once five seconds hav
 
   // straight on the catalog, as another isolate's edge would: within the five seconds this
   // isolate keeps the row it still admits the host, the window a deletion elsewhere goes unseen.
-  // This 404 is the deleted project's root context, its storage born again empty: the assertion
-  // pins that rebirth, and changes when a deleted project's storage can no longer be recreated.
+  // The host reaches the root context the first request bore, still standing: a deletion straight
+  // on the catalog runs no deletion saga, and a root already born is never refused its requests
+  // (iterate-context-durable-object.ts refuses only the birth of a deleted project's root).
   await catalog().deleteProject({ principal: { actor: "admin" } }, label);
-  expect(await call(`https://${label}.projects.test/`)).toMatchObject({ status: 404 });
+  const kept = await call(`https://${label}.projects.test/`);
+  expect(kept).toMatchObject({ status: 404 });
+  expect(await kept.text()).toMatch(/has no site yet/);
   clock.pass(6_000);
   await expectNoProject(label);
 });

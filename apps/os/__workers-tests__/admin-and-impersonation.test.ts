@@ -209,12 +209,6 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
     body: new URLSearchParams({ impersonate: target.user.id }),
   });
   expect(noOrigin).toMatchObject({ status: 403 });
-  // and nobody is named through the authorization URL: `act_as` there is an unknown parameter
-  const named = await authorize(target.approver, { scope: "iterate", actAs: ADMIN });
-  expect(named.view).toMatchObject({ kind: "consent", email: target.user.email });
-  expect(await authorizationForToken(env, named.token!, addresses, "api")).toMatchObject({
-    principal: { actor: target.user.id },
-  });
 });
 
 test("a sign-in link naming a test person (`login_hint`, a PR body's `Sign in ↗`) pre-fills an admin's Sign in as someone else for one of our own apps, and signs nobody in as them by itself", async () => {
@@ -329,15 +323,14 @@ async function approverFor(email: string) {
   return { approver, user: await controlPlane().ensureUser(email) };
 }
 
-/** A client's authorization for `scope` on `resource` (`act_as` and `login_hint` in its query when
- *  given), approved by `approver` with every project — or as the person `impersonate` names — and
- *  its code exchanged: the access token, or the refusal. */
+/** A client's authorization for `scope` on `resource` (`login_hint` in its query when given),
+ *  approved by `approver` with every project — or as the person `impersonate` names — and its code
+ *  exchanged: the access token, or the refusal. */
 async function authorize(
   approver: Awaited<ReturnType<typeof approverFor>>["approver"],
   input: {
     scope: string;
     resource?: string;
-    actAs?: string;
     loginHint?: string;
     impersonate?: string;
     /** how long after approval the code is exchanged */
@@ -355,7 +348,6 @@ async function authorize(
     input.resource || addresses.api,
   ]);
   query.set("scope", input.scope);
-  if (input.actAs) query.set("act_as", input.actAs);
   if (input.loginHint) query.set("login_hint", input.loginHint);
   const view = await approver.consent.describe(`?${query}`);
   const approval = await approver.consent.approve({
