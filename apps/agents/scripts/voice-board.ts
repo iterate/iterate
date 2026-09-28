@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { credentials, disposeSessions, session } from "./client.ts";
+import { connect } from "./client.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -62,7 +62,9 @@ export default async function voiceBoard(
   const DEVICE = options.device || "home_assistant_voice_preview_edition";
   const PROMPT = options.prompt || "Hello there. Please reply with the single word banana.";
   const EXPECT = new RegExp(options.expect || "banana", "i");
-  const root = session().authenticate(credentials()).projects.get(PROJECT);
+  using connection = await connect();
+  // Untyped: the board's capability, `clients.<device>`, is whatever its firmware lends.
+  const root: any = connection.session.projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
   const before = await healthWithRetry(kit);
@@ -181,7 +183,7 @@ export default async function voiceBoard(
       2,
     ),
   );
-  disposeSessions();
+  connection[Symbol.dispose]();
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 

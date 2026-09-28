@@ -34,7 +34,7 @@ the **operator bearer** (`secrets.adminBearer`) opens an operator session on
 `/api` that reaches every project, optionally as a named user (see
 [Acting as users](#acting-as-users-and-admins)). `login.allowedEmails` limits
 who may sign in by any of them (`["*@iterate.com"]`, or the var
-`APP_CONFIG_LOGIN__ALLOWED_EMAILS=*@iterate.com,*@nustom.com`); a live grant or
+`APP_CONFIG_LOGIN__ALLOWED_EMAILS='["*@iterate.com","*@nustom.com"]'`); a live grant or
 personal access token for an address it stops naming is refused at its next
 use. The operator bearer is not limited by it. People, agents and MCP clients
 use a **personal access token** instead of the bearer:
@@ -243,7 +243,7 @@ except on a preview or local dev: anyone with the password could sign in as an
 admin, and under paths a project's own code runs on the issuer's origin.
 
 The `iterate` CLI (`packages/cli`) takes the bearer from
-`APP_CONFIG_ADMIN_API_SECRET`, ahead of `ITERATE_BEARER_TOKEN` and any stored
+`APP_CONFIG_SECRETS__ADMIN_BEARER`, ahead of `ITERATE_BEARER_TOKEN` and any stored
 login:
 
 ```bash
@@ -251,11 +251,11 @@ login:
 pnpm exec iterate config set --name local --os-base-url http://localhost:8788
 
 # a session REPL as operator: itx is the session, so you can create projects
-APP_CONFIG_ADMIN_API_SECRET=dev-admin-api-secret pnpm exec iterate --config local repl
+APP_CONFIG_SECRETS__ADMIN_BEARER=dev-admin-api-secret pnpm exec iterate --config local repl
 # itx> const p = await itx.projects.create({ project: "my-proj" }); await p.whoami()
 
 # a script inside one project
-APP_CONFIG_ADMIN_API_SECRET=dev-admin-api-secret pnpm exec iterate --config local \
+APP_CONFIG_SECRETS__ADMIN_BEARER=dev-admin-api-secret pnpm exec iterate --config local \
   itx run --project my-proj --eval 'return await itx.whoami();'
 ```
 
@@ -362,7 +362,7 @@ acts as a chosen user instead.
 ```bash
 # an operator session against production (reaches every project); the bearer is
 # secrets.adminBearer in the APP_CONFIG of Doppler os/prd
-APP_CONFIG_ADMIN_API_SECRET=<prd adminBearer> pnpm exec iterate --config prd \
+APP_CONFIG_SECRETS__ADMIN_BEARER=<prd adminBearer> pnpm exec iterate --config prd \
   itx run --project <slug> --eval 'return await itx.whoami();'
 ```
 

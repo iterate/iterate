@@ -10,7 +10,7 @@ import { workerBaseUrl } from "./worker-base-url.ts";
  * Specs seed state through it instead of the UI where the state is not their subject. Dispose it.
  */
 export function openOperatorSession() {
-  const { adminApiSecret: secret } = readOsPlaywrightAuthConfig();
+  const { adminBearer: secret } = readOsPlaywrightAuthConfig();
   const url = new URL("/api", workerBaseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const api = newWebSocketRpcSession<IterateApi>(url.href);

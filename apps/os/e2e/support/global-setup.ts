@@ -12,7 +12,7 @@ import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
 import { deployedTarget } from "./deployed-target.ts";
 import {
-  E2E_ADMIN_API_SECRET,
+  E2E_ADMIN_BEARER,
   E2E_INGRESS_ROUTING,
   E2E_LOGIN_PASSWORD,
   e2eWorkerConfig,
@@ -26,7 +26,7 @@ declare module "vitest" {
     /** The worker's admin bearer — what the suite's default session authenticates with
      *  (support/client.ts): the local worker's (worker-config.ts), a deployed worker's
      *  `secrets.adminBearer`, read out of its APP_CONFIG (never in the tree). */
-    adminApiSecret: string;
+    adminBearer: string;
     /** The worker's sign-in password — what support/principal.ts mints a browser session with: the
      *  local worker's (worker-config.ts), a deployed worker's `login.password`, read out of its
      *  APP_CONFIG (never in the tree). */
@@ -56,7 +56,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   if (deployedWorkerBaseUrl) {
     const target = deployedTarget(deployedWorkerBaseUrl);
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
-    project.provide("adminApiSecret", target.adminApiSecret);
+    project.provide("adminBearer", target.adminBearer);
     project.provide("loginPassword", target.loginPassword);
     project.provide("ingressRouting", target.ingressRouting);
     project.provide("mcpBaseUrl", target.mcpBaseUrl);
@@ -70,7 +70,7 @@ export default async function setup(project: TestProject): Promise<() => Promise
   await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
   await server.getWorker().applyD1Migrations("DB");
   project.provide("workerBaseUrl", url.href);
-  project.provide("adminApiSecret", E2E_ADMIN_API_SECRET);
+  project.provide("adminBearer", E2E_ADMIN_BEARER);
   project.provide("loginPassword", E2E_LOGIN_PASSWORD);
   // The local worker's project hosts hang under `localhost` (worker-config.ts) and it serves MCP at
   // `/mcp` (no distinct MCP origin).

@@ -469,7 +469,7 @@ async function cliConfig() {
         env: {
           ...process.env,
           XDG_CONFIG_HOME: directory.path,
-          APP_CONFIG_ADMIN_API_SECRET: adminCredentials().secret,
+          APP_CONFIG_SECRETS__ADMIN_BEARER: adminCredentials().secret,
           ITERATE_BEARER_TOKEN: "",
         },
       });

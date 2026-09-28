@@ -23,7 +23,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import process from "node:process";
-import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
+import { newHttpBatchRpcSession } from "capnweb";
+import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
@@ -84,25 +85,13 @@ export default async function getin(
 /** `projects.create` as `email`, found or created, over the local operator bearer — idempotent.
  *  Answers the project's id. */
 async function createProject(baseUrl: string, input: { email: string; project: string }) {
-  const url = new URL("/api", baseUrl);
-  url.protocol = "ws:";
-  // The one call it makes, typed here: `iterate/api`'s types need the worker's lib (preview.ts
-  // `seedSignIn` does the same).
-  using rpc = newWebSocketRpcSession<{
-    authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
-      projects: {
-        create(input: { project: string }): { whoami(): Promise<{ projectId: string }> };
-      };
-    };
-  }>(url.href);
-  const { projectId } = await rpc
+  using connection = await connectIterate({
+    baseUrl,
     // local dev's `secrets.adminBearer` (generate-wrangler-config.ts `viteWranglerConfig`)
-    .authenticate({
-      type: "admin-secret",
-      secret: "dev-admin-api-secret",
-      as: { email: input.email },
-    })
-    .projects.create({ project: input.project })
+    auth: { type: "admin-secret", secret: "dev-admin-api-secret", as: { email: input.email } },
+  });
+  const { projectId } = await connection.session.projects
+    .create({ project: input.project })
     .whoami();
   return projectId;
 }

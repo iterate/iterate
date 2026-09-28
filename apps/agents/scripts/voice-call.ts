@@ -17,10 +17,10 @@
 import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import type { RpcStub } from "capnweb";
+import type { RpcPromise } from "capnweb";
 import type { IterateContextApiWith } from "iterate/api";
 import { createCli } from "trpc-cli";
-import { credentials, disposeSessions, session } from "./client.ts";
+import { connect } from "./client.ts";
 
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
@@ -102,11 +102,13 @@ export default async function voiceCall(
   const micPcm = UTTERANCE ? pcmFromWav(UTTERANCE) : Buffer.alloc(FRAME_MS * BYTES_PER_MS);
 
   // ONE warm authenticated session and the project root — what a connected device holds.
-  const api = session();
-  const root: RpcStub<IterateContextApiWith<"voice">> = api
-    .authenticate(credentials())
-    .projects.get(PROJECT);
   const warm0 = now();
+  using connection = await connect();
+  // The project installed voice (https://k.iterate.com prepares it), so its root has `voice`: the
+  // assertion iterate/api's `IterateContextApiWith` documents for a root that knows an app is there.
+  const root = connection.session.projects.get(PROJECT) as RpcPromise<
+    IterateContextApiWith<"voice">
+  >;
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);
 
@@ -274,7 +276,6 @@ export default async function voiceCall(
       2,
     ),
   );
-  disposeSessions();
 }
 
 if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-call" }).run();

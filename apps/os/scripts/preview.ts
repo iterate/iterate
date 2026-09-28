@@ -22,8 +22,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { newWebSocketRpcSession } from "capnweb";
-import { WebSocket } from "undici";
+import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
@@ -684,28 +683,15 @@ async function seedSignIn(
 ) {
   const { email, project } = preview;
   try {
-    const socketUrl = new URL("/api", preview.url);
-    socketUrl.protocol = "wss:";
-    const socket = new WebSocket(socketUrl);
-    // Undici implements the WebSocket transport; Workers' ambient type has extra unrelated members.
-    // The one call it makes, typed here: `iterate/api`'s types need the worker's lib, which
-    // tsconfig.scripts.json does not load.
-    using rpc = newWebSocketRpcSession<{
-      authenticate(credentials: { type: "admin-secret"; secret: string; as: { email: string } }): {
-        projects: { create(input: { project: string }): Promise<unknown> };
-      };
-    }>(socket as unknown as globalThis.WebSocket);
-    try {
-      await rpc
-        .authenticate({
-          type: "admin-secret",
-          secret: config.secrets.adminBearer.exposeSecret(),
-          as: { email },
-        })
-        .projects.create({ project });
-    } finally {
-      socket.close();
-    }
+    using connection = await connectIterate({
+      baseUrl: preview.url,
+      auth: {
+        type: "admin-secret",
+        secret: config.secrets.adminBearer.exposeSecret(),
+        as: { email },
+      },
+    });
+    await connection.session.projects.create({ project });
     console.log(`sign-in: seeded ${email} with project ${project}`);
     return true;
   } catch (error) {

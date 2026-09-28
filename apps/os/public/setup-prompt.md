@@ -121,8 +121,8 @@ with the admin bearer (from `iterate/apps/os`, where the SDK resolves). Ask only
 several:
 
 ```bash
-ADMIN_BEARER=<adminBearer> pnpm exec tsx --eval 'import("iterate/node").then(async ({ connectIterate }) => {
-  const c = await connectIterate({ baseUrl: process.argv[1], auth: { type: "admin-secret", secret: process.env.ADMIN_BEARER } });
+APP_CONFIG_SECRETS__ADMIN_BEARER=<adminBearer> pnpm exec tsx --eval 'import("iterate/node").then(async ({ connectIterate }) => {
+  const c = await connectIterate({ baseUrl: process.argv[1], auth: { type: "admin-secret", secret: process.env.APP_CONFIG_SECRETS__ADMIN_BEARER } });
   console.log((await c.session.projects.list()).map((p) => `project ${p.slug}`).join("\n"));
   console.log((await c.session.users.list()).map((u) => `user ${u.email}`).join("\n")); process.exit(0); })' <origin>
 ```

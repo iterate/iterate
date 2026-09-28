@@ -50,7 +50,10 @@ elements. The agent's rendering instructions live in [screen-context.md](src/scr
 | `src/screen-font.ts`                 | The screen font's CSS with its font embedded (`assets/`), stored at `voice/screen-font.css`.                                                                                                                                                                                                                                                                              |
 | `apps/agents/scripts/voice-call.ts`  | One conversation from Node, making exactly the device's calls; prints the press timeline.                                                                                                                                                                                                                                                                                 |
 | `apps/agents/scripts/voice-board.ts` | The physical HAVPE proof: remote press, the prompt spoken through the air, transcripts checked.                                                                                                                                                                                                                                                                           |
-| `apps/os/scripts/inspect-context.ts` | A context's log and subscription rows (the board's `health().conversation` names its current one).                                                                                                                                                                                                                                                                        |
+
+A conversation's log is `readEvents` on its context, through the CLI (the board's
+`health().conversation` names its current one):
+`pnpm exec iterate itx run --project <slug> --eval 'return (await itx.cd("<conversation>").readEvents(0, 500)).events'`.
 
 ## The device's calls
 

@@ -28,7 +28,7 @@ shrink the fixture.
 ## 2. Dump the log
 
 Use a personal access token for the chat's project as `ITERATE_BEARER_TOKEN`, or, for a project
-nobody at hand belongs to, the operator bearer as `APP_CONFIG_ADMIN_API_SECRET`
+nobody at hand belongs to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
 ([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)). Keep it in the
 command's environment and never print it.
 
@@ -61,13 +61,12 @@ Run at the project root, which is the default `--context /`. Never pass
 `--context <agent path>` for a dump. The run would be recorded in the agent's own log and
 show up in its chat as a script run.
 
-For a quick look with no JSON, use `apps/os/scripts/inspect-context.ts`. It prints one row per
-event, with payloads cut to 200 characters, and then the subscription rows:
+For a quick look with no JSON, the CLI prints the first 500 events as a table, and
+`itx.cd("/agents/web/<moment>").subscriptions.list()` the subscription rows:
 
 ```sh
-cd apps/os
-WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
-  PROJECT=<slug> CTX_PATH=/agents/web/<moment> pnpm exec tsx scripts/inspect-context.ts
+ITERATE_BEARER_TOKEN=itk_… pnpm exec iterate --config prd itx run --project <slug> \
+  --eval 'return (await itx.cd("/agents/web/<moment>").readEvents(0, 500)).events'
 ```
 
 The dump holds durable events only. `agent/llm-response-frame` is ephemeral and is never

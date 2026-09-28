@@ -33,7 +33,7 @@ export default function setup() {
 function osTargetEnv(): Record<string, string> {
   if (new URL(workerBaseUrl).hostname === "localhost") {
     return {
-      ADMIN_API_SECRET: "dev-admin-api-secret",
+      APP_CONFIG_SECRETS__ADMIN_BEARER: "dev-admin-api-secret",
       LOGIN_PASSWORD: "dev",
       PROJECT_INGRESS_ROUTING: JSON.stringify({ type: "subdomains", hostname: "localhost" }),
       MCP_BASE_URL: `${workerBaseUrl}/mcp`,
@@ -41,7 +41,7 @@ function osTargetEnv(): Record<string, string> {
   }
   const target = deployedTarget(workerBaseUrl);
   return {
-    ADMIN_API_SECRET: target.adminApiSecret,
+    APP_CONFIG_SECRETS__ADMIN_BEARER: target.adminBearer,
     LOGIN_PASSWORD: target.loginPassword,
     PROJECT_INGRESS_ROUTING: target.ingressRouting,
     MCP_BASE_URL: target.mcpBaseUrl,

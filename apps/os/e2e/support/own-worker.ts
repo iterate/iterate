@@ -7,7 +7,7 @@
 import { newWebSocketRpcSession } from "capnweb";
 import type { IngressRouting } from "iterate/project-ingress";
 import { createTestHarness } from "wrangler";
-import { E2E_ADMIN_API_SECRET, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
+import { E2E_ADMIN_BEARER, e2eWorkerConfig, PACKAGE_DIR } from "./worker-config.ts";
 
 export type OwnWorker = {
   /** Base URL of this worker, e.g. http://127.0.0.1:1234. */
@@ -40,7 +40,7 @@ export async function startOwnWorker(
   const admin = (as?: { email: string }) => {
     const s = newWebSocketRpcSession(`ws://${url.host}/api`);
     sessions.push(s);
-    return (s as any).authenticate({ type: "admin-secret", secret: E2E_ADMIN_API_SECRET, as });
+    return (s as any).authenticate({ type: "admin-secret", secret: E2E_ADMIN_BEARER, as });
   };
   return {
     url,
