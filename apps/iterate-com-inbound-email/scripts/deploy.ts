@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
 import { iterateComInboundEmailEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 /** vite build → wrangler deploy (scripts/lib/deploy-app.ts). The Worker answers no HTTP, so there is
  *  nothing to smoke: Email Routing's catch-all on iterate.com reaches it by name. */
@@ -18,7 +19,7 @@ export default async function deploy(options: { env?: string } = {}) {
   });
 }
 
-if (process.argv[1]?.endsWith("deploy.ts")) {
+if (isMainModule(import.meta.url)) {
   void createCli({ ...import.meta, name: "deploy" }).run({
     logger: yamlTableConsoleLogger,
     prompts: isAgent() ? undefined : createBuiltInPrompts(),

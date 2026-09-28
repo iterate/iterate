@@ -1,6 +1,4 @@
-# iterate.com's inbound mail (apps/iterate-com-inbound-email): the Worker the Email Routing catch-all
-# on the iterate.com zone delivers to. On the prd account; Doppler _shared/prd supplies its
-# Cloudflare credentials.
+# Deployment configuration: envs.ts (iterateComInboundEmailEnvs).
 name: Deploy iterate-com-inbound-email
 permissions:
   contents: read
