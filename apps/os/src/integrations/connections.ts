@@ -6,7 +6,7 @@
 // The project facet (project/durable-object.ts) runs connect and disconnect, and finishes a connect
 // when the provider's callback comes back; the webhooks are plain fetch functions in worker.ts.
 import { errorCode } from "iterate/lib";
-import { INTEGRATION_PROVIDER_NAMES, type StreamPage } from "iterate/api";
+import { INTEGRATION_PROVIDER_NAMES } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
@@ -246,38 +246,6 @@ export async function connectionRowOf(
     principal: null,
   })) as { state: ProjectState };
   return Object.hasOwn(state.integrations, path) ? state.integrations[path]! : null;
-}
-
-/** The connection a project root records at `path`, caught up through its log as it stands now: a
- *  fact committed there but not yet pushed to the facet counts (a disconnect that just finished,
- *  which `connectionRowOf`'s snapshot may not have folded yet). The platform's own reads: the log's
- *  durable head (a page read past it answers the head), then the facet's own barrier. */
-export async function connectionRowThroughHeadOf(
-  env: IntegrationEnv,
-  projectId: string,
-  path: string,
-): Promise<IntegrationConnectionRow | null> {
-  const root = env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-  );
-  // `invoke` is untyped across the DO hop; `readEvents` answers the log's own page (iterate/api)
-  const { scannedThroughOffset } = (await root.invoke(
-    ["itx", ["readEvents", Number.MAX_SAFE_INTEGER, 1]],
-    [],
-    { principal: null },
-  )) as StreamPage;
-  await root.invoke(
-    [
-      "itx",
-      "builtins",
-      "facets",
-      ["get", "project"],
-      ["waitUntilProcessed", { offset: scannedThroughOffset }],
-    ],
-    [],
-    { principal: null },
-  );
-  return connectionRowOf(env, projectId, path);
 }
 
 /** Route a provider account to the connection at `path` (iterate's app routes its webhooks there)

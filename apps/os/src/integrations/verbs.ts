@@ -27,7 +27,6 @@ import {
   attemptKeyOf,
   connectionPathOf,
   connectionRowOf,
-  connectionRowThroughHeadOf,
   consentAttemptKeyOf,
   deleteTokenSecret,
   dropAttemptsOf,
@@ -530,9 +529,10 @@ async function moveHere(scope: IntegrationScope, input: { offer: string }) {
         // Back to the holder only while its connection still names this account, in one statement
         // that never displaces another route (`restoreIntegrationRoute`); else released from here.
         // Read again once it is back: a holder that disconnected meanwhile released its routes
-        // before this one returned, so it goes again.
+        // before this one returned, so it goes again. Its `disconnected` landed before that release,
+        // and a read holds every fact committed before it (context/facet-host.ts `#callFacet`).
         const holderNamesIt = async () => {
-          const row = await connectionRowThroughHeadOf(env, holder.projectId, holder.path);
+          const row = await connectionRowOf(env, holder.projectId, holder.path);
           return row?.client === "iterate" && row.externalId === externalId;
         };
         const restored =
