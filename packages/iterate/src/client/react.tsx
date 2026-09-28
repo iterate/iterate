@@ -23,7 +23,7 @@ import {
   EMPTY_EVENT_LOG,
   type EventLogConnection,
   type EventLogHistory,
-  type IterateContextPresence,
+  type EventLogPresence,
 } from "./event-log.ts";
 import {
   connectLiveState,
@@ -188,7 +188,8 @@ export function useContextStub<S extends Disposable>(
 // of its processors table; who is here; named facets' live state. ONE hook here, pure components
 // there, so the UI kit stays free of the SDK and any app — the dash, the agents app — composes the two.
 
-export type { IterateContextPresence };
+/** One presence: who acted on the context and when last, from the log's stamps. */
+export type IterateContextPresence = EventLogPresence;
 
 /** The slice of a context handle `useIterateContext` reads — a capnweb `IterateContextApi` stub
  *  satisfies it structurally. `invoke` seeds a named facet's live state

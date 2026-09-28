@@ -13,7 +13,7 @@ or not. `withItx` releases those before its caller sees them.
 the context is evicted. Releasing the scope in a `finally` is not enough: the calls made through it
 stay open. `withItx` makes one round trip and then releases the scope, every call made through it,
 and every handle it awaited, with the calls made on that handle
-([with-itx.ts](../../packages/iterate/src/sdk/with-itx.ts),
+([record-pipelined-steps.ts](../../packages/iterate/src/sdk/record-pipelined-steps.ts),
 [residency](../../apps/os/docs/residency.md)).
 
 ```js

@@ -22,7 +22,7 @@
 // over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
-import { bytesToBase64, errorCode } from "iterate/lib";
+import { errorCode } from "iterate/lib";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -32,6 +32,7 @@ import {
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import type { RewriteRuleListEntry } from "iterate/api";
+import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import type { RunSettlement } from "iterate/stream/run";
 import {
   AgentContract,
@@ -47,6 +48,14 @@ import { parseCodemodeResponse } from "./codemode-format.ts";
  *  property of the code, not of a deployment. */
 const AI_GATEWAY_ID = "default";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
+
+/** Bytes to base64, chunked so a long buffer cannot overflow the call stack's argument list. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
 
 /** The failure backoff, folded into the debounce window: doubling from the policy's base per
  *  consecutive failure, capped at its ceiling; nothing after a success. */
@@ -159,7 +168,7 @@ async function appendUnlessLost(
   try {
     await append(...events);
   } catch (error) {
-    if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
+    if (!/idempotency key .* already names a different event/.test(String(error))) throw error;
   }
 }
 
@@ -298,7 +307,7 @@ export function renderScriptSettlement(settlement: RunSettlement): string | null
 type AgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
-  withItx: WithItx;
+  withItx: WithItx<ItxEntrypointScope>;
   /** The host bridges raw provider bodies through awaited byte RPC. */
   runModel(
     path: string,
@@ -422,8 +431,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         // caller's to choose through the public `at(base)`, collection.ts). `/` is the people's
         // (the dash, a member's session, the root's collection): a person's words carry no sender.
         // The sender signs nothing, so the label is advisory.
-        const { origin } = event.source;
-        const sender = origin !== event.path ? origin : event.payload.from;
+        const origin = event.source?.origin;
+        const sender = origin && origin !== event.path ? origin : event.payload.from;
         const next: AgentState = {
           ...state,
           contextItems: [

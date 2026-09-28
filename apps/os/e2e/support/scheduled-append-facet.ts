@@ -1,15 +1,13 @@
 /** Executable userspace example: ordinary facet RPC configures timers; its processor reduces the
  *  resulting durable events. No alarm handler, platform binding, or polling timer is needed. */
 export const scheduledAppendFacetSource = {
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-const DeadlinesContract = defineProcessorContract({
-  slug: "deadlines", version: "1", description: "the jobs whose timeouts fired for this owner",
-  stateSchema: z.object({ timedOut: z.array(z.string()).default([]), audited: z.array(z.string()).default([]) }),
-  consumes: ["job/timed-out", "job/timeout-audit"], emits: [],
-});
+  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class Deadlines extends StreamProcessor {
   constructor(owner) { super(); this.owner = owner; }
-  contract = DeadlinesContract;
+  contract = {
+    slug: "deadlines", version: "1", consumes: ["job/timed-out", "job/timeout-audit"], emits: [],
+    initialState: () => ({ timedOut: [], audited: [] }),
+  };
   reduce({ event, state }) {
     if (event.payload.owner !== this.owner) return;
     if (event.type === "job/timed-out") return { ...state, timedOut: [...state.timedOut, event.payload.job] };
@@ -38,15 +36,13 @@ export class DeadlinesDurableObject extends StreamProcessorDurableObject {
 
 /** A pure processor emits scheduling intent with the same durable append API as business facts. */
 export const scheduledAppendProcessorSource = {
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-const RemindersContract = defineProcessorContract({
-  slug: "reminders", version: "1", description: "schedules a reminder for each opened invoice",
-  stateSchema: z.object({ reminded: z.array(z.string()).default([]) }),
-  consumes: ["invoice/opened", "invoice/reminder-due"],
-  emits: ["events.iterate.com/itx/schedule-set"],
-});
+  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject } from "iterate/sdk";
 class Reminders extends StreamProcessor {
-  contract = RemindersContract;
+  contract = {
+    slug: "reminders", version: "1", consumes: ["invoice/opened", "invoice/reminder-due"],
+    emits: ["events.iterate.com/itx/schedule-set"],
+    initialState: () => ({ reminded: [] }),
+  };
   reduce({ event, state }) {
     if (event.type === "invoice/reminder-due") return { reminded: [...state.reminded, event.payload.invoiceId] };
   }

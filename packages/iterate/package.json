@@ -38,7 +38,7 @@
     "./project-ingress": "./src/project-ingress.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
-    "./with-itx": "./src/sdk/with-itx.ts",
+    "./with-itx": "./src/sdk/record-pipelined-steps.ts",
     "./node": "./src/node.ts"
   },
   "publishConfig": {

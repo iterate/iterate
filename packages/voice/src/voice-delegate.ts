@@ -12,15 +12,15 @@
  * Its birth as an agent of the project is `itx.agents.create` in worker.ts's setupVoiceAgent,
  * before this facet is subscribed.
  */
-import { z } from "zod";
-import { StreamProcessorDurableObject } from "iterate/sdk";
 import {
   StreamProcessor,
+  StreamProcessorDurableObject,
   defineProcessorContract,
+  z,
   type ConsumedEvent,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "iterate/stream/processor";
+} from "iterate/sdk";
 import {
   completeWithOpenAi,
   runDelegationTurn,

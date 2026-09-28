@@ -25,7 +25,7 @@ export type EventLogItx = LiveStateItx & {
 };
 
 /** One presence: who acted on the context and when last, from the log's stamps. */
-export type IterateContextPresence = {
+export type EventLogPresence = {
   actor: string;
   email?: string;
   grant?: string;
@@ -45,7 +45,7 @@ export type EventLogSnapshot = {
   /** Reading older pages: one in flight; none left (the log is held from its first event). */
   older: { loading: boolean; exhausted: boolean };
   /** Every principal that acted on an event held, newest first. */
-  actors: IterateContextPresence[];
+  actors: EventLogPresence[];
   /** The offset of the newest subscription change held — what the processors table is as of. */
   tableVersion: number;
 };
@@ -92,8 +92,8 @@ export function connectEventLog(
   let floor = 0;
   let loadingOlder = false;
   let tableVersion = 0;
-  const byActor = new Map<string, IterateContextPresence & { offset: number }>();
-  let actors: IterateContextPresence[] = [];
+  const byActor = new Map<string, EventLogPresence & { offset: number }>();
+  let actors: EventLogPresence[] = [];
   let scheduled = false;
 
   const schedule = () => {

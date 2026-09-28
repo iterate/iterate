@@ -5,16 +5,16 @@
  * delegations as `delegation-requested`, which voice-delegate.ts answers with
  * one chat-model turn (delegation-turn.ts).
  */
-import { z } from "zod";
-import { bytesToBase64 } from "iterate/lib";
-import { StreamProcessorDurableObject } from "iterate/sdk";
+import { bytesToBase64 } from "@iterate-com/shared/base64";
 import {
   StreamProcessor,
+  StreamProcessorDurableObject,
   defineProcessorContract,
+  z,
   type ConsumedEvent,
   type ProcessEventArgs,
   type ReduceArgs,
-} from "iterate/stream/processor";
+} from "iterate/sdk";
 import {
   Activation,
   DelegationRequestedPayload,

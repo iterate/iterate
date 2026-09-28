@@ -5,7 +5,6 @@
 //   release — `releaseRpcSessions`: dispose the Workers-RPC values a round trip reached
 //   patch   — `diff` / `applyPatch` / `jsonEqual`: the live-state delta (an RFC 6902 subset)
 //   timeout — `withTimeout`: a promise raced against a deadline (code TIMEOUT)
-//   bytes   — `bytesToBase64`: bytes to base64 without overflowing the call stack
 //   origin  — `isSameOriginBrowserRequest`: may a request spend the cookies it carries;
 //             `cookieValueOf`: one cookie out of a `Cookie` header;
 //             `sameOriginPath`, `isLocalOrigin`, `resolveContextPath`: origins and paths
@@ -304,17 +303,6 @@ export async function withTimeout<T>(
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-// ── bytes ──
-
-/** Bytes to base64, chunked so a long buffer cannot overflow the call stack's argument list. */
-export function bytesToBase64(bytes: Uint8Array) {
-  let binary = "";
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  }
-  return btoa(binary);
 }
 
 // ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
