@@ -63,7 +63,7 @@ const runInstructionsOf = (platformOrigin: string) =>
 \`\`\``,
     `Edit a file in place (this writes to the repo; replace the example path and pattern with your intended edit):
 \`\`\`json
-{"script":"async (itx) => { const repo = itx.repos.get('/repos/config'); const tip = await repo.tip(); const source = await repo.readFile('worker.ts', { commitOid: tip }); const next = source.replace(/Hello [A-Za-z]+/, 'Hello iterate'); if (next === source) throw new Error('no greeting in worker.ts'); return repo.commitFiles({ message: 'Change the greeting', parent: tip, changes: [{ path: 'worker.ts', content: next }] }); }"}
+{"script":"async (itx) => { const repo = itx.repos.get('/repos/config'); const tip = await repo.tip(); const source = await repo.readFile('worker.ts', { commitOid: tip }); const next = source.replace(/Homepage of project /, 'Welcome to '); if (next === source) throw new Error('the homepage text is not in worker.ts'); return repo.commitFiles({ message: 'Change the homepage greeting', parent: tip, changes: [{ path: 'worker.ts', content: next }] }); }"}
 \`\`\``,
     `Add a file, or several in one commit:
 \`\`\`json
