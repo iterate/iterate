@@ -1,7 +1,6 @@
-import { WebClient } from "@slack/web-api";
-// the policy's own module: Node's ESM import of the package's CommonJS index cannot see
-// `retryPolicies`, which it re-exports through a getter
-import { fiveRetriesInFiveMinutes } from "@slack/web-api/dist/retry-policies.js";
+// the default import is the package's CommonJS exports: Node's ESM named-export detection cannot see
+// `retryPolicies`, which the index re-exports through a getter
+import slackWebApi, { WebClient } from "@slack/web-api";
 import { dopplerSecret } from "../lib/env-context.ts";
 
 export const slackChannelIds = {
@@ -44,7 +43,7 @@ export const onCallMention = ["jonas", "misha"]
  *  Slack outage. A 429 waits its `Retry-After`. */
 export function getSlackClient() {
   return new WebClient(dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN"), {
-    retryConfig: fiveRetriesInFiveMinutes,
+    retryConfig: slackWebApi.retryPolicies.fiveRetriesInFiveMinutes,
   });
 }
 

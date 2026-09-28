@@ -353,22 +353,41 @@ export async function resolveDeployPages(
     sinceHours: DEPLOY_PAGE_HOURS,
     now: input.now,
   });
+  // one page that cannot be read or written leaves the others to resolve, and fails the step after
+  const errors: unknown[] = [];
   for (const found of open) {
-    const page = readDeployPage(found.text);
-    const failed = page.failed.some((entry) => entry.app === input.app);
-    const back = page.live.some((entry) => entry.app === input.app);
-    if (!failed || back || !(await input.descends(page.sha, input.sha))) continue;
-    const next = { ...page, live: [...page.live, { app: input.app, sha: input.sha.slice(0, 7) }] };
-    const text = deployPageText(next, false);
-    if (next.failed.every((entry) => next.live.some((live) => live.app === entry.app)))
-      await resolvePage(slack, {
-        channel,
-        ts: found.ts,
-        text,
-        why: `every app is live again: ${next.live.map((entry) => `${entry.app} at ${entry.sha}`).join(", ")}`,
-      });
-    else await slack.chat.update({ channel, ts: found.ts, text });
+    try {
+      await resolveDeployPage(slack, { ...input, channel, found });
+    } catch (error) {
+      errors.push(error);
+    }
   }
+  if (errors.length > 0)
+    throw new AggregateError(errors, `${errors.length} open deploy page(s) were not resolved`);
+}
+
+async function resolveDeployPage(
+  slack: WebClient,
+  input: Parameters<typeof resolveDeployPages>[1] & {
+    channel: string;
+    found: { ts: string; text: string };
+  },
+) {
+  const { channel, found } = input;
+  const page = readDeployPage(found.text);
+  const failed = page.failed.some((entry) => entry.app === input.app);
+  const back = page.live.some((entry) => entry.app === input.app);
+  if (!failed || back || !(await input.descends(page.sha, input.sha))) return;
+  const next = { ...page, live: [...page.live, { app: input.app, sha: input.sha.slice(0, 7) }] };
+  const text = deployPageText(next, false);
+  if (next.failed.every((entry) => next.live.some((live) => live.app === entry.app)))
+    await resolvePage(slack, {
+      channel,
+      ts: found.ts,
+      text,
+      why: `every app is live again: ${next.live.map((entry) => `${entry.app} at ${entry.sha}`).join(", ")}`,
+    });
+  else await slack.chat.update({ channel, ts: found.ts, text });
 }
 
 /** The prd deploy its job's step reports: APP_DISPLAY_NAME at GITHUB_SHA, linking the job. */

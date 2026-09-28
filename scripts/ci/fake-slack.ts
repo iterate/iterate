@@ -19,13 +19,20 @@ const SHORTCODES: Record<string, string> = {
  * thread reply with `thread_ts`), chat.update, chat.delete, conversations.history (newest first,
  * `limit` a page, with next_cursor) and conversations.replies. History spells the posters' emoji as
  * Slack's does. Every call is recorded in `calls`. A message's ts is `now` in seconds plus a
- * counter, so messages keep their order.
+ * counter, so messages keep their order. With `failUpdates`, every chat.update is refused after it
+ * is recorded, as Slack answers an error.
  */
-export function fakeSlack(options: { now: number }) {
+export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
   const channels = new Map<string, FakeMessage[]>(
     Object.values(slackChannelIds).map((id) => [id, []]),
   );
-  const calls: { method: string; channel?: string; text?: string; thread_ts?: string }[] = [];
+  const calls: {
+    method: string;
+    channel?: string;
+    ts?: string;
+    text?: string;
+    thread_ts?: string;
+  }[] = [];
   let counter = 0;
   const nextTs = (ageHours = 0) =>
     (options.now / 1000 - ageHours * 3600 + ++counter / 10_000).toFixed(6);
@@ -67,6 +74,7 @@ export function fakeSlack(options: { now: number }) {
       },
       update: async (args: { channel: string; ts: string; text: string }) => {
         calls.push({ method: "chat.update", ...args });
+        if (options.failUpdates) throw new Error("an_error");
         find(args.channel, args.ts).text = args.text;
         return { ok: true, ts: args.ts };
       },
@@ -113,9 +121,14 @@ export function fakeSlack(options: { now: number }) {
     /** A channel's top-level messages, oldest first, as posted. */
     channel: (name: Channel) =>
       [...messages(slackChannelIds[name])].sort((a, b) => Number(a.ts) - Number(b.ts)),
-    /** Puts a message in a channel as if the bot had posted it `ageHours` ago. */
-    seed: (name: Channel, text: string, ageHours = 0) => {
-      const seeded: FakeMessage = { ts: nextTs(ageHours), text, bot_id: "B0CIBOT", replies: [] };
+    /** Puts a message in a channel as if a bot, this one unless `botId` says, had posted it
+     *  `ageHours` ago. */
+    seed: (
+      name: Channel,
+      text: string,
+      { ageHours = 0, botId = "B0CIBOT" }: { ageHours?: number; botId?: string } = {},
+    ) => {
+      const seeded: FakeMessage = { ts: nextTs(ageHours), text, bot_id: botId, replies: [] };
       messages(slackChannelIds[name]).push(seeded);
       return seeded;
     },

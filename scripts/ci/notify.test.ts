@@ -179,7 +179,7 @@ test("two pages posted for one commit at once: the younger deletes itself into t
           "Do: open the run",
           "<https://depot.dev/Agents|run>",
         ].join("\n"),
-        0.001,
+        { ageHours: 0.001 },
       );
     return history(args);
   });
@@ -229,6 +229,26 @@ test("a re-run of an older commit resolves nothing", async () => {
   });
 
   expect(slack.channel("#error-pulse")[0]?.text).toBe(before);
+});
+
+test("a page that cannot be read leaves the others to resolve, then fails the step", async () => {
+  const slack = fakeSlack({ now });
+  await pageDeployFailure(slack.client, failure("OS"));
+  slack.seed("#error-pulse", `🚨 prd deploy failed at ??? (x): OS ${mention}`, { ageHours: 0.001 });
+
+  await expect(
+    resolveDeployPages(slack.client, {
+      app: "OS",
+      sha: fix,
+      now: new Date(now),
+      descends: async () => true,
+    }),
+  ).rejects.toThrow("1 open deploy page(s) were not resolved");
+
+  expect(slack.channel("#error-pulse").map((message) => message.text.split(" (")[0])).toEqual([
+    "🚨 prd deploy failed at ???",
+    "✅ resolved: prd deploy failed at 0123456",
+  ]);
 });
 
 test("a deploy page reads back from Slack's history as it was rendered", () => {

@@ -21,7 +21,6 @@ import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
-import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs } from "../../envs.ts";
 import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } from "./slack.ts";
@@ -56,7 +55,8 @@ export async function check(
     findings,
     liveVersion,
     sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    runUrl: z.string().parse(process.env.DEPOT_JOB_URL),
+    // the Depot job the page links; a local --dry-run has none
+    runUrl: process.env.DEPOT_JOB_URL || null,
     now: new Date(),
   };
   if (options.dryRun) console.log(postDeployTestText(reading));
@@ -105,7 +105,7 @@ export type PostDeployPage = {
   sha: string;
   since: string;
   deploys: number;
-  runUrl: string;
+  runUrl: string | null;
 };
 
 const MARKER = "prd post-deploy check failed after";
@@ -133,7 +133,7 @@ type PostDeployReading = {
   findings: string[];
   liveVersion?: string;
   sha: string;
-  runUrl: string;
+  runUrl: string | null;
   now: Date;
 };
 
