@@ -5,8 +5,9 @@
 #
 # #2580 is written as the iterate GitHub App (iterate[bot]): the writer mints an installation token
 # narrowed to writing issues in this repository. The Depot app's job token has no Issues permission
-# (403 on PATCH issues/2580). The app's key is read here only, in a workflow that never runs on
-# pull_request or push.
+# (403 on PATCH issues/2580). The app's id and key have one home, the platform's configuration
+# (Doppler os/prd's APP_CONFIG `integrations.github`), which this workflow reads on a schedule or a
+# dispatch only, never on pull_request or push.
 name: Flake dashboard
 permissions:
   contents: read
@@ -37,13 +38,13 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
-      # it back. The iterate GitHub App's id and key (Doppler _shared/prd) mint the token
-      # that writes the issue.
+      # it back. The writer parses os/prd's APP_CONFIG (with APP_CONFIG_SECRETS__KEY, which the
+      # parser requires) for the iterate GitHub App that writes the issue.
       - name: Recompute the dashboard issue
         run: |-
           set -euo pipefail
-          export CLOUDFLARE_API_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
+          export CLOUDFLARE_API_TOKEN APP_CONFIG APP_CONFIG_SECRETS__KEY
           CLOUDFLARE_API_TOKEN="$(doppler secrets get CLOUDFLARE_API_TOKEN --plain --project _shared --config preview)"
-          GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project _shared --config prd)"
-          GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project _shared --config prd)"
+          APP_CONFIG="$(doppler secrets get APP_CONFIG --plain --project os --config prd)"
+          APP_CONFIG_SECRETS__KEY="$(doppler secrets get APP_CONFIG_SECRETS__KEY --plain --project os --config prd)"
           pnpm tsx scripts/ci/flake-dashboard/update.ts ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}

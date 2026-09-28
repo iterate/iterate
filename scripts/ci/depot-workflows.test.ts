@@ -451,14 +451,21 @@ test("every job that records flakes uploads its test evidence to R2, where the f
     ).toBe(true);
 });
 
-test("the iterate GitHub App's key is read only by the flake dashboard, which never runs on a pull request or push", () => {
-  const readers = depotWorkflowFiles.filter((file) =>
-    readFileSync(resolve(repoRoot, file), "utf8").includes("GITHUB_APP_PRIVATE_KEY"),
+test("the flake dashboard takes the iterate GitHub App from os/prd's APP_CONFIG, its one home, and never runs on a pull request or push", () => {
+  const dashboard = loadWorkflow(".depot/workflows/flake-dashboard.yml");
+  const recompute = Object.values(dashboard.jobs)
+    .flatMap((job) => job.steps || [])
+    .find((step) => step.run?.includes("scripts/ci/flake-dashboard/update.ts"));
+
+  expect(recompute?.run).toContain(
+    'APP_CONFIG="$(doppler secrets get APP_CONFIG --plain --project os --config prd)"',
   );
-  expect(readers).toEqual([".depot/workflows/flake-dashboard.yml"]);
-  expect(Object.keys(loadWorkflow(".depot/workflows/flake-dashboard.yml").on || {}).sort()).toEqual(
-    ["schedule", "workflow_dispatch"],
-  );
+  expect(
+    depotWorkflowFiles.filter((file) =>
+      /\bGITHUB_APP_(ID|PRIVATE_KEY)\b/.test(readFileSync(resolve(repoRoot, file), "utf8")),
+    ),
+  ).toEqual([]);
+  expect(Object.keys(dashboard.on || {}).sort()).toEqual(["schedule", "workflow_dispatch"]);
 });
 
 // Each job that pages on a change of state hands its state to its next run as an artifact of its
