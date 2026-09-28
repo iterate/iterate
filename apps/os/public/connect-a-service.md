@@ -183,8 +183,7 @@ async (itx) =>
 
 It returns `{ path, url }`.
 
-A secret of several parts (an app's client ID, client secret and signing secret) is one link with
-`fields`: the page asks for each, and saves them as one JSON secret whose parts are
+A secret of several parts (an app's client secret and signing secret) is one link with `fields`: the page asks for each, and saves them as one JSON secret whose parts are
 `getSecret("/secrets/<name>", { field: "<name of the part>" })`:
 
 ```js
@@ -194,7 +193,6 @@ async (itx) =>
     egress: { urls: ["<every origin a part goes to>"] },
     description: "Your <Service> app's credentials, from [its settings](<the app's page>).",
     fields: [
-      { name: "clientId", label: "Client ID" },
       { name: "clientSecret", label: "Client secret" },
       { name: "signingSecret", label: "Signing secret" },
     ],
@@ -394,8 +392,9 @@ async (itx) => {
 Keep the `clientId`, and go straight to D2 with `clientAuth: "none"` and no `clientSecret`. Nothing
 for the person to do yet.
 
-**D1b. Otherwise: the person's app, and one link for all of it.** Make the link first: the app's
-client ID and client secret as fields of one secret (step 3a), pinned to the token endpoint's origin:
+**D1b. Otherwise: the person's app, and one link for its secrets.** Make the link first: the app's
+secret parts as fields of one secret (step 3a), pinned to the token endpoint's origin. Its client ID
+is no secret, so the person sends it in the chat:
 
 ```js
 async (itx) =>
@@ -404,10 +403,7 @@ async (itx) =>
     egress: { urls: ["<the token endpoint's origin>"] },
     description:
       "Your <Service> OAuth app, from [its settings](<the page that lists your apps>). The client secret is only ever sent to <Service>.",
-    fields: [
-      { name: "clientId", label: "Client ID" },
-      { name: "clientSecret", label: "Client secret" },
-    ],
+    fields: [{ name: "clientSecret", label: "Client secret" }],
   });
 ```
 
@@ -421,13 +417,13 @@ fields, and tell the person exactly what to fill in:
 >    - **<its homepage field, if any>**: `<projectUrl from step 1>`
 >    - **<its callback or redirect URL field>**: `https://os.iterate.com/.secrets/oauth/callback`
 > 2. Save it, then create a client secret.
-> 3. Paste its **Client ID** and **Client secret** here and press **Save**:
+> 3. Paste its **Client secret** here and press **Save**:
 >
 >    <url>
 >
->    Please don't paste them into this chat.
+>    Please don't paste it into this chat.
 >
-> 4. Tell me what it should be allowed to do.
+> 4. Reply with the app's **Client ID** (it isn't secret), and what it should be allowed to do.
 
 On a self-hosted iterate, the callback is `/.secrets/oauth/callback` on the origin this guide is
 served from. End your turn: you need their answer to 4.
@@ -440,8 +436,7 @@ async (itx) =>
   itx.secrets.beginOAuth("/secrets/<service>", {
     authorizationEndpoint: "<authorization endpoint>",
     tokenEndpoint: "<token endpoint>",
-    // after D1a, the client ID it returned; after D1b, the app's fields:
-    clientId: 'getSecret("/secrets/<service>-app", { field: "clientId" })',
+    clientId: "<the client ID: what D1a returned, or what the person sent after D1b>",
     // D1b only; leave it out after D1a:
     clientSecret: 'getSecret("/secrets/<service>-app", { field: "clientSecret" })',
     clientAuth: "<none after D1a; client_secret_post or client_secret_basic after D1b>",
@@ -465,8 +460,8 @@ passed to `beginOAuth`), without the `list()` check, and with a `timeoutMs` of u
 allows a call that long. The link works for an hour. If the person comes back later, or the page
 says it expired, run D2 again and send the new link.
 
-- **The person's app has no client secret** (a public client, PKCE only): ask only for
-  `clientId` in D1b's fields, leave `clientSecret` out, and pass `clientAuth: "none"`.
+- **The person's app has no client secret** (a public client, PKCE only): skip D1b's link, leave
+  `clientSecret` out, and pass `clientAuth: "none"`.
 - **The app signs its webhooks** (Slack's signing secret, GitHub's webhook secret): add the
   field in D1b, and check a webhook with
   `itx.secrets.verifyHmac("/secrets/<service>-app", { payload, signature, field: "signingSecret" })`.
@@ -539,7 +534,7 @@ Read the error first: most say what's wrong.
 | `… is not an OpenAPI 3 document`                                                      | It's YAML or Swagger 2. Use step 4C with the same secret.                                                                                                                                                                                                           |
 | The service answers 401 or 403                                                        | Check the header against the docs' `curl` example ("Writing the key into a request"), then the key itself: its kind, its scopes, and its region (some services have separate hosts per region). Tell the person exactly which key to make, and send the link again. |
 | The OAuth callback page says `the token endpoint returned no access_token`            | The client secret or `clientAuth` is wrong, or the app's callback URL doesn't match exactly. Fix it and run D2 again.                                                                                                                                               |
-| `beginOAuth` refuses the client ID or secret                                          | The app's secret must exist, hold the fields its placeholders name, and be pinned to the token endpoint's origin (D1b).                                                                                                                                             |
+| `beginOAuth` refuses the client secret                                                | The app's secret must exist, hold the fields its placeholders name, and be pinned to the token endpoint's origin (D1b).                                                                                                                                             |
 | `The operation timed out.`                                                            | Run the same script once more.                                                                                                                                                                                                                                      |
 | `The RPC receiver does not implement the method "…"`                                  | That name isn't there: check it against `listTools()` or `operations()`, and that you awaited the connection.                                                                                                                                                       |
 | The callback page says `This link is not one the platform issued, or it has expired.` | The consent link works for an hour. Run D2 again and send the new link.                                                                                                                                                                                             |

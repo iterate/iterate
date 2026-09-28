@@ -223,20 +223,18 @@ export function isSecretPlaceholder(value: string): boolean {
   return Boolean(secretPlaceholderOf(value));
 }
 
-/** AN OAUTH CLIENT'S SECRET, OR ITS ID, HELD BY ANOTHER SECRET: a `clientSecret` (or `clientId`)
- *  that is exactly one placeholder names the secret that holds it (resolved by
- *  secret/durable-object.ts `#clientSecretOf`), so a whole app collected as one JSON secret needs
- *  no value in the caller's hands. Null for one given in the clear, or none. A placeholder with
- *  anything around it is refused: it is neither a value nor a reference. */
+/** AN OAUTH CLIENT'S SECRET HELD BY ANOTHER SECRET: a `clientSecret` that is exactly one placeholder
+ *  names the secret that holds it (resolved by secret/durable-object.ts `#clientSecretOf`). Null for
+ *  a client secret given in the clear, or none. A placeholder with anything around it is refused:
+ *  it is neither a value nor a reference. */
 export function clientSecretReferenceOf(
   clientSecret: string,
-  name: "clientSecret" | "clientId" = "clientSecret",
 ): { path: string; field?: string } | null {
   const reference = secretPlaceholderOf(clientSecret);
   if (reference || !clientSecret.includes("getSecret(")) return reference;
   throw codedError(
     "INVALID_INPUT",
-    `secrets: a ${name} that names the secret holding it is one placeholder and nothing else, getSecret("/secrets/<name>") or getSecret("/secrets/<name>", { field: "a.b" })`,
+    'secrets: a clientSecret that names the secret holding it is one placeholder and nothing else, getSecret("/secrets/<name>") or getSecret("/secrets/<name>", { field: "a.b" })',
   );
 }
 

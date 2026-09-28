@@ -205,8 +205,8 @@ export type CollectSecretInput = {
   egress: { urls: string[] };
   description?: string;
   /** One input per field, saved as one JSON secret `{ [name]: value }`, whose parts are then
-   *  `getSecret(path, { field: name })`: an OAuth app's `clientId` and `clientSecret` (which
-   *  `beginOAuth` takes as placeholders), a webhook's `signingSecret`. Without it, one Value. */
+   *  `getSecret(path, { field: name })`: an OAuth app's `clientSecret` (which `beginOAuth` takes as
+   *  a placeholder), a webhook's `signingSecret`. Without it, one Value. */
   fields?: CollectSecretField[];
 };
 

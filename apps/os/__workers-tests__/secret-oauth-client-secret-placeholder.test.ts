@@ -79,7 +79,7 @@ test.for(["client_secret_basic", "client_secret_post"] as const)(
   },
 );
 
-test("a whole OAuth app as one JSON secret, as a collection link with fields saves it: clientId and clientSecret name its fields, the authorize URL carries the id, the exchange and a refresh send both, and a field that is not there is refused before consent", async () => {
+test("an OAuth app collected with fields is one JSON secret: clientSecret names its field, the exchange and a refresh send it; a clientId placeholder is refused, since the id comes back in the authorize URL", async () => {
   const member = await projectWithMember("oauth-placeholder-app");
   const provider = fakeProvider("client-secret-1");
   await member.itx.secrets.set(
@@ -89,13 +89,11 @@ test("a whole OAuth app as one JSON secret, as a collection link with fields sav
   );
   const app = {
     ...OPTIONS,
-    clientId: 'getSecret("/secrets/provider-app", { field: "clientId" })',
     clientSecret: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
     clientAuth: "client_secret_post" as const,
   };
 
   const { authorizationUrl } = await member.itx.secrets.beginOAuth("/secrets/provider", app);
-  expect(new URL(authorizationUrl).searchParams.get("client_id")).toBe(CLIENT_ID);
   const back = await callback(member.cookie, authorizationUrl);
   expect({ status: back.status, text: await back.text() }).toEqual({
     status: 200,
@@ -111,10 +109,11 @@ test("a whole OAuth app as one JSON secret, as a collection link with fields sav
     ],
   });
 
+  // read out of a secret, a client ID would come back in the URL: any secret's value would
   const refused = await member.itx.secrets
     .beginOAuth("/secrets/provider", {
       ...app,
-      clientId: 'getSecret("/secrets/provider-app", { field: "id" })',
+      clientId: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
     })
     .then(
       () => "begun",
@@ -122,18 +121,8 @@ test("a whole OAuth app as one JSON secret, as a collection link with fields sav
         `${errorCode(error)}: ${error instanceof Error ? error.message : String(error)}`,
     );
   expect(refused).toContain(
-    'INVALID_INPUT: secrets: /secrets/provider-app has no string at field "id"',
+    "INVALID_INPUT: secrets.beginOAuth: clientId is the client ID itself, never a getSecret placeholder",
   );
-  const mixed = await member.itx.secrets
-    .beginOAuth("/secrets/provider", {
-      ...app,
-      clientId: `id-${app.clientId}`,
-    })
-    .then(
-      () => "begun",
-      (error: unknown) => String(error),
-    );
-  expect(mixed).toContain("a clientId that names the secret holding it is one placeholder");
 });
 
 test("a client secret placeholder that cannot resolve is refused INVALID_INPUT at beginOAuth, before anyone is sent to consent; a field of a JSON secret pinned to the token endpoint is one that can", async () => {

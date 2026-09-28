@@ -1,5 +1,6 @@
 // The collection link's page (apps/dash/src/routes/collect-secret.$slug.tsx), end to end. The
 // `dash-phone` project runs it again at a phone's width, with touch.
+import { createHmac } from "node:crypto";
 import { expect } from "@playwright/test";
 import { test } from "../test-support/test.ts";
 
@@ -49,7 +50,8 @@ test("a collection link signs the person in, opens without the Dash's shell, sav
     rel: "noopener noreferrer",
   });
   await page.getByText("(dashboard.exa.ai)", { exact: true }).waitFor();
-  expect(await page.locator("img").count()).toBe(0);
+  // the page's logo is its only image: the description's raw <img> is not rendered
+  expect(await page.locator("form img").count()).toBe(0);
   expect(await page.getByRole("link", { name: "Not a link" }).count()).toBe(0);
   await page.getByText("/secrets/exa", { exact: true }).waitFor();
   // the pin is origins, whatever path the requester named
@@ -102,7 +104,7 @@ test("a collection link that names the Secrets page opens the link's own page, w
   await page.getByText("Saved. You can close this tab.", { exact: true }).waitFor();
 });
 
-test("a collection link with fields asks for each part, saves one JSON secret, and beginOAuth takes the app's id and secret from it as placeholders", async ({
+test("a collection link with fields asks for each part and saves one JSON secret whose parts its fields name", async ({
   page,
   helpers,
 }) => {
@@ -131,13 +133,15 @@ test("a collection link with fields asks for each part, saves one JSON secret, a
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await page.getByText("Saved. You can close this tab.", { exact: true }).waitFor();
 
-  // the parts are fields of one secret: beginOAuth names both, and the id reaches the authorize URL
-  const { authorizationUrl } = await fixture.itx.secrets.beginOAuth("/secrets/provider", {
-    authorizationEndpoint: "https://provider.example/authorize",
-    tokenEndpoint: "https://provider.example/token",
-    clientId: 'getSecret("/secrets/provider-app", { field: "clientId" })',
-    clientSecret: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
-    clientAuth: "client_secret_post",
-  });
-  expect(new URL(authorizationUrl).searchParams.get("client_id")).toBe("the-client-id");
+  // the parts are fields of one secret, each checked without reading it: an HMAC keyed with it
+  const holds = async (field: string, value: string) =>
+    fixture.itx.secrets.verifyHmac("/secrets/provider-app", {
+      payload: "probe",
+      signature: createHmac("sha256", value).update("probe").digest("hex"),
+      field,
+    });
+  expect({
+    clientId: await holds("clientId", "the-client-id"),
+    clientSecret: await holds("clientSecret", "the-client-secret"),
+  }).toEqual({ clientId: true, clientSecret: true });
 });
