@@ -21,7 +21,7 @@ shrink the fixture.
   the browser, `/agents/voice/<version>/<device>/<call>` for a voice call. With no `agent`,
   the page shows the first agent the project lists.
 - `view=events` is the raw log and `event=<offset>` the inspected row. `llmRequest=<offset>`
-  and `scriptExecution=<id>` open a trace sheet. Those offsets are where to look first.
+  and `scriptRun=<offset>` open a trace sheet. Those offsets are where to look first.
 - A Dash link (`dash.iterate.com/projects/<slug>`) names only the project. Ask for the
   Agents link, or list the agents (step 2) and match the time of the complaint.
 

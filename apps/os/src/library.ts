@@ -7,10 +7,11 @@
 // THE LIBRARY RULE: a library module takes `itx` and nothing else, so at runtime this file and
 // library/*.ts import only npm packages a userspace worker could bundle too (capnweb,
 // cloudflare:workers, zod), the SDK's pure `iterate/expression` (the codec and the pipelinable
-// handle), `iterate/lib` and `iterate/stream/run` (the run contract and its deadline), the entities'
-// contracts (pure zod, the vocabulary a handle's typed `append` validates against) and each other. Type-only imports are free. Anything else (the
-// stream, the DO, the rest of context/) would make the library un-movable to userspace, which is
-// the whole point of the tier. Lint enforces it (`no-restricted-imports` in .oxlintrc.json).
+// handle), `iterate/lib` and `iterate/stream/run` (the run contract and its deadline), the
+// entities' contracts (pure zod, the vocabulary a handle's typed `append` validates against) and
+// each other. Type-only imports are free. Anything else (the stream, the DO, the rest of context/)
+// would make the library un-movable to userspace, which is the whole point of the tier. Lint
+// enforces it (`no-restricted-imports` in .oxlintrc.json).
 
 import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";

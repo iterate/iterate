@@ -1009,28 +1009,69 @@ test("settles queued user messages before the next LLM request starts", () => {
   expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestOffset: 12 });
 });
 
-test("a request queued input starts while a script still runs joins the script's activity: the script stays running, the input queued", () => {
-  const state = reduceAll([
-    { type: "events.iterate.com/agent/llm-request-requested", offset: 1, payload: { model: "m" } },
+test("a request that input starts while a script still runs moves the input into the transcript and joins the script's activity", () => {
+  const events = [
     {
-      type: "events.iterate.com/agent/llm-request-settled",
-      payload: { requestOffset: 1, result: { status: "succeeded", text: "…" } },
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "do X" },
     },
-    runRequested(3, "async () => longWork()"),
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 2, payload: { model: "m" } },
+    requestSettled(2),
+    runRequested(4, "async () => longWork()"),
     {
       type: "events.iterate.com/agent/context-added",
       payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
     },
-    { type: "events.iterate.com/agent/llm-request-requested", offset: 5, payload: { model: "m" } },
+    { type: "events.iterate.com/agent/llm-request-requested", offset: 6, payload: { model: "m" } },
+    requestSettled(6),
+    {
+      type: "events.iterate.com/agent/web-message-sent",
+      payload: { message: "still working on X", llmRequestOffset: 6 },
+    },
+    runSettled(4),
+  ];
+
+  // The second request answers "and then?": the composer no longer shows it
+  // queued, and the request joins the activity the script keeps running.
+  const answering = reduceAll(events.slice(0, 6));
+  expect(answering.queuedUserMessages).toEqual([]);
+  expect(answering.items).toMatchObject([
+    { kind: "user", text: "do X" },
+    { kind: "user", text: "and then?" },
+  ]);
+  expect(answering.live?.steps).toMatchObject([
+    { kind: "llm", llmRequestOffset: 2, status: "done" },
+    { kind: "code", requestOffset: 4, status: "running" },
+    { kind: "llm", llmRequestOffset: 6, status: "running" },
   ]);
 
-  expect(state).toMatchObject({ items: [] });
-  expect(state.queuedUserMessages).toMatchObject([{ text: "and then?" }]);
-  expect(state.live?.steps).toMatchObject([
-    { kind: "llm", llmRequestOffset: 1, status: "done" },
-    { kind: "code", requestOffset: 3, status: "running" },
-    { kind: "llm", llmRequestOffset: 5, status: "running" },
+  const settled = reduceAll(events);
+  expect(settled.live).toBeNull();
+  expect(settled.items).toMatchObject([
+    { kind: "user", text: "do X" },
+    { kind: "user", text: "and then?" },
+    { kind: "activity", id: "activity-2", status: "done" },
+    { kind: "assistant", text: "still working on X" },
   ]);
+});
+
+test("a settling script flushes its held reply and the input that queued behind it in log order", () => {
+  const state = reduceAll([
+    runRequested(1, "async () => longWork()"),
+    {
+      type: "events.iterate.com/agent/context-added",
+      payload: { role: "user", actor: { type: "user", origin: "web" }, content: "and then?" },
+    },
+    { type: "events.iterate.com/agent/web-message-sent", payload: { message: "X is done" } },
+    runSettled(1),
+  ]);
+
+  expect(state.items).toMatchObject([
+    { kind: "activity", steps: [{ kind: "code", status: "done", success: true }] },
+    { kind: "user", text: "and then?" },
+    { kind: "assistant", text: "X is done" },
+  ]);
+  expect(state).toMatchObject({ deferredAssistantMessages: [], queuedUserMessages: [] });
 });
 
 test("does not append late chunks from an interrupted request into the next turn", () => {

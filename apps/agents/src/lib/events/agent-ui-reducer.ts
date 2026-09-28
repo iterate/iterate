@@ -272,6 +272,8 @@ export type AgentUiFileAttachment = {
 export type AgentUiMessageItem = {
   kind: "user" | "assistant";
   id: string;
+  /** Offset of the event that carried the message. */
+  offset: number;
   text: string;
   timestampMs: number;
   files?: AgentUiFileAttachment[];
@@ -292,7 +294,7 @@ export type AgentUiState = {
   live: AgentUiActivity | null;
   /** Assistant bubbles held until the grouped activity closes. */
   deferredAssistantMessages: AgentUiMessageItem[];
-  /** User messages that landed while the current request was already running. */
+  /** User messages that landed while a step ran and that no request has taken up yet. */
   queuedUserMessages: AgentUiMessageItem[];
   /** Latest agent/summary-updated `activity` text — stamped onto code steps. */
   summaryActivity: string | null;
@@ -396,6 +398,7 @@ function reduceAgentUiEvent(
         return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
+          offset: event.offset,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
@@ -405,6 +408,7 @@ function reduceAgentUiEvent(
         return emitUserMessageItem(state, items, {
           kind: "user",
           id: `user-${event.offset}`,
+          offset: event.offset,
           text,
           ...(files.length === 0 ? {} : { files }),
           timestampMs,
@@ -429,6 +433,7 @@ function reduceAgentUiEvent(
       const item: AgentUiMessageItem = {
         kind: "assistant",
         id: `assistant-${event.offset}`,
+        offset: event.offset,
         text,
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
@@ -437,17 +442,17 @@ function reduceAgentUiEvent(
     }
 
     case "events.iterate.com/agent/llm-request-requested": {
-      // Queued input starts this request: the activity it waited behind closes
-      // and the input follows it — unless a step there still runs (a script
-      // outlives the request that wrote it), which only its settlement ends;
-      // then this request joins that activity and the input stays queued.
+      // The agent builds a request's prompt from the log, so this request
+      // answers every queued input, and that input moves into the transcript.
+      // The activity it waited behind closes first, unless a step there still
+      // runs (a script outlives the request that wrote it): only that step's
+      // settlement ends it, so this request joins the activity and the
+      // script's replies stay deferred until it settles.
       const base =
         state.queuedUserMessages.length === 0 ? state : settleLive(state, timestampMs, items);
-      const ready =
-        !base.live &&
-        (base.deferredAssistantMessages.length > 0 || base.queuedUserMessages.length > 0)
-          ? flushDeferredMessages(base, items)
-          : base;
+      const ready = base.live
+        ? flushQueuedUserMessages(base, items)
+        : flushDeferredMessages(base, items);
       const live = ensureLive(ready, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
@@ -703,13 +708,17 @@ function flushQueuedUserMessages(state: AgentUiState, items: AgentUiItem[]): Age
 }
 
 /**
- * Emit the current turn's assistant output before user messages queued for the
- * next turn. Keeping the two queues separate also prevents assistant bubbles
- * from appearing in the composer's "queued messages" affordance.
+ * Emit the held assistant and user messages in log order, so a reply never
+ * lands above the question before it. The two queues stay separate so that
+ * assistant bubbles never show in the composer's "queued messages" panel.
  */
 function flushDeferredMessages(state: AgentUiState, items: AgentUiItem[]): AgentUiState {
-  items.push(...state.deferredAssistantMessages);
-  return flushQueuedUserMessages({ ...state, deferredAssistantMessages: [] }, items);
+  items.push(
+    ...[...state.deferredAssistantMessages, ...state.queuedUserMessages].sort(
+      (a, b) => a.offset - b.offset,
+    ),
+  );
+  return { ...state, deferredAssistantMessages: [], queuedUserMessages: [] };
 }
 
 // A user message while steps are still running must not archive those steps
