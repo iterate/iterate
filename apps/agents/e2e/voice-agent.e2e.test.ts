@@ -90,8 +90,8 @@ deployedOnly(
     });
     const { received, ai } = call;
     try {
-      // The agent's model must execute a script in the conversation's real sandbox. Audio alone
-      // missed the regression where the sandbox redirect was rejected as app-written builtins.
+      // The agent's model must execute a script in the conversation's real sandbox: audio alone
+      // does not prove the sandbox's redirect is admitted for the call's loaded code.
       const clockStarted = Date.now();
       const clock = await call.ask(CLOCK);
       const [, path, time] = /^The sandbox at (\S+) read the clock at (\S+)\.$/.exec(clock) ?? [];
@@ -111,8 +111,9 @@ deployedOnly(
           { role: "system", content: expect.stringContaining("itx.clients.zectrix_note4") },
         ]),
       );
+      // The hand-over came through the call's own `itx.agents`, so it reads as sent from there.
       expect(firstRequest.filter((message) => message.role === "user")).toEqual([
-        { role: "user", content: `Person: ${CLOCK}` },
+        { role: "user", content: `[from ${call.streamPath}] Person: ${CLOCK}` },
       ]);
       const log = await readAll(call.itx);
       expect(
@@ -159,12 +160,10 @@ deployedOnly(
       };
       // THE WAIT IS FOR PROGRESS, a step at a time (docs/testing.md: waits are progress-based): the
       // edit is eight model turns and seven sandbox scripts in a row, each several Durable Object
-      // hops, and the platform delivers some hops late. In the 2026-09-24 soaks (Workers traces) a
-      // subrequest between two contexts of one project, both in IAD, reached its target 3.1–3.2 s
-      // after it left, again and again in one run; three runs of sixty timed out while still
-      // stepping, 3.4–8.9 s a step, with every step answered. So 20 s bounds A STEP — an edit that
-      // stops still fails 20 s after its last step, naming it — and the whole edit has a backstop of
-      // 40 s (the slowest of those runs needed about 30).
+      // hops, and a hop between two contexts of one project can take 3 s (3.4–8.9 s a step in the
+      // slowest runs, Workers traces, 2026-09-24). So 20 s bounds A STEP — an edit that stops still
+      // fails 20 s after its last step, naming it — and the whole edit has a backstop of 40 s (the
+      // slowest measured edit needed about 30).
       const stepMs = 20_000;
       const wholeMs = 40_000;
       const steps = (events: typeof received) =>

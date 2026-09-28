@@ -1326,10 +1326,10 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
     messageAgent: async (words) => {
       const { path } = await this.#identity();
       return this.withItx((itx) =>
-        // The root's collection, so the words read as the person's, with no `[from …]` sender.
-        // Voice installs only beside the agents app (install.ts refuses otherwise), and the press
-        // created this context's agent through it (worker.ts), so the root answers `agents`.
-        (itx.cd("/") as IterateContextApiWith<"agents">).agents.get(path).message(words),
+        // This context's own `itx.agents` rule, which the press's `itx.agents.create` wrote
+        // (worker.ts): loaded code reaches no collection above it, so the agent reads the words as
+        // sent from this context, `[from <path>]`.
+        (itx as IterateContextApiWith<"agents">).agents.get(path).message(words),
       );
     },
   });
