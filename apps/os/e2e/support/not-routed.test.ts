@@ -3,10 +3,12 @@
 // then the Worker's. Which answers are Cloudflare's is platform-retry.test.ts's table.
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
+import { createServer as createHttp2Server } from "node:http2";
 import type { Socket } from "node:net";
 import { listenOnFetchSafePort } from "@iterate-com/shared/test-support/fetch-safe-port";
 import {
   Agent,
+  buildConnector,
   Client,
   fetch as undiciFetch,
   getGlobalDispatcher,
@@ -137,6 +139,36 @@ test("resend: a WebSocket upgrade answered with the not-found page opens on a fr
       { method: "GET", path: "/api", socket: 1 },
     ],
     connections: [edge.url("/api").replace(/\/api$/, "")],
+  });
+});
+
+test("resend: a WebSocket upgrade refused with the page over HTTP/2 opens on an HTTP/1.1 connection to another server", async () => {
+  await using h2 = await fakeHttp2Edge();
+  await using edge = await fakeEdge(["worker"]);
+  const agent = new Agent({ allowH2: true, useH2c: true });
+  onTestFinished(() => agent.close());
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const dispatcher = agent.compose(
+    resendNotRoutedYet({
+      pause: async () => {},
+      // the resend's connection dials the other server, whatever its origin says
+      connect: (origin) =>
+        new Client(origin, {
+          allowH2: false,
+          connect: (options, callback) => dial({ ...options, port: edge.port }, callback),
+        }),
+    }),
+  );
+  const socket = new WebSocket(h2.url("/api").replace("http:", "ws:"), { dispatcher });
+  onTestFinished(() => socket.close());
+  const received = await new Promise<string>((resolve) => {
+    socket.addEventListener("message", (event) => resolve(`message: ${event.data}`));
+    socket.addEventListener("error", (event) => resolve(`error: ${event.message}`));
+  });
+  expect({ received, h2: h2.streams, h1: edge.requests }).toMatchObject({
+    received: "message: hello",
+    h2: [{ ":method": "CONNECT", ":protocol": "websocket", ":path": "/api" }],
+    h1: [{ method: "GET", path: "/api", socket: 0 }],
   });
 });
 
@@ -330,6 +362,7 @@ async function fakeEdge(answers: Answer[]) {
   const port = await listenOnFetchSafePort(server);
   return {
     requests,
+    port,
     url: (path: string) => `http://127.0.0.1:${port}${path}`,
     async [Symbol.asyncDispose]() {
       for (const socket of upgraded) socket.destroy();
@@ -338,3 +371,26 @@ async function fakeEdge(answers: Answer[]) {
     },
   };
 }
+
+/** One cleartext HTTP/2 server that allows WebSockets over extended CONNECT (RFC 8441) and refuses
+ *  every stream with Cloudflare's page, recording each stream's pseudo-headers. */
+async function fakeHttp2Edge() {
+  const streams: Record<string, string | string[] | undefined>[] = [];
+  const server = createHttp2Server({ settings: { enableConnectProtocol: true } });
+  server.on("stream", (stream, headers) => {
+    streams.push(headers);
+    const { status, headers: answerHeaders, body } = ANSWERS.page;
+    stream.respond({ ":status": status, ...answerHeaders });
+    stream.end(body);
+  });
+  const port = await listenOnFetchSafePort(server);
+  return {
+    streams,
+    url: (path: string) => `http://127.0.0.1:${port}${path}`,
+    async [Symbol.asyncDispose]() {
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+const dial = buildConnector({});

@@ -130,8 +130,9 @@ type NotRoutedYet = { message: string; ray: string | undefined };
  *  but the start of the request (once); then everything, as it comes. It settles with the
  *  not-found Cloudflare answered, or with nothing once `downstream` has had the answer, an upgrade
  *  or an error. The page is known by its header, a plain answer of a few bytes once its last byte
- *  is read; either is then abandoned, which drops the connection it came on, so no later request
- *  of the pool goes to that server. */
+ *  is read; either is then abandoned. Over HTTP/1.1 that drops the connection it came on, so no
+ *  later request of the pool goes to that server; over HTTP/2 it resets the stream, and a later
+ *  request on the session that meets the server again is sent again the same way. */
 function attemptHandler(input: {
   downstream: Dispatcher.DispatchHandler;
   controller: DownstreamController;
@@ -169,6 +170,17 @@ function attemptHandler(input: {
       input.start(context);
     },
     onRequestUpgrade(_attempt, statusCode, headers, socket) {
+      // Over HTTP/2 a refused WebSocket upgrade arrives here with its status (RFC 8441), and undici
+      // wants the verdict before this returns: known by the page's header alone, its stream closed.
+      if (input.resendable && isNotRoutedYet({ status: statusCode, headers })) {
+        state = "not-routed";
+        const ray = headers["cf-ray"];
+        socket.destroy();
+        return settled({
+          message: `${statusCode} x-preview-user-error`,
+          ray: typeof ray === "string" ? ray : undefined,
+        });
+      }
       pass();
       downstream.onRequestUpgrade?.(controller, statusCode, headers, socket);
     },
