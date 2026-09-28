@@ -2128,7 +2128,7 @@ static size_t health_json(char *out, size_t capacity) {
       /* Opening inputs and capture-gate state. */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,"
       "\"gateOpen\":%s,\"activationStartedMs\":%" PRIu64
-      ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
+      ",\"firstMicAppendOffsetMs\":%" PRId64
       ",\"uptimeMs\":%" PRIu64,
       iterate_kit_itx_transport_state_name(transport.state),
       iterate_kit_voice_stream_state_name(runtime.voice_stream->state),
@@ -2152,7 +2152,6 @@ static size_t health_json(char *out, size_t capacity) {
           ? INT64_C(-1)
           : (int64_t)iterate_kit_voice_elapsed_ms(
                 runtime.first_mic_append_at_ms, runtime.activation_started_at_ms),
-      now,
       now);
   if (written <= 0 || (size_t)written >= capacity) return 0U;
   used = (size_t)written;
