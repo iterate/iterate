@@ -2,16 +2,9 @@ import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import { AppShell } from "@iterate-com/ui/components/app-shell";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldLabel } from "@iterate-com/ui/components/field";
+import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 
 // Notes edits a file in the config repo through a project workspace.
@@ -22,26 +15,17 @@ const FILE = `${REPO}/notes/log.md`;
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
-    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    // the URL names the project by slug; one this sign-in lacks → sign in again
+    const project = projects.find((item) => item.slug === params.slug);
     if (!project) return context.signInFor(params.slug);
     // the project's root context, pipelined: the calls below ride it before it has resolved
     using itx = context.api.projects.get(project.id);
-    await Promise.all([
-      itx.invoke(["itx", "workspaces", ["create", WORKSPACE]]),
-      itx.invoke(["itx", "repos", ["create", REPO]]),
-    ]);
+    await Promise.all([itx.workspaces.create(WORKSPACE), itx.repos.create(REPO)]);
     // Both must exist before reading: the workspace discovers mounts from the repo catalog.
-    const [note, tip] = await Promise.all([
-      itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["readFile", FILE]]),
-      itx.invoke(["itx", "repos", ["get", REPO], ["tip"]]),
-    ]);
-    return {
-      projects,
-      project,
-      note: z.string().nullable().parse(note) || "",
-      tip: z.string().nullable().parse(tip),
-    };
+    using workspace = itx.workspaces.get(WORKSPACE);
+    using repo = itx.repos.get(REPO);
+    const [note, tip] = await Promise.all([workspace.readFile(FILE), repo.tip()]);
+    return { projects, project, note: note || "", tip };
   },
   component: NotesPage,
 });
@@ -51,31 +35,18 @@ function NotesPage() {
   const { info, basePath } = Route.useRouteContext();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
-    <AppShell
+    <ProjectAppShell
       app="Notes"
       projects={data.projects}
-      activeProjectId={data.project.id}
-      projectHref={(item) => `${basePath}/projects/${item.slug}`}
-      header={
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:inline-flex">Notes</BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:inline-flex" />
-            <BreadcrumbItem>
-              <BreadcrumbPage className="font-mono">{data.project.slug}</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      }
+      project={data.project}
+      basePath={basePath}
       account={info.principal}
       locationKey={href}
     >
       <Editor key={data.project.id} project={data.project.id} initial={data.note} tip={data.tip} />
-    </AppShell>
+    </ProjectAppShell>
   );
 }
-
-const Commit = z.object({ commitOid: z.string().nullable(), changedPaths: z.array(z.string()) });
 
 /** The project facet's live state, the one field this page reads: where the project's own creation
  *  stands (null until `project/create-requested` lands). */
@@ -111,15 +82,9 @@ function Editor({
     setStatus("Committing…");
     try {
       using itx = await api.projects.get(project);
-      await itx.invoke(["itx", "workspaces", ["get", WORKSPACE], ["writeFile", FILE, note]]);
-      const committed = Commit.parse(
-        await itx.invoke([
-          "itx",
-          "workspaces",
-          ["get", WORKSPACE],
-          ["gitCommit", { message: "notes: save", scope: REPO }],
-        ]),
-      );
+      using workspace = itx.workspaces.get(WORKSPACE);
+      await workspace.writeFile(FILE, note);
+      const committed = await workspace.gitCommit({ message: "notes: save", scope: REPO });
       // A save that changes nothing commits nothing: the repo answers with its tip and no paths.
       setStatus(
         committed.changedPaths.length > 0 && committed.commitOid

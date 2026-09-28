@@ -3,17 +3,10 @@ import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useFacetLiveState } from "iterate/react";
-import { AppShell } from "@iterate-com/ui/components/app-shell";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
 import { publishedVersion } from "@iterate-com/agents/install";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
@@ -33,8 +26,8 @@ type VoiceLiveView = z.infer<typeof VoiceLiveView>;
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
-    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    // the URL names the project by slug; one this sign-in lacks → sign in again
+    const project = projects.find((item) => item.slug === params.slug);
     if (!project) return context.signInFor(params.slug);
     // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule. One that
     // exists but fails is Call's error to report, never a reason to install over it.
@@ -59,22 +52,10 @@ function CallPage() {
   const { projects, project, voice } = Route.useLoaderData();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
-    <AppShell
+    <ProjectAppShell
       app="Voice"
       projects={projects}
-      activeProjectId={project.id}
-      projectHref={(item) => `/projects/${item.slug}`}
-      header={
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:inline-flex" />
-            <BreadcrumbItem>
-              <BreadcrumbPage className="font-mono">{project.slug}</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      }
+      project={project}
       account={info.principal}
       locationKey={href}
     >
@@ -83,7 +64,7 @@ function CallPage() {
       ) : (
         <InstallVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
       )}
-    </AppShell>
+    </ProjectAppShell>
   );
 }
 
