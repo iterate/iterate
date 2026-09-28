@@ -1817,8 +1817,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // WHO ASKED, beyond what the append stamps (`source.principal`): the context the call started
       // at when it hopped here, and whether loaded code asked — loaded code carries no principal.
       const { path: callerPath, app } = deps.caller();
-      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts); the answer leaves
-      // once it is durable (the output gate), and the reset is the DO's, after the answer.
+      // THE FACT FIRST, through `append` (attributed, pause-exempt — stream.ts); the reset is the
+      // DO's, after the answer. A Workers-RPC caller's answer leaves once the fact is durable (the
+      // output gate); an in-process caller has it at once, and only what it sends out waits there.
       const [aborted] = await append({
         type: "events.iterate.com/itx/aborted",
         payload: { reason, callerPath, app },

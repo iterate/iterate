@@ -929,7 +929,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  after, when the gate has let the answer out. Nor can the timer keep an idle actor resident: the
    *  actor it fires in is the one it resets. Every OTHER call in flight here rejects with
    *  `message`. */
-  #abortAfterTheAnswer(message: string): void {
+  #abortAfterTheAnswer(message: string) {
     void this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.sync();
       setTimeout(() => this.ctx.abort(message), 0);
