@@ -6,13 +6,19 @@ const versions = {
   voice: "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@abc1234",
 };
 
-test("a project without voice gets the agents and voice folders committed, installed from those commits", async () => {
+test("a project without voice gets the agents and voice folders in one commit, installed from it", async () => {
   const root = project();
   expect(await ensureVoiceAgent(root, versions)).toBe("ready");
   expect(root.commits.map((commit) => commit.changes.map((change) => change.path))).toEqual([
-    ["agents/package.json", "agents/index.ts", "package.json"],
-    ["voice/package.json", "voice/worker.ts", "package.json"],
+    [
+      "agents/package.json",
+      "agents/index.ts",
+      "voice/package.json",
+      "voice/worker.ts",
+      "package.json",
+    ],
   ]);
+  expect(root).toMatchObject({ modulesReadAt: ["commit-1", "commit-1"] });
   expect(root.files["voice/package.json"]).toContain(versions.voice);
   // the root lists both packages, so `tsc` over the repo resolves the folders' imports
   expect(JSON.parse(root.files["package.json"]!)).toMatchObject({
@@ -46,6 +52,20 @@ test("a project without voice gets the agents and voice folders committed, insta
   expect(root.kv.values["voice/screen-font.css"]).toContain("Iterate Pixel");
 });
 
+test("the agents app's first load runs beside voice's health check, not before it", async () => {
+  const root = project();
+  // the upgrade settles only once health() has been asked: installing them one after the other
+  // never gets there
+  const { promise: healthAsked, resolve } = Promise.withResolvers<void>();
+  root.voice.health.mockImplementation(async () => {
+    resolve();
+    return { ok: true };
+  });
+  root.invoke.mockImplementation(() => healthAsked);
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
+  expect(root.invoke).toHaveBeenCalledWith(["itx", "agents", ["upgrade"]]);
+});
+
 test("a voice/ folder the project already has is installed as it is, never overwritten", async () => {
   const root = project();
   const own = {
@@ -55,8 +75,26 @@ test("a voice/ folder the project already has is installed as it is, never overw
   root.files["voice/package.json"] = own["package.json"];
   root.files["voice/worker.ts"] = own["worker.ts"];
   expect(await ensureVoiceAgent(root, versions)).toBe("ready");
-  expect(root.commits.map((commit) => commit.changes[0]!.path)).toEqual(["agents/package.json"]);
+  expect(root.commits.map((commit) => commit.changes.map((change) => change.path))).toEqual([
+    ["agents/package.json", "agents/index.ts", "package.json"],
+  ]);
   expect(JSON.parse(root.kv.values["voice/runtime"]!)).toMatchObject({ source: own });
+});
+
+test("a project with the agents app gets only the voice folder, and its agents are left as they are", async () => {
+  const root = project();
+  await root.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.agents", target: "own-agents" },
+  });
+  root.append.mockClear();
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
+  expect(root.commits.map((commit) => commit.changes.map((change) => change.path))).toEqual([
+    ["voice/package.json", "voice/worker.ts", "package.json"],
+  ]);
+  expect(root.processors.enable).not.toHaveBeenCalled();
+  expect(root.invoke).not.toHaveBeenCalled();
+  expect(root.append.mock.calls.map(([event]) => event.payload.match)).toEqual(["itx.voice"]);
 });
 
 test("a project without an OpenAI key and none given is asked for one, and nothing is installed", async () => {
@@ -91,6 +129,7 @@ function project() {
     "package.json": `${JSON.stringify({ devDependencies: { typescript: "^7.0.2" } }, null, 2)}\n`,
   };
   const commits: { message: string; changes: { path: string; content: string }[] }[] = [];
+  const modulesReadAt: (string | undefined)[] = [];
   const rules: Record<string, unknown> = {};
   const values: Record<string, string> = {};
   const append = vi.fn(async (event: any) => {
@@ -116,20 +155,27 @@ function project() {
         return { ok: true as const };
       }),
     },
+    modulesReadAt,
     repos: {
       get: () => ({
+        listFiles: async () => ({
+          commitOid: commits.length ? `commit-${commits.length}` : "seed",
+          paths: Object.keys(files),
+        }),
         readFile: async (path: string) => files[path] ?? null,
         commitFiles: async (input: { message: string; changes: any[] }) => {
           commits.push(input);
           for (const change of input.changes) files[change.path] = change.content;
           return { commitOid: `commit-${commits.length}`, changedPaths: [] };
         },
-        modules: async ({ dir }: { dir?: string; commitOid?: string }) =>
-          Object.fromEntries(
+        modules: async ({ dir, commitOid }: { dir?: string; commitOid?: string }) => {
+          modulesReadAt.push(commitOid);
+          return Object.fromEntries(
             Object.entries(files)
               .filter(([path]) => path.startsWith(`${dir}/`))
               .map(([path, content]) => [path.slice(dir!.length + 1), content]),
-          ),
+          );
+        },
       }),
     },
     append,

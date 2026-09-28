@@ -59,11 +59,63 @@ export function rootManifestListing(
   return `${JSON.stringify({ ...parsed, devDependencies }, null, 2)}\n`;
 }
 
-/** Install the app into a project root from its source: a folder's files by name, as
+/** An app the config repo holds as a folder of its own: its files (`agentsFolder`, …) under `dir`,
+ *  and the package the root manifest lists at `version`. */
+export type AppFolder = {
+  dir: string;
+  folder: Record<string, string>;
+  packageName: string;
+  version: string;
+};
+
+/** THE CONFIG REPO'S PART OF AN INSTALL: one read of `main`, then at most ONE commit — each folder
+ *  the repo lacks (no `<dir>/package.json`), and the root package.json listing its package
+ *  (`rootManifestListing`); a folder the repo has is kept as it is, its listing too. Answers the
+ *  commit to read the apps' sources at (`repo.modules({ dir, commitOid })`): the new one, or the tip
+ *  that was read. Every read and write of `main` is a git exchange with Artifacts, the slowest calls
+ *  an install makes, so installing two apps reads and commits once, not once per app. */
+export async function commitAppFolders(
+  repo: Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles">,
+  apps: AppFolder[],
+): Promise<string | undefined> {
+  const { commitOid: tip, paths } = await repo.listFiles();
+  const missing = apps.filter((app) => !paths.includes(`${app.dir}/package.json`));
+  if (!missing.length) return tip || undefined;
+  const before =
+    tip && paths.includes("package.json")
+      ? await repo.readFile("package.json", { commitOid: tip })
+      : null;
+  let manifest = before;
+  for (const app of missing)
+    manifest = rootManifestListing(manifest, app.packageName, app.version) ?? manifest;
+  const { commitOid } = await repo.commitFiles({
+    message: `Install ${missing.map((app) => app.packageName).join(" and ")}`,
+    changes: [
+      ...missing.flatMap((app) =>
+        Object.entries(app.folder).map(([name, content]) => ({
+          path: `${app.dir}/${name}`,
+          content,
+        })),
+      ),
+      ...(manifest && manifest !== before ? [{ path: "package.json", content: manifest }] : []),
+    ],
+  });
+  return commitOid || undefined;
+}
+
+/** The agents app as `commitAppFolders` commits it, pinning `version`. */
+export const agentsApp = (version: string): AppFolder => ({
+  dir: "agents",
+  folder: agentsFolder(version),
+  packageName: "@iterate-com/agents",
+  version,
+});
+
+/** Mount the app in a project root from its source: a folder's files by name, as
  *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
- *  classes). Installing the same source again changes nothing; a new source is an upgrade, and every
- *  agent is rebound to it. */
-export async function installAgents(itx: InstallTarget, source: Record<string, string>) {
+ *  classes) — the runtime every agent's facet loads, the `agents` processor on `/` and the
+ *  `itx.agents` rule, without loading it. `installAgents` is this and then `upgradeAgents`. */
+export async function publishAgents(itx: InstallTarget, source: Record<string, string>) {
   const { path } = await itx.whoami();
   if (path !== "/") throw new Error("Install agents at the project root");
   // The runtime's name is its content hash: every facet it hosts names it (a processor row shows
@@ -94,24 +146,25 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
         "The project's installed agents app: list(), create(path), get(path).message(text), delete(path)",
     },
   });
+}
+
+/** Rebind every agent to the runtime the project has mounted: its first call, so it loads the app
+ *  (the loader resolves its packages, from esm.sh the first time a dependency set is seen). */
+export async function upgradeAgents(itx: Pick<IterateContextApi, "invoke">) {
   await itx.invoke(["itx", "agents", ["upgrade"]]);
 }
 
-/** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or
- *  `agentsFolder(version)` committed there first when the repo has none, then installed. A project
- *  that has the rule keeps its own. */
-export async function ensureAgents(
-  project: InstallTarget & {
-    rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
-    repos: { get(path: string): Pick<RepoHandle, "readFile" | "commitFiles" | "modules"> };
-    waitForEvent: IterateContextApi["waitForEvent"];
-  },
-  version: string,
-) {
-  if ((await project.rewriteRules.get("itx.agents"))?.target) return;
-  // A project created a moment ago may still be seeding its config repo: the project's creation
-  // creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
-  // seed. Install once creation has settled (at once for a project created earlier).
+/** Install the app into a project root from its source (`publishAgents`), then rebind every agent to
+ *  it. Installing the same source again changes nothing; a new source is an upgrade. */
+export async function installAgents(itx: InstallTarget, source: Record<string, string>) {
+  await publishAgents(itx, source);
+  await upgradeAgents(itx);
+}
+
+/** A project created a moment ago may still be seeding its config repo: the project's creation
+ *  creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
+ *  seed. Resolves once creation has settled (at once for a project created earlier). */
+export async function configRepoSettled(project: Pick<IterateContextApi, "waitForEvent">) {
   const settled = await project.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
     afterOffset: 0,
@@ -119,25 +172,24 @@ export async function ensureAgents(
   });
   if (settled.type !== "events.iterate.com/project/created")
     throw new Error("The project's creation failed, so there is no config repo to install into");
+}
+
+/** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or
+ *  `agentsFolder(version)` committed there first when the repo has none (`commitAppFolders`), then
+ *  installed. A project that has the rule keeps its own. */
+export async function ensureAgents(
+  project: InstallTarget & {
+    rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
+    repos: {
+      get(path: string): Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles" | "modules">;
+    };
+    waitForEvent: IterateContextApi["waitForEvent"];
+  },
+  version: string,
+) {
+  if ((await project.rewriteRules.get("itx.agents"))?.target) return;
+  await configRepoSettled(project);
   const repo = project.repos.get("/repos/config");
-  const root = rootManifestListing(
-    await repo.readFile("package.json"),
-    "@iterate-com/agents",
-    version,
-  );
-  const commit = (await repo.readFile("agents/package.json"))
-    ? undefined
-    : await repo.commitFiles({
-        message: "Install the agents app",
-        changes: [
-          ...Object.entries(agentsFolder(version)).map(([name, content]) => ({
-            path: `agents/${name}`,
-            content,
-          })),
-          ...(root ? [{ path: "package.json", content: root }] : []),
-        ],
-      });
-  // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
-  const commitOid = commit?.commitOid ?? undefined;
+  const commitOid = await commitAppFolders(repo, [agentsApp(version)]);
   await installAgents(project, await repo.modules({ dir: "agents", commitOid }));
 }
