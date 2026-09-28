@@ -6,6 +6,11 @@
 import { e2eRowTimeoutCeilingMs } from "@iterate-com/shared/test-support/e2e-policy";
 import { afterAll, afterEach, beforeEach, inject } from "vitest";
 import { disposeFileSessions, disposeSessions, enterTestTransports } from "./client.ts";
+import { resendNotRoutedYetInThisProcess } from "./not-routed.ts";
+
+// A request Cloudflare answered itself, on a hostname it does not route everywhere yet, is sent
+// again on a fresh connection (support/not-routed.ts).
+resendNotRoutedYetInThisProcess();
 
 process.env.WORKER_BASE_URL = inject("workerBaseUrl");
 process.env.APP_CONFIG_SECRETS__ADMIN_BEARER = inject("adminBearer");

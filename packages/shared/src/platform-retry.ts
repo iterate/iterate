@@ -117,6 +117,31 @@ export function httpFailureKind(answer: unknown): FailureKind {
   return failureKind(answer);
 }
 
+/**
+ * Whether an answer is CLOUDFLARE'S OWN NOT-FOUND FOR A workers.dev HOSTNAME THE SERVER DOES NOT
+ * ROUTE YET: a failure of kind `disconnected`, since the request never reached a Worker, which makes
+ * it safe to send again whatever its method. A brand-new Worker's hostname reaches Cloudflare's
+ * servers one by one, and a connection that lands on one that has not learned it yet gets one of
+ * three answers only Cloudflare gives. The first is a 404 with `x-preview-user-error: true`, the
+ * "There is nothing here yet" page, when the hostname also reads as `<alias>-<worker>`, a preview URL
+ * of an existing Worker with preview URLs on (every per-commit deployment's does:
+ * `main-7a33b64-os` of `os`). The others are a 404 whose body is `error code: 1042` and a 500 whose
+ * body is `error code: 1104`. The page decides by its header, so `body` is read only for a small
+ * plain answer; a Worker's own 404 or 500 is never one of these.
+ */
+export function isNotRoutedYet(answer: {
+  status: number;
+  headers: Record<string, string | string[] | undefined>;
+  body?: string;
+}): boolean {
+  if (answer.status === 404 && answer.headers["x-preview-user-error"] === "true") return true;
+  const code = answer.body?.trim();
+  return (
+    (answer.status === 404 && code === "error code: 1042") ||
+    (answer.status === 500 && code === "error code: 1104")
+  );
+}
+
 /** What a script's log line says about a failed HTTP call: its status (`network` when no answer
  *  came) and its message. */
 export function httpFailureFields(error: unknown) {
@@ -208,7 +233,7 @@ export async function retryPlatformFailures<T>(
       if (repeats) {
         const askedMs = error instanceof HttpAnswerError ? (error.retryAfterMs ?? 0) : 0;
         const retryInMs = Math.max(
-          Math.round(delayMs / 2 + (Math.random() * delayMs) / 2),
+          jitteredMs(delayMs),
           Math.min(askedMs, Math.max(...schedule.delaysMs)),
         );
         logPlatformFailure(options.area, "retry", kind, {
@@ -224,6 +249,10 @@ export async function retryPlatformFailures<T>(
     }
   }
 }
+
+/** A schedule's wait, jittered down to between half and all of itself (`Schedule`). */
+export const jitteredMs = (delayMs: number) =>
+  Math.round(delayMs / 2 + (Math.random() * delayMs) / 2);
 
 /** `ms` of waiting, cut short when `signal` aborts. */
 function pause(ms: number, signal: AbortSignal | undefined) {

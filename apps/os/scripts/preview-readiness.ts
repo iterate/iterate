@@ -24,9 +24,16 @@
 // its edge (the id `/version` answers with), its own context and another brand-new one run, and
 // misses (`stage: "version"`) when any is not the deploy's: the gate passes once `consecutive`
 // rounds in a row run the deploy's version everywhere they look.
+//
+// A BRAND-NEW HOSTNAME reaches Cloudflare's servers one by one, and a probe that lands on one it has
+// not reached yet gets Cloudflare's own not-found, which its miss names (`isNotRoutedYet`). The
+// rounds sample a few dozen connections, so a rare server still behind once they pass is met by the
+// suites' thousands, whose transport sends those requests again (e2e/support/not-routed.ts).
 import { randomBytes, randomUUID } from "node:crypto";
+import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
+import { isNotRoutedYet } from "@iterate-com/shared/platform-retry";
 import type { IterateApi } from "iterate/api";
 import { WebSocket } from "undici";
 
@@ -140,7 +147,11 @@ async function probe(url: string, adminSecret: string, version: string): Promise
     const socketUrl = new URL("/api", url);
     const upgrade = await upgradeStatus(socketUrl, abandon.signal);
     if (upgrade.status !== 101)
-      throw new Error(`GET /api upgrade answered ${upgrade.status}: ${upgrade.body}`);
+      throw new Error(
+        isNotRoutedYet(upgrade)
+          ? `GET /api upgrade answered Cloudflare's own not-found (${upgrade.status}, cf-ray ${upgrade.headers["cf-ray"]}): the server it reached does not route this hostname yet`
+          : `GET /api upgrade answered ${upgrade.status}: ${upgrade.body}`,
+      );
     at.stage = "session";
     socketUrl.protocol = "wss:";
     socket = new WebSocket(socketUrl);
@@ -191,10 +202,10 @@ async function probe(url: string, adminSecret: string, version: string): Promise
 
 /** The upgrade of `url` as the edge answers it, on a raw HTTPS request of its own connection (a
  *  WebSocket client's shape — never a pooled keep-alive socket): 101 (the socket is dropped at
- *  once), or the status and the first 300 characters of the body. `signal` abandons it (a probe
- *  past its budget leaves no socket open behind it). */
+ *  once), or the status, the headers and the first 300 characters of the body. `signal` abandons
+ *  it (a probe past its budget leaves no socket open behind it). */
 function upgradeStatus(url: URL, signal: AbortSignal) {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+  return new Promise<UpgradeAnswer>((resolve, reject) => {
     const req = request(url, {
       agent: false,
       signal,
@@ -207,20 +218,26 @@ function upgradeStatus(url: URL, signal: AbortSignal) {
     });
     req.on("upgrade", (response, socket) => {
       socket.destroy();
-      resolve({ status: response.statusCode!, body: "" });
+      resolve({ status: response.statusCode!, headers: response.headers, body: "" });
     });
     req.on("response", (response) => {
       let body = "";
       response.setEncoding("utf8");
       response.on("data", (chunk: string) => (body += chunk));
       response.on("end", () =>
-        resolve({ status: response.statusCode!, body: body.replaceAll(/\s+/g, " ").slice(0, 300) }),
+        resolve({
+          status: response.statusCode!,
+          headers: response.headers,
+          body: body.replaceAll(/\s+/g, " ").slice(0, 300),
+        }),
       );
     });
     req.on("error", reject);
     req.end();
   });
 }
+
+type UpgradeAnswer = { status: number; headers: IncomingHttpHeaders; body: string };
 
 function withTimeout<T>(promise: Promise<T>, ms: number) {
   let timer: NodeJS.Timeout | undefined;
