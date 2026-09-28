@@ -1034,11 +1034,13 @@ test("a request that input starts while a script still runs moves the input into
   // The second request answers "and then?": the composer no longer shows it
   // queued, and the request joins the activity the script keeps running.
   const answering = reduceAll(events.slice(0, 6));
-  expect(answering.queuedUserMessages).toEqual([]);
-  expect(answering.items).toMatchObject([
-    { kind: "user", text: "do X" },
-    { kind: "user", text: "and then?" },
-  ]);
+  expect(answering).toMatchObject({
+    queuedUserMessages: [],
+    items: [
+      { kind: "user", text: "do X" },
+      { kind: "user", text: "and then?" },
+    ],
+  });
   expect(answering.live?.steps).toMatchObject([
     { kind: "llm", llmRequestOffset: 2, status: "done" },
     { kind: "code", requestOffset: 4, status: "running" },
