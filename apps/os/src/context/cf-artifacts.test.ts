@@ -321,6 +321,46 @@ test("after a platform failure, a create that landed all the same answers create
   ]);
 });
 
+test("a create Artifacts answers 10400 after 13.5 s, holding the name 7 s more, ends created: the taken name's wait starts when the name is found taken", async () => {
+  // Artifacts' answers on the preview account (measured 2026-09-28): the create answers 10400 after
+  // ~13.5 s, the retry's create finds the name taken, no repo by it reads, and the name comes free
+  // 3–13 s after the 10400.
+  const recording = recordingNamespace();
+  let heldUntil = 0;
+  const slowAndFailing: ArtifactsNamespace = {
+    ...recording.namespace,
+    create: async (name) => {
+      if (heldUntil === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 13_500));
+        heldUntil = Date.now() + 7_000;
+        recording.calls.push({ method: "create (failed)", name });
+        throw new Error("An internal error occurred.");
+      }
+      if (Date.now() < heldUntil) {
+        recording.calls.push({ method: "create (taken)", name });
+        throw new Error(`repo already exists: ${name}`);
+      }
+      return recording.namespace.create(name);
+    },
+  };
+  const outcome = await settle(() => scoped(slowAndFailing, "prj_a").create("/repos/config"));
+  expect(outcome).toMatchObject({
+    value: { created: true },
+    retries: [{ verb: "create", message: "An internal error occurred." }],
+    logs: [{ event: "cfartifacts.create-waited-for-taken-name", outcome: "created" }],
+  });
+  expect(recording.calls.map((call) => call.method)).toEqual([
+    "create (failed)",
+    "create (taken)", // the retry, a second later
+    "get", // not found: no repo by the name
+    "create (taken)",
+    "get",
+    "create (taken)",
+    "get",
+    "create", // the name came free, 7 s after the 10400
+  ]);
+});
+
 test("a create answered anything but 'already exists' surfaces, and no one retries", async () => {
   const refusing: ArtifactsNamespace = {
     ...recordingNamespace().namespace,

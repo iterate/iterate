@@ -36,11 +36,14 @@ test(
     const slug = freshDnsSafeProjectSlug("serve-localhost");
     const projectId = await registerProject(slug);
     const itx = session().authenticate(adminCredentials()).projects.get(projectId);
-    await itx.waitForEvent({
-      type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-      afterOffset: 0,
-      timeoutMs: 60_000,
-    });
+    // born, or its failed birth names why (the tunnel's host would answer "no site yet" instead)
+    expect(
+      await itx.waitForEvent({
+        type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+        afterOffset: 0,
+        timeoutMs: 60_000,
+      }),
+    ).toMatchObject({ type: "events.iterate.com/project/created" });
     const child = execFile(
       process.execPath,
       [example, new URL(workerUrl("/")).origin, slug, "web", String(local.port)],
