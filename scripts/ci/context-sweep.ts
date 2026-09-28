@@ -111,13 +111,7 @@ async function main() {
     baseUrl: target.baseUrl,
     auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
   });
-  const session = connection.session as unknown as {
-    projects: { list(): Promise<{ id: string }[]> };
-    contexts: {
-      identify(ids: string[]): Promise<SweptContext[]>;
-      destroy(id: string): Promise<{ projectId: string; path: string }>;
-    };
-  };
+  const { session } = connection;
   const contexts: SweptContext[] = [];
   for (let start = 0; start < stored.length; start += 50)
     contexts.push(...(await session.contexts.identify(stored.slice(start, start + 50))));

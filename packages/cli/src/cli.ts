@@ -134,7 +134,7 @@ const sessionNeedsRefresh = (session: StoredSession) => {
 };
 
 const credentialsForConfig = async (config: Config, name: string): Promise<SessionCredentials> => {
-  const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
+  const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER?.trim();
   if (secret) return { type: "admin-secret", secret };
   const token = process.env.ITERATE_BEARER_TOKEN?.trim();
   if (token) return { type: "bearer", token };

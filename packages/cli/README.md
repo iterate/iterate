@@ -27,7 +27,7 @@ issuer, PKCE and a loopback callback, and asks for the `iterate` scope alone.
 Tokens refresh automatically before a command when close to expiry.
 `ITERATE_BEARER_TOKEN` supplies a personal access token for scripts and
 `mcp claude` (`tokens create` prints one once; it works at `/api`, `/mcp` and the
-projects' hosts). `APP_CONFIG_ADMIN_API_SECRET` supplies the operator's
+projects' hosts). `APP_CONFIG_SECRETS__ADMIN_BEARER` supplies the operator's
 credentials, which only `/api` accepts, and takes precedence. The `tokens`
 commands use neither, nor the stored login: each signs in in the browser with the
 `account` scope for its one call and ends that sign-in, so a stored login mints

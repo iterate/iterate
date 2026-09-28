@@ -1,7 +1,7 @@
 // e2e/support/client.ts — THE E2E client: open a capnweb session to the one shared worker (URL and
-// admin secret from global-setup, via WORKER_BASE_URL and ADMIN_API_SECRET) for a FRESH ctx per test,
-// exactly like a production client. This is the whole "how a test reaches the worker" surface, plus
-// the idioms the files share (poll-until, must-reject, the delivery collector).
+// admin secret from global-setup, via WORKER_BASE_URL and APP_CONFIG_SECRETS__ADMIN_BEARER) for a
+// FRESH ctx per test, exactly like a production client. This is the whole "how a test reaches the
+// worker" surface, plus the idioms the files share (poll-until, must-reject, the delivery collector).
 // A project host — the one HTTP way into a project — is support/project-host.ts.
 
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -18,8 +18,11 @@ const baseUrl = (): string => {
 
 /** The worker's admin bearer (global-setup: the local worker's, or a deployed worker's from its APP_CONFIG). */
 const adminApiSecret = (): string => {
-  const secret = process.env.ADMIN_API_SECRET;
-  if (!secret) throw new Error("ADMIN_API_SECRET unset — the e2e globalSetup/setup did not run");
+  const secret = process.env.APP_CONFIG_SECRETS__ADMIN_BEARER;
+  if (!secret)
+    throw new Error(
+      "APP_CONFIG_SECRETS__ADMIN_BEARER unset — the e2e globalSetup/setup did not run",
+    );
   return secret;
 };
 

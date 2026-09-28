@@ -6,7 +6,7 @@
 //   ITERATE_BEARER_TOKEN=… node serve-localhost.mjs https://os.iterate.com my-project blog 5173
 //
 // Credentials come from the environment: ITERATE_BEARER_TOKEN (a personal access token), or an
-// operator's APP_CONFIG_ADMIN_API_SECRET. The visitor's path is forwarded as-is: under paths routing
+// operator's APP_CONFIG_SECRETS__ADMIN_BEARER. The visitor's path is forwarded as-is: under paths routing
 // (`<origin>/projects/<project>/<routingSlug>/…`, a per-PR preview) the platform strips that base and
 // names it in `x-iterate-base-path`, so a local server that serves under it (Vite: `--base`) needs it
 // put back in front. Pinned by apps/os e2e/serve-localhost-example.e2e.test.ts.
@@ -22,7 +22,7 @@ const api = newWebSocketRpcSession(`${origin.replace(/^http/, "ws")}/api`);
 const session = api.authenticate(
   process.env.ITERATE_BEARER_TOKEN
     ? { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN }
-    : { type: "admin-secret", secret: process.env.APP_CONFIG_ADMIN_API_SECRET },
+    : { type: "admin-secret", secret: process.env.APP_CONFIG_SECRETS__ADMIN_BEARER },
 );
 const project = session.projects.get(projectSlug);
 

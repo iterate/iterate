@@ -1084,7 +1084,8 @@ export interface IterateSessionApi {
     /** the organization's context — `session.user` for an organization — by membership: its
      *  activity, `events.iterate.com/organization/…` facts, and its own secrets */
     get(orgId: string): Promise<IterateContextApi>;
-    create(input: { name: string }): Promise<OrgRecord>;
+    /** the person is its owner; the operator names the owner (`ownerId`) */
+    create(input: { name: string; ownerId?: string }): Promise<OrgRecord>;
     rename(orgId: string, input: { name: string }): Promise<OrgRecord>;
     /** only while it holds no project */
     delete(orgId: string): Promise<void>;
@@ -1141,6 +1142,18 @@ export interface IterateSessionApi {
     /** find-or-create */
     create(input: { email: string }): Promise<{ id: string; email: string }>;
   };
+  /** Every context Cloudflare lists, by id — the operator's alone (scripts/ci/context-sweep.ts):
+   *  who each is, from its own birth record, and an orphan's destruction (refused for a global
+   *  context and for any project that still exists). */
+  contexts: {
+    identify(
+      ids: string[],
+    ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]>;
+    destroy(id: string): Promise<{ projectId: string; path: string }>;
+  };
+  /** One project secret's encrypted cell, as a project seed archives it — the operator's alone
+   *  (apps/os scripts/project-seed.ts). */
+  exportProjectSecretForSeed(project: string, path: string): Promise<unknown>;
   logout(): unknown;
 }
 

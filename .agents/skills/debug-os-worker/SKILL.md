@@ -99,11 +99,12 @@ lines are incomplete evidence.
 ## The durable side
 
 - **Credentials**: a personal access token for the project as `ITERATE_BEARER_TOKEN`, or, for a
-  project you don't belong to, the operator bearer as `APP_CONFIG_ADMIN_API_SECRET`
+  project you don't belong to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
   ([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)).
-- **A context's log and processor rows**: `apps/os/scripts/inspect-context.ts`, with
-  `WORKER_BASE_URL`, `ITERATE_BEARER_TOKEN`, `PROJECT` and `CTX_PATH`. The fix-stream skill
-  shows the full-JSON dump.
+- **A context's log and processor rows**: the CLI, at the project root:
+  `pnpm exec iterate --config <cfg> itx run --project <slug> --eval 'return (await itx.cd("<path>").readEvents(0, 500)).events'`,
+  and `itx.cd("<path>").subscriptions.list()` for the rows. The fix-stream skill shows the
+  full-JSON dump.
 - **Anything else a script can read**: run it at the project root with
   `ITERATE_BEARER_TOKEN=… pnpm exec iterate --config prd itx run --project <slug> --eval '…'`.
   The run is recorded on the project's root log under the key's person, and reading an idle
