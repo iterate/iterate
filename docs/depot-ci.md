@@ -77,7 +77,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes stale previews, old preview Workers and orphaned preview resources                             |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: main redeployed in place to preview `main`, E2E tests, Browser specs, its page, trace |
 | `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                 |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                            |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop, ci-reports or iterate-com-inbound-email |
 | `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                               |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                       |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse message per change of state   |
@@ -580,8 +580,8 @@ pins the exceptions:
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 
-Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports posts its result to
-#ci from its last step.
+Each deploy is one job, and every app but SPA, dummy-petshop, ci-reports and
+iterate-com-inbound-email posts its result to #ci from its last step.
 
 ## Preview job shape
 
