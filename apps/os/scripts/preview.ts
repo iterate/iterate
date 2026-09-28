@@ -928,7 +928,13 @@ async function runSuite(
       console.log(`[slow-rows] ${slowRows}: ${reason}`);
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
       return {
-        args: ["e2e:run", ...slowRowsTagsFilter(slowRows), ...selection],
+        // vitest matches a filter against the path from its root, apps/os, so a selected row's file
+        // goes as its absolute path
+        args: [
+          "e2e:run",
+          ...slowRowsTagsFilter(slowRows),
+          ...selection.map((file) => path.join(REPO_ROOT, file)),
+        ],
         env: {
           // empty without a PR, which the rows read as none
           PREVIEW_PR_NUMBER: prNumber || "",
