@@ -94,6 +94,30 @@ test.for([
   },
 );
 
+test.for([
+  { name: "the not-found page", answer: "page" },
+  { name: "error code: 1042", answer: "1042" },
+  { name: "error code: 1104", answer: "1104" },
+] satisfies { name: string; answer: Answer }[])(
+  "resend: the connection that answered $name is dropped, so the next request goes on a new one",
+  async ({ answer }) => {
+    await using edge = await fakeEdge([answer, "worker", "worker"]);
+    const transport = resending();
+    for (const path of ["/first", "/second"]) {
+      const response = await undiciFetch(edge.url(path), { dispatcher: transport.dispatcher });
+      await response.text();
+    }
+    // the second request's own connection: never the one Cloudflare answered on, 0
+    expect(edge).toMatchObject({
+      requests: [
+        { path: "/first", socket: 0 },
+        { path: "/first", socket: 1 },
+        { path: "/second", socket: 2 },
+      ],
+    });
+  },
+);
+
 test("resend: a WebSocket upgrade answered with the not-found page opens on a fresh connection, which outlives its Client", async () => {
   await using edge = await fakeEdge(["page", "worker"]);
   const transport = resending();
@@ -273,7 +297,12 @@ async function fakeEdge(answers: Answer[]) {
     for await (const chunk of request) chunks.push(chunk as Buffer);
     record(request, Buffer.concat(chunks).toString());
     const answer = next();
-    response.writeHead(answer.status, answer.headers).end(answer.body);
+    response
+      .writeHead(answer.status, {
+        ...answer.headers,
+        "content-length": Buffer.byteLength(answer.body),
+      })
+      .end(answer.body);
   });
   server.on("upgrade", (request: IncomingMessage, socket: Socket) => {
     record(request, "");

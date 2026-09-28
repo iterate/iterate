@@ -2,15 +2,14 @@
 // deployment's workers.dev hostname is brand-new, and it reaches Cloudflare's servers one by one: for
 // up to about a minute after its deploy (measured 2026-09-28), a connection can land on a server that
 // has not learned it and answers Cloudflare's own not-found (@iterate-com/shared/platform-retry
-// `isNotRoutedYet`). One runner's connections reach about nine colos, and the rare server still
-// behind is found by the suite's thousands of connections, not by the readiness gate's few dozen
-// (scripts/preview-readiness.ts). The request never reached the Worker, so the process's one
+// `isNotRoutedYet`). The readiness gate (scripts/preview-readiness.ts) samples connections, so it
+// cannot rule such a server out. The request never reached the Worker, so the process's one
 // transport, undici's global dispatcher (Node's fetch and WebSocket and undici's own go through it),
 // sends it again, whatever its method, on a fresh connection of its own, which lands on another
-// server. A resend waits CI_HTTP's schedule and logs `e2e.platform-failure-retry` with the answer's
-// cf-ray (its colo); once the schedule is spent it logs `e2e.platform-failure-gave-up` and the
-// request fails, naming the answer. Every other answer, the Worker's own 404 included, passes
-// through as it came.
+// server, and drops the connection the answer came on. A resend waits CI_HTTP's schedule and logs
+// `e2e.platform-failure-retry` with the answer's cf-ray (its colo); once the schedule is spent it
+// logs `e2e.platform-failure-gave-up` and the request fails, naming the answer. Every other answer,
+// the Worker's own 404 included, passes through as it came.
 import { Client, getGlobalDispatcher, setGlobalDispatcher, type Dispatcher } from "undici";
 import {
   CI_HTTP,
@@ -130,8 +129,9 @@ type NotRoutedYet = { message: string; ray: string | undefined };
 /** The handler of one attempt. Until its answer is known to be the Worker's it passes nothing on
  *  but the start of the request (once); then everything, as it comes. It settles with the
  *  not-found Cloudflare answered, or with nothing once `downstream` has had the answer, an upgrade
- *  or an error. The page is known by its header and abandoned unread, which drops the connection it
- *  came on; a plain answer of a few bytes is read first, then decided. */
+ *  or an error. The page is known by its header, a plain answer of a few bytes once its last byte
+ *  is read; either is then abandoned, which drops the connection it came on, so no later request
+ *  of the pool goes to that server. */
 function attemptHandler(input: {
   downstream: Dispatcher.DispatchHandler;
   controller: DownstreamController;
@@ -142,12 +142,25 @@ function attemptHandler(input: {
   const { downstream, controller, settled } = input;
   let state: "waiting" | "passing" | "reading" | "not-routed" = "waiting";
   let notRouted: NotRoutedYet | undefined;
-  let head: { status: number; headers: Record<string, string | string[] | undefined> } | undefined;
+  let head:
+    | { status: number; headers: Record<string, string | string[] | undefined>; length: number }
+    | undefined;
   let statusMessage: string | undefined;
   const chunks: Buffer[] = [];
   const pass = () => {
     state = "passing";
     settled(undefined);
+  };
+  /** Cloudflare answered: the attempt is aborted, which drops its connection, and settles with it. */
+  const abandon = (
+    attempt: Dispatcher.DispatchController,
+    message: string,
+    headers: Record<string, string | string[] | undefined>,
+  ) => {
+    state = "not-routed";
+    const ray = headers["cf-ray"];
+    notRouted = { message, ray: typeof ray === "string" ? ray : undefined };
+    attempt.abort(new Error(`Cloudflare's own not-found: ${message}`));
   };
   return {
     onRequestStart(attempt, context) {
@@ -163,46 +176,31 @@ function attemptHandler(input: {
       downstream.onResponseStarted?.();
     },
     onResponseStart(attempt, statusCode, headers, message) {
-      const ray = typeof headers["cf-ray"] === "string" ? headers["cf-ray"] : undefined;
-      if (input.resendable && isNotRoutedYet({ status: statusCode, headers })) {
-        state = "not-routed";
-        notRouted = { message: `${statusCode} x-preview-user-error`, ray };
-        return attempt.abort(new Error(`Cloudflare's own not-found: ${notRouted.message}`));
-      }
-      if (input.resendable && mayBePlainNotRoutedYet(statusCode, headers)) {
+      if (input.resendable && isNotRoutedYet({ status: statusCode, headers }))
+        return abandon(attempt, `${statusCode} x-preview-user-error`, headers);
+      const length = plainNotRoutedYetLength(statusCode, headers);
+      if (input.resendable && length) {
         state = "reading";
-        head = { status: statusCode, headers };
+        head = { status: statusCode, headers, length };
         statusMessage = message;
         return;
       }
       pass();
       downstream.onResponseStart?.(controller, statusCode, headers, message);
     },
-    onResponseData(_attempt, chunk) {
+    onResponseData(attempt, chunk) {
       if (state === "passing") return downstream.onResponseData?.(controller, chunk);
       if (state !== "reading") return;
       chunks.push(chunk);
-      if (Buffer.concat(chunks).length <= PLAIN_NOT_ROUTED_MAX_BYTES) return;
-      // longer than any of Cloudflare's codes: the Worker's own answer
+      const body = Buffer.concat(chunks);
+      if (body.length < head!.length) return;
+      if (body.length === head!.length && isNotRoutedYet({ ...head!, body: body.toString("utf8") }))
+        return abandon(attempt, `${head!.status} ${body.toString("utf8").trim()}`, head!.headers);
       pass();
       downstream.onResponseStart?.(controller, head!.status, head!.headers, statusMessage);
       for (const read of chunks.splice(0)) downstream.onResponseData?.(controller, read);
     },
     onResponseEnd(_attempt, trailers) {
-      if (state === "reading") {
-        const body = Buffer.concat(chunks).toString("utf8");
-        if (isNotRoutedYet({ ...head!, body })) {
-          state = "not-routed";
-          const ray = head!.headers["cf-ray"];
-          return settled({
-            message: `${head!.status} ${body.trim()}`,
-            ray: typeof ray === "string" ? ray : undefined,
-          });
-        }
-        pass();
-        downstream.onResponseStart?.(controller, head!.status, head!.headers, statusMessage);
-        for (const read of chunks.splice(0)) downstream.onResponseData?.(controller, read);
-      }
       if (state === "passing") downstream.onResponseEnd?.(controller, trailers);
     },
     onResponseError(_attempt, error) {
@@ -222,20 +220,22 @@ function attemptHandler(input: {
 /** Cloudflare's plain codes are 16 bytes and a line end. */
 const PLAIN_NOT_ROUTED_MAX_BYTES = 32;
 
-/** A 404 or 500 of a few bytes of plain text could be `error code: 1042` or `1104`: it is read
- *  before it is passed on. */
-function mayBePlainNotRoutedYet(
+/** A 404 or 500 of a few bytes of plain text could be `error code: 1042` or `1104`: its length, when
+ *  it is read before it is passed on, else 0. Cloudflare sends those with a `content-length`. */
+function plainNotRoutedYetLength(
   status: number,
   headers: Record<string, string | string[] | undefined>,
 ) {
   const type = headers["content-type"];
-  const length = Number(headers["content-length"] ?? 0);
-  return (
+  const length = Number(headers["content-length"]);
+  const plain =
     (status === 404 || status === 500) &&
     typeof type === "string" &&
     type.startsWith("text/plain") &&
-    length <= PLAIN_NOT_ROUTED_MAX_BYTES
-  );
+    Number.isInteger(length) &&
+    length > 0 &&
+    length <= PLAIN_NOT_ROUTED_MAX_BYTES;
+  return plain ? length : 0;
 }
 
 /** The controller `downstream` holds for the whole request: it acts on the attempt in flight, and

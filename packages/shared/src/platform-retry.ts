@@ -125,7 +125,7 @@ export function httpFailureKind(answer: unknown): FailureKind {
  * three answers only Cloudflare gives. The first is a 404 with `x-preview-user-error: true`, the
  * "There is nothing here yet" page, when the hostname also reads as `<alias>-<worker>`, a preview URL
  * of an existing Worker with preview URLs on (every per-commit deployment's does:
- * `main-7a33b64-os` of `os`). The others are a 404 whose body is `error code: 1042` and a 500 whose
+ * `<prefix>-<sha7>-os` of `os`). The others are a 404 whose body is `error code: 1042` and a 500 whose
  * body is `error code: 1104`. The page decides by its header, so `body` is read only for a small
  * plain answer; a Worker's own 404 or 500 is never one of these.
  */

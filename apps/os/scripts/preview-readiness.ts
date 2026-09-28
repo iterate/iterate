@@ -27,8 +27,8 @@
 //
 // A BRAND-NEW HOSTNAME reaches Cloudflare's servers one by one, and a probe that lands on one it has
 // not reached yet gets Cloudflare's own not-found, which its miss names (`isNotRoutedYet`). The
-// rounds sample a few dozen connections, so a rare server still behind once they pass is met by the
-// suites' thousands, whose transport sends those requests again (e2e/support/not-routed.ts).
+// rounds only sample connections, so the suites' transport sends such a request again too
+// (e2e/support/not-routed.ts).
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:https";
