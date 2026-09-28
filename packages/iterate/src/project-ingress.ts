@@ -100,9 +100,7 @@ export function projectWildcardHostOf(
   if (!wildcard) return null;
   const normalized = hostname.toLowerCase().replace(/\.$/, "");
   if (wildcard.excludedHostnames?.includes(normalized)) return null;
-  const suffix = `.${wildcard.hostname}`;
-  const label = normalized.endsWith(suffix) ? normalized.slice(0, -suffix.length) : null;
-  return normalized === wildcard.hostname || (label && !label.includes("."))
+  return normalized === wildcard.hostname || labelUnder(normalized, wildcard.hostname)
     ? { routingSlug: null, project: wildcard.project }
     : null;
 }
