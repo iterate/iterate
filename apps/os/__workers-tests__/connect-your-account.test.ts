@@ -64,7 +64,7 @@ test("a project connects your Google account in one click: its uses run through 
   await member.itx.integrations.connect("google", { account: "ada@example.test" });
   expect(Object.values(await personalLends(member, path))).toHaveLength(1);
 
-  await member.itx.facets.get("project").disconnectIntegration({ provider: "google", connection });
+  await member.itx.integrations.disconnect("google", connection);
   expect(await gmailProfile(member.itx, path)).toMatchObject({ status: 502 });
   await until("the project's row dropped", async () => !(await projectRow(member, connection)));
   expect(await personalRow(member, connection)).toMatchObject({ account: "ada@example.test" });
@@ -128,9 +128,7 @@ test("the project deleting its path, or the person disconnecting their account, 
 
   await member.itx.integrations.connect("google", { account: "cat@example.test" });
   expect(await gmailProfile(member.itx, first.path)).toMatchObject({ status: 200 });
-  await member.session.user.facets
-    .get("account")
-    .disconnectIntegration({ provider: "google", connection: first.connection });
+  await member.session.user.integrations.disconnect("google", first.connection);
   expect(await gmailProfile(member.itx, first.path)).toMatchObject({ status: 502 });
   await until(
     "the row dropped on the person's disconnect",
@@ -346,12 +344,10 @@ test("a person's disconnect of their account that could not tell a project fails
   await member.itx.integrations.connect("google", { account: "ret@example.test" });
   const projectPath = stub(`${member.projectId}.iterate${path}`);
   await projectPath.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
-  const account = member.session.user.facets.get("account");
-  await expect(account.disconnectIntegration({ provider: "google", connection })).rejects.toThrow(
-    /paused/,
-  );
+  const person = member.session.user;
+  await expect(person.integrations.disconnect("google", connection)).rejects.toThrow(/paused/);
   await projectPath.append({ type: "events.iterate.com/itx/resumed", payload: {} });
-  await account.disconnectIntegration({ provider: "google", connection });
+  await person.integrations.disconnect("google", connection);
   await until("the project's row dropped", async () => !(await projectRow(member, connection)));
   expect(await personalRow(member, connection)).toBeUndefined();
   expect(await gmailProfile(member.itx, path)).toMatchObject({ status: 502 });
@@ -367,7 +363,7 @@ test("a project that disconnects the account while more access is being asked fo
     scopes: ["https://www.googleapis.com/auth/contacts.readonly"],
     next: `${ORIGIN}/back`,
   });
-  await member.itx.facets.get("project").disconnectIntegration({ provider: "google", connection });
+  await member.itx.integrations.disconnect("google", connection);
   const back = await followConsent(
     petshop,
     `${authorizationUrl}&email=cal@example.test`,

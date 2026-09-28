@@ -45,6 +45,11 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "secret", walk: "write({})", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "fetch()", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "verifyHmac({})", byExpression: "FORBIDDEN" },
+  // 4. A connection's connect and disconnect are `itx.integrations`' alone.
+  { facet: "project", walk: "connectIntegration({})", byExpression: "FORBIDDEN" },
+  { facet: "project", walk: "disconnectIntegration({})", byExpression: "FORBIDDEN" },
+  { facet: "account", walk: "connectIntegration({})", byExpression: "FORBIDDEN" },
+  { facet: "account", walk: "disconnectIntegration({})", byExpression: "FORBIDDEN" },
 ];
 
 test.each(FACET_PUBLIC_METHOD_ROWS)(
@@ -68,7 +73,7 @@ test("the refusal names the facet, the step and the list", () => {
       ["processEventBatch"],
     ]),
   ).toThrow(
-    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectIntegration, disconnectIntegration, connectWaitrose)`,
+    `facet "account": "processEventBatch" is not one of its public methods (fetch, snapshot, liveSnapshot, waitUntilProcessed, connectWaitrose)`,
   );
   expect(() => assertFacetMethodIsPublic("plain", [], [["hello"]])).toThrow(
     `facet "plain": "hello" is not one of its public methods (it lists none)`,

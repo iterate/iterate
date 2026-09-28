@@ -6,9 +6,11 @@
 // (`connectWaitrose`). A PERSON'S ACCOUNT used by a project (a row with `ownerUserId`) is connected
 // by `itx.integrations.connect(provider, { account })` on the project (context/built-ins.ts), or here
 // when the consent it needed finishes (the attempt's `connectToProject`); disconnecting it from the
-// project leaves the person's own connection standing. `finishIntegrationConnect` and a connect with
-// `connectToProject` are the platform's alone: the facets do not publish them. An account another
-// project holds (Slack, GitHub) is offered to move here, and `confirmIntegrationMove` moves it.
+// project leaves the person's own connection standing. The facets publish none of connect, finish
+// and disconnect: `itx.integrations` (context/built-ins.ts) is the one way in, and checks what a
+// caller passes; `finishIntegrationConnect` and a connect with `connectToProject` are the platform's
+// alone. An account another project holds (Slack, GitHub) is offered to move here, and
+// `confirmIntegrationMove` moves it.
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
@@ -121,15 +123,11 @@ export async function connectIntegration(
   scope: IntegrationScope,
   integrations: Record<string, IntegrationConnectionRow>,
   input: ConnectInput,
-  /** The platform's alone (a person's connect a project asked for, on their own context): never
-   *  read off `input`, which a facet's caller writes. */
+  /** A person's connect a project asked for, on their own context (`integrations.connectForProject`). */
   connectToProject?: ConnectionAttempt["connectToProject"],
 ): Promise<{ authorizationUrl: string }> {
-  const { connectToProject: _neverTheCallers, ...fields } = input as ConnectInput & {
-    connectToProject?: unknown;
-  };
   const request = {
-    ...fields,
+    ...input,
     provider: IntegrationProvider.parse(input?.provider),
     connection: assertConnectionName(input?.connection),
   };
@@ -138,9 +136,6 @@ export async function connectIntegration(
       "INVALID_INPUT",
       "integrations: connectToProject is a person's connect, on their own context",
     );
-  if (request.client !== "iterate" && request.client !== "project")
-    throw codedError("INVALID_INPUT", 'integrations: client is "iterate" or "project"');
-  request.scopes = z.array(z.string().min(1)).optional().parse(request.scopes);
   if (scope.rootPath !== "/" && !PERSONAL_PROVIDERS.includes(request.provider))
     throw codedError(
       "INVALID_INPUT",
@@ -431,15 +426,12 @@ export async function confirmIntegrationMove(
           [
             "itx",
             "builtins",
-            "facets",
-            ["get", "project"],
+            "integrations",
             [
-              "disconnectIntegration",
-              {
-                provider,
-                connection: holder.path.slice(`/integrations/${provider}/`.length),
-                movedExternalId: externalId,
-              },
+              "disconnect",
+              provider,
+              holder.path.slice(`/integrations/${provider}/`.length),
+              { movedExternalId: externalId },
             ],
           ],
           [],

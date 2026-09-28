@@ -5,8 +5,8 @@
 // the `reduce` that runs in the facet IS the `reduce` the unit test drives — no hand-kept twin to
 // drift. And THE PERSON'S OWN CONNECTIONS (src/integrations/verbs.ts): connected, finished and
 // disconnected here exactly as a project's are on its `project` facet, over this context's
-// `/users/<id>` root. Reached as `session.user.integrations.connect(…)` (context/built-ins.ts); the
-// callback finishes (secret-oauth-callback.ts).
+// `/users/<id>` root. Reached as `session.user.integrations.connect(…)` and `.disconnect(…)`
+// (context/built-ins.ts); the callback finishes (secret-oauth-callback.ts).
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { AppConfigEnv } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
@@ -36,12 +36,9 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
   } & AppConfigEnv,
   ItxEntrypointScope
 > {
-  static override publicMethods = [
-    ...super.publicMethods,
-    "connectIntegration",
-    "disconnectIntegration",
-    "connectWaitrose",
-  ];
+  /** Connect, finish and disconnect are not published: `itx.integrations` (context/built-ins.ts)
+   *  reaches them. */
+  static override publicMethods = [...super.publicMethods, "connectWaitrose"];
 
   processor = new AccountProcessor();
 
@@ -60,25 +57,22 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
     return (await this.snapshot()).state.integrations;
   }
 
-  /** A person's connect: Google or Cloudflare through iterate's client. */
-  async connectIntegration(input: ConnectInput): Promise<{ authorizationUrl: string }> {
-    return connectIntegration(this.#integrationScope(), await this.#integrations(), input);
-  }
-
-  /** A person's connect a project asked for — the platform's alone, not published (context/built-ins.ts
-   *  `integrations.connectForProject`): once the consent finishes, the account is connected there. */
-  async connectIntegrationForProject(
-    input: ConnectInput & { connectToProject: NonNullable<ConnectionAttempt["connectToProject"]> },
+  /** A person's connect: Google or Cloudflare through iterate's client (`integrations.connect`),
+   *  or one a project asked for (`integrations.connectForProject`, the platform's alone): once its
+   *  consent finishes, the account is connected there. */
+  async connectIntegration(
+    input: ConnectInput,
+    connectToProject?: ConnectionAttempt["connectToProject"],
   ): Promise<{ authorizationUrl: string }> {
     return connectIntegration(
       this.#integrationScope(),
       await this.#integrations(),
       input,
-      input.connectToProject,
+      connectToProject,
     );
   }
 
-  /** The OAuth callback's, not published (context/built-ins.ts `integrations.finishConnect`). */
+  /** The OAuth callback's (context/built-ins.ts `integrations.finishConnect`). */
   async finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
     return finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
   }

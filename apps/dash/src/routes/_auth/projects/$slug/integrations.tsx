@@ -157,7 +157,6 @@ function ProjectIntegrations() {
   const [failedUse, setFailedUse] = useState<{ connection: string; message: string } | null>(null);
   const firstField = useRef<HTMLInputElement>(null);
 
-  const projectFacet = () => api.projects.get(project.id).facets.get("project");
   /** One verb at a time. A connect that leaves for the provider keeps its spinner up until the
    *  browser has gone. */
   const run = async (key: string, work: () => Promise<"leaving" | void>) => {
@@ -173,7 +172,7 @@ function ProjectIntegrations() {
   const closeSheet = () => navigate({ search: {}, replace: true });
   const here = `${window.location.origin}/projects/${project.slug}/integrations`;
   const askedScopes = search.scopes?.split(" ").filter(Boolean);
-  /** `itx.integrations.connect` on the project: another account through iterate's app. */
+  /** Another account through iterate's app. */
   const connectAnother = async (input: { provider: IterateAppProvider; scopes?: string[] }) =>
     z
       .object({ authorizationUrl: z.string().url() })
@@ -314,11 +313,11 @@ function ProjectIntegrations() {
                       noun={noun}
                       busy={busy}
                       onDisconnect={() =>
-                        run(`disconnect:${row.connection}`, async () => {
-                          await projectFacet().invoke([
-                            ["disconnectIntegration", { provider, connection: row.connection }],
-                          ]);
-                        })
+                        run(`disconnect:${row.connection}`, () =>
+                          api.projects
+                            .get(project.id)
+                            .integrations.disconnect(provider, row.connection),
+                        )
                       }
                     />
                   ))}
@@ -408,7 +407,10 @@ function ProjectIntegrations() {
               error={error}
               onConfirm={() =>
                 run("move", async () => {
-                  await projectFacet().invoke([["confirmIntegrationMove", { offer: search.move }]]);
+                  await api.projects
+                    .get(project.id)
+                    .facets.get("project")
+                    .invoke([["confirmIntegrationMove", { offer: search.move }]]);
                   await closeSheet();
                 })
               }
@@ -475,19 +477,10 @@ function ProjectIntegrations() {
                           const { authorizationUrl } = z
                             .object({ authorizationUrl: z.string().url() })
                             .parse(
-                              await projectFacet().invoke([
-                                [
-                                  "connectIntegration",
-                                  {
-                                    provider: "github",
-                                    connection: freshConnectionName(),
-                                    client: "iterate",
-                                    installationId,
-                                    platformOrigin: info.platformOrigin,
-                                    next: here,
-                                  },
-                                ],
-                              ]),
+                              await api.projects.get(project.id).integrations.connect("github", {
+                                installationId,
+                                next: here,
+                              }),
                             );
                           window.location.assign(authorizationUrl);
                           return "leaving";
@@ -589,22 +582,17 @@ function ProjectIntegrations() {
                     const { authorizationUrl } = z
                       .object({ authorizationUrl: z.string().url() })
                       .parse(
-                        await projectFacet().invoke([
-                          [
-                            "connectIntegration",
-                            {
-                              ...own,
-                              client: "project",
-                              // an agent's ask rides through to the consent
-                              scopes: askedScopes,
-                              next: here,
-                              ...(own.provider === "github" && {
-                                appSlug: appSlug || "",
-                                clientId: credentials.clientId || "",
-                              }),
-                            },
-                          ],
-                        ]),
+                        await api.projects.get(project.id).integrations.connect(own.provider, {
+                          connection: own.connection,
+                          client: "project",
+                          // an agent's ask rides through to the consent
+                          scopes: askedScopes,
+                          next: here,
+                          ...(own.provider === "github" && {
+                            appSlug: appSlug || "",
+                            clientId: credentials.clientId || "",
+                          }),
+                        }),
                       );
                     window.location.assign(authorizationUrl);
                     return "leaving";

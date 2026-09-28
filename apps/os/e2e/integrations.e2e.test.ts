@@ -52,9 +52,7 @@ deployedOnly(
       teamId,
       connection: "acme",
     });
-    await itx.facets
-      .get("project")
-      .disconnectIntegration({ provider: "slack", connection: "acme" });
+    await itx.integrations.disconnect("slack", "acme");
     expect(await integrationRows(itx)).toEqual({});
   },
 );
@@ -112,7 +110,7 @@ deployedOnly(
       }),
     );
     expect(await profile.json()).toMatchObject({ emailAddress: email });
-    await itx.facets.get("project").disconnectIntegration({ provider: "google", connection: "me" });
+    await itx.integrations.disconnect("google", "me");
     expect(await integrationRows(itx)).toEqual({});
   },
 );
@@ -159,9 +157,7 @@ deployedOnly(
     expect(await webhooksOn(itx, "/integrations/github/acme", "github")).toMatchObject([
       { idempotencyKey: `github-webhook:${deliveryId}`, source: { platform: true } },
     ]);
-    await itx.facets
-      .get("project")
-      .disconnectIntegration({ provider: "github", connection: "acme" });
+    await itx.integrations.disconnect("github", "acme");
     expect(await integrationRows(itx)).toEqual({});
   },
 );
@@ -172,10 +168,8 @@ deployedOnly(
     const { itx: holder, installation } = await githubConnected("github-holder");
     if (!installation) return skip("this deployment's GitHub App is not the pet shop's fake");
     const { itx: mover, memberBearer } = await projectWithMember("github-mover");
-    const { authorizationUrl } = await mover.facets.get("project").connectIntegration({
-      provider: "github",
+    const { authorizationUrl } = await mover.integrations.connect("github", {
       connection: "acme",
-      client: "iterate",
       next: workerUrl("/"),
     });
     // the same admin installs for the second project: the fake's page sends them straight back

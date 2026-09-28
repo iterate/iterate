@@ -49,16 +49,15 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   ItxEntrypointScope
 > {
   /** The processor's reads, the two collections `itx.repos` / `itx.workspaces` reach (library.ts),
-   *  and the integrations' verbs. `acceptGithubCallback` is GitHub's callback's (integrations/github.ts)
-   *  and acts only for its attempt's nonce, which only GitHub's redirect carries;
-   *  `finishIntegrationConnect` is not published at all — the platform's callback reaches it
-   *  (secret-oauth-callback.ts, through context/built-ins.ts `integrations.finishConnect`). */
+   *  and the integrations' verbs a Dash form or a callback calls. `acceptGithubCallback` is GitHub's
+   *  callback's (integrations/github.ts) and acts only for its attempt's nonce, which only GitHub's
+   *  redirect carries. Connect, finish and disconnect are not published: `itx.integrations`
+   *  (context/built-ins.ts) reaches them, and the platform's callback finishes through it
+   *  (secret-oauth-callback.ts, `integrations.finishConnect`). */
   static override publicMethods = [
     ...super.publicMethods,
     "repos",
     "workspaces",
-    "connectIntegration",
-    "disconnectIntegration",
     "confirmIntegrationMove",
     "connectWaitrose",
     "acceptGithubCallback",
@@ -195,8 +194,8 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     };
   }
 
-  /** CONNECT (integrations/verbs.ts): where to send a human to consent — through iterate's app
-   *  (`client: "iterate"`) or the project's own, whose credentials
+  /** CONNECT (integrations/verbs.ts; `itx.integrations.connect`): where to send a human to consent —
+   *  through iterate's app (`client: "iterate"`) or the project's own, whose credentials
    *  `/secrets/<provider>-<connection>` already holds. The provider's callback stores the credential
    *  and finishes the connection, then sends the human to `next` (the platform's or the Dash's
    *  origin). Again for a connection that exists asks for more `scopes` on the same account. */
@@ -207,7 +206,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   }
 
   /** The OAuth callback stored a Slack, Google or Cloudflare token: finish the connection — the
-   *  callback's alone, not published (context/built-ins.ts `integrations.finishConnect`). */
+   *  callback's alone (context/built-ins.ts `integrations.finishConnect`). */
   finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
     return this.#onConnection(input?.provider, input?.connection, (integrations) =>
       finishIntegrationConnect(this.#integrationScope(), integrations, input),
@@ -232,8 +231,8 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     );
   }
 
-  /** DISCONNECT: the token revoked where the provider allows, the route and the secret gone, any
-   *  connect in flight dropped, `<provider>/disconnected` on `/`. */
+  /** DISCONNECT (`itx.integrations.disconnect`): the token revoked where the provider allows, the
+   *  route and the secret gone, any connect in flight dropped, `<provider>/disconnected` on `/`. */
   disconnectIntegration(input: {
     provider: IntegrationProvider;
     connection: string;
