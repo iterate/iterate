@@ -84,13 +84,14 @@ during initial negotiation and refresh its supply mode after contract changes.
 Satellite1 shows the integration: its speaker rating and amplifier gain stay
 in the board, independently of the reusable PD driver.
 
-Register the board once in `apps/kit/src/firmware/catalog.ts`: device identity,
-ESP-IDF target, chip and flash plan, including its configuration partition.
-Use the target's partition CSV and generated `flasher_args.json` to establish
-those offsets. The release builder checks them against the actual binary
-partition table. Provide its checked-in chime assets if it uses them. The
-browser selector and the release builder consume the catalog. The air-path
-proof, `apps/agents/scripts/voice-board.ts`, takes the device name on
+Register the board once in `apps/kit/src/firmware/catalog.ts`: its id, which
+is also its `.device_name` (`catalog.test.ts` checks), name, vendor, `target`
+directory and how a call starts. The release builder takes the chip and flash
+layout from the build's `flasher_args.json` and checks them against the build's
+own partition table, which needs one `iterate_kit` configuration partition.
+Provide its checked-in chime assets if it uses them. The browser selector and
+the release builder consume the catalog. The air-path proof,
+`apps/agents/scripts/voice-board.ts`, takes the board's `itx.clients` name on
 `--device` and needs no registration.
 
 ## Remote screens
