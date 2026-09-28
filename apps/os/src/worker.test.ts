@@ -348,8 +348,8 @@ const appConfigRows: {
     throws: /^APP_CONFIG urls\.mcp \(APP_CONFIG_URLS__MCP\): must differ from urls\.os$/,
   },
   // a key the schema does not name — a typo inside the object, a var no field answers to, a stray
-  // key in a block a var sets whole — is WARNED about loudly and dropped; the rest parses (another
-  // branch may have added it to Doppler). A malformed field beside one still throws.
+  // key in a block a var sets whole — is WARNED about loudly and dropped, and the rest parses
+  // (why: parseAppConfigVars); a malformed field beside one still throws
   {
     vars: {
       APP_CONFIG: JSON.stringify({
