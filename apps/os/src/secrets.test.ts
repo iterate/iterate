@@ -855,6 +855,52 @@ test("client_secret_post puts client_id + client_secret in the form for both gra
   expect(publicExchange.exchanges[0]!.body).not.toContain("client_secret");
 });
 
+test("a client secret held by another secret: the exchange and the refresh send what the host resolves the placeholder to, for the token endpoint, and the record keeps the placeholder", async () => {
+  const placeholder = 'getSecret("/secrets/app")';
+  const options = normalizeSecretOAuth({ ...PROVIDER, clientId: "c", clientSecret: placeholder });
+  const { pending } = await beginSecretOAuth(options, {
+    redirectUri: "https://os.example/cb",
+    state: "st",
+    nonce: "n",
+  });
+  expect(pending.options).toMatchObject({ clientSecret: placeholder });
+  const resolved: string[] = [];
+  const clientSecretOf = async (clientSecret: string, tokenEndpoint: string) => {
+    resolved.push(`${clientSecret} → ${tokenEndpoint}`);
+    return "the-value";
+  };
+  const exchange = scripted(() => Response.json({ access_token: "AT", refresh_token: "RT" }));
+  const record = await completeSecretOAuth(
+    pending,
+    "code",
+    exchange.fetchFn,
+    undefined,
+    clientSecretOf,
+  );
+  const refresh = scripted(() => Response.json({ access_token: "AT2" }));
+  const next = await refreshSecretMaterial(
+    record.refresh!,
+    record.material,
+    refresh.fetchFn,
+    clientSecretOf,
+  );
+  expect({
+    sent: [exchange, refresh].map(({ exchanges }) => exchanges[0]!.headers.authorization),
+    resolved,
+    kept: [record.material, next],
+  }).toEqual({
+    sent: [`Basic ${btoa("c:the-value")}`, `Basic ${btoa("c:the-value")}`],
+    resolved: [
+      `${placeholder} → ${PROVIDER.tokenEndpoint}`,
+      `${placeholder} → ${PROVIDER.tokenEndpoint}`,
+    ],
+    kept: [
+      { clientId: "c", clientSecret: placeholder, accessToken: "AT", refreshToken: "RT" },
+      { clientId: "c", clientSecret: placeholder, accessToken: "AT2", refreshToken: "RT" },
+    ],
+  });
+});
+
 // AN INTEGRATION'S CLIENT AND `next` (secret-oauth.ts): the options passed ⇒ what the attempt keeps,
 // or the refusal.
 test.for([
@@ -862,6 +908,21 @@ test.for([
     row: "the project's own client, in the clear",
     options: { clientId: "c", clientSecret: "s" },
     becomes: { clientId: "c", clientSecret: "s", client: null, next: null },
+  },
+  {
+    row: "the project's own client, its secret held by another secret: the placeholder is kept",
+    options: { clientId: "c", clientSecret: 'getSecret("/secrets/app", { field: "secret" })' },
+    becomes: { clientId: "c", clientSecret: 'getSecret("/secrets/app", { field: "secret" })' },
+  },
+  {
+    row: "a client secret placeholder with text around it",
+    options: { clientId: "c", clientSecret: 'Basic getSecret("/secrets/app")' },
+    refused: /one placeholder and nothing else/,
+  },
+  {
+    row: "a client secret placeholder naming no secret's path",
+    options: { clientId: "c", clientSecret: 'getSecret("/app")' },
+    refused: /one placeholder and nothing else/,
   },
   {
     row: "iterate's Slack app",

@@ -20,6 +20,7 @@ import type {
   SecretMaterial,
   SecretRefresh,
 } from "iterate/api";
+import { codedError } from "iterate/lib";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
 import { IterateAppProvider } from "./integrations/contract.ts";
 import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
@@ -207,11 +208,34 @@ const SECRET_PLACEHOLDER = new RegExp(
   "g",
 );
 
-/** Whether `value` is exactly one placeholder (`getSecret("/secrets/x")`, or with a field) and
- *  nothing else: what a git origin's password may be, so an origin never holds a token. */
-export function isSecretPlaceholder(value: string): boolean {
+/** The secret `value` names when it is exactly one placeholder (`getSecret("/secrets/x")`, or with a
+ *  field) and nothing else, or null. */
+function secretPlaceholderOf(value: string): { path: string; field?: string } | null {
   const [match] = [...value.matchAll(SECRET_PLACEHOLDER)];
-  return match?.index === 0 && match[0].length === value.length;
+  if (match?.index !== 0 || match[0].length !== value.length) return null;
+  const [, path = "", field] = match;
+  return field ? { path, field } : { path };
+}
+
+/** Whether `value` is exactly one placeholder and nothing else: what a git origin's password may
+ *  be, so an origin never holds a token. */
+export function isSecretPlaceholder(value: string): boolean {
+  return Boolean(secretPlaceholderOf(value));
+}
+
+/** AN OAUTH CLIENT'S SECRET HELD BY ANOTHER SECRET: a `clientSecret` that is exactly one placeholder
+ *  names the secret that holds it (resolved by secret/durable-object.ts `#clientSecretOf`). Null for
+ *  a client secret given in the clear, or none. A placeholder with anything around it is refused:
+ *  it is neither a value nor a reference. */
+export function clientSecretReferenceOf(
+  clientSecret: string,
+): { path: string; field?: string } | null {
+  const reference = secretPlaceholderOf(clientSecret);
+  if (reference || !clientSecret.includes("getSecret(")) return reference;
+  throw codedError(
+    "INVALID_INPUT",
+    'secrets: a clientSecret that names the secret holding it is one placeholder and nothing else, getSecret("/secrets/<name>") or getSecret("/secrets/<name>", { field: "a.b" })',
+  );
 }
 
 /** The placeholder as a caller wrote it, for a refusal that names it. */
@@ -563,10 +587,18 @@ export async function oauthTokensOf(
   };
 }
 
+/** The client secret as a token request sends it, from the one a record holds and the token
+ *  endpoint it goes to: the host resolves a placeholder (`clientSecretReferenceOf`); by default it is
+ *  sent as held. */
+export type ClientSecretOf = (clientSecret: string, tokenEndpoint: string) => Promise<string>;
+
+export const clientSecretAsHeld: ClientSecretOf = async (clientSecret) => clientSecret;
+
 export async function refreshSecretMaterial(
   refresh: SecretRefresh,
   material: SecretMaterial | null,
   fetchFn: (request: Request) => Promise<Response>,
+  clientSecretOf = clientSecretAsHeld,
 ): Promise<Record<string, unknown>> {
   const record = materialRecordOf(material);
   // The deployment's client and a GitHub App's key are attached by the facet itself
@@ -584,12 +616,13 @@ export async function refreshSecretMaterial(
       oauthTokenRequest({
         tokenEndpoint: refresh.tokenEndpoint,
         clientId,
-        clientSecret,
+        clientSecret: await clientSecretOf(clientSecret, refresh.tokenEndpoint),
         clientAuth: refresh.clientAuth || "client_secret_basic",
         params: { grant_type: "refresh_token", refresh_token: refreshToken },
       }),
     );
-    // A provider may rotate the refresh token on use; keep the newest.
+    // A provider may rotate the refresh token on use; keep the newest. The client secret stays as
+    // held: a placeholder, never the value it resolved to.
     return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
   }
   // Waitrose's login is bundled exchange code of the same shape as a secret's own.

@@ -266,7 +266,13 @@ export type SecretOAuthOptions = {
   tokenEndpoint: string;
   /** Exactly one of `clientId` and `client`. */
   clientId?: string;
-  /** Absent for a public client (PKCE alone), and with `client`. */
+  /** Absent for a public client (PKCE alone), and with `client`. The secret itself, or one
+   *  placeholder naming the secret that holds it — `getSecret("/secrets/<name>")`, or
+   *  `getSecret("/secrets/<name>", { field: "a.b" })` — so it never passes through your hands:
+   *  collect it with `collectFromUser` into a secret pinned to the token endpoint's origin. The
+   *  platform reads it from there at the code exchange and at every refresh, and stores only the
+   *  placeholder, so rotating that secret takes effect at the next refresh. `beginOAuth` refuses
+   *  a placeholder that names no such secret. */
   clientSecret?: string;
   client?: SecretOAuthClient;
   /** An absolute URL on the platform's origin or the Dash's. */

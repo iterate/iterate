@@ -1286,6 +1286,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "secret", method: "verifyHmac", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "fetch", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "exportForProjectSeed", byExpression: "FORBIDDEN" },
+  { facet: "secret", method: "clientSecretFor", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "processEventBatch", byExpression: "FORBIDDEN" },
   // A loaded class that extends neither shell lists nothing.
   { facet: "plain Durable Object", method: "hello", byExpression: "FORBIDDEN" },

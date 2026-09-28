@@ -122,6 +122,10 @@ type PlatformSecretsVerbs = {
   /** The platform's, when that move failed: the held token dropped, or the record deleted while it
    *  is still the one the admit stored (`admitted`, with `secret/deleted`). You never call it. */
   dropHeldToken(path: string, input: { nonce: string }): Promise<"held" | "admitted" | "gone">;
+  /** The platform's, from another secret's facet (secret/durable-object.ts `#clientSecretOf`): the
+   *  client secret this secret holds, for that secret's token request to `origin`, which must be in
+   *  this one's pin. You never call it: no value leaves a secret toward a caller. */
+  clientSecretFor(path: string, input: { origin: string; field?: string }): Promise<string>;
   revokeLend(
     path: string,
     lendId: string,
@@ -1263,6 +1267,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             );
           return "admitted";
         });
+      },
+      clientSecretFor: (secretPath, input) => {
+        assertPlatformCaller("secrets.clientSecretFor");
+        return onSecretContext(
+          secretPath,
+          ["clientSecretFor", secretPath, input],
+          // the platform's own SecretDurableObject.clientSecretFor's declared answer, `unknown` over the hop
+          async () => (await secretFacet(["clientSecretFor", input])) as string,
+        );
       },
       // The facet FIRST here, the reverse of `set`: each verb runs its steps in the order whose
       // crash window fails LOUD. A clear not yet followed by its fact leaves a log that says set

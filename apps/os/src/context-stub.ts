@@ -69,6 +69,7 @@ const IDEMPOTENT_CALLS: ReadonlySet<string> = new Set([
   "subscriptions.list",
   "processors.list",
   "processors.enable",
+  "secrets.clientSecretFor",
   ...(
     [
       "snapshot",
