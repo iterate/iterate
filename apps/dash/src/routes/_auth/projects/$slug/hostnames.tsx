@@ -57,13 +57,18 @@ const HostnamesLive = z.looseObject({
 });
 type Hostname = z.infer<typeof HostnamesLive>["hostnames"][string];
 
+/** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active. */
+const isLive = (entry: Hostname) =>
+  entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
+
 /** Where a hostname stands, in the words and the one dot the row shows. */
 function standingOf(entry: Hostname) {
   const dns = entry.cloudflare?.status === "active";
-  const certificate = entry.cloudflare?.sslStatus === "active";
   if (entry.requested?.verb === "remove") return { label: "Removing…", dot: "bg-muted-foreground" };
+  if (!entry.cloudflare && entry.requested)
+    return { label: "Adding…", dot: "bg-amber-500 motion-safe:animate-pulse" };
   if (entry.error && !entry.cloudflare) return { label: "Failed", dot: "bg-destructive" };
-  if (dns && certificate) return { label: "Live", dot: "bg-emerald-500" };
+  if (isLive(entry)) return { label: "Live", dot: "bg-emerald-500" };
   return {
     label: !dns ? "Waiting for DNS" : "Issuing certificate",
     dot: "bg-amber-500 motion-safe:animate-pulse",
@@ -133,9 +138,7 @@ function ProjectHostnames() {
   // on its way to live: check again every CHECK_EVERY_MS while the page is visible — each check is
   // the same `hostname-add-requested` "Check again" appends, answered in the live state
   const waiting = hostnames
-    .filter(
-      ([, entry]) => entry.cloudflare && !entry.requested && standingOf(entry).label !== "Live",
-    )
+    .filter(([, entry]) => entry.cloudflare && !entry.requested && !isLive(entry))
     .map(([hostname]) => hostname)
     .join(" ");
   const automaticChecks = useRef(0);
@@ -241,7 +244,7 @@ function ProjectHostnames() {
               </Field>
             </FieldGroup>
             <SheetFooter className="border-t sm:flex-row sm:justify-end">
-              <SheetClose render={<Button variant="outline" />}>Cancel</SheetClose>
+              <SheetClose render={<Button variant="outline" type="button" />}>Cancel</SheetClose>
               <Button type="submit" disabled={pending}>
                 {pending ? "Adding…" : "Add hostname"}
               </Button>
@@ -270,7 +273,7 @@ function HostnameRow({
   onPrimary: (on: boolean) => void;
 }) {
   const standing = standingOf(entry);
-  const live = standing.label === "Live";
+  const live = isLive(entry);
   const dns = entry.cloudflare?.status === "active";
   return (
     <li className="flex flex-col gap-4 py-4" data-hostname={hostname}>
@@ -316,7 +319,7 @@ function HostnameRow({
         </div>
       </div>
       {entry.error && <p className="pl-4.5 text-sm text-destructive">{entry.error}</p>}
-      {entry.cloudflare && !live && (
+      {entry.cloudflare && !live && entry.requested?.verb !== "remove" && (
         <ol className="flex flex-col gap-4 pl-4.5">
           <Step done={dns} title="Point DNS at iterate">
             {!dns && (
