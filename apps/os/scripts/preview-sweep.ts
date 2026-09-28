@@ -19,11 +19,10 @@
 //   2. its prefix is `pr<n>` and pull request #n is closed or does not exist;
 //   3. it is not its prefix's newest deployment with an apps/os worker (`newestPreviewDeployment`),
 //      and its newest member is more than an hour old or it has no stamped member left;
-//   4. its prefix names no pull request (a hand-picked name like `exp-…` or `soak`), no open pull
-//      request's head branch slugifies to it, it is no CI workflow's own (CI_WORKFLOW_PREVIEWS),
-//      and its newest member is more than 24 h old.
-// Anything else is kept. A GitHub lookup that failed never makes a deployment stale: a PR state of
-// "unknown", or no open-branch list, leaves rule 1 alone.
+//   4. its prefix names no pull request (a hand-picked name like `exp-…` or `soak`), it is no CI
+//      workflow's own (CI_WORKFLOW_PREVIEWS), and its newest member is more than 24 h old.
+// Anything else is kept. A GitHub lookup that failed never makes a deployment stale: rule 2 takes
+// GitHub's "closed" or "missing", never "unknown".
 //
 // A LEGACY WORKER PREVIEW (`planLegacyWorkerPreviewSweep`), one of main on dev's workers or of a
 // former parent (preview-config.ts FORMER_PARENTS) from before per-commit deployments, is STALE
@@ -47,7 +46,7 @@
 // (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
 import { onCallMention } from "../../../scripts/ci/slack.ts";
-import { FORMER_PARENTS, previewPullRequestNumber, slugifyPreviewName } from "./preview-config.ts";
+import { FORMER_PARENTS, previewPullRequestNumber } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
 export type PullRequestState = "open" | "closed" | "missing" | "unknown";
@@ -173,8 +172,6 @@ export type PreviewSweepInput = {
   deployments: PreviewDeploymentListing[];
   /** By PR number; a number missing here is "unknown". */
   pullRequestStates: ReadonlyMap<number, PullRequestState>;
-  /** Every open pull request's head branch, or undefined when GitHub could not list them. */
-  openPullRequestBranches: string[] | undefined;
 };
 
 type PreviewSweepVerdict = {
@@ -212,12 +209,7 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[
     if (!newest && !(hours <= 1)) return stale(`not ${prefix}'s newest deployment, ${created}`); // rule 3
     if (state) return keep(`PR #${number} is ${state}, ${created}`);
     if (CI_WORKFLOW_PREVIEWS.has(prefix)) return keep(`a CI workflow's own, ${created}`);
-    if (!input.openPullRequestBranches) return keep(`open branches unknown, ${created}`);
-    const openBranch = input.openPullRequestBranches.find(
-      (branch) => slugifyPreviewName(branch) === prefix,
-    );
-    if (openBranch) return keep(`open PR branch ${openBranch}, ${created}`);
-    if (hours > 24) return stale(`no PR and no open branch of that name, ${created}`); // rule 4
+    if (hours > 24) return stale(`no PR, ${created}`); // rule 4
     return keep(`no PR, ${created}`);
   });
 }

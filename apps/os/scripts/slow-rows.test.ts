@@ -58,7 +58,7 @@ test("without a pull request (main, the scheduled run, a laptop) every row runs,
 });
 
 test.for(["run", "skip", "only"] as const)(
-  "what was asked for (E2E_SLOW_ROWS, --slow-rows) wins, and nothing is read: %s",
+  "what was asked for (--slow-rows) wins, and nothing is read: %s",
   async (requested) => {
     expect(await chooseSlowRows({ requested, prNumber: "7", readPullRequest: unread })).toEqual({
       slowRows: requested,

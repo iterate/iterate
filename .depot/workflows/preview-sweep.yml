@@ -19,7 +19,7 @@ name: Preview sweep
 
 permissions:
   contents: read
-  # Which pull requests are open or closed (the sweep's rules 2 and 4).
+  # Which pull requests are open or closed (the sweep's rule 2).
   pull-requests: read
 
 on:

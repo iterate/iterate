@@ -51,7 +51,8 @@ const suites = [
   { job: "e2e", name: "E2E tests", suite: "e2e" },
   { job: "specs", name: "Browser specs", suite: "specs" },
 ] as const;
-const suiteRun = 'doppler run --project os --config preview -- pnpm preview "$SUITE"';
+const suiteRun =
+  'doppler run --project os --config preview -- pnpm preview "$SUITE" ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"} ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}';
 
 test("Preview OS names each job for the check it is: deploy and the two suites side by side, the cleanup after the deploy, then the trace", () => {
   expect(
@@ -65,7 +66,7 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
   });
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
   expect(runs("deploy")).toContain(
-    "doppler run --project os --config preview -- pnpm preview deploy",
+    'doppler run --project os --config preview -- pnpm preview deploy --pr "$PR_NUMBER" --apps "$APPS"',
   );
   expect([preview.jobs.cleanup!.needs].flat()).toEqual(["deploy"]);
   expect(runs("cleanup")).toContain(
@@ -366,16 +367,27 @@ test.for([
   });
 });
 
-// A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts resolvePreviewName).
+// A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts
+// resolvePreviewPrefix), and `pnpm preview` takes flags only: its suite step passes `--pr` the PR's
+// number and `--name` the dispatch's preview-name, each when set.
 test("a test job names its preview by the PR's number, or by preview-name without one", () => {
+  expect(preview.env).toMatchObject({
+    PR_NUMBER: "${{ github.event.pull_request.number || inputs.pull-request-number }}",
+  });
   for (const suite of suites) {
     const step = preview.jobs[suite.job]!.steps?.find((step) => step.id === "suite");
-    expect(step?.env).toMatchObject({
-      PREVIEW_NAME: "${{ inputs.preview-name }}",
-      PREVIEW_PR_NUMBER: "${{ env.PR_NUMBER }}",
+    expect(step).toMatchObject({
+      env: {
+        DEPLOYMENT_PREFIX: "${{ inputs.preview-name }}",
+        SLOW_ROWS: "${{ inputs.slow-rows }}",
+      },
+      run: suiteRun,
     });
   }
-  expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
+  expect(preview.on.workflow_dispatch?.inputs).toMatchObject({
+    "preview-name": {},
+    "slow-rows": {},
+  });
 });
 
 // The evidence is kept once the suite read its deployed target, and the steps after the finalizer

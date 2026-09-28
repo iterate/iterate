@@ -9,8 +9,7 @@
 //                       seed, the PR body's section (the previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
-//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else PREVIEW_DEPLOYMENT, else the
-//                       prefix's newest
+//                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
 //   sweep               the stale deployments, the legacy Worker Previews and the former parents
@@ -46,6 +45,7 @@ import {
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
+import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import { getSlackClient, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
@@ -78,8 +78,8 @@ import {
   previewDeploymentUrls,
   previewPullRequestNumber,
   renderPullRequestSection,
+  PREVIEW_SECTION,
   resolvePreviewPrefix,
-  splicePullRequestBody,
   templateQuickLaunches,
   writePullRequestBody,
   type PullRequestBody,
@@ -100,7 +100,7 @@ import {
   type PullRequestState,
   type SweptNamespace,
 } from "./preview-sweep.ts";
-import { chooseSlowRows, SlowRows, slowRowsTagsFilter } from "./slow-rows.ts";
+import { chooseSlowRows, slowRowsTagsFilter, type SlowRows } from "./slow-rows.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const REPO_ROOT = path.resolve(ROOT, "../..");
@@ -118,9 +118,6 @@ const Command = z.enum([
   "reset-parent",
 ]);
 type Command = z.infer<typeof Command>;
-/** The apps on top: every one (a PR's, a CI workflow's), or none (a soak of apps/os alone). */
-const AppsMode = z.enum(["all", "none"]);
-type AppsMode = z.infer<typeof AppsMode>;
 
 /** Main on dev's Doppler config (envs.ts `OS_DOPPLER_PROJECT`, config `preview`), downloaded — the
  *  Cloudflare credentials for the dev/preview account and the two secrets every apps/os deploy
@@ -391,10 +388,9 @@ async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }
   if (failures.length > 0) throw new Error(`delete failures:\n  ${failures.join("\n  ")}`);
 }
 
-/** The deployment a suite tests: the one the run just deployed (PREVIEW_DEPLOYMENT, the deploy
- *  job's output), else — a test-only dispatch, a laptop — the prefix's newest. */
+/** The deployment a suite tests away from its run's deploy (a test-only dispatch, a laptop): the
+ *  prefix's newest. */
 async function deploymentToTest(prefix: string) {
-  if (process.env.PREVIEW_DEPLOYMENT) return process.env.PREVIEW_DEPLOYMENT;
   const newest = newestPreviewDeployment(
     await listPreviewDeployments((await accountContext()).cf),
     prefix,
@@ -603,7 +599,7 @@ async function deployPreviewSteps(
     });
     await traceOperation("Write the PR section", () =>
       writePullRequestBody(pullRequestBody(prNumber), "the preview section", (body) =>
-        splicePullRequestBody(body, section),
+        replaceMarkedSection(body, PREVIEW_SECTION, section),
       ),
     );
   };
@@ -775,7 +771,8 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  (NOTES_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
  *  them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
  *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
- *  each row to its timeout ceiling (e2e/support/setup.ts). */
+ *  each row to its timeout ceiling (e2e/support/setup.ts), and the PR's number as
+ *  PREVIEW_PR_NUMBER, by which the pkg.pr.new rows find the PR's own builds. */
 async function runSuite(
   suite: "e2e" | "specs",
   name: string,
@@ -843,7 +840,13 @@ async function runSuite(
       // `e2e:run`, not `e2e`: the deployed target needs no local build.
       return {
         args: ["e2e:run", ...slowRowsTagsFilter(slowRows)],
-        env: { ...env, E2E_SLOW_ROWS: slowRows, ...PREVIEW_SUITE_TELEMETRY["preview-e2e"] },
+        env: {
+          ...env,
+          // empty without a PR, which the rows read as none
+          PREVIEW_PR_NUMBER: prNumber || "",
+          E2E_SLOW_ROWS: slowRows,
+          ...PREVIEW_SUITE_TELEMETRY["preview-e2e"],
+        },
       };
     });
   } catch (error) {
@@ -1037,23 +1040,6 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
   }
 }
 
-/** Every open pull request's head branch — what keeps a deployment whose prefix names a branch
- *  (preview-sweep.ts rule 4) — or undefined when GitHub cannot say, and rule 4 then deletes nothing. */
-async function openPullRequestBranches() {
-  try {
-    const github = getOctokit();
-    const pulls = await github.paginate(github.rest.pulls.list, {
-      ...getRepo(),
-      state: "open",
-      per_page: 100,
-    });
-    return pulls.map((pull) => pull.head.ref);
-  } catch (error) {
-    console.warn(`${describe(error)}; deployments without a PR number are judged on age alone.`);
-    return undefined;
-  }
-}
-
 /** THE LEGACY WORKER PREVIEWS still on main on dev's workers and the former parents
  *  (preview-config.ts FORMER_PARENTS), each holding a Durable Object namespace per class of the
  *  account's 500, and the resources of `os`'s and `os-preview`'s previews
@@ -1146,12 +1132,7 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
       .filter((number) => number !== undefined),
   ))
     pullRequestStates.set(number, await pullRequestState(number));
-  const plan = planPreviewSweep({
-    now: Date.now(),
-    deployments,
-    pullRequestStates,
-    openPullRequestBranches: await openPullRequestBranches(),
-  });
+  const plan = planPreviewSweep({ now: Date.now(), deployments, pullRequestStates });
   for (const { deployment, verdict, reason } of plan)
     console.log(`  ${verdict === "stale" ? "delete" : "keep  "} ${deployment.name}: ${reason}`);
   const stale = plan
@@ -1245,13 +1226,14 @@ async function sweep(cf: Cf, options: { dryRun: boolean; jobUrl: string | undefi
 // ── main ───────────────────────────────────────────────────────────────────────────────────────
 
 type PreviewOptions = {
-  /** the pull request's number (else PREVIEW_PR_NUMBER) */
+  /** the pull request's number: its deployments are `pr<n>-<sha7>` */
   pr?: string;
-  /** the prefix's name, for a run without a PR number (else PREVIEW_NAME) */
+  /** the prefix's name, for a deployment with no PR (`exp-<you>`, CI's own `main`) */
   name?: string;
-  /** the apps on top: all (default, else PREVIEW_APPS) or none */
+  /** the apps on top: all (default: a PR's, a CI workflow's) or none (a soak of apps/os alone) */
   apps?: "all" | "none";
-  /** e2e: which rows tagged `slow` run — run, skip or only (else E2E_SLOW_ROWS) */
+  /** e2e: which rows tagged `slow` run — run, skip or only (default: as the PR's paths and label
+   *  say, scripts/slow-rows.ts) */
   slowRows?: "run" | "skip" | "only";
   /** print the plan instead of acting */
   dryRun?: boolean;
@@ -1299,7 +1281,7 @@ export default class Preview {
 
 async function main(command: Command, options: PreviewOptions) {
   const dryRun = options.dryRun || false;
-  const pr = options.pr || process.env.PREVIEW_PR_NUMBER;
+  const pr = options.pr;
   if (command === "sweep")
     return sweep((await accountContext()).cf, { dryRun, jobUrl: process.env.DEPOT_JOB_URL });
   if (command === "deploy-parents") return deployParents(await accountContext());
@@ -1310,10 +1292,7 @@ async function main(command: Command, options: PreviewOptions) {
       throw new Error("cleanup-superseded needs PREVIEW_DEPLOYMENT, the deployment the run made");
     return cleanupSuperseded((await accountContext()).cf, current, { dryRun });
   }
-  const prefix = resolvePreviewPrefix({
-    name: options.name || process.env.PREVIEW_NAME,
-    prNumber: pr,
-  });
+  const prefix = resolvePreviewPrefix({ name: options.name, prNumber: pr });
   if (command === "delete") return deletePrefix((await accountContext()).cf, prefix, { dryRun });
   if (command === "e2e" || command === "specs")
     return runSuite(
@@ -1324,7 +1303,7 @@ async function main(command: Command, options: PreviewOptions) {
         ? previewDeploymentName(prefix, checkedOutCommit())
         : await deploymentToTest(prefix),
       pr,
-      options.slowRows || SlowRows.optional().parse(process.env.E2E_SLOW_ROWS || undefined),
+      options.slowRows,
     );
   const name = previewDeploymentName(prefix, checkedOutCommit());
   const urls = previewDeploymentUrls(name);
@@ -1334,8 +1313,7 @@ async function main(command: Command, options: PreviewOptions) {
     console.log(`wrote ${findBuiltWranglerConfig(ROOT)}`);
     return;
   }
-  const apps =
-    AppsMode.parse(options.apps || process.env.PREVIEW_APPS || "all") === "all" ? APPS : [];
+  const apps = options.apps === "none" ? [] : APPS;
   if (dryRun) {
     for (const app of apps) console.log(`  apps/${app.name} → ${urls.apps[app.name]}`);
     return;

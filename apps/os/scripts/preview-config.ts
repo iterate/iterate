@@ -14,6 +14,7 @@ import { kit } from "../../kit/scripts/app.ts";
 import { notes } from "../../notes/scripts/app.ts";
 import { admin } from "../../admin/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
+import { markedSection, replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
 
@@ -130,27 +131,14 @@ export function accountWorkerNames() {
 
 // ── the PR body's managed section ──────────────────────────────────────────────────────────────
 
-const SECTION_BEGIN = "<!-- os-preview:begin -->";
-const SECTION_END = "<!-- os-preview:end -->";
-
-/** Replace the managed section between the markers, or append one. Everything a person wrote
- *  around it is kept verbatim. */
-export function splicePullRequestBody(body: string, section: string) {
-  const block = `${SECTION_BEGIN}\n${section.trim()}\n${SECTION_END}`;
-  const begin = body.indexOf(SECTION_BEGIN);
-  const end = body.indexOf(SECTION_END, begin);
-  if (begin >= 0 && end > begin) {
-    return body.slice(0, begin) + block + body.slice(end + SECTION_END.length);
-  }
-  const kept = body.trimEnd();
-  return `${kept ? `${kept}\n\n` : ""}${block}\n`;
-}
+/** The label of the PR body's managed section (scripts/ci/markdown-annotator.ts):
+ *  `<!-- os-preview -->…<!-- /os-preview -->`. */
+export const PREVIEW_SECTION = "os-preview";
 
 // ── a previous commit's section ────────────────────────────────────────────────────────────────
 
-/** The heading of a section this module writes, `### Preview \`<deployment>\``, or the
- *  `### OS preview: \`<preview>\`` an older section in a PR body still has. */
-const SECTION_HEADING = /^### (?:OS preview: |Preview )`([^`]+)`\n*/;
+/** The heading of a section this module writes, `### Preview \`<deployment>\``. */
+const SECTION_HEADING = /^### Preview `([^`]+)`\n*/;
 
 /** A deploy starts by folding the section it will replace into a `<details>`, so the links read as
  *  a previous commit's at a glance, and a deploy that fails leaves them folded; the next deploy
@@ -158,17 +146,15 @@ const SECTION_HEADING = /^### (?:OS preview: |Preview )`([^`]+)`\n*/;
  *  (tasks/ci-change-detection.md), fold only after it has decided to deploy: a push that reuses the
  *  deployment leaves it current. A body with no section, or one already folded, stays as it is. */
 export function foldPreviousPreviewSection(body: string) {
-  const begin = body.indexOf(SECTION_BEGIN);
-  const end = body.indexOf(SECTION_END, begin);
-  if (begin < 0 || end < begin) return body;
-  const inner = body.slice(begin + SECTION_BEGIN.length, end).trim();
-  if (inner.startsWith("<details>")) return body;
+  const inner = markedSection(body, PREVIEW_SECTION);
+  if (!inner || inner.startsWith("<details>")) return body;
   const heading = SECTION_HEADING.exec(inner);
   const summary = heading
     ? `Previous commit's deployment: <code>${heading[1]}</code>`
     : "Previous commit's deployment";
-  return splicePullRequestBody(
+  return replaceMarkedSection(
     body,
+    PREVIEW_SECTION,
     `<details><summary>${summary}</summary>\n\n${heading ? inner.slice(heading[0].length) : inner}\n\n</details>`,
   );
 }

@@ -16,7 +16,7 @@ pnpm install
 pnpm dev
 pnpm typecheck
 pnpm test
-pnpm os e2e
+pnpm --dir apps/os e2e
 pnpm spec
 ```
 
@@ -107,8 +107,8 @@ doppler run --project os --config preview -- \
 
 `deploy` deploys this checkout's commit as `pr<number>-<sha7>` (or `<name>-<sha7>` with `--name`).
 Use `e2e` (the vitest e2e suite) or `specs` (the Playwright specs) in place of `deploy` to test the
-newest deployment of a PR, or without `--pr` of a name (`--name main` is Main OS e2e's), or the
-one PREVIEW_DEPLOYMENT names. CI does the same without deploying:
+newest deployment of a PR, or without `--pr` of a name (`--name main` is Main OS e2e's). CI does the
+same without deploying:
 
 ```sh
 depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-os.yml --ref ci-soak/<name> \

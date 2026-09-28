@@ -77,9 +77,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # THE PREFIX of every run's deployment, `main-<sha7>` (apps/os/scripts/preview.ts reads it;
-  # preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
-  PREVIEW_NAME: main
+  # THE PREFIX of every run's deployment, `main-<sha7>`: each `pnpm preview` step's `--name`
+  # (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  DEPLOYMENT_PREFIX: main
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
   # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
   BASH_ENV: ${{ github.workspace }}/scripts/ci/tracing/shell.sh
@@ -109,8 +109,7 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          PREVIEW_APPS: all
-        run: doppler run --project os --config preview -- pnpm preview deploy
+        run: doppler run --project os --config preview -- pnpm preview deploy --name "$DEPLOYMENT_PREFIX" --apps all
 
   # THE TWO SUITES, as a PR's Preview OS runs them (preview-os.yml): E2E tests and Browser specs,
   # side by side, and ONE DEFINITION. Browser specs runs E2E tests' steps (the `suite-steps`
@@ -129,9 +128,9 @@ jobs:
       SUITE: e2e
       FLAKE_SUITE: preview-e2e
       TEST_TELEMETRY_EXPECTED_WORKSPACES: os
-      # every row, the ones tagged `slow` too: most PRs skip them (docs/testing.md#slow-rows). The
-      # `alert` job pages them under their own name.
-      E2E_SLOW_ROWS: run
+      # `--slow-rows`, so every row runs, the ones tagged `slow` too, which most PRs skip
+      # (docs/testing.md#slow-rows). The `alert` job pages them under their own name.
+      SLOW_ROWS: run
       # TEST TELEMETRY, as a PR preview's test jobs write it; main's flake records and suite
       # summaries feed the flake dashboard through the test evidence in R2.
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
@@ -187,7 +186,10 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # the job whose end starts the suite (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: deploy
-        run: doppler run --project os --config preview -- pnpm preview "$SUITE"
+        run: >-
+          doppler run --project os --config preview -- pnpm preview "$SUITE"
+          ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"}
+          ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}
       # The telemetry finalizer, then the test evidence manifest, once the suite read its deployed
       # target, as in a PR preview's test jobs (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest

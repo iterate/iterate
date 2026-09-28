@@ -3,6 +3,7 @@ import path from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
+import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import {
@@ -14,11 +15,11 @@ import {
   MAX_PREVIEW_PREFIX_LENGTH,
   previewDeploymentName,
   previewDeploymentUrls,
+  PREVIEW_SECTION,
   previewPullRequestNumber,
   renderPullRequestSection,
   resolvePreviewPrefix,
   slugifyPreviewName,
-  splicePullRequestBody,
   templateQuickLaunches,
   writePullRequestBody,
 } from "./preview-config.ts";
@@ -151,36 +152,15 @@ test("the PR body's managed section: says so when CI's seed of the test project 
   expect(section).not.toContain("Seeding");
 });
 
-test("the PR body's managed section: appends to a body without one, keeping the author's text", () => {
-  const body = splicePullRequestBody("What this PR does.\n", section);
-  expect(body.startsWith("What this PR does.\n\n<!-- os-preview:begin -->\n")).toBe(true);
-  expect(body.endsWith("\n<!-- os-preview:end -->\n")).toBe(true);
-});
-
-test("the PR body's managed section: replaces an existing section in place, and only that", () => {
-  const before = `Intro.\n\n<!-- os-preview:begin -->\nold\n<!-- os-preview:end -->\n\nOutro.\n`;
-  const after = splicePullRequestBody(before, "new");
-  expect(after).toBe(
-    `Intro.\n\n<!-- os-preview:begin -->\nnew\n<!-- os-preview:end -->\n\nOutro.\n`,
-  );
-  expect(splicePullRequestBody(after, "newer")).not.toContain("new\n<!--");
-});
-
-test("the PR body's managed section: an empty body becomes just the section", () => {
-  expect(splicePullRequestBody("", "s")).toBe(
-    "<!-- os-preview:begin -->\ns\n<!-- os-preview:end -->\n",
-  );
-});
-
 // ── a previous commit's section, folded when the next deploy starts ──
 
 test("a new deploy folds the previous commit's section, keeping the author's text byte for byte; the next section it writes is unfolded again", () => {
-  const body = splicePullRequestBody("What this PR does.\n", section);
+  const body = withSection("What this PR does.\n");
   const folded = foldPreviousPreviewSection(body);
   expect(folded).toMatchInlineSnapshot(`
     "What this PR does.
 
-    <!-- os-preview:begin -->
+    <!-- os-preview -->
     <details><summary>Previous commit's deployment: <code>pr123-ccccccc</code></summary>
 
     | apps | | |
@@ -191,20 +171,16 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
     New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
 
     </details>
-    <!-- os-preview:end -->
+    <!-- /os-preview -->
     "
   `);
   expect(folded.startsWith("What this PR does.\n\n")).toBe(true);
   // folding twice (a retried deploy, a second push before the first deploy landed) changes nothing
   expect(foldPreviousPreviewSection(folded)).toBe(folded);
-  expect(splicePullRequestBody(folded, section)).toBe(body);
+  expect(withSection(folded)).toBe(body);
 });
 
-test("a new deploy folds a section written before per-commit deployments too, and leaves a body without one alone", () => {
-  const legacy = splicePullRequestBody("", "### OS preview: `pr123`\n\nold links");
-  expect(foldPreviousPreviewSection(legacy)).toContain(
-    "<details><summary>Previous commit's deployment: <code>pr123</code></summary>\n\nold links\n\n</details>",
-  );
+test("a new deploy leaves a body without the section alone", () => {
   expect(foldPreviousPreviewSection("What this PR does.\n")).toBe("What this PR does.\n");
 });
 
@@ -496,5 +472,5 @@ function fakePullRequest(
 }
 
 function withSection(body: string) {
-  return splicePullRequestBody(body, section);
+  return replaceMarkedSection(body, PREVIEW_SECTION, section);
 }
