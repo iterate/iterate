@@ -1,4 +1,3 @@
-// ci-change-detection live check: a notes-only push (reverted by the next push)
 // base-path.ts — THE PATH NOTES IS SERVED UNDER in the browser. A project's config worker
 // (config-worker.ts) proxies Notes: on a host of its own under subdomains ingress
 // (`notes--<project>.<base>`) the base path is "", and under paths ingress it is
