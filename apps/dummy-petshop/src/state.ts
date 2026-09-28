@@ -7,7 +7,7 @@ export const DEFAULT_ACCESS_TTL_SECONDS = 120;
 /**
  * The seeded OAuth client every environment starts with. Fixed, well-known
  * values on purpose: this is a dummy service holding only fake data, and
- * specs need credentials that exist before any backdoor call.
+ * specs need credentials that exist before any test-control call.
  */
 export const DEFAULT_CLIENT_ID = "petshop-default";
 export const DEFAULT_CLIENT_SECRET = "petshop-default-secret";
@@ -17,7 +17,7 @@ export const DEFAULT_CLIENT_SECRET = "petshop-default-secret";
  * Well-known ids, like the OAuth client above — but the seed carries NO
  * verifying key: petshop holds only PUBLIC keys, and the matching private key
  * lives on the OS side, so the App JWT verifier is dead until a public key is
- * registered via `POST /__backdoor/apps`. That is the point being proven, not a
+ * registered via `POST /__test-controls/apps`. That is the point being proven, not a
  * gap.
  */
 export const DEFAULT_APP_ID = "petshop-app";
@@ -27,9 +27,9 @@ export const DEFAULT_INSTALLATION_ID = "petshop-installation";
 export interface OauthClient {
   clientSecret: string;
   accessTokenTtlSeconds: number;
-  /** RFC 7591 dynamically-registered redirect URIs. Empty for the seeded/backdoor
-   * clients (they accept any absolute redirect_uri); a DCR client is pinned to
-   * exactly what it registered. */
+  /** RFC 7591 dynamically-registered redirect URIs. Empty for the seeded client and those minted
+   * by `POST /__test-controls/clients` (they accept any absolute redirect_uri); a DCR client is
+   * pinned to exactly what it registered. */
   redirectUris?: string[];
   /** A public client (token_endpoint_auth_method "none", the standard MCP shape)
    * has no secret and authenticates at the token endpoint with PKCE + its
@@ -49,15 +49,17 @@ export interface GithubApp {
   publicKeyPem: string;
   installationId: string;
   webhookSecret: string;
-  /** The GitHub fake's (github.ts) view of the installation, filled by `registerApp` (absent on
-   *  an installation registered before the fake existed): the App's URL handle
-   *  (`/apps/<appSlug>/installations/new`), its Callback URL, the account it is installed on, the
-   *  users who reach it (`/user/installations`) and the OAuth client they authorize. */
-  appSlug?: string;
+  /** The GitHub fake's (github.ts) view of the installation: the App's URL handle
+   *  (`/apps/<appSlug>/installations/new`), the account it is installed on, the users who reach it
+   *  (`/user/installations`), the first of whom installs it by default, and the OAuth client they
+   *  authorize. */
+  appSlug: string;
+  account: GithubAccount;
+  users: GithubInstallationUser[];
+  oauthClientId: string;
+  /** The App's Callback URL, where installing redirects; an installation registered without one
+   *  has no install page. */
   callbackUrl?: string;
-  account?: GithubAccount;
-  users?: GithubInstallationUser[];
-  oauthClientId?: string;
 }
 
 /** The account (a user or an organization) a GitHub App installation is on. */
@@ -80,12 +82,12 @@ export interface GithubInstallationUser {
  * token-endpoint failures.
  */
 export interface PetshopState {
-  /** Revocation epochs, by client and by one account of a client (`accountRevocationKey`). A
-   * token seals both of its own, so a test expires the tokens of the account it signed in as
-   * and no other: the one shop serves every concurrent CI run, and a preview's Google, GitHub and
-   * Cloudflare sign-ins all hold tokens of `petshop-default`. A key with a colon is an account's
-   * (`tesco-login:<email>` is a client of one account), and the `MINTED_RECORDS_KEPT` most
-   * recently revoked are kept; a minted client's keys go with the client. */
+  /** The revocation epochs of one account's tokens of one client, by `accountRevocationKey`. A
+   * token seals its account's epoch at mint and answers 401 once expire-tokens (test-controls.ts)
+   * moves that epoch on, so a test expires the tokens of the account it signed in as and no
+   * other: the one shop serves every concurrent CI run, and a preview's Google, GitHub and
+   * Cloudflare sign-ins all hold tokens of `petshop-default`. The `MINTED_RECORDS_KEPT` most
+   * recently revoked are kept; a minted client's go with the client. */
   accessTokenEpochs: Record<string, number>;
   /** The seeded client and the newest `MINTED_RECORDS_KEPT` minted ones, oldest first. */
   clients: Record<string, OauthClient>;
@@ -101,23 +103,22 @@ export interface PetshopState {
   tokenEndpointFailuresRemainingByClient: Record<string, number>;
   /** Registered GitHub App installations, keyed by `installationId` (the path
    * segment of `POST /app/installations/<id>/access_tokens`). Seeded with the
-   * well-known default; extended/replaced via `POST /__backdoor/apps`. */
+   * well-known default; extended/replaced via `POST /__test-controls/apps`. */
   apps: Record<string, GithubApp>;
-  /** Installation ids in registration order, oldest first — what the registry's cap drops from.
-   *  Absent in a state saved before it existed. */
-  installationOrder?: string[];
+  /** Installation ids in registration order, oldest first — what the registry's cap drops from. */
+  installationOrder: string[];
   /** What the Slack fake's (slack.ts) `chat.postMessage` recorded, per workspace, newest last. */
-  slackMessages?: Record<string, SlackMessage[]>;
+  slackMessages: Record<string, SlackMessage[]>;
   /** The GitHub fake's pull requests (their files) and the check runs posted to it, per
    *  installation, newest last. */
-  githubPulls?: Record<string, GithubPull[]>;
-  githubCheckRuns?: Record<string, GithubCheckRun[]>;
+  githubPulls: Record<string, GithubPull[]>;
+  githubCheckRuns: Record<string, GithubCheckRun[]>;
   /** The RS256 key the Google and Cloudflare fakes sign ID tokens with (oidc.ts), minted on first
    *  use and kept, so every isolate's ID tokens verify against the one published JWKS. */
   oidcSigningKey?: OidcSigningKey;
 }
 
-/** A pull request the GitHub fake serves (`/__backdoor/github/pulls` seeds it). */
+/** A pull request the GitHub fake serves (`/__test-controls/github/pulls` seeds it). */
 export interface GithubPull {
   owner: string;
   repo: string;
@@ -169,9 +170,8 @@ const MINTED_RECORDS_KEPT = 500;
 
 const MINTED_CLIENT_ID_PREFIX = "petshop-client-";
 
-/** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's revocation epochs (its own
- *  and its accounts') and its scheduled token-endpoint failures go with it; the seeded client and
- *  the endpoint-wide epochs (`graphql-session-login`, a GitHub App's) stay. */
+/** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's accounts' revocation epochs
+ *  and its scheduled token-endpoint failures go with it; the seeded client stays. */
 function dropOldestMintedRecords(state: PetshopState): void {
   const mintedClientIds = Object.keys(state.clients).filter((id) =>
     id.startsWith(MINTED_CLIENT_ID_PREFIX),
@@ -180,14 +180,13 @@ function dropOldestMintedRecords(state: PetshopState): void {
     delete state.clients[clientId];
   for (const byClient of [state.accessTokenEpochs, state.tokenEndpointFailuresRemainingByClient])
     for (const key of Object.keys(byClient)) {
-      // a minted client's id has no colon, so it is the whole key or an account key's first part
+      // a minted client's id has no colon: a failure's whole key, an epoch key's first part
       const clientId = key.split(":")[0]!;
       if (clientId.startsWith(MINTED_CLIENT_ID_PREFIX) && !state.clients[clientId])
         delete byClient[key];
     }
-  const accountEpochIds = Object.keys(state.accessTokenEpochs).filter((id) => id.includes(":"));
-  for (const accountId of accountEpochIds.slice(0, -MINTED_RECORDS_KEPT))
-    delete state.accessTokenEpochs[accountId];
+  for (const key of Object.keys(state.accessTokenEpochs).slice(0, -MINTED_RECORDS_KEPT))
+    delete state.accessTokenEpochs[key];
   state.usedAuthorizationCodeIds = state.usedAuthorizationCodeIds.slice(-MINTED_RECORDS_KEPT);
 }
 
@@ -198,26 +197,17 @@ export function fakeUserIdOf(login: string): number {
   return hash >>> 0;
 }
 
-/** A client or account whose tokens were never expired is at epoch 0. */
-export function accessTokenEpochFor(state: PetshopState, key: string): number {
-  return state.accessTokenEpochs[key] ?? 0;
+/** The revocation epoch of the tokens `holder.account` holds from `holder.clientId`: 0 until they
+ *  are first expired. */
+export function accessTokenEpochFor(
+  state: PetshopState,
+  holder: { clientId: string; account: string },
+): number {
+  return state.accessTokenEpochs[accountRevocationKey(holder.clientId, holder.account)] ?? 0;
 }
 
-/** The revocation key of the tokens ONE account holds from `clientId`: expiring it ends them, and
- *  no other account's tokens of the client. */
-export const accountRevocationKey = (clientId: string, account: string) => `${clientId}:${account}`;
-
-/** The seeded default GitHub App installation — well-known ids, no verifying
- * key yet (see {@link GithubApp}); its webhook secret is random per environment,
- * so signature specs prove real verification. */
-function defaultGithubApp(): GithubApp {
-  return {
-    appId: DEFAULT_APP_ID,
-    publicKeyPem: "",
-    installationId: DEFAULT_INSTALLATION_ID,
-    webhookSecret: crypto.randomUUID(),
-  };
-}
+/** The key of the tokens ONE account holds from `clientId` in `accessTokenEpochs`. */
+const accountRevocationKey = (clientId: string, account: string) => `${clientId}:${account}`;
 
 /** Where the state blob is kept: a Durable Object's storage, or a map (memory-state.ts). */
 export interface PetshopStorage {
@@ -253,8 +243,12 @@ export class PetshopStore {
       revokedRefreshTokenIds: [],
       usedAuthorizationCodeIds: [],
       tokenEndpointFailuresRemainingByClient: {},
-      apps: { [DEFAULT_INSTALLATION_ID]: defaultGithubApp() },
+      // the seeded installation, with no verifying key until one is registered (DEFAULT_APP_ID)
+      apps: { [DEFAULT_INSTALLATION_ID]: githubApp({ publicKeyPem: "" }, {}) },
       installationOrder: [DEFAULT_INSTALLATION_ID],
+      slackMessages: {},
+      githubPulls: {},
+      githubCheckRuns: {},
     };
     await this.#storage.put("state", initial);
     return initial;
@@ -267,15 +261,6 @@ export class PetshopStore {
 
   async getState(): Promise<PetshopState> {
     return await this.#load();
-  }
-
-  /** An empty store takes `initial()`'s state in place of the seed, and answers it; a store that
-   *  has state keeps it, and answers null. */
-  async startFrom(initial: () => Promise<PetshopState>): Promise<PetshopState | null> {
-    if (await this.#storage.get<PetshopState>("state")) return null;
-    const state = await initial();
-    await this.#storage.put("state", state);
-    return state;
   }
 
   async createClient(input: {
@@ -296,12 +281,12 @@ export class PetshopStore {
     return { clientId, clientSecret };
   }
 
-  /** Every outstanding access token `account` holds from `clientId` answers 401 from now on; with
-   *  no `account`, every token of the client. Answers the new epoch. */
-  async expireAccessTokens(clientId: string, account?: string): Promise<number> {
+  /** Every outstanding access token `account` holds from `clientId` answers 401 from now on, and
+   *  no other account's. Answers the new epoch. */
+  async expireAccessTokens(clientId: string, account: string): Promise<number> {
     const state = await this.#load();
-    const key = account ? accountRevocationKey(clientId, account) : clientId;
-    const next = accessTokenEpochFor(state, key) + 1;
+    const key = accountRevocationKey(clientId, account);
+    const next = accessTokenEpochFor(state, { clientId, account }) + 1;
     // re-inserted, so the order of the epochs is the order they were last revoked in
     delete state.accessTokenEpochs[key];
     state.accessTokenEpochs[key] = next;
@@ -332,48 +317,15 @@ export class PetshopStore {
   /**
    * Register (or replace) a GitHub App installation's verifying key — how the
    * OS side installs the PUBLIC key matching the private key it will sign App
-   * JWTs with. Defaults the ids to the well-known seed so the common case is
-   * `{ publicKeyPem }`; a replace keeps the existing appId/webhookSecret unless
-   * overridden, so registering a key does not silently rotate the webhook
-   * secret. The GitHub fake's fields default to the seeded OAuth client and one
-   * admin, `petshop-user`; a User account's id is its login's user id. Returns
-   * the stored record (webhook secret included) for the caller.
+   * JWTs with. Returns the stored record (webhook secret included) for the
+   * caller.
    */
-  async registerApp(input: {
-    publicKeyPem: string;
-    appId?: string;
-    installationId?: string;
-    webhookSecret?: string;
-    appSlug?: string;
-    callbackUrl?: string;
-    account?: { login: string; id?: number; type?: GithubAccount["type"] };
-    users?: GithubInstallationUser[];
-    oauthClientId?: string;
-  }): Promise<GithubApp> {
+  async registerApp(input: AppRegistration): Promise<GithubApp> {
     const state = await this.#load();
-    const installationId = input.installationId || DEFAULT_INSTALLATION_ID;
-    const existing = state.apps[installationId];
-    const account = input.account || { login: "petshop-org" };
-    const app: GithubApp = {
-      appId: input.appId || existing?.appId || DEFAULT_APP_ID,
-      publicKeyPem: input.publicKeyPem,
-      installationId,
-      webhookSecret: input.webhookSecret || existing?.webhookSecret || crypto.randomUUID(),
-      appSlug: input.appSlug || DEFAULT_APP_ID,
-      callbackUrl: input.callbackUrl,
-      account: {
-        login: account.login,
-        id: account.id || fakeUserIdOf(account.login),
-        type: account.type || "Organization",
-      },
-      users: input.users || [{ login: "petshop-user", role: "admin" }],
-      oauthClientId: input.oauthClientId || DEFAULT_CLIENT_ID,
-    };
-    state.apps[installationId] = app;
-    const order = (state.installationOrder || Object.keys(state.apps)).filter(
-      (id) => id !== installationId,
-    );
-    order.push(installationId);
+    const app = githubApp(input, state.apps);
+    state.apps[app.installationId] = app;
+    const order = state.installationOrder.filter((id) => id !== app.installationId);
+    order.push(app.installationId);
     while (order.length > RECORDS_KEPT) {
       const [oldest] = order.splice(order[0] === DEFAULT_INSTALLATION_ID ? 1 : 0, 1);
       delete state.apps[oldest!];
@@ -385,7 +337,7 @@ export class PetshopStore {
 
   async recordSlackMessage(teamId: string, message: SlackMessage): Promise<void> {
     const state = await this.#load();
-    const { [teamId]: earlier = [], ...others } = state.slackMessages || {};
+    const { [teamId]: earlier = [], ...others } = state.slackMessages;
     // the workspace moves to the end, so the least recently posted-to are the ones dropped
     state.slackMessages = Object.fromEntries([
       ...Object.entries(others).slice(-(RECORDS_KEPT - 1)),
@@ -420,12 +372,12 @@ export class PetshopStore {
   /** Seed a pull request an installation reaches; the newest `RECORDS_KEPT` per installation. */
   async recordGithubPull(installationId: string, pull: GithubPull): Promise<void> {
     const state = await this.#load();
-    const pulls = (state.githubPulls?.[installationId] || []).filter(
+    const pulls = (state.githubPulls[installationId] || []).filter(
       (known) =>
         !(known.owner === pull.owner && known.repo === pull.repo && known.number === pull.number),
     );
     state.githubPulls = {
-      ...Object.fromEntries(Object.entries(state.githubPulls || {}).slice(-(RECORDS_KEPT - 1))),
+      ...Object.fromEntries(Object.entries(state.githubPulls).slice(-(RECORDS_KEPT - 1))),
       [installationId]: [...pulls, pull].slice(-RECORDS_KEPT),
     };
     await this.#save(state);
@@ -437,10 +389,10 @@ export class PetshopStore {
     run: Omit<GithubCheckRun, "id">,
   ): Promise<GithubCheckRun> {
     const state = await this.#load();
-    const runs = state.githubCheckRuns?.[installationId] || [];
+    const runs = state.githubCheckRuns[installationId] || [];
     const stored = { ...run, id: runs.length + 1 };
     state.githubCheckRuns = {
-      ...Object.fromEntries(Object.entries(state.githubCheckRuns || {}).slice(-(RECORDS_KEPT - 1))),
+      ...Object.fromEntries(Object.entries(state.githubCheckRuns).slice(-(RECORDS_KEPT - 1))),
       [installationId]: [...runs, stored].slice(-RECORDS_KEPT),
     };
     await this.#save(state);
@@ -464,6 +416,50 @@ export class PetshopStore {
     await this.#save(state);
     return true;
   }
+}
+
+/** A GitHub App installation's registration (`registerApp`): its App's public key, and what
+ *  differs from the seeded installation's. */
+interface AppRegistration {
+  publicKeyPem: string;
+  appId?: string;
+  installationId?: string;
+  webhookSecret?: string;
+  appSlug?: string;
+  callbackUrl?: string;
+  account?: { login: string; id?: number; type?: GithubAccount["type"] };
+  users?: GithubInstallationUser[];
+  oauthClientId?: string;
+}
+
+/**
+ * The installation `input` registers, over the one of its id in `registered`. What `input` leaves
+ * out is the seeded installation's (which is `githubApp({ publicKeyPem: "" }, {})`): the
+ * well-known ids, the seeded OAuth client, and one admin `petshop-user` on the organization
+ * `petshop-org`, so the common case is `{ publicKeyPem }`. A replace keeps the existing appId and
+ * webhook secret unless overridden, so registering a key does not silently rotate the webhook
+ * secret; a new webhook secret is random, so signature specs prove real verification. An
+ * account's id defaults to its login's user id.
+ */
+function githubApp(input: AppRegistration, registered: PetshopState["apps"]): GithubApp {
+  const installationId = input.installationId || DEFAULT_INSTALLATION_ID;
+  const existing = registered[installationId];
+  const account = input.account || { login: "petshop-org" };
+  return {
+    appId: input.appId || existing?.appId || DEFAULT_APP_ID,
+    publicKeyPem: input.publicKeyPem,
+    installationId,
+    webhookSecret: input.webhookSecret || existing?.webhookSecret || crypto.randomUUID(),
+    appSlug: input.appSlug || DEFAULT_APP_ID,
+    callbackUrl: input.callbackUrl,
+    account: {
+      login: account.login,
+      id: account.id || fakeUserIdOf(account.login),
+      type: account.type || "Organization",
+    },
+    users: input.users || [{ login: "petshop-user", role: "admin" }],
+    oauthClientId: input.oauthClientId || DEFAULT_CLIENT_ID,
+  };
 }
 
 /** What every route needs from the shop: its state, and the key that seals its codes and tokens.

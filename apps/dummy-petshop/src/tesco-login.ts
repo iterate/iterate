@@ -11,10 +11,10 @@
  *   → `{ access_token, expires_in: 900 }`. Any email, password "correct-horse".
  *   No cookie, or a `_csrf` the cookie does not bind, is a 403; a wrong
  *   password a 401.
- * - The access token is the shop's own (oauth-provider.ts) for the client
- *   `tesco-login:<email>`, so `/__backdoor/expire-tokens` with that client id
- *   revokes one account's tokens: what a test that forces a 401 wants, since
- *   this ONE shop serves every concurrent CI run.
+ * - The access token is the shop's own (oauth-provider.ts) of the client
+ *   `tesco-login`, its account the email, so `/__test-controls/expire-tokens`
+ *   with `{ clientId: "tesco-login", account: email }` revokes that account's
+ *   tokens and no other's (why: state.ts `accessTokenEpochs`).
  */
 import { LOGIN_PASSWORD, petshopOauth } from "./oauth-provider.ts";
 import { nowSeconds, seal, unseal } from "./seal.ts";
@@ -82,7 +82,7 @@ async function login(request: Request, deps: ShopDeps): Promise<Response> {
   if (!email || form.get("password") !== LOGIN_PASSWORD)
     return Response.json({ error: "invalid_credentials" }, { status: 401 });
   const accessToken = await petshopOauth(deps).accessToken(
-    `tesco-login:${email}`,
+    "tesco-login",
     { sub: email },
     TESCO_ACCESS_TTL_SECONDS,
   );

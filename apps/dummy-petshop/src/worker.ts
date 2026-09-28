@@ -5,43 +5,33 @@
  * behind many authentication schemes — its own OAuth 2.0 provider, a legacy
  * email+password login, a GraphQL session login, a Tesco-shaped form login, MCP,
  * OpenAPI and capnweb surfaces, two WebSocket gateways — plus Slack-, Google-,
- * Cloudflare- and GitHub-shaped fakes at those services' own paths, and a
- * backdoor for the tests. GET / documents the whole surface.
+ * Cloudflare- and GitHub-shaped fakes at those services' own paths, and
+ * controls for the tests (test-controls.ts). GET / documents the whole surface.
  *
  * The worker is stateless: durable state is one JSON blob in the
  * PetshopStateDurableObject (durable-object.ts), and every code and token is a
  * sealed AES-GCM blob (seal.ts).
  */
 import dedent from "dedent";
-import { z } from "zod";
 import { openAccessToken } from "./authorization-server.ts";
 import { handleCapnwebRequest } from "./capnweb.ts";
 import { handleCloudflareRequest } from "./cloudflare.ts";
 import { handleGatewayRequest } from "./gateway.ts";
 import {
   handleGithubRequest,
-  handleGithubTestControls,
   INSTALLATION_TOKEN,
   INSTALLATION_TOKEN_TTL_SECONDS,
   type InstallationGrant,
 } from "./github.ts";
 import { handleGoogleRequest } from "./google.ts";
-import {
-  GRAPHQL_SESSION_CLIENT_ID,
-  GRAPHQL_SESSION_TTL_SECONDS,
-  type GraphqlLoginDeps,
-  graphqlSessionFromBearer,
-  handleGraphqlLogin,
-} from "./graphql-login.ts";
+import { GRAPHQL_SESSION_TTL_SECONDS, handleGraphqlLogin } from "./graphql-login.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { handleOauthProviderRequest, LOGIN_PASSWORD, petshopOauth } from "./oauth-provider.ts";
 import { handlePetsApiRequest, petshopOpenApiDocument } from "./openapi.ts";
 import { type Pet, seedPets } from "./pets.ts";
 import { nowSeconds } from "./seal.ts";
-import { handleSlackRequest, handleSlackTestControls } from "./slack.ts";
+import { handleSlackRequest } from "./slack.ts";
 import {
-  accessTokenEpochFor,
-  accountRevocationKey,
   DEFAULT_ACCESS_TTL_SECONDS,
   DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
@@ -51,6 +41,7 @@ import {
 } from "./state.ts";
 import { PETSHOP_STATE_NAME, PetshopStateDurableObject } from "./durable-object.ts";
 import { handleTescoLogin, TESCO_ACCESS_TTL_SECONDS } from "./tesco-login.ts";
+import { handleTestControls } from "./test-controls.ts";
 
 export { PetshopStateDurableObject };
 
@@ -63,7 +54,6 @@ export interface Env {
 
 // The index doubles as endpoint documentation, so anyone poking a deployed
 // instance sees the whole surface without opening the repo.
-// iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the index lists the deployed /__backdoor/* routes by their paths
 const INDEX = dedent`
   🐾 dummy-petshop — a fake third party for integrations & secrets e2e
 
@@ -73,10 +63,11 @@ const INDEX = dedent`
   POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic or client_secret in the form, client_id alone for a public client (PKCE required)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "${LOGIN_PASSWORD}"
   POST /graphql             GraphQL session login: NewSession (any username, password "${LOGIN_PASSWORD}")
-                            → a ${GRAPHQL_SESSION_TTL_SECONDS}s session token, a bearer on /api/*; no refresh grant — logging in again is the refresh
+                            → a ${GRAPHQL_SESSION_TTL_SECONDS}s session token, a bearer on /api/*; no refresh grant — logging in again is the refresh;
+                            expire-tokens {clientId: "graphql-session-login", account: <username>} revokes it
   GET  /api/tesco/login     the Tesco-shaped two-step login, step one → {csrf} + Set-Cookie tesco_login (binds the token)
   POST /api/tesco/login     form email, password, _csrf with that cookie → {access_token, expires_in: ${TESCO_ACCESS_TTL_SECONDS}}; any email,
-                            password "${LOGIN_PASSWORD}"; a bearer on /api/*; expire-tokens {clientId: "tesco-login:<email>"} revokes it
+                            password "${LOGIN_PASSWORD}"; a bearer on /api/*; expire-tokens {clientId: "tesco-login", account: <email>} revokes it
   GET  /api/me              bearer whoami: {sub, clientId, tokenExpiresInSeconds}; +{installationId, appId} for an installation token
   GET  /api/pets            the account's (entirely fictional) pets
 
@@ -100,39 +91,23 @@ const INDEX = dedent`
                             a GitHub-shaped fake at GitHub's own paths (github.ts); an App JWT (RS256, iss=appId) mints a
                             ${INSTALLATION_TOKEN_TTL_SECONDS}s installation token, a bearer on /api/* too
 
-  POST /__backdoor/clients                 → mint {clientId, clientSecret}
-  POST /__backdoor/expire-tokens           {clientId, account} → the outstanding access tokens that account holds
-                                           from that client answer 401, no other account's (an email, login, name,
-                                           GraphQL username or GitHub installation id); with no account, every
-                                           token of the client
-  POST /__backdoor/revoke-refresh-token    {refreshToken} → that refresh token stops working
-  POST /__backdoor/fail-token-endpoint     {clientId, times} → that client's next N token calls answer 500
-  POST /__backdoor/apps                    {publicKeyPem, installationId?, appId?, webhookSecret?, appSlug?, callbackUrl?, account?, users?, oauthClientId?}
-                                           → register or replace a GitHub App installation (its public key only)
-  POST /__backdoor/apps/fire-webhook       {installationId?, url, event?, badSignature?, deliveryId?, eventName?} → deliver a webhook signed
-                                           x-hub-signature-256 with the installation's webhookSecret
-  POST /__backdoor/github/pulls · GET /__backdoor/github/check-runs?installation=   seed a pull request, read the check runs
-  GET  /__backdoor/slack/messages?team=<id>      what chat.postMessage recorded for that workspace
-  POST /__backdoor/slack/fire-webhook      {url, signingSecret, event, badSignature?} → POST it signed like Slack (x-slack-signature v0)
+  POST /__test-controls/clients                 → mint {clientId, clientSecret}
+  POST /__test-controls/expire-tokens           {clientId, account} → the outstanding access tokens that account holds
+                                                from that client answer 401, no other account's (an email, login, name,
+                                                GraphQL username or GitHub installation id)
+  POST /__test-controls/revoke-refresh-token    {refreshToken} → that refresh token stops working
+  POST /__test-controls/fail-token-endpoint     {clientId, times} → that client's next N token calls answer 500
+  POST /__test-controls/apps                    {publicKeyPem, installationId?, appId?, webhookSecret?, appSlug?, callbackUrl?, account?, users?, oauthClientId?}
+                                                → register or replace a GitHub App installation (its public key only)
+  POST /__test-controls/apps/fire-webhook       {installationId?, url, event?, badSignature?, deliveryId?, eventName?} → deliver a webhook signed
+                                                x-hub-signature-256 with the installation's webhookSecret
+  POST /__test-controls/github/pulls · GET /__test-controls/github/check-runs?installation=   seed a pull request, read the check runs
+  GET  /__test-controls/slack/messages?team=<id>      what chat.postMessage recorded for that workspace
+  POST /__test-controls/slack/fire-webhook      {url, signingSecret, event, badSignature?} → POST it signed like Slack (x-slack-signature v0)
 
   Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
-  seeded GitHub App ${DEFAULT_APP_ID}, installation ${DEFAULT_INSTALLATION_ID} (no key until POST /__backdoor/apps)
+  seeded GitHub App ${DEFAULT_APP_ID}, installation ${DEFAULT_INSTALLATION_ID} (no key until POST /__test-controls/apps)
 `;
-// iterate-lint-enable terminology/no-metaphorical-lane-door-seam
-
-/** The GraphQL login's view of the shop: the sealing key, and the two revocation epochs a session
- *  of `username` is bound to — the endpoint's (`graphql-session-login`) and the account's. */
-const graphqlLoginDeps = (deps: ShopDeps): GraphqlLoginDeps => ({
-  sealKey: deps.sealKey,
-  getAccessTokenEpochs: (username) =>
-    deps.state.getState().then((state) => ({
-      epoch: accessTokenEpochFor(state, GRAPHQL_SESSION_CLIENT_ID),
-      accountEpoch: accessTokenEpochFor(
-        state,
-        accountRevocationKey(GRAPHQL_SESSION_CLIENT_ID, username),
-      ),
-    })),
-});
 
 /** The request's bearer as a live grant on the pets API — the shop's own access token (OAuth, the
  *  legacy, Tesco and GraphQL logins) or a GitHub installation token — or null. */
@@ -150,66 +125,13 @@ async function accessGrant(
   const access = await petshopOauth(deps).openAccessToken(token);
   if (access) return { sub: access.grant.sub, clientId: access.clientId, exp: access.exp };
   const installation = await openAccessToken<InstallationGrant>(deps, INSTALLATION_TOKEN, token);
-  if (installation)
-    return {
-      sub: `installation:${installation.grant.installationId}`,
-      clientId: installation.clientId,
-      exp: installation.exp,
-      installation: installation.grant,
-    };
-  const session = await graphqlSessionFromBearer(token, graphqlLoginDeps(deps));
-  if (session) return { sub: session.sub, clientId: GRAPHQL_SESSION_CLIENT_ID, exp: session.exp };
-  return null;
-}
-
-const ExpireTokens = z.object({
-  clientId: z.string().min(1),
-  account: z.string().min(1).optional(),
-});
-const RevokeRefreshToken = z.object({ refreshToken: z.string() });
-const FailTokenEndpoint = z.object({ clientId: z.string().min(1), times: z.int().nonnegative() });
-
-/** The tests' controls of the shop's own provider, then the fakes' (slack.ts, github.ts). */
-async function backdoor(key: string, request: Request, deps: ShopDeps): Promise<Response> {
-  const body = () => request.json().catch(() => null);
-  const invalid = (error_description: string) =>
-    Response.json({ error: "invalid_request", error_description }, { status: 400 });
-  if (key === "POST /__backdoor/clients")
-    return Response.json(await deps.state.createClient({}), { status: 201 });
-  if (key === "POST /__backdoor/expire-tokens") {
-    const input = ExpireTokens.safeParse(await body());
-    if (!input.success)
-      return invalid("clientId is required so expiry cannot affect unrelated tests");
-    const { clientId, account } = input.data;
-    return Response.json({
-      clientId,
-      account,
-      accessTokenEpoch: await deps.state.expireAccessTokens(clientId, account),
-    });
-  }
-  if (key === "POST /__backdoor/revoke-refresh-token") {
-    const input = RevokeRefreshToken.safeParse(await body());
-    if (!input.success || !(await petshopOauth(deps).revokeRefreshToken(input.data.refreshToken)))
-      return invalid("refreshToken must be a refresh token of the shop's own provider");
-    return Response.json({ revoked: true });
-  }
-  if (key === "POST /__backdoor/fail-token-endpoint") {
-    const input = FailTokenEndpoint.safeParse(await body());
-    if (!input.success)
-      return invalid(
-        "clientId (so failures cannot affect unrelated tests) and times, a non-negative integer, are required",
-      );
-    await deps.state.setTokenEndpointFailures(input.data.clientId, input.data.times);
-    return Response.json({
-      clientId: input.data.clientId,
-      tokenEndpointFailuresRemaining: input.data.times,
-    });
-  }
-  return (
-    (await handleSlackTestControls(request, deps)) ??
-    (await handleGithubTestControls(request, deps)) ??
-    Response.json({ error: "not_found" }, { status: 404 })
-  );
+  if (!installation) return null;
+  return {
+    sub: `installation:${installation.grant.installationId}`,
+    clientId: installation.clientId,
+    exp: installation.exp,
+    installation: installation.grant,
+  };
 }
 
 /** What the routes need: the shop's state and sealing key, and the account's (fictional) pet
@@ -221,7 +143,14 @@ async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promis
   const key = `${request.method} ${url.pathname}`;
   if (key === "GET /")
     return new Response(INDEX, { headers: { "content-type": "text/plain; charset=utf-8" } });
-  if (url.pathname.startsWith("/__backdoor/")) return backdoor(key, request, deps);
+  if (url.pathname.startsWith("/__test-controls/")) return handleTestControls(request, deps);
+  // iterate-lint-disable terminology/no-metaphorical-lane-door-seam -- the deployed route the OS e2e helpers call until they move to /__test-controls
+  if (url.pathname.startsWith("/__backdoor/"))
+    return handleTestControls(
+      new Request(url.href.replace("/__backdoor/", "/__test-controls/"), request),
+      deps,
+    );
+  // iterate-lint-enable terminology/no-metaphorical-lane-door-seam
   const answered =
     (await handleOauthProviderRequest(request, deps)) ??
     (await handleSlackRequest(request, deps)) ??
@@ -231,7 +160,7 @@ async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promis
     (await handleTescoLogin(request, deps)) ??
     (await handleGatewayRequest(request, deps));
   if (answered) return answered;
-  if (key === "POST /graphql") return handleGraphqlLogin(request, graphqlLoginDeps(deps));
+  if (key === "POST /graphql") return handleGraphqlLogin(request, deps);
   // Everything below is the pets API, behind the bearer.
   const isPetsApi =
     key === "GET /api/me" ||
