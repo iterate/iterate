@@ -2,18 +2,19 @@
 // HAVPE has: a warm authenticated capnweb session, then "press the button = a new stream now".
 //
 // It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
-// project's root worker puts the voice facet and `call-started` on the fresh context in one append;
-// prepare the project at https://k.iterate.com), a live subscription for what the device would hear,
-// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary-added` fact
-// when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
-// timeline from the press.
+// project's root worker creates the call's agent, then puts the voice relay and `call-started` on the
+// fresh context in one append; prepare the project at https://k.iterate.com), a live subscription
+// for what the device would hear, microphone frames from a 16 kHz mono PCM16 WAV (or one silent
+// frame, with `--say`'s words handed to the call's agent as a person's message), the terminal. It
+// writes what came back to a WAV and prints the timeline from the press.
 //
 //   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
 //   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
-//   pnpm exec tsx scripts/voice-call.ts --say "Say: ready."
+//   pnpm exec tsx scripts/voice-call.ts --say "Say exactly: ready."
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
+import type {} from "@iterate-com/agents";
 import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
@@ -84,7 +85,8 @@ export default async function voiceCall(
     path?: string;
     /** A 16 kHz mono PCM16 WAV to send as microphone frames. */
     utterance?: string;
-    /** Text sent as a `commentary-added` fact after one silent frame. */
+    /** Words handed to the call's agent once the call is live, as a person's message: the live
+     *  model speaks the agent's answer. */
     say?: string;
     /** Where to write what came back as a WAV; default /tmp/voice-call-<now>.wav. */
     out?: string;
@@ -104,15 +106,16 @@ export default async function voiceCall(
   // ONE warm authenticated session and the project root — what a connected device holds.
   const warm0 = now();
   using connection = await connect();
-  // The project installed voice (https://k.iterate.com prepares it), so its root has `voice`: the
-  // assertion iterate/api's `IterateContextApiWith` documents for a root that knows an app is there.
+  // The project installed voice beside the agents app (https://k.iterate.com prepares both), so its
+  // root has `voice` and `agents`: the assertion iterate/api's `IterateContextApiWith` documents for
+  // a root that knows its apps are there.
   const root = connection.session.projects.get(PROJECT) as RpcPromise<
-    IterateContextApiWith<"voice">
+    IterateContextApiWith<"voice" | "agents">
   >;
   await root.invoke(["itx", ["whoami"]]);
   console.log(`session + project root ready in ${now() - warm0}ms`);
 
-  // THE PRESS: a fresh context, the processor enabled on it, a live callback for the answer.
+  // THE PRESS: a fresh context, its agent and the relay on it, a live callback for the answer.
   const itx = root.cd(CONTEXT_PATH);
   const t0 = now();
   const at = () => now() - t0;
@@ -124,8 +127,8 @@ export default async function voiceCall(
   let accepted: (() => void) | null = null;
   const acceptedPromise = new Promise<void>((resolve) => (accepted = resolve));
 
-  // THE PRESS: the root worker appends the voice facet's subscription row and `call-started` on
-  // this fresh context in one append. PIPELINED with the subscription below: neither depends on
+  // THE PRESS: the root worker creates the agent, then appends the relay's subscription row and
+  // `call-started` on this fresh context in one append. PIPELINED with the subscription below: neither depends on
   // the other's answer, so both go out now.
   const setupPromise = Promise.resolve(
     root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
@@ -143,7 +146,7 @@ export default async function voiceCall(
       "events.iterate.com/voice-agent/speaker-frame",
       "events.iterate.com/voice-agent/utterance-transcribed",
       "events.iterate.com/voice-agent/answer-transcribed",
-      "events.iterate.com/voice-agent/delegation-requested",
+      "events.iterate.com/agent/context-added",
       "events.iterate.com/voice-agent/provider-error-reported",
       "events.iterate.com/voice-agent/provider-disconnected",
     ],
@@ -175,10 +178,12 @@ export default async function voiceCall(
             transcript.push(`assistant: ${p.text}`);
             console.log(`[${at()}ms] assistant: ${p.text}`);
             break;
-          case "events.iterate.com/voice-agent/delegation-requested":
-            console.log(
-              `[${at()}ms] delegation ${p.delegationId} with ${p.transcript?.length ?? 0} turns`,
-            );
+          case "events.iterate.com/agent/context-added":
+            // What the relay handed the agent, and the agent's replies (a script step, or the
+            // answer the live model speaks).
+            if (p.role === "user") console.log(`[${at()}ms] to the agent: ${p.content}`);
+            if (p.role === "assistant" && p.llmRequestOffset)
+              console.log(`[${at()}ms] agent: ${String(p.content).slice(0, 300)}`);
             break;
           default:
             marks[event.type] ??= at();
@@ -236,13 +241,8 @@ export default async function voiceCall(
     sendFrame(frames[frameIndex] ?? silence);
     frameIndex++;
     if (SAY && frameIndex === 1) {
-      // Nothing to say into the microphone: hand the model a fact to paraphrase once the call is live.
-      void acceptedPromise.then(() =>
-        itx.append({
-          type: "events.iterate.com/voice-agent/commentary-added",
-          payload: { activation, delegationId: null, content: SAY },
-        }),
-      );
+      // Nothing to say into the microphone: hand the agent the words once the call is live.
+      void acceptedPromise.then(() => root.agents.get(CONTEXT_PATH).message(SAY));
     }
     if (ended) break;
   }

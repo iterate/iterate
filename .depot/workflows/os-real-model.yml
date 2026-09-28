@@ -32,12 +32,13 @@ on:
   push:
     branches: [main]
     # How an agent calls its model: the default model, the request, the byte transport, the pin of
-    # the fault the transport works around, and this suite.
+    # the fault the transport works around, a voice call's delegation, and this suite.
     paths:
       - .depot/workflows/os-real-model.yml
       - packages/agents/**
       - apps/agents/e2e/agents-default-model.e2e.test.ts
       - apps/agents/e2e/ai-stream-hung-request.e2e.test.ts
+      - apps/agents/e2e/voice-agent.e2e.test.ts
   workflow_dispatch:
 
 concurrency:
@@ -93,7 +94,7 @@ jobs:
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
           export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
-          doppler run --project os --config preview -- pnpm e2e:run agents-default-model ai-root-shadow-and-fable ai-stream-hung-request \
+          doppler run --project os --config preview -- pnpm e2e:run agents-default-model ai-root-shadow-and-fable ai-stream-hung-request voice-agent \
             || echo "the real-model rows exited $?: the health job judges their telemetry"
       - name: Keep the telemetry
         if: always()

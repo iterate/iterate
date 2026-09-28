@@ -1,9 +1,12 @@
 # @iterate-com/voice
 
-A GPT-Live voice conversation as TWO facet processors on a fresh context per press — the relay and
-the agent it delegates to — with the project's `itx.voice` worker answering the press. Userspace:
-a project installs this package; the platform ships none of it. It runs on the agents app
-(`@iterate-com/agents`): every call is an agent, created through `itx.agents`.
+A GPT-Live voice conversation on a fresh context per press: every call is an agent of the agents
+app (`@iterate-com/agents`, created through `itx.agents`), with this package's relay facet beside
+it and the project's `itx.voice` worker answering the press. The relay holds the live model; each
+request the live model delegates goes to the agent as a message through the agents app
+(`itx.agents.get(path).message(words)`), and the agent's answer goes back to the live model to
+speak. One agent loop answers the call: the agents app's, on its model and its sandbox. Userspace:
+a project installs this package; the platform ships none of it.
 
 ## Install
 
@@ -11,20 +14,25 @@ A project installs voice from a folder of its config repo, beside the agents app
 
 ```text
 voice/package.json   { "main": "worker.ts", "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" } }
-voice/worker.ts      export { default, VoiceAgentDurableObject, VoiceDelegateDurableObject } from "@iterate-com/voice";
+voice/worker.ts      export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
 ```
 
 `installVoice(itx, await itx.repos.get("/repos/config").modules({ dir: "voice" }))`
 (`@iterate-com/voice/install`) mounts that source at `itx.voice`, keeps it in project KV
-(`voice/runtime`) for the press's facets, and stores the screen font. `ensureVoiceAgent`, which Kit's
-Prepare and voice.iterate.com run, also stores the OpenAI key and commits both folders, in one
-commit (`commitAppFolders` in `@iterate-com/agents/install`), when the project has none, then loads
-both apps at once. To upgrade, pin a newer build and install again.
+(`voice/runtime`) for the press's relay facet, and stores the screen font. `ensureVoiceAgent`,
+which Kit's Prepare and voice.iterate.com run, also stores the OpenAI key (the live model's) and
+commits both folders, in one commit (`commitAppFolders` in `@iterate-com/agents/install`), when the
+project has none, then loads both apps at once. To upgrade, pin a newer build and install again.
 
-The backend inherits the same system prompt and codemode parser as a normal agent
-(`@iterate-com/agents/system-prompt` and `@iterate-com/agents/codemode-format`), with additional
-instructions for spoken answers. Keep tool examples in the shared prompt; do not maintain a
-separate voice API description.
+The backend is the project's normal agent: its system prompt, capability tree and codemode loop.
+The press adds [voice-context.md](src/voice-context.md), the instructions for spoken answers, as
+a developer message that starts no turn. Keep tool examples in the agents app's prompt; do not
+maintain a separate voice API description. Each hand-over carries the words said since the one
+before (`Person:` and `Voice:` lines), so the agent's own conversation holds the whole call. The
+relay reads the agent's replies with the agents app's codemode parser: a script step's status
+reaches the live model as a quiet note, and only the final prose is spoken, for the newest
+hand-over the reply's request had read. A reply ending in `HANG_UP` ends the call after the
+goodbye, and an agent that pauses says so.
 
 A device with a screen adds [screen-context.md](src/screen-context.md) as an
 ordinary developer message when the call starts, with its client name filled
@@ -40,17 +48,14 @@ asset wait. A failed image leaves the existing screen intact. Use `<img>`
 instead of CSS backgrounds for photos; the readiness check covers image
 elements. The agent's rendering instructions live in [screen-context.md](src/screen-context.md).
 
-| File                                 | What                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/voice-agent.ts`                 | `VoiceAgentDurableObject`: the GPT-Live relay and the call fold. Dials `wss://api.openai.com/v1/live/sessions` through egress with `getSecret("/secrets/openai")`, forwards `mic-frame`s, appends `speaker-frame`s and transcripts, records the live model's hand-offs as `delegation-requested`, and forwards the agent's `commentary-added` to the live model to speak. |
-| `src/voice-delegate.ts`              | `VoiceDelegateDurableObject`: the project's agent as a second facet on the same context. Consumes `delegation-requested`, folds it as pending, runs one `delegation-turn` and emits `commentary-added` naming the delegationId. Its own fold makes an eviction mid-turn recoverable.                                                                                      |
-| `src/events.ts`                      | The events both facets declare (`delegation-requested`, `thinking-added`, `commentary-added`) and the delegate's `consumes`, shared by its contract and `worker.ts`'s subscription row.                                                                                                                                                                                   |
-| `src/delegation-turn.ts`             | The backend turn, pure: gpt-6-astra (Responses API, same secret, same egress) with one tool, an `async (itx) => …` script run by `itx.run`.                                                                                                                                                                                                                               |
-| `src/worker.ts`                      | The voice service mounted at `itx.voice`. `setupVoiceAgent({ streamPath, activation })` is ONE append on the fresh context: both facets' subscription rows (the installed source, read from project KV) plus `call-started`, so the relay dials at boot.                                                                                                                  |
-| `src/install.ts`                     | `voiceFolder`, `installVoice` and `ensureVoiceAgent`: the folder a project installs from, its mount, and the flow Kit and voice.iterate.com run in the browser, preserving existing services and secrets.                                                                                                                                                                 |
-| `src/screen-font.ts`                 | The screen font's CSS with its font embedded (`assets/`), stored at `voice/screen-font.css`.                                                                                                                                                                                                                                                                              |
-| `apps/agents/scripts/voice-call.ts`  | One conversation from Node, making exactly the device's calls; prints the press timeline.                                                                                                                                                                                                                                                                                 |
-| `apps/agents/scripts/voice-board.ts` | The physical HAVPE proof: remote press, the prompt spoken through the air, transcripts checked.                                                                                                                                                                                                                                                                           |
+| File                                 | What                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/voice-agent.ts`                 | `VoiceAgentDurableObject`: the GPT-Live relay and the call fold. Dials `wss://api.openai.com/v1/live/sessions` through egress with `getSecret("/secrets/openai")`, forwards `mic-frame`s, appends `speaker-frame`s and transcripts, hands the live model's delegations to the agent on the context, and forwards the agent's replies to the live model to speak. |
+| `src/worker.ts`                      | The voice service mounted at `itx.voice`. `setupVoiceAgent({ streamPath, activation })` creates the agent, then ONE append on the fresh context: the relay's subscription row (the installed source, read from project KV), `call-started`, so the relay dials at boot, and the agent's instructions.                                                            |
+| `src/install.ts`                     | `voiceFolder`, `installVoice` and `ensureVoiceAgent`: the folder a project installs from, its mount, and the flow Kit and voice.iterate.com run in the browser, preserving existing services and secrets.                                                                                                                                                        |
+| `src/screen-font.ts`                 | The screen font's CSS with its font embedded (`assets/`), stored at `voice/screen-font.css`.                                                                                                                                                                                                                                                                     |
+| `apps/agents/scripts/voice-call.ts`  | One conversation from Node, making exactly the device's calls; prints the press timeline.                                                                                                                                                                                                                                                                        |
+| `apps/agents/scripts/voice-board.ts` | The physical HAVPE proof: remote press, the prompt spoken through the air, transcripts checked.                                                                                                                                                                                                                                                                  |
 
 A conversation's log is `readEvents` on its context, through the CLI (the board's
 `health().conversation` names its current one):

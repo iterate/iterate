@@ -58,47 +58,60 @@ test("an incorrect device acknowledgment stops the upload", async () => {
 });
 
 test.for(["waveshare-rlcd-4-2", "zectrix-note4", "havpe"])(
-  "%s receives only its own screen context",
+  "%s: the press puts the relay beside the call's agent and gives the agent its instructions, the screen guide only to a screen",
   async (device) => {
-    const { worker, append, create, disable } = await harness();
+    const { worker, append, create } = await harness();
     await worker.setupVoiceAgent({
       streamPath: `/agents/voice/v23/${device}/test`,
       activation: "test",
       screen: device !== "havpe",
     });
     expect(create).toHaveBeenCalledExactlyOnceWith(`/agents/voice/v23/${device}/test`);
-    expect(disable).toHaveBeenCalledExactlyOnceWith("agent");
-    expect(create.mock.invocationCallOrder[0]).toBeLessThan(disable.mock.invocationCallOrder[0]!);
-    expect(disable.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
+    expect(create.mock.invocationCallOrder[0]).toBeLessThan(append.mock.invocationCallOrder[0]!);
+    expect(append).toHaveBeenCalledTimes(1);
     const events = append.mock.calls[0]!;
-    const subscription = events.find((event) => event.payload?.name === "voice-delegate");
-    expect(subscription).toBeDefined();
-    for (const [name, className] of [
-      ["voice-agent", "VoiceAgentDurableObject"],
-      ["voice-delegate", "VoiceDelegateDurableObject"],
-    ])
-      expect(events.find((event) => event.payload?.name === name).payload).toMatchObject({
+    expect(
+      events
+        .filter((event) => event.type === "events.iterate.com/itx/subscription-configured")
+        .map((event) => event.payload),
+    ).toEqual([
+      {
+        name: "voice-agent",
         target: [
           "itx",
           "facets",
-          ["get", name, { ...JSON.parse(RUNTIME), className }],
+          ["get", "voice-agent", { ...JSON.parse(RUNTIME), className: "VoiceAgentDurableObject" }],
           "processEventBatch",
         ],
-      });
-    expect(events.some((event) => event.type === "events.iterate.com/agent/context-added")).toBe(
-      device !== "havpe",
-    );
-    if (device !== "havpe") {
-      expect(
-        events.find((event) => event.type === "events.iterate.com/agent/context-added").payload,
-      ).toMatchObject({
-        content: readFileSync(new URL("./screen-context.md", import.meta.url), "utf8").replaceAll(
-          "{{DEVICE}}",
-          device.replaceAll("-", "_"),
-        ),
-      });
-    }
-    expect(subscription.payload.consumes).toContain("events.iterate.com/agent/context-added");
+        consumes: expect.arrayContaining(["*"]),
+      },
+    ]);
+    const guide = (name: string) =>
+      readFileSync(new URL(`./${name}`, import.meta.url), "utf8").replaceAll(
+        "{{DEVICE}}",
+        device.replaceAll("-", "_"),
+      );
+    // Instructions start no turn: the agent's first turn is the first hand-over.
+    expect(
+      events
+        .filter((event) => event.type === "events.iterate.com/agent/context-added")
+        .map((event) => event.payload),
+    ).toEqual([
+      {
+        role: "developer",
+        content: guide("voice-context.md"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+      ...(device === "havpe"
+        ? []
+        : [
+            {
+              role: "developer",
+              content: guide("screen-context.md"),
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+            },
+          ]),
+    ]);
   },
 );
 
@@ -202,7 +215,7 @@ test("an abandoned refresh times out", async () => {
   );
 });
 
-/** The installed voice source as install.ts stores it; both facets of a press load it. */
+/** The installed voice source as install.ts stores it; the press's relay facet loads it. */
 const RUNTIME = JSON.stringify({ cacheKey: "c".repeat(64), source: { "worker.ts": "voice" } });
 
 let voiceWorker: Promise<any> | undefined;
@@ -326,13 +339,12 @@ async function harness(image = png(3, 0), infoOverride = {}) {
       admitLoadedCodeRow(event, "/agents/voice/test", "/agents/voice/test");
     return [];
   });
-  const disable = vi.fn(async () => undefined);
   const itx = {
     kv: { get: vi.fn(async (key: string) => (key === "voice/runtime" ? RUNTIME : null)) },
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },
-    cd: vi.fn(() => ({ append, processors: { disable } })),
+    cd: vi.fn(() => ({ append })),
   };
   return {
     worker: new VoiceWorker({ ITX: { get: () => itx } }),
@@ -340,6 +352,5 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     setImage,
     append,
     create: itx.agents.create,
-    disable,
   };
 }

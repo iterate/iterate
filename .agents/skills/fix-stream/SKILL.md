@@ -104,7 +104,7 @@ deployment and no real model.
 | what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets             |
 | the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                         |
 | what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                               |
-| a voice call                                                          | `packages/voice/src/*.test.ts` (see `agent.test.ts` and `screen-context-repro.json`)                          |
+| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent           |
 | an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint

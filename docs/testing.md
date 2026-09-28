@@ -167,6 +167,7 @@ options), and nothing is spent.
   a day of soaks spent it, and every PR's e2e timed out on the default-model rows.
 - **What runs where.** The `REAL:` rows (`realModelOnly`) of
   `apps/agents/e2e/agents-default-model.e2e.test.ts`,
+  `apps/agents/e2e/voice-agent.e2e.test.ts` (a voice call's delegation, answered by the agent),
   `apps/os/e2e/ai-root-shadow-and-fable.e2e.test.ts` and the pin of a Cloudflare streaming fault,
   `apps/agents/e2e/ai-stream-hung-request.e2e.test.ts`, run only with `E2E_REAL_MODELS=1`, which only
   `os-real-model.yml` sets, once a day and on main pushes to `packages/agents/**`. The soak strips
