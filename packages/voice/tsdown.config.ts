@@ -5,7 +5,7 @@ import { defineConfig } from "tsdown";
 // `@iterate-com/agents` and `pako` load as this package's dependencies. The Markdown the worker
 // sends and the workspace-only `@iterate-com/shared` are inlined.
 export default defineConfig({
-  entry: { index: "src/index.ts", install: "src/install.ts" },
+  entry: { index: "src/index.ts", install: "src/install.ts", call: "src/call-client.ts" },
   format: "esm",
   fixedExtension: true,
   platform: "neutral",

@@ -11,7 +11,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./install": "./src/install.ts"
+    "./install": "./src/install.ts",
+    "./call": "./src/call-client.ts"
   },
   "files": [
     "dist"
@@ -26,6 +27,10 @@
       "./install": {
         "types": "./dist/install.d.mts",
         "import": "./dist/install.mjs"
+      },
+      "./call": {
+        "types": "./dist/call.d.mts",
+        "import": "./dist/call.mjs"
       }
     }
   },

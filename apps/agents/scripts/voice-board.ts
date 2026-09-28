@@ -18,32 +18,22 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { connect } from "./client.ts";
 
 const run = promisify(execFile);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type Health = Record<string, unknown> & {
-  callActive?: boolean;
-  conversation?: string;
-  framesSent?: number;
-  spkWrites?: number;
-  uptimeMs?: number;
-};
-
-/** Adopting a fresh conversation remounts the device; its capability is briefly away. */
-async function healthWithRetry(kit: any, attempts = 20): Promise<Health> {
-  let last: unknown;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    try {
-      return JSON.parse(JSON.stringify(await kit.health())) as Health;
-    } catch (error) {
-      last = error;
-      await sleep(1500);
-    }
-  }
-  throw last;
-}
+/** What the proof reads of the board's `health()` (voice_loop.c writes it; the rest passes
+ *  through). The board keeps one mounted session across calls, so a health call that fails is a
+ *  dropped device, and the proof fails with it. */
+const Health = z.looseObject({
+  callActive: z.boolean().optional(),
+  conversation: z.string().optional(),
+  framesSent: z.number().optional(),
+  spkWrites: z.number().optional(),
+  uptimeMs: z.number().optional(),
+});
 
 /** Proves a physical board end to end on the platform, out loud, through real air: a remote press,
  *  the prompt spoken out of this Mac's speaker, the transcripts checked. PROJECT (env) names the
@@ -67,7 +57,7 @@ export default async function voiceBoard(
   const root: any = connection.session.projects.get(PROJECT);
   await root.invoke(["itx", ["whoami"]]);
   const kit = root.clients[DEVICE];
-  const before = await healthWithRetry(kit);
+  const before = Health.parse(await kit.health());
   if (before.callActive) throw new Error(`Device ${DEVICE} is already in a call; leave it alone.`);
   console.log(
     `before: ${JSON.stringify({ framesSent: before.framesSent, spkWrites: before.spkWrites, uptimeMs: before.uptimeMs, callActive: before.callActive })}`,
@@ -78,10 +68,10 @@ export default async function voiceBoard(
   let callActiveMs: number | null = null;
   let streamPath = "";
   for (let attempt = 0; attempt < 60; attempt++) {
-    const health = await healthWithRetry(kit);
+    const health = Health.parse(await kit.health());
     if (health.callActive) {
       callActiveMs = Date.now() - askedAt;
-      streamPath = String(health.conversation || "");
+      streamPath = health.conversation || "";
       break;
     }
     await sleep(500);
@@ -135,14 +125,13 @@ export default async function voiceBoard(
   console.log(`speaking: ${PROMPT}`);
   await run("say", ["-r", "170", PROMPT]);
 
-  let after = before;
   let framesSent = 0;
   let spkWrites = 0;
   for (let attempt = 0; attempt < 40; attempt++) {
-    after = await healthWithRetry(kit);
+    const after = Health.parse(await kit.health());
     if (after.conversation === streamPath) {
-      framesSent = Math.max(framesSent, Number(after.framesSent ?? 0));
-      spkWrites = Math.max(spkWrites, Number(after.spkWrites ?? 0));
+      framesSent = Math.max(framesSent, after.framesSent ?? 0);
+      spkWrites = Math.max(spkWrites, after.spkWrites ?? 0);
     }
     if (EXPECT.test(saidBack) && answers > 0) break;
     await sleep(1000);
