@@ -47,7 +47,7 @@ const TestTelemetryRecord = z.object({
 
 /**
  * Durable, runner-independent input to the CI telemetry finalizer
- * (scripts/ci/upload-test-telemetry.ts). Reporters only write this artifact and never perform
+ * (scripts/ci/test-telemetry-finalizer.ts). Reporters only write this artifact and never perform
  * network I/O.
  */
 export const TestTelemetryArtifact = z.object({

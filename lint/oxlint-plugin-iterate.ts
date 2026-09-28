@@ -2,7 +2,6 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import esquery from "esquery";
-import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program } from "estree";
 
@@ -11,7 +10,7 @@ import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
 import { noRawItxGetRule } from "./rules/no-raw-itx-get.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
-import type { StrictPlugin, StrictRule } from "./types.ts";
+import type { StrictPlugin } from "./types.ts";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
@@ -337,32 +336,6 @@ function jsxAttributeHasSrOnlyClass(attributeValue: any) {
   return hasSrOnlyClassExpression(attributeValue.expression);
 }
 
-const isolatedCodemodeRule = {
-  ...unicorn.rules?.["isolated-functions"],
-  create(context) {
-    const originalRule = unicorn.rules?.["isolated-functions"];
-    if (!originalRule) return {};
-    const original = originalRule.create(context as never);
-    for (const codemodeSelector of [":function[codemode]", ":function[codemode]:exit"]) {
-      if (codemodeSelector in original) {
-        const cb = original[codemodeSelector];
-        delete original[codemodeSelector];
-        const suffix = codemodeSelector.match(/:exit$/)?.[0] || "";
-        const nonClashingCatchallFunctionSelector = `FunctionExpression[random!="${Math.random()}"]${suffix}`;
-        original[nonClashingCatchallFunctionSelector] = (node: any, ...args: any[]) => {
-          const parentCallee = node.parent?.callee;
-          if (!parentCallee) return;
-          if (!context.sourceCode.getText(parentCallee).match(/\bcodemode\b/i)) return;
-          if (!context.sourceCode.getText(parentCallee).match(/\bfixture\b/i)) return;
-          return cb?.(node, ...args);
-        };
-        original[`Arrow${nonClashingCatchallFunctionSelector}`] =
-          original[nonClashingCatchallFunctionSelector];
-      }
-    }
-    return original;
-  },
-} as StrictRule;
 function getMatcherCall(node: any) {
   if (node.callee.type !== "MemberExpression") return undefined;
   const matcherName = getPropertyName(node.callee.property);
@@ -771,7 +744,6 @@ const plugin: StrictPlugin = {
     ...tseslintRules,
     "mechanical-class-impl": mechanicalClassImplRule,
     "no-raw-itx-get": noRawItxGetRule,
-    "isolated-codemode": isolatedCodemodeRule,
     "relative-import-extensions": {
       meta: {
         type: "problem",

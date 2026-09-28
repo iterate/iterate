@@ -4,10 +4,8 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join, relative, resolve } from "node:path";
-import { AwsClient } from "aws4fetch";
 import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { createCli } from "trpc-cli";
 import { ciTelemetrySourceFromEnvironment } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
@@ -17,7 +15,9 @@ import {
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
 import { ciBucketEnvs } from "../../envs.ts";
-import uploadTestTelemetry, { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
+import { ciBucket } from "./ci-bucket.ts";
+import finalizeTestTelemetry from "./test-telemetry-finalizer.ts";
+import { loadTestTelemetryArtifacts, unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 
 /**
  * THE TEST EVIDENCE FOLDER'S MANIFEST, AND ITS UPLOAD TO R2 (docs/test-evidence.md). Two commands,
@@ -303,26 +303,19 @@ const UPLOAD_CONCURRENCY = 32;
 const UPLOAD_BYTES_IN_FLIGHT = 128 * 1024 * 1024;
 
 /**
- * PUTs the folder into the CI bucket through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/):
- * every file the manifest lists, the largest first and up to UPLOAD_CONCURRENCY at once, then the
- * manifest. The manifest is the commit point: a folder whose manifest is in R2 is complete.
+ * PUTs the folder into the CI bucket (scripts/ci/ci-bucket.ts): every file the manifest lists, the
+ * largest first and up to UPLOAD_CONCURRENCY at once, then the manifest. The manifest is the commit
+ * point: a folder whose manifest is in R2 is complete. R2's S3 API, not the Cloudflare API's own
+ * object endpoint (the one `wrangler r2 object put` uses): that endpoint can replace an existing
+ * object despite `If-None-Match: *` and store a body whose `Content-MD5` is wrong, where R2's S3 API
+ * refuses both (412, and XAmzContentSHA256Mismatch), and each of its requests counts against the
+ * token owner's 1,200 per five minutes, which preview deploys share.
  *
- * The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
- * CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
- * S3 key pair, its id the access key id and the SHA-256 of its value the secret
- * (https://developers.cloudflare.com/r2/api/tokens/#get-s3-api-credentials-from-an-api-token). S3,
- * not the Cloudflare API's own object endpoint (the one `wrangler r2 object put` uses): that
- * endpoint can replace an existing object despite `If-None-Match: *` and store a body whose
- * `Content-MD5` is wrong, where R2's S3 API refuses both (412, and XAmzContentSHA256Mismatch), and
- * each of its requests counts against the token owner's 1,200 per five minutes, which preview
- * deploys share.
- *
- * Each PUT is write-once (`If-None-Match: *`). A 412 means the key exists: when it holds these very
- * bytes (a single PUT's ETag is the body's MD5), it is this upload's own earlier try, landed after
- * all; anything else is refused. Each file is hashed again as it is read and refused if it no
- * longer matches the manifest, and that sha256 is signed as the payload hash, so R2 refuses a body
- * that changed on the way too (https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html).
- * aws4fetch only signs: its own `AwsClient.fetch` would retry out of sight.
+ * Each PUT is write-once. A 412 means the key exists: when it holds these very bytes (a single PUT's
+ * ETag is the body's MD5), it is this upload's own earlier try, landed after all; anything else is
+ * refused. Each file is hashed again as it is read and refused if it no longer matches the
+ * manifest, and that sha256 is signed as the payload hash, so R2 refuses a body that changed on the
+ * way too (https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html).
  */
 export async function uploadTestEvidence(input: {
   repoRoot: string;
@@ -332,58 +325,31 @@ export async function uploadTestEvidence(input: {
   apiToken: string;
   fetch: typeof fetch;
 }) {
-  /** Aborts the upload: the request in flight, and any retry after it. */
-  const deadline = AbortSignal.timeout(UPLOAD_DEADLINE_MS);
   /** Platform-failure retries so far, for the step summary. */
   let retries = 0;
-  /** One request to Cloudflare, sent again when the failure is Cloudflare's: every one here is
-   *  idempotent, a PUT's repeat after it landed answering 412 (below). */
-  const send: Send = (what, request) => {
-    let sent = 0;
-    return fetchRetryingPlatformFailures(
-      what,
-      (signal) => {
-        if (sent++ > 0) retries++;
-        return request(signal);
-      },
-      { area: "test-evidence", idempotent: true, timeoutMs: REQUEST_TIMEOUT_MS, signal: deadline },
-    );
-  };
-  const client = new AwsClient({
-    accessKeyId: await apiTokenId(input, send),
-    secretAccessKey: sha256(new TextEncoder().encode(input.apiToken)),
-    service: "s3",
-    region: "auto",
+  const bucket = await ciBucket({
+    ...input,
+    area: "test-evidence",
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    // aborts the request in flight, and any retry after it
+    signal: AbortSignal.timeout(UPLOAD_DEADLINE_MS),
+    onRetry: () => retries++,
   });
   const root = resolve(input.repoRoot, testEvidencePaths.root);
   const manifestBytes = await readFile(resolve(input.repoRoot, testEvidencePaths.manifest));
   const manifest = TestEvidenceManifest.parse(JSON.parse(manifestBytes.toString("utf8")));
   const prefix = testEvidencePrefix(manifest);
-  const objectUrl = (key: string) =>
-    `https://${input.accountId}.r2.cloudflarestorage.com/${input.bucketName}/${key.split("/").map(encodeURIComponent).join("/")}`;
   const put = async (key: string, path: string, body: Uint8Array, payloadSha256: string) => {
     if (sha256(body) !== payloadSha256)
       throw new Error(`${path} changed after the manifest listed it; nothing more is uploaded`);
-    const response = await send(`PUT ${key}`, async (signal) =>
-      input.fetch(
-        await client.sign(objectUrl(key), {
-          method: "PUT",
-          body,
-          headers: {
-            "content-type": contentTypes[extname(path)] || "application/octet-stream",
-            "if-none-match": "*",
-            "x-amz-content-sha256": payloadSha256,
-          },
-        }),
-        { signal },
-      ),
-    );
+    const response = await bucket.put(key, body, {
+      contentType: contentTypes[extname(path)] || "application/octet-stream",
+      sha256: payloadSha256,
+    });
     if (response.ok) return;
     const answer = `${response.status} ${await response.text()}`;
     if (response.status === 412) {
-      const held = await send(`HEAD ${key}`, async (signal) =>
-        input.fetch(await client.sign(objectUrl(key), { method: "HEAD" }), { signal }),
-      );
+      const held = await bucket.head(key);
       // Cloudflare's edge compresses a JSON answer and so marks its ETag weak: `W/"<md5>"`.
       const etag = held.headers.get("etag")?.match(/^(?:W\/)?"([0-9a-f]{32})"$/u)?.[1];
       if (held.ok && etag === createHash("md5").update(body).digest("hex")) {
@@ -407,11 +373,6 @@ export async function uploadTestEvidence(input: {
     retries,
   };
 }
-
-type Send = (
-  what: string,
-  request: (signal: AbortSignal) => Promise<Response>,
-) => Promise<Response>;
 
 /**
  * `put` for every file, the largest first, up to UPLOAD_CONCURRENCY at once and holding at most
@@ -454,30 +415,6 @@ function inPool(
     next();
   });
 }
-
-/**
- * The API token's id, which is its S3 access key id. A user token answers `/user/tokens/verify`,
- * an account-owned one its account's (https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/).
- */
-async function apiTokenId(
-  input: { accountId: string; apiToken: string; fetch: typeof fetch },
-  send: Send,
-) {
-  const answers: string[] = [];
-  for (const path of ["/user/tokens/verify", `/accounts/${input.accountId}/tokens/verify`]) {
-    const response = await send(`GET ${path}`, (signal) =>
-      input.fetch(`https://api.cloudflare.com/client/v4${path}`, {
-        headers: { authorization: `Bearer ${input.apiToken}` },
-        signal,
-      }),
-    );
-    if (response.ok) return TokenVerification.parse(await response.json()).result.id;
-    answers.push(`${path}: ${response.status}`);
-  }
-  throw new Error(`CLOUDFLARE_API_TOKEN did not verify (${answers.join(", ")})`);
-}
-
-const TokenVerification = z.object({ result: z.object({ id: z.string().min(1) }) });
 
 function describeError(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
@@ -607,11 +544,11 @@ function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
 
 /**
  * THE STEP AFTER A JOB'S TESTS, in one process (docs/test-evidence.md#what-ci-does): the telemetry
- * finalizer (upload-test-telemetry.ts: every expected runner left a complete artifact, the unit row
- * budget, the suite's suite-summary.json), then the test evidence manifest. The finalizer decides
- * the step: missing, incomplete or foreign telemetry fails it, once the manifest is written. The
- * manifest decides nothing: a failure to write it is a warning and a line of the job's summary
- * (reportStepFailure), and the step's result stays the finalizer's.
+ * finalizer (test-telemetry-finalizer.ts: every expected runner left a complete artifact, the unit
+ * row budget, the suite's suite-summary.json), then the test evidence manifest. The finalizer
+ * decides the step: missing, incomplete or foreign telemetry fails it, once the manifest is
+ * written. The manifest decides nothing: a failure to write it is a warning and a line of the job's
+ * summary (reportStepFailure), and the step's result stays the finalizer's.
  *
  * The step's outputs say what the folder holds, each as soon as it is true: `evidence=kept` before
  * anything else, `manifest=written`, and `playwright-report=written` when it holds Playwright's HTML
@@ -640,10 +577,16 @@ export async function finalize(
     return;
   }
   stepOutput("evidence", "kept");
-  const telemetry = await uploadTestTelemetry({
-    flakeSuites,
-    expectUnitWorkspaces,
+  const telemetry = await finalizeTestTelemetry({
     cancelled,
+    expectedWorkspaces: expectUnitWorkspaces
+      ? unitTestWorkspaces(process.cwd())
+      : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")
+          .split(",")
+          .map((workspace) => workspace.trim())
+          .filter(Boolean),
+    flakeSuites,
+    headSha: process.env.TEST_TELEMETRY_HEAD_SHA,
   }).then(
     () => undefined,
     (error: unknown) => ({ error }),

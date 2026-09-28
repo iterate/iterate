@@ -1,48 +1,41 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
+import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
   UNIT_ROW_WARN_EXEMPTIONS,
   UNIT_ROW_WARN_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import {
   analyzeTestTelemetryCompleteness,
-  unitTestWorkspaces,
+  loadTestTelemetryArtifacts,
 } from "./test-telemetry-completeness.ts";
 import { writeFlakeSuiteSummary, type FlakeSuite } from "./flake-suite-summary.ts";
 
-export async function loadTestTelemetryArtifacts(rawDirectory: string) {
-  const files = (await filesBelow(rawDirectory)).filter((file) => file.endsWith(".json"));
-  const artifacts = await Promise.all(
-    files.map(async (file) => ({
-      file,
-      artifact: TestTelemetryArtifact.parse(JSON.parse(await readFile(file, "utf8"))),
-    })),
-  );
-  const duplicateIds = duplicateValues(artifacts.map(({ artifact }) => artifact.artifactId));
-  if (duplicateIds.length > 0) {
-    throw new Error(`Duplicate test telemetry artifact IDs: ${duplicateIds.join(", ")}`);
-  }
-  return artifacts;
-}
-
 /**
- * The CI job's telemetry finalizer (`--flake-suites unit|specs|preview-e2e`, an `if: always()` step
- * after the test runners). It checks that every expected runner left a complete artifact
+ * THE CI JOB'S TELEMETRY FINALIZER, which scripts/ci/test-evidence.ts `finalize` runs after the
+ * test runners (`if: always()`), and this file's one command, to check a job's downloaded telemetry
+ * again (docs/ci-test-telemetry.md). It checks that every expected runner left a complete artifact
  * (test-telemetry-completeness.ts), writes `manifest.json` beside the raw artifacts, and writes the
- * job's suite's `suite-summary.json` for the flake dashboard. It fails the job on missing, incomplete
- * or foreign evidence, after writing both, so the upload step that follows keeps what there is.
+ * job's suite's `suite-summary.json` for the flake dashboard. It fails on missing, incomplete or
+ * foreign evidence, after writing both, so the upload step that follows keeps what there is.
  */
-export async function finalizeTestTelemetry(options: {
-  artifactRoot: string;
-  cancelled?: boolean;
-  expectedWorkspaces?: readonly string[];
-  flakeSuites?: FlakeSuite;
-  headSha?: string;
-}) {
-  const artifactRoot = resolve(options.artifactRoot);
+export default async function finalizeTestTelemetry(
+  options: {
+    /** Where the raw telemetry artifacts are (default test-results/ci-telemetry). */
+    artifactRoot?: string;
+    /** The job was cancelled (the workflow's `cancelled()`). */
+    cancelled?: boolean;
+    /** The workspaces whose runners must each have left an artifact. */
+    expectedWorkspaces?: string[];
+    /** The flake suite this job ran, for its suite-summary.json. */
+    flakeSuites?: FlakeSuite;
+    /** The tested commit the suite summary names (TEST_TELEMETRY_HEAD_SHA in CI). */
+    headSha?: string;
+  } = {},
+) {
+  const artifactRoot = resolve(options.artifactRoot || "test-results/ci-telemetry");
   const rawDirectory = join(artifactRoot, "raw");
   const loaded = await loadTestTelemetryArtifacts(rawDirectory);
   if (loaded.length === 0 && !options.cancelled) {
@@ -147,63 +140,5 @@ export function unitRowBudget(artifacts: TestTelemetryArtifact[]) {
   ];
 }
 
-async function filesBelow(directory: string): Promise<string[]> {
-  let entries;
-  try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    throw error;
-  }
-  return (
-    await Promise.all(
-      entries.map((entry) => {
-        const path = join(directory, entry.name);
-        return entry.isDirectory() ? filesBelow(path) : Promise.resolve([path]);
-      }),
-    )
-  ).flat();
-}
-
-function duplicateValues(values: readonly string[]) {
-  const seen = new Set<string>();
-  const duplicates = new Set<string>();
-  for (const value of values) {
-    if (seen.has(value)) duplicates.add(value);
-    seen.add(value);
-  }
-  return [...duplicates];
-}
-
-/** Finalizes the job's CI test telemetry (finalizeTestTelemetry): completeness, unit row budget and
- *  the flake suite summary. */
-export default async function uploadTestTelemetry(
-  options: {
-    /** The flake suite this job ran, for its suite-summary.json. */
-    flakeSuites?: "unit" | "specs" | "preview-e2e";
-    /** Where the raw telemetry artifacts are. */
-    artifactRoot?: string;
-    /** Expect the checked-out tree's test workspaces (the Test workflow); otherwise the list
-     *  TEST_TELEMETRY_EXPECTED_WORKSPACES names (a preview test job's `iterate-root` or `os`). */
-    expectUnitWorkspaces?: boolean;
-    /** The job was cancelled (the workflow's `cancelled()`). */
-    cancelled?: boolean;
-  } = {},
-) {
-  const expectedWorkspaces = options.expectUnitWorkspaces
-    ? unitTestWorkspaces(process.cwd())
-    : (process.env.TEST_TELEMETRY_EXPECTED_WORKSPACES || "")
-        .split(",")
-        .map((workspace) => workspace.trim())
-        .filter(Boolean);
-  await finalizeTestTelemetry({
-    artifactRoot: options.artifactRoot || "test-results/ci-telemetry",
-    cancelled: options.cancelled ?? false,
-    expectedWorkspaces,
-    flakeSuites: options.flakeSuites,
-    headSha: process.env.TEST_TELEMETRY_HEAD_SHA,
-  });
-}
-
 if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "upload-test-telemetry" }).run();
+  void createCli({ ...import.meta, name: "test-telemetry-finalizer" }).run();

@@ -57,12 +57,14 @@ export class RetryTelemetryReporter {
   private readonly context: TestTelemetryContext;
   private readonly workspace: string;
 
-  constructor(defaults: { testKind?: "unit" | "integration" | "e2e"; suite?: string } = {}) {
+  /** A unit run's kind and suite unless TEST_TELEMETRY_KIND and TEST_TELEMETRY_SUITE say otherwise
+   *  (a preview's e2e run: apps/os/scripts/preview.ts). */
+  constructor() {
     this.workspace =
       process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || process.cwd();
     this.context = testTelemetryContextFromEnvironment("vitest", {
-      testKind: defaults.testKind || "unit",
-      suite: defaults.suite || "unit",
+      testKind: "unit",
+      suite: "unit",
       workspace: this.workspace,
     });
     this.artifactId = testTelemetryArtifactId(

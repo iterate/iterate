@@ -1,7 +1,6 @@
 name: Deploy OS
 permissions:
   contents: read
-  deployments: write
 concurrency:
   # Every ref deploys to the same production Worker (os-prd:
   # os.iterate.com, mcp.iterate.com, *.iterate.app). Never interrupt a

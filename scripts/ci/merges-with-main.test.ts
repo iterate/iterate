@@ -79,7 +79,7 @@ test("merges-with-main.yml runs only the base branch's script, with a read-only 
   expect(checkout?.with).not.toHaveProperty("ref");
   expect(checkout?.with).toMatchObject({
     "persist-credentials": false,
-    "sparse-checkout": "scripts/ci/merges-with-main.ts",
+    "sparse-checkout": "scripts/ci/merges-with-main.ts\n.nvmrc\n",
   });
   expect(steps.flatMap((step) => (step.run ? [step.run] : []))).toEqual([
     "node scripts/ci/merges-with-main.ts",

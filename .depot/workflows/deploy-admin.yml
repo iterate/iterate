@@ -1,7 +1,6 @@
 name: Deploy Admin
 permissions:
   contents: read
-  deployments: write
 concurrency:
   # Every ref deploys to the same production Worker. Never interrupt a
   # credentialed deployment midway through its rollout.
