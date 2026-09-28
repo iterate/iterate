@@ -1,4 +1,3 @@
-// ci-change-detection live check: an e2e-row-only push (reverted by a later push)
 // fetch.e2e.test.ts — the ONE fetch, in and out. IN: a PROJECT HOST — a GET and a WebSocket
 // upgrade on `<routingSlug>--<project>.<base>` reach the project's config worker fetch(): a LOADED
 // WORKER published as the config worker (the site fixture — workerd-native WebSocketPair + 101), or a
