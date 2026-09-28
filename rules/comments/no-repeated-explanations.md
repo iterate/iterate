@@ -12,6 +12,8 @@ files:
     "!**/*.gen.ts",
   ]
 engine: llm
+select: comment # the LLM reads the comments the pull request adds or changes, not the diff
+window: [3, 5] # lines before, after each comment
 ---
 
 # Say an explanation once

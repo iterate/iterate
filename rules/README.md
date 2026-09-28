@@ -23,7 +23,9 @@ engine: jev # optional: llm (the default) or jev
 ## Engines
 
 `engine: llm` rules are read by an LLM, which gets the pull request's diff and every LLM rule's
-prose in one call and reports what violates them.
+prose in one call and reports what violates them. An LLM rule with `select` and `window` (below)
+gets only the units its selector picks, each with the lines around it, instead of the diff; a pull
+request with no such unit asks the LLM nothing for it.
 
 `engine: jev` rules are decided unit by unit. A fixed selector picks units on the lines the pull
 request added, and Jev (TypeSafe's decision model on Workers AI) answers the rule's yes/no question
