@@ -52,6 +52,7 @@ on:
       - packages/iterate/**
       - packages/agents/**
       - packages/voice/**
+      - packages/docs/**
       - packages/shared/**
       - packages/ui/**
       - package.json

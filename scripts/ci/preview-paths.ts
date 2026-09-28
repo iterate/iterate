@@ -54,9 +54,10 @@ export const previewPaths = [
   // apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI.
   "packages/cli/**",
   "packages/iterate/**",
-  // the agents and voice rows install these (apps/agents/e2e)
+  // the agents and voice rows install these (apps/agents/e2e), and the docs spec this one
   "packages/agents/**",
   "packages/voice/**",
+  "packages/docs/**",
   "packages/shared/**",
   "packages/ui/**",
   "package.json",

@@ -21,6 +21,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `packages/agents`        | The agents app a project installs (`@iterate-com/agents`)       |
 | `packages/voice`         | Voice on the agents app, installed too (`@iterate-com/voice`)   |
 | `packages/github-sync`   | Config repo ↔ GitHub, one history (`@iterate-com/github-sync`)  |
+| `packages/docs`          | Docs' co-editing processors (`@iterate-com/docs`)               |
 | `packages/ai-linter`     | Pull requests against `rules/` (`@iterate-com/ai-linter`)       |
 | `packages/petshop-sdk`   | The dummy petshop's SDK, shaped like a vendor's                 |
 | `packages/ui`            | Components used by the apps                                     |

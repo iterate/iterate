@@ -1,7 +1,8 @@
 // The doc editor: CodeMirror over the file's markdown with Atomic's Obsidian-style live preview
 // (@atomic-editor/editor, assembled as its own AtomicCodeMirrorEditor component does). Rich and
 // Markdown mode are the same editor with the preview in or out of `preview`, so the text, the
-// selection and the undo history carry across a switch.
+// selection and the undo history carry across a switch. Undo is Yjs's (doc-session.ts): it undoes
+// this person's edits and leaves everyone else's.
 import "@atomic-editor/editor/styles.css";
 import {
   atomicEditorTheme,
@@ -15,7 +16,7 @@ import {
   tables,
 } from "@atomic-editor/editor";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
 import { indentOnInput } from "@codemirror/language";
 import { Compartment, EditorState, Prec, type Extension } from "@codemirror/state";
@@ -83,11 +84,9 @@ const theme = EditorView.theme({
 export function docEditorExtensions(options: {
   mode: EditorMode;
   preview: Compartment;
-  onDocChanged: (text: string) => void;
 }): Extension {
   return [
     highlightSpecialChars(),
-    history(),
     drawSelection(),
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
@@ -106,16 +105,7 @@ export function docEditorExtensions(options: {
     formattingKeymap,
     // Tab indents the line, which nests a list item, and the editor keeps focus (indentWithTab):
     // Escape then Tab moves focus on, as CodeMirror's docs on trapping Tab describe.
-    keymap.of([
-      ...closeBracketsKeymap,
-      ...historyKeymap,
-      ...markdownKeymap,
-      indentWithTab,
-      ...defaultKeymap,
-    ]),
+    keymap.of([...closeBracketsKeymap, ...markdownKeymap, indentWithTab, ...defaultKeymap]),
     options.preview.of(previewExtensions(options.mode)),
-    EditorView.updateListener.of((update) => {
-      if (update.docChanged) options.onDocChanged(update.state.doc.toString());
-    }),
   ];
 }

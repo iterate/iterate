@@ -1,5 +1,5 @@
 {
-  "name": "@iterate-com/docs",
+  "name": "@iterate-com/docs-app",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "@codemirror/search": "catalog:",
     "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
+    "@iterate-com/docs": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@lezer/common": "^1.5.2",
@@ -28,13 +29,15 @@
     "@tanstack/react-query": "^5.103.2",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",
-    "diff": "^8.0.4",
     "iterate": "workspace:*",
     "lucide-react": "catalog:",
-    "node-diff3": "3.2.1",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "tailwindcss": "catalog:"
+    "tailwindcss": "catalog:",
+    "y-codemirror.next": "^0.3.5",
+    "y-protocols": "^1.0.6",
+    "yjs": "^13.6.31",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:",

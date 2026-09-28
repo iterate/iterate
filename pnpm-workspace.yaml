@@ -15,6 +15,7 @@ packages:
   - packages/ai-linter
   - packages/cli
   - packages/github-sync
+  - packages/docs
   - packages/iterate
   - packages/petshop-sdk
   - packages/voice

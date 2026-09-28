@@ -153,6 +153,10 @@ export default {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],
     },
+    "packages/docs": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+    },
     "packages/ai-linter": {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],

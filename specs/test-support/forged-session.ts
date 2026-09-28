@@ -85,7 +85,7 @@ export function createSessionFixture(slugPrefix: string, input: { page: Page }) 
  * page does (`login.password`), and the issuer's session cookie lands in the page's browser
  * context. The sign-in page itself is the subject of specs/os/issuer-pages.spec.ts.
  */
-async function mintIterateSession(input: { email: string; page: Page }) {
+export async function mintIterateSession(input: { email: string; page: Page }) {
   const { loginPassword } = readOsPlaywrightAuthConfig();
   return test.step("sign in with the deployment's test password", async () => {
     // the OS platform, whichever app host the spec's project targets

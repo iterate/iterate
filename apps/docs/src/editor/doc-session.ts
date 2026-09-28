@@ -1,62 +1,64 @@
-// One open doc: its editor and its autosave. The page reads `state()` through
-// useSyncExternalStore; everything that changes it happens here.
+// One open doc: its editor, co-edited through the doc's processor (@iterate-com/docs). The page
+// reads `state()` through useSyncExternalStore; everything that changes it happens here.
 //
-// AUTOSAVE is a commit to /repos/docs with the commit the editor last synced with as its parent,
-// 1.5 s after the last keystroke (8 s at most while typing continues). The repo refuses a parent
-// that isn't its tip, so a save never lands on top of a commit it hasn't seen: on a refusal the
-// session reads the tip's copy, merges it into the editor like git would (merge.ts), and saves the
-// merge. (tasks/docs-app.md part 2 moves this into the doc's own server, for co-editing.)
-import { Compartment, Transaction } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
-import type { RepoHandle } from "iterate/api";
+// The editor opens read-only on the text the page loaded, and goes live once the tab has synced
+// with the doc's processor (collab.ts): from then on the editor is bound to the shared Y.Text
+// (y-codemirror.next), and the processor saves. Its live state (`commitOid`, `dirty`, `savedBy`,
+// `saveError`) is what the status line says.
+import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import * as Y from "yjs";
+import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+import { z } from "zod";
+import type { IterateContextApi } from "iterate/api";
+import { connectLiveState } from "iterate/client";
+import { DocLiveState } from "@iterate-com/docs/frames";
+import { DocCollab, type CollabStatus } from "./collab.ts";
 import { docEditorExtensions, previewExtensions, type EditorMode } from "./extensions.ts";
-import { mergeText, textChanges } from "./merge.ts";
 
-export type SaveStatus =
-  | { kind: "saved"; oid: string; mergedConflicts: number | null }
+export type DocStatus =
+  | { kind: "opening" }
   | { kind: "editing" }
-  | { kind: "saving" }
-  | { kind: "failed"; message: string };
+  | { kind: "saved"; oid: string; by: string[] }
+  | { kind: "save-failed"; message: string }
+  | { kind: "disconnected"; message: string };
 
-export type DocSessionState = { mode: EditorMode; status: SaveStatus };
-
-type Repo = Pick<RepoHandle, "commitFiles" | "readFile" | "tip">;
+export type DocSessionState = {
+  mode: EditorMode;
+  status: DocStatus;
+  /** Everyone else with the doc open, by name. */
+  others: string[];
+};
 
 type DocSessionOptions = {
   path: string;
-  /** the commit the doc was read at, and its text there */
-  oid: string;
+  /** The doc as the page loaded it: what the editor shows until it's live. */
   text: string;
-  author: { name: string; email: string } | undefined;
-  /** Runs `work` with the docs repo's handle, disposed after. */
-  withRepo: <T>(work: (repo: Repo) => Promise<T>) => Promise<T>;
+  /** Who's typing, as the others see them. */
+  user: { name: string };
+  /** Open the doc's context, set up for co-editing (`ensureDoc`); `dispose` lets it go. */
+  open: () => Promise<{ context: IterateContextApi; dispose: () => void }>;
 };
 
+const Seed = z.object({ rev: z.number(), state: DocLiveState });
+
+/** One mount of the editor: whether it's gone, and what to let go when it goes. */
+type Attachment = { unmounted: boolean; cleanups: (() => void)[] };
+
 export class DocSession {
-  #state: DocSessionState;
+  #state: DocSessionState = { mode: "rich", status: { kind: "opening" }, others: [] };
   #listeners = new Set<() => void>();
   #preview = new Compartment();
   #view: EditorView | null = null;
-  /** The text while there's no view: the doc as read, then what the view had when it went (what
-   *  a save after leaving the page commits). */
-  #detachedText: string;
-  /** The commit the editor's text last matched, and its copy of the doc. */
-  #base: { oid: string; text: string };
-  #idleTimer: ReturnType<typeof setTimeout> | undefined;
-  #dirtySince = 0;
-  #saving: Promise<void> | null = null;
-  #saveAgain = false;
+  #collab: DocCollab | null = null;
+  #undo: Y.UndoManager | null = null;
+  #collabStatus: CollabStatus = { kind: "opening" };
+  #live: DocLiveState | undefined;
 
   options: DocSessionOptions;
 
   constructor(options: DocSessionOptions) {
     this.options = options;
-    this.#base = { oid: options.oid, text: options.text };
-    this.#detachedText = options.text;
-    this.#state = {
-      mode: "rich",
-      status: { kind: "saved", oid: options.oid, mergedConflicts: null },
-    };
   }
 
   subscribe = (listener: () => void) => {
@@ -71,36 +73,135 @@ export class DocSession {
     for (const listener of this.#listeners) listener();
   }
 
-  /** The editor's element, as a React ref: the view lives while it's mounted. Leaving the page
-   *  saves what's unsaved; closing the tab with unsaved text asks first. */
+  /** The editor's element, as a React ref: the view and the doc's connection live while it's
+   *  mounted. Closing the tab before this tab's edits have been sent asks first. */
   mount = (parent: HTMLDivElement | null) => {
     if (!parent) return;
     const view = new EditorView({
       parent,
-      doc: this.#base.text,
-      extensions: [
-        docEditorExtensions({
-          mode: this.#state.mode,
-          preview: this.#preview,
-          onDocChanged: (text) => this.#changed(text),
-        }),
-        // the text box is named by the file it edits
-        EditorView.contentAttributes.of({ "aria-label": this.options.path }),
-      ],
+      state: EditorState.create({
+        doc: this.options.text,
+        extensions: [
+          this.#extensions(),
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+        ],
+      }),
     });
     this.#view = view;
-    const warnIfUnsaved = (event: BeforeUnloadEvent) => {
-      if (this.#state.status.kind !== "saved") event.preventDefault();
+    const attachment: Attachment = { unmounted: false, cleanups: [] };
+    const warnIfUnsent = (event: BeforeUnloadEvent) => {
+      if (this.#collab?.unsent()) event.preventDefault();
     };
-    window.addEventListener("beforeunload", warnIfUnsaved);
+    window.addEventListener("beforeunload", warnIfUnsent);
+    void this.#goLive(view, attachment);
     return () => {
-      window.removeEventListener("beforeunload", warnIfUnsaved);
-      this.#detachedText = view.state.doc.toString();
+      attachment.unmounted = true;
+      window.removeEventListener("beforeunload", warnIfUnsent);
+      for (const cleanup of attachment.cleanups.reverse()) cleanup();
       this.#view = null;
+      this.#collab = null;
+      this.#undo = null;
       view.destroy();
-      void this.save();
     };
   };
+
+  /** Let `cleanup` go with the view: at once when the view has gone already. */
+  #hold(attachment: Attachment, cleanup: () => void) {
+    if (attachment.unmounted) cleanup();
+    else attachment.cleanups.push(cleanup);
+  }
+
+  async #goLive(view: EditorView, attachment: Attachment) {
+    try {
+      const opened = await this.options.open();
+      this.#hold(attachment, opened.dispose);
+      if (attachment.unmounted) return;
+      const collab = new DocCollab({
+        context: opened.context,
+        user: { name: this.options.user.name, color: colorOf(this.options.user.name) },
+        onStatus: (status) => {
+          this.#collabStatus = status;
+          this.#refresh();
+        },
+      });
+      this.#hold(attachment, () => collab.dispose());
+      collab.awareness.on("change", () => this.#refresh());
+      await collab.open();
+      if (attachment.unmounted) return;
+      const live = await connectLiveState<DocLiveState>(opened.context, {
+        key: "doc",
+        readSeed: async () =>
+          Seed.parse(await opened.context.invoke("itx.facets.get('doc').liveSnapshot()")),
+      });
+      this.#hold(attachment, () => void live.dispose());
+      if (attachment.unmounted) return;
+      this.#hold(
+        attachment,
+        live.store.subscribe(() => {
+          const next = live.store.get();
+          // a save landed: sync again, in case a frame either way went missing before it
+          if (next?.commitOid !== this.#live?.commitOid) void collab.sync();
+          this.#live = next;
+          this.#refresh();
+        }),
+      );
+      this.#live = live.store.get();
+      this.#collab = collab;
+      this.#undo = new Y.UndoManager(collab.text);
+      view.setState(
+        EditorState.create({
+          doc: collab.text.toString(),
+          extensions: [
+            this.#extensions(),
+            yCollab(collab.text, collab.awareness, { undoManager: this.#undo }),
+            keymap.of(yUndoManagerKeymap),
+          ],
+        }),
+      );
+      this.#refresh();
+    } catch (error) {
+      this.#collabStatus = {
+        kind: "failed",
+        message: error instanceof Error ? error.message : String(error),
+      };
+      this.#refresh();
+    }
+  }
+
+  #extensions(): Extension {
+    return [
+      docEditorExtensions({ mode: this.#state.mode, preview: this.#preview }),
+      // the text box is named by the file it edits
+      EditorView.contentAttributes.of({ "aria-label": this.options.path }),
+    ];
+  }
+
+  #refresh() {
+    const live = this.#live;
+    const status: DocStatus =
+      this.#collabStatus.kind === "failed"
+        ? { kind: "disconnected", message: this.#collabStatus.message }
+        : !this.#collab || !live
+          ? { kind: "opening" }
+          : live.saveError
+            ? { kind: "save-failed", message: live.saveError }
+            : live.dirty || !live.commitOid
+              ? { kind: "editing" }
+              : { kind: "saved", oid: live.commitOid, by: live.savedBy };
+    const others = this.#collab
+      ? [...this.#collab.awareness.getStates()]
+          .filter(([client]) => client !== this.#collab!.doc.clientID)
+          .map(([, state]) => (state as { user?: { name?: string } }).user?.name)
+          .filter((name): name is string => Boolean(name))
+      : [];
+    this.#set({ status, others });
+  }
+
+  /** Sync with the doc's processor again: what "Try again" does after the connection failed. */
+  reconnect() {
+    void this.#collab?.sync();
+  }
 
   setMode(mode: EditorMode) {
     this.#view?.dispatch({ effects: this.#preview.reconfigure(previewExtensions(mode)) });
@@ -113,95 +214,29 @@ export class DocSession {
     if (this.#view) command(this.#view);
   }
 
-  #text() {
-    return this.#view ? this.#view.state.doc.toString() : this.#detachedText;
+  /** Undo this person's last edit; the others' stay. */
+  undo() {
+    this.#undo?.undo();
   }
 
-  #changed(text: string) {
-    if (text === this.#base.text && !this.#saving) {
-      clearTimeout(this.#idleTimer);
-      this.#dirtySince = 0;
-      this.#set({ status: { kind: "saved", oid: this.#base.oid, mergedConflicts: null } });
-      return;
-    }
-    if (this.#state.status.kind !== "saving") this.#set({ status: { kind: "editing" } });
-    this.#dirtySince ||= Date.now();
-    clearTimeout(this.#idleTimer);
-    // 1.5 s after the last keystroke, and at most 8 s after the first unsaved one
-    const wait = Math.min(1500, 8000 - (Date.now() - this.#dirtySince));
-    this.#idleTimer = setTimeout(() => void this.save(), Math.max(0, wait));
+  redo() {
+    this.#undo?.redo();
   }
+}
 
-  /** Commit what's unsaved now. One save runs at a time; a call during one runs once more after. */
-  save(): Promise<void> {
-    clearTimeout(this.#idleTimer);
-    if (this.#saving) {
-      this.#saveAgain = true;
-      return this.#saving;
-    }
-    this.#saving = this.#saveUntilClean().finally(() => {
-      this.#saving = null;
-    });
-    return this.#saving;
-  }
-
-  async #saveUntilClean() {
-    let mergedConflicts: number | null = null;
-    do {
-      this.#saveAgain = false;
-      const text = this.#text();
-      if (text === this.#base.text) continue;
-      this.#dirtySince = 0;
-      this.#set({ status: { kind: "saving" } });
-      try {
-        const merged = await this.options.withRepo((repo) => this.#commit(repo, text));
-        if (merged !== null) {
-          mergedConflicts = merged;
-          this.#saveAgain = true;
-        }
-      } catch (error) {
-        this.#set({
-          status: {
-            kind: "failed",
-            message: error instanceof Error ? error.message : String(error),
-          },
-        });
-        return;
-      }
-    } while (this.#saveAgain);
-    if (this.#text() === this.#base.text)
-      this.#set({ status: { kind: "saved", oid: this.#base.oid, mergedConflicts } });
-  }
-
-  /** One commit of `text`. Null when it landed; when the repo had moved on, the number of places
-   *  the merge kept ours over theirs, after merging the tip into the editor (the caller saves
-   *  again). */
-  async #commit(repo: Repo, text: string): Promise<number | null> {
-    try {
-      const result = await repo.commitFiles({
-        message: `docs: edit ${this.options.path}`,
-        changes: [{ path: this.options.path, content: text }],
-        parent: this.#base.oid,
-        author: this.options.author,
-      });
-      this.#base = { oid: result.commitOid || this.#base.oid, text };
-      return null;
-    } catch (error) {
-      // Refused because main moved (someone else committed)? Anything else is a real failure.
-      const tip = await repo.tip();
-      if (!tip || tip === this.#base.oid) throw error;
-      const theirs = (await repo.readFile(this.options.path, { commitOid: tip })) || "";
-      const ours = this.#text();
-      const merged = mergeText(ours, this.#base.text, theirs);
-      // Their edits aren't this person's to undo.
-      if (this.#view)
-        this.#view.dispatch({
-          changes: textChanges(ours, merged.text),
-          annotations: Transaction.addToHistory.of(false),
-        });
-      else this.#detachedText = merged.text;
-      this.#base = { oid: tip, text: theirs };
-      return merged.conflicts;
-    }
-  }
+/** A cursor colour per person, the same in every tab. */
+function colorOf(name: string) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  const colors = [
+    "#e5484d",
+    "#f76b15",
+    "#ffc53d",
+    "#30a46c",
+    "#12a594",
+    "#0090ff",
+    "#8e4ec6",
+    "#d6409f",
+  ];
+  return colors[Math.abs(hash) % colors.length]!;
 }

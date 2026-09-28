@@ -5,10 +5,11 @@ size: large
 
 # Docs: team docs instead of Notion
 
-Status: part 1 built (a docs app you can write in, autosaving from the browser); part 2
-(co-editing through a per-doc Yjs facet) not started. Part 1's browser spec runs on the PR preview
-only; locally the editor was checked in a harness. Not done: the `docs` Doppler project (prd
-deploy), docs.iterate.com, comments.
+Status: parts 1 and 2 built. Part 1: a docs app you can write in. Part 2: live co-editing through
+a per-doc processor from `@iterate-com/docs`, which also autosaves and takes in commits made
+elsewhere. The browser spec (two people, an agent's commit) runs on the PR preview only; locally the
+package has unit tests and the page was checked in a harness. Not done: the `docs` Doppler project
+(prd deploy), docs.iterate.com, comments.
 
 ## Goal
 
@@ -52,6 +53,9 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 - Autosave waits 1.5 s after the last keystroke (at most 8 s). Commit message
   `docs: edit <path>`, `Co-authored-by:` trailers when several people typed. No autosquash yet.
 - Part 1's autosave runs in the browser. It's thrown away in part 2 once the facet autosaves.
+- The per-doc server is a processor (a facet the doc's context pushes events to), one per doc on
+  `/docs/<path>`, plus one on the project's root that tells open docs about commits. The Docs page
+  installs both when a doc opens (`ensureDoc`), pinned to the package build of the app's own commit.
 
 ## Part 1: a docs app you can write in (commit 1)
 
@@ -77,20 +81,23 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 
 ## Part 2: co-editing (commit 2)
 
-- [ ] `packages/docs` → `@iterate-com/docs` (pkg.pr.new): the doc facet (Y.Doc in its storage, one
+- [x] `packages/docs` → `@iterate-com/docs` (pkg.pr.new): the doc facet (Y.Doc in its storage, one
       Y.Text `file`), and `ensureDocs(itx)` that installs it into a project the way `ensureAgents`
-      does
-- [ ] Yjs over the platform: browsers append ephemeral update/awareness events on the doc's
+      does _(`DocProcessor` in `processor.ts`, its Y.Doc as an updates table in the facet's SQLite;
+      `ensureDoc(project, path, version)` in `install.ts`, per doc rather than per project)_
+- [x] Yjs over the platform: browsers append ephemeral update/awareness events on the doc's
       context and subscribe to them; a late joiner gets a snapshot from the facet and catches up by
-      state vector
-- [ ] The browser binds CodeMirror to the Y.Text with `y-codemirror.next` (cursors and names via
-      awareness)
-- [ ] Autosave moves into the facet (Co-authored-by from the events' principals); the browser's
-      autosave goes
-- [ ] Commits from elsewhere reach the facet (`repo/commit-completed`) and merge in character by
-      character
-- [ ] Spec: two people edit one doc live; an agent's commit shows up without a reload and without
-      losing either person's typing
+      state vector _(`frames.ts`; the facet's `sync(stateVector)`; the page's `src/editor/collab.ts`)_
+- [x] The browser binds CodeMirror to the Y.Text with `y-codemirror.next` (cursors and names via
+      awareness) _(`doc-session.ts`; "Also here: …" above the editor; undo is Yjs's, your own edits only)_
+- [x] Autosave moves into the facet (Co-authored-by from the events' principals); the browser's
+      autosave goes _(`DocProcessor#save`; `apps/docs/src/editor/merge.ts` deleted)_
+- [x] Commits from elsewhere reach the facet (`repo/commit-completed`) and merge in character by
+      character _(the root's `DocsProcessor` (`root.ts`) sends `docs/commit-noticed` to opened docs
+      the commit changed; `DocProcessor#catchUp` merges and sends the edit to every tab)_
+- [x] Spec: two people edit one doc live; an agent's commit shows up without a reload and without
+      losing either person's typing _(`specs/docs/docs.spec.ts`; the merge-without-loss cases are
+      `packages/docs/src/processor.test.ts`)_
 
 ## Later
 
@@ -139,7 +146,8 @@ set of CodeMirror extensions, so switching later is cheap.
 
 ## Unknowns
 
-- Ephemeral event size and rate limits with a few people typing (part 2).
+- Ephemeral event size and rate limits with a few people typing. Each tab sends one frame at a time
+  and merges what's typed meanwhile, so a burst is a handful of frames.
 - Facets reset 60 s after their context goes quiet and on every deploy: fine for a session buffer if
   the Y.Doc is in facet storage and autosave flushes on quiet. Needs the slow e2e rows.
 - Installed code is pinned per project; nothing re-installs it when the package changes.
@@ -162,3 +170,19 @@ set of CodeMirror extensions, so switching later is cheap.
   (`.agents/skills/creating-an-app/references/doppler.md`). Not done here: shared infra.
 - Local `scripts` tests `ci/toolchain.test.ts` and `ci/tracing/tracing.test.ts` fail on macOS's bash
   3.2 (`inherit_errexit`); unrelated, green on CI's Linux.
+- 2026-09-28, part 2. The app package was also named `@iterate-com/docs`; renamed it
+  `@iterate-com/docs-app` (like `agents-app`, `voice-app`) so the new package keeps the name.
+- A dropped ephemeral frame is healed by syncing again, both ways, by state vector: the page does it
+  when Yjs holds back an update that needs one it never got, after a failed send, and after each
+  save (which also covers the processor having missed a tab's frame). Subscription ranges weren't
+  usable for this: they jump over every event the subscription doesn't consume.
+- The editor opens read-only on the loaded text ("Opening…") and swaps to the live state once
+  synced, so a keystroke can't land in a local-only doc.
+- Who's here: a tab announces itself after its first sync, and anyone who sees a new tab answers
+  with theirs, instead of waiting up to 15 s for awareness's heartbeat.
+- Checked by hand in the harness (now two `DocEditor`s over an in-page stand-in for the processor):
+  typing reaches the other editor with the typist's cursor and name, undo takes back only your own
+  line, an agent's commit shows up in both. The spec's second-person keystrokes were replayed there.
+- Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
+  at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
+  has Jonas type after he sees Misha's line.

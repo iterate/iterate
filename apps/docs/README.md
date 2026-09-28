@@ -15,12 +15,15 @@ The base path handling is Notes', shared in
   preview (`@atomic-editor/editor`), a formatting bar, Cmd/Ctrl-B, -I, -E, -K and -Shift-X, and a
   Rich / Markdown switch that turns the preview off. Frontmatter shows as page properties in Rich
   mode.
-- Autosave: 1.5 s after the last keystroke, a commit with the doc's last-synced commit as its
-  parent. When someone else committed first, the repo refuses it; the page reads their version,
-  merges it in like git (where both changed the same lines, the person typing wins), and saves
-  again ([src/editor/doc-session.ts](src/editor/doc-session.ts)).
+- Co-editing: opening a doc installs its processor from
+  [`@iterate-com/docs`](../../packages/docs/README.md) (`ensureDoc`, pinned to the package build of
+  this app's commit). The editor is bound to the doc's shared Y.Text (y-codemirror.next); edits and
+  cursors go to the other tabs as ephemeral events on the doc's context
+  ([src/editor/collab.ts](src/editor/collab.ts)). The processor saves, and merges in commits made
+  elsewhere; the status line is its live state
+  ([src/editor/doc-session.ts](src/editor/doc-session.ts)).
 
-What's next (co-editing, comments, docs.iterate.com): [tasks/docs-app.md](../../tasks/docs-app.md).
+What's next (comments, docs.iterate.com): [tasks/docs-app.md](../../tasks/docs-app.md).
 
 Local dev is Notes': `pnpm dev`, reached through a project behind `iterate tunnel`
 ([Notes' README](../notes/README.md)). The browser proof is [specs/docs](../../specs/docs).
