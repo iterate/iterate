@@ -43,6 +43,10 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: {
+    group: string;
+    "cancel-in-progress": boolean;
+  };
   env?: Record<string, string>;
   if?: string;
   outputs?: Record<string, string>;
@@ -105,6 +109,7 @@ test.each(deploymentWorkflows)(
   ({ file, app }) => {
     const workflow = loadWorkflow(file);
 
+    // on the whole run: a pending run a newer one replaces never starts, so it posts nothing
     expect(workflow).toMatchObject({
       concurrency: { group: `deploy-${app}-production`, "cancel-in-progress": false },
     });
@@ -212,23 +217,88 @@ test.each(
   deploymentWorkflows.filter(({ app }) =>
     ["os", "dash", "agents", "notes", "admin", "voice", "kit"].includes(app),
   ),
-)("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
+)("$file posts the deploy's own result as the deploy job's last two steps", ({ file, app }) => {
   const workflow = loadWorkflow(file);
   const steps = workflow.jobs.deploy?.steps || [];
+  // OS: a failed host check paged already, unless it ended before it could
+  const failed =
+    app === "os"
+      ? "steps.deploy.outcome != 'success' || (steps.check.outcome != 'success' && steps.check.outputs.paged != 'true')"
+      : "steps.deploy.outcome != 'success'";
 
   expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
-  expect(steps.at(-1)).toMatchObject({
-    name: "Notify Slack",
-    if: "${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
-    env: expect.objectContaining({
-      DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-      APP_DISPLAY_NAME: expect.any(String),
-      PUBLIC_URL: expect.stringMatching(/^https:\/\//),
-    }),
-    run: "node scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
-  });
+  // exact: success only when the whole job succeeded; any run on main, a dispatch too; a failed
+  // post never turns the deploy red
+  expect(steps.slice(-2)).toEqual([
+    {
+      name: "Post the deploy's line",
+      if: "${{ success() && github.ref == 'refs/heads/main' }}",
+      "continue-on-error": true,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+        GITHUB_TOKEN: "${{ github.token }}",
+        APP_DISPLAY_NAME: expect.any(String),
+      },
+      run: "node scripts/ci/notify.ts deploy-success",
+    },
+    {
+      name: "Page the failed deploy",
+      if: `\${{ always() && (${failed}) && github.ref == 'refs/heads/main' }}`,
+      "continue-on-error": true,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+        APP_DISPLAY_NAME: expect.any(String),
+        UPLOADED: "${{ steps.deploy.outcome }}",
+      },
+      run: "node scripts/ci/notify.ts deploy-failure",
+    },
+  ]);
 });
+
+test("each PR event's line posts from a job with no concurrency; the dashboard's job has it", () => {
+  const workflow = loadWorkflow(".depot/workflows/pr-dashboard.yml");
+
+  // a pending run a newer one replaces is cancelled: an event's line must never wait in a group
+  expect(workflow.concurrency).toBeUndefined();
+  expect(workflow.jobs.notify?.concurrency).toBeUndefined();
+  expect(workflow.jobs.notify?.steps?.at(-1)?.run).toBe("node scripts/ci/notify.ts pr-update");
+  expect(workflow.jobs.update_dashboard?.concurrency).toEqual({
+    group: "pr-dashboard",
+    "cancel-in-progress": false,
+  });
+  expect(
+    workflow.jobs.update_dashboard?.steps?.some((step) => step.run?.includes("notify.ts")),
+  ).toBe(false);
+});
+
+test.for([
+  {
+    file: ".depot/workflows/kit-firmware.yml",
+    failed: "contains(needs.*.result, 'failure')",
+    // a run that plans no release skips build and publish, and proves nothing
+    green: "needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'",
+  },
+  {
+    file: ".depot/workflows/os-crash-hunt.yml",
+    failed: "needs.crash-hunt.result == 'failure'",
+    green: "needs.crash-hunt.result == 'success'",
+  },
+])(
+  "$file pages a red run on main and resolves the page on a green one",
+  ({ file, failed, green }) => {
+    const notify = loadWorkflow(file).jobs.notify;
+    const steps = notify?.steps || [];
+
+    expect(notify?.if).toBe("always() && github.ref == 'refs/heads/main'");
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-failure")?.if,
+    ).toBe(failed);
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-resolved")?.if,
+    ).toBe(green);
+  },
+);
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
   for (const { file } of deploymentWorkflows) {
@@ -1520,7 +1590,7 @@ test.for([
   { file: ".depot/workflows/test.yml", jobIds: ["test"] },
   { file: ".depot/workflows/lint-typecheck.yml", jobIds: ["lint-typecheck"] },
   { file: ".depot/workflows/loc-report.yml", jobIds: ["loc-report"] },
-  { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["update_dashboard"] },
+  { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["notify", "update_dashboard"] },
   { file: ".depot/workflows/kit-firmware.yml", jobIds: ["plan-firmware", "build-firmware"] },
 ])(
   "$file checks out the run's own commit, the tree its workflow file was read from",

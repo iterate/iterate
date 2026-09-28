@@ -1,4 +1,6 @@
-import { WebClient } from "@slack/web-api";
+// the default import is the package's CommonJS exports: Node's ESM named-export detection cannot see
+// `retryPolicies`, which the index re-exports through a getter
+import slackWebApi, { WebClient } from "@slack/web-api";
 import { dopplerSecret } from "../lib/env-context.ts";
 
 export const slackChannelIds = {
@@ -36,14 +38,25 @@ export const onCallMention = ["jonas", "misha"]
   .map((handle) => `<@${slackUsers.find((user) => user.handle === handle)!.id}>`)
   .join(" ");
 
-/** Slack as the CI bot, whose token is Doppler _shared/prd's. */
+/** Slack as the CI bot, whose token is Doppler _shared/prd's, with Slack's own bounded retry policy:
+ *  its default asks again for about 30 minutes, which would hold a job to its timeout through a
+ *  Slack outage. A 429 waits its `Retry-After`. */
 export function getSlackClient() {
-  return new WebClient(dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN"));
+  return new WebClient(dopplerSecret("_shared", "prd", "SLACK_CI_BOT_TOKEN"), {
+    retryConfig: slackWebApi.retryPolicies.fiveRetriesInFiveMinutes,
+  });
 }
 
 /** Escapes the three characters Slack's mrkdwn treats as control characters. */
 export function slackEscape(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** `value` cut to `length` characters and "…" when longer, on whole graphemes, so an emoji or an
+ *  accented letter is never split. Cut before slackEscape, which would otherwise be split too. Pure. */
+export function cutText(value: string, length: number) {
+  const graphemes = Array.from(new Intl.Segmenter().segment(value), ({ segment }) => segment);
+  return graphemes.length > length ? `${graphemes.slice(0, length).join("")}…` : value;
 }
 
 /** The channel a page goes to: #error-pulse, or #ci for a 🧪 test run, which pages nobody. */

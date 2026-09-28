@@ -4,7 +4,7 @@
 # Object up to and past its 128 MiB isolate ceiling on purpose; they are opt-in
 # (RUN_ISOLATE_CRASH_HUNT=1) so the deploy's e2e run stays deterministic. This is where
 # they run: once a night, on the prd worker (no users; every row uses a fresh context),
-# from the default branch's tooling. A red run posts to #error-pulse.
+# from the default branch's tooling. A red run pages #error-pulse.
 #
 # Run it by hand: depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
 #   --workflow os-crash-hunt.yml --ref main
@@ -40,10 +40,11 @@ jobs:
         # The credentials come out of the deployment's APP_CONFIG in the environment
         # (apps/os/e2e/support/global-setup.ts).
         run: doppler run --project os --config prd -- pnpm e2e isolate-ceilings --no-file-parallelism
+  # A red run pages #error-pulse (one page while it stays red); the next green run resolves it.
   notify:
     needs:
       - crash-hunt
-    if: always() && needs.crash-hunt.result == 'failure'
+    if: always() && github.ref == 'refs/heads/main'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -53,7 +54,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Notify Slack
+      - name: Page the red run
+        if: needs.crash-hunt.result == 'failure'
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: node scripts/ci/notify.ts workflow-failure
+      - name: Resolve the page
+        if: needs.crash-hunt.result == 'success'
+        run: node scripts/ci/notify.ts workflow-resolved

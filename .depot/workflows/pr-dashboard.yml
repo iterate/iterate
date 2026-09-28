@@ -11,11 +11,30 @@ on:
       - ready_for_review
       - converted_to_draft
       - closed
-concurrency:
-  group: pr-dashboard
-  cancel-in-progress: false
 jobs:
+  # Each event's own line in #ci, in a job with no concurrency: a concurrency group holds one run
+  # running and one pending, and cancels a pending run that a newer one replaces, whose event would
+  # then get no line.
+  notify:
+    runs-on: depot-ubuntu-24.04
+    env:
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+    steps:
+      # THE RUN'S OWN COMMIT, the tree this workflow file was read from: the scripts read GitHub and
+      # Slack, never the pull request's code (docs/depot-ci.md#which-tree-a-pull-requests-ci-tests).
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+      - name: Notify PR update
+        run: node scripts/ci/notify.ts pr-update
+  # The dashboard is rebuilt whole from GitHub on each run, so a cancelled pending run loses nothing.
   update_dashboard:
+    concurrency:
+      group: pr-dashboard
+      cancel-in-progress: false
     runs-on: depot-ubuntu-24.04
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
@@ -29,7 +48,5 @@ jobs:
           ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Notify PR update
-        run: node scripts/ci/notify.ts pr-update
       - name: Update PR dashboard
         run: node scripts/ci/pr-dashboard.ts

@@ -196,13 +196,14 @@ jobs:
           done
 
   # A job, not a final step: it must also report a failed plan (after which nothing else runs), and
-  # the publish job's boundary is that it checks out and runs no repository code.
+  # the publish job's boundary is that it checks out and runs no repository code. A red run pages
+  # #error-pulse (one page while it stays red); the next run that builds and publishes resolves it.
   notify:
     needs:
       - plan-firmware
       - build-firmware
       - publish-firmware
-    if: always() && github.ref == 'refs/heads/main' && (needs.plan-firmware.result == 'failure' || needs.build-firmware.result == 'failure' || needs.publish-firmware.result == 'failure')
+    if: always() && github.ref == 'refs/heads/main'
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -214,7 +215,13 @@ jobs:
           persist-credentials: false
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Notify Slack
+      - name: Page the red run
+        if: contains(needs.*.result, 'failure')
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: node scripts/ci/notify.ts workflow-failure
+      # Only a run that built, published and saw Kit serve the files resolves: a run planning no
+      # release skips those jobs and proves nothing about the failure the page names.
+      - name: Resolve the page
+        if: needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'
+        run: node scripts/ci/notify.ts workflow-resolved

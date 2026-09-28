@@ -72,7 +72,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                           |
 | `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
 | `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
-| `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The Slack PR update and the daily PR dashboard                                                                   |
+| `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The event's line in #ci and the daily PR dashboard                                                               |
 | `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace                     |
 | `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
@@ -737,20 +737,37 @@ and OTLP JSON export.
 the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the preview
 sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
 (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
-(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
-succeeded, each pull request event, the PR dashboard, the Durable Object cost alarm's daily thread,
-each context sweep's result, the orphans it destroyed included (the crash hunt leaves some every
-night), and the 🧪 test pages.
+(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each pull request event as one
+top-level line (its title cut to 80 characters, its base named only when it is not `main`), each
+app's prd deploy as `🚀 <App> live · run` in the thread of its merge's line (`(re-run)` for a second
+run of the same commit; top-level with its sha when the deploy was dispatched or no merge's line
+appears within 3 minutes), the PR dashboard, the Durable Object cost alarm's daily thread, each
+context sweep's result, the orphans it destroyed included (the crash hunt leaves some every night),
+and the 🧪 test pages.
 
-The preview sweep and the context sweep keep one page per incident (`keepPage` in
-`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then `Impact:`, `Do:`, the ids to act on and one
-link. A later run that finds the incident still there edits the page, which notifies nobody; the
-first run that finds it gone edits its first line to start `✅ resolved:` and replies once in its
-thread, mentioning both. Older open pages of the same incident are marked resolved by an edit
-alone. The page's first line is its state, so the channel's history is the only state a poster
-keeps; a run that sees only part of an incident (the preview sweep's stuck namespaces) carries
-forward what the open page names until reads confirm it gone. Only a run on main pages; a 🧪 test run (each workflow's `test-run` input)
-posts to #ci, mentions nobody and never reads #error-pulse.
+Every page keeps one message per incident (`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then
+`Impact:`, `Do:`, the ids to act on and one link. A later run that finds the incident still there
+edits the page, which notifies nobody; the first run that finds it gone edits its first line to
+start `✅ resolved:` and replies once in its thread, mentioning both. Older open pages of the same
+incident are marked resolved by an edit alone. The page's first line is its state, so the channel's
+history is the only state a poster keeps; a run that sees only part of an incident (the preview
+sweep's stuck namespaces, the apps that failed on a commit) carries forward what the open page names.
+Only a run on main pages; a 🧪 test run (each workflow's `test-run` input, each `notify.ts` command's
+`--test-run`) posts to #ci, mentions nobody and never reads #error-pulse.
+
+| Poster                                                  | One page per   | Resolved by                                                  |
+| ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
+| `notify.ts deploy-failure`                              | failing commit | every app on it live again at a commit that descends from it |
+| `prd-post-deploy-check.ts`                              | os-prd         | the next passing check                                       |
+| `notify.ts workflow-failure` (Kit firmware, crash hunt) | workflow       | its next green run (`workflow-resolved`)                     |
+
+Another app failing on the same commit, an app live again, or another deploy failing the host check
+is an edit of the page, not a reply; a red workflow whose failed jobs change also replies in its
+thread. Kit firmware's green run is one that built and published: a run that plans no release
+skips both and resolves nothing. A deploy step posts to #ci only when its whole job succeeded,
+and a failed post never turns the deploy red. Each PR event's line posts from `pr-dashboard.yml`'s
+`notify` job, which has no concurrency group: a group cancels the pending run a newer one replaces,
+and that event would get no line.
 
 ## Health
 
