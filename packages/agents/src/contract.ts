@@ -29,7 +29,7 @@
 // `itx` as it is: no capability host, typecheck or preamble.
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
-import { RunEventCatalog } from "iterate/stream/run";
+import { RunContract } from "iterate/stream/run";
 
 /** Who put words into the context: a person, a script's result, or the loop itself (a format
  *  correction). A script's or the loop's words are self-triggered input — the autonomous-turn
@@ -335,7 +335,7 @@ export const AgentContract = defineProcessorContract({
   },
   // The script events are the CONTEXT's (`itx/run-requested` / `run-settled`): the agent asks,
   // the context runs, the agent reads the settlement as the next developer item.
-  processorDeps: [RunEventCatalog],
+  processorDeps: [RunContract],
   consumes: [
     "events.iterate.com/agent/create-requested",
     "events.iterate.com/agent/created",

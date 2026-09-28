@@ -25,9 +25,10 @@ export const RunSettled = z.object({
 export type RunSettled = z.infer<typeof RunSettled>;
 export type RunSettlement = RunSettled["settlement"];
 
-/** The run events' catalog. The core owns them (apps/os core-processor.ts); a processor that
- *  consumes them names this catalog in its `processorDeps`. */
-export const RunEventCatalog = {
+/** Script lifecycle events available to userspace processors. */
+export const RunContract = {
+  slug: "context-runs",
+  version: "1",
   events: {
     "events.iterate.com/itx/run-requested": {
       description:
@@ -40,4 +41,5 @@ export const RunEventCatalog = {
       payloadSchema: RunSettled,
     },
   },
+  initialState: () => ({}),
 };

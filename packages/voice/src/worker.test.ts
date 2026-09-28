@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { build } from "esbuild";
 import { expect, test, vi } from "vitest";
 
@@ -208,11 +209,14 @@ let voiceWorker: Promise<any> | undefined;
 
 /**
  * Deployed, `iterate/sdk` links to the platform's SDK build. Supply just the
- * ConfigWorker environment here and exercise the actual bundled worker, built
- * once per file on first use.
+ * ConfigWorker environment and the SDK's `z` here and exercise the actual
+ * bundled worker, built once per file on first use.
  */
 function loadVoiceWorker(): Promise<any> {
-  const withItxModule = createRequire(import.meta.url).resolve("iterate/with-itx");
+  const recordPipelinedSteps = join(
+    dirname(createRequire(import.meta.url).resolve("iterate/sdk")),
+    "record-pipelined-steps.ts",
+  );
   voiceWorker ||= (async () => {
     const bundle = await build({
       entryPoints: [new URL("./worker.ts", import.meta.url).pathname],
@@ -233,8 +237,9 @@ function loadVoiceWorker(): Promise<any> {
             // the same recording proxy and release as a deployed config worker.
             builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
               contents: [
-                `import { withItx } from ${JSON.stringify(withItxModule)};`,
+                `import { withItx } from ${JSON.stringify(recordPipelinedSteps)};`,
                 "export class ConfigWorker { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                'export { z } from "zod";',
               ].join("\n"),
               resolveDir: new URL(".", import.meta.url).pathname,
             }));

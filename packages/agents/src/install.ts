@@ -27,7 +27,7 @@ export async function publishedVersion(name: string, commit: string | undefined)
 }
 
 /** The source a project installs the agents app from, by file: `version` is what package.json pins
- *  (a pkg.pr.new URL). */
+ *  (a pkg.pr.new URL, or an npm range once the package is on npm). */
 export function agentsFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ dependencies: { "@iterate-com/agents": version } }, null, 2)}\n`,
@@ -59,10 +59,15 @@ export function rootManifestListing(
   return `${JSON.stringify({ ...parsed, devDependencies }, null, 2)}\n`;
 }
 
-/** An installed app's runtime name: the SHA-256 of its files as JSON, sorted by name. Every facet
- *  the runtime hosts names it (a processor row shows which runtime an agent runs), and an upgrade is
- *  a new name. */
-export async function sourceCacheKey(source: Record<string, string>) {
+/** Install the app into a project root from its source: a folder's files by name, as
+ *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
+ *  classes). Installing the same source again changes nothing; a new source is an upgrade, and every
+ *  agent is rebound to it. */
+export async function installAgents(itx: InstallTarget, source: Record<string, string>) {
+  const { path } = await itx.whoami();
+  if (path !== "/") throw new Error("Install agents at the project root");
+  // The runtime's name is its content hash: every facet it hosts names it (a processor row shows
+  // which runtime an agent runs), and an upgrade is a new name.
   const serialized = JSON.stringify(
     Object.fromEntries(
       Object.keys(source)
@@ -71,45 +76,9 @@ export async function sourceCacheKey(source: Record<string, string>) {
     ),
   );
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-/** An installed app's source in the config repo's `<dir>/`: the folder as it is, or `folder`
- *  committed there first when the repo has no `<dir>/package.json`, with the root package.json
- *  listing `packageName` at `version` (`rootManifestListing`). Answers the folder's files by name,
- *  as `repo.modules({ dir })` does. */
-export async function ensureAppFolder(
-  repo: Pick<RepoHandle, "readFile" | "commitFiles" | "modules">,
-  {
-    dir,
-    folder,
-    packageName,
-    version,
-  }: { dir: string; folder: Record<string, string>; packageName: string; version: string },
-) {
-  const root = rootManifestListing(await repo.readFile("package.json"), packageName, version);
-  const commit = (await repo.readFile(`${dir}/package.json`))
-    ? undefined
-    : await repo.commitFiles({
-        message: `Install ${packageName}`,
-        changes: [
-          ...Object.entries(folder).map(([name, content]) => ({ path: `${dir}/${name}`, content })),
-          ...(root ? [{ path: "package.json", content: root }] : []),
-        ],
-      });
-  // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
-  const commitOid = commit?.commitOid ?? undefined;
-  return repo.modules({ dir, commitOid });
-}
-
-/** Install the app into a project root from its source: a folder's files by name, as
- *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
- *  classes). Installing the same source again changes nothing; a new source is an upgrade, and every
- *  agent is rebound to it. */
-export async function installAgents(itx: InstallTarget, source: Record<string, string>) {
-  const { path } = await itx.whoami();
-  if (path !== "/") throw new Error("Install agents at the project root");
-  const cacheKey = await sourceCacheKey(source);
+  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   await itx.kv.put("agents/runtime", JSON.stringify({ cacheKey, source }));
   const spec = { cacheKey, source, className: "AgentCollectionDurableObject" };
   await itx.processors.enable("agents", {
@@ -129,8 +98,8 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
 }
 
 /** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or
- *  `agentsFolder(version)` committed there first when the repo has none (`ensureAppFolder`), then
- *  installed. A project that has the rule keeps its own. */
+ *  `agentsFolder(version)` committed there first when the repo has none, then installed. A project
+ *  that has the rule keeps its own. */
 export async function ensureAgents(
   project: InstallTarget & {
     rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
@@ -150,11 +119,25 @@ export async function ensureAgents(
   });
   if (settled.type !== "events.iterate.com/project/created")
     throw new Error("The project's creation failed, so there is no config repo to install into");
-  const source = await ensureAppFolder(project.repos.get("/repos/config"), {
-    dir: "agents",
-    folder: agentsFolder(version),
-    packageName: "@iterate-com/agents",
+  const repo = project.repos.get("/repos/config");
+  const root = rootManifestListing(
+    await repo.readFile("package.json"),
+    "@iterate-com/agents",
     version,
-  });
-  await installAgents(project, source);
+  );
+  const commit = (await repo.readFile("agents/package.json"))
+    ? undefined
+    : await repo.commitFiles({
+        message: "Install the agents app",
+        changes: [
+          ...Object.entries(agentsFolder(version)).map(([name, content]) => ({
+            path: `agents/${name}`,
+            content,
+          })),
+          ...(root ? [{ path: "package.json", content: root }] : []),
+        ],
+      });
+  // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
+  const commitOid = commit?.commitOid ?? undefined;
+  await installAgents(project, await repo.modules({ dir: "agents", commitOid }));
 }
