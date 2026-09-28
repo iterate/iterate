@@ -1,7 +1,8 @@
 import { defineConfig } from "tsdown";
 
 // One neutral ES module per export. `iterate`, `zod` and `cloudflare:workers` stay imports: a loaded
-// worker binds them to the platform's own modules (apps/os context/module-resolution.ts).
+// worker binds them to the platform's own modules (apps/os context/module-resolution.ts). The
+// workspace-only `@iterate-com/shared` is inlined.
 export default defineConfig({
   entry: {
     index: "src/index.ts",

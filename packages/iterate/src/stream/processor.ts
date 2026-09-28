@@ -155,7 +155,7 @@ export abstract class StreamProcessor<State, Event extends StreamEvent = StreamE
   /** Side-effect hook. Synchronous by design: register async work via the two helpers on args.
    *  `append` takes what THIS class's `contract` emits (`EmittedEventInput<this["contract"]>`:
    *  a subclass whose `contract` is a defined one gets each emitted type's payload as its catalog
-   *  spells it; the base, and a hand-built contract, take any input). */
+   *  spells it; the base `ProcessorContract` takes any input). */
   processEvent(
     _args: ProcessEventArgs<State, Event, EmittedEventInput<this["contract"]>>,
   ): undefined {}
@@ -717,8 +717,8 @@ export type StreamEventInput = {
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
-     *  at, whichever context it was appended to. On every event committed since the stamp: the
-     *  platform's own records of a context (its birth, a wake, a run's settlement) carry the
+     *  at, whichever context it was appended to. Every committed event carries it (`StreamEvent`):
+     *  the platform's own records of a context (its birth, a wake, a run's settlement) carry the
      *  context's own path. */
     origin?: string;
     /** The durable schedule definition responsible for this occurrence. */
@@ -757,11 +757,13 @@ export type StreamEventInput = {
   ephemeral?: true;
 };
 
-/** A committed event: the input plus the identity the stream assigned at its commit point. */
-export type StreamEvent = Omit<StreamEventInput, "offset"> & {
+/** A committed event: the input plus the identity the stream assigned at its commit point, and the
+ *  platform's `source`, whose `origin` every commit carries (apps/os stream.ts). */
+export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   offset: number;
   createdAt: string;
   path: string;
+  source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
 // ── idempotency (message text stays greppable across RPC hops) ──

@@ -66,6 +66,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
+    "@iterate-com/shared": "workspace:*",
     "iterate": "workspace:*",
     "tsdown": "catalog:",
     "typescript": "catalog:",

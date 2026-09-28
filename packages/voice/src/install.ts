@@ -6,15 +6,15 @@
 // without loading it.
 import type {} from "./api.ts";
 // registers `itx.voice` on InstalledAppRoots
-import { ensureAgents, rootManifestListing } from "@iterate-com/agents/install";
-import type { IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
+import { ensureAgents, ensureAppFolder, sourceCacheKey } from "@iterate-com/agents/install";
+import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
 import { z } from "zod";
 import { SCREEN_FONT_CSS } from "./screen-font.ts";
 
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
 /** The source a project installs voice from, by file: `version` is what package.json pins (a
- *  pkg.pr.new URL, or an npm range once the package is on npm). */
+ *  pkg.pr.new URL). */
 export function voiceFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,
@@ -38,17 +38,7 @@ export async function installVoice(
   if (path !== "/") throw new Error("Install voice at the project root");
   if (!(await itx.rewriteRules.get("itx.agents"))?.target)
     throw new Error("Voice needs the agents app: install it first");
-  const serialized = JSON.stringify(
-    Object.fromEntries(
-      Object.keys(source)
-        .sort()
-        .map((name) => [name, source[name]]),
-    ),
-  );
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
-  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const cacheKey = await sourceCacheKey(source);
   // Written before the rule: the worker reads its facets' source from here (worker.ts).
   await itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source }));
   // A screen script embeds this in its HTML (screen-context.md).
@@ -73,7 +63,6 @@ export async function ensureVoiceAgent(
   project: Parameters<typeof ensureAgents>[0] &
     Parameters<typeof installVoice>[0] & {
       secrets: Pick<IterateContextApi["secrets"], "list" | "set">;
-      repos: { get(path: string): Pick<RepoHandle, "readFile" | "commitFiles" | "modules"> };
     },
   versions: { agents: string; voice: string },
   openaiKey?: string,
@@ -87,27 +76,13 @@ export async function ensureVoiceAgent(
   }
   if (!(await project.rewriteRules.get("itx.voice"))) {
     await ensureAgents(project, versions.agents);
-    const repo = project.repos.get("/repos/config");
-    const root = rootManifestListing(
-      await repo.readFile("package.json"),
-      "@iterate-com/voice",
-      versions.voice,
-    );
-    const commit = (await repo.readFile("voice/package.json"))
-      ? undefined
-      : await repo.commitFiles({
-          message: "Install voice",
-          changes: [
-            ...Object.entries(voiceFolder(versions.voice)).map(([name, content]) => ({
-              path: `voice/${name}`,
-              content,
-            })),
-            ...(root ? [{ path: "package.json", content: root }] : []),
-          ],
-        });
-    // No commitOid (nothing committed, or a commit that changed nothing) reads the tip.
-    const commitOid = commit?.commitOid ?? undefined;
-    await installVoice(project, await repo.modules({ dir: "voice", commitOid }));
+    const source = await ensureAppFolder(project.repos.get("/repos/config"), {
+      dir: "voice",
+      folder: voiceFolder(versions.voice),
+      packageName: "@iterate-com/voice",
+      version: versions.voice,
+    });
+    await installVoice(project, source);
   }
   // The project's `itx.voice` rule exists now (published above, or its own), so its handle answers
   // `voice`; a project-owned service is still parsed, since only ours is typed by VoiceApi.

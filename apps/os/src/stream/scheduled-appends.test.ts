@@ -257,6 +257,7 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
     offset: 1,
     path: "/",
     createdAt: "2030-01-01T00:00:00.000Z",
+    source: { origin: "/" },
   };
   let state = reduceCoreEventBatch([input], CoreContract.initialState(), (error) => {
     throw error;
@@ -268,6 +269,7 @@ test("interval completion coalesces missed ticks, retains cadence and ignores du
     offset: 3,
     path: "/",
     createdAt: "2030-01-01T01:00:00.500Z",
+    source: { origin: "/" },
   };
   state = reduceCoreEventBatch([completed], state, (error) => {
     throw error;
