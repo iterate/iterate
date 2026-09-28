@@ -133,9 +133,10 @@ export default {
       ignoreDependencies: ["@iterate-com/capnweb"],
     },
     "apps/browser-extension": {
-      // public/index.html loads panel.js; its ./capnweb.js is the one the build copies into dist/.
+      // public/index.html loads panel.js; its ./capnweb.js and ./oauth.js are the ones the build
+      // copies into dist/.
       entry: ["public/panel.js"],
-      ignoreUnresolved: ["./capnweb.js"],
+      ignoreUnresolved: ["./capnweb.js", "./oauth.js"],
     },
     "packages/ui": {
       // The package.json export map is the public entry surface (many subpath

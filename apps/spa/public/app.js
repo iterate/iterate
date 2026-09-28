@@ -3,7 +3,7 @@
 // `authenticate` call (capnweb's own pattern): the session it returns is pipelined, so the first
 // calls ride the same round trip as the token.
 import { newWebSocketRpcSession } from "@iterate-com/capnweb";
-import { beginLogin, currentSession, finishLogin, freshAccessToken, logout } from "./oauth.js";
+import { oauthClient, webStore } from "./oauth.js";
 
 // Which platform: `?issuer=http://localhost:8788` for a local apps/os, remembered; else production.
 const issuer =
@@ -11,6 +11,25 @@ const issuer =
   localStorage.getItem("iterate-spa:issuer") ||
   "https://os.iterate.com";
 localStorage.setItem("iterate-spa:issuer", issuer);
+
+/** Where the issuer sends the browser back: this page, exactly. */
+const redirectUri = new URL(location.pathname, location.origin).href;
+const oauth = oauthClient({
+  clients: webStore(localStorage),
+  // this tab, until it closes
+  sessions: webStore(sessionStorage),
+  redirectUri,
+  // the page leaves for the issuer's consent and is loaded again at redirectUri, below
+  launch: (url) => {
+    location.assign(url);
+    return new Promise(() => {});
+  },
+  registration: {
+    client_name: "iterate static SPA",
+    client_uri: location.origin,
+    logo_uri: new URL("/client-logo.svg", location.origin).href,
+  },
+});
 
 const app = document.getElementById("app");
 const escape = (text) =>
@@ -22,7 +41,7 @@ function signedOut() {
     <p>This page is plain files served from <code>${escape(location.origin)}</code>. It signs you in
     at <code>${escape(issuer)}</code> itself, then talks to <code>${escape(issuer)}/api</code> directly.</p>
     <p><button id="login">Sign in with Iterate</button></p>`;
-  document.getElementById("login").onclick = () => beginLogin(issuer).catch(fail);
+  document.getElementById("login").onclick = () => oauth.signIn(issuer).catch(fail);
 }
 
 function fail(error) {
@@ -33,8 +52,8 @@ function fail(error) {
   app.append(alert);
 }
 
-async function signedIn(session) {
-  const token = await freshAccessToken(session);
+async function signedIn() {
+  const token = await oauth.freshAccessToken();
   const socket = new WebSocket(`${issuer.replace(/^http/, "ws")}/api`);
   const iterate = newWebSocketRpcSession(socket);
   const api = iterate.authenticate({ type: "bearer", token });
@@ -77,7 +96,7 @@ async function signedIn(session) {
     try {
       await api.logout();
     } finally {
-      logout();
+      await oauth.signOut();
       iterate[Symbol.dispose]();
       signedOut();
     }
@@ -92,8 +111,14 @@ async function signedIn(session) {
 }
 
 try {
-  const session = (await finishLogin()) || currentSession();
-  if (session && session.issuer === issuer) await signedIn(session);
+  // `?code=&state=` or `?error=` on this page: the issuer sent the browser back
+  const back = new URL(location.href);
+  if (back.searchParams.has("code") || back.searchParams.has("error")) {
+    history.replaceState(null, "", redirectUri);
+    await oauth.finishSignIn(back.href);
+  }
+  const session = await oauth.session();
+  if (session?.issuer === issuer) await signedIn();
   else signedOut();
 } catch (error) {
   signedOut();

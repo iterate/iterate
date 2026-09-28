@@ -36,6 +36,6 @@ writeFileSync(
 <ol><li>Unzip the download.</li><li>Open <code>chrome://extensions</code> and enable Developer mode.</li>
 <li>Choose <strong>Load unpacked</strong> and select the extracted folder.</li></ol>
 <p>Updating an existing copy? Replace the files in its installed folder, then click <strong>Reload</strong> on its extension card.
-Close and reopen the side panel; the heading shows the installed version. Sign out and sign in again to give the session its client logo.</p>
+Close and reopen the side panel; the heading shows the installed version.</p>
 </body></html>\n`,
 );
