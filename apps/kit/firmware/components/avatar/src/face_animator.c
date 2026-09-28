@@ -227,8 +227,6 @@ bool face_animator_init_with_config(
     animator->next_blink_frame = FIRST_BLINK_FRAME;
     animator->next_gaze_frame = FIRST_GAZE_FRAME;
     animator->state.eye_open = 255;
-    animator->state.viseme = FACE_VISEME_NONE;
-    animator->state.phoneme = FACE_PHONEME_NONE;
     return true;
 }
 
@@ -363,12 +361,6 @@ bool face_animator_snapshot(const face_animator_t *animator,
         &animator->state.gaze_x, __ATOMIC_RELAXED);
     candidate.gaze_y = __atomic_load_n(
         &animator->state.gaze_y, __ATOMIC_RELAXED);
-    candidate.viseme = __atomic_load_n(
-        &animator->state.viseme, __ATOMIC_RELAXED);
-    candidate.phoneme = __atomic_load_n(
-        &animator->state.phoneme, __ATOMIC_RELAXED);
-    candidate.confidence = __atomic_load_n(
-        &animator->state.confidence, __ATOMIC_RELAXED);
     candidate.activity = __atomic_load_n(
         &animator->state.activity, __ATOMIC_RELAXED);
     candidate.speaking = __atomic_load_n(

@@ -14,13 +14,7 @@ static face_render_key_t test_key(uint8_t activity)
     key.controls.eye_left_open = 255U;
     key.controls.eye_right_open = 255U;
     key.controls.expression = activity;
-    key.viseme = FACE_VISEME_O;
-    key.phoneme = 17U;
-    key.viseme_weight = 211U;
     key.audio_level = 133U;
-    key.viseme_set = FACE_VISEME_SET_OVR15;
-    key.viseme_secondary = FACE_VISEME_E;
-    key.viseme_blend = 91U;
     key.speech_phase = FACE_SPEECH_ACTIVE;
     key.expression_weight = 255U;
     key.attention = 100U;
@@ -50,14 +44,15 @@ static void test_deterministic_and_articulation_safe(void)
         5U) == 0);
     assert(first.controls.expression == source.controls.expression);
     assert(first.controls.flags == source.controls.flags);
-    assert(memcmp(&first.viseme, &source.viseme, 8U) == 0);
+    assert(first.audio_level == source.audio_level);
+    assert(first.speech_phase == source.speech_phase);
     assert(first.attention == 255U);
     assert(first.controls.brow >= 42);
     assert(first.brow_inner >= 68);
     assert(first.affect_arousal >= 224U);
 }
 
-static void test_stage_direction_wins(void)
+static void test_a_held_expression_wins(void)
 {
     face_render_key_t key = test_key(FACE_ACTIVITY_LISTENING);
     key.stage_expression = FACE_EXPRESSION_JOY;
@@ -178,7 +173,7 @@ int main(void)
     assert(sizeof(face_performance_profile_t) <= 8U);
     assert(sizeof(face_performance_frame_t) <= 20U);
     test_deterministic_and_articulation_safe();
-    test_stage_direction_wins();
+    test_a_held_expression_wins();
     test_activity_families_are_varied();
     test_activity_change_is_immediate();
     test_profile_controls_motion();

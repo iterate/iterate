@@ -599,9 +599,9 @@ bool face_performance_apply(
             : envelope;
 
     /*
-     * Neutral stage directions leave full room for ambient expression.
-     * Authored non-neutral emotions suppress brow/squint/affect changes in
-     * proportion to their weight but do not freeze believable head motion.
+     * A neutral expression leaves full room for ambient expression. A held
+     * non-neutral one suppresses brow/squint/affect changes in proportion to
+     * its weight but does not freeze believable head motion.
      */
     uint8_t expression_amount = envelope;
     if (render_key->stage_expression != FACE_EXPRESSION_NEUTRAL) {

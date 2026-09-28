@@ -21,7 +21,6 @@ static void doze_key_is_unmistakably_not_speaking(void)
     key.controls.mouth_round = 120U;
     key.controls.flags = FACE_KEYFRAME_FLAG_SPEAKING;
     key.speech_phase = FACE_SPEECH_ACTIVE;
-    key.viseme_weight = 240U;
     key.audio_level = 160U;
 
     /*
@@ -39,7 +38,6 @@ static void doze_key_is_unmistakably_not_speaking(void)
     assert((key.controls.flags & FACE_KEYFRAME_FLAG_SPEAKING) == 0U);
     assert((key.controls.flags & FACE_KEYFRAME_FLAG_BLINKING) != 0U);
     assert(key.speech_phase == FACE_SPEECH_IDLE);
-    assert(key.viseme_weight == 0U);
     assert(key.audio_level == 0U);
     assert(key.stage_expression == FACE_EXPRESSION_SLEEPY);
     assert(key.expression_weight == UINT8_MAX);
