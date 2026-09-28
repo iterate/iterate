@@ -265,7 +265,7 @@ export function wsRoundTripOnProjectUrl(
     });
     ws.addEventListener("error", (event) => {
       const { error, message } = event as { error?: { message?: string }; message?: string };
-      out.error = String((error?.message || message) ?? "websocket error");
+      out.error = String(error?.message || message || "websocket error");
     });
     ws.addEventListener("close", (event) => {
       clearTimeout(timer);

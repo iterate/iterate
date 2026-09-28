@@ -61,7 +61,7 @@ export const noInferableTypeAnnotationRule: StrictRule = {
         );
         // An instantiated signature has a target: the call inferred its type arguments, and the
         // annotation took part in that inference.
-        if (!tsCall || checker.getResolvedSignature(tsCall)?.target !== undefined) return;
+        if (!tsCall || checker.getResolvedSignature(tsCall)?.getTarget()) return;
       }
       const declared = checker.getTypeFromTypeNode(declaration.type);
       // Every type the checker cannot resolve is one error type, flagged Any, so two of them match
