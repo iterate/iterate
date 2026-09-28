@@ -37,13 +37,13 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # The Cloudflare API token CI uploads the test evidence with (Doppler _shared/preview) reads
-      # it back. The iterate GitHub App's id and key (Doppler os-legacy-backup/prd) mint the token
+      # it back. The iterate GitHub App's id and key (Doppler _shared/prd) mint the token
       # that writes the issue.
       - name: Recompute the dashboard issue
         run: |-
           set -euo pipefail
           export CLOUDFLARE_API_TOKEN GITHUB_APP_ID GITHUB_APP_PRIVATE_KEY
           CLOUDFLARE_API_TOKEN="$(doppler secrets get CLOUDFLARE_API_TOKEN --plain --project _shared --config preview)"
-          GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project os-legacy-backup --config prd)"
-          GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project os-legacy-backup --config prd)"
+          GITHUB_APP_ID="$(doppler secrets get GITHUB_APP_ID --plain --project _shared --config prd)"
+          GITHUB_APP_PRIVATE_KEY="$(doppler secrets get GITHUB_APP_PRIVATE_KEY --plain --project _shared --config prd)"
           pnpm tsx scripts/ci/flake-dashboard/update.ts ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}

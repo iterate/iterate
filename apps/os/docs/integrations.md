@@ -208,9 +208,10 @@ project's calls therefore append to that one Durable Object, which becomes a hot
 projects use one key. The Dash's Integrations page lists them under "From this deployment".
 
 `scripts/seed-instance-secrets.ts --env <name> [--pr <n>] [--lend-to-every-project]` sets
-`/secrets/exa`, `/secrets/parallel` and `/secrets/openai` from Doppler: `os-legacy-2026-04`'s
-`APP_CONFIG_INTEGRATIONS__EXA` and `__PARALLEL`, and `os`'s `OPENAI_API_KEY`. `--env` has no
-default, and `--env prd` also needs `--confirm-prd`.
+`/secrets/exa`, `/secrets/parallel` and `/secrets/openai` from the target's Doppler `os` config:
+`EXA_API_KEY`, `PARALLEL_API_KEY` and `OPENAI_API_KEY`. `os/preview` has no `OPENAI_API_KEY`, so
+`--env preview` also takes `--openai-config dev`. `--env` has no default, and `--env prd` also
+needs `--confirm-prd`.
 
 ## WebSockets through a secret
 
