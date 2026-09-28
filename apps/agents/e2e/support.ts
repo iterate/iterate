@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { matchesGlob } from "node:path";
@@ -67,34 +68,35 @@ async function prPublishesPackages(pr: string): Promise<boolean> {
   }
 }
 
-/** How far back from a head the newest published build is looked for. Every main commit publishes,
- *  so only a branch's own unpublished commits and a main build still in flight stand between. */
-const PUBLISHED_ANCESTOR_DEPTH = 30;
-
-/** This checkout's pkg.pr.new build of one of the repository's packages: a real build of a commit,
- *  never `@main`, which the loader locks to whatever it first resolved. A PR that changes what the
- *  pkg.pr.new workflow publishes on gets its head published on every push, so its rows pin the head's
- *  build, waited for while that workflow runs beside the preview's deploy (a first push has no build
- *  of the PR at all until it lands). Any other run (Main OS e2e, a PR that publishes nothing, a
- *  dispatch) pins the newest build of a commit at or before its head, as GitHub lists them. A run
- *  that names no head (a local one) pins main's. */
+/** This checkout's pkg.pr.new build of one of the repository's packages: the build of one commit,
+ *  waited for while the pkg.pr.new workflow publishes it, never `@main`, which the loader locks to
+ *  whatever it first resolved. A PR that changes what that workflow publishes on gets its head
+ *  published on every push, so its rows pin the head (a first push has no build of the PR until it
+ *  lands). Every main commit publishes, so any other run pins its head's merge base with main: the
+ *  head itself on a main run, the main commit a PR that publishes nothing branched from. A run that
+ *  names no head (a local one) pins this checkout's merge base with origin/main. */
 export async function publishedPackage(name: string): Promise<string> {
   const at = (ref: string) => pkgPrNewVersion(name, ref);
-  const published = async (ref: string) => (await fetch(at(ref), { method: "HEAD" })).ok;
-  const pr = process.env.PREVIEW_PR_NUMBER?.trim();
+  const ref = await publishedRef();
+  for (
+    const deadline = Date.now() + 60_000;
+    !(await fetch(at(ref), { method: "HEAD" })).ok;
+    await sleep(3_000)
+  )
+    if (Date.now() > deadline) throw new Error(`pkg.pr.new has not published ${at(ref)}`);
+  return at(ref);
+}
+
+/** The commit whose build `publishedPackage` pins. */
+async function publishedRef(): Promise<string> {
   const head = process.env.TEST_TELEMETRY_HEAD_SHA?.trim();
-  if (!head) return at("main");
-  if (pr && (await prPublishesPackages(pr))) {
-    for (const deadline = Date.now() + 60_000; !(await published(head)); await sleep(3_000))
-      if (Date.now() > deadline) throw new Error(`pkg.pr.new has not published ${at(head)}`);
-    return at(head);
-  }
-  const commits = await github(
-    `commits?sha=${head}&per_page=${PUBLISHED_ANCESTOR_DEPTH}`,
-    z.array(z.object({ sha: z.string() })),
+  if (!head)
+    return execFileSync("git", ["merge-base", "HEAD", "origin/main"], { encoding: "utf8" }).trim();
+  const pr = process.env.PREVIEW_PR_NUMBER?.trim();
+  if (pr && (await prPublishesPackages(pr))) return head;
+  const { merge_base_commit } = await github(
+    `compare/main...${head}?per_page=1`,
+    z.object({ merge_base_commit: z.object({ sha: z.string() }) }),
   );
-  for (const { sha } of commits) if (await published(sha)) return at(sha);
-  throw new Error(
-    `pkg.pr.new has published ${name} for none of the ${PUBLISHED_ANCESTOR_DEPTH} commits up to ${head}`,
-  );
+  return merge_base_commit.sha;
 }
