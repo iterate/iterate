@@ -628,6 +628,19 @@ export function refuseLiftingAJail(
   }
 }
 
+/** `itx.cd(path).append(…)` exactly (`ItxExpressionResolver#admit` says why it goes anywhere). */
+function isCdAppend(expression: ItxExpression): boolean {
+  const [, cd, append] = expression;
+  return (
+    expression.length === 3 &&
+    Array.isArray(cd) &&
+    cd[0] === "cd" &&
+    typeof cd[1] === "string" &&
+    Array.isArray(append) &&
+    append[0] === "append"
+  );
+}
+
 /** An expression as loaded code spells one, a dotted string or its steps: `normalizedItxExpression`
  *  refuses any other shape of either. */
 function isItxExpressionInput(value: unknown): value is ItxExpressionInput {
@@ -831,16 +844,8 @@ export class ItxExpressionResolver {
     // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
     // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
-    if (!caller.app || caller.path) return;
-    const [, cd, append] = expression;
-    const appendsAnywhere =
-      expression.length === 3 &&
-      Array.isArray(cd) &&
-      cd[0] === "cd" &&
-      typeof cd[1] === "string" &&
-      Array.isArray(append) &&
-      append[0] === "append";
-    if (!appendsAnywhere) admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path && !isCdAppend(expression))
+      admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run
