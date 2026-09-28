@@ -188,6 +188,12 @@ set of CodeMirror extensions, so switching later is cheap.
   preloads from the origin's root, outside the project's base path. It's now `@import`ed by
   `src/styles.css`, the one stylesheet the page already links under its base path. The spec caught
   it; the harness didn't (no base path there).
+- Then the doc's processor failed to load on the preview: "…/node-diff3@3.2.1/es2022/node-diff3.js
+  does not provide an export named 'diff3Merge'". The platform fetches a loaded package's npm
+  dependencies from esm.sh (`target=es2022`), which builds node-diff3 from its `browser` export, an
+  IIFE whose only export is `default`. node-diff3 is now bundled into the package (tsdown
+  `alwaysBundle`, a devDependency); yjs and diff come from esm.sh fine. The package's unit tests run
+  under node, which picks `import`, so they couldn't catch it.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.

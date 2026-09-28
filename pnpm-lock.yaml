@@ -1128,9 +1128,6 @@ importers:
       diff:
         specifier: ^8.0.4
         version: 8.0.4
-      node-diff3:
-        specifier: 3.2.1
-        version: 3.2.1
       yjs:
         specifier: ^13.6.31
         version: 13.6.33
@@ -1141,6 +1138,9 @@ importers:
       iterate:
         specifier: workspace:*
         version: link:../iterate
+      node-diff3:
+        specifier: 3.2.1
+        version: 3.2.1
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)

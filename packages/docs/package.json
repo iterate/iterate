@@ -42,7 +42,6 @@
   },
   "dependencies": {
     "diff": "^8.0.4",
-    "node-diff3": "3.2.1",
     "yjs": "^13.6.31"
   },
   "peerDependencies": {
@@ -52,6 +51,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "iterate": "workspace:*",
+    "node-diff3": "3.2.1",
     "tsdown": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:",
