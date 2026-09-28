@@ -6,7 +6,11 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { createProjectFixture, createSessionFixture } from "./forged-session.ts";
+import {
+  createProjectFixture,
+  createSessionFixture,
+  mintIterateSession,
+} from "./forged-session.ts";
 import { openOperatorSession, type OperatorSession } from "./operator.ts";
 import { screenshot } from "./screenshot.ts";
 
@@ -47,6 +51,15 @@ export const test = base.extend<{
     ) => Promise<Awaited<ReturnType<typeof createProjectFixture>>>;
     /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
     createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;
+    /** Someone else in the fixture's organization (`<name>-<fixture's email>`), signed in, in a
+     *  browser of their own: `page` has the primary page's plugins, and its uncaught errors fail
+     *  the spec. Disposing it closes their browser. */
+    createMember: (
+      fixture: { email: string },
+      name: string,
+    ) => Promise<
+      { email: string; page: Awaited<ReturnType<typeof addPagePlugins>> } & AsyncDisposable
+    >;
     /** The origin of a client app deployed against the platform under test, from its
      *  `<APP>_BASE_URL`. Locally a missing app skips the spec; in CI it fails, because the
      *  preview's e2e job always sets the variable. */
@@ -59,7 +72,7 @@ export const test = base.extend<{
     using session = openOperatorSession();
     await use(session.authenticate());
   },
-  helpers: async ({ page }, use) => {
+  helpers: async ({ page, browser }, use, testInfo) => {
     // A client app's uncaught errors fail its spec (docs/browser-testing.md: fail on page and
     // hydration errors), counted from before the fixture's sign-in to the end of the test.
     const appPageErrors: string[] = [];
@@ -79,6 +92,27 @@ export const test = base.extend<{
           }),
         createSession: (slugPrefix) =>
           base.step("create signed-in session", () => createSessionFixture(slugPrefix, { page })),
+        createMember: (fixture, name) =>
+          base.step("create another member", async () => {
+            const email = `${name}-${fixture.email}`;
+            operatorSession ||= openOperatorSession();
+            await operatorSession.authenticate().users.create({ email });
+            const owner = operatorSession.authenticate({ email: fixture.email });
+            const [org] = await owner.organizations.list();
+            await owner.organizations.addMember(org!.id, { userId: email, role: "member" });
+            const context = await browser.newContext();
+            const memberPage = await addPagePlugins(await context.newPage(), testInfo);
+            memberPage.on("pageerror", (error) => appPageErrors.push(`${email}: ${error.message}`));
+            await mintIterateSession({ email, page: memberPage });
+            return {
+              email,
+              page: memberPage,
+              async [Symbol.asyncDispose]() {
+                await memberPage[Symbol.asyncDispose]();
+                await context.close();
+              },
+            };
+          }),
         appOrigin: (app) => {
           const variable = `${app.toUpperCase()}_BASE_URL`;
           const name = `${app[0]!.toUpperCase()}${app.slice(1)}`;

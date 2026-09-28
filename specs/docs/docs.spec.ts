@@ -8,16 +8,12 @@ import { expect, type Page } from "@playwright/test";
 import { transformSync } from "esbuild";
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
-import { mintIterateSession } from "../test-support/forged-session.ts";
-import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
 import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 
 test("two people write a doc together: shortcuts, each other's typing live, an agent's commit live, and the doc saves itself", async ({
   page,
-  browser,
   helpers,
-  operator,
 }) => {
   const { ingressRouting } = readOsPlaywrightAuthConfig();
   await using fixture = await helpers.createFixture("docs");
@@ -70,21 +66,13 @@ test("two people write a doc together: shortcuts, each other's typing live, an a
 
   // Jonas, a member of the same organization, opens the doc in his own browser: each sees the
   // other is here, and what he types reaches Misha's editor without a reload.
-  const jonas = `jonas-${fixture.email}`;
-  await operator.users.create({ email: jonas });
-  using session = openOperatorSession();
-  const owner = session.authenticate({ email: fixture.email });
-  const [org] = await owner.organizations.list();
-  await owner.organizations.addMember(org!.id, { userId: jonas, role: "member" });
-  await using jonasContext = await browser.newContext();
-  const jonasPage = await jonasContext.newPage();
-  await mintIterateSession({ email: jonas, page: jonasPage });
-  await jonasPage.goto(proxied(`/projects/${fixture.project.slug}/lisbon-offsite.md`).href);
-  if (ingressRouting?.type === "subdomains") await consent(jonasPage, proxied("/").host);
-  const jonasEditor = jonasPage.getByRole("textbox", { name: "lisbon-offsite.md", exact: true });
-  await jonasEditor.and(jonasPage.locator('[contenteditable="true"]')).waitFor();
-  await page.getByLabel("Also here").filter({ hasText: jonas }).waitFor();
-  await jonasPage.getByLabel("Also here").filter({ hasText: fixture.email }).waitFor();
+  await using jonas = await helpers.createMember(fixture, "jonas");
+  await jonas.page.goto(proxied(`/projects/${fixture.project.slug}/lisbon-offsite.md`).href);
+  if (ingressRouting?.type === "subdomains") await consent(jonas.page, proxied("/").host);
+  const jonasEditor = jonas.page.getByRole("textbox", { name: "lisbon-offsite.md", exact: true });
+  await jonasEditor.and(jonas.page.locator('[contenteditable="true"]')).waitFor();
+  await page.getByLabel("Also here").filter({ hasText: jonas.email }).waitFor();
+  await jonas.page.getByLabel("Also here").filter({ hasText: fixture.email }).waitFor();
 
   await jonasEditor.press("ControlOrMeta+End");
   await jonasEditor.press("Enter");
@@ -100,7 +88,7 @@ test("two people write a doc together: shortcuts, each other's typing live, an a
   await expect
     .poll(async () => (await docs.log({ limit: 1 }))[0])
     .toMatchObject({
-      author: { email: jonas },
+      author: { email: jonas.email },
     });
 
   // An agent commits to the doc: the root's docs processor tells the doc's, which merges the
