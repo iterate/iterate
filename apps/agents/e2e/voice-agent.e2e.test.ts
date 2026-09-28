@@ -8,8 +8,8 @@
 // directions. It does not test the live model, microphones or speakers.
 import { expect } from "vitest";
 import { installAgents } from "@iterate-com/agents/install";
-import { DEFAULT_AGENT_SYSTEM_PROMPT } from "@iterate-com/agents/system-prompt";
 import { installVoice } from "@iterate-com/voice/install";
+import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system-prompt.ts";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse } from "../../os/e2e/support/fake-ai.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";

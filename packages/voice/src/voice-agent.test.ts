@@ -18,8 +18,10 @@ type Step =
   | { delegates: string }
   /** The agent opened a model request, over every item before it. */
   | { request: string }
-  /** That request's reply landed. */
-  | { answer: string; text: string }
+  /** The agents app published a script's status. */
+  | { status: string }
+  /** The agents app published that request's message, written beside a script or not. */
+  | { answer: string; text: string; besideScript?: true }
   | { agentPaused: string }
   /** Every wait of this many milliseconds ends. */
   | { elapseMs: number };
@@ -46,15 +48,13 @@ test.for<{
     ],
   },
   {
-    name: "a script step reaches the live model as its status only, never the prose beside the script",
+    name: "a script's status reaches the live model quietly, and the prose beside the script is never spoken",
     steps: [
       { heard: "What time is it in London?", atMs: 0 },
       { delegates: "d1" },
       { request: "r1" },
-      {
-        answer: "r1",
-        text: '<codemode status="Checking London time">\nreturn new Date().toISOString();\n</codemode>\n\nI could not verify the time.',
-      },
+      { status: "Checking London time" },
+      { answer: "r1", text: "I could not verify the time.", besideScript: true },
       { request: "r2" },
       { answer: "r2", text: "It is noon in London." },
     ],
@@ -278,13 +278,18 @@ async function liveCall(log: LoggedEvent[] = [], requests = new Map<string, numb
           payload: {},
         });
         requests.set(step.request, intent.offset);
+      } else if ("status" in step) {
+        commit({
+          type: "events.iterate.com/agent/summary-updated",
+          payload: { activity: step.status },
+        });
       } else if ("answer" in step) {
         commit({
-          type: "events.iterate.com/agent/context-added",
+          type: "events.iterate.com/agent/web-message-sent",
           payload: {
-            role: "assistant",
-            content: step.text,
+            message: step.text,
             llmRequestOffset: requests.get(step.answer),
+            ...(step.besideScript && { besideScript: true }),
           },
         });
       } else if ("agentPaused" in step) {

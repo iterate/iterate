@@ -254,10 +254,13 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/web-message-sent": {
       description:
-        "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from.",
+        "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from, and besideScript marks prose written beside a script, before its result.",
       payloadSchema: z.object({
         message: z.string().min(1),
         llmRequestOffset: z.number().int().positive().optional(),
+        /** The answer also held a script, so these words were written before its result: a reader
+         *  that may state only verified results (a voice call) holds them back. */
+        besideScript: z.literal(true).optional(),
       }),
     },
     "events.iterate.com/agent/summary-updated": {

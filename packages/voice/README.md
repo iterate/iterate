@@ -22,17 +22,23 @@ voice/worker.ts      export { default, VoiceAgentDurableObject } from "@iterate-
 (`voice/runtime`) for the press's relay facet, and stores the screen font. `ensureVoiceAgent`,
 which Kit's Prepare and voice.iterate.com run, also stores the OpenAI key (the live model's) and
 commits both folders, in one commit (`commitAppFolders` in `@iterate-com/agents/install`), when the
-project has none, then loads both apps at once. To upgrade, pin a newer build and install again.
+project has none, then loads both apps at once. To upgrade, write both files as `voiceFolder` has
+them for the newer build and install again: worker.ts re-exports the build's classes by name, so a
+new pin under an old worker.ts can fail to load. A worker.ts that re-exports
+`VoiceDelegateDurableObject` is one: the relay facet is the only class now, so it becomes
+`export { default, VoiceAgentDurableObject } from "@iterate-com/voice";`. A device's press is the
+same call either way, so no Kit board needs a reflash for an upgrade.
 
 The backend is the project's normal agent: its system prompt, capability tree and codemode loop.
 The press adds [voice-context.md](src/voice-context.md), the instructions for spoken answers, as
 a developer message that starts no turn. Keep tool examples in the agents app's prompt; do not
 maintain a separate voice API description. Each hand-over carries the words said since the one
 before (`Person:` and `Voice:` lines), so the agent's own conversation holds the whole call. The
-relay reads the agent's replies with the agents app's codemode parser: a script step's status
-reaches the live model as a quiet note, and only the final prose is spoken, for the newest
-hand-over the reply's request had read. A reply ending in `HANG_UP` ends the call after the
-goodbye, and an agent that pauses says so.
+relay passes on the facts the agents app publishes for a person: a script's status
+(`agent/summary-updated`) reaches the live model as a quiet note, and a message
+(`agent/web-message-sent`) is spoken for the newest hand-over its request had read, unless it was
+written beside a script (`besideScript`), before that script's result. A message ending in
+`HANG_UP` ends the call after the goodbye, and an agent that pauses says so.
 
 A device with a screen adds [screen-context.md](src/screen-context.md) as an
 ordinary developer message when the call starts, with its client name filled

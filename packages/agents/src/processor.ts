@@ -627,7 +627,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
-          payload: { message: outcome.prose, llmRequestOffset },
+          payload: {
+            message: outcome.prose,
+            llmRequestOffset,
+            ...(outcome.kind === "script" && { besideScript: true }),
+          },
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }

@@ -10,7 +10,6 @@
 // registers `itx.agents` on InstalledAppRoots
 import type {} from "@iterate-com/agents";
 import { AgentContract } from "@iterate-com/agents/contract";
-import { parseCodemodeResponse } from "@iterate-com/agents/codemode-format";
 import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
 import {
@@ -305,10 +304,11 @@ const VoiceAgentContract = defineProcessorContract({
       }),
     },
   },
-  /* The agent on this context owns its events; its answers are what the live model speaks. */
+  /* The agent on this context owns its events; its messages are what the live model speaks. */
   processorDeps: [AgentContract],
   consumes: [
-    "events.iterate.com/agent/context-added",
+    "events.iterate.com/agent/summary-updated",
+    "events.iterate.com/agent/web-message-sent",
     "events.iterate.com/agent/paused",
     "events.iterate.com/voice-agent/call-started",
     "events.iterate.com/voice-agent/call-ended",
@@ -603,27 +603,28 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event === null) return;
 
     switch (event.type) {
-      case "events.iterate.com/agent/context-added": {
-        /* The agent's reply to one of its model requests; the words handed to it, script results
-         * and the partial kept after an interruption carry no `llmRequestOffset`. A dial dies with
-         * its incarnation, so a redelivered reply with no dial is not forwarded. */
+      /* A dial dies with its incarnation, so a redelivered agent event with no dial is not
+       * forwarded. */
+      case "events.iterate.com/agent/summary-updated": {
+        /* A script's status: progress the voice may use quietly. */
         const dial = this.#dial;
-        const { role, content, llmRequestOffset } = event.payload;
-        if (!dial || role !== "assistant" || llmRequestOffset === undefined) return;
-        const reply = parseCodemodeResponse(content);
-        /* A script step is progress the voice may use quietly: its status only, since prose beside
-         * a script can guess at a result the script has not produced yet. */
-        if (reply.kind === "script") {
-          this.#sendToLiveModel(dial, {
-            kind: "thinking",
-            delegationId: null,
-            content: reply.status || "Running a script for the request.",
-            offset: event.offset,
-          });
-          return;
-        }
-        if (reply.kind !== "none" || !reply.prose) return;
-        if (reply.prose.includes(HANG_UP_TOKEN)) {
+        if (!dial) return;
+        this.#sendToLiveModel(dial, {
+          kind: "thinking",
+          delegationId: null,
+          content: event.payload.activity,
+          offset: event.offset,
+        });
+        return;
+      }
+
+      case "events.iterate.com/agent/web-message-sent": {
+        /* An answer to one of the agent's model requests is spoken, unless it was written beside a
+         * script: those words can guess at a result the script has not produced yet. */
+        const dial = this.#dial;
+        const { message, llmRequestOffset, besideScript } = event.payload;
+        if (!dial || besideScript || llmRequestOffset === undefined) return;
+        if (message.includes(HANG_UP_TOKEN)) {
           dial.hangUpReason = "the Agent hung up";
           dial.hangUpArmedAtFacetMs = this.deps.nowAtFacetMs();
           dial.answerBeforeHangUp = dial.answer;
@@ -639,7 +640,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
           kind: "commentary",
           delegationId:
             dial.delegations.findLast((row) => row.offset < llmRequestOffset)?.delegationId ?? null,
-          content: reply.prose.replace(HANG_UP_TOKEN, "").trim(),
+          content: message.replace(HANG_UP_TOKEN, "").trim(),
           offset: event.offset,
         });
         return;

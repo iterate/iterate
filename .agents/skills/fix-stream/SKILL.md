@@ -84,9 +84,11 @@ Print the conversation with offsets and times before reading product code. Every
   (`requestOffset`, `result.status`): the model calls.
 - `itx/run-requested` and `itx/run-settled`: the scripts the assistant's codemode ran. The
   request's offset is the run; the settlement names it back (`requestOffset`).
-- `agent/web-message-sent`: what the person saw. `agent/paused` and `agent/resumed`: a breaker
-  or an operator.
-- `voice-agent/*`: a call's transcripts, delegations and commentary (`packages/voice/src/`).
+- `agent/web-message-sent`: what the person saw; `besideScript` marks prose written beside a
+  script, which a voice call does not speak. `agent/paused` and `agent/resumed`: a breaker or an
+  operator.
+- `voice-agent/*`: a call's transcripts, audio frames and lifecycle (`packages/voice/src/`). The
+  live model's hand-overs are `agent/context-added` items `from` the call's own path.
 - Other `itx/*`: the context's own facts, such as wakes (`itx/woken`) and processor rows
   (`itx/subscription-configured`).
 
