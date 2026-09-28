@@ -9,11 +9,11 @@
 // Basic or the form (a refused client gets GitHub's HTTP 200 `{ error }`), and an API that takes the
 // latest access token. Every token request is recorded as the endpoint saw it.
 import { env, exports } from "cloudflare:workers";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { errorCode } from "iterate/lib";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { hmacSha256Hex } from "../src/secrets.ts";
-import { ORIGIN, projectWithMember } from "./support.ts";
+import { adminSession, ORIGIN, projectWithMember } from "./support.ts";
 
 const PROVIDER = "https://provider.test";
 const CLIENT_ID = "the-client";
@@ -79,7 +79,7 @@ test.for(["client_secret_basic", "client_secret_post"] as const)(
   },
 );
 
-test("a client secret placeholder that cannot resolve is refused at beginOAuth, before anyone is sent to consent; a field of a JSON secret pinned to the token endpoint is one that can", async () => {
+test("a client secret placeholder that cannot resolve is refused INVALID_INPUT at beginOAuth, before anyone is sent to consent; a field of a JSON secret pinned to the token endpoint is one that can", async () => {
   const member = await projectWithMember("oauth-placeholder-refused");
   const provider = fakeProvider("client-secret-1");
   await member.itx.secrets.set("/secrets/elsewhere", "client-secret-1", {
@@ -90,57 +90,112 @@ test("a client secret placeholder that cannot resolve is refused at beginOAuth, 
     { clientSecret: "client-secret-1" },
     { urls: [PROVIDER] },
   );
+  // the operator's own secret, pinned to the provider and lent to this project
+  const sessions: Disposable[] = [];
+  onTestFinished(() => sessions.forEach((session) => session[Symbol.dispose]()));
+  const operator: any = await adminSession(sessions);
+  const lent = `/secrets/oauth-placeholder-lent-${crypto.randomUUID().slice(0, 8)}`;
+  await operator.global.secrets.set(lent, "client-secret-1", { urls: [PROVIDER] });
+  await operator.global.secrets.lend(lent, {
+    to: member.projectId,
+    as: "/secrets/lent-client-secret",
+  });
   const rows = [
     {
       clientSecret: 'getSecret("/secrets/elsewhere")',
       outcome:
-        "the secret /secrets/elsewhere is pinned to https://elsewhere.test, not https://provider.test",
+        "INVALID_INPUT: secrets: the secret /secrets/elsewhere is pinned to https://elsewhere.test, not https://provider.test",
     },
     {
       clientSecret: 'getSecret("/secrets/never-set")',
-      outcome: "/secrets/never-set holds no secret",
+      outcome: "INVALID_INPUT: secrets: /secrets/never-set holds no secret",
+    },
+    {
+      clientSecret: 'getSecret("/secrets/lent-client-secret")',
+      outcome: "INVALID_INPUT: secrets: /secrets/lent-client-secret is borrowed",
     },
     {
       clientSecret: 'getSecret("/secrets/provider-app")',
       outcome:
-        '/secrets/provider-app is a JSON object: name its field, getSecret("/secrets/provider-app", { field: "…" })',
+        'INVALID_INPUT: secrets: /secrets/provider-app is a JSON object: name its field, getSecret("/secrets/provider-app", { field: "…" })',
     },
     {
       clientSecret: 'getSecret("/secrets/provider-app", { field: "secret" })',
-      outcome: '/secrets/provider-app has no string at field "secret"',
+      outcome: 'INVALID_INPUT: secrets: /secrets/provider-app has no string at field "secret"',
     },
     {
       clientSecret: 'getSecret("/secrets/provider")',
-      outcome: "names /secrets/provider itself",
+      outcome:
+        'INVALID_INPUT: secrets: the client secret getSecret("/secrets/provider") names /secrets/provider itself',
     },
-    { clientSecret: `Basic ${PLACEHOLDER}`, outcome: "one placeholder and nothing else" },
+    {
+      clientSecret: `Basic ${PLACEHOLDER}`,
+      outcome:
+        "INVALID_INPUT: secrets: a clientSecret that names the secret holding it is one placeholder and nothing else",
+    },
     {
       clientSecret: 'getSecret("/provider-client-secret")',
-      outcome: "one placeholder and nothing else",
+      outcome:
+        "INVALID_INPUT: secrets: a clientSecret that names the secret holding it is one placeholder and nothing else",
     },
     {
       clientSecret: 'getSecret("/secrets/provider-app", { field: "clientSecret" })',
       outcome: "begun",
     },
   ];
+  const begin = (itx: Member["itx"], clientSecret: string) =>
+    itx.secrets.beginOAuth("/secrets/provider", { ...OPTIONS, clientSecret }).then(
+      () => "begun",
+      (error: unknown) =>
+        `${errorCode(error)}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   const outcomes = [];
   for (const { clientSecret } of rows)
-    outcomes.push({
-      clientSecret,
-      outcome: await member.itx.secrets
-        .beginOAuth("/secrets/provider", { ...OPTIONS, clientSecret })
-        .then(
-          () => "begun",
-          (error: unknown) => (error instanceof Error ? error.message : String(error)),
-        ),
-    });
+    outcomes.push({ clientSecret, outcome: await begin(member.itx, clientSecret) });
   expect(outcomes).toEqual(
     rows.map(({ clientSecret, outcome }) => ({
       clientSecret,
       outcome: outcome === "begun" ? outcome : expect.stringContaining(outcome),
     })),
   );
-  expect(provider).toMatchObject({ tokenRequests: [] });
+  // a person's own OAuth secret names the person's own secrets: the project's is out of reach
+  await member.itx.secrets.set("/secrets/provider-client-secret", "client-secret-1", {
+    urls: [PROVIDER],
+  });
+  expect(await begin(member.session.user, PLACEHOLDER)).toContain(
+    "INVALID_INPUT: secrets: /secrets/provider-client-secret holds no secret",
+  );
+  expect(await begin(member.itx, PLACEHOLDER)).toBe("begun");
+  expect(provider).toMatchObject({ requests: [] });
+});
+
+test("a refresh toward an endpoint the named secret is not pinned to sends the client secret nowhere: the refresh is refused, and the caller gets a 502", async () => {
+  const member = await projectWithMember("oauth-placeholder-moved");
+  const provider = fakeProvider("client-secret-1");
+  await member.itx.secrets.set("/secrets/provider-client-secret", "client-secret-1", {
+    urls: [PROVIDER],
+  });
+  // the OAuth secret's strategy pointed elsewhere, by whoever may set it
+  await member.itx.secrets.set(
+    "/secrets/moved",
+    { clientId: CLIENT_ID, clientSecret: PLACEHOLDER, refreshToken: "refresh-0" },
+    {
+      urls: ["https://elsewhere.test"],
+      refresh: { kind: "oauth-refresh-token", tokenEndpoint: "https://elsewhere.test/token" },
+    },
+  );
+  const response: Response = await member.itx.fetch(
+    new Request("https://elsewhere.test/me", {
+      headers: { authorization: 'Bearer getSecret("/secrets/moved", { field: "accessToken" })' },
+    }),
+  );
+  expect({ status: response.status, text: await response.text() }).toEqual({
+    status: 502,
+    text: expect.stringContaining(
+      "the refresh failed: secrets: the secret /secrets/provider-client-secret is pinned to https://provider.test, not https://elsewhere.test",
+    ),
+  });
+  expect(provider).toMatchObject({ requests: [] });
 });
 
 test("no caller but the platform reads a client secret out: `itx.secrets.clientSecretFor` and the `secret` facet's `clientSecretFor` are refused FORBIDDEN to a project member, and answer the platform", async () => {
@@ -180,22 +235,28 @@ test("no caller but the platform reads a client secret out: `itx.secrets.clientS
 // ── helpers ──
 
 /** The provider at https://provider.test, answering this isolate's `fetch` for the rest of the test
- *  (the platform's own origin goes to this worker, every other through). `clientSecret` is the one
+ *  (the platform's own origin goes to this worker, every other is a recorded 404). `clientSecret` is the one
  *  its token endpoint accepts for `CLIENT_ID`; setting `accessToken` revokes the one it issued. */
 function fakeProvider(clientSecret: string) {
   const provider = {
     clientSecret,
     accessToken: "",
     refreshToken: "",
+    /** Every request that left for anywhere but the platform, as sent. */
+    requests: [] as { url: string; authorization: string | null; body: string }[],
     tokenRequests: [] as { grant: string | null; via: "basic" | "form"; clientSecret: string }[],
   };
   let issued = 0;
-  const through = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin === ORIGIN) return exports.default.fetch(request);
-    if (url.origin !== PROVIDER) return through(request);
+    provider.requests.push({
+      url: request.url,
+      authorization: request.headers.get("authorization"),
+      body: await request.clone().text(),
+    });
+    if (url.origin !== PROVIDER) return new Response("not found", { status: 404 });
     if (url.pathname === "/me")
       return request.headers.get("authorization") === `Bearer ${provider.accessToken}`
         ? Response.json({ login: "octocat" })

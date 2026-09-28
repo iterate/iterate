@@ -653,9 +653,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
         "INVALID_INPUT",
         `secrets: the secret ${path} is pinned to ${stored.record.urls.join(", ")}, not ${input.origin} — the token endpoint's origin — so it is never sent there as a client secret`,
       );
-    const record = await this.#opened(stored);
-    await this.#assertInstallationRouted(record.refresh);
-    await this.#assertWorkspaceNotMoved(record.routedAccount);
+    let record: SecretRecord;
+    try {
+      record = await this.#opened(stored);
+      await this.#assertInstallationRouted(record.refresh);
+      await this.#assertWorkspaceNotMoved(record.routedAccount);
+    } catch (error) {
+      // the refusals egress answers 502 are this caller's expected outcomes too
+      if (!(error instanceof SecretRefused)) throw error;
+      throw codedError("INVALID_INPUT", error.message.replace(/^itx\.fetch: /, "secrets: "));
+    }
     const value = secretMaterialStringOf(record.material, input.field);
     if (value) return value;
     throw codedError(
