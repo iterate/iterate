@@ -16,7 +16,7 @@
 //     POST /api/integrations/slack/{webhook,interactivity-webhook}/<projectId>/<connection>  own app
 // A signed request lands on `<project>:/integrations/slack/<connection>` as
 // `slack/webhook-received`, keyed `slack-webhook:<event_id|trigger_id>` (the codes: rules.ts).
-import { codedError } from "iterate/lib";
+import { codedError, errorCode } from "iterate/lib";
 import { z } from "zod";
 import { appConfigOf, DEFAULT_SLACK_BOT_SCOPES } from "../app-config.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
@@ -414,9 +414,9 @@ export async function slackWebhookRoute(request: Request, env: Env): Promise<Res
       payload: { body, teamId, slackRequestTimestamp: timestamp },
     });
   } catch (error) {
-    // A redelivery carries a new timestamp, so its body differs from the one stored under the key
-    // (stream.ts IDEMPOTENCY_CONFLICT, greppable across the hop): already stored.
-    if (!String(error).includes("already names a different event")) throw error;
+    // A redelivery carries a new timestamp, so its body differs from the one stored under the key:
+    // already stored.
+    if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
   }
   return Response.json({ ok: true });
 }

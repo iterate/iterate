@@ -2,7 +2,7 @@
 // microphone frames in, answer frames of any length out. One AudioContext at 16 kHz carries both
 // directions, so no resampling happens here; the two worklets (public/worklets) do the per-sample
 // work off the main thread.
-import { bytesToBase64 } from "@iterate-com/shared/base64";
+import { bytesToBase64 } from "iterate/lib";
 
 /** 16 kHz, one 50 ms frame = 800 samples. */
 export const FRAME_SAMPLES = 800;

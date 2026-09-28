@@ -56,9 +56,9 @@ not only by ASR text.
 
 - Keep target-only defaults in `targets/<board>/sdkconfig.defaults`. Shared
   defaults are explicit shared values, never inferred from absence.
-- A target partition table must retain its `iterate_kit` configuration partition
-  and reserve a wake-model partition when needed. Match partition geometry to
-  flash size.
+- A target takes its flash size's partition table from `targets/common`. Each
+  table keeps the `iterate_kit` configuration partition, and the 16 MiB one the
+  `model` partition a wake word needs.
 - After defaults or partition changes, pass `-D SDKCONFIG=/tmp/<board>.sdkconfig`
   to `idf.py`; an environment-only `SDKCONFIG` is ignored.
 - The reviewed press and end WAVs are converted by CMake into each component's

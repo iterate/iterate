@@ -10,5 +10,6 @@ vendor constants. Unused experimental waveforms and generators are omitted. The 
 come from the same repository's `zectrix_board` component; see
 `LICENSE.zectrix.md`.
 
-`status_font.h` reuses the small status font from this repository's Waveshare
-display implementation. No vendor consumer firmware is distributed.
+The status text is this repository's own, shared with the Waveshare RLCD
+(`components/capabilities/src/screen.c`). No vendor consumer firmware is
+distributed.

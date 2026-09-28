@@ -22,7 +22,6 @@ const chromeStore = {
 };
 
 const oauth = oauthClient({
-  clients: chromeStore,
   sessions: chromeStore,
   // `https://<extension id>.chromiumapp.org/`: the manifest's `key` keeps the id, and so this URL,
   // the same on every install.

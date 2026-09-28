@@ -71,8 +71,7 @@ side, a suite job's suite):
    (`node scripts/ci/test-evidence.ts finalize --flake-suites <suite>`, `--cancelled` when the job
    was, two minutes at most). The Test job runs it `if: always()`; a suite job whenever its suite
    step ran, with `--only-with-target`, so it keeps a folder only once the suite read the deployed
-   target. One step and one Node process, with Node's own type stripping rather than `tsx`, and
-   Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
+   target. One step and one Node process, with Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
    upload's Node starts from. First the telemetry finalizer
    ([CI telemetry](ci-test-telemetry.md#test-telemetry-artifacts)), then the manifest: the
    workflow passes the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
@@ -85,12 +84,13 @@ side, a suite job's suite):
    still keeps a failed suite's traces and flake lines.
 2. **Upload the test evidence to R2** (`node scripts/ci/test-evidence.ts upload`, `if: always()`
    once the manifest is written, `continue-on-error`, three minutes at most), in one `parallel:`
-   block beside the Depot artifact uploads. Its Doppler secrets (`_shared/preview`) come without
-   a request: an earlier step, "Fetch the evidence upload's secrets", saved them into Doppler's
-   encrypted fallback file in the runner's temporary directory, and `doppler run --fallback-only`
-   reads them. In the Test job that step runs beside the tests, in a suite job before the suite,
-   while the deploy it waits for runs. Without that file (a failed fetch is a warning there) the
-   upload fetches them itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
+   block beside the Depot artifact uploads. Its token (Doppler `_shared/preview`'s
+   `CLOUDFLARE_API_TOKEN`) comes without a request: an earlier step, "Fetch the evidence upload's
+   secrets" (`node scripts/ci/test-evidence.ts fetch-upload-secrets`), saved the config into
+   Doppler's encrypted fallback file in the runner's temporary directory, and the upload reads it
+   from there (scripts/lib/env-context.ts `dopplerSecret`'s `fallback`). In the Test job that step
+   runs beside the tests, in a suite job before the suite, while the deploy it waits for runs.
+   Without that file (a failed fetch is a warning there) the upload fetches the token itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
    files is one or two waves of about half a second each and the manifest's. A cancelled job's
    folder goes too, its manifest saying `cancelled`. The step prints the run's prefix, the object
    count and how long the upload and the process took
@@ -146,6 +146,9 @@ never reached R2.
 Everything CI keeps in R2 lives in **`iterate-ci`**, on the dev/preview account
 (`ciBucketEnvs.ci` in `envs.ts`), under `evidence/`. `evidence/local/` and `state/` are reserved
 for laptop runs and the guards' state ([#3110](https://github.com/iterate/iterate/issues/3110)).
+`backups/context-sweep/<env>/<run's start>/` holds the context sweep's backups: each orphan context
+it destroys, its identity and whole durable log in one JSON Lines object
+([`scripts/ci/context-sweep.ts`](../scripts/ci/context-sweep.ts)).
 
 One bucket, because an R2 API token scopes to buckets, never to a prefix, and CI has one
 credential that reaches every bucket anyway ([credentials](#credentials)); lifecycle rules and
@@ -233,6 +236,7 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
 - `evidence/ci/trust=main/`: 365 days (`evidence-main-after-365-days`).
 - `evidence/ci/trust=pr/`: 90 days (`evidence-pr-after-90-days`).
 - `evidence/local/`: 30 days (`evidence-local-after-30-days`).
+- `backups/context-sweep/`: 365 days (`backups-context-sweep-after-365-days`).
 - `state/`: never deleted. Nothing in CI deletes objects.
 - **No bucket lock is set** (30 days on `trust=main/` would stop even CI's token deleting them);
   whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
@@ -268,6 +272,7 @@ Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN` and
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
+   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci backups-context-sweep-after-365-days backups/context-sweep/ --expire-days 365 --force
    # nothing expires state/
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle list iterate-ci
    ```

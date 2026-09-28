@@ -53,8 +53,8 @@ struct iterate_kit_board_sounds {
  * a dial, side buttons). board.c runs its own half of each op first, then extra's:
  * extra->start before the codec; extra->present after the ring; board.c reads
  * GPIO and read_gestures, applies the grammar and chimes, then extra->poll handles
- * board-only UI. extra->health is appended; button.gpio >= 0 mounts button.press
- * first, then extra->modules appends the board-only capabilities.
+ * board-only UI. extra->health is appended; extra->modules are the board-only
+ * capabilities.
  */
 struct iterate_kit_board {
   struct iterate_kit_board_facts facts;    /* .speaker.set_volume/.volume filled by board.c */
@@ -103,17 +103,41 @@ bool iterate_kit_board_boot_steps(
     const struct iterate_kit_gpio_step *steps, size_t count,
     bool (*drive)(int8_t gpio, uint8_t level), void (*wait)(uint16_t ms));
 /** Apply the active table's volume control; only successful writes update the
- * reported value. The dial and RPC share this exact path.
+ * reported and kept value. The dial, the RPC and the boot restore share this
+ * exact path.
  */
 enum iterate_kit_status iterate_kit_board_set_volume(uint8_t percent, uint8_t *applied);
+/** Keep `percent` in NVS as the level to restore at the next boot.
+ * iterate_kit_board_set_volume calls it after every successful write.
+ */
+void iterate_kit_board_save_volume(uint8_t percent);
+/** Replay the kept level through `set`, the board's one volume path, so
+ * today's ceiling still clamps it. Nothing kept, or a byte that is no
+ * percentage, leaves the boot level and answers ITERATE_KIT_OK; otherwise the
+ * answer is set's. Start calls it once the codec is open.
+ */
+enum iterate_kit_status iterate_kit_board_restore_volume(
+    enum iterate_kit_status (*set)(uint8_t percent, uint8_t *applied));
 /** Nudge by signed percentage points, clamp to 0..100 then the table ceiling,
  * and set through iterate_kit_board_set_volume. Success borrows the ring for
  * a one-second volume bar; failure leaves the reported volume and bar alone.
  * App task only; board-specific mute feedback may immediately replace the bar.
  */
 enum iterate_kit_status iterate_kit_board_nudge_volume(int step);
-/** Queue a synthetic down edge in the same classifier as physical controls. */
+/** The wake word's press: a synthetic down edge in the table button's classifier. */
 void iterate_kit_board_inject_press(void);
+/** The two lines a board's status text panel shows, and whether it shows them yet. */
+struct iterate_kit_board_status_text {
+  const char *title; /**< FAULT, CONNECTING, READY, LISTENING or SPEAKING */
+  char status[32];   /**< the view's status in upper case, or the board's hint */
+  bool shown;        /**< the board sets it once the panel shows these lines */
+};
+/** Set `text` to `view`'s lines, `hint` standing in for an empty status. True
+ * when the panel must draw them: they changed, or they are not shown yet.
+ * A board clears `shown` when an image leaves its panel. */
+bool iterate_kit_board_status_text(
+    struct iterate_kit_board_status_text *text,
+    const struct iterate_kit_voice_view *view, const char *hint);
 /** Apply the shared grammar to normalized input. Exposed for focused host
  * tests; board.c is the only firmware caller. */
 void iterate_kit_board_apply_gestures(

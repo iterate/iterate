@@ -33,4 +33,4 @@ jobs:
       - name: Deploy apps/ci-reports
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project _shared --config preview -- pnpm --dir apps/ci-reports run-script deploy --env ci
+        run: pnpm --dir apps/ci-reports run-script deploy --env ci

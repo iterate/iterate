@@ -13,7 +13,6 @@
 #include "iterate/kit/capabilities/face.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/board.h"
-#include "iterate/kit/capabilities/arguments.h"
 #include "iterate/kit/voice/loop.h"
 #include "iterate/kit/voice_device_profile.h"
 
@@ -28,16 +27,6 @@
  */
 #include <sounds_generated.inc>
 
-static const char *const button_press_path[] = {"button", "press"};
-
-static enum capnweb_status button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  m5sticks3_board_inject_call_press();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
 static bool wear_face(void *context, size_t index) {
   (void)context;
   return m5sticks3_board_wear_face(index);
@@ -45,31 +34,18 @@ static bool wear_face(void *context, size_t index) {
 
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
-  static const struct iterate_kit_method board_methods[] = {
-    {button_press_path, 2U, button_press},
-  };
   static struct iterate_kit_face face;
   static const struct iterate_kit_face_driver face_driver = {
     .context = NULL,
     .slug_at = face_avatar_registry_slug_at,
     .wear = wear_face,
   };
-  size_t count = 0U;
   (void)context;
-  if (capacity < 2U) return 0U;
-  out[count++] = (struct iterate_kit_module){
-    .methods = board_methods,
-    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
-    .context = NULL,
-    .close = NULL,
-    .session_ended = NULL,
-  };
   /* `face.set({face})`, the same catalogue the CoreS3 wears: this board has
    * no local face control, so a face nobody asks for by name is never made. */
-  if (iterate_kit_face_init(&face, &face_driver) == ITERATE_KIT_OK) {
-    out[count++] = iterate_kit_face_module(&face);
-  }
-  return count;
+  if (capacity < 1U || iterate_kit_face_init(&face, &face_driver) != ITERATE_KIT_OK) return 0U;
+  out[0] = iterate_kit_face_module(&face);
+  return 1U;
 }
 
 static bool start(void *context, struct iterate_kit_board_audio *out) {
@@ -92,7 +68,6 @@ static void present(
 
 /** Supply either debounced physical M5 button as one session press. */
 static void read_gestures(struct iterate_kit_board_gestures *out) {
-  m5sticks3_board_poll();
   out->pressed |= m5sticks3_board_take_call_press();
 }
 

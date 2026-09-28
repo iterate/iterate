@@ -2,7 +2,9 @@
 
 `worker.ts` serves the homepage and installs the agents app on `project/created`, and again
 on every commit that changes `agents/`.
-It extends `ConfigWorker` from `iterate/sdk` and reaches the project's `itx`
+It extends `ConfigWorker` from `iterate/sdk`, which holds the hosts (a processor
+imports `StreamProcessor` and `defineProcessorContract` from `iterate/stream/processor`),
+and reaches the project's `itx`
 through `this.withItx((itx) => …)`, or the `itx` that `processEvent({ event, itx })`
 is handed; both release everything the call reached when it returns. Never keep
 a value from `this.env.ITX.get()`, and answer data, not handles, from `withItx`:

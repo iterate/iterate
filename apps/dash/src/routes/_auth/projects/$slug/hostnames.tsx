@@ -13,7 +13,7 @@
 // hostname is on its way the page checks it again every CHECK_EVERY_MS, so nobody has to.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, useNavigate } from "@tanstack/react-router";
-import { CheckIcon, Plus } from "lucide-react";
+import { LoaderCircleIcon, Plus } from "lucide-react";
 import { z } from "zod";
 import { Button, buttonVariants } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
@@ -29,6 +29,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { cn } from "cn";
 import { useContextStub, useFacetLiveState } from "iterate/react";
+import { DNS_PROVIDER_GUIDES, type DnsProviderGuide } from "../../../../lib/dns-provider-guides.ts";
 
 const shell = getRouteApi("/_auth");
 
@@ -49,9 +50,11 @@ const HostnamesLive = z.looseObject({
           sslStatus: z.string(),
           records: z.array(z.object({ name: z.string(), value: z.string() })),
           connect: z.object({ provider: z.string(), url: z.string() }).nullish(),
+          dns: z.object({ zone: z.string(), provider: z.string().nullable() }).nullish(),
         })
         .nullable(),
       error: z.string().nullable(),
+      connectedAt: z.string().nullish(),
     }),
   ),
 });
@@ -61,18 +64,23 @@ type Hostname = z.infer<typeof HostnamesLive>["hostnames"][string];
 const isLive = (entry: Hostname) =>
   entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
-/** Where a hostname stands, in the words and the one dot the row shows. */
+/** Whether the owner came back from their DNS provider having approved the records in the last
+ *  ten minutes: long enough for them to be seen, and a crafted or failed return can't hide the
+ *  setup for longer. */
+const recentlyConnected = (entry: Hostname) =>
+  Boolean(entry.connectedAt && Date.now() - Date.parse(entry.connectedAt) < 10 * 60_000);
+
+/** Where a hostname stands, in the one word and the one dot its row shows: a pulsing dot while
+ *  something is on its way, a still one while it waits on the owner. */
 function standingOf(entry: Hostname) {
-  const dns = entry.cloudflare?.status === "active";
+  const waiting = "bg-amber-500 motion-safe:animate-pulse";
   if (entry.requested?.verb === "remove") return { label: "Removing…", dot: "bg-muted-foreground" };
-  if (!entry.cloudflare && entry.requested)
-    return { label: "Adding…", dot: "bg-amber-500 motion-safe:animate-pulse" };
+  if (!entry.cloudflare && entry.requested) return { label: "Adding…", dot: waiting };
   if (entry.error && !entry.cloudflare) return { label: "Failed", dot: "bg-destructive" };
   if (isLive(entry)) return { label: "Live", dot: "bg-emerald-500" };
-  return {
-    label: !dns ? "Waiting for DNS" : "Issuing certificate",
-    dot: "bg-amber-500 motion-safe:animate-pulse",
-  };
+  if (entry.cloudflare?.status === "active") return { label: "Issuing certificate", dot: waiting };
+  if (recentlyConnected(entry)) return { label: "Waiting for DNS", dot: waiting };
+  return { label: "Connect your DNS", dot: "bg-amber-500" };
 }
 
 export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
@@ -80,6 +88,9 @@ export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
     add: z.literal(1).optional().catch(undefined),
     /** the hostname a Domain Connect provider just wrote the records for */
     connected: z.string().optional().catch(undefined),
+    /** what the provider said when it wrote nothing (Domain Connect's redirect: a cancel, a failure) */
+    error: z.string().optional().catch(undefined),
+    error_description: z.string().optional().catch(undefined),
   }),
   staticData: { page: "Hostnames" },
   head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
@@ -125,8 +136,16 @@ function ProjectHostnames() {
     const hostname = search.connected;
     if (!context || !hostname || !connectedIsOurs || checkingConnected.current === hostname) return;
     checkingConnected.current = hostname;
+    // a cancel or a failure at the provider comes back with `error`: nothing was written
+    if (search.error)
+      setError(
+        `Your DNS provider added no records for ${hostname}: ${search.error_description || search.error}.`,
+      );
     context
-      .append({ type: "events.iterate.com/project/hostname-add-requested", payload: { hostname } })
+      .append({
+        type: "events.iterate.com/project/hostname-add-requested",
+        payload: { hostname, connected: !search.error },
+      })
       .then(
         () => navigate({ search: {}, replace: true }),
         (caught: unknown) => {
@@ -134,7 +153,14 @@ function ProjectHostnames() {
           setError(caught instanceof Error ? caught.message : String(caught));
         },
       );
-  }, [context, search.connected, connectedIsOurs, navigate]);
+  }, [
+    context,
+    search.connected,
+    search.error,
+    search.error_description,
+    connectedIsOurs,
+    navigate,
+  ]);
   // on its way to live: check again every CHECK_EVERY_MS while the page is visible — each check is
   // the same `hostname-add-requested` "Check again" appends, answered in the live state
   const waiting = hostnames
@@ -205,6 +231,7 @@ function ProjectHostnames() {
               entry={entry}
               primary={hostname === primaryHostname}
               onCheck={() => void request("add", hostname)}
+              onAdd={(other) => void request("add", other)}
               onRemove={() => void request("remove", hostname)}
               onPrimary={(on) => void configurePrimary(on ? hostname : null)}
             />
@@ -223,8 +250,9 @@ function ProjectHostnames() {
             <SheetHeader>
               <SheetTitle>Add hostname</SheetTitle>
               <SheetDescription>
-                A subdomain you control, like <code>iterate.example.com</code>. Its apps get one
-                label more: <code>notes.iterate.example.com</code>.
+                A domain or subdomain you control, like <code>example.com</code> or{" "}
+                <code>iterate.example.com</code>. Its apps get one label more:{" "}
+                <code>notes.iterate.example.com</code>.
               </SheetDescription>
             </SheetHeader>
             <FieldGroup className="flex-1 p-4">
@@ -238,8 +266,9 @@ function ProjectHostnames() {
                   required
                 />
                 <FieldDescription>
-                  Next you point it at iterate: one click if your DNS is on Cloudflare, otherwise
-                  three CNAME records we show you. The certificate follows by itself.
+                  Next you point it at iterate: one click where your DNS provider supports it,
+                  otherwise a few records we show you, with where to put them. The certificate
+                  follows by itself.
                 </FieldDescription>
               </Field>
             </FieldGroup>
@@ -256,12 +285,14 @@ function ProjectHostnames() {
   );
 }
 
-/** One hostname: its dot and standing, its actions, and — until it is live — the steps there. */
+/** One hostname: its dot and standing and its actions, and — until it is live — where it is on
+ *  the way (DNS, certificate, live) and the one thing to do next, or what it is waiting for. */
 function HostnameRow({
   hostname,
   entry,
   primary,
   onCheck,
+  onAdd,
   onRemove,
   onPrimary,
 }: {
@@ -269,42 +300,46 @@ function HostnameRow({
   entry: Hostname;
   primary: boolean;
   onCheck: () => void;
+  onAdd: (hostname: string) => void;
   onRemove: () => void;
   onPrimary: (on: boolean) => void;
 }) {
   const standing = standingOf(entry);
   const live = isLive(entry);
-  const dns = entry.cloudflare?.status === "active";
+  const cloudflare = entry.cloudflare;
+  const dns = cloudflare?.status === "active";
+  const zone = cloudflare?.dns?.zone;
+  const guide = DNS_PROVIDER_GUIDES[cloudflare?.dns?.provider || ""];
+  // a bare domain at a provider that cannot point its root at another name
+  const apexNotPossible = zone === hostname && guide?.apex === false && !cloudflare?.connect;
   return (
-    <li className="flex flex-col gap-4 py-4" data-hostname={hostname}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
-          {live ? (
-            <a
-              href={`https://${hostname}`}
-              target="_blank"
-              rel="noreferrer"
-              className="truncate font-mono hover:underline"
-            >
-              {hostname}
-            </a>
-          ) : (
-            <span className="truncate font-mono">{hostname}</span>
-          )}
-          <span className="text-sm text-muted-foreground">
-            {standing.label}
-            {primary && " · primary"}
-          </span>
-        </div>
-        <div className="flex gap-2">
+    <li className="flex flex-col gap-4 py-5" data-hostname={hostname}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
+        {live ? (
+          <a
+            href={`https://${hostname}`}
+            target="_blank"
+            rel="noreferrer"
+            className="truncate font-mono text-base hover:underline"
+          >
+            {hostname}
+          </a>
+        ) : (
+          <span className="truncate font-mono text-base">{hostname}</span>
+        )}
+        <span className="text-sm text-muted-foreground">
+          {standing.label}
+          {primary && " · primary"}
+        </span>
+        <div className="ml-auto flex gap-1">
           {live && (
             <Button variant="ghost" size="sm" onClick={() => onPrimary(!primary)}>
               {primary ? "Clear primary" : "Make primary"}
             </Button>
           )}
           {standing.label === "Failed" && (
-            <Button variant="outline" size="sm" onClick={onCheck}>
+            <Button variant="ghost" size="sm" onClick={onCheck}>
               Try again
             </Button>
           )}
@@ -318,95 +353,223 @@ function HostnameRow({
           </Button>
         </div>
       </div>
-      {entry.error && <p className="pl-4.5 text-sm text-destructive">{entry.error}</p>}
-      {entry.cloudflare && !live && entry.requested?.verb !== "remove" && (
-        <ol className="flex flex-col gap-4 pl-4.5">
-          <Step done={dns} title="Point DNS at iterate">
-            {!dns && (
-              <div className="flex flex-col gap-3">
-                {entry.cloudflare.connect && (
-                  <div className="flex flex-col gap-1">
-                    <a
-                      href={entry.cloudflare.connect.url}
-                      className={buttonVariants({ className: "self-start" })}
-                    >
-                      Connect with {entry.cloudflare.connect.provider}
-                    </a>
-                    <p className="text-xs text-muted-foreground">
-                      {entry.cloudflare.connect.provider} shows you the records and adds them when
-                      you approve. Nothing else changes.
-                    </p>
-                  </div>
-                )}
-                <div className="flex flex-col gap-1">
-                  <p className="text-sm text-muted-foreground">
-                    {entry.cloudflare.connect
-                      ? "Or add these records yourself:"
-                      : "Add these records at your DNS provider (on Cloudflare, set them to DNS only):"}
-                  </p>
-                  <table className="w-full text-left font-mono text-xs">
-                    <tbody>
-                      {entry.cloudflare.records.map((record) => (
-                        <tr key={record.name} className="align-top">
-                          <td className="py-0.5 pr-4 break-all">{record.name}</td>
-                          <td className="py-0.5 pr-4 text-muted-foreground">CNAME</td>
-                          <td className="py-0.5 break-all">{record.value}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </Step>
-          <Step done={entry.cloudflare.sslStatus === "active"} title="Issue the certificate">
-            {dns && (
-              <p className="text-sm text-muted-foreground">
-                Cloudflare is issuing a certificate for <code>{hostname}</code> and{" "}
-                <code>*.{hostname}</code>. This usually takes a few minutes.
+      {entry.error && <p className="pl-5 text-sm text-destructive">{entry.error}</p>}
+      {cloudflare && !live && entry.requested?.verb !== "remove" && (
+        <div className="flex max-w-2xl flex-col gap-4 pl-5">
+          <Progress dns={dns} certificate={cloudflare.sslStatus === "active"} />
+          {dns ? (
+            <Waiting
+              lead={
+                <>
+                  Issuing a certificate for <code>{hostname}</code> and <code>*.{hostname}</code>.
+                </>
+              }
+              detail="Usually two to five minutes. Nothing for you to do."
+            />
+          ) : recentlyConnected(entry) ? (
+            <Waiting
+              lead={`${cloudflare.connect?.provider || "Your DNS provider"} added the records at ${new Date(entry.connectedAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`}
+              detail={
+                <>
+                  Waiting for them to be seen, usually under a minute.{" "}
+                  <CheckNow onCheck={onCheck} checking={Boolean(entry.requested)} />
+                </>
+              }
+            />
+          ) : apexNotPossible ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-[15px]">
+                {guide.name} can't point a bare domain like <code>{hostname}</code> at another name.
               </p>
-            )}
-          </Step>
-          <Step done={false} title="Live">
-            <p className="text-sm text-muted-foreground">
-              {entry.requested ? "Checking…" : "Checked automatically while this page is open."}{" "}
-              {!entry.requested && (
-                <button type="button" className="underline" onClick={onCheck}>
-                  Check now
-                </button>
-              )}
-            </p>
-          </Step>
-        </ol>
+              <p className="text-sm text-muted-foreground">
+                Use a subdomain instead, or move {hostname}'s DNS to a provider with CNAME
+                flattening (Cloudflare's is free).
+              </p>
+              <Button className="self-start" onClick={() => onAdd(`www.${hostname}`)}>
+                Add www.{hostname} instead
+              </Button>
+            </div>
+          ) : cloudflare.connect ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-[15px]">
+                {entry.connectedAt
+                  ? `${cloudflare.connect.provider} hasn't shown the records yet. If you didn't approve them, connect again.`
+                  : `${zone || hostname}'s DNS is on ${cloudflare.connect.provider}. Approve the records there and you're done.`}
+              </p>
+              <a
+                href={cloudflare.connect.url}
+                className={buttonVariants({ className: "self-start" })}
+              >
+                Connect with {cloudflare.connect.provider}
+              </a>
+              <details>
+                <summary className="cursor-pointer text-sm text-muted-foreground">
+                  Add the records yourself instead
+                </summary>
+                <div className="pt-3">
+                  <ManualRecords records={cloudflare.records} zone={zone} guide={guide} />
+                </div>
+              </details>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <p className="text-[15px]">
+                {guide && zone
+                  ? `${zone}'s DNS is on ${guide.name}. Add these records there.`
+                  : "Add these records at your DNS provider."}
+              </p>
+              <ManualRecords records={cloudflare.records} zone={zone} guide={guide} />
+              <p className="text-sm text-muted-foreground">
+                Checked every 30 seconds while this page is open.{" "}
+                <CheckNow onCheck={onCheck} checking={Boolean(entry.requested)} />
+              </p>
+            </div>
+          )}
+        </div>
       )}
     </li>
   );
 }
 
-/** One step to live: a ring, filled with a check once done, its title, and what to do while not. */
-function Step({
-  done,
-  title,
-  children,
-}: {
-  done: boolean;
-  title: string;
-  children?: React.ReactNode;
-}) {
+/** DNS → certificate → live, as three short bars: done ones dark, the current one half. */
+function Progress({ dns, certificate }: { dns: boolean; certificate: boolean }) {
+  const stages = [
+    { label: "DNS", done: dns },
+    { label: "Certificate", done: certificate },
+    { label: "Live", done: false },
+  ];
+  const current = stages.findIndex((stage) => !stage.done);
   return (
-    <li className="flex gap-3" data-done={done ? "true" : undefined}>
-      <span
-        className={cn(
-          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border",
-          done ? "border-primary bg-primary text-primary-foreground" : "border-muted-foreground/30",
-        )}
-      >
-        {done && <CheckIcon aria-hidden className="size-3.5" />}
-      </span>
-      <div className="flex min-w-0 flex-col gap-2">
-        <p className={cn("text-sm font-medium", done && "text-muted-foreground")}>{title}</p>
-        {!done && children}
+    <ol
+      className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+      aria-label="Progress"
+    >
+      {stages.map((stage, index) => (
+        <li
+          key={stage.label}
+          className={cn("flex items-center gap-1.5", index <= current && "text-foreground")}
+          aria-current={index === current ? "step" : undefined}
+        >
+          <span
+            className={cn(
+              "h-0.5 w-10 rounded-full bg-border",
+              stage.done && "bg-foreground",
+              index === current && "bg-gradient-to-r from-foreground from-50% to-border to-50%",
+            )}
+          />
+          {stage.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** What the hostname is waiting for, with a spinner: nothing for the owner to do. */
+function Waiting({ lead, detail }: { lead: React.ReactNode; detail: React.ReactNode }) {
+  return (
+    <div className="flex gap-3" role="status">
+      <LoaderCircleIcon aria-hidden className="mt-1 size-4 shrink-0 motion-safe:animate-spin" />
+      <div className="flex flex-col gap-1">
+        <p className="text-[15px]">{lead}</p>
+        <p className="text-sm text-muted-foreground">{detail}</p>
       </div>
-    </li>
+    </div>
+  );
+}
+
+function CheckNow({ onCheck, checking }: { onCheck: () => void; checking: boolean }) {
+  return checking ? (
+    <span>Checking…</span>
+  ) : (
+    <button type="button" className="underline" onClick={onCheck}>
+      Check now
+    </button>
+  );
+}
+
+/** The records to add by hand, named as the owner's DNS provider's form wants them — relative to
+ *  the zone (`iterate`, `@` for the zone itself) when we know it — with that provider's own clicks
+ *  when we know the provider (lib/dns-provider-guides.ts), a copy button per value. */
+function ManualRecords({
+  records,
+  zone,
+  guide,
+}: {
+  records: { name: string; value: string; type?: string }[];
+  zone: string | undefined;
+  guide: DnsProviderGuide | undefined;
+}) {
+  const nameOf = (name: string) =>
+    !zone
+      ? name
+      : name === zone
+        ? "@"
+        : name.endsWith(`.${zone}`)
+          ? name.slice(0, -zone.length - 1)
+          : name;
+  return (
+    <div className="flex flex-col gap-3">
+      {guide && (
+        <ol className="flex list-decimal flex-col gap-0.5 pl-5 text-sm text-muted-foreground">
+          <li>
+            <a href={guide.url} target="_blank" rel="noreferrer" className="underline">
+              Open {guide.name}
+            </a>
+          </li>
+          {guide.steps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="text-xs text-muted-foreground">
+              <th className="pb-1.5 pr-4 font-medium">{zone ? "Name" : "Hostname"}</th>
+              <th className="pb-1.5 pr-4 font-medium">Type</th>
+              <th className="pb-1.5 font-medium">Value</th>
+            </tr>
+          </thead>
+          <tbody className="font-mono text-[13px]">
+            {records.map((record) => {
+              const value = guide?.trailingDot ? `${record.value}.` : record.value;
+              return (
+                <tr key={record.name} className="border-t align-top">
+                  <td className="py-2 pr-4 break-all">{nameOf(record.name)}</td>
+                  <td className="py-2 pr-4 text-muted-foreground">{record.type || "CNAME"}</td>
+                  <td className="py-2 break-all">
+                    {value}
+                    <CopyButton text={value} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {guide?.notes?.map((note) => (
+        <p key={note} className="text-xs text-muted-foreground">
+          {note}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="ml-2 rounded border px-1.5 py-0.5 font-sans text-xs text-muted-foreground hover:text-foreground"
+      onClick={() =>
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        })
+      }
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
   );
 }

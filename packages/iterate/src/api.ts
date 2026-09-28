@@ -197,13 +197,23 @@ export type SecretCatalogEntry = {
 };
 
 /** The input an agent gives `itx.secrets.collectFromUser`: the write-only secret path, the
- * origins its material may reach, and the short explanation the authenticated collection form
- * shows its user. */
+ * origins its material may reach, what the collection page shows the person, and, for a secret of
+ * several parts, one field each. `description` is markdown: say where the value comes from, with
+ * links (they open in a new tab). */
 export type CollectSecretInput = {
   path: string;
   egress: { urls: string[] };
   description?: string;
+  /** One input per field, saved as one JSON secret `{ [name]: value }`, whose parts are then
+   *  `getSecret(path, { field: name })`: an OAuth app's `clientSecret` (which `beginOAuth` takes as
+   *  a placeholder), a webhook's `signingSecret`. Without it, one Value. */
+  fields?: CollectSecretField[];
 };
+
+/** One part of a secret a collection page asks for: its name in the JSON secret
+ *  (`[A-Za-z_][A-Za-z0-9_]*`), the label the person reads, and whether its value is several lines
+ *  (a PEM private key). */
+export type CollectSecretField = { name: string; label: string; multiline?: boolean };
 
 /** A secret collection link. Sending this asks the person to authenticate to the intended
  * Iterate instance; it is not itself permission to write a secret. */
@@ -744,9 +754,11 @@ export interface IterateContextApi {
     ): Promise<{ authorizationUrl: string; nonce: string }>;
     delete(path: string): Promise<{ path: string }>;
     list(): Promise<SecretCatalogEntry[]>;
-    /** Build the authenticated Dash link where a person enters a value an agent must never see in
-     * chat. The link fixes the project, platform instance, secret path and egress pin. If called
-     * from an agent context, a successful submission messages that same agent with the path only. */
+    /** Build the authenticated Dash link (`/collect-secret/<slug>`, a page of its own) where a
+     * person enters a value an agent must never see in chat. The link fixes the project, platform
+     * instance, secret path and egress pin, and shows `description` as the requester's words. If
+     * called from an agent context, a successful submission messages that same agent with the path
+     * only. */
     collectFromUser(input: CollectSecretInput): Promise<CollectSecretLink>;
     /** A webhook's signature checked against a secret WITHOUT revealing it: one bit back,
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
@@ -1055,9 +1067,8 @@ export interface IterateSessionApi {
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;
     /** the providers a person signs in with here: the ones a signed-in person can add to their
-     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`); absent from a platform
-     *  older than it, which offers none */
-    signInProviders?: SignInProvider[];
+     *  account (the issuer's `/.auth/identity/<provider>?link=<userId>`) */
+    signInProviders: SignInProvider[];
   };
   /** The grants this session may manage (a signed-in person's with the `account` scope): list and
    *  end its sessions and personal access tokens, and mint a personal access token — its bearer
@@ -1135,12 +1146,10 @@ export interface IterateSessionApi {
     addMember(orgId: string, input: { userId: string; role?: "owner" | "member" }): Promise<void>;
     removeMember(orgId: string, input: { userId: string }): Promise<void>;
     /** the members with their emails, by membership, in the order they joined: `createdAt` is
-     *  when (epoch ms), null for one who joined before the platform recorded it */
+     *  when they joined (epoch ms) */
     members(
       orgId: string,
-    ): Promise<
-      { userId: string; email: string; role: "owner" | "member"; createdAt: number | null }[]
-    >;
+    ): Promise<{ userId: string; email: string; role: "owner" | "member"; createdAt: number }[]>;
     /** the invitation links still open (an expired one stays until revoked), oldest first — an
      *  owner's */
     invitations(orgId: string): Promise<InvitationRecord[]>;
@@ -1186,12 +1195,15 @@ export interface IterateSessionApi {
     create(input: { email: string }): Promise<{ id: string; email: string }>;
   };
   /** Every context Cloudflare lists, by id — the operator's alone (scripts/ci/context-sweep.ts):
-   *  who each is, from its own birth record, and an orphan's destruction (refused for a global
-   *  context and for any project that still exists). */
+   *  who each is, from its own birth record; its durable log a page at a time, as `readEvents`
+   *  pages it, which the sweep backs an orphan up with; and an orphan's destruction (refused for a
+   *  global context and for any project that still exists). Neither `identify` nor `readEvents`
+   *  records a wake. */
   contexts: {
     identify(
       ids: string[],
     ): Promise<({ id: string; projectId: string; path: string } | { id: string; error: string })[]>;
+    readEvents(id: string, afterOffset: number): Promise<StreamPage>;
     destroy(id: string): Promise<{ projectId: string; path: string }>;
   };
   /** One project secret's encrypted cell, as a project seed archives it — the operator's alone

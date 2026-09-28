@@ -8,7 +8,8 @@ runs it and zips `dist/` for its downloads page.
 
 - `public/manifest.json` — MV3; `debugger`, `identity`, `sidePanel`, `storage`; no host permissions.
 - `public/index.html` — the panel page (its styles inline).
-- `public/panel.js` — everything else: the sign-in through Chrome's identity window (tokens in
+- `public/panel.js` — everything else: the sign-in through Chrome's identity window (a public
+  client registered at each sign-in, so the consent page shows every time; the session in
   `chrome.storage.local`), one bare WebSocket to the platform's `/api` with the token IN
   `authenticate`, and the lend: `itx.provide("itx.chrome", new ChromeBrowser())` on the chosen
   project's root context — an `RpcTarget` with `openPage({ url })` (a new tab, answered once loaded),

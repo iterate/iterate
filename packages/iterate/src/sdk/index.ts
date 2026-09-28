@@ -1,13 +1,19 @@
-// sdk/index.ts — THE userspace SDK surface (zod re-exported — the owner's call). A loaded worker
-// imports it by name and the loader links this deployment's own build of it (apps/os/scripts/build.ts):
-//
-//   import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
-//
-// The workerd HOSTS live here too (this file imports cloudflare:workers; the Node unit tests never import it):
+// sdk/index.ts — THE SDK's HOSTS, the workerd classes a loaded worker extends (this file imports
+// cloudflare:workers; the Node unit tests never import it):
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
 //                                  the methods a caller reaches by itx expression (`publicMethods`)
 //   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
 //   ConfigWorker                 — the stateless `WorkerEntrypoint` a project's one event handler extends
+// and capnweb's constructors (below), which loaded code has no other platform path to.
+//
+// Everything else has one path of its own: a processor's surface (`StreamProcessor`,
+// `defineProcessorContract`, `LiveState`, the event and contract types) is `iterate/stream/processor`,
+// which runs in Node too; `withItx` is `iterate/with-itx`; zod is `zod`. A loaded worker imports each
+// by name and the loader links this deployment's own build of it (apps/os/scripts/build.ts):
+//
+//   import { StreamProcessorDurableObject } from "iterate/sdk";
+//   import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+//   import { z } from "zod";
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type { IterateContextApi, StreamPage } from "../api.ts";
@@ -20,36 +26,8 @@ import {
   type StreamEventInput,
 } from "../stream/processor.ts";
 import { auth } from "./auth.ts";
-import { withItx } from "./record-pipelined-steps.ts";
-// THE ONE WAY code reaches its context: `withItx(this.env.ITX, (itx) => …)` — one round trip, then
-// everything it reached released (record-pipelined-steps.ts). A host's `this.withItx(fn)` is the same
-// function. Never `env.ITX.get()` alone: whatever it hands out keeps this isolate, and the object
-// hosting it, running and billed after the context is evicted (lint: iterate/no-raw-itx-get).
-export { withItx };
-export {
-  // LIVE STATE for a mini-app DO that is NOT a processor (a processor's base owns one internally):
-  // `new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", {…})` — a
-  // field initializer cannot await — then `set` to mutate and `snapshot()` as the client's seed read
-  // (stream/processor.ts).
-  LiveState,
-  StreamProcessor,
-  defineProcessorContract,
-  type ConsumedEvent,
-  type EventCatalog,
-  type EventDefinition,
-  type EmittedEventInput,
-  type EventInput,
-  type LiveStateSink,
-  type ProcessorContract,
-  type ProcessorState,
-  type ProcessorStream,
-  type ProcessEventArgs,
-  type ReduceArgs,
-  type ScannedRange,
-  type StreamEvent,
-  type StreamEventInput,
-} from "../stream/processor.ts";
-export { z } from "zod";
+// The hosts' `this.withItx(fn)` is this function (with-itx.ts says why a scope is never kept).
+import { withItx } from "./with-itx.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
@@ -57,7 +35,6 @@ export { z } from "zod";
 // to hold across calls, and a one-shot POST is the honest shape (the lint rule targets long-lived workers).
 // oxlint-disable-next-line iterate/no-capnweb-http-batch -- userspace one-shot remote calls; see above
 export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse } from "capnweb";
-export { applyPatch, diff, jsonEqual, type PatchOp } from "../lib.ts";
 // ── StreamProcessorDurableObject ── THE SDK HOST: the `DurableObject` shell that hosts ONE
 // `StreamProcessor` as a facet of its context. An author writes the pure processor and its host,
 // one line long:
@@ -124,16 +101,18 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
   }
 }
 
-/** The itx scope `withItx` hands its callback: a context's declared API (api.ts) — a capnweb stub
- *  of apps/os's `IterateContextRpcTarget`, which satisfies it. */
-export type ItxScope = IterateContextApi;
-/** What hands the scope over — a loaded worker's `env.ITX`, or the loopback a class of the platform's
- *  own worker mints from `ctx.exports`: `get()` its scope, or `fetch` a request through the
- *  context's dispatch (a fetch route's target, the `x-itx-expression` header). */
-export type ItxEntrypointService = { get(): ItxScope; fetch(request: Request): Promise<Response> };
+/** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
+ *  platform's own worker mints from `ctx.exports`: `get()` its scope (a context's declared API,
+ *  api.ts, which a capnweb stub of apps/os's `IterateContextRpcTarget` satisfies), or `fetch` a
+ *  request through the context's dispatch (a fetch route's target, the `x-itx-expression` header). */
+export type ItxEntrypointService = {
+  get(): IterateContextApi;
+  fetch(request: Request): Promise<Response>;
+};
 /** The least a host needs of its scope: the fixed-point log calls the engine makes. The platform's own
  *  facets pass the Workers-RPC STUB of a context (every dotted step pipelined; a property there is a
- *  promise), which no plain-promise interface can name — so the constraint is this, not `ItxScope`. */
+ *  promise), which no plain-promise interface can name — so the constraint is this, not
+ *  `IterateContextApi`. */
 export type ProcessorScope = {
   append(...events: StreamEventInput[]): Promise<unknown>;
   readEvents(afterOffset?: number, limit?: number): Promise<unknown>;
@@ -151,12 +130,14 @@ export type ProcessorScope = {
  *  released after (`StreamProcessorDurableObject.withItx`). A processor that needs an effect —
  *  `itx.cfArtifacts.create(path)`, `itx.ai.run(…)` — takes this and nothing else, so a unit test
  *  hands it a fake and the e2e lends one by rule on the context. */
-export type WithItx<Scope = ItxScope> = <T>(call: (itx: Scope) => T) => Promise<Awaited<T>>;
+export type WithItx<Scope = IterateContextApi> = <T>(
+  call: (itx: Scope) => T,
+) => Promise<Awaited<T>>;
 
 export abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX?: ItxEntrypointService } = { ITX: ItxEntrypointService },
-  Scope extends ProcessorScope = ItxScope,
+  Scope extends ProcessorScope = IterateContextApi,
 > extends FacetDurableObject<Env> {
   /** The reads a caller reaches on every processor: `fetch`, and the state caught up through the log
    *  (`snapshot`, `liveSnapshot`) or awaited (`waitUntilProcessed`). What feeds the processor —
@@ -271,7 +252,7 @@ export abstract class StreamProcessorDurableObject<
 
 // ConfigWorker is a stateless event handler loaded with an explicit workers.get spec.
 // Subscribe its processEventBatch method explicitly; fetch routing is configured separately.
-export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: ItxScope };
+export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: IterateContextApi };
 
 export abstract class ConfigWorker<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
@@ -297,7 +278,7 @@ export abstract class ConfigWorker<
 
   /** ONE round trip on the itx scope, then release the scope and every call made through it
    *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). */
-  protected withItx<T>(call: (itx: ItxScope) => T): Promise<Awaited<T>> {
+  protected withItx<T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> {
     return withItx(this.env.ITX, call);
   }
 
@@ -314,5 +295,3 @@ export abstract class ConfigWorker<
     return new Response("Not found\n", { status: 404 });
   }
 }
-
-export { RunContract, RunRequested, RunSettled } from "../stream/run.ts";

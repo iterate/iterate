@@ -5,7 +5,6 @@ set(ITERATE_KIT_CORE_SOURCES
   src/conversation_lights.c
   src/conversation_overlay.c
   src/conversation_ring.c
-  src/device_events.c
   src/face_wake.c
   src/itx_connection.c
   src/itx_mount.c

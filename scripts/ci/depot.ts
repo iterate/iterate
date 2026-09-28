@@ -2,7 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 
-import { DEPOT_ORG } from "@iterate-com/shared/depot-api";
+import { DEPOT_ORG, depotCiApi } from "@iterate-com/shared/depot-api";
+import { dopplerSecret } from "../lib/env-context.ts";
 
 /** `operation` over `inputs`, at most `concurrency` at a time, outputs in input order: how the
  *  telemetry sync and PR time to green fan out their per-run Depot calls, and the flake dashboard
@@ -34,6 +35,13 @@ export function depotWorkflowUrl(workflowId: string) {
 /** One Depot CI API call with the organization token bound: `@iterate-com/shared/depot-api`
  *  `depotCiApi` as the scripts take it. */
 export type DepotApi = (method: string, body: object) => Promise<unknown>;
+
+/** Depot's CI API with the organization token (Doppler _shared/preview) bound: how every script
+ *  reads Depot. */
+export function depotApi(): DepotApi {
+  const token = dopplerSecret("_shared", "preview", "DEPOT_CI_TELEMETRY_TOKEN");
+  return (method, body) => depotCiApi(method, body, token);
+}
 
 // Connect's JSON encoding omits empty strings and lists, so an unset field is absent rather than "":
 // https://protobuf.dev/programming-guides/json/ ("default values are omitted").

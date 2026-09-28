@@ -351,7 +351,20 @@ test("the sweep deletes on the dev/preview account, and envs.ts's workers there 
   ]);
 });
 
-test("a Durable Object namespace whose worker is gone is paged with its id, what to escalate, and the run", () => {
+test.for([
+  {
+    name: "a Durable Object namespace whose worker is gone is paged with its id, what to escalate, and the run",
+    testRun: false,
+    firstLine:
+      "🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker <@U067G4QRFK2> <@U099JH9TAF2>",
+  },
+  {
+    name: "a test run's workerless page is 🧪 and mentions nobody",
+    testRun: true,
+    firstLine:
+      "🧪 TEST RUN — 🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker",
+  },
+])("$name", ({ testRun, firstLine }) => {
   const namespaces = [
     { id: "n1", name: "os_ProjectDurableObject", script: "os" },
     { id: "n2", name: "os-preview_ProjectDurableObject", script: "os-preview" },
@@ -359,15 +372,19 @@ test("a Durable Object namespace whose worker is gone is paged with its id, what
     { id: "n4", name: "LegacyDurableObject" },
   ];
   const workerless = workerlessNamespaces(namespaces, ["os", "dash"]);
-  expect(workerless.map(({ id }) => id)).toEqual(["n2", "n4"]);
+  // exact: the page is what the on-call reads
   expect(
-    renderWorkerlessNamespacesPage(workerless, "https://depot.dev/orgs/x/workflows/y").split("\n"),
+    renderWorkerlessNamespacesPage(workerless, {
+      jobUrl: "https://depot.dev/orgs/x/workflows/y",
+      testRun,
+    }).split("\n"),
   ).toEqual([
-    "🚨 preview sweep: 2 Durable Object namespace(s) outlived their worker <@U067G4QRFK2> <@U099JH9TAF2>",
+    firstLine,
+    "Impact: each counts toward the account's 500 Durable Object namespaces",
+    "Do: escalate to Cloudflare with these ids: a worker's delete takes its namespaces, and the API deletes no namespace alone. The sweep checks again each night.",
     "• os-preview_ProjectDurableObject (n2), worker os-preview",
     "• LegacyDurableObject (n4), worker unnamed",
-    "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",
-    "<https://depot.dev/orgs/x/workflows/y|sweep run>",
+    "<https://depot.dev/orgs/x/workflows/y|run>",
   ]);
 });
 

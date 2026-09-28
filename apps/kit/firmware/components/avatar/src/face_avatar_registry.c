@@ -1,5 +1,6 @@
 #include "iterate/kit/avatar/face_avatar_registry.h"
 
+#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_performance.h"
 #include "iterate/kit/avatar/face_sprite_sheet.h"
 
@@ -172,6 +173,27 @@ bool face_avatar_registry_render(
         sample_clock,
         rgb565,
         pixel_capacity);
+}
+
+bool face_avatar_registry_render_pose(
+    face_avatar_registry_t *registry,
+    const face_pose_t *pose,
+    bool dozing,
+    uint32_t sample_clock,
+    face_render_key_t *key,
+    uint16_t *rgb565,
+    size_t pixel_capacity)
+{
+    if (pose == NULL || key == NULL) {
+        return false;
+    }
+    face_render_key_from_pose(pose, key);
+    if (dozing) {
+        face_doze_prepare_render_key(key);
+    }
+    return face_avatar_registry_render(
+               registry, key, sample_clock, rgb565, pixel_capacity) &&
+        (!dozing || face_doze_apply_overlay(rgb565, pixel_capacity, sample_clock));
 }
 
 bool face_avatar_registry_render_snapshot_at(

@@ -2,6 +2,10 @@
 # only; what it deletes is apps/os/scripts/preview-sweep.ts's rules.
 #
 # When a run goes red, and what it pages to #error-pulse instead: the end of preview.ts's `sweep`.
+# Only a run on main pages; one on another ref prints its pages. test-run=true deletes nothing and
+# posts what the sweep would page to #ci as a 🧪 TEST RUN:
+#   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow preview-sweep.yml \
+#     --ref <branch> --input test-run=true
 #
 # Beside it, the reset of main on dev's own data (`pnpm preview reset-parent`): what people and
 # agents left on https://os.iterate-dev-preview.workers.dev and the apps signed in against it,
@@ -27,6 +31,12 @@ on:
     # Nightly, off the hour (cloudflare-os runs theirs at 04:37 too).
     - cron: "37 4 * * *"
   workflow_dispatch:
+    inputs:
+      test-run:
+        description: true = delete nothing and post what the sweep would page to #ci as a 🧪 TEST RUN; the reset is skipped
+        required: false
+        type: string
+        default: "false"
 
 concurrency:
   group: preview-sweep
@@ -48,10 +58,13 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: doppler run --project os --config preview -- pnpm preview sweep
+        run: >-
+          doppler run --project os --config preview -- pnpm preview sweep
+          ${{ inputs.test-run == 'true' && '--test-run' || '' }}
 
   reset-parent:
     name: reset the os parent
+    if: inputs.test-run != 'true'
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 45
     concurrency:

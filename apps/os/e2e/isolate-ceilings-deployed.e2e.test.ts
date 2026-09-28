@@ -62,6 +62,7 @@ const EVENT_CHARS = 6 * MiB;
  *  `seededLog()` hands the others the same context. */
 const SEEDED_ROW_TIMEOUT = 90_000;
 let seed: Promise<{ ctx: string; offsets: number[] }> | undefined;
+let seedCtx: string | undefined;
 
 // ── the memory pins ──
 
@@ -93,7 +94,9 @@ test.sequential(
 /** A facet processor that COUNTS blob events — the fan-out target (its push is a loopback RPC copy). */
 const SINK_SOURCE = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({ slug: "sink", version: "1.0.0", description: "counts blob events — a fan-out target", stateSchema: z.object({ n: z.number().default(0) }), events: {}, consumes: ["blob"], emits: [] });
 class SinkProcessor extends StreamProcessor { contract = contract; reduce({ state }) { return { n: state.n + 1 }; } }
 export class SinkDurableObject extends StreamProcessorDurableObject { processor = new SinkProcessor(); }`,
@@ -103,7 +106,9 @@ export class SinkDurableObject extends StreamProcessorDurableObject { processor 
  *  ~2 MB SQLite checkpoint cell (SQLITE_TOOBIG) and wedges. The poison-facet case. */
 const HOARDER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+  "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({ slug: "hoarder", version: "1.0.0", description: "accumulates every payload — outgrows the checkpoint cell", stateSchema: z.object({ blobs: z.array(z.string()).default([]) }), events: {}, consumes: ["blob"], emits: [] });
 class HoarderProcessor extends StreamProcessor { contract = contract; reduce({ event, state }) { return { blobs: [...state.blobs, event.payload.blob] }; } }
 export class HoarderDurableObject extends StreamProcessorDurableObject { processor = new HoarderProcessor(); }`,
@@ -343,19 +348,35 @@ function blobFor(n: number): string {
 
 /** The ONE seeded 144 MiB context every read-driven row shares (24 × 6 MiB, more than the isolate),
  *  seeded by whichever of those rows runs first and reused by the rest — they are sequential, so the
- *  first caller's promise is the only seed. A row run on its own (`-t`) seeds it itself. */
+ *  first caller's promise is the only seed. A row run on its own (`-t`) seeds it itself.
+ *
+ *  Each event carries an idempotency key, so each append is idempotent under the failure model
+ *  (docs/engineering-invariants.md#failures-and-retries): when the edge's call on the context loses
+ *  its connection ("Network connection lost.", `disconnected`), the edge sends it once more
+ *  (context-stub.ts) and logs `itx.platform-failure-retry`, where an unkeyed append would reach this
+ *  client as UNAVAILABLE. A seed that still fails is not kept: the row's retry seeds the SAME context
+ *  again, and every event that already landed answers with itself, so the log stays 24 events. */
 function seededLog(): Promise<{ ctx: string; offsets: number[] }> {
-  seed ||= (async () => {
-    const ctx = freshCtx("membudget");
-    const itx = openItx(ctx);
-    const offsets: number[] = [];
-    for (let n = 0; n < EVENT_COUNT; n++) {
-      const [event] = await itx.append({ type: "blob", payload: { n, blob: blobFor(n) } });
-      offsets.push(event.offset as number);
-    }
-    return { ctx, offsets };
-  })();
+  seed ||= seedLog().catch((error: unknown) => {
+    seed = undefined;
+    throw error;
+  });
   return seed;
+}
+
+async function seedLog(): Promise<{ ctx: string; offsets: number[] }> {
+  seedCtx ||= freshCtx("membudget");
+  const itx = openItx(seedCtx);
+  const offsets: number[] = [];
+  for (let n = 0; n < EVENT_COUNT; n++) {
+    const [event] = await itx.append({
+      type: "blob",
+      idempotencyKey: `membudget-seed/${n}`,
+      payload: { n, blob: blobFor(n) },
+    });
+    offsets.push(event.offset as number);
+  }
+  return { ctx: seedCtx, offsets };
 }
 
 // ── helpers ──

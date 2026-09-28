@@ -898,7 +898,6 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
         "dash.iterate.com",
         "k.iterate.com",
         "voice.iterate.com",
-        "install.iterate.com",
       ],
     }),
   } as Env;
@@ -917,7 +916,7 @@ test("a first-level wildcard CIMD client is bound to its project at consent", as
     user.id,
   );
   expect(issuer).toMatchObject({ projectBound: false });
-  for (const hostname of ["os", "mcp", "dash", "k", "voice", "install"]) {
+  for (const hostname of ["os", "mcp", "dash", "k", "voice"]) {
     const firstParty = await projectsForClient(
       configured,
       ORIGIN,

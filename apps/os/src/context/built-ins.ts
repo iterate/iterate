@@ -1397,6 +1397,21 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             path: z.string(),
             egress: z.object({ urls: z.array(z.string()) }),
             description: z.string().optional(),
+            fields: z
+              .array(
+                z.object({
+                  name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+                  label: z.string().trim().min(1).max(80),
+                  multiline: z.boolean().optional(),
+                }),
+              )
+              .min(1)
+              .max(10)
+              .refine(
+                (fields) => new Set(fields.map((field) => field.name)).size === fields.length,
+                "field names are unique",
+              )
+              .optional(),
           })
           .parse(input);
         const secretPath = assertSecretPath(collected.path);
@@ -1427,17 +1442,18 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           throw new Error(
             "itx.secrets.collectFromUser: only a project's context can collect a secret",
           );
+        // the Dash's page for the link, outside its shell (apps/dash routes/collect-secret.$slug.tsx)
         const url = new URL(
-          `/projects/${encodeURIComponent(project.projectSlug)}/secrets`,
+          `/collect-secret/${encodeURIComponent(project.projectSlug)}`,
           deps.dashOrigin,
         );
-        url.searchParams.set("collect", "1");
         url.searchParams.set("project", projectId);
         url.searchParams.set("platform", platformOrigin);
         url.searchParams.set("path", secretPath);
         url.searchParams.set("urls", JSON.stringify(urls));
         if (collected.description)
           url.searchParams.set("description", JSON.stringify(collected.description));
+        if (collected.fields) url.searchParams.set("fields", JSON.stringify(collected.fields));
         const callingPath = deps.caller().path;
         // Agent scripts always run in exactly one child sandbox. The parent is the agent whose
         // `message()` wakes the next turn; an ordinary `/agents/**` caller is already that agent.

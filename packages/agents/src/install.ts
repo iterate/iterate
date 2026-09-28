@@ -14,7 +14,7 @@ type InstallTarget = Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
 
 /** The source a project installs the agents app from, by file: `version` is what package.json pins,
  *  a pkg.pr.new URL at a full commit (the loader refuses a branch; the apps pin theirs with
- *  @iterate-com/shared/pkg-pr-new `publishedCommit`) or an npm version once the package is on npm. */
+ *  @iterate-com/shared/pkg-pr-new `publishedCommit`). */
 export function agentsFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ main: "index.ts", dependencies: { "@iterate-com/agents": version } }, null, 2)}\n`,
@@ -98,15 +98,10 @@ export const agentsApp = (version: string) => ({
   version,
 });
 
-/** Mount the app in a project root from its source: a folder's files by name, as
- *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
- *  classes) — the runtime every agent's facet loads, the `agents` processor on `/` and the
- *  `itx.agents` rule, without loading it. `installAgents` is this and then `upgradeAgents`. */
-export async function publishAgents(itx: InstallTarget, source: Record<string, string>) {
-  const { path } = await itx.whoami();
-  if (path !== "/") throw new Error("Install agents at the project root");
-  // The runtime's name is its content hash: every facet it hosts names it (a processor row shows
-  // which runtime an agent runs), and an upgrade is a new name.
+/** An installed app's runtime name: the SHA-256 of its files as JSON, sorted by name. Every facet
+ *  the runtime hosts names it (a processor row shows which runtime an agent runs), and an upgrade is
+ *  a new name. */
+export async function sourceCacheKey(source: Record<string, string>) {
   const serialized = JSON.stringify(
     Object.fromEntries(
       Object.keys(source)
@@ -115,9 +110,17 @@ export async function publishAgents(itx: InstallTarget, source: Record<string, s
     ),
   );
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
-  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Mount the app in a project root from its source: a folder's files by name, as
+ *  `repo.modules({ dir })` answers them (`agentsFolder`, or any source whose entry exports the two
+ *  classes) — the runtime every agent's facet loads, the `agents` processor on `/` and the
+ *  `itx.agents` rule, without loading it. `installAgents` is this and then `upgradeAgents`. */
+export async function publishAgents(itx: InstallTarget, source: Record<string, string>) {
+  const { path } = await itx.whoami();
+  if (path !== "/") throw new Error("Install agents at the project root");
+  const cacheKey = await sourceCacheKey(source);
   await itx.kv.put("agents/runtime", JSON.stringify({ cacheKey, source }));
   const spec = { cacheKey, source, className: "AgentCollectionDurableObject" };
   await itx.processors.enable("agents", {

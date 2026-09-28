@@ -22,9 +22,10 @@ import {
 } from "./personal-access-token.ts";
 import { appendPlatformFacts } from "./session.ts";
 
+/** The branding every grant stores at approval (client-display.ts `clientDisplay`). */
 const DisplayMetadata = z.object({
-  clientName: z.string().optional(),
-  logoUri: ClientDisplayUrl.optional().catch(undefined),
+  clientName: z.string(),
+  logoUri: ClientDisplayUrl.optional(),
   clientDomain: z.string().optional(),
   /** a platform admin's sign-in as the person (consent.ts `#impersonate`): the admin's email */
   impersonatedBy: z.string().optional(),
@@ -149,13 +150,13 @@ export class GrantsRpcTarget extends RpcTarget {
     ]);
     const sessions = page.items.flatMap((grant): GrantRecord[] => {
       if (account.endedGrants[grant.id]) return [];
-      const metadata = DisplayMetadata.parse(grant.metadata ?? {});
+      const metadata = DisplayMetadata.parse(grant.metadata);
       // The provider stores an unexchanged grant with the code's ten-minute KV TTL.
       const expiresAt = (grant.expiresAt ?? grant.createdAt + 600) * 1000;
       return [
         {
           id: grant.id,
-          name: metadata.clientName || grant.clientId,
+          name: metadata.clientName,
           clientId: grant.clientId,
           logoUri: metadata.logoUri,
           clientDomain: metadata.clientDomain,

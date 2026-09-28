@@ -182,7 +182,7 @@ static enum capnweb_status aec_set_stage(
   return capnweb_reply_set_boolean(reply, true);
 }
 
-/** Append the XMOS diagnostic control after board.c mounts button.press. */
+/** The XMOS diagnostic control, this board's one capability of its own. */
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method methods[] = {

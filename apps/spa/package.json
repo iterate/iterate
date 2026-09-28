@@ -4,14 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "python3 -m http.server 8799 --bind 127.0.0.1 --directory public",
-    "deploy": "tsx scripts/deploy.ts",
-    "build": "tsx scripts/build.ts",
+    "deploy": "node scripts/deploy.ts",
+    "build": "node scripts/build.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "fflate": "catalog:",
     "trpc-cli": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "wrangler": "catalog:",
     "zod": "catalog:"

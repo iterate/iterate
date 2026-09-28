@@ -1,12 +1,13 @@
-# Context sweep — nightly, against prd. Cloudflare's list of every context object that holds data,
-# each asked who it is (scripts/ci/context-sweep.ts): a context of a project the control plane no
-# longer holds is an orphan its project's deletion missed. REPORT-ONLY for now: the run lists the
-# orphans in its log and destroys nothing; it goes red (and posts to #error-pulse) only when an
-# object could not say who it is. Destroying them is `--destroy`, switched on once a few runs read
-# right.
+# Context sweep — nightly, against prd. scripts/ci/context-sweep.ts says what an orphan is and how
+# each is backed up before it is destroyed. The step passes --destroy on main (the schedule, or a
+# dispatch from main); a dispatch from any other branch only reports. The backups, under
+# r2://iterate-ci/backups/context-sweep/prd/, are kept 365 days (docs/test-evidence.md#retention).
+# The notify job posts every result (context-sweep.ts `post`): a run on main posts its line to #ci
+# and keeps one #error-pulse page while the sweep fails; a run on another ref prints. test-run=true
+# destroys nothing and posts the result to #ci as a 🧪 TEST RUN.
 #
 # Run it by hand: depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \
-#   --workflow context-sweep.yml --ref main
+#   --workflow context-sweep.yml --ref main [--input test-run=true]
 #
 # Secrets (depot ci secrets --org 0p91s0lz49): DOPPLER_TOKEN.
 
@@ -17,29 +18,41 @@ on:
   # Nightly, off the hour (deploys land at :00, the health job at :41, the crash hunt at 03:17).
   schedule:
     - cron: "43 2 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      test-run:
+        description: true = report only, and post the result to #ci as a 🧪 TEST RUN; no page kept
+        required: false
+        type: string
+        default: "false"
 concurrency:
   group: context-sweep
   cancel-in-progress: false
 jobs:
   sweep:
     runs-on: depot-ubuntu-24.04
-    timeout-minutes: 15
+    # A night's orphans hold a few hundred megabytes of log (the crash hunt's contexts), each read
+    # from prd and written to R2 before it is destroyed.
+    timeout-minutes: 45
+    outputs:
+      report: ${{ steps.sweep.outputs.report }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup
         uses: ./.depot/actions/setup
       # prd's Cloudflare credentials and operator bearer from Doppler os/prd, which the script
-      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts).
-      - name: Sweep prd's contexts (report-only)
+      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts), and the
+      # CI bucket's token, which it reads from Doppler itself too (envs.ts `ciBucketEnvs`).
+      - name: Sweep prd's contexts
+        id: sweep
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm tsx scripts/ci/context-sweep.ts --env prd
+        run: node scripts/ci/context-sweep.ts --env prd ${{ github.ref == 'refs/heads/main' && inputs.test-run != 'true' && '--destroy' || '' }}
   notify:
     needs:
       - sweep
-    if: always() && needs.sweep.result == 'failure'
+    if: always()
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -49,7 +62,8 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Notify Slack
+      - name: Post the result
         env:
-          NEEDS: ${{ toJSON(needs) }}
-        run: pnpm tsx scripts/ci/notify.ts workflow-failure
+          REPORT: ${{ needs.sweep.outputs.report }}
+          RESULT: ${{ needs.sweep.result }}
+        run: node scripts/ci/context-sweep.ts post ${{ inputs.test-run == 'true' && '--test-run' || '' }}

@@ -10,6 +10,7 @@ enum {
 };
 
 bool rlcd_display_start(void);
+/** Draw the shared status text (iterate_kit_screen_draw_status). */
 bool rlcd_display_show(const char *title, const char *status);
 /** Draw a 400x300 row-major 1bpp bitmap. The high bit is the leftmost pixel;
  * one means black. The board maps it to the panel's unusual column/page wire

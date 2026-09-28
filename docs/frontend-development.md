@@ -42,7 +42,7 @@ is the entire runtime-specific binding around the shared client.
 
 **Light mode only**, in every app and page: no dark palette, theme provider or `dark:` class of our own. `dark:` never matches: `@iterate-com/ui/globals.css` switches it off.
 
-**The shadcn components are vendored** ([packages/ui/AGENTS.md](../packages/ui/AGENTS.md)): each file is exactly what `shadcn add` writes, and nobody edits one. Customise a component at the call site (a `className`, a prop) or in a wrapper of our own in `packages/ui`. They keep upstream's `dark:` classes: don't strip them. Refresh them all with `pnpm tsx scripts/ci/shadcn-drift.ts refresh`, then review the diff. A pull request that touches one runs the drift check (`.depot/workflows/shadcn-drift.yml`), which fails when a file differs from `shadcn add`. `cn` comes from the `cn` package.
+**The shadcn components are vendored** ([packages/ui/AGENTS.md](../packages/ui/AGENTS.md)): each file is exactly what `shadcn add` writes, and nobody edits one. Customise a component at the call site (a `className`, a prop) or in a wrapper of our own in `packages/ui`. They keep upstream's `dark:` classes: don't strip them. Refresh them all with `node scripts/ci/shadcn-drift.ts refresh`, then review the diff. A pull request that touches one runs the drift check (`.depot/workflows/shadcn-drift.yml`), which fails when a file differs from `shadcn add`. `cn` comes from the `cn` package.
 
 The backend surface is the platform's one API — declared in
 [`packages/iterate/src/api.ts`](../packages/iterate/src/api.ts) (never

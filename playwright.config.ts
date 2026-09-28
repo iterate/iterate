@@ -103,6 +103,17 @@ export default defineConfig({
       testDir: "specs/dash",
       use: recordedAtViewport({ ...desktopWebUse, baseURL: dashBaseUrl }),
     },
+    // the Dash's collection link once more at a phone's width, with touch: where it is often read
+    {
+      name: "dash-phone",
+      testDir: "specs/dash",
+      testMatch: ["**/collect-secret.spec.ts"],
+      use: recordedAtViewport({
+        ...devices["Pixel 7"],
+        viewport: { width: 390, height: 844 },
+        baseURL: dashBaseUrl,
+      }),
+    },
     {
       name: "admin",
       testDir: "specs/admin",

@@ -14,7 +14,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { ItxScope as ItxEntrypointScope } from "iterate/sdk";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
 import type { FacetSpec } from "iterate/api";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
@@ -24,13 +23,13 @@ import type { AgentState } from "./contract.ts";
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly withItx: WithItx;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly spec: () => Promise<FacetSpec>;
   private readonly base: string;
 
   constructor(
-    withItx: WithItx<ItxEntrypointScope>,
+    withItx: WithItx,
     catalog: () => Promise<AgentCatalogState>,
     spec: () => Promise<FacetSpec>,
     base = "/",
@@ -236,13 +235,13 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
 /** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path, reached from the
  *  collection's base. */
 class AgentReference extends RpcTarget implements AgentHandleApi {
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly withItx: WithItx;
   private readonly path: string;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly base: string;
 
   constructor(
-    withItx: WithItx<ItxEntrypointScope>,
+    withItx: WithItx,
     path: string,
     catalog: () => Promise<AgentCatalogState>,
     base: string,

@@ -13,9 +13,8 @@ import { AgentCollectionRpcTarget } from "./collection.ts";
 
 const AgentCatalogContract = defineProcessorContract({
   slug: "agents",
-  // 2: the deleted agents are kept (`deleted`), so a verb on one refuses from here without hosting
-  // its facet again (collection.ts).
-  version: "2",
+  // 3: a certificate counts only when stamped with the path of the agent it names.
+  version: "3",
   description: "The agents installed in this project by the userspace agents app.",
   stateSchema: z.object({
     agents: z.record(z.string(), z.object({ createdAt: z.string() })).default({}),
@@ -30,7 +29,7 @@ const AgentCatalogContract = defineProcessorContract({
   emits: [],
 });
 export type AgentCatalogState = ProcessorState<typeof AgentCatalogContract>;
-class AgentCatalogProcessor extends StreamProcessor<
+export class AgentCatalogProcessor extends StreamProcessor<
   AgentCatalogState,
   ConsumedEvent<typeof AgentCatalogContract>
 > {
@@ -38,13 +37,13 @@ class AgentCatalogProcessor extends StreamProcessor<
   /** A certificate counts only from the agent it names: each agent writes its own on `/`
    *  (processor.ts), and the platform stamps where it came from (apps/os caller.ts `stampCaller`),
    *  so one any other context appends is ignored — anyone may append anywhere, and a forged death
-   *  would refuse the agent's every message for good. One with no origin predates the stamp. */
+   *  would refuse the agent's every message for good. */
   reduce({
     state,
     event,
   }: ReduceArgs<AgentCatalogState, ConsumedEvent<typeof AgentCatalogContract>>) {
     const path = event.payload.path;
-    if (event.source?.origin && event.source.origin !== path) return;
+    if (event.source.origin !== path) return;
     if (event.type === "events.iterate.com/agent/created") {
       if (state.agents[path] || state.deleted[path]) return; // born once; dead is terminal
       return { ...state, agents: { ...state.agents, [path]: { createdAt: event.createdAt } } };

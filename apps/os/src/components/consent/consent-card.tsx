@@ -2,11 +2,11 @@ import { useRef, useState, useTransition, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { useHydrated, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
+import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
 import type { ConsentView } from "../../consent.ts";
 import { projectSlug } from "../../control-plane/catalog.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";
 import { switchAccountHref } from "../../login-search.ts";
-import { IssuerPage } from "../issuer-page.tsx";
 import { ClientHeading } from "./client-heading.tsx";
 import { OnboardingStep } from "./onboarding-step.tsx";
 import { PermissionsStep } from "./permissions-step.tsx";
@@ -146,7 +146,7 @@ export function ConsentCard({
   };
 
   return (
-    <IssuerPage wide className="gap-8 md:gap-10">
+    <StandalonePage wide className="gap-8 md:gap-10">
       <ClientHeading
         clientName={view.clientName}
         clientLogoUri={view.clientLogoUri}
@@ -194,7 +194,7 @@ export function ConsentCard({
           onEditProjects={() => showStep("projects")}
         />
       )}
-    </IssuerPage>
+    </StandalonePage>
   );
 }
 

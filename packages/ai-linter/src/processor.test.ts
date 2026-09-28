@@ -70,6 +70,7 @@ function fold(
       offset: index + 1,
       createdAt: new Date(0).toISOString(),
       path: "/integrations/github/c1",
+      source: { origin: "/integrations/github/c1" },
     };
     state = processor.reduce({ event, state }) ?? state;
   });

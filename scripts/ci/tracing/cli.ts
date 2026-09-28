@@ -1,7 +1,9 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { ciReportsEnvs } from "../../../envs.ts";
+import { depotApi, type DepotApi } from "../depot.ts";
 import { getOctokit } from "../github.ts";
 import {
   assembleTrace,
@@ -15,8 +17,10 @@ import {
 /** The workflows whose runs are traced: a PR's preview, and main's e2e run on its own. */
 const TRACED_WORKFLOWS = ["preview-os.yml", "main-os-e2e.yml"];
 
-/** Completed-run CI traces. Invoke with `pnpm exec trpc-cli scripts/ci/tracing/cli.ts`. */
+/** Completed-run CI traces: `node scripts/ci/tracing/cli.ts <command>`. */
 export default class CiTrace {
+  #depot: DepotApi | undefined;
+
   /** Collect the jobs this `trace` job needs, in the workflow run it belongs to. */
   async current(directory: string) {
     const source = new URL(z.string().url().parse(process.env.DEPOT_JOB_URL));
@@ -175,8 +179,10 @@ export default class CiTrace {
     return statuses;
   }
 
-  private async depot(method: string, body: object) {
-    return depotCiApi(method, body, z.string().min(1).parse(process.env.DEPOT_CI_TELEMETRY_TOKEN));
+  /** Depot's CI API, its token read once per command. */
+  private depot(method: string, body: object) {
+    this.#depot ||= depotApi();
+    return this.#depot(method, body);
   }
 }
 
@@ -238,3 +244,5 @@ const LogPage = z.object({
     .default([]),
   nextPageToken: z.string().default(""),
 });
+
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "ci-trace" }).run();

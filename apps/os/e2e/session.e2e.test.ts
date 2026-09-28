@@ -512,7 +512,7 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   const SRC_MINE = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Mine extends WorkerEntrypoint {
   async run() {
     const { projectId } = await withItx(this.env.ITX, (itx) => itx.whoami());

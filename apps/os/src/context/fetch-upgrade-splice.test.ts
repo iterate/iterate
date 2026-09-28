@@ -404,8 +404,18 @@ class FakeSocket {
     const other = this.other;
     queueMicrotask(() => {
       if (other.closed) return;
+      // a binary frame is remembered by its first 8 bytes — only those are read, so a 1 MiB
+      // frame costs 8 bytes here, not a million-element copy
       other.received.push(
-        typeof data === "string" ? data : [...new Uint8Array(data as ArrayBuffer)].slice(0, 8),
+        typeof data === "string"
+          ? data
+          : [
+              ...new Uint8Array(
+                ArrayBuffer.isView(data) ? data.buffer : data,
+                ArrayBuffer.isView(data) ? data.byteOffset : 0,
+                Math.min(8, data.byteLength),
+              ),
+            ],
       );
       other.emit("message", { data });
     });

@@ -59,7 +59,7 @@ test("callLater(cb) fires back in the caller — capnweb client AND dynamic work
     "package.json": '{"main":"worker.js"}',
     "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Consumer extends WorkerEntrypoint {
   run() {
     // withItx hands the real scope. Plain dotted access; the callback runs back HERE, inside the

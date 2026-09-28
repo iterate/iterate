@@ -45,13 +45,21 @@ jobs:
         working-directory: apps/kit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project kit --config prd -- pnpm run-script deploy
-      # The deploy's own result: a success to #ci; a failed, cancelled or timed-out deploy pages
-      # #error-pulse (deploy-os.yml says why `always()`).
-      - name: Notify Slack
-        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: pnpm run-script deploy --env prd
+      # The deploy's own post (scripts/ci/notify.ts; deploy-os.yml says when each runs).
+      - name: Post the deploy's line
+        if: ${{ success() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_DISPLAY_NAME: Kit
+        run: node scripts/ci/notify.ts deploy-success
+      - name: Page the failed deploy
+        if: ${{ always() && (steps.deploy.outcome != 'success') && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: Kit
-          PUBLIC_URL: https://k.iterate.com
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
+          UPLOADED: ${{ steps.deploy.outcome }}
+        run: node scripts/ci/notify.ts deploy-failure

@@ -30,6 +30,9 @@ export const CustomHostnameObservation = z.object({
    *  `records` there, when that provider has onboarded our Domain Connect template and the
    *  hostname is not live yet. Null otherwise: the owner adds the records by hand. */
   connect: z.object({ provider: z.string(), url: z.string() }).nullable().default(null),
+  /** The zone the hostname lives in and who hosts it (dns-provider.ts), by the id the dash keys its
+   *  instructions by, while the hostname is not live yet; null when unknown. */
+  dns: z.object({ zone: z.string(), provider: z.string().nullable() }).nullable().default(null),
 });
 export type CustomHostnameObservation = z.infer<typeof CustomHostnameObservation>;
 
@@ -92,6 +95,9 @@ export const ProjectContract = defineProcessorContract({
             .nullable(),
           cloudflare: CustomHostnameObservation.nullable(),
           error: z.string().nullable(),
+          /** When the owner came back from their DNS provider's Domain Connect page having
+           *  approved the records (ISO time), so the page says so while they are being seen. */
+          connectedAt: z.string().nullable().default(null),
         }),
       )
       .default({}),
@@ -146,7 +152,11 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/hostname-add-requested": {
       description:
         "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
-      payloadSchema: z.object({ hostname: z.string().min(1) }),
+      payloadSchema: z.object({
+        hostname: z.string().min(1),
+        /** Asked on the way back from the DNS provider's Domain Connect page. */
+        connected: z.boolean().optional(),
+      }),
     },
     "events.iterate.com/project/hostname-add-settled": {
       description:

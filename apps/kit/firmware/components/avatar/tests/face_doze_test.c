@@ -106,11 +106,46 @@ static void every_avatar_renders_a_distinct_closed_eye_pose(void)
     }
 }
 
+/* The frame every board draws: the pose's key, and dozing, the sleepy key with the Z over it. */
+static void a_pose_renders_as_the_key_then_the_doze(void)
+{
+    static uint16_t expected[FACE_RENDER_PIXEL_COUNT];
+    face_avatar_registry_t registry = {0};
+    face_render_key_t key;
+    face_render_key_t expected_key;
+    face_pose_t pose = {0};
+    pose.eye_open = 200U;
+    pose.mouth_open = 120U;
+    pose.level = 900U;
+    assert(face_avatar_registry_init(&registry));
+
+    for (int dozing = 0; dozing <= 1; ++dozing) {
+        face_render_key_from_pose(&pose, &expected_key);
+        if (dozing) face_doze_prepare_render_key(&expected_key);
+        assert(face_avatar_registry_render(
+            &registry, &expected_key, 4321U, expected, FACE_RENDER_PIXEL_COUNT));
+        if (dozing) {
+            assert(face_doze_apply_overlay(
+                expected, FACE_RENDER_PIXEL_COUNT, 4321U));
+        }
+        assert(face_avatar_registry_render_pose(
+            &registry, &pose, dozing != 0, 4321U, &key, pixels,
+            FACE_RENDER_PIXEL_COUNT));
+        assert(memcmp(&key, &expected_key, sizeof(key)) == 0);
+        assert(memcmp(pixels, expected, sizeof(pixels)) == 0);
+    }
+    /* A buffer too small for the frame fails it; no board shows half a doze. */
+    assert(!face_avatar_registry_render_pose(
+        &registry, &pose, true, 4321U, &key, pixels,
+        FACE_RENDER_PIXEL_COUNT - 1U));
+}
+
 int main(void)
 {
     doze_key_is_unmistakably_not_speaking();
     doze_overlay_is_a_bounded_visible_sprite();
     every_avatar_renders_a_distinct_closed_eye_pose();
+    a_pose_renders_as_the_key_then_the_doze();
     puts("face_doze_test: PASS");
     return 0;
 }

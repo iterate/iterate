@@ -42,7 +42,30 @@ static void call(const char *method, const char *argument) {
   snprintf(path, sizeof(path), "\"screen\",\"%s\"", method);
   call_path(path, argument);
 }
+static bool black(const uint8_t *mono1, unsigned x, unsigned y) {
+  return (mono1[y * (ITERATE_KIT_SCREEN_STATUS_WIDTH / 8) + x / 8] & (0x80U >> (x % 8))) != 0;
+}
+
+/* The status text: the frame cleared, each line centred at its scale, 1 for
+ * black, and a line wider than the panel left out rather than clipped. */
+static void draws_the_status_text(void) {
+  static uint8_t mono1[ITERATE_KIT_SCREEN_STATUS_BYTES];
+  memset(mono1, 0xff, sizeof(mono1));
+  iterate_kit_screen_draw_status(mono1, "A", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXY");
+  assert(!black(mono1, 0, 0) && !black(mono1, 399, 299));
+  /* "ITERATE" at scale 3 starts at x (400 - 7 * 18) / 2 = 137; I's first column is empty. */
+  assert(!black(mono1, 137, 32) && black(mono1, 140, 32) && black(mono1, 140, 50));
+  /* "A" at scale 4 starts at x 188, y 100: its first column is rows 1 to 6. */
+  assert(!black(mono1, 188, 100) && black(mono1, 188, 104) && black(mono1, 191, 127));
+  assert(!black(mono1, 188, 128));
+  /* 35 characters at scale 2 are 420 pixels: the status line is not drawn. */
+  for (unsigned y = 190; y < 204; ++y) {
+    for (unsigned x = 0; x < ITERATE_KIT_SCREEN_STATUS_WIDTH; ++x) assert(!black(mono1, x, y));
+  }
+}
+
 int main(void) {
+  draws_the_status_text();
   uint8_t pixels[12] = {0};
   struct iterate_kit_screen_driver driver = {.width=9, .height=2, .formats=3,
     .preferred_format=ITERATE_KIT_SCREEN_MONO1, .refresh_timeout_ms=2000,

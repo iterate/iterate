@@ -11,10 +11,10 @@ on:
   # A soak runs it by dispatch: under `depot ci run` the job has no Depot Cache
   # (docs/depot-ci.md#run-ci-without-a-pr).
   workflow_dispatch: {}
-# Rapid pushes to a branch supersede each other. On PRs, head_ref identifies
-# the source branch; on main, ref_name keeps only the newest validation run.
+# A newer push to a PR's branch cancels its older run; each push to main keeps its own run, grouped
+# by its sha (docs/depot-ci.md#reliability-defaults).
 concurrency:
-  group: test-${{ github.head_ref || github.ref_name || github.run_id }}
+  group: test-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref_name || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -81,9 +81,8 @@ jobs:
             timeout-minutes: 1
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-            run: |
-              doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" -- true ||
-                echo "::warning title=Doppler prefetch::_shared/preview not saved; the evidence upload fetches it"
+              NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
+            run: node scripts/ci/test-evidence.ts fetch-upload-secrets
       # THE STEP AFTER THE TESTS, cancelled runs too: the telemetry finalizer, then the test evidence
       # manifest (scripts/ci/test-evidence.ts `finalize` says what fails it).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
@@ -115,11 +114,8 @@ jobs:
             env:
               DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
               NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
-            # offline from the file the fetch beside the tests saved; a fetch without it
-            run: |
-              offline=()
-              if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
-              doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
+            # its token from the file the fetch beside the tests saved, else fetched now
+            run: node scripts/ci/test-evidence.ts upload
           # Everything the run wrote under test-results/, as the e2e jobs keep theirs: the telemetry,
           # and the flake records beside the finalizer's suite-summary.json.
           - name: Upload results

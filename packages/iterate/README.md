@@ -28,14 +28,50 @@ Supabase, tRPC, Hono and Wrangler draw the same line:
 [the decision record](https://github.com/iterate/iterate/blob/d52a4e8e0f791c96b683fe178b56570532123c05/docs/2026-09-24-sdk-platform-line.md)
 (#3018).
 
-## Reaching the context from loaded code
+## One path per symbol
 
 Code the platform loads for a project (a config worker, a facet, a worker behind a rewrite rule)
-imports the SDK as `iterate/sdk` and reaches its context through `withItx`: one round trip,
-after which the scope, every call made through it and every handle it awaited are released.
+imports each symbol from one path, and the loader links this deployment's own build of it:
+
+| Path                       | What it holds                                                                                                                       |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk`              | The workerd hosts: `ConfigWorker`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors    |
+| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too |
+| `iterate/with-itx`         | `withItx` alone                                                                                                                     |
+| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                    |
 
 ```js
-import { ConfigWorker, withItx } from "iterate/sdk";
+import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
+
+const Contract = defineProcessorContract({
+  slug: "hoarder",
+  version: "1.0.0",
+  description: "keeps every blob it reduces",
+  stateSchema: z.object({ blobs: z.array(z.string()).default([]) }),
+  consumes: ["blob"],
+  emits: [],
+});
+class Hoarder extends StreamProcessor {
+  contract = Contract;
+  reduce({ event, state }) {
+    return { blobs: [...state.blobs, event.payload.blob] };
+  }
+}
+export class HoarderDurableObject extends StreamProcessorDurableObject {
+  processor = new Hoarder();
+}
+```
+
+## Reaching the context from loaded code
+
+Loaded code reaches its context through `withItx`: one round trip, after which the scope, every
+call made through it and every handle it awaited are released.
+
+```js
+import { ConfigWorker } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 
 export default class extends ConfigWorker {
   async fetch() {

@@ -20,13 +20,14 @@
  * on time moves only when it says so — a delay is a clock move, a restart is
  * recorded rather than honoured. Until something pins it, time is the host's
  * monotonic clock, a delay sleeps, and esp_restart() ends the process.
+ * NVS keeps u8 values in RAM until reset, so a test can boot twice over one store.
  */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** Drop every task, queue and note; back to real time. Tests call it per fixture. */
+/** Drop every task, queue, note and NVS entry; back to real time. Tests call it per fixture. */
 void iterate_kit_host_esp_idf_reset(void);
 
 /** Pin the clock: time moves only through set/advance and delays from here on. */

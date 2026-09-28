@@ -131,8 +131,10 @@ async function runStreamingCaptured(
 }
 
 /**
- * Probe a deployed URL until `ok(status)` holds (18 attempts, 5s apart ≈ 90s)
+ * Probe a deployed URL until `ok(response)` holds (18 attempts, 5s apart ≈ 90s)
  * and throw when it never does — a deploy is only done once the env answers.
+ * `ok` reads the status, or the body where an edge or router fallback could
+ * answer the same status.
  *
  * The window is deliberately generous: a fresh worker version can answer 503
  * at the edge for tens of seconds while it propagates (measured 2026-07-09: a
@@ -140,16 +142,7 @@ async function runStreamingCaptured(
  * A success at attempt 12 costs nothing extra; giving up early fails the
  * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
-export async function smoke(url: string, ok: (status: number) => boolean, label: string) {
-  await smokeResponse(url, (response) => ok(response.status), label);
-}
-
-/**
- * Response-aware variant of {@link smoke}. Use this when a status alone could
- * be produced by an edge/router fallback and the response body is part of the
- * deployment proof.
- */
-export async function smokeResponse(
+export async function smoke(
   url: string,
   ok: (response: Response) => boolean | Promise<boolean>,
   label: string,

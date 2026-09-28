@@ -38,8 +38,10 @@ test("the apply link names our template, carries domain, host and redirect_uri, 
   const url = new URL(
     await signedApplyUrl({
       urlSyncUX: "https://dash.cloudflare.com/domainconnect/",
+      serviceId: "custom-hostname",
       domain: "templestein.com",
       host: "iterate",
+      project: "prj_1",
       redirectUri:
         "https://dash.iterate.com/projects/prj_1/hostnames?connected=iterate.templestein.com",
       privateKey,
@@ -51,6 +53,7 @@ test("the apply link names our template, carries domain, host and redirect_uri, 
   expect(Object.fromEntries(url.searchParams)).toMatchObject({
     domain: "templestein.com",
     host: "iterate",
+    project: "prj_1",
     redirect_uri:
       "https://dash.iterate.com/projects/prj_1/hostnames?connected=iterate.templestein.com",
     key: "_dck1",
@@ -79,16 +82,49 @@ test("discovery walks up to the zone that publishes _domainconnect, reads its se
   const asked: string[] = [];
   const link = await domainConnectLinkOf("iterate.shop.example.com", {
     redirectUri: "https://dash.iterate.com/back",
+    project: "prj_1",
     privateKey,
     fetcher: provider(asked, { zone: "example.com", template: 200 }),
   });
   expect(link).toMatchObject({ provider: "Cloudflare" });
   expect(new URL(link!.url).searchParams.get("host")).toBe("iterate.shop");
   expect(asked).toEqual([
+    "dns _domainconnect.iterate.shop.example.com",
     "dns _domainconnect.shop.example.com",
     "dns _domainconnect.example.com",
     "https://api.dc.test/v2/example.com/settings",
     "https://api.dc.test/v2/domainTemplates/providers/iterate.com/services/custom-hostname",
+  ]);
+});
+
+test("a bare domain on Cloudflare takes our subdomain template without a host (Cloudflare ignores hostRequired and flattens the apex CNAME); elsewhere it takes the apex template", async () => {
+  const { privateKey } = await keyPair();
+  const asked: string[] = [];
+  for (const [providerName, service] of [
+    ["cloudflare", "custom-hostname"],
+    ["godaddy", "custom-hostname-apex"],
+  ]) {
+    const fake = provider(asked, { zone: "effect.ninja", template: 200 });
+    const link = await domainConnectLinkOf("effect.ninja", {
+      redirectUri: "https://dash.iterate.com/back",
+      project: "prj_1",
+      privateKey,
+      fetcher: (async (input: string, init?: RequestInit) => {
+        const answer = await fake(input, init);
+        if (!input.endsWith("/settings")) return answer;
+        return Response.json({ ...((await answer.json()) as object), providerName });
+      }) as typeof fetch,
+    });
+    const url = new URL(link!.url);
+    expect(url).toMatchObject({
+      pathname: `/v2/domainTemplates/providers/iterate.com/services/${service}/apply`,
+    });
+    expect(url.searchParams.has("host")).toBe(false);
+    expect(url.searchParams.get("domain")).toBe("effect.ninja");
+  }
+  expect(asked.filter((line) => line.includes("/domainTemplates/"))).toEqual([
+    "https://api.dc.test/v2/domainTemplates/providers/iterate.com/services/custom-hostname",
+    "https://api.dc.test/v2/domainTemplates/providers/iterate.com/services/custom-hostname-apex",
   ]);
 });
 
@@ -104,6 +140,7 @@ test("a zone whose provider does not answer for it is passed over for the next o
   const { privateKey } = await keyPair();
   const link = await domainConnectLinkOf("iterate.shop.example.com", {
     redirectUri: "https://dash.iterate.com/back",
+    project: "prj_1",
     privateKey,
     fetcher: provider([], { zone: "example.com", template: 200, decoy: "shop.example.com" }),
   });
@@ -112,7 +149,7 @@ test("a zone whose provider does not answer for it is passed over for the next o
 
 test("a DNS error or a provider's 5xx throws (the caller logs it); an http URL from a provider is never followed", async () => {
   const { privateKey } = await keyPair();
-  const options = { redirectUri: "https://dash.iterate.com/back", privateKey };
+  const options = { redirectUri: "https://dash.iterate.com/back", project: "prj_1", privateKey };
   await expect(
     domainConnectLinkOf("iterate.example.com", {
       ...options,
@@ -139,6 +176,7 @@ test("every provider request follows no redirect the Workers way (`manual`; the 
   const fake = provider([], { zone: "example.com", template: 200 });
   const link = await domainConnectLinkOf("iterate.example.com", {
     redirectUri: "https://dash.iterate.com/back",
+    project: "prj_1",
     privateKey,
     fetcher: (async (input: string, init?: RequestInit) => {
       redirects.push(init?.redirect);
@@ -153,7 +191,7 @@ test("every provider request follows no redirect the Workers way (`manual`; the 
 
 test("no link when no zone above the hostname speaks Domain Connect, or its provider has not onboarded our template", async () => {
   const { privateKey } = await keyPair();
-  const options = { redirectUri: "https://dash.iterate.com/back", privateKey };
+  const options = { redirectUri: "https://dash.iterate.com/back", project: "prj_1", privateKey };
   expect(
     await domainConnectLinkOf("iterate.example.com", {
       ...options,

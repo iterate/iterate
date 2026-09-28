@@ -11,6 +11,7 @@ import {
   commitAppFolders,
   configRepoSettled,
   publishAgents,
+  sourceCacheKey,
   upgradeAgents,
 } from "@iterate-com/agents/install";
 import type { IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
@@ -20,8 +21,7 @@ import { SCREEN_FONT_CSS } from "./screen-font.ts";
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
 /** The source a project installs voice from, by file: `version` is what package.json pins, a
- *  pkg.pr.new URL at a commit (@iterate-com/agents/install `agentsFolder` says why) or an npm
- *  version once the package is on npm. */
+ *  pkg.pr.new URL at a commit (@iterate-com/agents/install `agentsFolder` says why). */
 export function voiceFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ main: "worker.ts", dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,
@@ -43,17 +43,7 @@ export async function installVoice(
   const [{ path }, agents] = await Promise.all([itx.whoami(), itx.rewriteRules.get("itx.agents")]);
   if (path !== "/") throw new Error("Install voice at the project root");
   if (!agents?.target) throw new Error("Voice needs the agents app: install it first");
-  const serialized = JSON.stringify(
-    Object.fromEntries(
-      Object.keys(source)
-        .sort()
-        .map((name) => [name, source[name]]),
-    ),
-  );
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
-  const cacheKey = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const cacheKey = await sourceCacheKey(source);
   await Promise.all([
     // Written before the rule: the worker reads its facets' source from here (worker.ts).
     itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source })),

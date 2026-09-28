@@ -3,7 +3,6 @@
 
 #include "iterate/kit/avatar/face_animator.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
-#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_render.h"
 #include "iterate/kit/avatar/face_scale.h"
@@ -240,14 +239,8 @@ struct stackchan_avatar_owner {
    */
   volatile uint32_t pending_avatar_index_plus_one;
   volatile uint32_t pending_side_button_taps;
-  /*
-   * Completed face taps, with the half of the panel the LAST one pressed.
-   * Two taps between device polls collapse onto the newest zone, which for
-   * a 20 ms sampler and a human finger is a distinction without a case.
-   */
+  /* Completed face taps, counted so a quick pair cannot collapse into one. */
   volatile uint32_t pending_face_taps;
-  volatile uint32_t last_face_tap_left;
-  volatile uint32_t last_touch_x;
   /*
    * THE GLASS ON LOAN (iterate_kit_stackchan_avatar_show_image). `image` is
    * the lent 320x240 frame, NULL while the face owns the glass; each loan or
@@ -408,28 +401,14 @@ static bool prepare_avatar_frame(
    */
   owner.latest_pose.playout_samples = __atomic_load_n(
       &owner.metrics.physical_playout_sample_clock, __ATOMIC_RELAXED);
-  face_render_key_from_pose(&owner.latest_pose, render_key);
-  const bool dozing = face_dozing_now();
-  if (dozing) face_doze_prepare_render_key(render_key);
-  if (!face_avatar_registry_render(
+  if (!face_avatar_registry_render_pose(
           &owner.registry,
-          render_key,
+          &owner.latest_pose,
+          face_dozing_now(),
           owner.latest_pose.playout_samples,
+          render_key,
           owner.framebuffer,
           FACE_RENDER_PIXEL_COUNT)) {
-    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
-    return false;
-  }
-  if (dozing && !face_doze_apply_overlay(
-                     owner.framebuffer,
-                     FACE_RENDER_PIXEL_COUNT,
-                     owner.latest_pose.playout_samples)) {
-    /*
-     * The doze sprite is part of the user-visible lifecycle contract.
-     * Failing closed here prevents a plausible awake-looking frame from
-     * replacing the last coherent display when buffer geometry and
-     * renderer assumptions diverge.
-     */
     iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
     return false;
   }
@@ -644,26 +623,9 @@ static void sample_physical_controls(uint64_t now_ms) {
      */
     iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_read_failures);
   } else {
-    /*
-     * The finger's place is only reported while it is DOWN, so the half a
-     * completed tap chose has to be remembered from the press: by the
-     * release sample that completes the tap, the controller has nothing
-     * left to say about where it was.
-     */
-    if (touch_point_count != 0U) {
-      __atomic_store_n(
-          &owner.last_touch_x, (uint32_t)touch_point.x, __ATOMIC_RELAXED);
-    }
     if (iterate_kit_touch_tap_update(
             &owner.touch_tap, touch_point_count != 0U, now_ms)) {
       iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.touch_taps);
-      __atomic_store_n(
-          &owner.last_face_tap_left,
-          __atomic_load_n(&owner.last_touch_x, __ATOMIC_RELAXED) <
-                  (uint32_t)(BSP_LCD_H_RES / 2U)
-              ? 1U
-              : 0U,
-          __ATOMIC_RELEASE);
       iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
     }
   }
@@ -1034,31 +996,12 @@ static bool take_pending(volatile uint32_t *pending) {
   return false;
 }
 
-bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half) {
-  if (!take_pending(&owner.pending_face_taps)) return false;
-  *left_half =
-      __atomic_load_n(&owner.last_face_tap_left, __ATOMIC_ACQUIRE) != 0U;
-  return true;
+bool iterate_kit_stackchan_avatar_take_face_tap(void) {
+  return take_pending(&owner.pending_face_taps);
 }
 
 bool iterate_kit_stackchan_avatar_take_side_button_tap(void) {
   return take_pending(&owner.pending_side_button_taps);
-}
-
-/* The INJECTED gestures land in the same pending latches the physical
- * sampler fills, so everything downstream — the session grammar, the menu,
- * the audit — cannot tell a capability from a finger. That is the point. */
-void iterate_kit_stackchan_avatar_inject_side_button(void) {
-  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_side_button_taps);
-}
-
-void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x) {
-  __atomic_store_n(&owner.last_touch_x, (uint32_t)x, __ATOMIC_RELAXED);
-  __atomic_store_n(
-      &owner.last_face_tap_left,
-      (uint32_t)x < (uint32_t)(BSP_LCD_H_RES / 2U) ? 1U : 0U,
-      __ATOMIC_RELEASE);
-  iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.pending_face_taps);
 }
 
 bool IRAM_ATTR iterate_kit_stackchan_avatar_observe_playout(

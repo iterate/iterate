@@ -23,7 +23,9 @@ const PRESENCE_SOURCE: WorkerSource = {
 export const SOURCES: Record<string, WorkerSource> = {
   chatroom: {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { FacetDurableObject, LiveState, withItx } from "iterate/sdk";
+    "worker.js": `import { FacetDurableObject } from "iterate/sdk";
+import { LiveState } from "iterate/stream/processor";
+import { withItx } from "iterate/with-itx";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
   #chat = new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", { messages: [] });
@@ -70,7 +72,7 @@ export class KeeperDurableObject extends FacetDurableObject {
   digest: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
@@ -88,7 +90,9 @@ export default class Digest extends WorkerEntrypoint {
   },
   chunky: {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+    "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "chunky",
   version: "1.0.0",
@@ -113,7 +117,9 @@ export class ChunkyDurableObject extends StreamProcessorDurableObject {
   presence: PRESENCE_SOURCE,
   "user-tally": {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+    "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "user-tally",
   version: "1.0.0",
@@ -136,7 +142,9 @@ export class UserTallyDurableObject extends StreamProcessorDurableObject {
   // by type. A userspace class like any other — there are no built-in processors.
   tally: {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+    "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "tally",
   version: "1.0.0",
@@ -162,7 +170,9 @@ export class TallyDurableObject extends StreamProcessorDurableObject {
   // double-pause. Core knows nothing about it — the pause check reads the reduced `paused` slice.
   breaker: {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+    "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const CAPACITY = 5; // tokens the bucket holds
 const REFILL_PER_SECOND = 1; // tokens restored per second of EVENT time
 const CONTROL = new Set([
@@ -214,7 +224,9 @@ export class BreakerDurableObject extends StreamProcessorDurableObject {
   // only the webhooks after that event (enabling replays the whole log).
   prLinter: {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { StreamProcessor, StreamProcessorDurableObject, defineProcessorContract, z } from "iterate/sdk";
+    "worker.js": `import { StreamProcessorDurableObject } from "iterate/sdk";
+import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
+import { z } from "zod";
 const WEBHOOK = "events.iterate.com/github/webhook-received";
 const INSTALLED = "pr-linter-installed";
 const CHECK = "Iterate GitHub AI linter";

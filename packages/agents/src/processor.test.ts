@@ -313,7 +313,6 @@ test.for<{ name: string; source?: { origin: string }; from?: string; label?: str
   },
   { name: "the agent's own words: no sender", source: { origin: "/agents/b" } },
   { name: "the root's append (a member's session, the dash): a person's", source: { origin: "/" } },
-  { name: "unstamped (before the stamp): nothing", label: undefined },
   {
     name: "relayed by its own facet (`message`): the sender handed over",
     source: { origin: "/agents/b" },

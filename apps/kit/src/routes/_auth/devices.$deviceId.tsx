@@ -208,12 +208,10 @@ function KitPage() {
           }}
         >
           <Field className={horizontalFieldClassName}>
-            <FieldLabel htmlFor="device" className="sm:pt-2">
-              Device
-            </FieldLabel>
+            <FieldLabel className="sm:pt-2">Device</FieldLabel>
             <FieldContent>
               <div className="flex flex-wrap items-center justify-between gap-2 sm:pt-2">
-                <span id="device">{device.name}</span>
+                <span>{device.name}</span>
                 {/* through Kit's connect route (device-auth.ts): back to device selection, keeping
                     this session's platform when it isn't the default one */}
                 <a
@@ -235,15 +233,11 @@ function KitPage() {
           </Field>
 
           <Field className={horizontalFieldClassName}>
-            <FieldLabel htmlFor="firmware" className="sm:pt-2">
-              Firmware
-            </FieldLabel>
+            <FieldLabel className="sm:pt-2">Firmware</FieldLabel>
             <FieldContent>
               {firmware.manifest ? (
                 <>
-                  <span id="firmware" className="sm:pt-2">
-                    {firmware.manifest.version}
-                  </span>
+                  <span className="sm:pt-2">{firmware.manifest.version}</span>
                   <FieldDescription>
                     The newest release for this device.{" "}
                     {/* a new tab keeps what is typed on this page */}

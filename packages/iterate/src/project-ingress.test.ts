@@ -254,7 +254,6 @@ const wildcard = {
     "dash.iterate.com",
     "k.iterate.com",
     "voice.iterate.com",
-    "install.iterate.com",
   ],
 };
 test.for([

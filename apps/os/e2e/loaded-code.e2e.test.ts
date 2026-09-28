@@ -11,7 +11,7 @@ import { FakeArtifacts } from "./support/fake-artifacts.ts";
 const PROBE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 const outcome = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: String(e && e.message || e) }; } };
 export default class extends WorkerEntrypoint {
   say(call, ...args) { return outcome(() => withItx(this.env.ITX, (itx) => itx.invoke(call, ...args))); }

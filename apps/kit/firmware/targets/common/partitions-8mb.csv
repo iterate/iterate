@@ -1,9 +1,7 @@
-# 8 MiB flash (M5StickS3). Offsets match the donor firmware exactly so the
-# ITERKIT1 provisioning blob already at 0x210000 on the physical unit
-# survives a plain app flash; --erase-all wipes it (and with it the adopted
-# conversation path in NVS), which looks like the feature failing.
-# ota_0 and ota_1 are the two app slots system.update alternates between;
-# otadata records which one boots.
+# The 8 MiB board (M5StickS3): the 16 MiB table's layout in half the flash,
+# without a model partition. ota_0 and ota_1 are the two app slots
+# system.update alternates between; otadata records which one boots.
+# iterate_kit holds the ITERKIT1 provisioning image Kit writes.
 # Name,     Type, SubType, Offset,   Size,     Flags
 nvs,        data, nvs,     0x9000,   0x6000,
 phy_init,   data, phy,     0xf000,   0x1000,

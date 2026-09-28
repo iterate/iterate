@@ -50,7 +50,8 @@ function(iterate_kit_add_core_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-core)
 endfunction()
 
-# Pure board-table rules; IDF value types only, no simulated hardware startup.
+# Pure board-table rules and the kept volume (host NVS); IDF value types only,
+# no simulated hardware startup.
 iterate_kit_add_test(iterate-kit-board-table-test
   board_table_test.c
   ../platforms/iterate_esp_idf/components/board/board.c
@@ -71,7 +72,6 @@ iterate_kit_add_core_test(
   iterate-kit-conversation-overlay-test conversation_overlay_test.c)
 iterate_kit_add_core_test(
   iterate-kit-conversation-ring-test conversation_ring_test.c)
-iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(

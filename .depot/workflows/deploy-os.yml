@@ -67,7 +67,7 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project os --config prd -- pnpm run-script deploy --env prd
+        run: pnpm run-script deploy --env prd
       # READ-ONLY, right after the deploy (scripts/ci/prd-post-deploy-check.ts): once `/version` names
       # the new version (≤ 60 s), one GET of each production project host
       # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still
@@ -75,16 +75,28 @@ jobs:
       # fails this workflow. Faults on the new version are the prd fault alarm's (prd-fault-alarm.yml,
       # every 15 minutes).
       - name: Check the project hosts
+        id: check
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
-      # The deploy's own result: a success to #ci; a deploy that failed, was cancelled or hit the
-      # job's timeout pages #error-pulse. `always()`, because `!cancelled()` is false once the job is cancelled, and a
-      # timeout ends the job by cancelling it.
-      - name: Notify Slack
-        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: node scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
+      # The deploy's own post (scripts/ci/notify.ts): once the whole job succeeded, a reply to its
+      # merge's line in #ci; a deploy that failed, was cancelled or timed out pages #error-pulse,
+      # unless the host check paged already. `always()`, because `!cancelled()` is false once the job
+      # is cancelled, and a timeout ends the job by cancelling it. A failed post never turns the deploy
+      # red. Any run on main posts, a dispatched redeploy too.
+      - name: Post the deploy's line
+        if: ${{ success() && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          APP_DISPLAY_NAME: OS
+        run: node scripts/ci/notify.ts deploy-success
+      - name: Page the failed deploy
+        if: ${{ always() && (steps.deploy.outcome != 'success' || (steps.check.outcome != 'success' && steps.check.outputs.paged != 'true')) && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           APP_DISPLAY_NAME: OS
-          PUBLIC_URL: https://os.iterate.com
-        run: pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}
+          UPLOADED: ${{ steps.deploy.outcome }}
+        run: node scripts/ci/notify.ts deploy-failure

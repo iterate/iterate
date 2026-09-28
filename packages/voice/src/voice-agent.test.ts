@@ -169,6 +169,7 @@ type LoggedEvent = {
   offset: number;
   createdAt: string;
   path: string;
+  source: { origin: string };
 };
 
 /** A call on a bare relay, `call-started` delivered and the provider's session started. The log is
@@ -207,7 +208,7 @@ async function liveCall(log: LoggedEvent[] = [], requests = new Map<string, numb
    *  contract's own schema parsed its payload, so it is the consumed event its type names. */
   const consumed = (event: LoggedEvent): Consumed | null => {
     if (!consumesEvent(processor.contract.consumes, event)) return null;
-    const payload = processor.contract.payloadSchemaFor?.(event.type)?.parse(event.payload);
+    const payload = processor.contract.payloadSchemaFor(event.type)?.parse(event.payload);
     return { ...event, payload } as Consumed;
   };
   let state = log.reduce((folded, event) => {
@@ -218,7 +219,14 @@ async function liveCall(log: LoggedEvent[] = [], requests = new Map<string, numb
   function commit({ type, payload = {} }: { type: string; payload?: Record<string, unknown> }) {
     const offset = log.length + 1;
     const createdAt = new Date(offset * 1000).toISOString();
-    const event: LoggedEvent = { type, payload, offset, createdAt, path: PATH };
+    const event: LoggedEvent = {
+      type,
+      payload,
+      offset,
+      createdAt,
+      path: PATH,
+      source: { origin: PATH },
+    };
     log.push(event);
     const delivered = consumed(event);
     if (!delivered) return event;

@@ -6,18 +6,19 @@
 //
 //   committedEvent  — one committed event, the shape a stream hands a reduce or an engine
 //   reduceProcessor — fold events through a processor's pure `reduce`, as the engine does
-//   memoryStream    — the Stream's commit semantics in memory (one offset sequence, idempotency on
-//                     append, the scanned-range proof) plus THE PUMP: a fire-and-forget
-//                     `processEventBatch` to every engine in `engines` after each append (awaited, it
-//                     would deadlock a processor that appends during its own batch). A short page's
-//                     proof is the in-memory head, so the engine's stale-push and ephemeral-window
-//                     rules are exercised directly; the platform's real Stream stops at the DURABLE
-//                     mark
+//   memoryStream    — the Stream's commit semantics in memory (one offset sequence, the origin
+//                     stamp, idempotency on append, the scanned-range proof) plus THE PUMP: a
+//                     fire-and-forget `processEventBatch` to every engine in `engines` after each
+//                     append (awaited, it would deadlock a processor that appends during its own
+//                     batch). A short page's proof is the in-memory head, so the engine's
+//                     stale-push and ephemeral-window rules are exercised directly; the platform's
+//                     real Stream stops at the DURABLE mark
 //   memoryStorage   — the real `ReduceCheckpointTable` over node:sqlite, counting writes
 //   nodeSqliteDurableObjectStorage — a Durable Object's `sql` + `transactionSync` over node:sqlite
 //   settle          — wait for fire-and-forget pushes to land
 import { DatabaseSync } from "node:sqlite";
 import type { SqlStorageValue } from "@cloudflare/workers-types";
+import { codedError } from "../lib.ts";
 import {
   idempotencyConflictMessage,
   sameIdempotentEvent,
@@ -30,22 +31,30 @@ import {
   type SqlStorageHandle,
 } from "./processor.ts";
 
-/** A committed event at `offset` on the root path, stamped `offset` seconds past the epoch: what a
- *  test hands a reduce, an engine or a fake log without a stream. A field it does not set (a
- *  `source`, another `path`, `ephemeral`) is spread over it. */
+/** A committed event at `offset` on the root path, from the root, stamped `offset` seconds past the
+ *  epoch: what a test hands a reduce, an engine or a fake log without a stream. A field it does not
+ *  set (another `source`, another `path`, `ephemeral`) is spread over it. */
 export function committedEvent(
   offset: number,
   type: string,
   payload?: StreamEvent["payload"],
 ): StreamEvent {
-  return { type, payload, offset, createdAt: new Date(offset * 1000).toISOString(), path: "/" };
+  return {
+    type,
+    payload,
+    offset,
+    createdAt: new Date(offset * 1000).toISOString(),
+    path: "/",
+    source: { origin: "/" },
+  };
 }
 
 /** THE PROCESSOR HARNESS: fold `inputs` through a processor's pure `reduce`, exactly as the engine
  *  does — start from the contract's initial state, validate each payload against the contract (a
  *  malformed KNOWN payload is SKIPPED, never reduced), reduce, thread the state — for a declarative
  *  `{ events → state }` processor spec with no engine, storage, or effects. Construct the
- *  processor with `new` and hand it the events; the offsets are the input order. Ephemeral inputs are
+ *  processor with `new` and hand it the events; the offsets are the input order. An input with no
+ *  `source.origin` came from the context it is on, as the stream stamps it. Ephemeral inputs are
  *  reduced like any other — the reduce decides what it folds (presence's `poke` returns undefined). */
 export function reduceProcessor<State>(
   processor: {
@@ -57,22 +66,21 @@ export function reduceProcessor<State>(
   inputs: readonly {
     type: string;
     payload?: unknown;
-    source?: StreamEvent["source"];
+    source?: StreamEventInput["source"];
     /** The context it is on; `/` by default. */
     path?: string;
   }[],
 ): State {
   let state = processor.contract.initialState();
   inputs.forEach((input, index) => {
-    const parsed = processor.contract
-      .payloadSchemaFor?.(input.type)
-      ?.safeParse(input.payload ?? {});
+    const parsed = processor.contract.payloadSchemaFor(input.type)?.safeParse(input.payload ?? {});
     if (parsed && !parsed.success) return; // the engine skips a malformed known payload
+    const path = input.path || "/";
     const event = {
       ...committedEvent(index + 1, input.type),
       payload: parsed?.success ? parsed.data : input.payload,
-      source: input.source,
-      path: input.path || "/",
+      source: { ...input.source, origin: input.source?.origin || path },
+      path,
     } as StreamEvent;
     state = processor.reduce({ event, state }) ?? state;
   });
@@ -101,7 +109,11 @@ export function memoryStream(path = "/") {
           const existingEvent = eventsByIdempotencyKey.get(event.idempotencyKey);
           if (existingEvent) {
             if (sameIdempotentEvent(existingEvent, event)) return existingEvent;
-            throw new Error(idempotencyConflictMessage(event.idempotencyKey, existingEvent.offset));
+            throw codedError(
+              "IDEMPOTENCY_CONFLICT",
+              idempotencyConflictMessage(event.idempotencyKey, existingEvent.offset),
+              { existingOffset: existingEvent.offset },
+            );
           }
         }
         maxAssigned += 1;
@@ -110,6 +122,7 @@ export function memoryStream(path = "/") {
           offset: maxAssigned,
           createdAt: new Date(0).toISOString(),
           path,
+          source: { ...event.source, origin: event.source?.origin || path },
         };
         if (!event.ephemeral) {
           durableEvents.push(committedEvent);

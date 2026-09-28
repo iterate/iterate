@@ -38,7 +38,7 @@ export type MembershipsRow = {
 	org_id: string;
 	user_id: string;
 	role: string;
-	created_at: number | null;
+	created_at: number;
 };
 
 export type OauthGrantsRow = {
@@ -50,7 +50,7 @@ export type OauthGrantsRow = {
 export type OrganizationsRow = {
 	id: string;
 	name: string;
-	created_at: number | null;
+	created_at: number;
 };
 
 export type ProjectHostnamesRow = {
@@ -67,7 +67,7 @@ export type ProjectsRow = {
 	id: string;
 	slug: string;
 	org_id: string;
-	created_at: number | null;
+	created_at: number;
 };
 
 export type UsersRow = {

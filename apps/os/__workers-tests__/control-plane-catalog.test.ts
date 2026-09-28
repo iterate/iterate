@@ -117,15 +117,8 @@ test("people: a signed-in person adds a sign-in to their account: the subject be
     await c.linkIdentity({ provider: "github", subject: "gh-ada", email: "ada@elsewhere.example" }),
   ).toEqual(ada);
   expect(await c.user(ada.id)).toEqual(ada);
-  // nor can any other write, an older version's `linkIdentity` among them: the database refuses it
-  await expect(
-    env.DB.prepare("update users set email = 'ada@elsewhere.example' where id = ?")
-      .bind(ada.id)
-      .run(),
-  ).rejects.toThrow(/a person with an added sign-in keeps their email/);
-  expect(await c.user(ada.id)).toEqual(ada);
-  // the sign-in's own email update holds the rule in its `where`: a sign-in added between its read
-  // and its write stops it quietly, never failing that sign-in on the trigger
+  // the platform's one email write holds the rule in its `where`: a sign-in added between a
+  // sign-in's read and its write stops it quietly
   expect(
     await updateUserEmail(createD1Client(env.DB), { email: "ada3@example.com" }, { id: ada.id }),
   ).toMatchObject({ rowsAffected: 0 });
@@ -343,7 +336,7 @@ test("created_at: every write stamps its organization, membership or project wit
   expect(await c.members(dans)).toMatchObject([{ userId: dan.id, createdAt: NOW + 5 }]);
 });
 
-test("created_at: every list reads oldest first, by name or slug among rows made at once; a row older than the column reads null and lists first", async () => {
+test("created_at: every list reads oldest first, by name or slug among rows made at once; D1 refuses a row without one", async () => {
   await emptyTables();
   const ada = await person("ada@example.com");
   const bob = await person("bob@example.com");
@@ -362,16 +355,17 @@ test("created_at: every list reads oldest first, by name or slug among rows made
   expect(slugs((await c.accessibleTo(ada.id)).projects)).toEqual(["zulu", "alpha", "bravo"]);
   expect(slugs((await c.accessibleTo(bob.id)).projects)).toEqual(["zulu", "bravo"]);
   expect((await c.members(zed.id)).map(({ email }) => email)).toEqual([ada.email, bob.email]);
-  // rows written before migrations/0004_created_at.sql, which recorded no time: the oldest
-  await rows(`update organizations set created_at = null where id = '${mid.id}'`);
-  await rows(`update projects set created_at = null where slug = 'bravo'`);
-  await rows(`update memberships set created_at = null where user_id = '${bob.id}'`);
-  expect(orgNames(await c.organizations())).toEqual(["Mid", "Zed", "Abe"]);
-  expect(slugs((await c.accessibleTo(ada.id)).projects)).toEqual(["bravo", "zulu", "alpha"]);
-  expect(await c.members(zed.id)).toMatchObject([
-    { userId: bob.id, createdAt: null },
-    { userId: ada.id, createdAt: NOW },
-  ]);
+  await expect(rows(`insert into organizations (id, name) values ('org_x', 'X')`)).rejects.toThrow(
+    /NOT NULL constraint failed: organizations\.created_at/,
+  );
+  await expect(
+    rows(
+      `insert into memberships (org_id, user_id, role) values ('${mid.id}', '${bob.id}', 'member')`,
+    ),
+  ).rejects.toThrow(/NOT NULL constraint failed: memberships\.created_at/);
+  await expect(
+    rows(`insert into projects (id, slug, org_id) values ('prj_x', 'xray', '${mid.id}')`),
+  ).rejects.toThrow(/NOT NULL constraint failed: projects\.created_at/);
 });
 
 test("invitations: an owner creates a link — the record by id, never the hash — and lists the open ones; the holder previews the organization; a stranger or a member cannot create one or list them, nor create one already expired", async () => {

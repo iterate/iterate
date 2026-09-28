@@ -17,10 +17,10 @@ static const uint8_t iterate_kit_test_configuration_image[] = {
 };
 
 /*
- * AND ONE A BOARD IS FLASHED WITH, written by tools/make-config-image.py: a
- * project reference with no `prj_` prefix (`projects.get` also takes a slug),
- * and a key of the field's full 128 bytes. Refusing either is a board that
- * never dials and looks, from outside, dead.
+ * AND ONE A BENCH BOARD IS PROVISIONED WITH: a project reference with no `prj_`
+ * prefix (`projects.get` also takes a slug), and a key of the field's full 128
+ * bytes. Refusing either is a board that never dials and looks, from outside,
+ * dead.
  *
  * The key is 128 repeats of 'k', generated rather than pasted: 128 hand-copied
  * bytes prove nothing the repeat does not.

@@ -14,6 +14,7 @@ import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
 import { stateArtifact as prdFaultAlarmState } from "./prd-fault-alarm.ts";
 import { previewPaths } from "./preview-paths.ts";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
+import { renderWorkflowString } from "./workflow-expression.ts";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 /** What a test job's evidence artifacts end with: the job attempt's id (docs/depot-ci.md#artifacts-per-job-attempt). */
@@ -27,8 +28,6 @@ const afterTheSuite = "${{ always() && steps.suite.outcome != 'skipped' }}";
 const afterTheFinalizer =
   "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}";
 /** Where each test job's Doppler step saves _shared/preview's secrets for the evidence upload. */
-const dopplerFallback = "$RUNNER_TEMP/doppler-shared-preview";
-
 type WorkflowStep = {
   "continue-on-error"?: boolean;
   env?: Record<string, string>;
@@ -45,6 +44,10 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: {
+    group: string;
+    "cancel-in-progress": boolean;
+  };
   env?: Record<string, string>;
   if?: string;
   outputs?: Record<string, string>;
@@ -107,6 +110,7 @@ test.each(deploymentWorkflows)(
   ({ file, app }) => {
     const workflow = loadWorkflow(file);
 
+    // on the whole run: a pending run a newer one replaces never starts, so it posts nothing
     expect(workflow).toMatchObject({
       concurrency: { group: `deploy-${app}-production`, "cancel-in-progress": false },
     });
@@ -115,6 +119,51 @@ test.each(deploymentWorkflows)(
         expect.any(Number),
       );
     }
+  },
+);
+
+test.for([{ file: ".depot/workflows/test.yml" }, { file: ".depot/workflows/lint-typecheck.yml" }])(
+  "$file gives every main commit its own run and supersedes a PR branch's older run",
+  ({ file }) => {
+    const { concurrency } = loadWorkflow(file);
+    const group = (context: Record<string, string>) =>
+      renderWorkflowString(concurrency!.group, {
+        "github.head_ref": "",
+        "github.ref_name": "",
+        "github.run_id": "",
+        "github.sha": "",
+        ...context,
+      });
+    const mainPush = (sha: string, runId: string) =>
+      group({
+        "github.event_name": "push",
+        "github.ref_name": "main",
+        "github.sha": sha,
+        "github.run_id": runId,
+      });
+    const prPush = (sha: string, runId: string) =>
+      group({
+        "github.event_name": "pull_request",
+        "github.head_ref": "some-branch",
+        "github.ref_name": "3400/merge",
+        "github.sha": sha,
+        "github.run_id": runId,
+      });
+
+    // one group for all of main cancels the run in progress, or replaces the pending run, when the
+    // next merge lands: that merge commit then has no Test or Lint verdict at all
+    expect(mainPush("a1", "r1")).not.toBe(mainPush("b2", "r2"));
+    expect(concurrency!["cancel-in-progress"]).toBe(true);
+    expect(prPush("a1", "r1")).toBe(prPush("b2", "r2"));
+    // a soak's dispatches on one branch still supersede each other (docs/depot-ci.md#soak-n-runs-then-read-them)
+    const dispatch = (runId: string) =>
+      group({
+        "github.event_name": "workflow_dispatch",
+        "github.ref_name": "ci-soak/x",
+        "github.sha": "a1",
+        "github.run_id": runId,
+      });
+    expect(dispatch("r1")).toBe(dispatch("r2"));
   },
 );
 
@@ -214,23 +263,88 @@ test.each(
   deploymentWorkflows.filter(({ app }) =>
     ["os", "dash", "agents", "notes", "admin", "voice", "kit"].includes(app),
   ),
-)("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
+)("$file posts the deploy's own result as the deploy job's last two steps", ({ file, app }) => {
   const workflow = loadWorkflow(file);
   const steps = workflow.jobs.deploy?.steps || [];
+  // OS: a failed host check paged already, unless it ended before it could
+  const failed =
+    app === "os"
+      ? "steps.deploy.outcome != 'success' || (steps.check.outcome != 'success' && steps.check.outputs.paged != 'true')"
+      : "steps.deploy.outcome != 'success'";
 
   expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
-  expect(steps.at(-1)).toMatchObject({
-    name: "Notify Slack",
-    if: "${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
-    env: expect.objectContaining({
-      DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-      APP_DISPLAY_NAME: expect.any(String),
-      PUBLIC_URL: expect.stringMatching(/^https:\/\//),
-    }),
-    run: "pnpm tsx scripts/ci/notify.ts deploy-${{ steps.deploy.outcome == 'success' && 'success' || 'failure' }}",
-  });
+  // exact: success only when the whole job succeeded; any run on main, a dispatch too; a failed
+  // post never turns the deploy red
+  expect(steps.slice(-2)).toEqual([
+    {
+      name: "Post the deploy's line",
+      if: "${{ success() && github.ref == 'refs/heads/main' }}",
+      "continue-on-error": true,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+        GITHUB_TOKEN: "${{ github.token }}",
+        APP_DISPLAY_NAME: expect.any(String),
+      },
+      run: "node scripts/ci/notify.ts deploy-success",
+    },
+    {
+      name: "Page the failed deploy",
+      if: `\${{ always() && (${failed}) && github.ref == 'refs/heads/main' }}`,
+      "continue-on-error": true,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+        APP_DISPLAY_NAME: expect.any(String),
+        UPLOADED: "${{ steps.deploy.outcome }}",
+      },
+      run: "node scripts/ci/notify.ts deploy-failure",
+    },
+  ]);
 });
+
+test("each PR event's line posts from a job with no concurrency; the dashboard's job has it", () => {
+  const workflow = loadWorkflow(".depot/workflows/pr-dashboard.yml");
+
+  // a pending run a newer one replaces is cancelled: an event's line must never wait in a group
+  expect(workflow.concurrency).toBeUndefined();
+  expect(workflow.jobs.notify?.concurrency).toBeUndefined();
+  expect(workflow.jobs.notify?.steps?.at(-1)?.run).toBe("node scripts/ci/notify.ts pr-update");
+  expect(workflow.jobs.update_dashboard?.concurrency).toEqual({
+    group: "pr-dashboard",
+    "cancel-in-progress": false,
+  });
+  expect(
+    workflow.jobs.update_dashboard?.steps?.some((step) => step.run?.includes("notify.ts")),
+  ).toBe(false);
+});
+
+test.for([
+  {
+    file: ".depot/workflows/kit-firmware.yml",
+    failed: "contains(needs.*.result, 'failure')",
+    // a run that plans no release skips build and publish, and proves nothing
+    green: "needs.build-firmware.result == 'success' && needs.publish-firmware.result == 'success'",
+  },
+  {
+    file: ".depot/workflows/os-crash-hunt.yml",
+    failed: "needs.crash-hunt.result == 'failure'",
+    green: "needs.crash-hunt.result == 'success'",
+  },
+])(
+  "$file pages a red run on main and resolves the page on a green one",
+  ({ file, failed, green }) => {
+    const notify = loadWorkflow(file).jobs.notify;
+    const steps = notify?.steps || [];
+
+    expect(notify?.if).toBe("always() && github.ref == 'refs/heads/main'");
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-failure")?.if,
+    ).toBe(failed);
+    expect(
+      steps.find((step) => step.run === "node scripts/ci/notify.ts workflow-resolved")?.if,
+    ).toBe(green);
+  },
+);
 
 test("runs OS and Notes stateful proofs only against an isolated preview", () => {
   for (const { file } of deploymentWorkflows) {
@@ -284,6 +398,45 @@ test("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
   });
 
   expect([...new Set(secretReferences)]).toEqual(["DOPPLER_TOKEN"]);
+});
+
+// A secret in a step's shell is one `set -x` or stray echo from the job's log: each script reads its
+// own out of Doppler (scripts/lib/env-context.ts), and no step does. The one other form
+// (docs/depot-ci.md#secrets): the preview tooling and the suites against a deployment run under
+// `doppler run`, as a developer's terminal runs them. No step calls Doppler any other way.
+test("no step reads Doppler but to wrap the preview tooling or a suite against a deployment", () => {
+  const wrapper =
+    /^doppler run --project os --config [a-z0-9_-]+ -- pnpm (?:preview|e2e|e2e:run|e2e:soak|perf:run)(?=\s|$)/u;
+  const others = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(/\bdoppler\b.*/gu)]
+      .filter(([command]) => !wrapper.test(command))
+      .map(([command]) => `${where}: ${command}`),
+  );
+  expect(others).toEqual([]);
+});
+
+/** A command that runs TypeScript through tsx or the trpc-cli bin: bare, `pnpm`, `pnpm exec` or `npx`. */
+const tsxOrTrpcCli = /(?:^|[\s;&|(])((?:pnpm\s+(?:exec\s+)?|npx\s+)?(?:tsx|trpc-cli)\b.*)/gmu;
+
+// A step runs TypeScript with `node <file>.ts` (docs/depot-ci.md#editing-workflows). The root has no
+// tsx or trpc-cli bin, so a step that calls one fails only when it runs: for a scheduled or
+// dispatched workflow, no pull request would see it.
+test("no step runs TypeScript through tsx or the trpc-cli bin", () => {
+  const runners = everyStepRun().flatMap(({ where, run }) =>
+    [...run.matchAll(tsxOrTrpcCli)].map(([, command]) => `${where}: ${command}`),
+  );
+  expect(runners).toEqual([]);
+});
+
+// A package script runs TypeScript as CI does, with `node <file>.ts`, so `pnpm run deploy` on a
+// laptop and the deploy step run the same thing.
+test("no package script runs TypeScript through tsx or the trpc-cli bin", () => {
+  const runners = [".", ...workspaceDirectories].flatMap((directory) =>
+    Object.entries(readPackageJson(directory).scripts ?? {}).flatMap(([name, script]) =>
+      [...script.matchAll(tsxOrTrpcCli)].map(([, command]) => `${directory} ${name}: ${command}`),
+    ),
+  );
+  expect(runners).toEqual([]);
 });
 
 test("uses only GitHub's job-scoped token for GitHub API calls", () => {
@@ -451,15 +604,15 @@ test("every job that records flakes uploads its test evidence to R2, where the f
     ).toBe(true);
 });
 
-test("the flake dashboard takes the iterate GitHub App from os/prd's APP_CONFIG, its one home, and never runs on a pull request or push", () => {
+// The dashboard's writer reads the App's key out of os/prd's APP_CONFIG, its one home
+// (scripts/ci/flake-dashboard/update.ts).
+test("the flake dashboard, which holds the iterate GitHub App's key, never runs on a pull request or push", () => {
   const dashboard = loadWorkflow(".depot/workflows/flake-dashboard.yml");
   const recompute = Object.values(dashboard.jobs)
     .flatMap((job) => job.steps || [])
     .find((step) => step.run?.includes("scripts/ci/flake-dashboard/update.ts"));
 
-  expect(recompute?.run).toContain(
-    'APP_CONFIG="$(doppler secrets get APP_CONFIG --plain --project os --config prd)"',
-  );
+  expect(recompute).toBeDefined();
   expect(
     depotWorkflowFiles.filter((file) =>
       /\bGITHUB_APP_(ID|PRIVATE_KEY)\b/.test(readFileSync(resolve(repoRoot, file), "utf8")),
@@ -1222,22 +1375,15 @@ test.each([
       if: expect.stringContaining("always()"),
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
-      run: expect.stringContaining(
-        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" "\${offline[@]}" -- node scripts/ci/test-evidence.ts upload`,
-      ),
+      run: "node scripts/ci/test-evidence.ts upload",
     });
-    // the prefetch's placement and the upload's offline read (docs/test-evidence.md#what-ci-does)
-    expect(upload?.run).toContain(
-      `if [ -s "${dopplerFallback}" ]; then offline=(--fallback-only); fi`,
-    );
+    // the prefetch's placement, whose file the upload reads offline (docs/test-evidence.md#what-ci-does)
     const prefetch = steps.find((step) => step.name === "Fetch the evidence upload's secrets");
     expect(prefetch, `${file} must save _shared/preview before its tests end`).toMatchObject({
       "continue-on-error": true,
       "timeout-minutes": expect.any(Number),
       env: { DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}" },
-      run: expect.stringContaining(
-        `doppler run --project _shared --config preview --fallback "${dopplerFallback}" -- true ||`,
-      ),
+      run: "node scripts/ci/test-evidence.ts fetch-upload-secrets",
     });
     expect(steps.indexOf(prefetch!)).toBeLessThan(steps.indexOf(write!));
     const testsBlock = readWorkflow(file).jobs[jobId]?.steps?.find((step) =>
@@ -1499,7 +1645,7 @@ test.for([
   { file: ".depot/workflows/test.yml", jobIds: ["test"] },
   { file: ".depot/workflows/lint-typecheck.yml", jobIds: ["lint-typecheck"] },
   { file: ".depot/workflows/loc-report.yml", jobIds: ["loc-report"] },
-  { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["update_dashboard"] },
+  { file: ".depot/workflows/pr-dashboard.yml", jobIds: ["notify", "update_dashboard"] },
   { file: ".depot/workflows/kit-firmware.yml", jobIds: ["plan-firmware", "build-firmware"] },
 ])(
   "$file checks out the run's own commit, the tree its workflow file was read from",
@@ -1534,6 +1680,17 @@ test("labels unit artifacts with the pull-request head, whose merge commit the j
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
   });
 });
+
+/** Every step's `run` in every workflow, named by its file, job and step. */
+function everyStepRun() {
+  return depotWorkflowFiles.flatMap((file) =>
+    Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
+      (job.steps || []).flatMap((step) =>
+        step.run ? [{ where: `${file} ${jobId}: ${step.name}`, run: step.run }] : [],
+      ),
+    ),
+  );
+}
 
 /** A workflow as its jobs run it: each `parallel:` block's steps stand where the block does. */
 function loadWorkflow(file: string): Workflow {

@@ -51,7 +51,7 @@ type Range = { after: number; through: number };
 const SRC_LEDGER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export class Ledger extends WorkerEntrypoint {
   processEventBatch(events, range) {
     return withItx(this.env.ITX, async (itx) => {
@@ -600,7 +600,7 @@ const haltFactsFor = async (itx: any, name: string): Promise<any[]> =>
 const HOOKED_SOURCE = (hook: string) => ({
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 export default class Hooked extends WorkerEntrypoint {
   processEventBatch(events, range) {
     return withItx(this.env.ITX, (itx) => itx.${hook}.deliver(events, range));

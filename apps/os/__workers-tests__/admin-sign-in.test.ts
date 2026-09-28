@@ -10,7 +10,8 @@ import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
 import worker from "../src/worker.ts";
-import { platformAddressesOf } from "../src/app-config.ts";
+import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "../src/app-config.ts";
+import { signClaims, verifyClaims } from "../src/caller.ts";
 import { authorizationForToken } from "../src/oauth.ts";
 import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import { authorizationRequest, call, helpers, issuerApprover } from "./oauth-support.ts";
@@ -112,21 +113,44 @@ test("anyone the issuer vouches for but the preview's admins lands back on the s
   });
 });
 
-test("a callback without the flow's cookie — another browser, or a forged one — signs nobody in", async () => {
+test("a callback without the flow's cookie — another browser, a forged one, or another claim set the same secret signs — signs nobody in", async () => {
   bothOriginsReachable();
   const started = await startSignIn("/login");
   const authorize = new URL(started.headers.get("location")!);
   const approver = await approverFor("boss@admins.test");
   const approval = await approver.consent.approve({ query: authorize.search, projects: [] });
   const back = (approval as { redirectTo: string }).redirectTo;
-  for (const cookie of ["", `${FLOW_COOKIE}=forged.signature`]) {
+  // the flow's claims, signed like every platform claim set, apart from the others by their kind
+  const secret = await sessionSigningSecretOf(appConfigOf(previewEnv));
+  const flow = (await verifyClaims(
+    cookieOf(started, FLOW_COOKIE).slice(`${FLOW_COOKIE}=`.length),
+    secret,
+  )) as Record<string, unknown>;
+  expect(flow).toMatchObject({ kind: "admin-sign-in", next: "/login" });
+  const identityFlow = cookieOf(
+    await previewFetch(`${PREVIEW}/.auth/identity/github?next=%2Flogin`, ""),
+    "__Host-itx-github-identity-flow",
+  ).slice("__Host-itx-github-identity-flow=".length);
+  for (const cookie of [
+    "",
+    `${FLOW_COOKIE}=forged.signature`,
+    // a sign-in's own flow cookie, which the same secret signed
+    `${FLOW_COOKIE}=${identityFlow}`,
+    // this flow's claims under a sign-in's kind
+    `${FLOW_COOKIE}=${await signClaims({ ...flow, kind: "identity-login" }, secret)}`,
+  ]) {
     const refused = await previewFetch(back, cookie);
-    expect(refused).toMatchObject({ status: 303 });
+    expect(refused, cookie).toMatchObject({ status: 303 });
     expect(new URL(refused.headers.get("location")!, PREVIEW).searchParams.get("error")).toMatch(
       /expired or began in another browser/,
     );
     expect(refused.headers.getSetCookie().join()).not.toContain("__Host-itx-session=");
   }
+  // the same claims under their own kind, signed again, sign the admin in: the rows above were
+  // refused for their kind and shape alone
+  const landed = await previewFetch(back, `${FLOW_COOKIE}=${await signClaims(flow, secret)}`);
+  expect(landed, await landed.clone().text()).toMatchObject({ status: 302 });
+  expect(landed.headers.get("location")).toBe("/login");
 });
 
 test("a project's app on the preview's origin is never handed the flow's cookie, and cannot set one", async () => {

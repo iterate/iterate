@@ -515,7 +515,7 @@ function firmwareRepository() {
   };
 }
 
-/** targets/common/partitions-16mb-model.csv as gen_esp32part.py writes it: entries, the MD5 row, FF. */
+/** targets/common/partitions-16mb.csv as gen_esp32part.py writes it: entries, the MD5 row, FF. */
 function havpeTable() {
   const entries = [
     { label: "nvs", type: 0x01, subtype: 0x02, offset: 0x9000, size: 0x6000 },

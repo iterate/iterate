@@ -1,5 +1,4 @@
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../common/partitions-16mb.csv"
-CONFIG_IDF_TARGET="esp32s3"
 
 # CoreS3 uses 16 MB QIO flash and quad 80 MHz PSRAM. DSP state belongs in
 # PSRAM where the library permits it; DMA queues and ISR-visible chunks remain
@@ -27,11 +26,6 @@ CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
-# Atomic publication in PSRAM must never fetch the workaround from flash while
-# the cache is disabled. The final ELF audit separately verifies our callback
-# and raw-copy call graph; this option closes ESP-IDF's documented S3 atomic
-# erratum path rather than relying on whichever default the SDK picks.
-CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y
 CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n
 
 #

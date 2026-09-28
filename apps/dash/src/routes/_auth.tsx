@@ -16,7 +16,6 @@ import {
 import { ArrowLeft, KeyRound, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { z } from "zod";
-import { createIterateClient } from "iterate/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   DropdownMenuGroup,
@@ -29,13 +28,11 @@ import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";
 import { ProjectNav, TopLevelNav } from "../components/dash-nav.tsx";
 import { OrganizationTree, useOrganizationTree } from "../components/organization-tree.tsx";
 import { projectHostOf } from "../lib/origins.ts";
-import { dashScopes } from "../lib/scopes.ts";
-
-const iterate = createIterateClient({ scopes: dashScopes });
+import { iterateClient } from "../lib/iterate-client.ts";
 
 export const Route = createFileRoute("/_auth")({
   ssr: false,
-  beforeLoad: ({ location }) => iterate.authenticate(location.href),
+  beforeLoad: ({ location }) => iterateClient.authenticate(location.href),
   // which issuer this browser is connected to (the gate's `/.auth/session.json`): the shell says
   // so whenever it is not the deployment's own, so a person can tell their self-host from ours;
   // a gate that does not answer leaves the label off

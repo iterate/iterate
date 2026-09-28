@@ -7,12 +7,12 @@
     "build": "vite build",
     "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "vitest run",
-    "deploy": "tsx scripts/app.ts deploy",
-    "ensure-resources": "tsx scripts/app.ts ensure-resources",
-    "routes:generate": "tsx scripts/app.ts generate-route-tree",
-    "routes:check": "tsx scripts/app.ts generate-route-tree --check",
-    "voice:call": "tsx scripts/voice-call.ts",
-    "voice:board": "tsx scripts/voice-board.ts"
+    "deploy": "node scripts/app.ts deploy",
+    "ensure-resources": "node scripts/app.ts ensure-resources",
+    "routes:generate": "node scripts/app.ts generate-route-tree",
+    "routes:check": "node scripts/app.ts generate-route-tree --check",
+    "voice:call": "node scripts/voice-call.ts",
+    "voice:board": "node scripts/voice-board.ts"
   },
   "dependencies": {
     "@codemirror/state": "catalog:",
@@ -44,7 +44,6 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "trpc-cli": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:",

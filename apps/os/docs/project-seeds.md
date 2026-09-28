@@ -184,9 +184,10 @@ every seed with the same `--organization` and `--owners` as the first run, then
 The erase refuses shared data resources while another worker still binds them,
 and refuses preview parents with multiple namespaces for a class. Retire any
 confirmed predecessor's writers before erasing shared stores. The worker identity
-and routes remain; Durable Objects, the control plane's D1 rows, both KV stores, R2 objects
-and Artifacts repositories are emptied and verified. Deploy normally before applying
-seeds. No seed command erases or deploys anything implicitly.
+and routes remain; Durable Objects, both KV stores, R2 objects and Artifacts repositories
+are emptied and verified, and the control plane's D1 loses its schema and migration
+history. The deploy after the erase migrates the D1 from nothing; deploy normally before
+applying seeds. No seed command erases or deploys anything implicitly.
 
 Artifacts deletes a repository asynchronously: its name stays taken for a while after
 the erase has verified the namespace empty. A config repo created meanwhile waits up to

@@ -421,13 +421,9 @@ function Members({
                     </TableCell>
                     <TableCell className="text-muted-foreground">{member.role}</TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground tabular-nums">
-                      {member.createdAt ? (
-                        <time dateTime={new Date(member.createdAt).toISOString()}>
-                          {dateOf(member.createdAt)}
-                        </time>
-                      ) : (
-                        <span title="Joined before joining dates were recorded">—</span>
-                      )}
+                      <time dateTime={new Date(member.createdAt).toISOString()}>
+                        {dateOf(member.createdAt)}
+                      </time>
                     </TableCell>
                     {canManage ? (
                       <TableCell className="text-right">

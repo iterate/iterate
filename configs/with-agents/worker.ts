@@ -1,5 +1,6 @@
 import { installAgents } from "@iterate-com/agents/install";
-import { ConfigWorker, z, type ConfigEventArgs } from "iterate/sdk";
+import { ConfigWorker, type ConfigEventArgs } from "iterate/sdk";
+import { z } from "zod";
 
 const CommitCompleted = z.object({
   path: z.string(),

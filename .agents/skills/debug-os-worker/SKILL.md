@@ -18,7 +18,7 @@ outcome held.
 Never type a worker or account name from memory, because workers get renamed. Print them:
 
 ```sh
-pnpm exec tsx -e 'import("./envs.ts").then((m) => console.log(m.osEnvs.prd.workerName, m.PRD_ACCOUNT_ID, m.osEnvs.preview.workerName, m.PREVIEW_AND_DEV_ACCOUNT_ID))'
+node -e 'import("./envs.ts").then((m) => console.log(m.osEnvs.prd.workerName, m.PRD_ACCOUNT_ID, m.osEnvs.preview.workerName, m.PREVIEW_AND_DEV_ACCOUNT_ID))'
 ```
 
 | Target            | `$metadata.service` in Workers Logs             | Credentials (`doppler run --project os --config …`) |
@@ -38,8 +38,7 @@ Logs. The dashboard is `https://dash.cloudflare.com/<account id>/workers-and-pag
 15 minutes. Replay any half hour without posting:
 
 ```sh
-doppler run --project os --config prd -- \
-  pnpm tsx scripts/ci/prd-fault-alarm.ts run --dry-run --at 2026-09-23T07:30:00Z
+node scripts/ci/prd-fault-alarm.ts run --dry-run --at 2026-09-23T07:30:00Z
 ```
 
 It prints three grouped counts for the window, and each one is the next thing to open:

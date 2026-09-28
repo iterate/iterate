@@ -5,8 +5,10 @@
 #include "rlcd_display.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "iterate/kit/capabilities/screen.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -44,24 +46,6 @@ static const struct { uint8_t command, length, data[10]; uint16_t wait_ms; } ini
   {0x29, 0, {0}, 0},
 };
 
-/* A small uppercase 5x7 font keeps this monochrome status panel independent
- * of a UI framework. Each byte is one column, least significant bit at top. */
-static const uint8_t letters[26][5] = {
- {0x7e,0x11,0x11,0x11,0x7e},{0x7f,0x49,0x49,0x49,0x36},
- {0x3e,0x41,0x41,0x41,0x22},{0x7f,0x41,0x41,0x22,0x1c},
- {0x7f,0x49,0x49,0x49,0x41},{0x7f,0x09,0x09,0x09,0x01},
- {0x3e,0x41,0x49,0x49,0x7a},{0x7f,0x08,0x08,0x08,0x7f},
- {0,0x41,0x7f,0x41,0},{0x20,0x40,0x41,0x3f,0x01},
- {0x7f,0x08,0x14,0x22,0x41},{0x7f,0x40,0x40,0x40,0x40},
- {0x7f,0x02,0x0c,0x02,0x7f},{0x7f,0x04,0x08,0x10,0x7f},
- {0x3e,0x41,0x41,0x41,0x3e},{0x7f,0x09,0x09,0x09,0x06},
- {0x3e,0x41,0x51,0x21,0x5e},{0x7f,0x09,0x19,0x29,0x46},
- {0x46,0x49,0x49,0x49,0x31},{0x01,0x01,0x7f,0x01,0x01},
- {0x3f,0x40,0x40,0x40,0x3f},{0x1f,0x20,0x40,0x20,0x1f},
- {0x3f,0x40,0x38,0x40,0x3f},{0x63,0x14,0x08,0x14,0x63},
- {0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43},
-};
-
 static bool send_bytes(bool data, const void *bytes, size_t length) {
   if (gpio_set_level(5, data) != ESP_OK) return false;
   spi_transaction_t transfer = {.length = length * 8, .tx_buffer = bytes};
@@ -89,30 +73,13 @@ bool rlcd_display_start(void) {
   return true;
 }
 
-static void text_line(const char *text, unsigned y, unsigned scale) {
-  const size_t length = strlen(text);
-  if (length * 6 * scale > 400 || y + 7 * scale > 300) return;
-  unsigned x = (400 - length * 6 * scale) / 2;
-  for (; *text; ++text, x += 6 * scale) {
-    if (*text < 'A' || *text > 'Z') continue;
-    for (unsigned col = 0; col < 5; ++col) for (unsigned row = 0; row < 7; ++row) {
-      if (!(letters[*text - 'A'][col] & (1 << row))) continue;
-      for (unsigned dy = 0; dy < scale; ++dy) for (unsigned dx = 0; dx < scale; ++dx) {
-        const unsigned px = x + col * scale + dx, py = 299 - (y + row * scale + dy);
-        frame[(px / 2) * 75 + py / 4] |= 1 << (7 - ((py % 4) * 2 + px % 2));
-      }
-    }
-  }
-}
+_Static_assert((int)RLCD_DISPLAY_BITMAP_BYTES == (int)ITERATE_KIT_SCREEN_STATUS_BYTES,
+               "the shared status text is drawn at this panel's size");
+EXT_RAM_BSS_ATTR static uint8_t text[RLCD_DISPLAY_BITMAP_BYTES];
 
 bool rlcd_display_show(const char *title, const char *status) {
-  if (!panel) return false;
-  memset(frame, 0, sizeof(frame));
-  text_line("ITERATE", 32, 3);
-  text_line(title, 100, 4);
-  text_line(status, 190, 2);
-  const uint8_t command = 0x2c;
-  return send_bytes(false, &command, 1) && send_bytes(true, frame, sizeof(frame));
+  iterate_kit_screen_draw_status(text, title, status);
+  return rlcd_display_show_bitmap(text, sizeof(text));
 }
 
 bool rlcd_display_show_bitmap(const uint8_t *bitmap, size_t length) {

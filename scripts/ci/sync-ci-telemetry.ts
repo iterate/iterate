@@ -2,8 +2,8 @@
  * THE CI TELEMETRY SYNC (`.depot/workflows/ci-telemetry.yml`, hourly): one PostHog event per Depot
  * workflow run and one per job attempt, saying which workflow and job ran for which pull request,
  * branch and commit, on which runner size, how long it queued and ran, and how it ended. Nothing per
- * test: per-test events were over 70% of the PostHog project's ingestion when #2494 cut delivery to
- * zero, and test data stays in the Depot artifacts (docs/ci-test-telemetry.md).
+ * test, which was over 70% of the PostHog project's ingestion: test data stays in the Depot
+ * artifacts (docs/ci-test-telemetry.md).
  *
  * A schedule rather than a last step in every workflow: a step inside a workflow cannot see that
  * workflow's own outcome or duration, a cancelled workflow skips it, and it would boot one more
@@ -21,17 +21,17 @@
  * still succeeds, so the next one starts after it. Event UUIDs derive from Depot's execution and
  * attempt IDs, so PostHog deduplicates an overlapping replay (`--since`).
  *
- *   DEPOT_CI_TELEMETRY_TOKEN=… GITHUB_TOKEN="$(gh auth token)" \
- *     pnpm tsx scripts/ci/sync-ci-telemetry.ts --dry-run --since 2026-09-24T00:00:00Z
+ *   GITHUB_TOKEN="$(gh auth token)" \
+ *     node scripts/ci/sync-ci-telemetry.ts --dry-run --since <ISO time>
  */
 import { readFile, readdir } from "node:fs/promises";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { DEPOT_ORG, depotCiApi } from "@iterate-com/shared/depot-api";
+import { DEPOT_ORG } from "@iterate-com/shared/depot-api";
 import { osEnvs } from "../../envs.ts";
-import { mapConcurrent } from "./depot.ts";
+import { depotApi, mapConcurrent } from "./depot.ts";
 import { createOctokit } from "./github.ts";
 import { durationMs, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 import { testEvidenceJobs, testEvidenceUploadedPrefix } from "./test-evidence.ts";
@@ -56,15 +56,11 @@ export default async function syncCiTelemetry(
     until?: string;
   } = {},
 ) {
-  const depotToken = z
-    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
-    .min(1)
-    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
   const githubToken = z
     .string({ error: "GITHUB_TOKEN is required" })
     .min(1)
     .parse(process.env.GITHUB_TOKEN);
-  const depot = (method: string, body: object) => depotCiApi(method, body, depotToken);
+  const depot = depotApi();
 
   const requested = values.since
     ? {

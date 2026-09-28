@@ -14,7 +14,8 @@ resource leaks.
   durable explanation of what happened. A workaround that heals a platform
   fault logs a warn whose `event` is `<area>.platform-failure-<action>`: the
   [prd fault alarm](../scripts/ci/prd-fault-alarm.ts) pages on bursts of those,
-  on any os-prd 5xx, and on error bursts. Retries follow one policy:
+  on any 5xx a first-party prd Worker answered a visitor, and on errors.
+  Retries follow one policy:
   [Failures and retries](#failures-and-retries).
 - A workaround for an upstream defect (a library, Cloudflare, a vendor) stays
   only while a [`createFailing`](testing.md#pinned-bugs-createfailingtest--not-bare-testfails)
@@ -42,19 +43,21 @@ kind (`failureKind` in
 [platform-retry.ts](../packages/shared/src/platform-retry.ts)), and the kind
 rides on as own properties, which Workers RPC and capnweb keep.
 
-| Kind           | Recognized by                                                                                                                                                                        | Repeated                                                                                                                                          | Answered as            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| `refused`      | a `code` from iterate/lib's `ErrorCode`                                                                                                                                              | never                                                                                                                                             | 4xx or a typed answer  |
-| `deploy-reset` | "reset because its code was updated" (a Durable Object's or D1's)                                                                                                                    | once, at once, on a fresh stub, if idempotent                                                                                                     | 503, `Retry-After: 1`  |
-| `disconnected` | workerd's `retryable: true`; a storage reset; D1's documented transient errors; an HTTP 5xx or dropped connection; Artifacts 10400; Browser Run 6002 on inline HTML                  | once at once on a fresh stub (RPC), once a second later (an upstream API), or on a script's schedule (`CI_HTTP`, `CLOUDFLARE_API`), if idempotent | 503, `Retry-After: 1`  |
-| `overloaded`   | workerd's `overloaded: true` (a storage timeout, a memory limit); D1's overload, or workerd's opaque "internal error; reference = …" on a D1 call; HTTP 429 or 408; our own deadline | never at once: only a durable ladder, or the caller after `Retry-After`                                                                           | 503, `Retry-After: 10` |
-| `failed`       | anything else, our own defects and workerd's opaque internal error on any other call included                                                                                        | never, except a named workaround with a pin                                                                                                       | 500, and `reportIssue` |
+| Kind           | Recognized by                                                                                                                                                                                                                             | Repeated                                                                                                                                          | Answered as            |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| `refused`      | a `code` from iterate/lib's `ErrorCode`                                                                                                                                                                                                   | never                                                                                                                                             | 4xx or a typed answer  |
+| `deploy-reset` | "reset because its code was updated" (a Durable Object's or D1's)                                                                                                                                                                         | once, at once, on a fresh stub, if idempotent                                                                                                     | 503, `Retry-After: 1`  |
+| `disconnected` | workerd's `retryable: true`; a storage reset; D1's documented transient errors; an HTTP 5xx or dropped connection; Artifacts 10400; Browser Run 6002 on inline HTML; Cloudflare's own not-found for a workers.dev hostname not routed yet | once at once on a fresh stub (RPC), once a second later (an upstream API), or on a script's schedule (`CI_HTTP`, `CLOUDFLARE_API`), if idempotent | 503, `Retry-After: 1`  |
+| `overloaded`   | workerd's `overloaded: true` (a storage timeout, a memory limit); D1's overload, or workerd's opaque "internal error; reference = …" on a D1 call; HTTP 429 or 408; our own deadline                                                      | never at once: only a durable ladder, or the caller after `Retry-After`                                                                           | 503, `Retry-After: 10` |
+| `failed`       | anything else, our own defects and workerd's opaque internal error on any other call included                                                                                                                                             | never, except a named workaround with a pin                                                                                                       | 500, and `reportIssue` |
 
 - **Idempotency decides whether a call is repeated; the kind decides when.**
   Idempotent means a read, an append whose every event is durable and keyed, a
   `processors.enable`, a GET or HEAD with no body, or a script's call on a
   method that names its whole end state. A request answered 429 was refused
-  unrun, so a script sends it again whatever its method. `contextStub`
+  unrun, so a script sends it again whatever its method, and so does the e2e
+  transport with one Cloudflare answered not routed yet (`isNotRoutedYet`,
+  [not-routed.ts](../apps/os/e2e/support/not-routed.ts)). `contextStub`
   ([context-stub.ts](../apps/os/src/context-stub.ts)) applies this to every
   call the platform makes on a context Durable Object, whichever hop makes it.
 - **Schedules come from one short list**: `ONCE_NOW`, `UPSTREAM_ONCE`,

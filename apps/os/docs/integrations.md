@@ -118,8 +118,8 @@ is still signed in to the issuer as them, after Google's consent screen when it 
 another account of that provider. `session.info().signInProviders` says which providers can be
 added. It keeps the token as a sign-in does, and the person stays signed in as they were, back on
 `next` (`?error=` when refused). Their email never changes, then or on a later sign-in with the
-added account (the D1 trigger `users_email_kept_by_added_sign_in` refuses the write from anything,
-an older platform version among them), and `login.allowedEmails` asks nothing of the added account's
+added account (the one email write, queries/users.sql `updateUserEmail`, refuses it in its `where`),
+and `login.allowedEmails` asks nothing of the added account's
 own address; signing in with it later is an ordinary sign-in, which does.
 
 A project uses a member's own account when they connect it there, on the project's root:

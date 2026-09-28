@@ -494,36 +494,40 @@ test("a run that crossed a line does not raise the line the next run is judged b
   ).toMatchObject({ baseline: 10_000, regressionLine: 30_000, regressed: true });
 });
 
-test("a metric turns red when it crossed in two runs in a row, and pages once", () => {
+test("a metric turns red when it crossed in two runs in a row: the page opens, escalates when another turns, then is edited", () => {
   const empty: LatencyMemory = { runs: [], red: [] };
   const first = transition({
     state: empty,
     readings: [],
     run: stateRun("r1", ["sign-in"]),
   });
-  expect(first).toMatchObject({ page: null, turnedRed: [], next: { red: [] } });
+  expect(first).toMatchObject({ action: null, turnedRed: [], next: { red: [] } });
   const second = transition({
     state: first.next,
     readings: [],
     run: stateRun("r2", ["sign-in", "mcp.call"]),
   });
-  expect(second).toMatchObject({ page: "red", turnedRed: ["sign-in"], next: { red: ["sign-in"] } });
+  expect(second).toMatchObject({
+    action: "post",
+    turnedRed: ["sign-in"],
+    next: { red: ["sign-in"], signal: { state: "red", since: "abc", runs: 1 } },
+  });
   const third = transition({
     state: second.next,
     readings: [],
     run: stateRun("r3", ["sign-in", "mcp.call"]),
   });
   expect(third).toMatchObject({
-    page: "red",
+    action: "escalate",
     turnedRed: ["mcp.call"],
-    next: { red: ["sign-in", "mcp.call"] },
+    next: { red: ["sign-in", "mcp.call"], signal: { runs: 2 } },
   });
   const fourth = transition({
     state: third.next,
     readings: [],
     run: stateRun("r4", ["sign-in", "mcp.call"]),
   });
-  expect(fourth).toMatchObject({ page: null, turnedRed: [], cleared: [] });
+  expect(fourth).toMatchObject({ action: "edit", turnedRed: [], cleared: [] });
 });
 
 test("a run whose row broke neither breaks a streak of crossings nor completes one", () => {
@@ -534,33 +538,46 @@ test("a run whose row broke neither breaks a streak of crossings nor completes o
     readings: [],
     run: stateRun("r2", [], ["mcp.call"]),
   });
-  expect(broken).toMatchObject({ page: null, next: { red: [] } });
+  expect(broken).toMatchObject({ action: null, next: { red: [] } });
   const again = transition({ state: broken.next, readings: [], run: stateRun("r3", ["sign-in"]) });
-  expect(again).toMatchObject({ page: "red", turnedRed: ["sign-in"] });
+  expect(again).toMatchObject({ action: "post", turnedRed: ["sign-in"] });
 });
 
-test("a red metric clears after two measured runs under its lines; green pages once nothing is red", () => {
+test("a red metric clears after two measured runs under its lines; the page resolves once nothing is red", () => {
   const red: LatencyMemory = {
     runs: [stateRun("r1", ["sign-in", "mcp.call"]), stateRun("r2", ["sign-in", "mcp.call"])],
     red: ["sign-in", "mcp.call"],
+    signal: { state: "red", since: "abc", runs: 1, failures: ["sign-in", "mcp.call"] },
   };
   const both = ["sign-in", "mcp.call"] as const;
   const once = transition({ state: red, readings: [], run: stateRun("r3", [], [...both]) });
-  expect(once).toMatchObject({ page: null, cleared: [], next: { red: ["sign-in", "mcp.call"] } });
+  expect(once).toMatchObject({
+    action: "edit",
+    cleared: [],
+    next: { red: ["sign-in", "mcp.call"] },
+  });
   // sign-in unmeasured (its row broke): it neither clears nor stays over
   const partly = transition({
     state: once.next,
     readings: [],
     run: stateRun("r4", [], ["mcp.call"]),
   });
-  expect(partly).toMatchObject({ page: null, cleared: ["mcp.call"], next: { red: ["sign-in"] } });
+  expect(partly).toMatchObject({
+    action: "edit",
+    cleared: ["mcp.call"],
+    next: { red: ["sign-in"] },
+  });
   // under again: with r3, its last measured run, that is two in a row
   const green = transition({
     state: partly.next,
     readings: [],
     run: stateRun("r5", [], [...both]),
   });
-  expect(green).toMatchObject({ page: "green", cleared: ["sign-in"], next: { red: [] } });
+  expect(green).toMatchObject({
+    action: "resolve",
+    cleared: ["sign-in"],
+    next: { red: [], signal: { state: "green" } },
+  });
 });
 
 test("the state keeps the newest 20 runs", () => {
@@ -595,67 +612,79 @@ test("a run is remembered by each measured metric's median, what crossed, and wh
 
 test.for([
   {
-    name: "red says which line each metric crossed, and what is still red",
-    page: "red" as const,
+    name: "a page says which line each red metric crossed, and since when",
+    kind: "edit" as const,
     expected: {
-      tone: "red",
-      headline: "latency over its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      details: [
-        "*rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180",
-        "still red: sign-in",
-      ],
-      link: "https://depot.dev/run",
+      signal: "latency",
+      kind: "edit",
+      page: {
+        what: "latency over its lines at `3b6b1c8b0` (A &lt;change&gt;)",
+        impact:
+          "*rules.300.newest* median 170 ms: over its budget of 150 ms (baseline 21 ms, 8.1×); n=3, max 180; sign-in: not measured; red since `abcdef`, 2 runs",
+        action: "fix or revert the change that slowed rules.300.newest, sign-in",
+        link: "https://depot.dev/run",
+      },
     },
   },
   {
-    name: "green",
-    page: "green" as const,
+    name: "an escalation names the metric that just turned",
+    kind: "escalate" as const,
     expected: {
-      tone: "green",
-      headline: "latency back under its lines at `3b6b1c8b0` (A &lt;change&gt;)",
-      details: [
-        "rules.300.newest median 170 ms (budget 150, baseline 21 ms, 8.1×)",
-        "still red: sign-in",
-      ],
-      link: "https://depot.dev/run",
+      kind: "escalate",
+      news: "latency: rules.300.newest over its lines too at `3b6b1c8b0` (A &lt;change&gt;)",
+      broadcast: false,
     },
   },
-])("the page, $name", ({ page, expected }) => {
+  {
+    name: "a resolution names what came back",
+    kind: "resolve" as const,
+    expected: {
+      signal: "latency",
+      kind: "resolve",
+      why: "latency back under its lines at `3b6b1c8b0` (A &lt;change&gt;); rules.300.newest median 170 ms (budget 150, baseline 21 ms, 8.1×)",
+    },
+  },
+])("$name", ({ kind, expected }) => {
   const history = Array.from({ length: 5 }, (_, i) => ({
     ...stateRun(`r${i}`, []),
     judged: { "rules.300.newest": 21 },
   }));
   expect(
     renderPage({
-      page,
+      kind,
       readings: judgeRun({
         samples: { "rules.300.newest": [160, 170, 180] },
         history,
       }),
-      metrics: ["rules.300.newest"],
-      stillRed: ["sign-in"],
+      red: ["rules.300.newest", "sign-in"],
+      turnedRed: ["rules.300.newest"],
+      cleared: ["rules.300.newest"],
+      signal: { state: "red", since: "abcdef", runs: 2, failures: ["sign-in", "rules.300.newest"] },
       commit: { sha: "3b6b1c8b0aaaaaaa", subject: "A <change>" },
       runUrl: "https://depot.dev/run",
     }),
-  ).toEqual(expected);
+  ).toMatchObject(expected);
 });
 
 test("a rate's page line says it fell under its budget, and its lowest round", () => {
   expect(
     renderPage({
-      page: "red",
+      kind: "post",
       readings: judgeRun({
         samples: { "push.flood.throughput": [600, 800, 900] },
         history: [],
       }),
-      metrics: ["push.flood.throughput"],
-      stillRed: [],
+      red: ["push.flood.throughput"],
+      turnedRed: ["push.flood.throughput"],
+      cleared: [],
+      signal: { state: "red", since: "abc", runs: 1, failures: ["push.flood.throughput"] },
       commit: { sha: "3b6b1c8b0aaaaaaa", subject: "A change" },
     }),
   ).toMatchObject({
-    details: [
-      "*push.flood.throughput* median 800 events/s: under its budget of 1,000 events/s (no baseline yet); n=3, min 600",
-    ],
+    page: {
+      impact:
+        "*push.flood.throughput* median 800 events/s: under its budget of 1,000 events/s (no baseline yet); n=3, min 600",
+    },
   });
 });
 

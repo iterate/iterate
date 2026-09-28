@@ -4,6 +4,8 @@
 if(NOT DEFINED PROJECT_VER)
   set(PROJECT_VER "dev")
 endif()
+# Every target's SDK defaults: these shared ones, then the target's own.
+set(SDKCONFIG_DEFAULTS "${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults;sdkconfig.defaults")
 set(ITERATE_KIT_FIRMWARE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 list(APPEND EXTRA_COMPONENT_DIRS
   "${ITERATE_KIT_FIRMWARE_ROOT}/platforms/iterate_esp_idf/components/board"

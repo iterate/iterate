@@ -13,7 +13,7 @@ or not. `withItx` releases those before its caller sees them.
 the context is evicted. Releasing the scope in a `finally` is not enough: the calls made through it
 stay open. `withItx` makes one round trip and then releases the scope, every call made through it,
 and every handle it awaited, with the calls made on that handle
-([record-pipelined-steps.ts](../../packages/iterate/src/sdk/record-pipelined-steps.ts),
+([with-itx.ts](../../packages/iterate/src/sdk/with-itx.ts),
 [residency](../../apps/os/docs/residency.md)).
 
 ```js
@@ -21,7 +21,7 @@ and every handle it awaited, with the calls made on that handle
 const { projectSlug } = await this.withItx((itx) => itx.whoami());
 
 // Anything else: a plain WorkerEntrypoint, a FacetDurableObject, a test fixture
-import { withItx } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
 const { projectSlug } = await withItx(this.env.ITX, (itx) => itx.whoami());
 
 // An object that needs reach takes an accessor, never a scope

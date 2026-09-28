@@ -552,9 +552,13 @@ another's data. When an exit path skips the delete (a force-closed PR, a failed
 cleanup), the sweep collects what is left. One exit is Cloudflare's: an
 Artifacts namespace it will not delete (an empty repos list, yet `DELETE` keeps
 answering 409/10202 "Namespace is not empty"). The delete and the sweep log
-`preview.platform-failure-stuck-namespace` and carry on; the sweep pages
-#error-pulse to escalate it to Cloudflare and tries again the next night. The
-run goes red only when the sweep could not act.
+`preview.platform-failure-stuck-namespace` and carry on; the sweep tries again
+the next night. It keeps one #error-pulse page for such namespaces, and one for
+Durable Object namespaces that outlived their worker, each naming what to
+escalate to Cloudflare, edited nightly and resolved once they are gone
+([Slack channels](depot-ci.md#slack-channels)). `--test-run` deletes nothing
+and posts what it would page to #ci as a 🧪 TEST RUN. The run goes red only
+when the sweep could not act.
 
 ### Story 2: run what CI runs, locally
 

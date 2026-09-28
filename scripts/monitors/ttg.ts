@@ -25,10 +25,12 @@
 //                       ran no Preview OS at all
 //
 // THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
-// and at least 20 of them, has a median over 165 s or a p90 over 200 s, the check pages red; red
-// again whenever that median is more than 20 s over the lowest judged since the last page; green once
-// when both are back under their lines (`pageFor`). Fewer pushes change nothing. Every page names the
-// job that finished last on most of those pushes, which ends their critical path.
+// and at least 20 of them, has a median over 165 s or a p90 over 200 s, the check opens a page, and
+// edits it with each hour's numbers while they stay over; whenever that median is more than 20 s
+// over the lowest judged since the page or its last escalation, it escalates in the page's thread,
+// broadcast to the channel; once both are back under their lines it resolves the page (`pageFor`).
+// Fewer pushes change nothing. The page names the job that finished last on most of those pushes,
+// which ends their critical path.
 //
 // Its memory, in the health job's state, is the pushes of the last 7 days as measured and what the
 // channel was last told. Each run lists the PR runs of the last 26 hours and measures those it has
@@ -37,7 +39,7 @@ import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-
 import { z } from "zod";
 import { mapConcurrent, workflowArtifact, type DepotApi } from "../ci/depot.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
-import type { Page } from "./page.ts";
+import { decide, type PageUpdate } from "./page.ts";
 
 /** The page's lines on the time to green of the pushes that skipped the slow rows, in seconds; how
  *  far a median still over them must rise past the lowest judged since the last page to page red
@@ -76,8 +78,9 @@ type Push = z.infer<typeof Push>;
 /** What the check remembers between runs, in the health job's state. */
 export const TtgMemory = z.object({
   pushes: z.array(Push),
-  /** What the channel was last told, `over` in red or `under` in green, and the lowest median
-   *  judged since, that page's included. None before the first page. */
+  /** What the channel was last told, `over` by a page or its escalation, or `under` by its
+   *  resolution, and the lowest median judged since, that message's included. None before the first
+   *  page. */
   lastPage: z.object({ judgement: z.enum(["over", "under"]), bestP50: z.number() }).optional(),
 });
 export type TtgMemory = z.infer<typeof TtgMemory>;
@@ -223,57 +226,71 @@ export function judge(
   return { judgement: over ? "over" : "under", p50: green.p50 };
 }
 
-/** The page a judgement owes the channel, given what it was last told, and what the state keeps of
- *  that: red on crossing a line; red again once the median is more than LINES.worse over the lowest
- *  judged since the last page, so a regression after a recovery that stayed over the lines is
- *  heard as well as one that never recovered; green on coming back under. Pure. */
+/** What a judgement owes the page, given what the channel was last told, and what the state keeps of
+ *  that (./page.ts `decide`): a page on crossing a line; an edit with the new numbers while over; an
+ *  escalation once the median is more than LINES.worse over the lowest judged since the page or its
+ *  last escalation, so a regression after a recovery that stayed over the lines is heard as well as
+ *  one that never recovered; the resolution on coming back under. Pure. */
 export function pageFor(
   lastPage: TtgMemory["lastPage"],
   judged: ReturnType<typeof judge>,
-): { page: "over" | "worse" | "under" | null; lastPage: TtgMemory["lastPage"] } {
-  if (judged.judgement === "too-few") return { page: null, lastPage };
-  const told = { judgement: judged.judgement, bestP50: judged.p50 };
-  // Under the lines before any page: there is nothing to tell.
-  if (!lastPage && judged.judgement === "under") return { page: null, lastPage };
-  if (lastPage?.judgement !== judged.judgement) return { page: judged.judgement, lastPage: told };
-  if (judged.judgement === "over" && judged.p50 - lastPage.bestP50 > LINES.worse)
-    return { page: "worse", lastPage: told };
-  return { page: null, lastPage: { ...lastPage, bestP50: Math.min(lastPage.bestP50, judged.p50) } };
+): { kind: "post" | "edit" | "escalate" | "resolve" | null; lastPage: TtgMemory["lastPage"] } {
+  if (judged.judgement === "too-few") return { kind: null, lastPage };
+  const kind = decide(
+    lastPage?.judgement === "over" ? "red" : "green",
+    judged.judgement === "over" ? "red" : "green",
+    judged.judgement === "over" &&
+      lastPage?.judgement === "over" &&
+      judged.p50 - lastPage.bestP50 > LINES.worse,
+  );
+  if (kind === "post" || kind === "escalate" || kind === "resolve")
+    return { kind, lastPage: { judgement: judged.judgement, bestP50: judged.p50 } };
+  if (kind === "edit" && lastPage)
+    return { kind, lastPage: { ...lastPage, bestP50: Math.min(lastPage.bestP50, judged.p50) } };
+  return { kind: null, lastPage };
 }
 
-/** The page: the judgement and its numbers, and the job that finished last. Each group's numbers
- *  are in the job's log. Only a test page is ever `too-few`. Pure. */
+/** What the page tells, for the update `kind`: the page with the last 24 hours' numbers and the job
+ *  that finished last, the escalation's news, or the resolution's why. Each group's numbers are in
+ *  the job's log. Only a test page is ever `too-few`, and it posts. Pure. */
 export function renderPage(input: {
-  page: NonNullable<ReturnType<typeof pageFor>["page"]> | "too-few";
+  kind: NonNullable<ReturnType<typeof pageFor>["kind"]>;
+  tooFew?: boolean;
   summary: PushSummary;
   lastPage: TtgMemory["lastPage"];
   runUrl?: string;
-}): Page {
+}): PageUpdate {
+  const signal = "PR time to green";
   const { timeToGreen: green, lastJob } = input.summary.byRows["slow-rows-skipped"];
-  const sinceLastPage =
-    input.lastPage && `; ${seconds(input.lastPage.bestP50)} at best since the last page`;
-  const numbers = green
-    ? `p50 ${seconds(green.p50)} (line ${LINES.p50} s${sinceLastPage || ""}), p90 ${seconds(green.p90)} (line ${LINES.p90} s), n=${green.n}`
-    : "none green";
-  const pages: Record<typeof input.page, { tone: Page["tone"]; heading: string }> = {
-    over: { tone: "red", heading: "PR time to green over its lines" },
-    worse: { tone: "red", heading: `PR time to green more than ${LINES.worse} s worse again` },
-    under: { tone: "green", heading: "PR time to green back under its lines" },
-    "too-few": {
-      tone: "none",
-      heading: `PR time to green not judged below ${LINES.minPushes} pushes`,
-    },
-  };
-  const { tone, heading } = pages[input.page];
-  return {
-    tone,
-    headline: `${heading}: pushes that skipped the slow rows, last 24 h: ${numbers}`,
-    details:
-      lastJob && green
-        ? [`their critical path ends with ${lastJob.job} on ${lastJob.pushes} of the ${green.n}`]
-        : [],
+  const medians = green ? `p50 ${seconds(green.p50)}, p90 ${seconds(green.p90)}` : "none green";
+  if (input.kind === "resolve")
+    return { signal, kind: "resolve", why: `${signal} back under its lines: ${medians}` };
+  // the lowest median since the page, this hour's included: an escalation's is the one before it
+  const bestP50 =
+    input.lastPage?.judgement === "over" &&
+    Math.min(input.lastPage.bestP50, green?.p50 ?? Infinity);
+  const best = bestP50 !== false && `; ${seconds(bestP50)} at best since the page`;
+  const page = {
+    what: input.tooFew
+      ? `${signal} not judged below ${LINES.minPushes} pushes`
+      : `${signal} over its lines: ${medians}`,
+    impact: green
+      ? `pushes that skipped the slow rows, last 24 h: p50 ${seconds(green.p50)} (line ${LINES.p50} s${best || ""}), p90 ${seconds(green.p90)} (line ${LINES.p90} s), n=${green.n}${lastJob ? `; their critical path ends with ${lastJob.job} on ${lastJob.pushes} of the ${green.n}` : ""}`
+      : "no push that skipped the slow rows was green in the last 24 h",
+    action: lastJob
+      ? `shorten ${lastJob.job}, which ends most of their critical paths`
+      : "read the job log for each group's numbers",
     link: input.runUrl,
   };
+  if (input.kind === "escalate")
+    return {
+      signal,
+      kind: "escalate",
+      page,
+      news: `${signal} more than ${LINES.worse} s worse again: p50 ${green ? seconds(green.p50) : "none"}${best || ""}`,
+      broadcast: true,
+    };
+  return { signal, kind: input.kind, page };
 }
 
 /** One line per group, with the job that finished last on most of its green pushes, and a closing
@@ -330,8 +347,9 @@ export function pushEvents(pushes: Push[]) {
 }
 
 /** Measure the pushes of the last 26 hours that `memory` has not, judge the last 24 hours, and
- *  return the page `pageFor` owes (on a test run, this run's judgement whatever it owes), the memory
- *  after it, and a PostHog event per push measured. */
+ *  return the update `pageFor` owes (on a test run, this run's judgement whatever it owes: a page
+ *  when over or too few, the resolution when under), the memory after it, and a PostHog event per
+ *  push measured. */
 export async function checkTtg(input: {
   depot: DepotApi;
   memory: TtgMemory;
@@ -373,14 +391,21 @@ export async function checkTtg(input: {
   );
   const judged = judge(day);
   const owed = pageFor(memory.lastPage, judged);
-  const page = input.testRun ? judged.judgement : owed.page;
-  console.log(JSON.stringify({ judged, lastPage: memory.lastPage, page }));
+  const kind = input.testRun
+    ? ({ over: "post", "too-few": "post", under: "resolve" } as const)[judged.judgement]
+    : owed.kind;
+  console.log(JSON.stringify({ judged, lastPage: memory.lastPage, kind }));
   return {
     memory: { pushes, lastPage: owed.lastPage },
-    page:
-      page && renderPage({ page, summary: day, lastPage: memory.lastPage, runUrl: input.runUrl }),
-    /** The state now, for the message's last line. */
-    status: ({ over: "red", under: "green", "too-few": "none" } as const)[judged.judgement],
+    update:
+      kind &&
+      renderPage({
+        kind,
+        tooFew: judged.judgement === "too-few",
+        summary: day,
+        lastPage: memory.lastPage,
+        runUrl: input.runUrl,
+      }),
     events: pushEvents(measured),
   } as const;
 }

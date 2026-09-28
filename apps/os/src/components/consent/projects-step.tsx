@@ -59,7 +59,7 @@ export function ProjectsStep({
         <form
           aria-label="New project"
           onSubmit={onCreateProject}
-          className="flex flex-col gap-4 rounded-xl border bg-muted/40 p-4"
+          className="flex flex-col gap-4 sm:rounded-xl sm:border sm:bg-muted/40 sm:p-4"
         >
           <h3 className="text-sm font-medium">New project</h3>
           <ProjectFields {...fields} focusSlug />

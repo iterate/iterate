@@ -45,10 +45,10 @@
 //
 // A DURABLE OBJECT NAMESPACE whose worker the account no longer has (`workerlessNamespaces`) is
 // Cloudflare's: a worker's delete takes its namespaces, and the API deletes no namespace alone. The
-// sweep pages it to #error-pulse each night it is still listed at the end of the run
+// sweep keeps one #error-pulse page for them while any is still listed at the end of a run
 // (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
-import { onCallMention } from "../../../scripts/ci/slack.ts";
+import { pageText } from "../../../scripts/ci/slack.ts";
 import { FORMER_PARENTS, previewPullRequestNumber } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
@@ -359,17 +359,24 @@ export function workerlessNamespaces(namespaces: SweptNamespace[], workers: stri
   return namespaces.filter(({ script }) => !workers.includes(script || ""));
 }
 
-/** The sweep's page for the workerless namespaces: what to escalate, and to whom. */
+/** The first words after the count on the sweep's page for the workerless namespaces, by which the
+ *  next night's sweep finds it open (scripts/ci/slack.ts `keepPage`). */
+export const WORKERLESS_PAGE_MARKER = "Durable Object namespace(s) outlived their worker";
+
+/** The sweep's page for the workerless namespaces: what to escalate. Pure. */
 export function renderWorkerlessNamespacesPage(
   namespaces: SweptNamespace[],
-  jobUrl: string | undefined,
+  input: { jobUrl: string | undefined; testRun: boolean },
 ) {
-  return [
-    `🚨 preview sweep: ${namespaces.length} Durable Object namespace(s) outlived their worker ${onCallMention}`,
-    ...namespaces.map(({ id, name, script }) => `• ${name} (${id}), worker ${script || "unnamed"}`),
-    "A Cloudflare fault, not a commit's: a worker's delete takes its namespaces, and the API deletes no namespace alone. Each counts toward the account's 500: escalate them to Cloudflare with these ids. The sweep checks again each night.",
-    jobUrl && `<${jobUrl}|sweep run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return pageText({
+    what: `preview sweep: ${namespaces.length} ${WORKERLESS_PAGE_MARKER}`,
+    impact: "each counts toward the account's 500 Durable Object namespaces",
+    action:
+      "escalate to Cloudflare with these ids: a worker's delete takes its namespaces, and the API deletes no namespace alone. The sweep checks again each night.",
+    details: namespaces.map(
+      ({ id, name, script }) => `• ${name} (${id}), worker ${script || "unnamed"}`,
+    ),
+    link: input.jobUrl || null,
+    testRun: input.testRun,
+  });
 }
