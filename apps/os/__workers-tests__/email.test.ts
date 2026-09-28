@@ -148,6 +148,30 @@ test("a member's verified message says so, and a forged one claiming to be their
   ]);
 });
 
+test("mail to an address on the project wildcard's domain lands on that project's log", async () => {
+  const member = await projectWithMember("wildcard-mail");
+  const wildcard = {
+    ...env,
+    APP_CONFIG_URLS__PROJECT_WILDCARD: JSON.stringify({
+      hostname: "wildcard.test",
+      project: "wildcard-mail",
+    }),
+  } as unknown as Env;
+  const hello =
+    "From: ann@example.com\r\nSubject: Hi\r\nMessage-ID: <hello@example.com>\r\n\r\nHello";
+  expect(await deliver("hello@wildcard.test", hello, wildcard)).toMatchObject({ rejected: [] });
+  const inbox = DurableObjectNameCodec.stringify({
+    projectId: member.projectId,
+    path: "/integrations/email",
+  });
+  expect(mailOf(await readLog(inbox))).toMatchObject([
+    {
+      type: "events.iterate.com/email/received",
+      payload: { messageId: "hello@example.com", envelope: { to: "hello@wildcard.test" } },
+    },
+  ]);
+});
+
 test("mail for no project, or on another domain, bounces", async () => {
   await projectWithMember("bounces");
   const note = "From: ann@example.com\r\nSubject: Hi\r\n\r\nHello";
@@ -160,7 +184,7 @@ test("mail for no project, or on another domain, bounces", async () => {
 });
 
 /** One delivery by Cloudflare Email Routing to `to`, and what `receiveEmail` rejected it with. */
-async function deliver(to: string, mime: string) {
+async function deliver(to: string, mime: string, workerEnv = env as unknown as Env) {
   const rejected: string[] = [];
   const raw = new TextEncoder().encode(mime);
   // the fields of a ForwardableEmailMessage that `receiveEmail` reads
@@ -172,7 +196,7 @@ async function deliver(to: string, mime: string) {
     headers: new Headers(),
     setReject: (reason: string) => void rejected.push(reason),
   } as unknown as ForwardableEmailMessage;
-  await receiveEmail(message, env as unknown as Env);
+  await receiveEmail(message, workerEnv);
   return { rejected };
 }
 
