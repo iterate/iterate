@@ -19,7 +19,7 @@ The panel needs ambient light; it has no backlight and is not e-paper.
 
 ## Build and recovery
 
-Activate ESP-IDF **5.4.2**, then run:
+Activate ESP-IDF **6.1**, then run:
 
 ```sh
 idf.py -C apps/kit/firmware/targets/waveshare_s3_rlcd \

@@ -8,4 +8,4 @@ dependencies:
   # transitively through esp32-camera; named directly because the device
   # component includes jpeg_decoder.h on its own account.
   espressif/esp_jpeg: "==1.3.1"
-  idf: ">=5.4"
+  idf: ">=6.1"

@@ -80,7 +80,7 @@ enum {
    * minute and a half between calls, and nothing in the logs but a reconnect.
    *
    * One period, two probes, two questions. The transport sends a WebSocket
-   * PING when the hop has been silent both ways (is this TCP hop half-open),
+   * PING when the peer has been silent (is this TCP hop half-open),
    * and the mount sends `whoami()` on the SESSION (is this session still there
    * — an application message, which is the only kind the idle close counts,
    * answered at the edge without waking the project's Durable Object; asking

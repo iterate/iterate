@@ -101,6 +101,14 @@ uint32_t esp_random(void) {
   return ((uint32_t)random() << 16) ^ (uint32_t)random();
 }
 
+void esp_fill_random(void *buffer, size_t length) {
+  uint8_t *bytes = buffer;
+  size_t index;
+  for (index = 0U; index < length; ++index) {
+    bytes[index] = (uint8_t)esp_random();
+  }
+}
+
 /* --- logging -------------------------------------------------------------- */
 
 void iterate_kit_host_esp_log(

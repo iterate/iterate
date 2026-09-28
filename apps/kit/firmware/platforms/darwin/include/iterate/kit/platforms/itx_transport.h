@@ -4,10 +4,11 @@
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
-#include "iterate/kit/platforms/posix_websocket_client.h"
+#include "iterate/kit/platforms/posix_tls_stream.h"
 #include "iterate/kit/retry_gate.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
+#include "iterate/kit/websocket_client.h"
 #include "iterate/kit/websocket_text.h"
 #include "iterate/kit/wifi_status.h"
 
@@ -88,8 +89,8 @@ struct iterate_kit_itx_transport_metrics {
   int32_t last_websocket_close_status_code;
   int32_t last_websocket_transport_errno;
   uint32_t websocket_pongs_received;
-  /* The Mac's client does not read a refused upgrade's status, so a refused
-   * key is an ordinary failed connect here and this stays false. */
+  /* The Mac does not hold a refused key back: a refused key is an ordinary
+   * failed connect here, and this stays false. */
   bool credential_refused;
   /** A Mac has no Wi-Fi to join: always ITERATE_KIT_WIFI_JOINED. */
   enum iterate_kit_wifi_status wifi_status;
@@ -121,12 +122,16 @@ struct iterate_kit_itx_transport {
   struct iterate_kit_websocket_text_outbox control_outbox;
   struct iterate_kit_itx_outbox_sender control_sender;
   char websocket_url[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
+  /* The upgrade's `Authorization: Bearer <key>` line. */
+  char websocket_headers[
+      sizeof("Authorization: Bearer \r\n") + ITERATE_KIT_PROJECT_API_KEY_CAPACITY];
   uint8_t websocket_receive_storage[
       ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY];
   uint8_t websocket_transmit_storage[
       ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
           ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY)];
-  struct iterate_kit_posix_websocket_client websocket;
+  struct iterate_kit_websocket_client websocket;
+  struct iterate_kit_posix_tls_stream stream;
   struct iterate_kit_retry_gate websocket_retry;
   enum iterate_kit_itx_transport_state state;
   enum capnweb_status last_capnweb_status;

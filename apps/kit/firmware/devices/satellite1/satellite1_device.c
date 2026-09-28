@@ -239,7 +239,7 @@ static const struct iterate_kit_board board = {
   .scripts = NULL, .script_count = 0,
   .audio = &audio,
   .volume = {.register_count = 0},
-  .ring = {.gpio = 21, .pixels = 24, .order = LED_PIXEL_FORMAT_GRB, .power_gpio = -1},
+  .ring = {.gpio = 21, .pixels = 24, .power_gpio = -1},
   .status_led_gpio = 45,
   .button = {.gpio = 0, .active_low = true},
   .wake_word = "jarvis",

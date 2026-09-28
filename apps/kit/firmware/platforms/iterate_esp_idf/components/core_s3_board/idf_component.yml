@@ -6,6 +6,6 @@ dependencies:
     version: ~1.5
   esp_lcd_ili9341: ^2.0.1
   esp_lcd_touch_ft5x06: ^1
-  idf: ">=5.4"
+  idf: ">=6.1"
 description: First-party M5Stack CoreS3 board support, distilled for StackChan
 version: 1.0.0

@@ -13,10 +13,11 @@
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
-#include "iterate/kit/platforms/esp_idf_websocket_connection.h"
+#include "iterate/kit/platforms/esp_tls_stream.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
 #include "iterate/kit/voice_device_profile.h"
+#include "iterate/kit/websocket_client.h"
 #include "iterate/kit/websocket_frame_writer.h"
 #include "iterate/kit/websocket_text.h"
 #include "iterate/kit/wifi_status.h"
@@ -54,7 +55,7 @@ enum {
    * fragmented RPC cannot create an unbounded reassembly allocation.
    */
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES =
-      ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
+      ITERATE_KIT_ESP_TLS_STREAM_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   /*
    * One full microphone append (ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND
@@ -75,7 +76,7 @@ enum {
    */
   ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
   /*
-   * A refused key (iterate_kit_esp_idf_websocket_refused_credential) is asked
+   * A refused key (iterate_kit_itx_refused_credential) is asked
    * again after a minute, doubling to ten. Setting the device up again is what
    * mends it, and that rewrites the key and reboots, so a retry serves only a
    * refusal that ends on its own: a key minted moments ago that has not
@@ -85,6 +86,17 @@ enum {
   ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS = 60000,
   ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS = 600000,
 };
+
+/*
+ * A 401 or 403 answer to the upgrade is the OS refusing the key the upgrade
+ * carried, before any session exists: unknown, expired, ended, or without the
+ * scope `/api` needs. The same key gets the same answer however soon it is
+ * asked again. A network failure or a 5xx is different: a prompt retry can
+ * outlast it.
+ */
+static inline bool iterate_kit_itx_refused_credential(int32_t upgrade_status) {
+  return upgrade_status == 401 || upgrade_status == 403;
+}
 
 /**
  * Application-visible lifecycle, not a mirror of ESP-IDF callback events.
@@ -252,7 +264,7 @@ struct iterate_kit_itx_transport_lifecycle {
 };
 
 /**
- * ESP-IDF transport state. The network task alone owns the taskless WebSocket,
+ * ESP-IDF transport state. The network task alone owns the WebSocket client,
  * copies complete bounded messages into the SPSC inbox, and consumes the SPSC
  * outbox. The application task alone owns the Cap'n Web session.
  *
@@ -283,8 +295,8 @@ struct iterate_kit_itx_transport {
   struct iterate_kit_websocket_text_inbox control_inbox;
   struct iterate_kit_websocket_text_outbox control_outbox;
   /*
-   * The taskless connection embeds exactly one receive chunk and one masked
-   * transmit frame. Keeping these buffers visible in sizeof(transport) makes
+   * The client borrows exactly one receive chunk and one masked transmit
+   * frame, which also hold the upgrade's answer and request. Keeping these buffers visible in sizeof(transport) makes
    * the control plane's permanent RAM cost auditable and prevents reconnect
    * pressure from growing a heap queue.
    */
@@ -302,7 +314,8 @@ struct iterate_kit_itx_transport {
   uint8_t websocket_transmit_storage[
       ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
           ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY)];
-  struct iterate_kit_esp_idf_websocket_connection websocket;
+  struct iterate_kit_websocket_client websocket;
+  struct iterate_kit_esp_tls_stream stream;
   /*
    * A resumable write borrows the outbox head until the complete RFC 6455 frame
    * has reached the lower transport. Retaining the acquisition prevents the

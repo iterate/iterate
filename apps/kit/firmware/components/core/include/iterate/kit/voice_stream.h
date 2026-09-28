@@ -257,6 +257,18 @@ const char *iterate_kit_voice_stream_state_name(
 const char *iterate_kit_voice_stream_failure_name(
     enum iterate_kit_voice_stream_failure failure);
 
+/**
+ * Encode padded RFC 4648 base64: the one encoder, for microphone PCM and the
+ * WebSocket upgrade's key alike. Returns the characters written, always a
+ * multiple of four and never NUL-terminated, or 0 when `destination` cannot
+ * hold them all (nothing is written then).
+ */
+size_t iterate_kit_base64_encode(
+    const uint8_t *bytes,
+    size_t byte_count,
+    char *destination,
+    size_t destination_capacity);
+
 #ifdef __cplusplus
 }
 #endif

@@ -77,6 +77,8 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-itx-outbox-sender-test itx_outbox_sender_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
 
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
@@ -95,15 +97,21 @@ iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-voice-stream-test voice_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-websocket-client-test websocket_client_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-websocket-frame-reader-test websocket_frame_reader_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 
-# The ESP WebSocket keepalive decision itself is host-pure: this tests the
-# exact PING queue policy without recreating ESP-TLS or a radio.
+# The board's byte stream under the WebSocket client, against a scripted
+# ESP-TLS (tests/fakes/esp_tls): what counts as an empty pass, and what keeps
+# a failure's cause.
 iterate_kit_add_test(
-  iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
-  INCLUDES ../platforms/iterate_esp_idf/include
+  iterate-kit-esp-tls-stream-test esp_tls_stream_test.c
+  ../platforms/iterate_esp_idf/esp_tls_stream.c fakes/esp_tls/fake_esp_tls.c
+  INCLUDES fakes/esp_tls ../platforms/iterate_esp_idf/include
   LINK iterate-kit-core iterate-kit-host-esp-idf)
 
 # Which upgrade answers are a refused key, and how long one waits: the two
@@ -207,11 +215,11 @@ if(APPLE)
     iterate-kit-darwin-audio-output-test darwin_audio_output_test.c
     STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
 
-  iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
+  iterate_kit_add_test(iterate-kit-posix-tls-stream-test posix_tls_stream_test.c
     LINK iterate-kit-darwin)
 
   iterate_kit_add_test(iterate-kit-darwin-itx-transport-test
-    darwin_itx_transport_test.c fakes/fake_posix_websocket.c
+    darwin_itx_transport_test.c fakes/fake_websocket_client.c
     ../platforms/darwin/itx_transport.c
     INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()

@@ -37,6 +37,14 @@ static void increment(uint32_t *value) {
   iterate_kit_atomic_saturating_increment_relaxed_u32(value);
 }
 
+/* The client's own errno, else the stream's, when a generation fails. */
+static int websocket_error(const struct iterate_kit_itx_transport *transport) {
+  if (transport->websocket.last_error != 0) {
+    return transport->websocket.last_error;
+  }
+  return transport->stream.last_errno != 0 ? transport->stream.last_errno : EIO;
+}
+
 static bool ring_empty(const struct iterate_kit_spsc_ring *ring) {
   struct iterate_kit_spsc_ring_metrics metrics;
   iterate_kit_spsc_ring_metrics(ring, &metrics);
@@ -70,7 +78,7 @@ static void close_generation(
   transport->websocket_open_attempt_active = false;
   transport->websocket_open_deadline_us = 0;
   /* Reset the writer before its borrowed ring head can be released. */
-  iterate_kit_posix_websocket_client_close(&transport->websocket);
+  iterate_kit_websocket_client_close(&transport->websocket);
   iterate_kit_itx_outbox_sender_discard(&transport->control_sender);
   iterate_kit_itx_connection_lost(transport->options.connection);
   discard_inbox(transport);
@@ -112,19 +120,19 @@ static void receive_messages(
   for (index = 0U;
        index < NETWORK_RECEIVE_BURST && transport->socket_connected;
        ++index) {
-    struct iterate_kit_posix_websocket_chunk chunk;
-    enum iterate_kit_posix_websocket_receive_result result;
+    struct iterate_kit_websocket_chunk chunk;
+    enum iterate_kit_websocket_receive_result result;
     enum capnweb_status status;
     if (!inbox_has_room(transport)) {
       increment(&transport->control_inbox_deferrals);
       return;
     }
-    result = iterate_kit_posix_websocket_client_receive(
-        &transport->websocket, &chunk);
-    if (result == ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_IDLE) {
+    result = iterate_kit_websocket_client_receive(
+        &transport->websocket, now_us, &chunk);
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_IDLE) {
       return;
     }
-    if (result == ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_DATA) {
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_DATA) {
       status = iterate_kit_websocket_text_inbox_feed(
           &transport->control_inbox,
           chunk.opcode,
@@ -137,27 +145,23 @@ static void receive_messages(
         protocol_failure(transport, status, now_us);
         return;
       }
-    } else if (result ==
-               ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_CONTROL) {
+    } else if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_CONTROL) {
       continue;
-    } else if (result ==
-               ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_PEER_CLOSE) {
-      (void)iterate_kit_posix_websocket_client_service_control(
-          &transport->websocket);
+    } else if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_PEER_CLOSE) {
+      (void)iterate_kit_websocket_client_service_control(
+          &transport->websocket, now_us);
       close_generation(transport, now_us);
       return;
-    } else if (result ==
-               ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_DROPPED) {
-      transport->last_platform_error = transport->websocket.last_error;
+    } else if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_DROPPED) {
+      transport->last_platform_error = websocket_error(transport);
       protocol_failure(transport, CAPNWEB_E_UNSUPPORTED, now_us);
       return;
-    } else if (result ==
-               ITERATE_KIT_POSIX_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE) {
-      transport->last_platform_error = transport->websocket.last_error;
+    } else if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE) {
+      transport->last_platform_error = websocket_error(transport);
       protocol_failure(transport, CAPNWEB_E_INVALID_MESSAGE, now_us);
       return;
     } else {
-      transport->last_platform_error = transport->websocket.last_error;
+      transport->last_platform_error = websocket_error(transport);
       increment(&transport->websocket_errors);
       close_generation(transport, now_us);
       return;
@@ -168,7 +172,7 @@ static void receive_messages(
 static enum iterate_kit_websocket_tx_result send_message(
     void *context, const void *message, size_t length) {
   struct iterate_kit_itx_transport *transport = context;
-  return iterate_kit_posix_websocket_client_send(
+  return iterate_kit_websocket_client_send(
       &transport->websocket,
       ITERATE_KIT_WEBSOCKET_TEXT,
       message,
@@ -193,7 +197,7 @@ static void send_messages(
         result == ITERATE_KIT_ITX_OUTBOX_DEFERRED) {
       return;
     }
-    transport->last_platform_error = transport->websocket.last_error;
+    transport->last_platform_error = websocket_error(transport);
     increment(&transport->websocket_errors);
     close_generation(transport, now_us);
     return;
@@ -204,11 +208,11 @@ static void service_control_messages(
     struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
   const enum iterate_kit_websocket_tx_result result =
-      iterate_kit_posix_websocket_client_service_control(
-          &transport->websocket);
+      iterate_kit_websocket_client_service_control(
+          &transport->websocket, now_us);
   if (result == ITERATE_KIT_WEBSOCKET_TX_FAILED ||
       result == ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED) {
-    transport->last_platform_error = transport->websocket.last_error;
+    transport->last_platform_error = websocket_error(transport);
     increment(&transport->websocket_errors);
     close_generation(transport, now_us);
   }
@@ -225,14 +229,14 @@ static void timeout_open_attempt(
   transport->last_platform_error = ETIMEDOUT;
   transport->websocket_open_attempt_active = false;
   transport->websocket_open_deadline_us = 0;
-  iterate_kit_posix_websocket_client_close(&transport->websocket);
+  iterate_kit_websocket_client_close(&transport->websocket);
   iterate_kit_retry_gate_defer(&transport->websocket_retry, now_us);
 }
 
 static void drive_socket(
     struct iterate_kit_itx_transport *transport,
     int64_t now_us) {
-  enum iterate_kit_posix_websocket_open_result result;
+  enum iterate_kit_websocket_open_result result;
   int64_t step_now_us;
   if (!transport->socket_connected &&
       transport->state == ITERATE_KIT_ITX_FAILED) {
@@ -260,28 +264,26 @@ static void drive_socket(
       timeout_open_attempt(transport, step_now_us);
       return;
     }
-    result = iterate_kit_posix_websocket_client_open(
-        &transport->websocket);
+    result = iterate_kit_websocket_client_open(
+        &transport->websocket, step_now_us);
     step_now_us = transport_now_us(transport);
     if (step_now_us >= transport->websocket_open_deadline_us) {
       timeout_open_attempt(transport, step_now_us);
       return;
     }
-    if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_WOULD_BLOCK) {
+    if (result == ITERATE_KIT_WEBSOCKET_OPEN_WOULD_BLOCK) {
       return;
     }
-    if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED) {
+    if (result == ITERATE_KIT_WEBSOCKET_OPEN_FAILED) {
       /* The loop only sees CONNECTING while this retries; say why here. */
+      transport->last_platform_error = websocket_error(transport);
       (void)fprintf(
           stderr, "transport: websocket open failed (error %d); retrying\n",
-          transport->websocket.last_error);
+          transport->last_platform_error);
       transport->websocket_open_attempt_active = false;
       transport->websocket_open_deadline_us = 0;
-      transport->last_platform_error =
-          transport->websocket.last_error;
       increment(&transport->websocket_errors);
-      iterate_kit_posix_websocket_client_close(
-          &transport->websocket);
+      iterate_kit_websocket_client_close(&transport->websocket);
       iterate_kit_retry_gate_defer(
           &transport->websocket_retry, step_now_us);
       return;
@@ -290,8 +292,7 @@ static void drive_socket(
       transport->fatal_failure_latched = true;
       transport->fatal_failure_reason =
           ITERATE_KIT_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED;
-      iterate_kit_posix_websocket_client_close(
-          &transport->websocket);
+      iterate_kit_websocket_client_close(&transport->websocket);
       transport->state = ITERATE_KIT_ITX_FAILED;
       return;
     }
@@ -422,7 +423,9 @@ static enum iterate_kit_status drain_application(
 enum iterate_kit_status iterate_kit_itx_transport_prepare(
     struct iterate_kit_itx_transport *transport,
     const struct iterate_kit_itx_transport_options *options) {
-  struct iterate_kit_posix_websocket_client_options websocket_options;
+  struct iterate_kit_websocket_client_options websocket_options;
+  struct iterate_kit_posix_tls_stream_options stream_options;
+  int headers_length;
   if (transport == NULL || options == NULL ||
       options->configuration == NULL || options->connection == NULL ||
       options->control_inbox == NULL ||
@@ -455,21 +458,43 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
           WEBSOCKET_RETRY_MAX_MS) != ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-  websocket_options =
-      (struct iterate_kit_posix_websocket_client_options){
-        .url = transport->websocket_url,
-        .receive_storage = transport->websocket_receive_storage,
-        .receive_storage_capacity =
-            sizeof(transport->websocket_receive_storage),
-        .transmit_storage = transport->websocket_transmit_storage,
-        .transmit_storage_capacity =
-            sizeof(transport->websocket_transmit_storage),
-        .DANGEROUS_disable_certificate_verification =
-            options->DANGEROUS_disable_certificate_verification,
-        .bearer_token = options->configuration->project_api_key,
-      };
-  if (iterate_kit_posix_websocket_client_prepare(
+  /*
+   * The OS gates `/api` with its OAuth provider: the key rides the upgrade,
+   * resolved before the first Cap'n Web frame exists.
+   */
+  headers_length = snprintf(
+      transport->websocket_headers,
+      sizeof(transport->websocket_headers),
+      "Authorization: Bearer %s\r\n",
+      options->configuration->project_api_key);
+  websocket_options = (struct iterate_kit_websocket_client_options){
+    .url = transport->websocket_url,
+    .headers = transport->websocket_headers,
+    .receive_storage = transport->websocket_receive_storage,
+    .receive_storage_capacity = sizeof(transport->websocket_receive_storage),
+    .transmit_storage = transport->websocket_transmit_storage,
+    .transmit_storage_capacity = sizeof(transport->websocket_transmit_storage),
+    .keepalive_ms = ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS,
+    .stream = &iterate_kit_posix_tls_stream_ops,
+    .stream_context = &transport->stream,
+  };
+  if (headers_length <= 0 ||
+      (size_t)headers_length >= sizeof(transport->websocket_headers) ||
+      iterate_kit_websocket_client_prepare(
           &transport->websocket, &websocket_options) != ITERATE_KIT_OK) {
+    memset(transport, 0, sizeof(*transport));
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  stream_options = (struct iterate_kit_posix_tls_stream_options){
+    .host = transport->websocket.endpoint.host,
+    .port = transport->websocket.endpoint.port,
+    .use_tls = transport->websocket.endpoint.secure,
+    .DANGEROUS_disable_certificate_verification =
+        transport->websocket.endpoint.secure &&
+        options->DANGEROUS_disable_certificate_verification,
+  };
+  if (iterate_kit_posix_tls_stream_prepare(
+          &transport->stream, &stream_options) != ITERATE_KIT_OK) {
     memset(transport, 0, sizeof(*transport));
     return ITERATE_KIT_IO_ERROR;
   }
@@ -569,7 +594,8 @@ enum iterate_kit_status iterate_kit_itx_transport_stop(
   }
   if (transport->started) {
     transport->socket_connected = false;
-    iterate_kit_posix_websocket_client_cleanup(&transport->websocket);
+    iterate_kit_websocket_client_close(&transport->websocket);
+    iterate_kit_posix_tls_stream_cleanup(&transport->stream);
     iterate_kit_itx_outbox_sender_discard(&transport->control_sender);
     discard_inbox(transport);
     iterate_kit_itx_connection_lost(transport->options.connection);
@@ -621,7 +647,11 @@ void iterate_kit_itx_transport_metrics(
   metrics->last_capnweb_status = transport->last_capnweb_status;
   metrics->last_application_capnweb_status = transport->last_capnweb_status;
   metrics->last_application_capnweb_generation = transport->socket_generation;
-  metrics->websocket_pongs_received = transport->websocket.pongs_received;
+  {
+    struct iterate_kit_websocket_client_metrics websocket;
+    iterate_kit_websocket_client_metrics(&transport->websocket, &websocket);
+    metrics->websocket_pongs_received = websocket.pongs_received;
+  }
   metrics->fatal_failure_latched = transport->fatal_failure_latched;
   metrics->fatal_failure_reason =
       (enum iterate_kit_itx_fatal_failure_reason)

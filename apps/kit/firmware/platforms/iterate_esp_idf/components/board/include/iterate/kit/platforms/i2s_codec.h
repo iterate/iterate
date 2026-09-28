@@ -21,8 +21,8 @@ extern "C" {
  * otherwise raised once after enable and codec power-up, before tasks start.
  */
 struct iterate_kit_i2s_codec_facts {
-  i2s_port_t playback_port;
-  i2s_port_t capture_port;
+  int playback_port;
+  int capture_port;
   i2s_role_t role;
   i2s_std_config_t playback;
   i2s_std_config_t capture;
@@ -60,7 +60,7 @@ bool iterate_kit_i2s_codec_open_playback(
 bool iterate_kit_i2s_codec_valid(const struct iterate_kit_i2s_codec_facts *facts);
 /** Validate one direction; open_playback uses this for M5's pin handover. */
 bool iterate_kit_i2s_codec_valid_channel(
-    i2s_port_t port, const i2s_std_config_t *config,
+    int port, const i2s_std_config_t *config,
     const struct iterate_kit_pcm_shape *shape, uint16_t frames, uint8_t descriptors);
 /** After board.c's AFTER_I2S scripts and open_codec, raise the amplifier and
  * start the hardware tasks. start only enables preloaded channels: no samples

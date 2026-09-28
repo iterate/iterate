@@ -2,6 +2,7 @@
 #include "iterate/kit/atomic.h"
 #include "iterate/kit/retry_gate.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <string.h>
 
@@ -457,13 +458,18 @@ static bool mark_socket_connected(
   return true;
 }
 
+/* The client's own errno, or the stream's cause when the stream failed. */
+static int32_t websocket_error(
+    const struct iterate_kit_itx_transport *transport) {
+  return transport->websocket.last_error != 0
+      ? (int32_t)transport->websocket.last_error
+      : transport->stream.last_error;
+}
+
 static void remember_websocket_error(
     struct iterate_kit_itx_transport *transport,
     int32_t error) {
-  /*
-   * The lower taskless adapter exposes the errno/result at the point it loses
-   * framing trust: record the generation and the causal errno.
-   */
+  /* Record the generation that lost framing trust and its causal code. */
   iterate_kit_atomic_saturating_increment_relaxed_u32(
       &transport->websocket_errors);
   atomic_store_u32(
@@ -479,17 +485,15 @@ static void remember_websocket_error(
 static bool service_websocket_control(
     struct iterate_kit_itx_transport *transport) {
   enum iterate_kit_websocket_tx_result result;
-  result =
-      iterate_kit_esp_idf_websocket_connection_service_control(
-          &transport->websocket);
+  result = iterate_kit_websocket_client_service_control(
+      &transport->websocket, esp_timer_get_time());
   if (result == ITERATE_KIT_WEBSOCKET_TX_IDLE ||
       result == ITERATE_KIT_WEBSOCKET_TX_SENT ||
       result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS ||
       result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
     return true;
   }
-  remember_websocket_error(
-      transport, transport->websocket.last_error);
+  remember_websocket_error(transport, websocket_error(transport));
   mark_socket_disconnected(transport);
   request_restart(transport);
   return false;
@@ -527,7 +531,7 @@ static void receive_control_messages(
        received < NETWORK_RECEIVE_BURST &&
        atomic_load_u32(&transport->socket_connected);
        ++received) {
-    struct iterate_kit_esp_idf_websocket_chunk chunk;
+    struct iterate_kit_websocket_chunk chunk;
     if (!inbox_has_room(transport)) {
       /*
        * Full: leave it on the socket. The consumer drains every poll, so this
@@ -538,15 +542,13 @@ static void receive_control_messages(
           &transport->control_inbox_deferrals);
       return;
     }
-    const enum iterate_kit_esp_idf_websocket_receive_result result =
-        iterate_kit_esp_idf_websocket_connection_receive(
-            &transport->websocket, 0, &chunk);
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_IDLE) {
+    const enum iterate_kit_websocket_receive_result result =
+        iterate_kit_websocket_client_receive(
+            &transport->websocket, esp_timer_get_time(), &chunk);
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_IDLE) {
       return;
     }
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_DATA) {
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_DATA) {
       const enum capnweb_status status =
           iterate_kit_websocket_text_inbox_feed(
               &transport->control_inbox,
@@ -567,12 +569,10 @@ static void receive_control_messages(
       }
       continue;
     }
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_CONTROL) {
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_CONTROL) {
       continue;
     }
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PEER_CLOSE) {
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_PEER_CLOSE) {
       /*
        * Give the queued CLOSE response one bounded write attempt before the
        * next owner pass tears the socket down. Peer close is lifecycle, not an
@@ -583,20 +583,16 @@ static void receive_control_messages(
       request_restart(transport);
       return;
     }
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_DROPPED) {
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_DROPPED) {
       fail_receive(transport, CAPNWEB_E_UNSUPPORTED);
       return;
     }
-    if (result ==
-        ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE) {
-      remember_websocket_error(
-          transport, transport->websocket.last_error);
+    if (result == ITERATE_KIT_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE) {
+      remember_websocket_error(transport, websocket_error(transport));
       fail_receive(transport, CAPNWEB_E_INVALID_MESSAGE);
       return;
     }
-    remember_websocket_error(
-        transport, transport->websocket.last_error);
+    remember_websocket_error(transport, websocket_error(transport));
     mark_socket_disconnected(transport);
     request_restart(transport);
     return;
@@ -606,7 +602,7 @@ static void receive_control_messages(
 static enum iterate_kit_websocket_tx_result send_control_message(
     void *context, const void *message, size_t length) {
   struct iterate_kit_itx_transport *transport = context;
-  return iterate_kit_esp_idf_websocket_connection_send(
+  return iterate_kit_websocket_client_send(
       &transport->websocket,
       ITERATE_KIT_WEBSOCKET_TEXT,
       message,
@@ -661,8 +657,7 @@ static void send_control_messages(
        * the opaque byte stream, and let the remounted session reconstruct only
        * fresh work.
        */
-      remember_websocket_error(
-          transport, transport->websocket.last_error);
+      remember_websocket_error(transport, websocket_error(transport));
       mark_socket_disconnected(transport);
       request_restart(transport);
       return;
@@ -705,27 +700,44 @@ static void refresh_handshake_headers(
 static void stop_websocket(
     struct iterate_kit_itx_transport *transport,
     bool *websocket_open) {
-  if (!*websocket_open &&
-      transport->websocket.parent == NULL &&
-      transport->websocket.websocket == NULL) {
-    iterate_kit_itx_outbox_sender_discard(
-        &transport->control_sender);
-    return;
-  }
   mark_socket_disconnected(transport);
   /*
    * Reset the resumable writer and destroy the lower stream before releasing
    * any borrowed outbox head. That order proves no retained encoded suffix can
-   * observe a slot after its producer is allowed to reuse it. Unlike
-   * the former managed-client stop, this close has no private task to join with
-   * an unbounded wait.
+   * observe a slot after its producer is allowed to reuse it.
    */
-  iterate_kit_esp_idf_websocket_connection_close(
-      &transport->websocket);
+  iterate_kit_websocket_client_close(&transport->websocket);
   iterate_kit_itx_outbox_sender_discard(
       &transport->control_sender);
   *websocket_open = false;
   atomic_store_u32(&transport->websocket_started, 0U);
+}
+
+/*
+ * THE ONE BLOCKING STEP IN A PASS. ESP-TLS's connect blocks within this bound
+ * on its own; the upgrade's answer follows within a round trip and is polled
+ * here, so the whole open fits the one bound the task watchdog budgets for.
+ * UNAVAILABLE is the bound running out.
+ */
+static enum iterate_kit_status open_websocket(
+    struct iterate_kit_itx_transport *transport) {
+  const int64_t deadline_us =
+      esp_timer_get_time() + (int64_t)WEBSOCKET_CONNECT_TIMEOUT_MS * 1000;
+  for (;;) {
+    switch (iterate_kit_websocket_client_open(
+        &transport->websocket, esp_timer_get_time())) {
+      case ITERATE_KIT_WEBSOCKET_OPEN_READY:
+        return ITERATE_KIT_OK;
+      case ITERATE_KIT_WEBSOCKET_OPEN_FAILED:
+        return ITERATE_KIT_IO_ERROR;
+      case ITERATE_KIT_WEBSOCKET_OPEN_WOULD_BLOCK:
+        break;
+    }
+    if (esp_timer_get_time() >= deadline_us) {
+      return ITERATE_KIT_UNAVAILABLE;
+    }
+    vTaskDelay(1);
+  }
 }
 
 static void network_task(void *context) {
@@ -878,10 +890,7 @@ static void network_task(void *context) {
       iterate_kit_atomic_saturating_increment_relaxed_u32(
           &transport->websocket_start_attempts);
       refresh_handshake_headers(transport);
-      status =
-          iterate_kit_esp_idf_websocket_connection_open(
-              &transport->websocket,
-              WEBSOCKET_CONNECT_TIMEOUT_MS);
+      status = open_websocket(transport);
       /*
        * DNS/TCP/TLS/upgrade may consume the entire setup bound. Retry policy
        * must use the clock after that operation, not a stale pre-handshake
@@ -902,10 +911,13 @@ static void network_task(void *context) {
               ITERATE_KIT_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT);
         } else {
           remember_websocket_error(
-              transport, transport->websocket.last_error);
+              transport,
+              status == ITERATE_KIT_UNAVAILABLE
+                  ? ETIMEDOUT
+                  : websocket_error(transport));
           iterate_kit_retry_gate_defer(
               &websocket_retry, now_us);
-          if (iterate_kit_esp_idf_websocket_refused_credential(
+          if (iterate_kit_itx_refused_credential(
                   transport->websocket.last_upgrade_status)) {
             iterate_kit_atomic_saturating_increment_relaxed_u32(
                 &transport->websocket_credential_refusals);
@@ -914,8 +926,7 @@ static void network_task(void *context) {
                 &credential_retry, now_us);
           }
         }
-        iterate_kit_esp_idf_websocket_connection_close(
-            &transport->websocket);
+        iterate_kit_websocket_client_close(&transport->websocket);
       }
     }
 
@@ -967,8 +978,7 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
     const struct iterate_kit_itx_transport_options *options) {
   enum iterate_kit_configuration_error configuration_error;
   enum iterate_kit_status status;
-  struct iterate_kit_esp_idf_websocket_connection_options
-      websocket_options;
+  struct iterate_kit_websocket_client_options websocket_options;
   if (transport == NULL ||
       options == NULL ||
       options->configuration == NULL ||
@@ -1009,34 +1019,29 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
           options->control_outbox) != ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
-  websocket_options =
-      (struct
-       iterate_kit_esp_idf_websocket_connection_options){
-        .url = transport->websocket_url,
-        /*
-         * Authentication and mounting are Cap'n Web messages on this endpoint,
-         * not HTTP upgrade credentials. NULL avoids inventing an empty
-         * Sec-WebSocket-Protocol header or allocating empty header strings in
-         * the ESP lower transport.
-         */
-        .subprotocol = NULL,
-        .headers = transport->websocket_headers,
-        .receive_storage =
-            transport->websocket_receive_storage,
-        .receive_storage_capacity =
-            sizeof(transport->websocket_receive_storage),
-        .transmit_storage =
-            transport->websocket_transmit_storage,
-        .transmit_storage_capacity =
-            sizeof(transport->websocket_transmit_storage),
-      };
-  status =
-      iterate_kit_esp_idf_websocket_connection_prepare(
-          &transport->websocket, &websocket_options);
+  websocket_options = (struct iterate_kit_websocket_client_options){
+    .url = transport->websocket_url,
+    .headers = transport->websocket_headers,
+    .receive_storage = transport->websocket_receive_storage,
+    .receive_storage_capacity =
+        sizeof(transport->websocket_receive_storage),
+    .transmit_storage = transport->websocket_transmit_storage,
+    .transmit_storage_capacity =
+        sizeof(transport->websocket_transmit_storage),
+    .keepalive_ms = ITERATE_KIT_VOICE_HOP_KEEPALIVE_MS,
+    .stream = &iterate_kit_esp_tls_stream_ops,
+    .stream_context = &transport->stream,
+  };
+  status = iterate_kit_websocket_client_prepare(
+      &transport->websocket, &websocket_options);
   if (status != ITERATE_KIT_OK) {
     memset(transport, 0, sizeof(*transport));
     return status;
   }
+  iterate_kit_esp_tls_stream_prepare(
+      &transport->stream,
+      &transport->websocket.endpoint,
+      WEBSOCKET_CONNECT_TIMEOUT_MS);
   transport->state = ITERATE_KIT_ITX_IDLE;
   transport->last_capnweb_status = CAPNWEB_OK;
   transport->initialized = true;
@@ -1219,13 +1224,13 @@ enum iterate_kit_status iterate_kit_itx_transport_start(
    */
   if (error == ESP_OK) {
     error = esp_wifi_set_bandwidth(
-        WIFI_IF_STA, WIFI_BW_HT20);
+        WIFI_IF_STA, WIFI_BW20);
   }
   if (error == ESP_OK) {
     error = esp_wifi_get_bandwidth(
         WIFI_IF_STA, &actual_bandwidth);
   }
-  if (error == ESP_OK && actual_bandwidth != WIFI_BW_HT20) {
+  if (error == ESP_OK && actual_bandwidth != WIFI_BW20) {
     error = ESP_ERR_INVALID_STATE;
   }
   /*
@@ -1623,7 +1628,7 @@ enum iterate_kit_status iterate_kit_itx_transport_stop(
   (void)iterate_kit_itx_connection_close(
       transport->options.connection);
   /*
-   * The network owner already destroyed the taskless lower connection before
+   * The network owner already closed the WebSocket and its stream before
    * publishing exited. Delete the remaining shared platform resources only
    * after that publication; another component may legitimately own an
    * already-existing default event loop.
@@ -1708,8 +1713,6 @@ void iterate_kit_itx_transport_metrics(
   metrics->websocket_credential_refusals =
       atomic_load_u32(
           &transport->websocket_credential_refusals);
-  metrics->last_websocket_upgrade_status = __atomic_load_n(
-      &transport->websocket.last_upgrade_status, __ATOMIC_ACQUIRE);
   metrics->credential_refused =
       atomic_load_u32(&transport->credential_refused) != 0U;
   metrics->fatal_failure_latched =
@@ -1797,9 +1800,9 @@ void iterate_kit_itx_transport_metrics(
           &transport->last_websocket_close_status_code,
           __ATOMIC_ACQUIRE);
   {
-    struct iterate_kit_esp_idf_websocket_connection_metrics websocket;
-    iterate_kit_esp_idf_websocket_connection_metrics(
-        &transport->websocket, &websocket);
+    struct iterate_kit_websocket_client_metrics websocket;
+    iterate_kit_websocket_client_metrics(&transport->websocket, &websocket);
+    metrics->last_websocket_upgrade_status = websocket.last_upgrade_status;
     metrics->websocket_pongs_received = websocket.pongs_received;
     metrics->websocket_frames_received = websocket.frames_received;
     metrics->last_websocket_close_status_code =

@@ -71,7 +71,7 @@ static enum capnweb_status fail(
 }
 
 
-/* --- base64 (RFC 4648; the uplink pads, see append_frames) -------------- */
+/* --- base64 (RFC 4648, padded) ------------------------------------------ */
 
 static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -93,40 +93,26 @@ static const char base64_alphabet[] =
  * has the exact one.
  */
 
-static size_t base64_encode(
+size_t iterate_kit_base64_encode(
     const uint8_t *bytes,
     size_t byte_count,
     char *destination,
     size_t destination_capacity) {
   size_t out = 0U;
-  size_t index = 0U;
-  while (index + 3U <= byte_count) {
-    uint32_t chunk = ((uint32_t)bytes[index] << 16) |
-        ((uint32_t)bytes[index + 1U] << 8) |
-        (uint32_t)bytes[index + 2U];
-    if (out + 4U > destination_capacity) {
-      return 0U;
-    }
-    destination[out++] = base64_alphabet[(chunk >> 18) & 0x3fU];
-    destination[out++] = base64_alphabet[(chunk >> 12) & 0x3fU];
-    destination[out++] = base64_alphabet[(chunk >> 6) & 0x3fU];
-    destination[out++] = base64_alphabet[chunk & 0x3fU];
-    index += 3U;
+  size_t index;
+  if ((byte_count + 2U) / 3U > destination_capacity / 4U) {
+    return 0U;
   }
-  if (index < byte_count) {
-    uint32_t chunk = (uint32_t)bytes[index] << 16;
-    size_t remainder = byte_count - index;
-    if (remainder == 2U) {
-      chunk |= (uint32_t)bytes[index + 1U] << 8;
-    }
-    if (out + (remainder == 2U ? 3U : 2U) > destination_capacity) {
-      return 0U;
-    }
+  for (index = 0U; index < byte_count; index += 3U) {
+    const size_t remainder = byte_count - index;
+    const uint32_t chunk = ((uint32_t)bytes[index] << 16) |
+        (remainder > 1U ? (uint32_t)bytes[index + 1U] << 8 : 0U) |
+        (remainder > 2U ? (uint32_t)bytes[index + 2U] : 0U);
     destination[out++] = base64_alphabet[(chunk >> 18) & 0x3fU];
     destination[out++] = base64_alphabet[(chunk >> 12) & 0x3fU];
-    if (remainder == 2U) {
-      destination[out++] = base64_alphabet[(chunk >> 6) & 0x3fU];
-    }
+    destination[out++] =
+        remainder > 1U ? base64_alphabet[(chunk >> 6) & 0x3fU] : '=';
+    destination[out++] = remainder > 2U ? base64_alphabet[chunk & 0x3fU] : '=';
   }
   return out;
 }
@@ -657,8 +643,7 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
   {
     const size_t body_capacity =
         sizeof(voice_stream->args_buffer) - sizeof("\"}}]") - 4U;
-    size_t padding;
-    encoded_length = base64_encode(
+    encoded_length = iterate_kit_base64_encode(
         pcm,
         frame_count * frame_length,
         voice_stream->args_buffer + offset,
@@ -669,16 +654,10 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
       ++voice_stream->frame_send_failures;
       return CAPNWEB_E_LIMIT;
     }
-    offset += encoded_length;
     /* PADDED: GPT-Live's decoder rejects unpadded base64 ("illegal base64
      * data at input byte 852" — a Mac talk run heard nothing back until the
      * facet learned to pad). */
-    padding = (4U - (encoded_length % 4U)) % 4U;
-    if (offset + padding > body_capacity) {
-      ++voice_stream->frame_send_failures;
-      return CAPNWEB_E_LIMIT;
-    }
-    while (padding-- > 0U) voice_stream->args_buffer[offset++] = '=';
+    offset += encoded_length;
   }
   if (offset + 4U >= sizeof(voice_stream->args_buffer)) {
     ++voice_stream->frame_send_failures;

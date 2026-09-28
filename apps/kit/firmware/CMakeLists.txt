@@ -24,7 +24,7 @@ set(CAPNWEB_SANITIZE ${ITERATE_KIT_SANITIZE} CACHE BOOL "" FORCE)
 FetchContent_Declare(
   capnweb_c
   GIT_REPOSITORY https://github.com/iterate/capnweb.git
-  GIT_TAG aee32b391063c4f5baf0aec852f38851eeeed1d9
+  GIT_TAG a9e3703f62eb09d21d8b3af3abf666180f4609a7
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR c)
 FetchContent_MakeAvailable(capnweb_c)

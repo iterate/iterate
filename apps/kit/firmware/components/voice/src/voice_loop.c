@@ -648,9 +648,9 @@ static void on_speaker_pcm(
  * Keep these five effects together. The ordering is the correctness proof:
  * disarm -> note flush -> invalidate -> discard -> reprime. In particular,
  * invalidating before disarming creates a window in which an intentional cut
- * is counted as listener-visible starvation. ESP-IDF 5.4.2's
- * FreeRTOS-Kernel-SMP/queue.c:xQueueGenericReset holds the queue lock and leaves
- * blocked receivers waiting when an existing queue is reset. A frame copied
+ * is counted as listener-visible starvation. ESP-IDF's FreeRTOS
+ * (queue.c, xQueueGenericReset) holds the queue lock and leaves blocked
+ * receivers waiting when an existing queue is reset. A frame copied
  * before that lock was taken is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
@@ -2959,7 +2959,7 @@ void iterate_kit_voice_loop_step(void) {
      * mount exists yet — the only window on this device that is genuinely quiet.
      *
      * KEYING ON THE PONG ALONE WAS A RACE. The transport originates its PING
-     * only after inbound silence (websocket_connection.c), and an answered probe
+     * only after inbound silence (websocket_client.c), and an answered probe
      * IS inbound traffic on the same period — so a healthy mounted board could
      * suppress every PING it needed and reboot itself at 420 s on a good
      * network. Reading the probe answers here removes the race without a second

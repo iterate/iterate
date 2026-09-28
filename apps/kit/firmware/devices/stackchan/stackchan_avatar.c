@@ -88,10 +88,11 @@ _Static_assert(
 #define STACKCHAN_AVATAR_FRAMEBUFFER_CAPS \
   (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT)
 /*
- * ESP-IDF 5.4's ESP32-S3 SPI host explicitly cannot access external memory.
- * Keep this compile-time tripwire beside the allocation policy: adding PSRAM
- * either makes the requested heap capability set impossible or silently
- * restores the driver's per-transfer internal bounce allocation.
+ * ESP-IDF's ESP32-S3 SPI host sends from external memory through an internal
+ * bounce buffer per transfer (esp_lcd's psram_dma_direct, which this panel
+ * does not ask for, is the exception). Keep this compile-time tripwire beside
+ * the allocation policy: adding PSRAM either makes the requested heap
+ * capability set impossible or silently restores that bounce allocation.
  */
 _Static_assert(
     (STACKCHAN_AVATAR_FRAMEBUFFER_CAPS & MALLOC_CAP_SPIRAM) == 0U,
@@ -895,10 +896,9 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * 153.6 KiB full-screen buffer. Audio deadlines still own priority, and the
    * resource/transfer metrics make this visual tradeoff falsifiable on-device.
    *
-   * ESP32-S3 PSRAM is not SPI-DMA-capable in ESP-IDF 5.4. Asking the heap for
-   * SPIRAM|DMA therefore returns NULL, while asking only for SPIRAM makes the
-   * SPI driver allocate and copy through an internal bounce buffer on every
-   * transfer. The internal allocation below is deliberately permanent: it
+   * ESP-IDF's heap has no SPIRAM|DMA memory on the ESP32-S3, so asking for it
+   * returns NULL, while asking only for SPIRAM makes the SPI driver allocate
+   * and copy through an internal bounce buffer on every transfer. The internal allocation below is deliberately permanent: it
    * makes startup fail honestly if the memory budget is unavailable and keeps
    * steady-state rendering allocation-free. It also removes PSRAM/cache
    * contention from the display transfer that runs beside the AEC owner.

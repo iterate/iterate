@@ -35,6 +35,7 @@ void iterate_kit_led_ring_render_volume(
 
 #ifdef ESP_PLATFORM
 #include "iterate/kit/platforms/led_ring.h"
+#include "led_strip.h"
 #include "iterate/kit/conversation_ring.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
@@ -71,8 +72,8 @@ bool iterate_kit_led_ring_start(const struct iterate_kit_led_ring *facts) {
   const led_strip_config_t strip_config = {
     .strip_gpio_num = facts->gpio,
     .max_leds = facts->pixels,
-    .led_pixel_format = facts->order,
     .led_model = LED_MODEL_WS2812,
+    .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
     .flags = {.invert_out = false},
   };
   const led_strip_rmt_config_t rmt_config = {
