@@ -1,9 +1,9 @@
 // Browser specs in shards (./specs-shards.ts): how many shards the workflows run, and the first
 // shard's collection of the others' blob reports, against the monitors' fake Depot on a fake clock.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { fakeDepot } from "../monitors/fake-depot.ts";
@@ -54,7 +54,7 @@ test.for(["preview-os.yml", "main-os-e2e.yml"])(
 );
 
 test("the first shard waits for the others, then takes each one's blob report from its newest attempt", async () => {
-  const run = shardedRun({
+  using run = shardedRun({
     "Browser specs 2/3": { statuses: ["running", "finished"], blobs: ["report-2.zip"] },
     "Browser specs 3/3": { statuses: ["queued", "running", "running", "finished"], retried: true },
   });
@@ -107,7 +107,7 @@ test.for([
 ])(
   "a shard that $name keeps the specs from passing, and the others' reports are still taken",
   async ({ shard, problem }) => {
-    const run = shardedRun({
+    using run = shardedRun({
       "Browser specs 2/3": { statuses: ["finished"] },
       "Browser specs 3/3": shard,
     });
@@ -122,7 +122,7 @@ test.for([
 );
 
 test("the collection fails at once when its workflow has no shard job", async () => {
-  const run = shardedRun({ "Browser specs 2/3": { statuses: ["finished"] } });
+  using run = shardedRun({ "Browser specs 2/3": { statuses: ["finished"] } });
 
   await expect(collectShards({ ...run, job: "specs-shards" })).rejects.toThrow(
     "Depot lists no job specs-shards in workflow wf-1 to collect",
@@ -139,7 +139,7 @@ function count(suite: any): number {
 
 /** A Preview OS run whose first shard collects: each named leg of `specs-shard` moves through its
  *  statuses, one a call to GetWorkflow, the last repeated, on a fake clock that moves on whenever
- *  the wait sleeps. A leg's newest attempt's test results hold its `blobs` (one named for its shard
+ *  the wait sleeps. The blob reports go to a temporary directory, `out`, removed with the run. A leg's newest attempt's test results hold its `blobs` (one named for its shard
  *  unless given); a `retried` leg has an older attempt whose results the collection must not take. */
 function shardedRun(
   legs: Record<string, { statuses: string[]; blobs?: string[]; retried?: boolean }>,
@@ -147,8 +147,7 @@ function shardedRun(
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.setTimerTickMode("nextTimerAsync");
   onTestFinished(() => void vi.useRealTimers());
-  const out = mkdtempSync(join(tmpdir(), "specs-shards-"));
-  onTestFinished(() => rmSync(out, { recursive: true, force: true }));
+  const out = temporaryDirectory();
   const shards = Object.entries(legs).map(([displayName, leg], index) => {
     const shard = displayName.split(" ").at(-1)!.split("/")[0]!;
     const attempts = leg.retried ? [1, 2] : [1];
@@ -198,7 +197,7 @@ function shardedRun(
   let calls = 0;
   return {
     workflowId: "wf-1",
-    out,
+    out: out.path,
     started: Date.now(),
     lines,
     log: (line: string) => void lines.push(line),
@@ -210,5 +209,6 @@ function shardedRun(
       }
       return fake(method, body);
     },
+    [Symbol.dispose]: () => out[Symbol.dispose](),
   };
 }
