@@ -1,0 +1,8 @@
+{
+  // The app Worker's half (src/apps/server.ts): typed against the Cloudflare types, which the rest of
+  // the kit, browser code, does without.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "node"] },
+  "include": ["src/apps/server.ts", "src/apps/server.test.ts"],
+  "exclude": []
+}

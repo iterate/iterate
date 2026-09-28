@@ -242,6 +242,14 @@ async function ensureResources(app: StartApp, options: { env?: string }) {
   );
 }
 
+/** How the route generator writes src/routeTree.gen.ts: `vite dev`/`vite build` (start-app-vite.ts)
+ *  and generate-route-tree alike. */
+export const routeTreeStyle = {
+  addExtensions: true,
+  semicolons: true,
+  quoteStyle: "double",
+} as const;
+
 /**
  * Regenerates src/routeTree.gen.ts with the same generator + config that @tanstack/react-start's vite
  * plugin uses. `check` fails
@@ -259,10 +267,7 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
       routesDirectory: path.resolve(root, "src/routes"),
       generatedRouteTree: routeTreePath,
       target: "react",
-      // Mirrors the router options in vite.config.ts.
-      addExtensions: true,
-      semicolons: true,
-      quoteStyle: "double",
+      ...routeTreeStyle,
       // @tanstack/start-plugin-core appends this Register block when the vite plugin runs the
       // generator; mirror it so this script produces the same output as the build. Source of the
       // footer (pin bumps may change it):

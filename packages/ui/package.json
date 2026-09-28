@@ -4,7 +4,10 @@
   "version": "0.0.1",
   "type": "module",
   "exports": {
-    "./apps/providers": "./src/apps/providers.tsx",
+    "./apps/document": "./src/apps/document.tsx",
+    "./apps/head": "./src/apps/head.ts",
+    "./apps/router": "./src/apps/router.tsx",
+    "./apps/server": "./src/apps/server.ts",
     "./globals.css": "./src/styles/globals.css",
     "./components/context-view/*": "./src/components/context-view/*.tsx",
     "./components/context-view/context-view-search": "./src/components/context-view/context-view-search.ts",
@@ -13,7 +16,7 @@
     "./hooks/*": "./src/hooks/*.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
     "test": "vitest run"
   },
   "dependencies": {
@@ -28,12 +31,14 @@
     "@codemirror/state": "catalog:",
     "@codemirror/view": "catalog:",
     "@fsegurai/codemirror-theme-bundle": "catalog:",
+    "@iterate-com/shared": "workspace:*",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-virtual": "^3.14.13",
     "class-variance-authority": "^0.7.1",
     "cmdk": "^1.1.1",
     "cn": "catalog:",
     "codemirror": "catalog:",
+    "iterate": "workspace:*",
     "lucide-react": "catalog:",
     "next-themes": "^0.4.6",
     "posthog-js": "1.434.12",
@@ -45,6 +50,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "jsdom": "30.1.1",

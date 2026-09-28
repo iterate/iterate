@@ -76,3 +76,10 @@ To bump the CLI, change the `shadcn` pin in `package.json` and refresh. To vendo
 | breadcrumb, label         | Upstream's                                                                                                                                                                                                                                                                     |
 
 Everything else here is our own code.
+
+## Every app's shell
+
+`src/apps/` is what each TanStack Start app's own shell files call with only what the app does
+differently: `server.ts` (`appServerEntry`, the Worker entry, typed by `tsconfig.worker.json`
+against the Workers types), `router.tsx` (`createAppRouter`), `document.tsx` (`AppDocument`) and
+`head.ts` (`appHead`, with the one viewport every app has).

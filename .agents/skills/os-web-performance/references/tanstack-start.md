@@ -31,8 +31,8 @@ The apps have no TanStack Query, so the Router and Query composition skill does 
 - `loader` and `beforeLoad` are isomorphic: on client navigation they run in the browser.
   Server-only work belongs behind a server function.
 - The first restrictive route renders its pending component in the server HTML
-  (`defaultPendingComponent`, shown after `defaultPendingMs: 300` in each `router.tsx`). A
-  faster spinner is not a faster route.
+  (`defaultPendingComponent`, shown after `defaultPendingMs: 300`, `createAppRouter` in
+  `packages/ui/src/apps/router.tsx`). A faster spinner is not a faster route.
 - Guide: [Selective SSR](https://tanstack.com/start/latest/docs/framework/react/guide/selective-ssr).
 
 ### Split route UI without delaying data
