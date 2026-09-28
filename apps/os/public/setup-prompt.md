@@ -168,7 +168,7 @@ user's, and the check is done. A key can end itself (`logout`), so no sign-in is
 ```bash
 TOKEN=$TOKEN pnpm exec tsx --eval 'import("capnweb").then(async ({ newHttpBatchRpcSession }) => {
   await newHttpBatchRpcSession(new Request(`${process.argv[1]}/api`, { headers: { authorization: `Bearer ${process.env.TOKEN}` } }))
-    .authenticate({ type: "from-server-cookie" }).logout(); })' <origin>
+    .authenticate({ type: "bearer", token: process.env.TOKEN }).logout(); })' <origin>
 ```
 
 `repo /repos/config: not created` means project creation failed. Check the project's page in the dash for the reason. For `Namespace

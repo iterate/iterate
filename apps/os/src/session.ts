@@ -46,18 +46,14 @@ import { IterateAppProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
-/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser and `bearer` is
- *  a device or script whose token rode the upgrade: the OAuth gate already resolved the session
- *  from the request, so either only says "hand me that session". Kit firmware (itx_mount.c) sends
- *  `{ type: "bearer" }` alone — the token-less form exists for it.
- *  `bearer` WITH a `token` is the in-band form (capnweb's own pattern): a client that opened the
- *  socket bare — a static page on another origin, whose browser cannot put a header on a WebSocket
- *  (api.ts) — presents its token here, and it goes through the same gate. `admin-secret` is the
- *  operator/CLI credential, verified in-band on any transport — a bare socket, or one the gate
- *  already resolved. */
+/** What `IterateRpcTarget.authenticate` accepts. `from-server-cookie` is the browser: the OAuth gate
+ *  already resolved its session from the request, so it only says "hand me that session". `bearer`
+ *  is a device or script, and always carries its `token` (capnweb's own pattern), which goes
+ *  through the same gate (rpc.ts `resolveBearer`). `admin-secret` is the operator/CLI credential,
+ *  verified in-band on any transport — a bare socket, or one the gate already resolved. */
 const SessionCredentials = z.discriminatedUnion("type", [
   z.object({ type: z.literal("from-server-cookie") }),
-  z.object({ type: z.literal("bearer"), token: z.string().min(1).optional() }),
+  z.object({ type: z.literal("bearer"), token: z.string().min(1) }),
   z.object({
     type: z.literal("admin-secret"),
     secret: z.string(),
@@ -80,17 +76,17 @@ export interface SessionInput {
   platformOrigin: string;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
-  /** The in-band bearer (rpc.ts): verify a token a bare socket presents and bind the transport to
-   *  its grant — null for a token the gate refuses. Absent on an endpoint with no such form. */
+  /** The in-band bearer (rpc.ts): verify the token `authenticate` presents and bind the transport
+   *  to its grant — null for a token the gate refuses. Absent where no `/api` root is served. */
   resolveBearer?: (token: string) => Promise<SessionAuthority | null>;
 }
 
 /** THE `/api` ROOT — the one thing a fresh capnweb connection holds. `authenticate(credentials)` is
  *  its only real verb: it returns the `SessionRpcTarget` you reach `.user`/`.projects`/… through.
  *  On a transport the OAuth gate resolved, `authenticate({ type: "from-server-cookie" })` hands back
- *  that session; a bare socket (api.ts) carries none, so it authenticates in-band —
- *  `authenticate({ type: "bearer", token })`, or `authenticate({ type: "admin-secret", secret })`,
- *  the deployment admin secret verified here.
+ *  that session; a device or script presents its token in-band,
+ *  `authenticate({ type: "bearer", token })`, and the operator
+ *  `authenticate({ type: "admin-secret", secret })`, the deployment admin secret verified here.
  *  Its teardown owns every context the session it vends hands out. */
 export class IterateRpcTarget extends RpcTarget implements IterateApi {
   readonly #input: SessionInput;
@@ -119,23 +115,20 @@ export class IterateRpcTarget extends RpcTarget implements IterateApi {
     if (!credentials.success)
       throw codedError(
         "INVALID_CREDENTIALS",
-        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' (a token on the upgrade, or in-band as `token`) or 'admin-secret' (operator).",
+        "authenticate({ type }): 'from-server-cookie' (browser), 'bearer' with its `token` (device or script) or 'admin-secret' (operator).",
       );
-    if (credentials.data.type === "bearer" && credentials.data.token) {
-      // IN-BAND: the same gate as a header on the upgrade, bound to this transport by rpc.ts. No
-      // account fact — a page or script presenting its token on every reconnect is not a sign-in.
+    if (credentials.data.type === "bearer") {
+      // The same gate as a header on the upgrade, bound to this transport by rpc.ts. No account
+      // fact — a device or script presenting its token on every reconnect is not a sign-in (the
+      // grant's last use already records it).
       const resolved = await this.#input.resolveBearer?.(credentials.data.token);
       if (!resolved) throw codedError("INVALID_CREDENTIALS", "Invalid or revoked bearer");
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, resolved);
     }
-    if (credentials.data.type === "from-server-cookie" || credentials.data.type === "bearer") {
+    if (credentials.data.type === "from-server-cookie") {
       if (!this.#resolved)
         throw codedError("UNAUTHENTICATED", "this transport carries no session — sign in first.");
-      // A person signing in is an account fact; a device or script presenting its token on every
-      // reconnect is not (the grant's last use already records it) — so only the browser form
-      // publishes one.
-      if (credentials.data.type === "from-server-cookie")
-        this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
+      this.#publishAuthenticationFact(this.#resolved.principal, "from-server-cookie");
       return new SessionRpcTarget(this.#input, this.#sessionTeardown, this.#resolved);
     }
     const admin = await verifyAdminSecret(

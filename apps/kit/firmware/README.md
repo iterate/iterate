@@ -227,7 +227,8 @@ mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
 The device dials `wss://<os base url host>/api` — the OS's public endpoint — with
-the blob's key as `Authorization: Bearer` on the upgrade: a personal access
+the blob's key as `Authorization: Bearer` on the upgrade, and again in-band in
+`authenticate`: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
 one project, revocable from that person's sessions list. The one WebSocket
 client sends it, over ESP-TLS on a board and OpenSSL on the Mac. The blob's

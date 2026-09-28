@@ -342,7 +342,8 @@ enum capnweb_status iterate_kit_itx_mount_start(
       sizeof("bearer") - 1U,
     }},
   };
-  struct capnweb_object_field auth_fields[1];
+  struct capnweb_expression token;
+  struct capnweb_object_field auth_fields[2];
   struct capnweb_expression auth;
   enum capnweb_status status;
 
@@ -360,20 +361,32 @@ enum capnweb_status iterate_kit_itx_mount_start(
   mount->options = *options;
   mount->state = ITERATE_KIT_ITX_MOUNT_AUTHENTICATING;
   /*
-   * THE CREDENTIAL ALREADY RODE THE UPGRADE. The blob's key is a personal
-   * access token the Kit page minted for the person who set this device up,
-   * scoped to this project; the transport sends it as `Authorization: Bearer`
-   * and the OS's OAuth gate resolves it before the first frame. This call
-   * only asks the session for what that gate resolved, so it carries no
-   * secret: `{type: "bearer"}` and nothing else.
+   * THE TOKEN, IN-BAND — like every other bearer client. The blob's key is a
+   * personal access token the Kit page minted for the person who set this
+   * device up, scoped to this project. The transport also presents it as
+   * `Authorization: Bearer` on the upgrade, so a refused key is the upgrade's
+   * 401 and the connection's key-refused backoff sees it; the OS checks that
+   * this token names the grant the upgrade did. The call serializes before
+   * it returns, so nothing here outlives the configuration's key.
    */
+  token = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {
+      options->project_api_key,
+      strlen(options->project_api_key),
+    }},
+  };
   auth_fields[0] = (struct capnweb_object_field){
     {"type", sizeof("type") - 1U},
     &bearer,
   };
+  auth_fields[1] = (struct capnweb_object_field){
+    {"token", sizeof("token") - 1U},
+    &token,
+  };
   auth = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {auth_fields, 1U}},
+    {.object = {auth_fields, 2U}},
   };
   status = capnweb_session_call_expressions(
       options->session,

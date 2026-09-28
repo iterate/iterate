@@ -85,8 +85,8 @@ static void mount_to_ready(struct fixture *fixture) {
 }
 
 /*
- * The handshake has three calls: `authenticate` asks for the session the bearer
- * on the upgrade resolved and carries no secret, `projects.get` is pure
+ * The handshake has three calls: `authenticate` presents the key in-band, as
+ * every bearer client does (it also rode the upgrade), `projects.get` is pure
  * addressing with one bare string argument, and lending this device back is
  * `provide(match, stub)`.
  *
@@ -108,13 +108,14 @@ static void mounts_and_retains_the_project_and_the_rule(void) {
       ITERATE_KIT_ITX_MOUNT_AUTHENTICATING);
   assert(fixture.captured_count == 2U);
   /*
-   * ONE FIELD AND NO SECRET. The token rode the upgrade as `Authorization:
-   * Bearer` and the OS's gate resolved it; this call asks for that session.
+   * THE KEY, IN-BAND. It also rode the upgrade as `Authorization: Bearer`;
+   * the OS checks both name one grant.
    */
   assert(strcmp(
       fixture.captured[0],
       "[\"push\",[\"pipeline\",0,[\"authenticate\"],"
-      "[{\"type\":\"bearer\"}]]]") == 0);
+      "[{\"type\":\"bearer\","
+      "\"token\":\"operator-secret-never-log\"}]]]") == 0);
   assert(strcmp(fixture.captured[1], "[\"pull\",1]") == 0);
 
   receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
