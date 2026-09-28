@@ -5,23 +5,50 @@ import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { appServerEntry } from "./server.ts";
 
+// `owns`: the one path the app's own routes answer ("own"), or "*" for every path.
 test.for([
-  { name: "/healthz answers ok before the app's own routes", path: "/healthz", expected: "ok" },
   {
-    name: "PostHog's files come from PostHog through /e/",
+    name: "/healthz answers ok before the app's own routes",
+    path: "/healthz",
+    owns: "*",
+    expected: "ok",
+  },
+  {
+    name: "PostHog's files come from PostHog through /e/, before the app's own routes",
     path: "/e/static/array.js",
+    owns: "*",
     expected: "fetched https://eu-assets.i.posthog.com/static/array.js",
   },
-  { name: "the app's own routes answer before the gate", path: "/.auth/login", expected: "own" },
-  { name: "a static file is the built asset", path: "/client-logo.svg", expected: "asset" },
-  { name: "every other path is a page", path: "/projects/p1", expected: "page /projects/p1" },
-  { name: "a signed-out landing is the landing page", path: "/", expected: "page /" },
-])("$name", async ({ path, expected }) => {
+  {
+    name: "the app's own routes answer before the gate",
+    path: "/.auth/login",
+    owns: "/.auth/login",
+    expected: "own",
+  },
+  {
+    name: "a static file is the built asset",
+    path: "/client-logo.svg",
+    owns: "/.auth/login",
+    expected: "asset",
+  },
+  {
+    name: "every other path is a page",
+    path: "/projects/p1",
+    owns: "/.auth/login",
+    expected: "page /projects/p1",
+  },
+  {
+    name: "a signed-out landing is the landing page",
+    path: "/",
+    owns: "/.auth/login",
+    expected: "page /",
+  },
+])("$name", async ({ path, owns, expected }) => {
   vi.stubGlobal("fetch", async (url: string) => new Response(`fetched ${url}`));
   const response = await testEntry({
     home: "/projects",
     before: async (request) =>
-      new URL(request.url).pathname === "/.auth/login" ? new Response("own") : null,
+      owns === "*" || new URL(request.url).pathname === owns ? new Response("own") : null,
   }).fetch(new Request(`https://app.example${path}`));
   expect({ status: response.status, body: await response.text() }).toMatchObject({
     status: 200,

@@ -7,8 +7,9 @@ import { proxyFirmwareFile } from "./firmware/firmware-proxy.ts";
 import { deviceAuth } from "./device-auth.ts";
 export { BrowserSession } from "iterate/app-session";
 
-/** Kit has no OAuth client of its own: every device is one (device-auth.ts), whose sign-in also
- *  answers the gate's `/.auth/login` and `/.auth/connect`. */
+/** Every device is its own OAuth client (device-auth.ts): `deviceAuth` answers `/.auth/login` and
+ *  `/.auth/connect` ahead of the gate, so no Kit sign-in uses the generic `/.auth/client.json` the
+ *  gate still publishes. */
 export default createServerEntry(
   appServerEntry(handler, {
     async before(request, config) {
