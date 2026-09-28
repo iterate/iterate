@@ -2,17 +2,29 @@
 // (≤ 60 s) for `/version` to name a version other than the one live before the deploy, so the hosts
 // are read on the new one, then one GET of each production project host, four tries 10 s apart while
 // it looks down. A `/version` that never moves, or a host still answering 421 or 5xx or not at all,
-// pages #error-pulse (top-level) and fails the workflow: every project host can answer 421 while
-// /version, the OAuth metadata smokes and the fault alarm (a 421 is no error) stay green. Faults on
-// the new version are the prd fault alarm's (scripts/ci/prd-fault-alarm.ts, every 15 minutes).
+// pages #error-pulse and fails the workflow: every project host can answer 421 while /version, the
+// OAuth metadata smokes and the fault alarm (a 421 is no error) stay green. Faults on the new version
+// are the prd fault alarm's (scripts/ci/prd-fault-alarm.ts, every 15 minutes).
+//
+// One page while the hosts are down (./slack.ts): a failing check edits the open page with what is
+// down now and how many deploys it has failed since; the next passing check resolves it. A check that
+// paged or edited says `paged=true` in its step's outputs, so the deploy's notify job does not page
+// the same failure again (docs/depot-ci.md#slack-channels).
 // READ-ONLY: `/version` and page GETs — it never creates a project, a user or an account.
 //
-//   node scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>] [--dry-run]
+//   node scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>] [--dry-run] [--test-run]
+//
+// `--dry-run` prints the page and posts nothing; `--test-run` posts what the check would, marked 🧪,
+// to #ci, and reads no page.
+import { execFileSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
+import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs } from "../../envs.ts";
-import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
+import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } from "./slack.ts";
 
 /** Production's project hosts people rely on: the iterate project's apex (envs.ts
  *  `osEnvs.prd.projectWildcard`) and projects' own custom hostnames, which live in the control plane
@@ -29,54 +41,138 @@ const VERSION_URL = `${osEnvs.prd!.baseUrl}/version`;
 
 /** Waits for `/version` to name a version other than --previous-version (the id it named before the
  *  deploy; empty when it did not answer then), then GETs each production project host. */
-export async function check(options: { previousVersion?: string; dryRun?: boolean } = {}) {
+export async function check(
+  options: { previousVersion?: string; dryRun?: boolean; testRun?: boolean } = {},
+) {
   const liveVersion = await readNewVersion(options.previousVersion);
   const hosts = await Promise.all(PRD_PROJECT_HOST_URLS.map(readHost));
-  const page = renderPostDeployPage({
+  const findings = postDeployFindings({
     previousVersion: options.previousVersion,
     liveVersion,
     hosts,
-    runUrl: process.env.DEPOT_JOB_URL,
   });
   console.log(JSON.stringify({ previousVersion: options.previousVersion, liveVersion, hosts }));
-  if (!page)
-    return `${osEnvs.prd!.workerName} version ${liveVersion} is live and every project host answers`;
-  if (!options.dryRun)
+  const reading = {
+    findings,
+    liveVersion,
+    sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    runUrl: z.string().parse(process.env.DEPOT_JOB_URL),
+    now: new Date(),
+  };
+  if (options.dryRun) console.log(postDeployTestText(reading));
+  else if (options.testRun)
     await getSlackClient().chat.postMessage({
-      channel: slackChannelIds["#error-pulse"],
-      text: page,
+      channel: slackChannelIds["#ci"],
+      text: postDeployTestText(reading),
     });
-  throw new Error(`prd post-deploy check failed:\n${page}`);
+  else {
+    const step = await reportPostDeploy(getSlackClient(), reading);
+    console.log(`[prd-post-deploy-check] ${step}`);
+    if ((step === "post" || step === "edit") && process.env.GITHUB_OUTPUT)
+      appendFileSync(process.env.GITHUB_OUTPUT, "paged=true\n");
+  }
+  if (findings.length > 0) throw new Error(`prd post-deploy check failed:\n${findings.join("\n")}`);
+  return `${osEnvs.prd!.workerName} version ${liveVersion} is live and every project host answers`;
 }
 
-/** The page for one post-deploy check, or null when `/version` names a new version and every
- *  project host answers: a line when `/version` still names the previous version (or did not
- *  answer), and a line per host that is down. Pure. */
-export function renderPostDeployPage(input: {
+/** What is wrong after a deploy, or nothing when `/version` names a new version and every project
+ *  host answers: `/version` still naming the previous version (or not answering), and each host that
+ *  is down. Pure. */
+export function postDeployFindings(input: {
   previousVersion?: string;
   /** What `/version` last named, undefined when it never answered 200. */
   liveVersion?: string;
   hosts: { url: string; status: number }[];
-  runUrl?: string;
-}): string | null {
+}): string[] {
   const versionLine = !input.liveVersion
-    ? `• ${VERSION_URL} did not answer 200`
+    ? `${VERSION_URL} did not answer 200`
     : input.liveVersion === input.previousVersion &&
-      `• ${VERSION_URL} still names \`${input.liveVersion.slice(0, 8)}\`, the version live before the deploy`;
-  const down = input.hosts.filter((host) => hostIsDown(host.status));
-  if (!versionLine && down.length === 0) return null;
-  return [
-    `🚨 prd post-deploy check failed after the ${osEnvs.prd!.workerName} deploy ${onCallMention}`,
-    versionLine,
-    ...down.map((host) =>
+      `${VERSION_URL} still names \`${input.liveVersion.slice(0, 8)}\`, the version live before the deploy`;
+  const down = input.hosts
+    .filter((host) => hostIsDown(host.status))
+    .map((host) =>
       host.status
-        ? `• the project host ${host.url} answered ${host.status}`
-        : `• the project host ${host.url} did not answer`,
-    ),
-    input.runUrl && `<${input.runUrl}|the deploy run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+        ? `the project host ${host.url} answered ${host.status}`
+        : `the project host ${host.url} did not answer`,
+    );
+  return [...(versionLine ? [versionLine] : []), ...down];
+}
+
+/** The page while the hosts are down: what is down after the deploy at `sha`, and since which
+ *  commit and how many deploys the check has failed. */
+export type PostDeployPage = {
+  findings: string[];
+  sha: string;
+  since: string;
+  deploys: number;
+  runUrl: string;
+};
+
+const MARKER = "prd post-deploy check failed after";
+
+/** The page while the hosts are down. Pure. */
+export function postDeployPageText(page: PostDeployPage, testRun: boolean) {
+  const worker = osEnvs.prd!.workerName;
+  const deploys = page.deploys === 1 ? "1 deploy" : `${page.deploys} deploys`;
+  return pageText({
+    what: `${MARKER} the ${worker} deploy at ${page.sha.slice(0, 7)}`,
+    impact: `${page.findings.join("; ")}; failing since ${page.since.slice(0, 7)}, ${deploys}`,
+    action: `read the check's output in the run, then roll back ${worker} or fix forward`,
+    link: page.runUrl,
+    testRun,
+  });
+}
+
+/** Since which commit and over how many deploys the open page says the check has failed. Pure. */
+export function readPostDeployPage(text: string) {
+  const [, since = "", deploys = "0"] = /failing since (\w+), (\d+) deploys?/.exec(text) || [];
+  return { since, deploys: Number(deploys) };
+}
+
+type PostDeployReading = {
+  findings: string[];
+  liveVersion?: string;
+  sha: string;
+  runUrl: string;
+  now: Date;
+};
+
+const passedWhy = (reading: PostDeployReading) =>
+  `every project host answers on \`${(reading.liveVersion || "").slice(0, 8)}\``;
+
+/** This reading's page, carrying forward since when and how many deploys the open page counted, or
+ *  undefined when the check passed. Pure. */
+export function postDeployPage(reading: PostDeployReading, openText: string | undefined) {
+  if (reading.findings.length === 0) return undefined;
+  const open = openText ? readPostDeployPage(openText) : undefined;
+  return {
+    findings: reading.findings,
+    sha: reading.sha,
+    since: open?.since || reading.sha,
+    deploys: (open?.deploys || 0) + 1,
+    runUrl: reading.runUrl,
+  };
+}
+
+/** What a 🧪 TEST RUN posts for this reading: the page it would post, or the resolution. Pure. */
+export function postDeployTestText(reading: PostDeployReading) {
+  const page = postDeployPage(reading, undefined);
+  return page ? postDeployPageText(page, true) : resolvedText(passedWhy(reading), true);
+}
+
+/** One check's page in #error-pulse (keepPage): a failure posts the page or edits the open one; a
+ *  pass resolves it. Returns the step taken. */
+export function reportPostDeploy(slack: WebClient, reading: PostDeployReading) {
+  return keepPage(slack, {
+    marker: MARKER,
+    sinceHours: 24,
+    now: reading.now,
+    render: async (openText) => {
+      const page = postDeployPage(reading, openText);
+      return page && postDeployPageText(page, false);
+    },
+    why: passedWhy(reading),
+  });
 }
 
 /** A project host that answers 421 (no project is served there) or a 5xx is down; 0 is no answer. */

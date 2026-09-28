@@ -2,6 +2,7 @@
 import type { WebClient } from "@slack/web-api";
 import { expect, test } from "vitest";
 import {
+  cutText,
   escalationText,
   findOpenPages,
   keepPage,
@@ -90,6 +91,13 @@ test.for([
   },
 ])("thread replies: $name", ({ text, expected }) => {
   expect(text).toBe(expected);
+});
+
+test("a title is cut on whole characters", () => {
+  expect(cutText("short", 80)).toBe("short");
+  expect(cutText("a".repeat(81), 80)).toBe(`${"a".repeat(80)}…`);
+  // a flag is two code points, a family seven: neither is split
+  expect(cutText("ab🇬🇧👨‍👩‍👧‍👦cd", 3)).toBe("ab🇬🇧…");
 });
 
 test("a test run's page goes to #ci, a real one to #error-pulse", () => {

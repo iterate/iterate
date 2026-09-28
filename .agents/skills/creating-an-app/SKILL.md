@@ -56,7 +56,7 @@ parents workflow once the app is on `main`.
 Read [Doppler setup](references/doppler.md). Then copy `.depot/workflows/deploy-dash.yml` to
 `deploy-<app>.yml`, and change the name, the concurrency group, the `paths` (the app's
 directory and the workflow itself), the Doppler project, the `working-directory`, and
-`APP_DISPLAY_NAME`/`PUBLIC_URL`. Depot registers triggers from the default branch, so the
+`APP_DISPLAY_NAME`. Depot registers triggers from the default branch, so the
 workflow first runs after it lands on `main` ([Depot CI](../../../docs/depot-ci.md)).
 
 A workers.dev `baseUrl` needs nothing else. A custom domain needs its zone in the prd account,
