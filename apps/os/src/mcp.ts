@@ -56,12 +56,16 @@ const runInstructionsOf = (platformOrigin: string) =>
     "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your token reaches several projects.",
     'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
     'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker, for at most ten minutes; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
-    'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. Commit edits with `commitFiles({ message, changes: [{ path, content }] })`; file paths are repo-relative. A config-repo commit publishes the project worker.',
+    'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. `commitFiles({ message, changes, parent? })` takes the whole new content of each changed file (`{ path, content }`, or `{ path, delete: true }`); there is no patch operation. To edit a file, change its text inside your script with any JavaScript (`replace`, a regular expression, split and join) and commit the result, passing the tip you read as `parent` so the commit is refused if main moved meanwhile; the file never has to pass through your context. File paths are repo-relative. A config-repo commit publishes the project worker.',
     `Read the current worker:
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').readFile('worker.ts')"}
 \`\`\``,
-    `Commit a file (this writes to the repo; replace the example path and content with your intended edit):
+    `Edit a file in place (this writes to the repo; replace the example path and pattern with your intended edit):
+\`\`\`json
+{"script":"async (itx) => { const repo = itx.repos.get('/repos/config'); const tip = await repo.tip(); const source = await repo.readFile('worker.ts', { commitOid: tip }); const next = source.replace(/Homepage of project /, 'Welcome to '); if (next === source) throw new Error('the homepage text is not in worker.ts'); return repo.commitFiles({ message: 'Change the homepage greeting', parent: tip, changes: [{ path: 'worker.ts', content: next }] }); }"}
+\`\`\``,
+    `Add a file, or several in one commit:
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
 \`\`\``,

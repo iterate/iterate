@@ -56,8 +56,8 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const examples = [...description.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) =>
     JSON.parse(match[1]),
   );
-  expect(examples).toHaveLength(3);
-  const [starter, readWorker, commitNote] = examples;
+  expect(examples).toHaveLength(4);
+  const [starter, readWorker, editWorker, commitNote] = examples;
   const started = await request("tools/call", { name: "run", arguments: starter });
   expect(started, JSON.stringify(started)).toMatchObject({
     isError: false,
@@ -79,6 +79,16 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
       `async (itx) => { const candidateSource = ${JSON.stringify(read.structuredContent.result)}; const { projectUrl } = await itx.whoami(); const response = await ${probe}; return response.status; }`,
     ),
   ).toBe(200);
+  // the edit example reads worker.ts at the tip, changes the text in the script, and commits with
+  // that tip as parent
+  const edited = await request("tools/call", { name: "run", arguments: editWorker });
+  expect(edited, JSON.stringify(edited)).toMatchObject({
+    isError: false,
+    structuredContent: { result: { commitOid: expect.any(String), changedPaths: ["worker.ts"] } },
+  });
+  expect(await root.repos.get("/repos/config").readFile("worker.ts")).toBe(
+    read.structuredContent.result.replace("Homepage of project ", "Welcome to "),
+  );
   const noted = await request("tools/call", { name: "run", arguments: commitNote });
   expect(noted, JSON.stringify(noted)).toMatchObject({
     isError: false,
@@ -123,7 +133,7 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     ),
   ).toBeDefined();
   const requested = events.filter((e) => e.type === "events.iterate.com/itx/run-requested");
-  expect(requested.length).toBe(8);
+  expect(requested.length).toBe(9);
   expect(
     requested.every(
       (e) => e.source.principal.actor === principal.actor && e.source.grant === grantId,
