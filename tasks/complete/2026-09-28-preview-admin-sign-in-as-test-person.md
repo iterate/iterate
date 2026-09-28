@@ -1,11 +1,14 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
 # An admin signs in to a preview as the PR's test person from the platform's own sign-in page
 
-**Status:** spec'd, implementation starting. Nothing built yet.
+**Status:** done, CI green (iterate/iterate#3393). Built: the `/login` offer and its POST, attribution
+through consent, the key-mint refusal, the proxied apps' PR links and the seed's fetch routes, unit,
+workers and browser tests, docs. Missing: nothing in scope; Docs gets its link and route when #3384
+merges.
 
 ## Why
 
@@ -55,18 +58,25 @@ app Worker's own `/.auth/login`, which those Workers don't serve (404).
 
 ## Checklist
 
-- [ ] `/login`: `login_hint` in the search; offer for admins; sign-in options return to the offer
-- [ ] `POST /login` `sign_in_as`: guards, one-hour impersonated issuer session, both records, old session ended
-- [ ] `SignedIn` shows the offer button and, for an impersonation, who you are
-- [ ] consent from an impersonated issuer session: `impersonatedBy` + capped deadline
-- [ ] `grants.mint` refuses an impersonation
-- [ ] preview-config: `proxiedAppSignInLink`, the fetch route per proxied app; preview.ts uses both
-- [ ] unit rows (preview.test.ts): link shape, section row, route shape
-- [ ] workers test rows: POST guards, the session's attribution/deadline, consent + mint from it
-- [ ] specs: admin via the link lands on Notes as the test person (paths only); non-admin and non-test hint get no offer
-- [ ] docs: dev-environments.md (PR sign-in links, Acting as users and admins), comments
-- [ ] PR (draft) with risk map calling out the trust boundary
+- [x] `/login`: `login_hint` in the search; offer for admins; sign-in options return to the offer _`login.server.ts` `loginState` (`afterSignIn`, `signInAs`)_
+- [x] `POST /login` `sign_in_as`: guards, one-hour impersonated issuer session, both records, old session ended _`src/sign-in-as-test-person.ts`; `startIssuerSession` takes `impersonatedBy`_
+- [x] `SignedIn` shows the offer button and, for an impersonation, who you are _`components/login/signed-in.tsx`_
+- [x] consent from an impersonated issuer session: `impersonatedBy` + capped deadline _`consent.ts` `#complete`_
+- [x] `grants.mint` refuses an impersonation _`grants.ts`_
+- [x] preview-config: `proxiedAppSignInLink`, the fetch route per proxied app; preview.ts uses both _`testPersonSignInLink`, `proxiedAppRoute`, `seedSignIn`_
+- [x] unit rows (preview.test.ts): link shape, section row, route shape
+- [x] workers test rows: POST guards, the session's attribution/deadline, consent + mint from it _one row in `__workers-tests__/admin-and-impersonation.test.ts`_
+- [x] specs: admin via the link lands on Notes as the test person (paths only); non-admin and non-test hint get no offer _`specs/notes/test-person-link.spec.ts`, `specs/os/sign-in-as-test-person.spec.ts`; passed on the PR's preview_
+- [x] docs: dev-environments.md (PR sign-in links, Acting as users and admins), comments _plus apps/os README, testing.md's Notes row_
+- [x] PR (draft) with risk map calling out the trust boundary
 
 ## Implementation notes
 
-(log goes here)
+- `IMPERSONATION_MS` and `grantIdOf` moved to oauth.ts so the issuer session and consent share them.
+- The local Playwright setup treats localhost as subdomains ingress, so the Notes link spec only runs
+  against a preview; `lint/dated-skips.test.ts` allowlists its gate. Ran it against the PR's own
+  preview with `doppler run`, and it passes in CI's Browser specs.
+- A spec run against a PR's preview can fail with "no project/created event" when the next push's
+  Clean up superseded deletes that deployment mid-run (it then answers 404). Not a defect.
+- Stale generated `apps/os/wrangler*.jsonc` left in this worktree from an old checkout broke
+  `vite build`; moved aside, not committed.
