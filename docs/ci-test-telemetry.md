@@ -91,10 +91,12 @@ Vitest (retry-telemetry-reporter.ts) / Playwright (playwright-telemetry-reporter
   test-results/ci-telemetry/raw/*.json      schema-validated, atomic, no network I/O
                     │
                     ▼  if: always()
-  scripts/ci/upload-test-telemetry.ts --flake-suites unit|specs|preview-e2e
+  scripts/ci/test-evidence.ts finalize --flake-suites unit|specs|preview-e2e
+     upload-test-telemetry.ts's finalizer:
      checks every expected runner left a complete artifact
      writes test-results/ci-telemetry/manifest.json
      writes the job's suite's suite-summary.json beside its flake records
+     then the test evidence manifest (test-evidence.md)
                     │
                     ▼  if: always(), if-no-files-found: error
   actions/upload-artifact: {unit,preview-os,main-os}-test-artifacts-attempt-<job attempt id>

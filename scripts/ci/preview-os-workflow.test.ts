@@ -373,30 +373,40 @@ test("a test job names its preview by the PR's number, or by preview-name withou
   expect(preview.on.workflow_dispatch?.inputs).toHaveProperty("preview-name");
 });
 
-// Without a preview there is nothing to keep: the evidence steps follow the deployed target the suite
-// reads once its preview is there (apps/os/scripts/preview.ts `writeDeployedTarget`), not the guard,
-// the path check or the wait. The R2 upload and its fallback report follow the manifest's write, and
-// the Playwright report exists only once the specs ran.
+// The evidence is kept once the suite read its deployed target, and the steps after the finalizer
+// follow its outputs (scripts/ci/test-evidence.ts `finalize`).
 test("a test job keeps its evidence whenever its suite read its deployed target, and only then", () => {
   for (const suite of suites) {
     const steps = preview.jobs[suite.job]!.steps || [];
     const evidence = steps.slice(steps.findIndex((step) => step.id === "suite") + 1);
-    const followers = evidence.filter(
-      (step) =>
-        step.id === "evidence-upload" ||
-        step.name === "Report a test evidence step that could not" ||
-        step.with?.name === "public-playwright-report",
-    );
-    expect(evidence.length - followers.length).toBeGreaterThan(0);
-    for (const step of evidence.filter((step) => !followers.includes(step)))
-      expect(step, step.name).toMatchObject({
-        if: "${{ always() && hashFiles('test-results/target.json') != '' }}",
-      });
-    // the Playwright report only the specs write
-    expect(followers.map((step) => step.if)).toEqual([
-      "${{ always() && hashFiles('test-results/manifest.json') != '' }}",
-      "${{ always() && hashFiles('test-results/playwright-html/index.html') != '' }}",
-      "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+    expect(evidence[0]).toMatchObject({
+      id: "evidence-write",
+      if: "${{ always() && steps.suite.outcome != 'skipped' }}",
+      run: expect.stringContaining("finalize --only-with-target"),
+    });
+    expect(evidence.slice(1).map((step) => [step.name, step.if])).toEqual([
+      [
+        "Upload the test evidence to R2",
+        "${{ always() && steps.evidence-write.outputs.manifest == 'written' }}",
+      ],
+      // the Depot artifacts also after a step that failed before it could say it kept them
+      [
+        "Upload flake records",
+        "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}",
+      ],
+      [
+        "Upload results",
+        "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}",
+      ],
+      // the Playwright report only the specs write
+      [
+        "Upload public Playwright HTML report",
+        "${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}",
+      ],
+      [
+        "Report a test evidence step that could not",
+        "${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}",
+      ],
     ]);
   }
 });

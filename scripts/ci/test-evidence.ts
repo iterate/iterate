@@ -17,19 +17,21 @@ import {
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
 import { ciBucketEnvs } from "../../envs.ts";
-import { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
+import uploadTestTelemetry, { loadTestTelemetryArtifacts } from "./upload-test-telemetry.ts";
 
 /**
  * THE TEST EVIDENCE FOLDER'S MANIFEST, AND ITS UPLOAD TO R2 (docs/test-evidence.md). Two commands,
- * each a step after a CI job's telemetry finalizer, run from the repository root:
+ * each a step after a CI job's tests, run from the repository root with Node's own type stripping:
  *
- *   pnpm tsx scripts/ci/test-evidence.ts write [--cancelled]  # manifest.json
- *   pnpm tsx scripts/ci/test-evidence.ts upload               # into R2, the manifest last
+ *   node scripts/ci/test-evidence.ts finalize --flake-suites <suite> [--cancelled]
+ *     # the telemetry finalizer, then manifest.json
+ *   node scripts/ci/test-evidence.ts upload   # into R2, the manifest last
  *
- * `upload` runs in the Test, Preview OS and Main OS e2e jobs (testEvidenceJobs), with Doppler
- * `_shared/preview`'s CLOUDFLARE_API_TOKEN. Neither step decides the job (both are
- * `continue-on-error`): the tests did. A step that fails says so in a warning annotation and a line
- * of the job's summary (reportStepFailure); one that fails before it can, a later step reports
+ * They run in the Test, Preview OS and Main OS e2e jobs (testEvidenceJobs), `upload` with Doppler
+ * `_shared/preview`'s CLOUDFLARE_API_TOKEN. Neither the manifest nor the upload decides the job (the
+ * upload is `continue-on-error`, and `finalize` fails only on the telemetry's account): the tests
+ * did. A write or upload that fails says so in a warning annotation and a line of the job's summary
+ * (reportStepFailure); one that fails before it can, a later step reports
  * (scripts/ci/test-evidence-unreported.sh).
  */
 export async function writeTestEvidence(input: {
@@ -292,21 +294,28 @@ const REQUEST_TIMEOUT_MS = 60_000;
  *  outage costs the job a minute and a half. The e2e job is a pull request's slowest check, and this
  *  evidence decides nothing. */
 const UPLOAD_DEADLINE_MS = 90_000;
+/** PUTs in flight at once. One takes about half a second to the WEUR bucket however many go
+ *  together (2026-09-27), so an upload's time is its waves: a job's 10 to 53 files are one or two
+ *  at 32, and the manifest one more. */
+const UPLOAD_CONCURRENCY = 32;
+/** The bodies those PUTs hold in memory at once. A failed spec's trace or video can be tens of
+ *  megabytes; a file larger than this goes alone. */
+const UPLOAD_BYTES_IN_FLIGHT = 128 * 1024 * 1024;
 
 /**
  * PUTs the folder into the CI bucket through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/):
- * every file the manifest lists, eight at a time, then the manifest. The manifest is the commit
- * point: a folder whose manifest is in R2 is complete.
+ * every file the manifest lists, the largest first and up to UPLOAD_CONCURRENCY at once, then the
+ * manifest. The manifest is the commit point: a folder whose manifest is in R2 is complete.
  *
  * The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
  * CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
  * S3 key pair, its id the access key id and the SHA-256 of its value the secret
  * (https://developers.cloudflare.com/r2/api/tokens/#get-s3-api-credentials-from-an-api-token). S3,
- * not the Cloudflare API's own object endpoint (the one `wrangler r2 object put` uses): on
- * 2026-09-24 that endpoint replaced an existing object despite `If-None-Match: *` and stored a body
- * whose `Content-MD5` was wrong, and each of its requests counts against the token owner's 1,200
- * per five minutes, which preview deploys share. R2's S3 API refused both (412, and
- * XAmzContentSHA256Mismatch).
+ * not the Cloudflare API's own object endpoint (the one `wrangler r2 object put` uses): that
+ * endpoint can replace an existing object despite `If-None-Match: *` and store a body whose
+ * `Content-MD5` is wrong, where R2's S3 API refuses both (412, and XAmzContentSHA256Mismatch), and
+ * each of its requests counts against the token owner's 1,200 per five minutes, which preview
+ * deploys share.
  *
  * Each PUT is write-once (`If-None-Match: *`). A 412 means the key exists: when it holds these very
  * bytes (a single PUT's ETag is the body's MD5), it is this upload's own earlier try, landed after
@@ -384,20 +393,9 @@ export async function uploadTestEvidence(input: {
     }
     throw new Error(`R2 PUT ${input.bucketName}/${key}: ${answer}`);
   };
-  for (let start = 0; start < manifest.files.length; start += 8) {
-    await Promise.all(
-      manifest.files
-        .slice(start, start + 8)
-        .map(async (file) =>
-          put(
-            `${prefix}${file.path}`,
-            file.path,
-            await readFile(join(root, file.path)),
-            file.sha256,
-          ),
-        ),
-    );
-  }
+  await inPool(manifest.files, async (file) =>
+    put(`${prefix}${file.path}`, file.path, await readFile(join(root, file.path)), file.sha256),
+  );
   const manifestPath = relative(testEvidencePaths.root, testEvidencePaths.manifest);
   await put(`${prefix}${manifestPath}`, manifestPath, manifestBytes, sha256(manifestBytes));
   const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
@@ -414,6 +412,48 @@ type Send = (
   what: string,
   request: (signal: AbortSignal) => Promise<Response>,
 ) => Promise<Response>;
+
+/**
+ * `put` for every file, the largest first, up to UPLOAD_CONCURRENCY at once and holding at most
+ * UPLOAD_BYTES_IN_FLIGHT of their bytes (a file larger than that goes alone). The first failure
+ * rejects at once and nothing more starts.
+ */
+function inPool(
+  files: TestEvidenceManifest["files"],
+  put: (file: TestEvidenceManifest["files"][number]) => Promise<void>,
+) {
+  const queue = files.toSorted((a, b) => b.bytes - a.bytes);
+  let active = 0;
+  let bytes = 0;
+  let failed = false;
+  return new Promise<void>((resolve, reject) => {
+    const next = () => {
+      if (failed) return;
+      if (queue.length === 0 && active === 0) return resolve();
+      while (
+        queue.length > 0 &&
+        active < UPLOAD_CONCURRENCY &&
+        (active === 0 || bytes + queue[0]!.bytes <= UPLOAD_BYTES_IN_FLIGHT)
+      ) {
+        const file = queue.shift()!;
+        active++;
+        bytes += file.bytes;
+        put(file).then(
+          () => {
+            active--;
+            bytes -= file.bytes;
+            next();
+          },
+          (error: unknown) => {
+            failed = true;
+            reject(error);
+          },
+        );
+      }
+    };
+    next();
+  });
+}
 
 /**
  * The API token's id, which is its S3 access key id. A user token answers `/user/tokens/verify`,
@@ -457,6 +497,8 @@ export async function testEvidenceSource(repoRoot: string) {
       cwd: repoRoot,
       encoding: "utf8",
       env: { ...process.env, ...env },
+      // a git that never answers holds the event loop, so the manifest's deadline could not pass
+      timeout: WRITE_DEADLINE_MS,
     }).trim();
   const directory = await mkdtemp(join(tmpdir(), "test-evidence-index-"));
   try {
@@ -533,11 +575,12 @@ export const stepFailureTitles = {
 };
 
 /**
- * A failed step's report. The step is `continue-on-error`, so the job's result stays the tests';
- * this makes the missing evidence visible on the run's page: a warning annotation and a line of the
- * job's summary saying why. Then a marker in the runner's temporary directory says it reported, so
- * the workflow's next step (scripts/ci/test-evidence-unreported.sh), which reports a step that
- * failed before it got here (Doppler, pnpm, the step's timeout), does not report it twice.
+ * A failed write's or upload's report. Neither decides the job (the upload's step is
+ * `continue-on-error`, and a failed write leaves `finalize` the finalizer's result), so this makes
+ * the missing evidence visible on the run's page: a warning annotation and a line of the job's
+ * summary saying why. Then a marker in the runner's temporary directory says it reported, so the
+ * workflow's next step (scripts/ci/test-evidence-unreported.sh), which reports a step that failed
+ * before it got here (Node, Doppler, the step's timeout), does not report it twice.
  */
 export function reportStepFailure(input: {
   command: keyof typeof stepFailureTitles;
@@ -562,36 +605,121 @@ function stepSummary(environment: NodeJS.ProcessEnv, line: string) {
   if (environment.GITHUB_STEP_SUMMARY) appendFileSync(environment.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
-/** manifest.json, in the job's test evidence folder. */
-export async function write(
+/**
+ * THE STEP AFTER A JOB'S TESTS, in one process (docs/test-evidence.md#what-ci-does): the telemetry
+ * finalizer (upload-test-telemetry.ts: every expected runner left a complete artifact, the unit row
+ * budget, the suite's suite-summary.json), then the test evidence manifest. The finalizer decides
+ * the step: missing, incomplete or foreign telemetry fails it, once the manifest is written. The
+ * manifest decides nothing: a failure to write it is a warning and a line of the job's summary
+ * (reportStepFailure), and the step's result stays the finalizer's.
+ *
+ * The step's outputs say what the folder holds, each as soon as it is true: `evidence=kept` before
+ * anything else, `manifest=written`, and `playwright-report=written` when it holds Playwright's HTML
+ * report. The steps after it read these rather than `hashFiles()`, which costs the runner about
+ * 0.2 s per condition (the job's first about 0.6 s), one at a time even inside a parallel block.
+ */
+export async function finalize(
   options: {
+    /** The flake suite this job ran, for its suite-summary.json. */
+    flakeSuites?: "unit" | "specs" | "preview-e2e";
+    /** Expect the checked-out tree's test workspaces (the Test workflow); otherwise the list
+     *  TEST_TELEMETRY_EXPECTED_WORKSPACES names (a preview test job's `iterate-root` or `os`). */
+    expectUnitWorkspaces?: boolean;
+    /** A suite job's: keep evidence only once its suite read the deployed target
+     *  (test-results/target.json). A job that never had a preview has nothing to keep. */
+    onlyWithTarget?: boolean;
     /** The job was cancelled (the workflow's `cancelled()`). */
     cancelled?: boolean;
   } = {},
 ) {
-  const repoRoot = process.cwd();
+  const { flakeSuites, expectUnitWorkspaces, onlyWithTarget, cancelled = false } = options;
+  if (onlyWithTarget && !existsSync(resolve(process.cwd(), testEvidencePaths.target))) {
+    console.log(
+      `[test-evidence] no ${testEvidencePaths.target}: the suite had no preview to test, so there is no evidence to keep`,
+    );
+    return;
+  }
+  stepOutput("evidence", "kept");
+  const telemetry = await uploadTestTelemetry({
+    flakeSuites,
+    expectUnitWorkspaces,
+    cancelled,
+  }).then(
+    () => undefined,
+    (error: unknown) => ({ error }),
+  );
+  const manifest = await writeManifest({
+    repoRoot: process.cwd(),
+    environment: process.env,
+    cancelled,
+  });
+  if (manifest) {
+    stepOutput("manifest", "written");
+    const report = `${relative(testEvidencePaths.root, testEvidencePaths.playwrightReport)}/index.html`;
+    if (manifest.files.some((file) => file.path === report))
+      stepOutput("playwright-report", "written");
+  }
+  if (telemetry) throw telemetry.error;
+}
+
+/** One of the step's outputs (GITHUB_OUTPUT), for the steps after it. */
+function stepOutput(name: string, value: string) {
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+}
+
+/** How long the manifest may take, a second or two in CI: one pass over the folder and a git tree.
+ *  Past it the manifest is a failed write, so one that never finishes cannot run its step, which
+ *  also carries the finalizer's result, into the step's two-minute timeout. */
+const WRITE_DEADLINE_MS = 60_000;
+
+/** manifest.json, in the job's test evidence folder. A failure, or no manifest by
+ *  WRITE_DEADLINE_MS, is reported (reportStepFailure), never thrown: the manifest decides nothing. */
+export async function writeManifest(input: {
+  repoRoot: string;
+  /** The job's, as writeTestEvidence reads it, and the report's GITHUB_STEP_SUMMARY and RUNNER_TEMP. */
+  environment: NodeJS.ProcessEnv;
+  cancelled: boolean;
+  /** The source the manifest records, testEvidenceSource's by default. */
+  source?: (repoRoot: string) => ReturnType<typeof testEvidenceSource>;
+}) {
+  const { repoRoot, environment, source = testEvidenceSource } = input;
+  const pastDeadline = Promise.withResolvers<never>();
+  const deadline = setTimeout(
+    () => pastDeadline.reject(new Error(`not written within ${WRITE_DEADLINE_MS / 1000} s`)),
+    WRITE_DEADLINE_MS,
+  );
   try {
-    const manifest = await writeTestEvidence({
-      repoRoot,
-      environment: process.env,
-      cancelled: options.cancelled ?? false,
-      source: await testEvidenceSource(repoRoot),
-      toolchain: { node: process.version, platform: process.platform, arch: process.arch },
-      createdAt: new Date(),
-    });
+    const manifest = await Promise.race([
+      (async () =>
+        writeTestEvidence({
+          repoRoot,
+          environment,
+          cancelled: input.cancelled,
+          source: await source(repoRoot),
+          toolchain: { node: process.version, platform: process.platform, arch: process.arch },
+          createdAt: new Date(),
+        }))(),
+      pastDeadline.promise,
+    ]);
     const bytes = manifest.files.reduce((total, file) => total + file.bytes, 0);
     console.log(
       `[test-evidence] ${manifest.testRunId} ${manifest.result}: ${manifest.files.length} files, ${bytes} bytes, tree ${manifest.source.tree}${manifest.source.dirty ? " (not the commit's)" : ""}`,
     );
     for (const diagnostic of manifest.diagnostics) console.log(`[test-evidence] ${diagnostic}`);
+    return manifest;
   } catch (error) {
-    failStep("write", error);
+    reportStepFailure({ command: "write", error, environment });
+    console.error(error);
+    return undefined;
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
 /** The test evidence folder into R2, the manifest last (CLOUDFLARE_API_TOKEN, Doppler _shared/preview). */
 export async function upload() {
   const bucket = ciBucketEnvs.ci;
+  const started = performance.now();
   try {
     const { CLOUDFLARE_API_TOKEN } = process.env;
     if (!CLOUDFLARE_API_TOKEN)
@@ -603,12 +731,17 @@ export async function upload() {
       apiToken: CLOUDFLARE_API_TOKEN,
       fetch,
     });
-    console.log(`[test-evidence] r2://${bucket.bucketName}/${uploaded.prefix}`);
+    // the upload's own time, and the process's: the difference is Node's start-up
+    console.log(
+      `[test-evidence] r2://${bucket.bucketName}/${uploaded.prefix} (${uploaded.objects} objects in ${seconds(performance.now() - started)}, ${seconds(performance.now())} after Node started)`,
+    );
     stepSummary(process.env, uploadedSummaryLine({ bucketName: bucket.bucketName, ...uploaded }));
   } catch (error) {
     failStep("upload", error);
   }
 }
+
+const seconds = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
 
 /** Reports the failed step (reportStepFailure) and exits 1. */
 function failStep(command: keyof typeof stepFailureTitles, error: unknown): never {

@@ -51,8 +51,8 @@ tree than the deploy built: compare `target.deploymentId` with the deploy's own 
 | Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
 | createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)    |
 | Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
-| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/upload-test-telemetry.ts`                                                                  |
-| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts write`                                                                    |
+| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/upload-test-telemetry.ts`'s finalizer   |
+| The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |
 | Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
 | The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs          |
 
@@ -62,31 +62,54 @@ nothing.
 
 ### What CI does
 
-In each of those jobs, after the telemetry finalizer:
+In each of those jobs, after the steps that run tests (the Test job's Vitest and Kit's CTest side by
+side, a suite job's suite):
 
-1. **Write the test evidence manifest** (`pnpm tsx scripts/ci/test-evidence.ts write`,
-   `if: always()`, `--cancelled` when the job was, `continue-on-error`, two minutes at most). The
+1. **Check test telemetry, write the suite summary and the test evidence manifest**
+   (`node scripts/ci/test-evidence.ts finalize --flake-suites <suite>`, `--cancelled` when the job
+   was, two minutes at most). The Test job runs it `if: always()`; a suite job whenever its suite
+   step ran, with `--only-with-target`, so it keeps a folder only once the suite read the deployed
+   target. One step and one Node process, with Node's own type stripping rather than `tsx`, and
+   Node's compile cache (`NODE_COMPILE_CACHE` in the runner's temporary directory), which the
+   upload's Node starts from. First the telemetry finalizer
+   ([CI telemetry](ci-test-telemetry.md#test-telemetry-artifacts)), then the manifest: the
    workflow passes the outcome of every step that runs tests in `TEST_EVIDENCE_STEPS`
-   (`tests=… kit-host-tests=…` in the Test job). It hashes every file and writes `manifest.json`.
-2. **Upload the test evidence to R2** (`pnpm tsx scripts/ci/test-evidence.ts upload`,
-   `if: always()` when a manifest exists, `continue-on-error`, three minutes at most). A cancelled
-   job's folder goes too, its manifest saying `cancelled`. The step prints the run's prefix
-   (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/`) and writes it
-   to the job's summary. It runs in one `parallel:` block beside the Depot artifact uploads
-   ([parallel steps](depot-ci.md#parallel-steps)).
+   (`tests=… kit-host-tests=…` in the Test job), and it hashes every file and writes
+   `manifest.json`. Its outputs say what the folder holds, each once it is true: `evidence=kept`,
+   `manifest=written`, and `playwright-report=written`. The steps after it read those instead of
+   `hashFiles()`, which costs the runner about 0.2 s per condition, one at a time
+   ([parallel steps](depot-ci.md#parallel-steps)). A suite job's Depot artifact uploads (results
+   and flake records) also run when this step failed, so a Node that failed before `evidence=kept`
+   still keeps a failed suite's traces and flake lines.
+2. **Upload the test evidence to R2** (`node scripts/ci/test-evidence.ts upload`, `if: always()`
+   once the manifest is written, `continue-on-error`, three minutes at most), in one `parallel:`
+   block beside the Depot artifact uploads. Its Doppler secrets (`_shared/preview`) come without
+   a request: an earlier step, "Fetch the evidence upload's secrets", saved them into Doppler's
+   encrypted fallback file in the runner's temporary directory, and `doppler run --fallback-only`
+   reads them. In the Test job that step runs beside the tests, in a suite job before the suite,
+   while the deploy it waits for runs. Without that file (a failed fetch is a warning there) the
+   upload fetches them itself. Up to 32 files at once, the largest first, holding at most 128 MiB of them, then the manifest; a job's folder of 10 to 53
+   files is one or two waves of about half a second each and the manifest's. A cancelled job's
+   folder goes too, its manifest saying `cancelled`. The step prints the run's prefix, the object
+   count and how long the upload and the process took
+   (`[test-evidence] r2://iterate-ci/evidence/ci/trust=pr/date=…/job=…/testrun_…/ (22 objects in …)`)
+   and writes the prefix to the job's summary.
 3. **Report a test evidence step that could not** (`scripts/ci/test-evidence-unreported.sh`), after
    that block, when either step's outcome is `failure`.
 
-The write step fails only when the job has no Depot job attempt to name the run after, git cannot
-record the source, or a runner's fields do not fit the schema. Everything else it cannot read goes
-into the manifest's `diagnostics`, and the manifest is written anyway: the run whose runner crashed
-is the one whose evidence matters most.
+The write fails only when the job has no Depot job attempt to name the run after, git cannot
+record the source, a runner's fields do not fit the schema, or it is not done within a minute (a
+second or two is usual), which keeps a stuck manifest from running the step into its timeout.
+Everything else it cannot read goes into the manifest's `diagnostics`, and the manifest is written
+anyway: the run whose runner crashed is the one whose evidence matters most.
 
-Neither step decides the job; the tests' own steps and the finalizer do. A failure is made visible
-instead: the script's own warning annotation and summary line ("Test evidence not in R2", "No test
-evidence manifest"); the plain-shell fallback step for a step that failed before it could report
-(Doppler refusing `DOPPLER_TOKEN`, `pnpm tsx` crashing, the step's own timeout); and
-`test_evidence_uploaded` on each attempt's `ci job attempt finished` event in PostHog
+Neither the manifest nor the upload decides the job; the tests' own steps and the finalizer do. The
+first step fails when the finalizer does (missing, incomplete or foreign telemetry, once the
+manifest is written), not when the manifest cannot be written. A failure is made visible instead:
+the script's own warning annotation and summary line ("Test evidence not in R2", "No test evidence
+manifest"); the plain-shell fallback step for a step that failed before it could report (Node or
+Doppler failing, the step's own timeout), which reports the write only when the step left no
+manifest; and `test_evidence_uploaded` on each attempt's `ci job attempt finished` event in PostHog
 ([CI telemetry](ci-test-telemetry.md#ci-events-in-posthog)), which counts attempts whose folder
 never reached R2.
 

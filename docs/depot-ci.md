@@ -69,7 +69,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | File                  | Runs on                                          | What it does                                                                                           |
 | --------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | `lint-typecheck.yml`  | PR, main push, dispatch                          | **Lint and Typecheck** (required): lint, typecheck, format check, knip                                 |
-| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, then the Kit firmware host tests                                     |
+| `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                            |
 | `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                           |
 | `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The Slack PR update and the daily PR dashboard                                                         |
 | `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace           |
@@ -330,8 +330,17 @@ A step inside a `parallel:` block behaves as it would in the list: its `id`,
 `uses` and `with` all hold. Later steps read its `steps.<id>.outcome` and
 outputs, its `$GITHUB_STEP_SUMMARY` lines reach the job's summary, and it shares
 `$RUNNER_TEMP` and the workspace. After a failed step, only the block's steps
-with `always()` run. The test jobs run their evidence uploads in one such block,
-and the report step after the block reads the R2 upload's outcome.
+with `always()` run. The Test job runs Kit's firmware host tests and the evidence
+upload's Doppler fetch beside `pnpm test` in one such block, and the test jobs run their evidence uploads in another; the
+report step after that block reads the R2 upload's outcome.
+
+A condition that calls `hashFiles()` costs the runner about 0.2 s, the job's first
+one about 0.6 s, and a block's conditions are evaluated one at a time before its
+steps start: on a `2x8`, a block of three steps each with `hashFiles()`
+started its first command 0.63 s after the step before, against 0.1 s with plain
+conditions (probe runs `l0k2xd618v`, `prqd1q8n48`, `8d2zn6gshd`, 2026-09-27). The
+test jobs' evidence steps read the finalizer step's outputs instead
+([test evidence](test-evidence.md#what-ci-does)).
 
 ### Reliability defaults
 
