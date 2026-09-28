@@ -14,7 +14,9 @@
  * divider carrying the actual amplifier output; preserving that signal is
  * better than reconstructing it from pristine PCM, but its fixed attenuation
  * is board-specific. Keeping the calibration at this interface makes the cost and
- * clipping observable and lets host tests prove it cannot wrap.
+ * clipping observable and lets host tests prove it cannot wrap. StackChan also
+ * raises its processed uplink with it, a gain that cannot queue, smear or
+ * alter phoneme timing.
  *
  * Input and output may be the same array. `clipped_samples` is a lifetime
  * saturating counter owned by the caller so abnormal board levels remain in

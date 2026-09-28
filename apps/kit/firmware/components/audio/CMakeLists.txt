@@ -5,7 +5,6 @@
 set(ITERATE_KIT_AUDIO_SOURCES
   src/aec_capture_bridge.c
   src/aec_reference_scaler.c
-  src/aec_uplink_selector.c
   src/audio_codec.c
   src/audio_processor.c
   src/pcm_format.c

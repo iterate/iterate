@@ -17,7 +17,6 @@ struct fixture {
   struct iterate_kit_aec_capture_bridge bridge;
   int16_t near[processing_samples];
   int16_t reference[processing_samples];
-  int16_t playout[processing_samples];
   int16_t clean[processing_samples];
   int16_t egress[wire_samples];
   int16_t emitted[maximum_emitted_frames][wire_samples];
@@ -26,8 +25,8 @@ struct fixture {
   size_t reset_calls;
   size_t copy_calls;
   size_t copied_frames;
-  int16_t last_processed_playout_first;
-  int16_t last_processed_playout_last;
+  int16_t last_processed_reference_first;
+  int16_t last_processed_reference_last;
   size_t fail_process_call;
   size_t fail_copy_call;
 };
@@ -36,13 +35,12 @@ static enum iterate_kit_status process_aec(
     void *context,
     const int16_t *near,
     const int16_t *reference,
-    const int16_t *playout,
     int16_t *clean,
     size_t sample_count) {
   struct fixture *fixture = context;
   fixture->process_calls++;
-  fixture->last_processed_playout_first = playout[0];
-  fixture->last_processed_playout_last = playout[sample_count - 1U];
+  fixture->last_processed_reference_first = reference[0];
+  fixture->last_processed_reference_last = reference[sample_count - 1U];
   for (size_t index = 0U; index < sample_count; ++index) {
     clean[index] = (int16_t)(near[index] - reference[index]);
   }
@@ -95,7 +93,6 @@ static void initialise(struct fixture *fixture) {
     .egress_frame_samples = wire_samples,
     .near_frame = fixture->near,
     .reference_frame = fixture->reference,
-    .playout_frame = fixture->playout,
     .clean_frame = fixture->clean,
     .processing_frame_capacity = processing_samples,
     .egress_frame = fixture->egress,
@@ -118,11 +115,9 @@ static enum iterate_kit_status push_chunk(
     size_t first_sample) {
   int16_t near[dma_samples];
   int16_t reference[dma_samples];
-  int16_t playout[dma_samples];
   for (size_t index = 0U; index < dma_samples; ++index) {
     near[index] = (int16_t)(first_sample + index);
     reference[index] = 0;
-    playout[index] = (int16_t)(12000U + first_sample + index);
   }
   return iterate_kit_aec_capture_bridge_push_aligned(
       &fixture->bridge,
@@ -130,30 +125,39 @@ static enum iterate_kit_status push_chunk(
       captured_through_at_us,
       near,
       reference,
-      playout,
       dma_samples);
 }
 
 /*
- * Physical loudspeaker feedback and exact digital playout answer different
- * questions. The feedback is the best cancellation input because it contains
- * amplifier distortion; the exact playout is the only reliable far-active
- * oracle because the feedback channel can contain noise during silence. This
- * regression proves the generic cadence bridge cannot accidentally alias or
- * discard the third timeline while joining two 128-sample DMA chunks into one
- * 256-sample DSP frame.
+ * The reference is the physical loudspeaker feedback the AEC cancels against,
+ * a timeline of its own. This regression proves the generic cadence bridge
+ * cannot alias it with the near plane or discard it while joining two
+ * 128-sample DMA chunks into one 256-sample DSP frame.
  */
-static void preserves_distinct_reference_and_playout_timelines(void) {
+static void preserves_a_distinct_reference_timeline(void) {
   struct fixture fixture = {0};
+  int16_t near[dma_samples] = {0};
+  int16_t reference[dma_samples];
   initialise(&fixture);
 
-  assert(push_chunk(&fixture, 0U, 8000U, 0U) == ITERATE_KIT_OK);
-  assert(
-      push_chunk(&fixture, 1U, 16000U, dma_samples) == ITERATE_KIT_OK);
+  for (uint32_t sequence = 0U; sequence < 2U; ++sequence) {
+    for (size_t index = 0U; index < dma_samples; ++index) {
+      reference[index] =
+          (int16_t)(12000U + sequence * dma_samples + index);
+    }
+    assert(
+        iterate_kit_aec_capture_bridge_push_aligned(
+            &fixture.bridge,
+            sequence,
+            (uint64_t)(sequence + 1U) * 8000U,
+            near,
+            reference,
+            dma_samples) == ITERATE_KIT_OK);
+  }
   assert(fixture.process_calls == 1U);
-  assert(fixture.last_processed_playout_first == 12000);
+  assert(fixture.last_processed_reference_first == 12000);
   assert(
-      fixture.last_processed_playout_last ==
+      fixture.last_processed_reference_last ==
       (int16_t)(12000U + processing_samples - 1U));
 }
 
@@ -355,7 +359,6 @@ static void coalesced_input_cannot_send_past_backpressure(void) {
   struct fixture fixture = {0};
   int16_t near[processing_samples * 3U];
   int16_t reference[processing_samples * 3U] = {0};
-  int16_t playout[processing_samples * 3U] = {0};
   fixture.fail_copy_call = 2U;
   initialise(&fixture);
   for (size_t index = 0U;
@@ -371,7 +374,6 @@ static void coalesced_input_cannot_send_past_backpressure(void) {
           96000U,
           near,
           reference,
-          playout,
           processing_samples * 3U) ==
       ITERATE_KIT_BACKPRESSURE);
 
@@ -486,7 +488,6 @@ struct flat_fixture {
   struct iterate_kit_aec_capture_bridge bridge;
   int16_t near[flat_samples];
   int16_t reference[flat_samples];
-  int16_t playout[flat_samples];
   int16_t clean[flat_samples];
   int16_t egress[flat_samples];
   int16_t emitted[maximum_emitted_frames][flat_samples];
@@ -499,12 +500,10 @@ static enum iterate_kit_status flat_process(
     void *context,
     const int16_t *near,
     const int16_t *reference,
-    const int16_t *playout,
     int16_t *clean,
     size_t sample_count) {
   struct flat_fixture *fixture = context;
   (void)reference;
-  (void)playout;
   fixture->process_calls++;
   assert(sample_count == flat_samples);
   /* What the passthrough processor does: near, verbatim. */
@@ -546,7 +545,6 @@ static void flat_initialise(struct flat_fixture *fixture) {
     .egress_frame_samples = flat_samples,
     .near_frame = fixture->near,
     .reference_frame = fixture->reference,
-    .playout_frame = fixture->playout,
     .clean_frame = fixture->clean,
     .processing_frame_capacity = flat_samples,
     .egress_frame = fixture->egress,
@@ -566,11 +564,9 @@ static enum iterate_kit_status flat_push(
     struct flat_fixture *fixture, uint32_t sequence, size_t first_sample) {
   int16_t near[flat_samples];
   int16_t reference[flat_samples];
-  int16_t playout[flat_samples];
   for (size_t index = 0U; index < flat_samples; ++index) {
     near[index] = (int16_t)(first_sample + index);
     reference[index] = 0;
-    playout[index] = 0;
   }
   return iterate_kit_aec_capture_bridge_push_aligned(
       &fixture->bridge,
@@ -578,7 +574,6 @@ static enum iterate_kit_status flat_push(
       (uint64_t)(sequence + 1U) * 20000U,
       near,
       reference,
-      playout,
       flat_samples);
 }
 
@@ -586,7 +581,7 @@ static enum iterate_kit_status flat_push(
  * ONE CHUNK IN, ONE IDENTICAL FRAME OUT, NOTHING RETAINED.
  *
  * The whole cost of routing a board that never needed reframing through the
- * bridge: four memcpys and the same processor call. If this ever stops being
+ * bridge: three memcpys and the same processor call. If this ever stops being
  * exact, three boards' uplinks changed and nothing else would say so.
  */
 static void flat_cadence_is_an_exact_passthrough(void) {
@@ -660,7 +655,7 @@ static void flat_process_failure_emits_silence_not_a_hole(void) {
 int main(void) {
   flat_cadence_is_an_exact_passthrough();
   flat_process_failure_emits_silence_not_a_hole();
-  preserves_distinct_reference_and_playout_timelines();
+  preserves_a_distinct_reference_timeline();
   reframes_without_loss_or_drift();
   sequence_gap_resets_every_partial_epoch();
   sequence_gap_discards_unprocessed_input();

@@ -266,10 +266,9 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 /*
  * WHAT THE CODEC KNOWS ABOUT THE CHUNK IT JUST HANDED OVER, which on this
- * board is all three things the bridge needs and on the others is none of
- * them: a DMA sequence that gaps when the hardware does, a completion
- * timestamp that back-dates each egress frame, and whether the far end was
- * audible while this chunk was recorded.
+ * board is both things the bridge needs and on the others is neither: a DMA
+ * sequence that gaps when the hardware does, and a completion timestamp that
+ * back-dates each egress frame.
  *
  * The epoch latch is CONSUMED here, so it must only be read once per accepted
  * chunk — which is exactly when the loop calls this.
@@ -279,8 +278,7 @@ static void capture_meta(
   (void)context;
   out->epoch_reset = stackchan_audio_take_epoch_reset();
   stackchan_audio_last_chunk_meta(
-      &out->sequence, &out->captured_through_at_us,
-      &out->playback_content_active);
+      &out->sequence, &out->captured_through_at_us);
 }
 
 static uint8_t volume(void *context) {
@@ -670,7 +668,6 @@ static size_t health(void *context, char *out, size_t capacity) {
        * every board runs one.
        */
       {"aecRecreates", stackchan_processor_recreates()},
-      {"aecModeFallbacks", stackchan_processor_mode_fallbacks()},
       {"aecMode", stackchan_processor_mode()},
       {"aecRecreateFailures", stackchan_processor_recreate_failures()},
       {"aecReferenceClipped",

@@ -254,16 +254,14 @@ iterate_kit_add_havpe_pure_test(iterate-kit-havpe-dial-test
   havpe_dial_test.c ../devices/havpe/havpe_dial.c)
 
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
-# bridge, reference scaler, uplink selector, and near high-pass, each with the
-# donor's host tests. They link the audio component, not core.
+# bridge, reference scaler and near high-pass, each with the donor's host
+# tests. They link the audio component, not core.
 function(iterate_kit_add_audio_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-audio)
 endfunction()
 
 iterate_kit_add_audio_test(
   iterate-kit-aec-capture-bridge-test aec_capture_bridge_test.c)
-iterate_kit_add_audio_test(
-  iterate-kit-aec-uplink-selector-test aec_uplink_selector_test.c)
 iterate_kit_add_audio_test(
   iterate-kit-aec-reference-scaler-test aec_reference_scaler_test.c)
 iterate_kit_add_audio_test(

@@ -55,14 +55,11 @@ struct iterate_kit_audio_codec stackchan_audio_codec(void);
 
 /**
  * Metadata for the chunk the last successful codec read returned: the DMA
- * sequence, the completion timestamp of its final sample, and whether the
- * speaker edge written immediately before it contained response audio.
- * Same-task with read(), by the reserve's single-consumer contract.
+ * sequence and the completion timestamp of its final sample. Same-task with
+ * read(), by the reserve's single-consumer contract.
  */
 void stackchan_audio_last_chunk_meta(
-    uint32_t *sequence,
-    uint64_t *captured_through_at_us,
-    bool *playback_content_active);
+    uint32_t *sequence, uint64_t *captured_through_at_us);
 
 /**
  * True (consumed) when the capture timeline broke: reserve overflow, DMA
