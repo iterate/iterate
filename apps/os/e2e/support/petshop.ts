@@ -1,10 +1,10 @@
 // e2e/support/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
 // secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
 // session-login endpoint speaking the Waitrose wire shape, a Tesco-shaped two-step login (a CSRF
-// token and its cookie, then the form), one bearer-protected pets API, GitHub-App
-// style signed webhooks, and a `/__backdoor` console to force expiry, fail the token endpoint and
-// fire webhooks. The worker under test fetches it directly (the local worker over the real network,
-// the deployed worker from the edge); nothing here proxies for it.
+// token and its cookie, then the form), one bearer-protected pets API, GitHub-App style signed
+// webhooks, and the `/__test-controls` a test uses to force expiry, fail the token endpoint and fire
+// webhooks. The worker under test fetches it directly (the local worker over the real network, the
+// deployed worker from the edge); nothing here proxies for it.
 
 /** The deployed fixture (apps/dummy-petshop) — `PETSHOP_BASE_URL` picks another. */
 export const petshopBaseUrl = (): string =>
@@ -35,7 +35,7 @@ async function petshopJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** A fresh OAuth client of its own, whose token endpoint a test can fail without touching another. */
 export const petshopMintClient = (): Promise<{ clientId: string; clientSecret: string }> =>
-  petshopJson("/__backdoor/clients", {
+  petshopJson("/__test-controls/clients", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",
@@ -51,7 +51,7 @@ export const petshopExpireTokens = (
   clientId: string,
   account: string,
 ): Promise<{ clientId: string; account: string; accessTokenEpoch: number }> =>
-  petshopJson("/__backdoor/expire-tokens", {
+  petshopJson("/__test-controls/expire-tokens", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ clientId, account }),
@@ -107,7 +107,7 @@ export const petshopFailTokenEndpoint = (
   clientId: string,
   times: number,
 ): Promise<{ clientId: string; tokenEndpointFailuresRemaining: number }> =>
-  petshopJson("/__backdoor/fail-token-endpoint", {
+  petshopJson("/__test-controls/fail-token-endpoint", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ clientId, times }),
@@ -120,7 +120,7 @@ export const petshopRegisterApp = (input: {
   installationId: string;
   webhookSecret: string;
 }): Promise<unknown> =>
-  petshopJson("/__backdoor/apps", {
+  petshopJson("/__test-controls/apps", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ...input, publicKeyPem: "unused by the webhook rows" }),
@@ -135,7 +135,7 @@ export const petshopFireAppWebhook = (input: {
   event: unknown;
   badSignature?: boolean;
 }): Promise<{ status: number; error?: string }> =>
-  petshopJson("/__backdoor/apps/fire-webhook", {
+  petshopJson("/__test-controls/apps/fire-webhook", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -143,7 +143,7 @@ export const petshopFireAppWebhook = (input: {
 
 /** Revoke one refresh token at the provider — the next refresh grant with it is `invalid_grant`. */
 export const petshopRevokeRefreshToken = (refreshToken: string): Promise<unknown> =>
-  petshopJson("/__backdoor/revoke-refresh-token", {
+  petshopJson("/__test-controls/revoke-refresh-token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ refreshToken }),
@@ -199,7 +199,7 @@ export const petshopSlackFireWebhook = (input: {
   event: unknown;
   badSignature?: boolean;
 }): Promise<{ status: number; body: unknown; error?: string }> =>
-  petshopJson("/__backdoor/slack/fire-webhook", {
+  petshopJson("/__test-controls/slack/fire-webhook", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -209,7 +209,7 @@ export const petshopSlackFireWebhook = (input: {
 export const petshopSlackMessages = (
   teamId: string,
 ): Promise<{ messages: { channel: string; text: string }[] }> =>
-  petshopJson(`/__backdoor/slack/messages?team=${encodeURIComponent(teamId)}`);
+  petshopJson(`/__test-controls/slack/messages?team=${encodeURIComponent(teamId)}`);
 
 /** Register a GitHub App installation with the shop's GitHub fake (apps/dummy-petshop/src/github.ts):
  *  the App's PUBLIC key (installation tokens are minted from an App JWT it verifies), its webhook
@@ -225,7 +225,7 @@ export const petshopRegisterGithubInstallation = (input: {
   accountLogin: string;
   adminLogin: string;
 }): Promise<{ installationId: string; appId: string }> =>
-  petshopJson("/__backdoor/apps", {
+  petshopJson("/__test-controls/apps", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -246,7 +246,7 @@ export const petshopGithubFireWebhook = (input: {
   eventName?: string;
   badSignature?: boolean;
 }): Promise<{ status: number; body: unknown; error?: string }> =>
-  petshopJson("/__backdoor/apps/fire-webhook", {
+  petshopJson("/__test-controls/apps/fire-webhook", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -262,7 +262,7 @@ export const petshopGithubSeedPull = (input: {
   headSha: string;
   files: { filename: string; status: string; patch: string }[];
 }): Promise<{ ok: true }> =>
-  petshopJson("/__backdoor/github/pulls", {
+  petshopJson("/__test-controls/github/pulls", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -280,4 +280,6 @@ export const petshopGithubCheckRuns = (
     output: { summary?: string } | null;
   }[];
 }> =>
-  petshopJson(`/__backdoor/github/check-runs?installation=${encodeURIComponent(installationId)}`);
+  petshopJson(
+    `/__test-controls/github/check-runs?installation=${encodeURIComponent(installationId)}`,
+  );

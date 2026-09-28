@@ -138,8 +138,7 @@ test("worker: a userspace Tesco login in the secret's own exchange code logs in 
 
   expect(await bearerCall(itx, "/secrets/tesco", "/api/me")).toMatchObject({
     status: 200,
-    // the Tesco client of whichever shop is deployed: `tesco-login`, or `tesco-login:<email>`
-    body: { sub: email, clientId: expect.stringMatching(/^tesco-login(:|$)/) },
+    body: { sub: email, clientId: "tesco-login" },
   });
   await petshopExpireTescoTokens(email);
   expect(await bearerCall(itx, "/secrets/tesco", "/api/pets")).toMatchObject({
@@ -159,7 +158,7 @@ test("worker: a userspace Tesco login in the secret's own exchange code logs in 
 
 // AN OAUTH-PROTECTED API, END TO END. The petshop is a real OAuth 2.0 provider (RFC 8414 discovery,
 // authorization code, HTTP Basic client auth at the token endpoint, refresh tokens that ROTATE on
-// every refresh grant, a backdoor to revoke one). The story in order:
+// every refresh grant, a test control to revoke one). The story in order:
 //   1. discovery — the connect flow learns the token endpoint from the provider's metadata;
 //   2. consent + code exchange — the trusted party (a connect flow; here the test) walks the
 //      authorization code grant ONCE and holds the first tokens for a moment;
