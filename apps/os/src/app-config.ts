@@ -168,6 +168,9 @@ export const AppConfig = z.object({
           hostname: dnsName,
           project: z.string().trim().min(1, REQUIRED),
           excludedHostnames: z.array(dnsName).optional(),
+          /** A verified Email Routing destination every message to an address on `hostname` is
+           *  also forwarded to (integrations/email.ts). */
+          forwardEmailTo: z.email().optional(),
         })
         .optional(),
     })

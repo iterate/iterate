@@ -3,7 +3,9 @@
 //   receiveEmail — the worker's `email()` handler (worker.ts). Cloudflare Email Routing's catch-all
 //                  on the email domain delivers every message here; the local part names the
 //                  project (a `+tag` after it is ignored). On the project wildcard's domain
-//                  (iterate.com on prd) every address routed here is that one project's. Each
+//                  (iterate.com on prd) every address routed here is that one project's, and the
+//                  message is also forwarded as it arrived to `projectWildcard.forwardEmailTo` (a
+//                  Google Group on prd) once the project has it. Each
 //                  attachment becomes a project file under `/email/<message key>/`, then
 //                  `email/received` lands on `/integrations/email`, keyed by the Message-ID and the
 //                  address it reached, so a redelivery lands nothing new and a copy to another of the
@@ -41,9 +43,10 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   const { urls } = appConfigOf(env);
   const recipient = /^([^@+]+)(?:\+[^@]*)?@(.+)$/.exec(message.to.trim().toLowerCase());
   const wildcard = urls.projectWildcard;
+  const viaWildcard = !!recipient && !!wildcard && recipient[2] === wildcard.hostname;
   let projectRef: string | undefined;
   if (recipient && recipient[2] === emailDomainOf(urls.ingressRouting)) projectRef = recipient[1];
-  else if (recipient && recipient[2] === wildcard?.hostname) projectRef = wildcard.project;
+  else if (viaWildcard) projectRef = wildcard.project;
   const controlPlane = new ControlPlane(env);
   const project = projectRef ? await controlPlane.getProject(projectRef) : null;
   if (!project) return message.setReject("No such address.");
@@ -99,6 +102,15 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
       },
     },
   );
+  if (viaWildcard && wildcard.forwardEmailTo) {
+    try {
+      await message.forward(wildcard.forwardEmailTo);
+    } catch (error) {
+      // Email Routing forwards only mail that passes SPF or DKIM; the project has this one anyway.
+      // Any other failure throws, the sender retries, and the redelivery is recorded once.
+      if (!String(error).includes("non-authenticated emails cannot be forwarded")) throw error;
+    }
+  }
 }
 
 /** What `itx.email.send` takes, checked here: it arrives over the wire. */
