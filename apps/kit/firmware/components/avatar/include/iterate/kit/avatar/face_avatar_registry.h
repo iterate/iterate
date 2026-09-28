@@ -52,6 +52,21 @@ bool face_avatar_registry_render(
     size_t pixel_capacity);
 
 /*
+ * One frame of the worn face for `pose`, the way every board draws it: `key`
+ * gets the pose's render key, and dozing, the lids shut in the character's
+ * own sleepy bank and the Z goes on over the face (face_doze.h). False when
+ * the render or the overlay fails; the board keeps its last coherent frame.
+ */
+bool face_avatar_registry_render_pose(
+    face_avatar_registry_t *registry,
+    const face_pose_t *pose,
+    bool dozing,
+    uint32_t sample_clock,
+    face_render_key_t *key,
+    uint16_t *rgb565,
+    size_t pixel_capacity);
+
+/*
  * Pure interleaved-matrix path for WASM. It uses the same compiled atlas,
  * performance preparation, and renderer as firmware without sharing the
  * firmware player's mouth-debounce history between gallery tiles.

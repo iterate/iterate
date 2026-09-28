@@ -21,7 +21,6 @@
 #include "esp_heap_caps.h"
 #include "iterate/kit/avatar/face_animator.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
-#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_render.h"
 #include "iterate/kit/conversation_overlay.h"
@@ -238,22 +237,16 @@ bool face_draw(void) {
     }
   }
   face_render_key_t key = {};
-  face_render_key_from_pose(&face.latest_pose, &key);
   const uint32_t sample_clock = static_cast<uint32_t>(now_us / 1000);
   const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
   const iterate_kit_conversation_visual_state status = face_status();
   const bool dozing = !iterate_kit_face_awake(
       &face.wake, status.conversation_active,
       static_cast<uint64_t>(now_us / 1000));
-  if (dozing) face_doze_prepare_render_key(&key);
-  if (!face_avatar_registry_render(
-          &face.registry, &key, sample_clock, face.frame, pixels)) {
-    ++face.render_failures;
-    return false;
-  }
-  if (dozing && !face_doze_apply_overlay(face.frame, pixels, sample_clock)) {
-    /* The sleeping face is a promise about lifecycle; a half-applied one
-     * would say the device is awake. Fail to the text screen instead. */
+  /* A failed frame, the doze's Z included, falls back to the text screen. */
+  if (!face_avatar_registry_render_pose(
+          &face.registry, &face.latest_pose, dozing, sample_clock, &key,
+          face.frame, pixels)) {
     ++face.render_failures;
     return false;
   }

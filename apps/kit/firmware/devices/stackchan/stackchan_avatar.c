@@ -3,7 +3,6 @@
 
 #include "iterate/kit/avatar/face_animator.h"
 #include "iterate/kit/avatar/face_avatar_registry.h"
-#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_render.h"
 #include "iterate/kit/avatar/face_scale.h"
@@ -402,28 +401,14 @@ static bool prepare_avatar_frame(
    */
   owner.latest_pose.playout_samples = __atomic_load_n(
       &owner.metrics.physical_playout_sample_clock, __ATOMIC_RELAXED);
-  face_render_key_from_pose(&owner.latest_pose, render_key);
-  const bool dozing = face_dozing_now();
-  if (dozing) face_doze_prepare_render_key(render_key);
-  if (!face_avatar_registry_render(
+  if (!face_avatar_registry_render_pose(
           &owner.registry,
-          render_key,
+          &owner.latest_pose,
+          face_dozing_now(),
           owner.latest_pose.playout_samples,
+          render_key,
           owner.framebuffer,
           FACE_RENDER_PIXEL_COUNT)) {
-    iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
-    return false;
-  }
-  if (dozing && !face_doze_apply_overlay(
-                     owner.framebuffer,
-                     FACE_RENDER_PIXEL_COUNT,
-                     owner.latest_pose.playout_samples)) {
-    /*
-     * The doze sprite is part of the user-visible lifecycle contract.
-     * Failing closed here prevents a plausible awake-looking frame from
-     * replacing the last coherent display when buffer geometry and
-     * renderer assumptions diverge.
-     */
     iterate_kit_atomic_saturating_increment_relaxed_u32(&owner.metrics.render_failures);
     return false;
   }

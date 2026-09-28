@@ -73,7 +73,7 @@ bool rlcd_display_start(void) {
   return true;
 }
 
-_Static_assert(RLCD_DISPLAY_BITMAP_BYTES == ITERATE_KIT_SCREEN_STATUS_BYTES,
+_Static_assert((int)RLCD_DISPLAY_BITMAP_BYTES == (int)ITERATE_KIT_SCREEN_STATUS_BYTES,
                "the shared status text is drawn at this panel's size");
 EXT_RAM_BSS_ATTR static uint8_t text[RLCD_DISPLAY_BITMAP_BYTES];
 
