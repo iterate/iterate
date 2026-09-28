@@ -9,7 +9,7 @@ size: large
 
 - **Built:** units (`scripts/ci/preview-units.ts`), inherit (`scripts/ci/preview-inherit.ts`, the `changes` step), reuse (`apps/os/scripts/preview-reuse.ts`, partial deployments, the plan artifact, cleanup and sweep rules), docs. Since decision 7, a PR run tests its head, and both walk its history.
 - **Proven live** (under decision 3's first form, testing the merge with main): a docs-only push inherited both suites in 8 s with no deploy; a specs-only push inherited E2E tests; a notes-only push deployed one worker and the specs passed against it; reverting both deployed nothing.
-- **Left:** the same live checks under decision 7.
+- **Left:** the live checks under decision 7. On `91866ad` (the first run testing the head) both walks decided as designed; E2E tests and one spec went red on Cloudflare Artifacts errors ("Durable Object storage is no longer accessible") on the brand-new deployment.
 
 ## Why now
 
