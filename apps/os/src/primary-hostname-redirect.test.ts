@@ -22,10 +22,9 @@ test.for<{
     redirect: { routingSlug: "blog" },
   },
   {
-    why: "a navigation on `<routingSlug>.<project>` keeps its routing slug",
+    why: "two labels under the base are not a project host: no redirect",
     url: "https://blog.p.iterate.app/",
     headers: navigate,
-    redirect: { routingSlug: "blog" },
   },
   {
     why: "a navigation on the apex goes to the primary's apex",

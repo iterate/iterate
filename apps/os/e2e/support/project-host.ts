@@ -57,9 +57,9 @@ export function ingressRouting(): IngressRouting {
 }
 
 /** `test`, skipped where the worker under test does not route projects by SUBDOMAIN — for what only a
- *  hostname can say: a host label outside the DNS grammar, the dotted `<routingSlug>.<project>` shape, a
- *  site's own `/.auth/*` routes (under paths an app shares the platform's origin, whose routes are the
- *  issuer's). Everything else composes its address with `projectUrl` and runs under both routings. */
+ *  hostname can say: a host label outside the DNS grammar, a site's own `/.auth/*` routes (under
+ *  paths an app shares the platform's origin, whose routes are the issuer's). Everything else
+ *  composes its address with `projectUrl` and runs under both routings. */
 export const subdomainsOnly = test.skipIf(ingressRouting()?.type !== "subdomains");
 
 /** THE ONE COMPOSER a row addresses a project with — `projectUrlOf` (iterate/project-ingress)

@@ -90,8 +90,8 @@ What it takes:
 2. **A proxied wildcard DNS record** for `*.<your-domain>`. It also covers `os.<your-domain>`. The
    record's target does not matter; the Worker route answers.
 3. **A certificate for `*.<your-domain>`.** Cloudflare's Universal SSL covers the apex and one
-   wildcard level, which is why app hosts are one label (`<routingSlug>--<project>`) and not
-   `<routingSlug>.<project>.<your-domain>`.
+   wildcard level, which is why a project host is one label under `<your-domain>`:
+   `<routingSlug>--<project>`, or the apex `<project>`.
 4. **Worker routes** `os.<your-domain>/*` and `*.<your-domain>/*` (zone `<your-domain>`), added to
    `selfHostWranglerConfig` in `apps/os/scripts/generate-wrangler-config.ts`, which sets none.
 5. **The config:** `urls.os` = `https://os.<your-domain>` in `APP_CONFIG`, and
