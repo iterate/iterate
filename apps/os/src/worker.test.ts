@@ -209,8 +209,8 @@ const appConfigRows: {
     becomes: MINIMAL_CONFIG,
     warns: 1,
   },
-  // who may sign in: a JSON array, or a comma-separated list as the var; lowercased; an entry
-  // without an @ or an empty list is refused rather than silently admitting nobody or everybody
+  // who may sign in: a JSON array, lowercased; a comma-separated list, an entry without an @ or an
+  // empty list is refused rather than silently admitting nobody or everybody
   {
     vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["*@Iterate.com", "a@b.dev"]' },
     becomes: {
@@ -219,14 +219,12 @@ const appConfigRows: {
     },
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: " *@iterate.com, *@nustom.com ," },
-    becomes: {
-      ...MINIMAL_CONFIG,
-      login: { password: "password", allowedEmails: ["*@iterate.com", "*@nustom.com"] },
-    },
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "*@iterate.com, *@nustom.com" },
+    throws:
+      /^APP_CONFIG login\.allowedEmails \(APP_CONFIG_LOGIN__ALLOWED_EMAILS\): expected a JSON array of email patterns/,
   },
   {
-    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "iterate.com" },
+    vars: { ...MINIMAL, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["iterate.com"]' },
     throws: /login\.allowedEmails\.0 .*expected email patterns/,
   },
   {

@@ -104,7 +104,7 @@ test("login.allowedEmails: an address it does not name is refused before any pas
     EMAIL: { send } as unknown as Env["EMAIL"],
     APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@control.test>",
   } as Env;
-  const listed = { ...mailbox, APP_CONFIG_LOGIN__ALLOWED_EMAILS: "*@listed.dev" } as Env;
+  const listed = { ...mailbox, APP_CONFIG_LOGIN__ALLOWED_EMAILS: '["*@listed.dev"]' } as Env;
   const client = `client-${crypto.randomUUID()}`;
   await expect(
     signInWithPassword(listed, `stranger-${client}@elsewhere.dev`, loginPassword(), client),

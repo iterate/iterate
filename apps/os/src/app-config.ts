@@ -77,29 +77,6 @@ function redacted<Schema extends z.ZodTypeAny>(schema: Schema) {
 /** A field's failure message names the SHAPE; `parseAppConfig` prefixes where it came from. */
 const REQUIRED = "required, but unset or blank";
 
-/** Email patterns (allowed-emails.ts): `*` for any run of characters — `["*@iterate.com",
- *  "someone@example.com"]`. A JSON array, or as a var a comma-separated list too; never empty,
- *  `empty` saying why. */
-const emailPatterns = (empty: string) =>
-  z.preprocess(
-    (value) =>
-      typeof value === "string"
-        ? value
-            .split(",")
-            .map((pattern) => pattern.trim())
-            .filter(Boolean)
-        : value,
-    z
-      .array(
-        z
-          .string()
-          .trim()
-          .toLowerCase()
-          .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
-      )
-      .min(1, empty),
-  );
-
 /** The bot scopes a Slack connection asks for unless told otherwise: the scopes iterate's Slack app
  *  is registered with. */
 export const DEFAULT_SLACK_BOT_SCOPES = [
@@ -220,12 +197,20 @@ export const AppConfig = z.object({
   login: z
     .object({
       /** WHO MAY SIGN IN (allowed-emails.ts): email patterns, `*` for any run of characters —
-       *  `["*@iterate.com", "someone@example.com"]`. A JSON array, or as the var
-       *  `APP_CONFIG_LOGIN__ALLOWED_EMAILS` a comma-separated list too. Every mechanism refuses an
-       *  address it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
-      allowedEmails: emailPatterns(
-        "lists no pattern, so nobody could sign in — name one, or unset it",
-      ).optional(),
+       *  `["*@iterate.com", "someone@example.com"]`, or the var
+       *  `APP_CONFIG_LOGIN__ALLOWED_EMAILS='["*@iterate.com"]'`. Every mechanism refuses an address
+       *  it does not name, and a live grant for one stops working. Unset ⇒ everyone. */
+      allowedEmails: z
+        .array(
+          z
+            .string()
+            .trim()
+            .toLowerCase()
+            .regex(/^[^@\s]+@[^@\s]+$/, 'expected email patterns like "*@iterate.com"'),
+          { error: 'expected a JSON array of email patterns, like ["*@iterate.com"]' },
+        )
+        .min(1, "lists no pattern, so nobody could sign in — name one, or unset it")
+        .optional(),
       /** A GLOBAL PASSWORD: anyone who knows it signs in as the email they type — the membership is
        *  the password, the email is the name tag. The self-host default; also how the specs sign in.
        *  Blank ⇒ off. */
