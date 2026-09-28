@@ -27,7 +27,7 @@ export type RunSettlement = RunSettled["settlement"];
 
 /** The run events' catalog. The core owns them (apps/os core-processor.ts); a processor that
  *  consumes them names this catalog in its `processorDeps`. */
-export const RunContract = {
+export const RunEventCatalog = {
   events: {
     "events.iterate.com/itx/run-requested": {
       description:

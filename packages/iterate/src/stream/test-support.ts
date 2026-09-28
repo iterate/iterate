@@ -10,10 +10,9 @@
 //                     stamp, idempotency on append, the scanned-range proof) plus THE PUMP: a
 //                     fire-and-forget `processEventBatch` to every engine in `engines` after each
 //                     append (awaited, it would deadlock a processor that appends during its own
-//                     batch). A short page's
-//                     proof is the in-memory head, so the engine's stale-push and ephemeral-window
-//                     rules are exercised directly; the platform's real Stream stops at the DURABLE
-//                     mark
+//                     batch). A short page's proof is the in-memory head, so the engine's
+//                     stale-push and ephemeral-window rules are exercised directly; the platform's
+//                     real Stream stops at the DURABLE mark
 //   memoryStorage   — the real `ReduceCheckpointTable` over node:sqlite, counting writes
 //   nodeSqliteDurableObjectStorage — a Durable Object's `sql` + `transactionSync` over node:sqlite
 //   settle          — wait for fire-and-forget pushes to land

@@ -44,7 +44,7 @@ import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
 import type { RewriteRuleConfigured } from "iterate/api";
-import { RunContract, RunRequested } from "iterate/stream/run";
+import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -331,10 +331,10 @@ export const CoreContract = {
   slug: "core",
   version: "15.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
-   *  (core-events.ts) and RunContract (iterate/stream/run). A processor that consumes them names
-   *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunContract);
+   *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
+   *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
    *  the runner and `itx.run` read them here. */
-  events: { ...CoreEventCatalog.events, ...RunContract.events },
+  events: { ...CoreEventCatalog.events, ...RunEventCatalog.events },
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},

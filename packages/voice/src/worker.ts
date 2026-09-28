@@ -11,11 +11,12 @@
  * The device carries no source or class name: both facets load the project's installed voice
  * source, the one this worker runs (install.ts keeps it in project KV).
  */
-import type {} from "@iterate-com/agents";
 // registers `itx.agents` on InstalledAppRoots
-import { bytesToBase64 } from "@iterate-com/shared/base64";
+import type {} from "@iterate-com/agents";
+import { z } from "zod";
 import type { IterateContextApiWith } from "iterate/api";
-import { ConfigWorker, z } from "iterate/sdk";
+import { bytesToBase64 } from "iterate/lib";
+import { ConfigWorker } from "iterate/sdk";
 import type { VoiceApi } from "./api.ts";
 import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.ts";

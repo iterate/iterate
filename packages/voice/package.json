@@ -45,7 +45,6 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
-    "@iterate-com/shared": "workspace:*",
     "@types/node": "catalog:",
     "esbuild": "catalog:",
     "iterate": "workspace:*",

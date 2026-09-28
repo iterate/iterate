@@ -1,7 +1,6 @@
-// with-itx.test.ts — `withItx` disposes what this records, so it must record EVERY call a
-// round trip reached (the undisposed `itx.cd(path)` of `itx.cd(path).append(…)` kept facet → ItxEntrypoint
-// → context resident until the next deploy, 2026-09-21/22; without this, the facet itself kept running,
-// billed, 2026-09-23) and change nothing else about the stub.
+// with-itx.test.ts — `withItx` disposes what this records, so it must record EVERY call a round
+// trip reached (an undisposed `itx.cd(path)` of `itx.cd(path).append(…)` keeps facet → ItxEntrypoint
+// → context resident, and the facet running and billed) and change nothing else about the stub.
 import { expect, test, vi } from "vitest";
 import { recordPipelinedSteps, withItx } from "./with-itx.ts";
 

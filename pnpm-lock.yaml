@@ -984,9 +984,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20260925.1
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../shared
       iterate:
         specifier: workspace:*
         version: link:../iterate
@@ -1239,9 +1236,6 @@ importers:
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20260925.1
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../shared
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6

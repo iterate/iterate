@@ -22,8 +22,7 @@
 // over the same fold re-derives it, so an attempt lost to an eviction costs nothing, and every
 // append is idempotency-keyed so a retry appends nothing twice.
 import { z } from "zod";
-import { bytesToBase64 } from "@iterate-com/shared/base64";
-import { errorCode } from "iterate/lib";
+import { bytesToBase64, errorCode } from "iterate/lib";
 import {
   type ConsumedEvent,
   type EmittedEventInput,

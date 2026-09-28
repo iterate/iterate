@@ -766,7 +766,8 @@ export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
-// ── idempotency (message text stays greppable across RPC hops) ──
+// ── idempotency ── the one conflict message, which apps/os stream.ts and test-support's
+// `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
   return `idempotency key "${idempotencyKey}" already names a different event at offset ${existingOffset}`;
