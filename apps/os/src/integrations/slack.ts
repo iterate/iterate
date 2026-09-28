@@ -11,7 +11,7 @@
 //   connectMovedSlackTeam → the move (verbs.ts `confirmIntegrationMove`): the held token stored here
 //   revokeSlack       → a disconnect's `auth.revoke` (verbs.ts `PROVIDERS`), when its release of
 //                       the workspace's route wins
-//   slackWebhookRoute → Slack's inbound requests, on the legacy platform's URLs:
+//   slackWebhookRoute → Slack's inbound requests, on the URLs the apps are registered with:
 //     POST /api/integrations/slack/{webhook,interactivity-webhook}                       iterate's app
 //     POST /api/integrations/slack/{webhook,interactivity-webhook}/<projectId>/<connection>  own app
 // A signed request lands on `<project>:/integrations/slack/<connection>` as

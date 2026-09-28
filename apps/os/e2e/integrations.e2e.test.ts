@@ -38,7 +38,7 @@ deployedOnly(
     const connected = await connectThroughProvider(
       itx,
       { provider: "slack", connection: "acme", client: "iterate" },
-      { team: teamId, approve: "1" },
+      { team: teamId },
       memberBearer,
     );
     if (!connected) return skip("this deployment's Slack app is not the pet shop's fake");
@@ -74,7 +74,7 @@ deployedOnly(
     await connectThroughProvider(
       itx,
       { provider: "slack", connection: "own", client: "project" },
-      { team: teamId, approve: "1" },
+      { team: teamId },
       memberBearer,
     );
     expect(await integrationRows(itx)).toMatchObject({
