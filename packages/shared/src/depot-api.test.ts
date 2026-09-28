@@ -2,7 +2,7 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { depotCiApi } from "./depot-api.ts";
 import { HttpAnswerError } from "./platform-retry.ts";
 
-// Preview OS trace, PR #2970, attempt 144gszhm0r: "Error: Depot GetJobAttemptLogs returned HTTP 500".
+// A single 500 on GetJobAttemptLogs must not fail a trace job.
 test("a read Depot answers with one 500 is asked again, with a warn, and succeeds", async () => {
   const depot = depotAnswering(500, 200);
 
