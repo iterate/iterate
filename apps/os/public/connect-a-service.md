@@ -1,29 +1,42 @@
 # Connect a service to an iterate project
 
-A recipe for a coding agent that reaches an iterate project through iterate's MCP server. Follow it
-when the person asks you to connect a service to their project ("connect Linear", "give my agents
-Exa"). At the end, the project holds the service's credential as a secret, and you have shown with
-one read-only call that it works.
+You are a coding agent. You reach an iterate project through iterate's MCP server, and the person
+asked you to connect a service to it ("connect Linear", "give my agents Exa"). This guide takes you,
+and them, through it one step at a time. Each step says what to run, what to say to the person and
+which step comes next. Do the steps in order and don't skip ahead.
 
-The MCP server has one tool, `run({ project?, script })`. `script` is a JavaScript function,
-`async (itx) => { … }`, run at the project's root. Every example below is a `script`: send it as
-the `script` argument of `run`, and pass `project` (the slug) when the server reaches several
-projects.
+When you finish, three things are true: the project holds the service's credential as a secret, one
+read-only call has shown that it works, and the project's `AGENTS.md` says how to use it.
+
+## How you run code in the project
+
+iterate's MCP server has one tool, `run({ project?, script })`. `script` is the text of one
+JavaScript function, `async (itx) => { … }`, and it runs at the project's root. Every code block
+below is a `script`: send it as the `script` argument of `run`. Pass `project` (the project's slug,
+for example `"connect-test"`) when the server reaches more than one project.
+
+```js
+async (itx) => ({ project: await itx.whoami() });
+```
+
+What comes back is what the function returns. Return plain data: strings, numbers, arrays and
+objects. A handle, such as a connection, comes back as `{}`, so return what you read from it
+instead. A thrown error comes back as its message.
 
 ## Four rules
 
 1. **Never take a secret in the chat.** Don't ask for an API key, a client secret, a token or a
    password, and don't accept one. If the person pastes one anyway, tell them it is now exposed and
-   should be revoked, and send them the collection link instead (step 3).
-2. **Name a secret, never its value.** You can't read a secret, and you don't need to. Put
+   should be revoked, and send them a collection link instead (step 3).
+2. **Name a secret, never its value.** You can't read a secret, and you don't need to. Write
    `getSecret("/secrets/<name>")` where the value goes, in a header or a URL. The platform swaps the
    real value in on the way out, and only to the origins the secret is pinned to. It never looks at
    a request body.
-3. **One step at a time. When the person has to do something (open a link, create an app), end your
-   turn.** Say exactly what to do, then wait for them to reply "done". Don't poll and don't guess.
+3. **When the person has to do something, end your turn.** Say exactly what to do, then wait for
+   them to reply "done". Don't poll, and don't guess what happened.
 4. **Prove it before you say it's connected:** one read-only call that returns real data.
 
-## 1. Look at the project
+## Step 1. Look at the project
 
 ```js
 async (itx) => ({
@@ -32,70 +45,94 @@ async (itx) => ({
 });
 ```
 
-If a secret for the service already exists, go straight to step 4 with it.
+Then go to the first line that fits:
 
-Slack, Google, Cloudflare, GitHub (as a GitHub App installation) and Waitrose are built in: for
-those, tell the person to open their project's **Integrations** page in the Dash and press
-**Connect**. That is one click, and you are done.
+- **The service is Slack, Google, Cloudflare, GitHub (as a GitHub App installation) or Waitrose.**
+  These are built in. Say this, and stop:
 
-## 2. Find out how the service is reached, then pick a path
+  > <Service> is built into iterate: open https://dash.iterate.com/projects/<projectSlug>/integrations
+  > and press **Connect** next to <Service>.
 
-Search the service's own documentation and answer:
+  `projectSlug` is in what step 1 returned. That link is the only one to send: don't make up
+  another.
 
-- Does it run a **hosted MCP server**? Its URL, and the header that carries the key.
-- Does it publish an **OpenAPI document**? Its URL.
-- Its **REST API origin** (`https://api.example.com`) and how a key is sent
-  (`Authorization: Bearer <key>`, `x-api-key: <key>`, a query parameter).
-- Does it support **OAuth**? Its authorization and token endpoints, the scopes, and whether its
-  token endpoint wants the client secret in a Basic header or in the body.
-- Where does the person **get an API key**? The exact page in the service's settings.
+  If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
+  them), carry on at step 2.
 
-Then:
+- **A secret for the service is already listed** (`/secrets/exa` for Exa, say): go to step 5.
+- **Otherwise:** go to step 2.
 
-| The service offers                                             | Path                     |
-| -------------------------------------------------------------- | ------------------------ |
-| API keys and a hosted MCP server                               | **A**: key + MCP         |
-| API keys and an OpenAPI document                               | **B**: key + OpenAPI     |
-| API keys and a REST API                                        | **C**: key + `itx.fetch` |
-| OAuth only, or the person wants it to act as their own account | **D**: OAuth             |
+## Step 2. Research the service, then pick a path
 
-Prefer A, then B, then C: an API key is one step for the person. Use D when the service has no API
-keys, or when the person asks for their own account.
+Search the service's own documentation. Look for pages called "API keys", "Authentication", "MCP",
+"OpenAPI" and "OAuth". Then write this sheet down for yourself, one line each. "none" is an
+answer, and a guess isn't:
 
-## 3. Paths A, B and C: collect the key
+```
+Service:            Exa
+API keys page:      https://dashboard.exa.ai/api-keys
+Hosted MCP server:  https://mcp.exa.ai/mcp, key in header x-api-key
+OpenAPI document:   none
+REST API origin:    https://api.exa.ai, key in header x-api-key
+A read-only call:   the MCP tool web_search_exa, or POST https://api.exa.ai/search
+OAuth:              no
+```
+
+Only a JSON OpenAPI 3 document counts: iterate doesn't read YAML or Swagger 2. An origin is scheme
+and host only, `https://api.exa.ai`, with no path.
+
+Now answer these in order. The first "yes" is your path:
+
+| Question                                                                                      | Yes → path                  |
+| --------------------------------------------------------------------------------------------- | --------------------------- |
+| Has no API keys at all, or the person asked for it to act as their own account through OAuth? | **D**: OAuth, step 4D       |
+| Runs a hosted MCP server that takes the API key?                                              | **A**: key + MCP, step 4A   |
+| Publishes a JSON OpenAPI 3 document?                                                          | **B**: key + OpenAPI, 4B    |
+| Anything else with an API key                                                                 | **C**: key + HTTPS, step 4C |
+
+Paths A, B and C start with step 3. Path D starts at step 4D.
+
+## Step 3. Collect the key (paths A, B and C)
+
+**3a.** Make the collection link. `path` is `/secrets/` plus the service's name in lowercase.
+`urls` lists every origin you will send the key to: the MCP server's and the REST API's, when they
+differ.
 
 ```js
 async (itx) =>
   itx.secrets.collectFromUser({
     path: "/secrets/exa",
-    // every origin the key may be sent to: scheme and host only, no path
     egress: { urls: ["https://mcp.exa.ai", "https://api.exa.ai"] },
-    description: "Your Exa API key, from dashboard.exa.ai/api-keys. It is only ever sent to Exa.",
+    description:
+      "Your Exa API key, from https://dashboard.exa.ai/api-keys. It is only ever sent to Exa.",
   });
 ```
 
-It returns `{ path, url }`. Say to the person, with the real link and the real settings page:
+It returns `{ path, url }`.
 
-> Open this link, paste your Exa API key into **Value** and press **Set secret**: `<url>`
-> You can create a key at `<the service's API keys page>`. Reply "done" when it's saved, and please
-> don't paste the key here.
+**3b.** Send the person this message, with the real link and the real API keys page:
 
-End your turn. When they reply "done", check it's there before going on:
+> Open this link, paste your Exa API key into **Value** and press **Set secret**:
+> `<url>`
+>
+> You can create a key at https://dashboard.exa.ai/api-keys. Reply "done" when it's saved, and
+> please don't paste the key here.
+
+**3c.** End your turn.
+
+**3d.** When the person replies "done", check that the secret is there:
 
 ```js
 async (itx) =>
   (await itx.secrets.list()).find((secret) => secret.path === "/secrets/exa") ?? "not saved yet";
 ```
 
-If it isn't there, send the link again.
+- `"not saved yet"`: send the same link again (3b), and end your turn.
+- It's there: go to 4A, 4B or 4C, whichever step 2 chose.
 
-Pin every host you will call. An MCP server often lives on another host than the REST API
-(`mcp.exa.ai` and `api.exa.ai`). A secret pinned to one refuses the other. To change the pin,
-collect the secret again at the same path.
+## Step 4A. A hosted MCP server
 
-## 4. Connect and prove it
-
-### Path A: a hosted MCP server
+Connect, list the tools, and call one read-only tool:
 
 ```js
 async (itx) => {
@@ -103,17 +140,23 @@ async (itx) => {
     headers: { "x-api-key": 'getSecret("/secrets/exa")' },
   });
   const tools = (await mcp.listTools()).map((tool) => tool.name);
-  // pick a read-only tool from `tools` for the proof
   const result = await mcp.callTool("web_search_exa", { query: "iterate", numResults: 1 });
   await mcp.close();
   return { tools, result };
 };
 ```
 
-Many servers want `authorization: 'Bearer getSecret("/secrets/<name>")'` instead of `x-api-key`: use
-whatever the service documents.
+Use the header the service documents. Many want
+`authorization: 'Bearer getSecret("/secrets/<name>")'` instead of `x-api-key`. If you don't know a
+tool's name yet, run the script with only `listTools()` first, then pick a tool that searches,
+lists or reads.
 
-### Path B: an OpenAPI document
+It returned real data: go to step 6. It didn't: see "When something goes wrong".
+
+## Step 4B. An OpenAPI document
+
+Connect, list the operations, and call one GET operation that lists or reads something. Each
+`operationId` is a method of the connection:
 
 ```js
 async (itx) => {
@@ -121,74 +164,143 @@ async (itx) => {
     "https://generativelanguage.googleapis.com/$discovery/OPENAPI3_0?version=v1beta",
     { headers: { "x-goog-api-key": 'getSecret("/secrets/gemini")' } },
   );
-  const operations = api.operations();
-  // a read-only operation for the proof: a GET that lists or reads something
-  const list = operations.find(
-    (operation) => operation.method.toUpperCase() === "GET" && /list/i.test(operation.operationId),
-  );
-  return {
-    operations: operations
-      .slice(0, 30)
-      .map((operation) => `${operation.method} ${operation.path} ${operation.operationId}`),
-    proof: list
-      ? await api.call(list.operationId, {})
-      : "no list operation: pick one from `operations`",
-  };
+  const reads = (await api.operations())
+    .filter((operation) => operation.method.toUpperCase() === "GET")
+    .map((operation) => `${operation.operationId} ${operation.path}`);
+  return { reads: reads.slice(0, 40), proof: await api.ListModels({ pageSize: 3 }) };
 };
 ```
 
-`connectToOpenApi` also takes the document itself instead of a URL, and `{ baseUrl }` when the
-requests go somewhere other than the document's first server.
+- Path and query parameters go in the one input object: `api.GetModel({ model: "gemini-2.5-flash" })`.
+- **The document lives on another host than the API** (OpenAI's is on GitHub, for example): pass
+  `baseUrl`, the API's base URL. The key then goes to the API only, never to the document's host:
 
-### Path C: plain HTTPS
+  ```js
+  const api = await itx.connectToOpenApi(
+    "https://raw.githubusercontent.com/openai/openai-openapi/main/openapi.json",
+    {
+      baseUrl: "https://api.openai.com/v1",
+      headers: { authorization: 'Bearer getSecret("/secrets/openai")' },
+    },
+  );
+  ```
+
+- An `operationId` that isn't a plain name (`list-models`, `models.list`) has no method: call it as
+  `api.call("list-models", {})`.
+
+It returned real data: go to step 6. The document won't load, or it isn't JSON OpenAPI 3: use 4C
+instead, with the same secret.
+
+## Step 4C. Plain HTTPS
+
+Send the request through `itx.fetch`, with the placeholder where the key goes:
 
 ```js
 async (itx) => {
   const response = await itx.fetch(
-    new Request("https://api.example.com/v1/me", {
-      headers: { authorization: 'Bearer getSecret("/secrets/example")' },
+    new Request("https://api.openai.com/v1/models", {
+      headers: { authorization: 'Bearer getSecret("/secrets/openai")' },
     }),
   );
   return { status: response.status, body: (await response.text()).slice(0, 1000) };
 };
 ```
 
-Use `itx.fetch` for every call that carries a secret. A key sent as a query parameter works too:
-`https://api.example.com/v1/search?key=getSecret("/secrets/example")`.
+The key goes wherever the service documents it:
 
-## 5. Path D: OAuth
+| The docs say                           | Write                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------ |
+| `Authorization: Bearer <key>`          | `authorization: 'Bearer getSecret("/secrets/<name>")'`                   |
+| `Authorization: <key>` (no `Bearer`)   | `authorization: 'getSecret("/secrets/<name>")'`                          |
+| `X-Api-Key: <key>` or any other header | `"x-api-key": 'getSecret("/secrets/<name>")'`                            |
+| `?api_key=<key>` in the URL            | `https://api.example.com/v1/search?api_key=getSecret("/secrets/<name>")` |
 
-The person registers an OAuth app with the service, and the platform runs the OAuth flow; its
-callback is on the platform. You never see the client secret or the tokens.
+A POST works the same way: the key in a header, the JSON in the body. GraphQL, for example:
 
-**D1. The app.** Tell the person where to register it, and exactly what to fill in:
+```js
+async (itx) => {
+  const response = await itx.fetch(
+    new Request("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        authorization: 'getSecret("/secrets/linear")',
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ query: "{ viewer { id name } }" }),
+    }),
+  );
+  return { status: response.status, body: await response.json() };
+};
+```
 
-> In `<the service's developer settings page>`, create an OAuth app:
->
-> - Name: `iterate <project>`
-> - Homepage: the project's URL (`projectUrl` from step 1)
-> - Callback / redirect URL: `https://os.iterate.com/.secrets/oauth/callback`
->
-> Then send me the app's **client ID** here: it isn't secret. Also tell me what it should be allowed to do.
+Status 200 with real data: go to step 6. Anything else: see "When something goes wrong".
 
-On a self-hosted iterate, the callback is `/.secrets/oauth/callback` on that deployment's own origin,
-the one this guide is served from. End your turn.
+## Step 4D. OAuth
 
-**D2. The client secret.** Collect it like a key, pinned to the origin of the service's **token
-endpoint**:
+The person registers an OAuth app with the service, and the platform runs the OAuth flow. Its
+callback is on the platform, and you never see the client secret or the tokens. The person acts
+twice: once to register the app and save its client secret, once to approve access.
+
+**D0. Find the endpoints.** You need the authorization endpoint, the token endpoint, the scopes,
+and how the token endpoint wants the client secret: in the form body (`client_secret_post`) or in
+a Basic header (`client_secret_basic`). Many services publish them:
+
+```js
+async (itx) => {
+  const origin = "https://example.com"; // the service's auth origin
+  for (const path of [
+    "/.well-known/oauth-authorization-server",
+    "/.well-known/openid-configuration",
+  ]) {
+    const response = await itx.fetch(new Request(origin + path));
+    if (response.ok) {
+      const metadata = await response.json();
+      return {
+        authorizationEndpoint: metadata.authorization_endpoint,
+        tokenEndpoint: metadata.token_endpoint,
+        clientAuth: metadata.token_endpoint_auth_methods_supported,
+        scopes: metadata.scopes_supported,
+      };
+    }
+  }
+  return "no metadata: read the service's OAuth documentation";
+};
+```
+
+GitHub publishes none. Its values are in the D2 sample below.
+
+**D1. The app, and a link for its client secret.** First make the link, pinned to the origin of
+the token endpoint:
 
 ```js
 async (itx) =>
   itx.secrets.collectFromUser({
     path: "/secrets/github-client-secret",
-    egress: { urls: ["https://github.com"] }, // the token endpoint's origin
-    description: "The client secret of your GitHub OAuth app (Generate a new client secret).",
+    egress: { urls: ["https://github.com"] },
+    description:
+      "The client secret of your GitHub OAuth app. It is only ever sent to GitHub's token endpoint.",
   });
 ```
 
-Send the link, end your turn, and check it is there when they reply "done" (step 3).
+Then tell the person exactly what to do, with the service's real settings page. For GitHub:
 
-**D3. The consent.** Start the flow and send the person the link:
+> Let's register an OAuth app with GitHub:
+>
+> 1. Open https://github.com/settings/applications/new and fill in:
+>    - **Application name**: `iterate <project>`
+>    - **Homepage URL**: `<projectUrl from step 1>`
+>    - **Authorization callback URL**: `https://os.iterate.com/.secrets/oauth/callback`
+> 2. Press **Register application**, then **Generate a new client secret**.
+> 3. Paste the client secret into **Value** here and press **Set secret**: `<url>`
+>    Please don't paste it into this chat.
+> 4. Reply with the app's **Client ID**: it isn't secret. Also tell me what it should be allowed to
+>    do, for example "read my profile" or "read my repositories".
+
+On a self-hosted iterate, the callback is `/.secrets/oauth/callback` on the origin this guide is
+served from. End your turn.
+
+**D2. The consent.** When the person replies with the client ID, check that the client secret is
+saved (step 3d, with `/secrets/github-client-secret`). Then start the flow:
 
 ```js
 async (itx) =>
@@ -197,26 +309,29 @@ async (itx) =>
     tokenEndpoint: "https://github.com/login/oauth/access_token",
     clientId: "Ov23li…", // what the person sent you
     clientSecret: 'getSecret("/secrets/github-client-secret")',
-    clientAuth: "client_secret_post", // or "client_secret_basic": whatever the service documents
+    clientAuth: "client_secret_post",
     scope: "read:user", // the least the person asked for
-    // the token endpoint's origin, and every API origin the token may be sent to
+    // the token endpoint's origin, and every API origin the token will be sent to
     urls: ["https://github.com", "https://api.github.com"],
   });
 ```
 
 It returns `{ authorizationUrl }`. Say:
 
-> Open this link and approve access: `<authorizationUrl>`. It comes back to iterate, and the page
-> says whether it worked. Reply "done" when it does.
+> Open this link and approve access: `<authorizationUrl>`
+>
+> It comes back to iterate, and the page says whether it worked. Reply "done" when it says
+> **Done**, or send me what it says instead.
 
 End your turn.
 
-- **No client secret at all:** a public client with PKCE only. Leave out `clientSecret`.
-- **Extra authorize parameters:** pass them as `extra`. Google wants
-  `{ access_type: "offline", prompt: "consent" }` to issue a refresh token.
+- **The service has no client secret** (a public client, PKCE only): skip the collection link in D1,
+  and leave `clientSecret` out.
+- **Extra authorize parameters** go in `extra`. Google wants `{ access_type: "offline", prompt:
+"consent" }` before it issues a refresh token.
 
-**D4. The proof.** The tokens are a JSON secret at the path you passed. Use the access token with
-`{ field: "accessToken" }`:
+**D3. The proof.** The tokens are a JSON secret at the path you passed to `beginOAuth`. Send the
+access token with `{ field: "accessToken" }`:
 
 ```js
 async (itx) => {
@@ -225,6 +340,7 @@ async (itx) => {
       headers: {
         authorization: 'Bearer getSecret("/secrets/github", { field: "accessToken" })',
         accept: "application/vnd.github+json",
+        "user-agent": "iterate",
       },
     }),
   );
@@ -233,17 +349,18 @@ async (itx) => {
 ```
 
 A token that expires is refreshed by the platform when the service answers 401, as long as the
-service issued a refresh token.
+service issued a refresh token. Go to step 6.
 
-## 6. Tell the person, and write it down for the project's agents
+## Step 5. The secret already exists
 
-Tell the person what is stored and how it is used, for example:
+Run the proof for its path with the existing secret: 4A, 4B or 4C for a key, D3 for OAuth. If it
+works, go to step 6. If the service answers 401 or 403, the stored value is wrong or expired:
+collect it again at the same path (step 3), which replaces it.
 
-> Exa is connected: `/secrets/exa`, only ever sent to `mcp.exa.ai` and `api.exa.ai`. The test
-> search returned results.
+## Step 6. Tell the person, and write it down for the project's agents
 
-Then record it in the project's config repo, so its agents find it later. Append a line to
-`AGENTS.md`, keeping everything already there:
+Record the connection in the project's config repo, so its agents find it later. Append one line
+to `AGENTS.md` and keep everything already there:
 
 ```js
 async (itx) => {
@@ -258,15 +375,42 @@ async (itx) => {
 };
 ```
 
-A commit to the config repo republishes the project's worker, so tell the person you did it.
+Then tell the person what is stored, where it may go, and what the proof showed:
+
+> Exa is connected. The key is at `/secrets/exa`, and it is only ever sent to `mcp.exa.ai` and
+> `api.exa.ai`. A test search returned results. I noted it in the project's `AGENTS.md`, which
+> republishes the project's worker.
+
+## A whole conversation, start to finish
+
+Person: "Connect Exa to my iterate project "connect-test"."
+
+1. You run step 1. No `/secrets/exa`, and Exa isn't built in.
+2. You read Exa's docs and fill in the sheet (step 2). Exa has API keys and a hosted MCP server:
+   path A.
+3. You run 3a and send the 3b message with the link. **Your turn ends.**
+4. Person: "done". You run 3d: the secret is there.
+5. You run 4A. `web_search_exa` returns a result.
+6. You run step 6's commit, and send its message. Done.
+
+With OAuth (GitHub, as the person's own account):
+
+1. Step 1, then step 2: the person asked for their own account, so path D.
+2. D1: you make the client-secret link and send the app instructions. **Your turn ends.**
+3. Person: "done, client ID Ov23li…, read my profile". You check the secret, run D2 and send the
+   consent link. **Your turn ends.**
+4. Person: "done". You run D3: status 200 and their login. Step 6. Done.
 
 ## When something goes wrong
 
-| What you see                                                               | What it means, and what to do                                                                                                                   |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Your MCP client won't call `run` ("requires approval")                     | Ask the person to approve iterate's `run` tool in their client. For the Codex CLI: `-c mcp_servers.iterate.tools.run.approval_mode="approve"`.  |
-| `… is outside the pin`, or a secret is refused for a host                  | The secret isn't pinned to the host you called. Collect it again at the same path, with that origin added.                                      |
-| The service answers 401 or 403                                             | Check the header name and format against its docs (`Bearer`, `x-api-key`, a query parameter), and that the person pasted the right kind of key. |
-| The OAuth callback page says "the token endpoint returned no access_token" | The client secret or `clientAuth` is wrong, or the app's callback URL doesn't match exactly. Fix it and run D3 again.                           |
-| `beginOAuth` refuses the client secret                                     | The client-secret secret must exist and be pinned to the token endpoint's origin (D2).                                                          |
-| The person pasted a key into the chat                                      | Tell them to revoke it, then send the collection link.                                                                                          |
+| What you see                                                               | What it means, and what to do                                                                                                                  |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your MCP client won't call `run` ("requires approval")                     | Ask the person to approve iterate's `run` tool in their client. For the Codex CLI: `-c mcp_servers.iterate.tools.run.approval_mode="approve"`. |
+| `no stored project secret for getSecret("/secrets/…")`                     | Nothing is saved at that path yet. Check the path, then send the collection link again (step 3b).                                              |
+| `the secret /secrets/… is pinned to … — not sent to …`                     | The secret isn't pinned to the host you called. Collect it again at the same path, with that origin added to `urls`.                           |
+| `connectToOpenApi: fetching … returned 502` for a document on another host | The key was headed to the document's host. Pass `baseUrl` (step 4B).                                                                           |
+| `… is not an OpenAPI 3 document`                                           | It's YAML or Swagger 2. Use step 4C with the same secret.                                                                                      |
+| The service answers 401 or 403                                             | Check the header name and format against its docs (the table in 4C), and that the person created the right kind of key.                        |
+| The OAuth callback page says `the token endpoint returned no access_token` | The client secret or `clientAuth` is wrong, or the app's callback URL doesn't match exactly. Fix it and run D2 again.                          |
+| `beginOAuth` refuses the client secret                                     | The client-secret secret must exist and be pinned to the token endpoint's origin (D1).                                                         |
+| The person pasted a key into the chat                                      | Tell them to revoke it and make a new one, then send the collection link.                                                                      |
