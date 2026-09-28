@@ -26,7 +26,6 @@ idf_component_register(
     esp_driver_uart
     esp_lcd
     lcd_transfer
-    nvs_flash
     espressif__esp-sr
     core_s3_board
     espressif__esp32-camera)

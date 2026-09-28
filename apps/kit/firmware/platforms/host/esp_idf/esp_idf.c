@@ -10,6 +10,7 @@
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -25,6 +26,16 @@ enum {
   FAKE_TASK_CAPACITY = 8,
   FAKE_QUEUE_CAPACITY = 8,
   FAKE_RESTART_NOTE_CAPACITY = 128,
+  FAKE_NVS_CAPACITY = 8,
+  /* NVS names are at most 15 characters, plus the terminator. */
+  FAKE_NVS_NAME = 16,
+};
+
+/* One u8 under a key in a namespace. A handle is its namespace's index + 1. */
+struct iterate_kit_fake_nvs_entry {
+  size_t space;
+  char key[FAKE_NVS_NAME];
+  uint8_t value;
 };
 
 struct iterate_kit_fake_queue {
@@ -45,6 +56,10 @@ static struct {
   char restart_note[FAKE_RESTART_NOTE_CAPACITY];
   bool log_enabled;
   bool log_checked;
+  char nvs_spaces[FAKE_NVS_CAPACITY][FAKE_NVS_NAME];
+  size_t nvs_space_count;
+  struct iterate_kit_fake_nvs_entry nvs[FAKE_NVS_CAPACITY];
+  size_t nvs_count;
 } fake;
 
 void iterate_kit_host_esp_idf_reset(void) {
@@ -332,3 +347,62 @@ UBaseType_t uxQueueSpacesAvailable(QueueHandle_t queue) {
   if (queue == NULL || !queue->live) return 0U;
   return (UBaseType_t)(queue->depth - queue->count);
 }
+
+/* --- nvs ------------------------------------------------------------------ */
+
+esp_err_t nvs_open(const char *name, nvs_open_mode_t mode, nvs_handle_t *out) {
+  size_t space;
+  if (name == NULL || out == NULL || strlen(name) >= FAKE_NVS_NAME) return ESP_ERR_INVALID_ARG;
+  for (space = 0U; space < fake.nvs_space_count; ++space) {
+    if (strcmp(fake.nvs_spaces[space], name) == 0) break;
+  }
+  if (space == fake.nvs_space_count) {
+    /* Opening an absent namespace read-only is NOT_FOUND on a device too. */
+    if (mode == NVS_READONLY) return ESP_ERR_NVS_NOT_FOUND;
+    if (space == FAKE_NVS_CAPACITY) return ESP_ERR_NO_MEM;
+    (void)snprintf(fake.nvs_spaces[space], FAKE_NVS_NAME, "%s", name);
+    ++fake.nvs_space_count;
+  }
+  *out = (nvs_handle_t)(space + 1U);
+  return ESP_OK;
+}
+
+static struct iterate_kit_fake_nvs_entry *nvs_entry(nvs_handle_t handle, const char *key) {
+  size_t index;
+  for (index = 0U; index < fake.nvs_count; ++index) {
+    if (fake.nvs[index].space + 1U == handle && strcmp(fake.nvs[index].key, key) == 0) {
+      return &fake.nvs[index];
+    }
+  }
+  return NULL;
+}
+
+esp_err_t nvs_get_u8(nvs_handle_t handle, const char *key, uint8_t *out) {
+  const struct iterate_kit_fake_nvs_entry *entry;
+  if (key == NULL || out == NULL) return ESP_ERR_INVALID_ARG;
+  entry = nvs_entry(handle, key);
+  if (entry == NULL) return ESP_ERR_NVS_NOT_FOUND;
+  *out = entry->value;
+  return ESP_OK;
+}
+
+esp_err_t nvs_set_u8(nvs_handle_t handle, const char *key, uint8_t value) {
+  struct iterate_kit_fake_nvs_entry *entry;
+  if (handle == 0U || handle > fake.nvs_space_count || key == NULL ||
+      strlen(key) >= FAKE_NVS_NAME) return ESP_ERR_INVALID_ARG;
+  entry = nvs_entry(handle, key);
+  if (entry == NULL) {
+    if (fake.nvs_count == FAKE_NVS_CAPACITY) return ESP_ERR_NO_MEM;
+    entry = &fake.nvs[fake.nvs_count++];
+    entry->space = handle - 1U;
+    (void)snprintf(entry->key, FAKE_NVS_NAME, "%s", key);
+  }
+  entry->value = value;
+  return ESP_OK;
+}
+
+esp_err_t nvs_commit(nvs_handle_t handle) {
+  return handle == 0U || handle > fake.nvs_space_count ? ESP_ERR_INVALID_ARG : ESP_OK;
+}
+
+void nvs_close(nvs_handle_t handle) { (void)handle; }
