@@ -1,6 +1,3 @@
-// Retries back off exponentially, from two seconds doubling to thirty, because the upstream API
-// limits bursts per account: a fixed delay would line every client's retries up in the same second,
-// trip the limit again at once, and keep the whole fleet failing in lockstep until someone restarts it.
 export async function retryPayments(attempt: number) {
   return Math.min(30_000, 2_000 * 2 ** attempt);
 }
