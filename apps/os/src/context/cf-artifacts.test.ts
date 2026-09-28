@@ -4,6 +4,7 @@
 
 import { expect, test } from "vitest";
 import {
+  canBackRepo,
   projectScopedArtifacts,
   repoArtifactName,
   repoPathOf,
@@ -28,6 +29,12 @@ test("repoArtifactName — the Artifacts repo a path is backed by: injective: a 
 test("repoArtifactName — the Artifacts repo a path is backed by: repoPathOf inverts it", () => {
   for (const path of ["/repos/config", "/vendor/lib", "/a/b.c/d_e-f", "/site"])
     expect(repoPathOf(repoArtifactName(path))).toBe(path);
+});
+test("canBackRepo — a project's deletion asks the repo of every path repoArtifactName names, and of no path it refuses: the root, and a context path outside the grammar", () => {
+  for (const path of ["/repos/config", "/agents/web/1", "/a/b.c/d_e-f"])
+    expect(canBackRepo(path), path).toBe(true);
+  for (const path of ["/", "/repos/a--b", "/agents/web/2026-09-28T10:00:00.000Z", "/.hidden"])
+    expect(canBackRepo(path), path).toBe(false);
 });
 
 // ── cfArtifacts ── `itx.cfArtifacts`, Cloudflare Artifacts project-scoped and addressed by PATH. Two

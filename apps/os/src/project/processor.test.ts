@@ -686,7 +686,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
 
 // THE DELETION SAGA — driven by hand like the effects above, over a fake reach (processor.ts
 // `ProjectDeletion`) that records every call.
-test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, each answered by a keyed context-deleted that nothing reads back, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
+test("ProjectProcessor — the deletion: the saga destroys each context the registry names deepest first, then deletes the repo its path backs, each answered by a keyed context-deleted that nothing reads back, then the hostnames, the project's storage, the certificate, and `/` last — and no other saga runs meanwhile", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
@@ -706,6 +706,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
     }),
     () => ({
       destroyContext: async (path) => void calls.push(`destroy ${path}`),
+      deleteRepo: async (path) => void calls.push(`delete repo ${path}`),
       deleteProjectStorage: async () => void calls.push("delete storage"),
     }),
   );
@@ -732,12 +733,18 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
     appended.push(...(events as typeof appended));
   });
   await settle();
+  // every registered context's repo, by its path, once the context is gone; none for `/`
   expect(calls).toEqual([
     "destroy /agents/web/1",
+    "delete repo /agents/web/1",
     "destroy /agents/web",
+    "delete repo /agents/web",
     "destroy /repos/config",
+    "delete repo /repos/config",
     "destroy /agents",
+    "delete repo /agents",
     "destroy /repos",
+    "delete repo /repos",
     "remove www.acme.test",
     "release www.acme.test",
     "delete storage",
@@ -761,7 +768,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   });
 });
 
-test("ProjectProcessor — the deletion: a context announced while a pass runs (the creation saga's `/repos/config`) is destroyed by the same pass, before `/`", async () => {
+test("ProjectProcessor — the deletion: a context announced while a pass runs (the creation saga's `/repos/config`) is destroyed, and its repo deleted, by the same pass, before `/`", async () => {
   const calls: string[] = [];
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
@@ -788,6 +795,7 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
           runInBackground: () => {},
         });
       },
+      deleteRepo: async (path) => void calls.push(`delete repo ${path}`),
       deleteProjectStorage: async () => void calls.push("delete storage"),
     }),
   );
@@ -795,8 +803,11 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   await settle();
   expect(calls).toEqual([
     "destroy /a",
+    "delete repo /a",
     "destroy /b",
+    "delete repo /b",
     "destroy /repos/config",
+    "delete repo /repos/config",
     "delete storage",
     "destroy /",
   ]);
@@ -818,6 +829,7 @@ test("ProjectProcessor — the deletion: a pass that keeps failing runs again af
           passes += 1;
           throw new Error("Cloudflare said no");
         },
+        deleteRepo: async () => {},
         deleteProjectStorage: async () => {},
       }),
     );

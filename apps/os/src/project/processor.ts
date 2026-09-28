@@ -95,14 +95,18 @@ const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
   entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
 /** What the deletion saga reaches, for THIS project (durable-object.ts builds it): a context's
- *  destruction, and the project's own kv, files and Artifacts repos. The contexts it destroys are the
- *  registry's (`state.contexts`). */
+ *  destruction, the Artifacts repo a context's path backs, and the project's own kv and files. The
+ *  contexts it destroys, and whose repos it deletes, are the registry's (`state.contexts`). */
 export type ProjectDeletion = {
   /** Everything the context at `path` holds goes: its log, its facets' storage, its alarm. The
    *  root's only once the catalog holds the project as deleted: before, it throws (the pass is run
    *  again). */
   destroyContext(path: string): Promise<void>;
-  /** The project's kv keys, files and Artifacts repos. */
+  /** The Artifacts repo the context at `path` backs, deleted by its name: a repo's git is not in
+   *  its context's storage, and the binding lists no repo by project, so the name is how a
+   *  project's repo is found. Nothing to do for a path no repo can back, or one already gone. */
+  deleteRepo(path: string): Promise<void>;
+  /** The project's kv keys and files. */
   deleteProjectStorage(): Promise<void>;
 };
 
@@ -598,8 +602,12 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   /** One pass of the deletion saga, over the newest state: every registered context, deepest first,
-   *  until no context registered meanwhile is left; then each custom hostname at Cloudflare and then
-   *  its claim; the project's storage; the certificate; and `/` last. */
+   *  and the repo its path backs once it is destroyed (nothing left running there can create it
+   *  again), until no context registered meanwhile is left; then each custom hostname at Cloudflare
+   *  and then its claim; the project's storage; the certificate; and `/` last. The registry, not
+   *  the catalog, names the repos: a repo's context announces itself when it wakes to run its
+   *  creation, so the registry also holds a repo whose certificate never landed, and nothing a
+   *  member appends drops an entry from it (a forged `repo/deleted` drops a catalog one). */
   async #deletionPass(
     deletion: ProjectDeletion,
     append: (event: EmittedEventInput<typeof ProjectContract>) => Promise<unknown>,
@@ -614,6 +622,7 @@ export class ProjectProcessor extends StreamProcessor<
       paths.sort((a, b) => b.split("/").length - a.split("/").length || a.localeCompare(b));
       for (const path of paths) {
         await deletion.destroyContext(path);
+        await deletion.deleteRepo(path);
         destroyed.add(path);
         await append({
           type: "events.iterate.com/project/context-deleted",

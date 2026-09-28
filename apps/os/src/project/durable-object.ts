@@ -12,7 +12,7 @@
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
-import { projectScopedArtifacts } from "../context/cf-artifacts.ts";
+import { canBackRepo, projectScopedArtifacts } from "../context/cf-artifacts.ts";
 import { CONTEXT_DESTROYED, DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -72,9 +72,13 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   );
 
   /** THE DELETION SAGA's reach, for THIS project (processor.ts `ProjectDeletion`): destroying one of
-   *  its contexts, and deleting its kv, files and Artifacts repos. */
+   *  its contexts, deleting the Artifacts repo a context's path backs, and deleting its kv and
+   *  files. The files bucket and the Artifacts binding are absent where a deployment binds none (the
+   *  workers tests). */
   #deletion(): ProjectDeletion {
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    const artifacts =
+      this.env.ARTIFACTS && projectScopedArtifacts({ namespace: this.env.ARTIFACTS, projectId });
     return {
       // the destroyed instance's reset rejects the call that asked for it: that rejection is done.
       // The root only once its row is gone (the verb drops it a moment after it asks for this):
@@ -90,6 +94,11 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
             if (!String(error).includes(CONTEXT_DESTROYED)) throw error;
           });
       },
+      // one binding delete by the path's name (cf-artifacts.ts), never the binding's `list`, which
+      // pages through every project's repos in the namespace
+      deleteRepo: async (path) => {
+        if (artifacts && canBackRepo(path)) await artifacts.delete(path);
+      },
       deleteProjectStorage: async () => {
         for (let cursor: string | undefined; ;) {
           const page = await this.env.ITX_KV.list({ prefix: `${projectId}:`, cursor });
@@ -97,20 +106,10 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
           if (page.list_complete) break;
           cursor = page.cursor;
         }
-        // The files bucket and the Artifacts binding are absent where a deployment binds none
-        // (the workers tests).
         for (let cursor: string | undefined; this.env.FILES;) {
           const page = await this.env.FILES.list({ prefix: `${projectId}/`, cursor });
           if (page.objects.length) await this.env.FILES.delete(page.objects.map((o) => o.key));
           if (!page.truncated) break;
-          cursor = page.cursor;
-        }
-        if (!this.env.ARTIFACTS) return;
-        const artifacts = projectScopedArtifacts({ namespace: this.env.ARTIFACTS, projectId });
-        for (let cursor: string | undefined; ;) {
-          const page = await artifacts.list({ cursor });
-          for (const repo of page.repos) await artifacts.delete(repo.path);
-          if (!page.cursor) break;
           cursor = page.cursor;
         }
       },

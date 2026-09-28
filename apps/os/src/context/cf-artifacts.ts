@@ -109,20 +109,32 @@ async function withArtifactRepoHandle<T>(
  *  (refused, as is a segment outside the grammar and the root itself); `repoPathOf` is its inverse.
  *  THE ONE PLACE a name is spelled — every itx surface speaks paths. */
 export function repoArtifactName(path: string): string {
+  const named = namedRepo(path);
+  if ("refusal" in named) throw new Error(`itx.cfArtifacts: ${named.refusal}`);
+  return named.name;
+}
+
+/** Whether an Artifacts repo can back `path` at all (`repoArtifactName` names one): a project's
+ *  deletion asks only such a path's repo to go (project/durable-object.ts). */
+export function canBackRepo(path: string): boolean {
+  return "name" in namedRepo(path);
+}
+
+/** `repoArtifactName`'s answer, or why `path` cannot back a repo. */
+function namedRepo(path: string): { name: string } | { refusal: string } {
   const segments = path.split("/").filter((segment) => segment !== "");
-  if (segments.length === 0)
-    throw new Error("itx.cfArtifacts: the project's root context is not a repo");
+  if (segments.length === 0) return { refusal: "the project's root context is not a repo" };
   for (const segment of segments)
     if (segment.includes("--") || !/^[a-zA-Z0-9._-]+$/.test(segment))
-      throw new Error(
-        `itx.cfArtifacts: "${path}" cannot back an Artifacts repo — a path segment is [a-zA-Z0-9._-]+ without "--" (got "${segment}")`,
-      );
+      return {
+        refusal: `"${path}" cannot back an Artifacts repo — a path segment is [a-zA-Z0-9._-]+ without "--" (got "${segment}")`,
+      };
   const name = segments.join("--");
   if (!/^[a-zA-Z0-9]/.test(name))
-    throw new Error(
-      `itx.cfArtifacts: "${path}" cannot back an Artifacts repo — its name must start with a letter or digit`,
-    );
-  return name;
+    return {
+      refusal: `"${path}" cannot back an Artifacts repo — its name must start with a letter or digit`,
+    };
+  return { name };
 }
 
 /** The path an Artifacts repo NAME (unprefixed) backs — `repoArtifactName`'s inverse. */
