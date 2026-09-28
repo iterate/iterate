@@ -69,7 +69,8 @@ localOnly(
         ),
       ).toBe(false);
       expect(chunks.invocations[0]!.events[0]!.payload).toMatchObject({
-        chunks: [{ type: "response.output_text.delta", delta: "A delayed " }],
+        responseDelta: "A delayed ",
+        thinkingDelta: "",
         sequence: 0,
       });
       secondPart.resolve();

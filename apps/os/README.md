@@ -58,9 +58,10 @@ Cloudflare for SaaS fallback use `iterate.app`; custom apexes hosted in other ac
 `cname.iterate.app` and must show an active hostname and certificate on that zone.
 A project's email is `<slug>@iterate.app` (src/integrations/email.ts): the zone is onboarded for
 Email Sending, and its Email Routing catch-all rule delivers every inbound message to `os-prd`'s
-`email()` handler. On iterate.com, an Email Routing rule sends `hello@iterate.com` to `os-prd` too,
-where it lands on the `iterate` project's (the project wildcard's) `/integrations/email`; every other
-iterate.com address goes to `iterate-com-inbound-email`.
+`email()` handler. iterate.com is the `iterate` project's (the project wildcard's) email domain too:
+it is onboarded for Email Sending, so that project sends from any iterate.com address, and its
+catch-all also delivers to `os-prd`, which records every message on that project's
+`/integrations/email` and forwards it to `projectWildcard.forwardEmailTo` (envs.ts).
 The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` project's config worker;
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.

@@ -187,6 +187,12 @@ EXT_RAM_BSS_ATTR static uint8_t
 static char stream_path[160];
 /* "itx.clients.<device name>" — the itx expression this board answers. */
 static char capability_match[ITERATE_KIT_ITX_MOUNT_CAPABILITY_MATCH_CAPACITY];
+/*
+ * Its client name, the part after "itx.clients.": what names this board's calls
+ * (`/agents/voice/<client>/<UTC>-<activation>`) and its screen to voice.
+ */
+static const char *const client_name =
+    capability_match + sizeof("itx.clients.") - 1U;
 
 enum opening_outcome {
   OPENING_IDLE = 0,
@@ -356,7 +362,7 @@ EXT_RAM_BSS_ATTR static struct {
    *
    * `metrics()` is a const reader now, so the app task could call it — but the
    * bridge holds no atomics and a multi-word counter read from another task
-   * can still tear. Mirroring here is the same shape the uplink selector uses.
+   * can still tear.
    */
   atomic_uint aec_bridge_failures;
   atomic_uint aec_bridge_reset_failures;
@@ -648,9 +654,9 @@ static void on_speaker_pcm(
  * Keep these five effects together. The ordering is the correctness proof:
  * disarm -> note flush -> invalidate -> discard -> reprime. In particular,
  * invalidating before disarming creates a window in which an intentional cut
- * is counted as listener-visible starvation. ESP-IDF 5.4.2's
- * FreeRTOS-Kernel-SMP/queue.c:xQueueGenericReset holds the queue lock and leaves
- * blocked receivers waiting when an existing queue is reset. A frame copied
+ * is counted as listener-visible starvation. ESP-IDF's FreeRTOS
+ * (queue.c, xQueueGenericReset) holds the queue lock and leaves blocked
+ * receivers waiting when an existing queue is reset. A frame copied
  * before that lock was taken is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
@@ -1099,7 +1105,7 @@ void iterate_kit_voice_loop_playback_step(void) {
  * lock, allocation or hidden capacity.
  *
  * At 320 in / 320 processed / 320 out it degenerates to an exact pass-through
- * — four memcpys and one `iterate_kit_audio_processor_process` call — with
+ * — three memcpys and one `iterate_kit_audio_processor_process` call — with
  * ONE real semantic change against a direct path:
  *
  *   A FAILED PROCESS NOW EMITS 320 SAMPLES OF SILENCE INSTEAD OF DROPPING THE
@@ -1118,13 +1124,11 @@ static enum iterate_kit_status bridge_process(
     void *context,
     const int16_t *near_samples,
     const int16_t *reference_samples,
-    const int16_t *playout_samples,
     int16_t *clean_samples,
     size_t sample_count) {
   const struct iterate_kit_audio_processor_frame frame = {
     .near = near_samples,
     .reference = reference_samples,
-    .playout_activity = playout_samples,
     .output = clean_samples,
     .sample_count = sample_count,
   };
@@ -1215,8 +1219,8 @@ static void begin_activation(uint64_t now) {
       written = snprintf(
           ticket->stream_path,
           sizeof(ticket->stream_path),
-          "/agents/voice/v23/%s/%s-%s",
-          runtime.facts->device_name,
+          "/agents/voice/%s/%s-%s",
+          client_name,
           name,
           runtime.activation);
       if (written < 0 || (size_t)written >= sizeof(ticket->stream_path)) {
@@ -1416,17 +1420,19 @@ static void start_voice_setup(struct voice_setup_ticket *ticket) {
           strcmp(method->path[1], "info") == 0) has_screen = true;
     }
   }
+  /* A board with a screen names the client voice draws on; `screen` comes last
+   * so a board without one sends the first two fields only. */
   const struct capnweb_expression screen = {
-    CAPNWEB_EXPRESSION_BOOLEAN, {.boolean = has_screen},
+    CAPNWEB_EXPRESSION_STRING, {.string = {client_name, strlen(client_name)}},
   };
   const struct capnweb_object_field fields[] = {
-    {{"screen", sizeof("screen") - 1U}, &screen},
     {{"streamPath", sizeof("streamPath") - 1U}, &path},
     {{"activation", sizeof("activation") - 1U}, &activation},
+    {{"screen", sizeof("screen") - 1U}, &screen},
   };
   const struct capnweb_expression args = {
     CAPNWEB_EXPRESSION_OBJECT,
-    {.object = {fields, sizeof(fields) / sizeof(fields[0])}},
+    {.object = {fields, has_screen ? 3U : 2U}},
   };
   enum capnweb_status status;
   const size_t index = (size_t)(ticket - runtime.setup);
@@ -1595,7 +1601,6 @@ void iterate_kit_voice_loop_capture_step(void) {
    */
   static int16_t near_chunk[FRAME_SAMPLES];
   static int16_t reference_chunk[FRAME_SAMPLES];
-  static int16_t activity_chunk[FRAME_SAMPLES];
   struct iterate_kit_voice_capture_meta meta;
   size_t sample_count = 0U;
   runtime.capture_generation_inflight = atomic_load_explicit(
@@ -1646,29 +1651,12 @@ void iterate_kit_voice_loop_capture_step(void) {
           ITERATE_KIT_OK) {
     ++runtime.mic_process_failures;
   }
-  {
-    /*
-     * The far-active plane is a POLICY signal the codec samples, never the
-     * analogue reference: noise must not select an uplink branch. Refilled
-     * only when it changes, because it is constant for whole answers and
-     * constantly zero on a board that cannot report it.
-     */
-    static int16_t activity_level;
-    const int16_t level = meta.playback_content_active ? 1 : 0;
-    if (level != activity_level) {
-      activity_level = level;
-      for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
-        activity_chunk[index] = level;
-      }
-    }
-  }
   if (iterate_kit_aec_capture_bridge_push_aligned(
           &runtime.capture_bridge,
           meta.sequence,
           meta.captured_through_at_us,
           near_chunk,
           reference_chunk,
-          activity_chunk,
           chunk_samples) != ITERATE_KIT_OK) {
     ++runtime.mic_process_failures;
   }
@@ -1819,9 +1807,8 @@ static bool initialise_connection(void) {
     }
   }
   /*
-   * OTA as a capability: the server names a url and a digest, the device
-   * fetches, verifies, and reboots into it. Until this, every deploy meant a
-   * serial cable on somebody's desk.
+   * OTA as a capability: the caller names an image and its digest, the board
+   * fetches, verifies and reboots into it (README, Over-the-air updates).
    */
   {
     const struct iterate_kit_system_update_driver driver = {
@@ -2148,7 +2135,7 @@ static size_t health_json(char *out, size_t capacity) {
       /* Opening inputs and capture-gate state. */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,"
       "\"gateOpen\":%s,\"activationStartedMs\":%" PRIu64
-      ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
+      ",\"firstMicAppendOffsetMs\":%" PRId64
       ",\"uptimeMs\":%" PRIu64,
       iterate_kit_itx_transport_state_name(transport.state),
       iterate_kit_voice_stream_state_name(runtime.voice_stream->state),
@@ -2172,7 +2159,6 @@ static size_t health_json(char *out, size_t capacity) {
           ? INT64_C(-1)
           : (int64_t)iterate_kit_voice_elapsed_ms(
                 runtime.first_mic_append_at_ms, runtime.activation_started_at_ms),
-      now,
       now);
   if (written <= 0 || (size_t)written >= capacity) return 0U;
   used = (size_t)written;
@@ -2324,14 +2310,13 @@ static void park_with_fault(const char *what) {
  */
 static bool start_board(void) {
   /*
-   * The bridge's five buffers, caller-owned for its whole life and sized for
-   * the largest cadence any board declares. Internal RAM on purpose: four of
+   * The bridge's four buffers, caller-owned for its whole life and sized for
+   * the largest cadence any board declares. Internal RAM on purpose: three of
    * them are what a board's DSP reads and writes every frame, and the one
    * board with a real canceller runs esp-sr over them inline.
    */
   static int16_t bridge_near[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_reference[ITERATE_KIT_VOICE_FRAME_SAMPLES];
-  static int16_t bridge_playout[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_clean[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_egress[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   struct iterate_kit_board_audio audio;
@@ -2367,7 +2352,6 @@ static bool start_board(void) {
       .egress_frame_samples = FRAME_SAMPLES,
       .near_frame = bridge_near,
       .reference_frame = bridge_reference,
-      .playout_frame = bridge_playout,
       .clean_frame = bridge_clean,
       .processing_frame_capacity = ITERATE_KIT_VOICE_FRAME_SAMPLES,
       .egress_frame = bridge_egress,
@@ -2959,7 +2943,7 @@ void iterate_kit_voice_loop_step(void) {
      * mount exists yet — the only window on this device that is genuinely quiet.
      *
      * KEYING ON THE PONG ALONE WAS A RACE. The transport originates its PING
-     * only after inbound silence (websocket_connection.c), and an answered probe
+     * only after inbound silence (websocket_client.c), and an answered probe
      * IS inbound traffic on the same period — so a healthy mounted board could
      * suppress every PING it needed and reboot itself at 420 s on a good
      * network. Reading the probe answers here removes the race without a second

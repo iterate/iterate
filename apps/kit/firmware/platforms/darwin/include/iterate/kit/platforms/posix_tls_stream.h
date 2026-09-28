@@ -2,6 +2,7 @@
 #define ITERATE_KIT_PLATFORMS_POSIX_TLS_STREAM_H
 
 #include "iterate/kit/status.h"
+#include "iterate/kit/websocket_client.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,18 +18,6 @@ extern "C" {
 enum {
   ITERATE_KIT_POSIX_TLS_HOST_CAPACITY = 129,
   ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY = 8,
-};
-
-enum iterate_kit_posix_tls_connect_result {
-  ITERATE_KIT_POSIX_TLS_CONNECT_READY = 0,
-  ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK,
-  ITERATE_KIT_POSIX_TLS_CONNECT_FAILED,
-};
-
-enum iterate_kit_posix_tls_io_result {
-  ITERATE_KIT_POSIX_TLS_IO_PROGRESS = 0,
-  ITERATE_KIT_POSIX_TLS_IO_WOULD_BLOCK,
-  ITERATE_KIT_POSIX_TLS_IO_FAILED,
 };
 
 typedef void (*iterate_kit_posix_tls_resolved_address_fn)(
@@ -96,7 +85,7 @@ struct iterate_kit_posix_tls_address {
  * through connect(), so the caller's one open-attempt deadline bounds every
  * establishment stage. Plain TCP exists solely to reach local ws://
  * development servers; deployed wss:// endpoints always select TLS in the
- * WebSocket adapter.
+ * WebSocket client (iterate_kit_posix_tls_stream_ops).
  */
 struct iterate_kit_posix_tls_stream {
   char host[ITERATE_KIT_POSIX_TLS_HOST_CAPACITY];
@@ -128,29 +117,16 @@ enum iterate_kit_status iterate_kit_posix_tls_stream_prepare(
     struct iterate_kit_posix_tls_stream *stream,
     const struct iterate_kit_posix_tls_stream_options *options);
 
-enum iterate_kit_posix_tls_connect_result
-iterate_kit_posix_tls_stream_connect(
-    struct iterate_kit_posix_tls_stream *stream);
-
-enum iterate_kit_posix_tls_io_result iterate_kit_posix_tls_stream_read(
-    struct iterate_kit_posix_tls_stream *stream,
-    uint8_t *bytes,
-    size_t byte_capacity,
-    size_t *bytes_read);
-
-enum iterate_kit_posix_tls_io_result iterate_kit_posix_tls_stream_write(
-    struct iterate_kit_posix_tls_stream *stream,
-    const uint8_t *bytes,
-    size_t byte_count,
-    size_t *bytes_written);
-
-/** Closes one connection generation while retaining the reusable SSL_CTX. */
-void iterate_kit_posix_tls_stream_close(
-    struct iterate_kit_posix_tls_stream *stream);
-
 /** Releases the long-lived OpenSSL context after the final close. */
 void iterate_kit_posix_tls_stream_cleanup(
     struct iterate_kit_posix_tls_stream *stream);
+
+/**
+ * The stream as the WebSocket client drives it, with OpenSSL's randomness and
+ * SHA-1. The context is a prepared struct iterate_kit_posix_tls_stream. close
+ * ends one connection generation and keeps the reusable SSL_CTX.
+ */
+extern const struct iterate_kit_byte_stream_ops iterate_kit_posix_tls_stream_ops;
 
 #ifdef __cplusplus
 }

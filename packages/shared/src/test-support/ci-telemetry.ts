@@ -47,7 +47,7 @@ const TestTelemetryRecord = z.object({
 
 /**
  * Durable, runner-independent input to the CI telemetry finalizer
- * (scripts/ci/upload-test-telemetry.ts). Reporters only write this artifact and never perform
+ * (scripts/ci/test-telemetry-finalizer.ts). Reporters only write this artifact and never perform
  * network I/O.
  */
 export const TestTelemetryArtifact = z.object({
@@ -63,7 +63,6 @@ export const TestTelemetryArtifact = z.object({
     workflowName: z.string().optional(),
     workflowRunId: z.string().min(1),
     workflowRunAttempt: z.string().min(1),
-    workflowRunUrl: z.string().optional(),
     jobName: z.string().optional(),
     depotJobUrl: z.string().optional(),
   }),
@@ -210,11 +209,6 @@ export function ciTelemetrySourceFromEnvironment(
     workflowName: environment.GITHUB_WORKFLOW || undefined,
     workflowRunId: runId,
     workflowRunAttempt: environment.GITHUB_RUN_ATTEMPT || "1",
-    ...(environment.GITHUB_SERVER_URL &&
-      environment.GITHUB_REPOSITORY &&
-      environment.GITHUB_RUN_ID && {
-        workflowRunUrl: `${environment.GITHUB_SERVER_URL}/${environment.GITHUB_REPOSITORY}/actions/runs/${environment.GITHUB_RUN_ID}`,
-      }),
     jobName: environment.GITHUB_JOB || undefined,
     depotJobUrl: environment.DEPOT_JOB_URL || undefined,
   };

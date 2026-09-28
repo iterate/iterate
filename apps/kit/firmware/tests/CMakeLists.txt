@@ -22,9 +22,9 @@ add_test(
 # Every host test is one executable behind the same warning wall, registered
 # with CTest under its own name. A declaration lists the test's sources and
 # states only what differs: STD <n> (C standard, default 99), INCLUDES,
-# DEFINES, extra warning OPTIONS, and the libraries to LINK.
+# extra warning OPTIONS, and the libraries to LINK.
 function(iterate_kit_add_test NAME)
-  cmake_parse_arguments(T "" "STD" "INCLUDES;DEFINES;OPTIONS;LINK" ${ARGN})
+  cmake_parse_arguments(T "" "STD" "INCLUDES;OPTIONS;LINK" ${ARGN})
   if(NOT T_STD)
     set(T_STD 99)
   endif()
@@ -39,9 +39,6 @@ function(iterate_kit_add_test NAME)
     ${T_OPTIONS})
   if(T_INCLUDES)
     target_include_directories(${NAME} PRIVATE ${T_INCLUDES})
-  endif()
-  if(T_DEFINES)
-    target_compile_definitions(${NAME} PRIVATE ${T_DEFINES})
   endif()
   if(T_LINK)
     target_link_libraries(${NAME} PRIVATE ${T_LINK})
@@ -77,6 +74,8 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-itx-outbox-sender-test itx_outbox_sender_test.c)
 iterate_kit_add_core_test(iterate-kit-microphone-flush-test microphone_flush_test.c)
 
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
@@ -95,15 +94,21 @@ iterate_kit_add_core_test(iterate-kit-voice-playout-test voice_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-voice-stream-test voice_stream_test.c)
 iterate_kit_add_core_test(
   iterate-kit-websocket-frame-writer-test websocket_frame_writer_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-websocket-client-test websocket_client_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-websocket-frame-reader-test websocket_frame_reader_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 
-# The ESP WebSocket keepalive decision itself is host-pure: this tests the
-# exact PING queue policy without recreating ESP-TLS or a radio.
+# The board's byte stream under the WebSocket client, against a scripted
+# ESP-TLS (tests/fakes/esp_tls): what counts as an empty pass, and what keeps
+# a failure's cause.
 iterate_kit_add_test(
-  iterate-kit-esp-websocket-keepalive-test websocket_keepalive_test.c
-  INCLUDES ../platforms/iterate_esp_idf/include
+  iterate-kit-esp-tls-stream-test esp_tls_stream_test.c
+  ../platforms/iterate_esp_idf/esp_tls_stream.c fakes/esp_tls/fake_esp_tls.c
+  INCLUDES fakes/esp_tls ../platforms/iterate_esp_idf/include
   LINK iterate-kit-core iterate-kit-host-esp-idf)
 
 # Which upgrade answers are a refused key, and how long one waits: the two
@@ -165,6 +170,9 @@ iterate_kit_add_test(iterate-kit-health-fields-test health_fields_test.c
 iterate_kit_add_test(iterate-kit-health-test health_test.c
   LINK iterate-kit-capabilities)
 
+iterate_kit_add_test(iterate-kit-system-update-test system_update_test.c
+  LINK iterate-kit-capabilities)
+
 function(iterate_kit_add_avatar_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-avatar)
 endfunction()
@@ -207,19 +215,18 @@ if(APPLE)
     iterate-kit-darwin-audio-output-test darwin_audio_output_test.c
     STD 11 OPTIONS -Wconversion -Wshadow LINK iterate-kit-darwin)
 
-  iterate_kit_add_test(iterate-kit-posix-websocket-test posix_websocket_test.c
+  iterate_kit_add_test(iterate-kit-posix-tls-stream-test posix_tls_stream_test.c
     LINK iterate-kit-darwin)
 
   iterate_kit_add_test(iterate-kit-darwin-itx-transport-test
-    darwin_itx_transport_test.c fakes/fake_posix_websocket.c
+    darwin_itx_transport_test.c fakes/fake_websocket_client.c
     ../platforms/darwin/itx_transport.c
     INCLUDES fakes ../platforms/darwin/include LINK iterate-kit-darwin)
 endif()
 
 # HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
-# the deliberately compiler-visible XMOS uplink-stage selector. These build
-# the pure hardware table directly, including the diagnostic override; no
-# I2C transport or ESP-IDF runtime is required by these literal table tests.
+# the XMOS uplink stage. These build the pure hardware table directly; no I2C
+# transport or ESP-IDF runtime is required by these literal table tests.
 function(iterate_kit_add_havpe_pure_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN}
     INCLUDES ../devices/havpe ../components/core/include)
@@ -231,13 +238,6 @@ iterate_kit_add_test(iterate-kit-havpe-hardware-config-test
   INCLUDES fakes/board ../platforms/iterate_esp_idf/components/board/include
   LINK iterate-kit-voice iterate-kit-audio iterate-kit-core)
 
-iterate_kit_add_test(iterate-kit-havpe-hardware-config-aec-override-test
-  havpe_hardware_config_aec_override_test.c
-  ../platforms/iterate_esp_idf/components/board/codecs/aic3204.c
-  INCLUDES ../platforms/iterate_esp_idf/components/board/include
-  DEFINES ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
-  LINK iterate-kit-core)
-
 iterate_kit_add_test(iterate-kit-pcm-format-test pcm_format_test.c
   LINK iterate-kit-audio)
 
@@ -246,16 +246,14 @@ iterate_kit_add_havpe_pure_test(iterate-kit-havpe-dial-test
   havpe_dial_test.c ../devices/havpe/havpe_dial.c)
 
 # StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
-# bridge, reference scaler, uplink selector, and near high-pass, each with the
-# donor's host tests. They link the audio component, not core.
+# bridge, reference scaler and near high-pass, each with the donor's host
+# tests. They link the audio component, not core.
 function(iterate_kit_add_audio_test NAME)
   iterate_kit_add_test(${NAME} ${ARGN} LINK iterate-kit-audio)
 endfunction()
 
 iterate_kit_add_audio_test(
   iterate-kit-aec-capture-bridge-test aec_capture_bridge_test.c)
-iterate_kit_add_audio_test(
-  iterate-kit-aec-uplink-selector-test aec_uplink_selector_test.c)
 iterate_kit_add_audio_test(
   iterate-kit-aec-reference-scaler-test aec_reference_scaler_test.c)
 iterate_kit_add_audio_test(
@@ -313,3 +311,6 @@ iterate_kit_add_core_test(iterate-kit-itx-multiplex-test itx_multiplex_test.c)
 
 iterate_kit_add_test(iterate-kit-screen-test screen_test.c
   LINK iterate-kit-capabilities)
+
+iterate_kit_add_test(iterate-kit-face-capability-test face_capability_test.c
+  LINK iterate-kit-capabilities iterate-kit-avatar)

@@ -254,10 +254,13 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/web-message-sent": {
       description:
-        "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from.",
+        "THE assistant-message fact: the markdown outside the tag, what a person is shown; llmRequestOffset names the answer it came from, and besideScript marks prose written beside a script, before its result.",
       payloadSchema: z.object({
         message: z.string().min(1),
         llmRequestOffset: z.number().int().positive().optional(),
+        /** The answer also held a script, so these words were written before its result: a reader
+         *  that may state only verified results (a voice call) holds them back. */
+        besideScript: z.literal(true).optional(),
       }),
     },
     "events.iterate.com/agent/summary-updated": {
@@ -276,11 +279,14 @@ export const AgentContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-response-frame": {
       description:
-        "EPHEMERAL, never stored: one coalescing window of the provider's streamed events for the request it names — what a feed renders as the answer being written. The settled event carries the durable text.",
+        "EPHEMERAL, never stored: one coalescing window of the answer being written for the request it names — the text and the thinking it adds, which a feed appends to what it has shown. The settled event carries the durable text.",
       ephemeral: true,
       payloadSchema: z.object({
         llmRequestOffset: z.number().int().positive(),
-        chunks: z.array(z.unknown()).min(1),
+        /** The answer text this window adds ("" when it adds only thinking). */
+        responseDelta: z.string(),
+        /** The model's thinking (a reasoning summary) this window adds ("" when it adds only text). */
+        thinkingDelta: z.string(),
         /** The window's ordinal within the response — a redelivered window is told from a new one. */
         sequence: z.number().int().nonnegative(),
       }),

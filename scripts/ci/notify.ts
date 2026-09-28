@@ -1,59 +1,56 @@
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
-import { getRunUrl, readEventPayload, type GithubEventPayload } from "./github.ts";
-import { getSlackClient, slackChannelIds, slackEscape } from "./slack.ts";
+import { z } from "zod";
+import { readEventPayload, type GithubEventPayload } from "./github.ts";
+import { getSlackClient, onCallMention, slackChannelIds, slackEscape } from "./slack.ts";
 
 type DeployOptions = {
   app: string;
   status: "success" | "failure";
   commitSha: string;
+  /** the Depot job's page (DEPOT_JOB_URL) */
   runUrl: string;
   publicUrl?: string;
 };
 
 type PullRequestPayload = NonNullable<GithubEventPayload["pull_request"]>;
 
-async function notifyDeploy({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
-  const slack = getSlackClient();
+/** A prd deploy's post: a success is routine, for #ci; a failure pages #error-pulse. Pure. */
+export function deployMessage({ app, status, commitSha, runUrl, publicUrl }: DeployOptions) {
   const shortSha = commitSha.slice(0, 7);
-  const message =
-    status === "success"
-      ? [
-          `✅ ${app} prd deploy succeeded (${shortSha})`,
-          publicUrl ? `<${publicUrl}|Open app>` : null,
-          `<${runUrl}|View workflow run>`,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : [
-          `🚨 ${app} prd deploy failed (${shortSha}).`,
-          `<${runUrl}|View workflow run>`,
-          "@iterate please investigate",
-        ].join(" ");
-
-  await slack.chat.postMessage({
-    channel: slackChannelIds["#ci"],
-    text: message,
-  });
+  if (status === "success")
+    return {
+      channel: slackChannelIds["#ci"],
+      text: [
+        `✅ ${app} prd deploy succeeded (${shortSha})`,
+        publicUrl ? `<${publicUrl}|Open app>` : null,
+        `<${runUrl}|View workflow run>`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
+  return {
+    channel: slackChannelIds["#error-pulse"],
+    text: `🚨 ${app} prd deploy failed (${shortSha}) ${onCallMention}\n<${runUrl}|View workflow run>`,
+  };
 }
 
-async function notifyWorkflowFailure() {
-  const needs = JSON.parse(readOption("NEEDS")) as Record<string, { result?: string }>;
-  const failedJobs = Object.entries(needs)
+/** A workflow's `toJSON(needs)`: each job it waited on, with its result. */
+const WorkflowNeeds = z.record(z.string(), z.object({ result: z.string().optional() }));
+
+/** The page for a workflow whose jobs failed. Pure. */
+export function workflowFailureMessage(input: {
+  needs: z.infer<typeof WorkflowNeeds>;
+  refName: string;
+  runUrl: string;
+}) {
+  const failedJobs = Object.entries(input.needs)
     .filter(([, value]) => value.result === "failure")
     .map(([name]) => name);
-
-  const refName = process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || "unknown ref";
-  const message = [
-    `🚨 ${failedJobs.join(", ")} failed on ${refName}.`,
-    `<${getRunUrl()}|View Workflow Run>`,
-    "\n@iterate please investigate",
-  ].join(" ");
-
-  await getSlackClient().chat.postMessage({
+  return {
     channel: slackChannelIds["#error-pulse"],
-    text: message,
-  });
+    text: `🚨 ${failedJobs.join(", ")} failed on ${input.refName} ${onCallMention}\n<${input.runUrl}|View Workflow Run>`,
+  };
 }
 
 async function notifyPullRequestUpdate() {
@@ -70,7 +67,8 @@ async function notifyPullRequestUpdate() {
   });
 }
 
-function formatPullRequestUpdateMessage(payload: GithubEventPayload) {
+/** A pull request event's routine post for #ci, or null for an action it does not post. Pure. */
+export function formatPullRequestUpdateMessage(payload: GithubEventPayload) {
   const pullRequest = payload.pull_request;
   if (!pullRequest) {
     throw new Error("pull_request payload is required");
@@ -134,37 +132,42 @@ function formatPullRequestLink(pullRequest: PullRequestPayload) {
   return pullRequest.html_url ? `<${pullRequest.html_url}|${label}>` : label;
 }
 
+/** The deploy a prd deploy workflow's Notify step names: APP_DISPLAY_NAME at GITHUB_SHA, PUBLIC_URL
+ *  linking the app. */
+function deployOptions() {
+  return {
+    app: readOption("APP_DISPLAY_NAME"),
+    commitSha: readOption("GITHUB_SHA"),
+    runUrl: readOption("DEPOT_JOB_URL"),
+    publicUrl: process.env.PUBLIC_URL,
+  };
+}
+
 function readOption(name: string) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
 }
 
-/** Posts the prd deploy success line for APP_DISPLAY_NAME at GITHUB_SHA (PUBLIC_URL links the app). */
+/** Posts the prd deploy success line for APP_DISPLAY_NAME at GITHUB_SHA to #ci (PUBLIC_URL links the app). */
 export async function deploySuccess() {
-  await notifyDeploy({
-    app: readOption("APP_DISPLAY_NAME"),
-    status: "success",
-    commitSha: readOption("GITHUB_SHA"),
-    runUrl: getRunUrl(),
-    publicUrl: process.env.PUBLIC_URL,
-  });
+  await getSlackClient().chat.postMessage(deployMessage({ ...deployOptions(), status: "success" }));
 }
 
-/** Posts the prd deploy failure page for APP_DISPLAY_NAME at GITHUB_SHA. */
+/** Pages #error-pulse with the prd deploy failure of APP_DISPLAY_NAME at GITHUB_SHA. */
 export async function deployFailure() {
-  await notifyDeploy({
-    app: readOption("APP_DISPLAY_NAME"),
-    status: "failure",
-    commitSha: readOption("GITHUB_SHA"),
-    runUrl: getRunUrl(),
-    publicUrl: process.env.PUBLIC_URL,
-  });
+  await getSlackClient().chat.postMessage(deployMessage({ ...deployOptions(), status: "failure" }));
 }
 
-/** Posts the failed workflow run to Slack. */
+/** Pages #error-pulse with the workflow's failed jobs (NEEDS). */
 export async function workflowFailure() {
-  await notifyWorkflowFailure();
+  await getSlackClient().chat.postMessage(
+    workflowFailureMessage({
+      needs: WorkflowNeeds.parse(JSON.parse(readOption("NEEDS"))),
+      refName: process.env.GITHUB_REF_NAME || process.env.GITHUB_REF || "unknown ref",
+      runUrl: readOption("DEPOT_JOB_URL"),
+    }),
+  );
 }
 
 /** Posts the pull request event (GITHUB_EVENT_PATH) to Slack. */

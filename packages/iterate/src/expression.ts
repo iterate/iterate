@@ -449,7 +449,7 @@ installPrototypeInvokeFallback(InvokeHandle, []);
  *  itself a pipelined remote path, and calling it sends the stub as an argument, which a facet stub
  *  refuses with a DataCloneError. What a connector over a lent stub or a remote capnweb API walks. */
 export function walkStepsOnRpcStub(stub: unknown, steps: ItxExpression): unknown {
-  let value: unknown = stub;
+  let value = stub;
   for (const step of steps) {
     if (typeof step === "string") value = (value as Record<string, unknown>)[step];
     else {

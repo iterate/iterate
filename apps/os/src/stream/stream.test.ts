@@ -247,7 +247,7 @@ test("waitForEvent: a nested onCommit re-append cannot outrun the outer commit â
   // ran #onCommit first, this nested matching append (a live-state-delta stand-in â€” the real
   // fan-out does exactly this) would resolve the waiting caller with the LATER (nested) event.
   let nestedReceipt: StreamEvent | undefined;
-  const stream: Stream = bareStream({
+  const stream = bareStream({
     onCommit: (fresh) => {
       if (!nestedReceipt && fresh.some((e) => e.type === "ping" && !e.ephemeral))
         [nestedReceipt] = stream.append({ type: "ping", ephemeral: true, payload: { n: 2 } });

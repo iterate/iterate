@@ -364,7 +364,7 @@ export class ControlPlaneDatabase {
     if (input.ownerId && !owner)
       throw codedError("INVALID_INPUT", `No user ${JSON.stringify(input.ownerId)} to own it.`);
     const ownerId =
-      owner?.id ??
+      owner?.id ||
       (isOperator(caller) ? null : this.#requireUser(caller, "create an organization"));
     const organization = { id: newId("org"), name: input.name.trim() };
     await batch(this.#d1, [

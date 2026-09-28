@@ -33,8 +33,9 @@ test("records the first failed attempt when a retry passes", async () => {
   const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", telemetryDir);
-  vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
-  vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
+  // a preview's e2e run (apps/os/scripts/preview.ts)
+  vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
+  vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
   const testCase = {
@@ -53,7 +54,7 @@ test("records the first failed attempt when a retry passes", async () => {
     moduleId: "/repo/network.e2e.test.ts",
     children: { allTests: () => [testCase] },
   };
-  await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd([testModule]);
+  await new RetryTelemetryReporter().onTestRunEnd([testModule]);
 
   // The retried-pass also produced an unknown-flake record, keyed on the
   // BARE test name (what a later createFlake wrap would record) with the
@@ -98,6 +99,8 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
   const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", join(directory.path, "telemetry"));
+  vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
+  vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
   vi.spyOn(console, "log").mockImplementation(() => {});
   const testCase = (name: string, state: string, options?: { fails: boolean }) => ({
     fullName: `socket > ${name}`,
@@ -117,11 +120,7 @@ test("a plain test that failed every attempt leaves an unexpected-error flake re
     },
   };
 
-  await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd(
-    [testModule],
-    [],
-    "failed",
-  );
+  await new RetryTelemetryReporter().onTestRunEnd([testModule], [], "failed");
 
   const records = readdirSync(flakeRecordDir).flatMap((file) =>
     readFileSync(join(flakeRecordDir, file), "utf8")
@@ -155,6 +154,8 @@ test.for([
   async ({ mode, state, reason, expectedState }) => {
     using directory = temporaryDirectory();
     vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
+    vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
+    vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
     const testCase = {
       fullName: "sign-in > keeps a connection",
       name: "keeps a connection",
@@ -167,11 +168,7 @@ test.for([
       children: { allTests: () => [testCase] },
     };
 
-    await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd(
-      [testModule],
-      [],
-      reason,
-    );
+    await new RetryTelemetryReporter().onTestRunEnd([testModule], [], reason);
 
     expect(onlyArtifact(directory.path).tests).toMatchObject([{ state, expectedState }]);
   },
@@ -182,6 +179,9 @@ test("writes unit tests without performing network I/O", async () => {
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
   vi.stubEnv("npm_package_name", "@iterate/example");
   vi.stubEnv("GITHUB_WORKSPACE", "/repo");
+  // a unit run's own kind, whatever the ambient environment says
+  vi.stubEnv("TEST_TELEMETRY_KIND", undefined);
+  vi.stubEnv("TEST_TELEMETRY_SUITE", undefined);
   const fetchMock = vi.spyOn(globalThis, "fetch");
 
   const testCase = {
@@ -207,6 +207,8 @@ test("writes unit tests without performing network I/O", async () => {
 test("prints the e2e rows that ran past the row budget's warning", async () => {
   using directory = temporaryDirectory();
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
+  vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
+  vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
   vi.stubEnv("FLAKE_RECORD_DIR", undefined);
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   const row = (name: string, project: string, duration: number, tags: string[] = []) => ({
@@ -230,7 +232,7 @@ test("prints the e2e rows that ran past the row budget's warning", async () => {
     },
   };
 
-  await new RetryTelemetryReporter({ testKind: "e2e", suite: "vitest" }).onTestRunEnd([testModule]);
+  await new RetryTelemetryReporter().onTestRunEnd([testModule]);
 
   expect(log.mock.calls.flat().filter((line) => String(line).startsWith("[row-budget]"))).toEqual([
     "[row-budget] 2 e2e row(s) ran longer than 45 s; a row that runs on every PR finishes within 60 s at its p95:",

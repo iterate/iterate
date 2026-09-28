@@ -43,7 +43,7 @@ export function deployedTarget(workerBaseUrl: string): {
   return {
     adminBearer,
     loginPassword,
-    ingressRouting: JSON.stringify(env?.ingressRouting ?? null),
+    ingressRouting: JSON.stringify(env?.ingressRouting || null),
     // MCP on an origin of its own (prd's mcp.iterate.com) is the deployment's; on the platform
     // origin it is `/mcp` on the worker's own.
     mcpBaseUrl:

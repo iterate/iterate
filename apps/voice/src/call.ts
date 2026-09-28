@@ -1,10 +1,10 @@
-// One call from a browser: the device's exact calls (apps/agents/scripts/voice-call.ts, in a
-// browser). Press = a fresh context: one `setupVoiceAgent` append puts the relay and the agent on
-// it and starts the call; a subscription brings the answer's frames and the call's facts back;
-// microphone frames go up as ephemeral appends, twenty a second; hanging up appends the terminal.
+// One call from a browser: `@iterate-com/voice/call`'s client, the device's calls, with the
+// browser's microphone and speaker on either end (audio.ts). A service that is there but failing
+// says so before anything is appended.
 
 // registers `itx.voice` on InstalledAppRoots
 import type {} from "@iterate-com/voice";
+import { startVoiceCall, type VoiceCallStats } from "@iterate-com/voice/call";
 import type { IterateContextApiWith } from "iterate/api";
 import type { AuthenticatedApp } from "iterate/app";
 import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
@@ -12,15 +12,9 @@ import { base64ToInt16, int16ToBase64, type AudioSession } from "./audio.ts";
 /** `id` counts up per call: the list key (one subscription batch can report several facts at once). */
 export type CallFact = { id: number; text: string };
 
-/** What this browser saw of the call, counted here because the relay cannot see the last hop. */
-export type CallStats = {
-  micFramesSent: number;
-  /** Frames the microphone produced while five appends were still in flight (a slow link). */
-  micFramesDropped: number;
-  spkChunksReceived: number;
-  spkMsReceived: number;
-  handshakeMs: number | null;
-};
+/** What this browser saw of the call, counted by the call client because the relay cannot see the
+ *  last hop. */
+export type CallStats = VoiceCallStats;
 
 export type Call = {
   /** The conversation's context — what `useLiveState` subscribes to. */
@@ -36,109 +30,53 @@ export async function startCall(input: {
   onFact(fact: CallFact): void;
 }): Promise<Call> {
   const { api, projectId, audio, onFact } = input;
-  const activation = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) =>
-    b.toString(16).padStart(2, "0"),
-  ).join("");
-  const streamPath = `/agents/voice/web/${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}-${activation}`;
   const project = await api.projects.get(projectId);
   // The page offers Call only once `itx.voice` is configured (it installs voice otherwise), so the
-  // project answers `voice`; a service that is there but failing says so before anything is appended.
+  // project answers `voice`.
   const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
   await installed.voice.health().catch((error: unknown) => {
     throw new Error(
       `This project's voice agent isn't answering (${error instanceof Error ? error.message : String(error)}).`,
     );
   });
-  const call = project.cd(streamPath);
   let factId = 0;
-  const stats: CallStats = {
-    micFramesSent: 0,
-    micFramesDropped: 0,
-    spkChunksReceived: 0,
-    spkMsReceived: 0,
-    handshakeMs: null,
-  };
-  const setup = installed.voice.setupVoiceAgent({ streamPath, activation });
-  const subscription = await call.subscribe({
-    name: `web-${activation}`,
-    consumes: [
-      "events.iterate.com/voice-agent/speaker-frame",
-      "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/call-ended",
-      "events.iterate.com/voice-agent/provider-error-reported",
-      "events.iterate.com/voice-agent/provider-disconnected",
-    ],
-    target: (events) => {
-      for (const raw of events) {
-        // capnweb hands each row over as a plain JSON value; the shape is the relay's event contract
-        const event = raw as { type: string; payload: Record<string, unknown> };
-        const p = event.payload;
-        if (event.type === "events.iterate.com/voice-agent/speaker-frame") {
-          if (p.activation !== activation) continue;
-          if (p.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
-          if (typeof p.pcm === "string" && p.pcm !== "") {
-            const pcm = base64ToInt16(p.pcm);
-            stats.spkChunksReceived += 1;
-            stats.spkMsReceived += pcm.length / 16;
-            audio.speaker.push(pcm);
-          }
-        } else if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
-          stats.handshakeMs = Number(p.handshakeTookMs);
-          onFact({ id: factId++, text: `accepted (handshake ${String(p.handshakeTookMs)} ms)` });
-        } else if (event.type === "events.iterate.com/voice-agent/call-ended") {
+  const say = (text: string) => onFact({ id: factId++, text });
+  const call = await startVoiceCall(installed, {
+    client: "web",
+    onSpeakerFrame: (frame) => {
+      if (frame.clearSpeakerBufferBeforeFrame) audio.speaker.clear();
+      if (frame.pcm) audio.speaker.push(base64ToInt16(frame.pcm));
+    },
+    // The list shows the call's milestones and the provider's troubles; the transcript and the
+    // delegations are the live view's (the page's `voice-agent` state).
+    onFact: (fact) => {
+      switch (fact.type) {
+        case "events.iterate.com/voice-agent/conversation-accepted":
+          say(`accepted (handshake ${String(fact.payload.handshakeTookMs)} ms)`);
+          break;
+        case "events.iterate.com/voice-agent/call-ended":
           audio.onFrame = null;
-          onFact({ id: factId++, text: `ended: ${String(p.reason)}` });
-        } else {
-          const kind = event.type.replace("events.iterate.com/voice-agent/", "");
-          onFact({ id: factId++, text: `${kind}: ${JSON.stringify(p).slice(0, 160)}` });
-        }
+          say(`ended: ${fact.payload.reason}`);
+          break;
+        case "events.iterate.com/voice-agent/provider-error-reported":
+        case "events.iterate.com/voice-agent/provider-disconnected":
+          say(
+            `${fact.type.replace("events.iterate.com/voice-agent/", "")}: ${JSON.stringify(fact.payload).slice(0, 160)}`,
+          );
+          break;
       }
     },
   });
-  await setup;
-  onFact({ id: factId++, text: `call started on ${streamPath}` });
-  let sending = 0;
+  say(`call started on ${call.streamPath}`);
   audio.onFrame = (pcm) => {
-    // Fire and forget, twenty a second; a slow link drops frames rather than queueing them.
-    if (sending > 4) {
-      stats.micFramesDropped += 1;
-      return;
-    }
-    sending += 1;
-    stats.micFramesSent += 1;
-    void call
-      .append({
-        type: "events.iterate.com/voice-agent/mic-frame",
-        ephemeral: true,
-        payload: { activation, pcm: int16ToBase64(pcm) },
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        sending -= 1;
-      });
+    call.sendMicFrame(int16ToBase64(pcm));
   };
-  const keepalive = setInterval(() => {
-    void call
-      .append({ type: "events.iterate.com/voice-agent/keepalive", ephemeral: true, payload: {} })
-      .catch(() => undefined);
-  }, 20_000);
   return {
-    itx: call,
-    stats,
+    itx: call.itx,
+    stats: call.stats,
     async hangUp() {
-      clearInterval(keepalive);
       audio.onFrame = null;
-      await call
-        .append({
-          type: "events.iterate.com/voice-agent/call-ended",
-          payload: { activation, reason: "hung up" },
-        })
-        .catch(() => undefined);
-      try {
-        subscription[Symbol.dispose]();
-      } catch {
-        // the session may already be gone
-      }
+      await call.hangUp("hung up");
     },
   };
 }

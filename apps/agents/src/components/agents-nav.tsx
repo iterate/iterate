@@ -163,7 +163,7 @@ function AgentsNavRow({
   onTogglePinned: () => void;
 }) {
   const status = row.summary?.status;
-  const title = row.summary?.title ?? row.path.split("/").filter(Boolean).at(-1) ?? row.path;
+  const title = row.summary?.title || row.path.split("/").filter(Boolean).at(-1) || row.path;
   const tooltip = [
     row.path,
     status ? STATUS_LABEL[status] : unavailable ? "Live status unavailable" : undefined,

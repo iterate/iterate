@@ -30,7 +30,7 @@ extern "C" {
  */
 enum {
     FACE_SPRITE_MAGIC = 0x46535052U, /* "FSPR" */
-    FACE_SPRITE_VERSION = 2,
+    FACE_SPRITE_VERSION = 3,
     FACE_SPRITE_CELL_NONE = 0xffffU,
     FACE_SPRITE_MOUTH_SLOT_NONE = 0xffU,
     FACE_SPRITE_MAX_LID_CELLS = 6,
@@ -46,9 +46,9 @@ typedef enum {
 } face_sprite_encoding_t;
 
 /*
- * Cheap fallback mouth vocabulary. An atlas can expose any number of mouth
- * slots and map OVR15, VRM5, Preston9, Microsoft22, or custom visemes to
- * them. These nine roles are used only when an explicit mapping is absent.
+ * The mouth vocabulary. The player picks one role from the energy-driven
+ * mouth controls (open, width, round, press, teeth); an atlas maps each role
+ * to one of its mouth slots (`role_slots`).
  */
 typedef enum {
     FACE_SPRITE_MOUTH_REST = 0,
@@ -137,9 +137,9 @@ typedef struct {
 
 /*
  * Expression-bank target in renderer-neutral action space. A bank is chosen
- * by proximity to the already evaluated facial actions, rather than by a
- * stage-direction enum. That keeps sprite assets compatible with local audio,
- * authored animation, and future AI stage-direction producers.
+ * by proximity to the already evaluated facial actions, rather than by an
+ * expression enum, so a held expression (face_stage.h) and the ambient
+ * performance select art the same way.
  */
 typedef struct {
     int8_t valence;
@@ -166,18 +166,6 @@ typedef struct {
     face_sprite_brow_layer_t brow_right;
 } face_sprite_bank_t;
 
-/*
- * Map any wire vocabulary/id pair to an atlas mouth slot. `role` supplies a
- * cheap transition intermediate; use FACE_SPRITE_MOUTH_SLOT_NONE when a
- * custom shape has no useful canonical role.
- */
-typedef struct {
-    uint8_t viseme_set;
-    uint8_t viseme;
-    uint8_t mouth_slot;
-    uint8_t role;
-} face_sprite_viseme_map_t;
-
 typedef struct {
     uint16_t cell;
     uint16_t duration_samples;
@@ -201,9 +189,9 @@ typedef struct {
 } face_sprite_cycle_t;
 
 /*
- * Thresholds for the continuous-control fallback. expression_bank_min avoids
- * popping to a discrete emotion bank at the start/end of a softly blended
- * stage cue. explicit_viseme_min ignores low-confidence recognizer output.
+ * Thresholds that pick a mouth role from the continuous controls.
+ * expression_bank_min avoids popping to a discrete emotion bank while an
+ * expression's weight is low.
  */
 typedef struct {
     uint8_t open_min;
@@ -216,7 +204,6 @@ typedef struct {
     uint8_t wide_min;
     uint8_t wide_open;
     uint8_t open_wide;
-    uint8_t explicit_viseme_min;
     uint8_t expression_bank_min;
 } face_sprite_selector_t;
 
@@ -244,7 +231,6 @@ typedef struct {
     uint16_t palette_count;
     uint16_t cell_count;
     uint16_t mouth_slot_count;
-    uint16_t viseme_map_count;
     uint8_t bank_count;
     uint8_t sequence_count;
     uint8_t cycle_count;
@@ -253,21 +239,21 @@ typedef struct {
     uint16_t reserved;
     face_sprite_selector_t selector;
     face_sprite_timing_t timing;
-    uint8_t fallback_slots[FACE_SPRITE_MOUTH_ROLE_COUNT];
+    /* The mouth slot each role draws; REST must name one. */
+    uint8_t role_slots[FACE_SPRITE_MOUTH_ROLE_COUNT];
     uint8_t reserved_slots[3];
     const uint16_t *palette;
     const face_sprite_cell_t *cells;
     const uint8_t *blob;
     uint32_t blob_size;
     const face_sprite_bank_t *banks;
-    const face_sprite_viseme_map_t *viseme_map;
     const face_sprite_sequence_t *sequences;
     const face_sprite_cycle_t *cycles;
     const char *name;
 } face_sprite_atlas_t;
 
 #define FACE_SPRITE_SELECTOR_DEFAULTS \
-    { 20, 128, 160, 96, 140, 150, 128, 170, 120, 170, 32, 96 }
+    { 20, 128, 160, 96, 140, 150, 128, 170, 120, 170, 96 }
 
 #define FACE_SPRITE_TIMING_DEFAULTS \
     { 1120, 1920, 1280, 640, 1920, 1067, 64000, 20800, 96000, 67200 }

@@ -51,7 +51,7 @@ export function createFlake<TestFn extends (...args: any[]) => any>(
   options?: { timeoutMs: number },
 ): TestFn {
   const timeoutMs = options?.timeoutMs || 30_000;
-  const failer: unknown = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
+  const failer = "fails" in test ? test.fails : "fail" in test ? test.fail : undefined;
   if (typeof failer !== "function") {
     throw new Error(
       "createFlake(test, pattern): test has neither .fails (vitest) nor .fail (playwright)",

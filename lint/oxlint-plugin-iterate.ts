@@ -2,16 +2,17 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import esquery from "esquery";
-import unicorn from "eslint-plugin-unicorn";
 import type { Rule, Scope, SourceCode } from "eslint";
 import type { Program } from "estree";
 
 import { getPropertyName } from "./rules/ast.ts";
 import { simpleTruthinessCheckRule } from "./rules/simple-truthiness-check.ts";
 import { mechanicalClassImplRule } from "./rules/mechanical-class-impl.ts";
+import { noInferableTypeAnnotationRule } from "./rules/no-inferable-type-annotation.ts";
 import { noRawItxGetRule } from "./rules/no-raw-itx-get.ts";
+import { countWordInOtherFiles } from "./rules/repository-word-counts.ts";
 import { tseslintRules } from "./rules/tseslint.ts";
-import type { StrictPlugin, StrictRule } from "./types.ts";
+import type { StrictPlugin } from "./types.ts";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
@@ -337,32 +338,6 @@ function jsxAttributeHasSrOnlyClass(attributeValue: any) {
   return hasSrOnlyClassExpression(attributeValue.expression);
 }
 
-const isolatedCodemodeRule = {
-  ...unicorn.rules?.["isolated-functions"],
-  create(context) {
-    const originalRule = unicorn.rules?.["isolated-functions"];
-    if (!originalRule) return {};
-    const original = originalRule.create(context as never);
-    for (const codemodeSelector of [":function[codemode]", ":function[codemode]:exit"]) {
-      if (codemodeSelector in original) {
-        const cb = original[codemodeSelector];
-        delete original[codemodeSelector];
-        const suffix = codemodeSelector.match(/:exit$/)?.[0] || "";
-        const nonClashingCatchallFunctionSelector = `FunctionExpression[random!="${Math.random()}"]${suffix}`;
-        original[nonClashingCatchallFunctionSelector] = (node: any, ...args: any[]) => {
-          const parentCallee = node.parent?.callee;
-          if (!parentCallee) return;
-          if (!context.sourceCode.getText(parentCallee).match(/\bcodemode\b/i)) return;
-          if (!context.sourceCode.getText(parentCallee).match(/\bfixture\b/i)) return;
-          return cb?.(node, ...args);
-        };
-        original[`Arrow${nonClashingCatchallFunctionSelector}`] =
-          original[nonClashingCatchallFunctionSelector];
-      }
-    }
-    return original;
-  },
-} as StrictRule;
 function getMatcherCall(node: any) {
   if (node.callee.type !== "MemberExpression") return undefined;
   const matcherName = getPropertyName(node.callee.property);
@@ -771,7 +746,7 @@ const plugin: StrictPlugin = {
     ...tseslintRules,
     "mechanical-class-impl": mechanicalClassImplRule,
     "no-raw-itx-get": noRawItxGetRule,
-    "isolated-codemode": isolatedCodemodeRule,
+    "no-inferable-type-annotation": noInferableTypeAnnotationRule,
     "relative-import-extensions": {
       meta: {
         type: "problem",
@@ -875,7 +850,7 @@ const plugin: StrictPlugin = {
         type: "suggestion",
         docs: {
           description:
-            "Flag undocumented tiny non-exported helper functions that are only used once. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
+            "Flag undocumented tiny helper functions that are only used once, in their file or (when exported) in the repository. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
         },
       },
       create(context) {
@@ -883,12 +858,8 @@ const plugin: StrictPlugin = {
 
         function checkHelper(id: any, fn: any, statement: any) {
           const exportParent = statement.parent?.type;
-          if (
-            exportParent === "ExportNamedDeclaration" ||
-            exportParent === "ExportDefaultDeclaration"
-          ) {
-            return;
-          }
+          // A default export is imported under any name, so its uses cannot be counted by name.
+          if (exportParent === "ExportDefaultDeclaration") return;
 
           const bodyLines = getFunctionBodyLineCount(context.sourceCode, fn);
           if (bodyLines > MAX_BODY_LINES) return;
@@ -899,7 +870,10 @@ const plugin: StrictPlugin = {
             return;
           }
           if (esquery.match(fn, esquery.parse("IfStatement")).length > 0) return;
-          if (hasLeadingJsDocComment(context.sourceCode, statement)) return;
+          const exported = exportParent === "ExportNamedDeclaration";
+          // An exported helper's JSDoc sits above its `export`.
+          if (hasLeadingJsDocComment(context.sourceCode, exported ? statement.parent : statement))
+            return;
           if (hasCommentInsideFunction(context.sourceCode, fn)) return;
           if (hasTypePredicateReturnType(context.sourceCode, fn)) return;
 
@@ -908,12 +882,12 @@ const plugin: StrictPlugin = {
           if (!variable) return;
 
           const reads = variable.references.filter((ref: any) => ref.isRead());
-          // `export { helper }` / `export default helper` make it part of the module's surface
-          const isExportedReference = reads.some((ref: any) => {
-            const parentType = ref.identifier.parent?.type;
-            return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
-          });
-          if (isExportedReference) return;
+          const exports = reads.filter((ref: any) =>
+            ["ExportSpecifier", "ExportDefaultDeclaration"].includes(ref.identifier.parent?.type),
+          );
+          // Exported under another name (`export { helper as other }`, `export default helper`),
+          // it is used under a name this rule does not count.
+          if (exports.some((ref: any) => ref.identifier.parent.exported?.name !== id.name)) return;
 
           // a recursive helper can't be inlined, so any self-reference disqualifies it
           const hasSelfReference = reads.some((ref: any) => {
@@ -922,7 +896,18 @@ const plugin: StrictPlugin = {
             return referenceStart >= fn.range[0] && referenceStart < fn.range[1];
           });
           if (hasSelfReference) return;
-          if (reads.length !== 1) return;
+
+          let uses = reads.length - exports.length;
+          if (exported || exports.length > 0) {
+            const elsewhere = countWordInOtherFiles({
+              cwd: context.cwd,
+              fileName: context.filename,
+              name: id.name,
+            });
+            if (elsewhere === undefined) return;
+            uses += elsewhere;
+          }
+          if (uses !== 1) return;
 
           context.report({
             node: id,

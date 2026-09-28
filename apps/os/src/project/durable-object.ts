@@ -37,6 +37,7 @@ import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
+import { domainConnectLinkOf } from "./domain-connect.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
@@ -123,11 +124,22 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     const controlPlane = new ControlPlane(this.env);
     const config = appConfigOf(this.env);
     return {
-      reservedZones: config.customHostnames?.reservedZones ?? [],
+      reservedZones: config.customHostnames?.reservedZones || [],
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
+      // back to the project's Hostnames page in the dash — addressed by the project's slug, as the
+      // dash's routes are — which re-checks the hostname it names
+      connect: async (hostname) => {
+        const slug = (await controlPlane.getProject(projectId))?.slug;
+        return config.domainConnect && config.urls.dash && slug
+          ? domainConnectLinkOf(hostname, {
+              privateKey: config.domainConnect.privateKey.exposeSecret(),
+              redirectUri: `${config.urls.dash}/projects/${slug}/hostnames?connected=${encodeURIComponent(hostname)}`,
+            })
+          : null;
+      },
     };
   }
 

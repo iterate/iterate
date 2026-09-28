@@ -140,34 +140,12 @@
     "iterate/no-single-use-types": "error",
     "iterate/prefer-logical-and-spread": "error",
     "iterate/simple-truthiness-check": "error",
+    "iterate/no-inferable-type-annotation": "error",
     "iterate/typed-no-floating-promises": "error",
     "iterate/mechanical-class-impl": "error",
     "iterate/no-raw-itx-get": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
-    "iterate/isolated-codemode": [
-      "error",
-      {
-        "selectors": [":function[codemode]"],
-        "overrideGlobals": {
-          "crypto": "readonly",
-          "fetch": "readonly",
-          "console": "readonly",
-          "setTimeout": "readonly"
-        }
-      }
-    ],
-    "unicorn-js/isolated-functions": [
-      "error",
-      {
-        "overrideGlobals": {
-          "crypto": "readonly",
-          "fetch": "readonly",
-          "console": "readonly",
-          "setTimeout": "readonly"
-        }
-      }
-    ],
     "unicorn-js/template-indent": "warn"
   },
   "overrides": [

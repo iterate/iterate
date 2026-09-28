@@ -7,12 +7,11 @@ client and no sign-in of its own. The note
 is a FILE in the project's config repo — `/repos/config/notes/log.md` — edited
 through the workspace `/workspaces/notes`: the page brings the repo and the
 workspace into being through their collections
-(`itx.invoke(["itx", "repos", ["create", "/repos/config"]])`,
-`itx.invoke(["itx", "workspaces", ["create", "/workspaces/notes"]])`, both idempotent), reads the
-file through the workspace, and "Save" writes the workspace's overlay and lands
-ONE commit on the repo's `main` (`gitCommit({ scope: "/repos/config" })`). The
+(`itx.repos.create("/repos/config")`, `itx.workspaces.create("/workspaces/notes")`, both
+idempotent), reads the file through the workspace, and "Save" writes the workspace's overlay
+and lands ONE commit on the repo's `main` (`gitCommit({ scope: "/repos/config" })`). The
 app holds no OAuth credentials and no state of its own. It frames itself in
-packages/ui's `AppShell` — the sidebar, the project switcher and the account menu
+packages/ui's `ProjectAppShell` — the sidebar, the project switcher and the account menu
 every OS app shares — with the note as its one page.
 
 Publish [config-worker.ts](config-worker.ts) as the project's config worker

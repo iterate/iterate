@@ -40,8 +40,9 @@ import {
   type SecretRecord,
 } from "./secrets.ts";
 
-/** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. */
-export const SECRET_OAUTH_TTL_MS = 10 * 60_000;
+/** How long an OAuth attempt stays open: the signed `state`'s expiry and the pending attempt's. An
+ *  hour, because the link often reaches a person through an agent's chat, and they open it later. */
+export const SECRET_OAUTH_TTL_MS = 60 * 60_000;
 
 /** The options validated and normalized — the shape the pending attempt and the exchange read. */
 export type NormalizedSecretOAuthOptions = {
@@ -69,7 +70,8 @@ export type PendingSecretOAuth = {
   codeVerifier: string;
   /** Pairs the callback with THIS attempt (a replayed or foreign state cannot complete it). */
   nonce: string;
-  /** Ten minutes: long enough to sign in at the provider, short enough that a stale attempt dies. */
+  /** SECRET_OAUTH_TTL_MS from the start: long enough to reach the link and sign in, short enough
+   *  that a stale attempt dies. */
   until: number;
 };
 

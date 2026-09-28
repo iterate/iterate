@@ -6,6 +6,7 @@
   "exports": {
     "./app-config": "./src/app-config.ts",
     "./base64": "./src/base64.ts",
+    "./depot-api": "./src/depot-api.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./integration-scopes": "./src/integration-scopes.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
@@ -26,7 +27,8 @@
       "default": "./src/posthog/posthog.ts"
     },
     "./config-repo-template/reference": "./src/config-repo-template/reference.ts",
-    "./platform-retry": "./src/platform-retry.ts"
+    "./platform-retry": "./src/platform-retry.ts",
+    "./pkg-pr-new": "./src/pkg-pr-new.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

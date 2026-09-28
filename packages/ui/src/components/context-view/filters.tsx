@@ -192,4 +192,4 @@ function valueGlance(value: unknown): string {
 
 /** Who appended: the email when the stamp has one, else the actor id; "" for the platform's own. */
 export const actorLabel = (event: ContextViewEvent): string =>
-  event.source?.principal?.email ?? event.source?.principal?.actor ?? "";
+  event.source?.principal?.email || event.source?.principal?.actor || "";

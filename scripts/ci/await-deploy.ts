@@ -23,7 +23,8 @@ import {
   httpFailureKind,
   isPlatformFailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { depotCiApi, workflowArtifact, type DepotApi } from "./depot.ts";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
+import { workflowArtifact, type DepotApi } from "./depot.ts";
 
 /** How often the wait asks Depot; how long it waits at most, the deploy jobs' own `timeout-minutes`;
  *  and how long Depot may fail every call before the wait gives up on it. */

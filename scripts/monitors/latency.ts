@@ -168,7 +168,7 @@ function platformFailure(message: string, meta: RowMeta | undefined): PlatformFa
   if (firstLine === "TypeError: fetch failed") return "connection-reset";
   if (firstLine === "Error: WebSocket connection failed.") return "socket-lost";
   if (firstLine === "Error: Network connection lost.") return "transport-cut";
-  const subscribeBatchMs = meta?.subscribeBatchMs ?? [];
+  const subscribeBatchMs = meta?.subscribeBatchMs || [];
   if (
     firstLine.startsWith("Error: until(") &&
     subscribeBatchMs.length > 0 &&
@@ -225,7 +225,7 @@ export function readReport(report: z.infer<typeof VitestReport>) {
 
 /** What a failed row reported beside its failure, in words, or undefined for nothing. Pure. */
 function evidenceOf(meta: RowMeta | undefined) {
-  const lost = meta?.failure?.socketsLost ?? [];
+  const lost = meta?.failure?.socketsLost || [];
   const failedAfter = lost.map((socket) => socket.failedAfterMs);
   const neverOpened = lost.filter((socket) => socket.openedAfterMs === undefined).length;
   const parts = [

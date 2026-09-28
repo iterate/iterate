@@ -361,17 +361,10 @@ jobs:
               offline=()
               if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
-          # One artifact per suite and job attempt; PR time to green reads its suite summary.
-          - name: Upload flake records
-            if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}
-            uses: actions/upload-artifact@v4
-            with:
-              name: flake-records-${{ env.FLAKE_SUITE }}-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/flake-records/${{ env.FLAKE_SUITE }}
-              if-no-files-found: ignore
           # EVERYTHING THE RUN WROTE under test-results/, whatever the suite's outcome
-          # (docs/depot-ci.md#browser-reports-from-artifacts): the telemetry, and for the specs each
-          # failed spec's trace.zip, screenshot and error-context.md under playwright-output/ and
+          # (docs/depot-ci.md#browser-reports-from-artifacts): the telemetry, the flake records
+          # beside the suite's summary, which PR time to green reads, and for the specs each failed
+          # spec's trace.zip, screenshot and error-context.md under playwright-output/ and
           # playwright-results.json.
           - name: Upload results
             if: ${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}

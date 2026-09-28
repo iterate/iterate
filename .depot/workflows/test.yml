@@ -57,18 +57,16 @@ jobs:
       # so no timing-sensitive row waits on it.
       - fail-fast: false
         parallel:
+          # No secrets: no unit test reads one. The telemetry's kind and suite are the reporters'
+          # own `unit`, and its branch GitHub's head_ref or ref_name (ci-telemetry.ts).
           - name: Run Tests
             id: tests
             env:
-              DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-              FLAKE_RECORD_DIR: test-results/flake-records
+              FLAKE_RECORD_DIR: test-results/flake-records/unit
               TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
-              TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
               TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-              TEST_TELEMETRY_KIND: unit
-              TEST_TELEMETRY_SUITE: unit
               TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
-            run: doppler run --project test --config dev -- pnpm test
+            run: pnpm test
           # `!cancelled()`, so a failed setup does not hide the firmware result. CTest's JUnit XML
           # goes into the test evidence folder (docs/test-evidence.md).
           - name: Run Kit firmware host tests
@@ -96,7 +94,6 @@ jobs:
           TEST_EVIDENCE_STEPS: tests=${{ steps.tests.outcome }} kit-host-tests=${{ steps.kit-host-tests.outcome }}
           # Node's compile cache, which the upload's Node then starts from
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
-          TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
           TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
         # --expect-unit-workspaces reads the workspaces from the checkout, so the list has one source:
@@ -123,17 +120,8 @@ jobs:
               offline=()
               if [ -s "$RUNNER_TEMP/doppler-shared-preview" ]; then offline=(--fallback-only); fi
               doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" "${offline[@]}" -- node scripts/ci/test-evidence.ts upload
-          # The recorder lines and the finalizer's suite-summary.json as a workflow
-          # artifact, one per job attempt. The flake dashboard reads the same files
-          # from the test evidence in R2 (docs/testing.md#flakes-and-pinned-failures).
-          - name: Upload flake records
-            if: always()
-            uses: actions/upload-artifact@v4
-            with:
-              name: flake-records-unit-attempt-${{ steps.attempt.outputs.id }}
-              path: test-results/flake-records
-              if-no-files-found: ignore
-          # Everything the run wrote under test-results/, as the e2e jobs keep theirs.
+          # Everything the run wrote under test-results/, as the e2e jobs keep theirs: the telemetry,
+          # and the flake records beside the finalizer's suite-summary.json.
           - name: Upload results
             if: always()
             uses: actions/upload-artifact@v4

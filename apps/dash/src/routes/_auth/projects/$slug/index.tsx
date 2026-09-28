@@ -4,9 +4,9 @@
 // processor reported. The frame the project's own pages fill in over time. Its organization's owner
 // deletes the project here (`session.projects.delete`). The config repo's remote is linked, pulled
 // and pushed here too (`itx.repos.get("/repos/config")`: `origin`, `setOrigin`, `pull`, `push`).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ComponentProps, useCallback, useEffect, useRef, useState } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowUpRight, CheckIcon, CircleXIcon } from "lucide-react";
+import { ArrowUpRight, CheckIcon, CircleXIcon, MoreHorizontalIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { errorCode } from "iterate/lib";
@@ -31,6 +31,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import {
@@ -90,14 +96,14 @@ function ProjectOverview() {
   const context = opened.stub;
   const live = useFacetLiveState(context, "project");
   const parsed = ProjectLive.safeParse(live.value).data;
-  const creation = parsed?.creation ?? null;
+  const creation = parsed?.creation || null;
   // Until the facet's first value lands the page cannot tell a project still being created from
   // one that is done: `projects.create` answers before its saga does. A refused context, or a live
   // state that failed or does not parse, leaves the plain overview.
   const creationKnown = live.status !== "connecting" || Boolean(opened.error);
   const creating = creation?.status === "requested" || creation?.status === "failed";
   const configRepoSeeded = Boolean(parsed?.repos["/repos/config"]);
-  const githubConnections = Object.values(parsed?.integrations ?? {}).filter(
+  const githubConnections = Object.values(parsed?.integrations || {}).filter(
     (row) => row.provider === "github",
   );
   return (
@@ -149,20 +155,20 @@ function ProjectOverview() {
 }
 
 /** What the config repo's section is doing, one action at a time. */
-type ConfigRepoAction = "link" | "pull" | "push" | "replace" | "force-push" | "unlink";
+type ConfigRepoAction = "link" | "pull" | "push" | "force-pull" | "force-push" | "unlink";
 
-/** A choice the sheet waits on, with the remote it is about: after a pull (`diverged`) or a push
- *  (`behind`) against it that was not a fast-forward, or replacing iterate's main with it
- *  (`replace`, the confirm). Its actions use that remote, whatever origin is by then. */
+/** A choice the page waits on, with the remote it is about: after a pull or a push against it that
+ *  was not a fast-forward (`diverged`, the sheet), or replacing iterate's main with it (`replace`,
+ *  the confirm). Its actions use that remote, whatever origin is by then. */
 type ConfigRepoChoice = {
-  kind: "diverged" | "behind" | "replace";
+  kind: "diverged" | "replace";
   remote: ReturnType<typeof describeOrigin>;
 };
 
 /** The config repo's remote, git's `origin`, read again after every action, and its main pulled and
  *  pushed by hand. Every pull and push names the remote the page shows, so a link changed elsewhere
  *  since is never the one acted on, and a pending choice goes when a read finds origin changed. The
- *  sheet links it (`?configRepo=link`) or holds the pending choice. */
+ *  sheet links it (`?configRepo=link`) or holds a diverged choice; replacing asks in a confirm. */
 function ConfigRepo({
   project,
   githubConnections,
@@ -203,7 +209,10 @@ function ConfigRepo({
 
   const remote = read?.origin ? describeOrigin(read.origin) : null;
   const linking = !choice && search.configRepo === "link";
-  const closeSheet = async () => {
+  const diverged = choice?.kind === "diverged" ? choice.remote : null;
+  const githubListed = githubConnections.length > 0;
+  /** Closes the sheet or the confirm, with the choice and the error it showed. */
+  const dismiss = async () => {
     setChoice(null);
     setError(null);
     await navigate({ search: {}, replace: true });
@@ -218,10 +227,10 @@ function ConfigRepo({
           ? "Already up to date"
           : `${verb === "pull" ? "Pulled" : "Pushed"} ${(result.commitOid || "").slice(0, 7)}`,
       );
-      await closeSheet();
+      await dismiss();
     } catch (caught) {
       if (errorCode(caught) !== "NOT_FAST_FORWARD") throw caught;
-      setChoice({ kind: verb === "pull" ? "diverged" : "behind", remote: describeOrigin(url) });
+      setChoice({ kind: "diverged", remote: describeOrigin(url) });
     }
   };
   /** One action, busy while its own calls run. The origin read after it runs with the buttons
@@ -245,11 +254,15 @@ function ConfigRepo({
     action: ConfigRepoAction,
     label: string,
     work: () => Promise<unknown>,
-    variant: "outline" | "destructive" = "outline",
+    {
+      variant = "outline",
+      className,
+    }: Pick<ComponentProps<typeof Button>, "variant" | "className"> = {},
   ) => (
     <Button
       type="button"
       variant={variant}
+      className={className}
       disabled={Boolean(busy)}
       onClick={() => void run(action, work)}
     >
@@ -257,76 +270,106 @@ function ConfigRepo({
       {label}
     </Button>
   );
-  const name = choice?.remote.name;
-  const copy =
-    choice &&
-    {
-      diverged: {
-        title: `${name}'s main and iterate's have diverged`,
-        description: `Each has commits the other lacks: keep ${name}'s, or push iterate's over it.`,
-      },
-      behind: {
-        title: `${name} has commits iterate's main doesn't`,
-        description: `Pushing anyway overwrites ${name}'s main with iterate's, and those commits go.`,
-      },
-      replace: {
-        title: `Replace iterate's main with ${name}'s?`,
-        description: `iterate's own commits since the two diverged are dropped from main, and the project republishes ${name}'s version.`,
-      },
-    }[choice.kind];
 
   return (
     <section aria-labelledby="config-repo-heading" className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h2 id="config-repo-heading" className="text-lg font-semibold tracking-tight">
-            Config repo
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            The project&apos;s code, <code>/repos/config</code>: every commit to its main publishes.
-            Link it to a git remote to pull that main in and push it back.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {remote ? (
-            <>
-              {actionButton("pull", "Pull now", () => sync("pull", remote.url))}
-              {actionButton("push", "Push now", () => sync("push", remote.url))}
-              <Button
-                variant="outline"
-                disabled={Boolean(busy)}
-                onClick={() => setChoice({ kind: "replace", remote })}
-              >
-                Replace with {remote.name}&apos;s
-              </Button>
-              {actionButton("unlink", "Unlink", async () =>
-                setRead(await configRepo().setOrigin(null)),
-              )}
-            </>
-          ) : read ? (
-            <Button onClick={() => void navigate({ search: { configRepo: "link" } })}>Link</Button>
-          ) : null}
-        </div>
-      </div>
-      {read || error ? null : <p className="text-sm text-muted-foreground">Loading…</p>}
-      {read && !remote ? <p className="text-sm">Not linked</p> : null}
+      <h2 id="config-repo-heading" className="text-lg font-semibold tracking-tight">
+        Config repo
+      </h2>
       {remote ? (
-        <p className="text-sm">
-          Linked to{" "}
-          <a href={remote.href} target="_blank" rel="noreferrer" className="font-mono underline">
-            {remote.label}
-          </a>
-        </p>
-      ) : null}
-      {outcome ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          {outcome}
-        </p>
-      ) : null}
+        <div className="flex flex-col gap-3 border-y py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <a
+              href={remote.href}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-full items-center gap-1 font-mono text-sm font-medium hover:underline"
+            >
+              <span className="break-all">{remote.label}</span>
+              <ArrowUpRight aria-hidden="true" className="size-3.5 shrink-0" />
+            </a>
+            {outcome ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                {outcome}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            {actionButton("pull", "Pull", () => sync("pull", remote.url), {
+              className: "flex-1 sm:flex-none",
+            })}
+            {actionButton("push", "Push", () => sync("push", remote.url), {
+              className: "flex-1 sm:flex-none",
+            })}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={Boolean(busy)}
+                render={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    title="More"
+                    aria-label="More"
+                  />
+                }
+              >
+                {busy === "unlink" ? <Spinner /> : <MoreHorizontalIcon aria-hidden="true" />}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-auto">
+                <DropdownMenuItem onClick={() => setChoice({ kind: "replace", remote })}>
+                  Replace with {remote.name}&apos;s main…
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() =>
+                    void run("unlink", async () => setRead(await configRepo().setOrigin(null)))
+                  }
+                >
+                  Unlink
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+      ) : read ? (
+        <div className="flex items-center justify-between gap-3 border-y py-3">
+          <p className="text-sm text-muted-foreground">Not linked to a git remote</p>
+          <Button type="button" onClick={() => void navigate({ search: { configRepo: "link" } })}>
+            Link
+          </Button>
+        </div>
+      ) : error ? null : (
+        <Spinner />
+      )}
       {choice || linking ? null : <Failure error={error} />}
+      <AlertDialog
+        open={choice?.kind === "replace"}
+        onOpenChange={(open) => !open && !busy && void dismiss()}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Replace iterate&apos;s main with {choice?.remote.name || remote?.name}&apos;s?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Commits only iterate has are dropped, and the project republishes.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Failure error={error} />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(busy)}>Cancel</AlertDialogCancel>
+            {choice
+              ? actionButton("force-pull", "Replace", () => sync("pull", choice.remote.url, true), {
+                  variant: "destructive",
+                })
+              : null}
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Sheet
-        open={Boolean(choice) || linking}
-        onOpenChange={(open) => !open && !busy && void closeSheet()}
+        open={Boolean(diverged) || linking}
+        onOpenChange={(open) => !open && !busy && void dismiss()}
       >
         <SheetContent
           side="right"
@@ -344,12 +387,16 @@ function ConfigRepo({
             }}
           >
             <SheetHeader className="border-b">
-              <SheetTitle>{copy ? copy.title : "Link the config repo"}</SheetTitle>
-              <SheetDescription>
-                {copy
-                  ? `${copy.description} Cancel keeps the link and moves nothing.`
-                  : "iterate keeps the remote as the repo's origin and pulls its main."}
-              </SheetDescription>
+              <SheetTitle>
+                {diverged
+                  ? `${diverged.name}'s main and iterate's have diverged`
+                  : "Link config repo"}
+              </SheetTitle>
+              {diverged ? (
+                <SheetDescription>
+                  Each has commits the other doesn&apos;t. Keep one.
+                </SheetDescription>
+              ) : null}
             </SheetHeader>
             <FieldGroup className="flex-1 p-4">
               {linking ? (
@@ -365,7 +412,9 @@ function ConfigRepo({
                     />
                   ))}
                   <Field>
-                    <FieldLabel htmlFor="config-repo-url">Git URL</FieldLabel>
+                    <FieldLabel htmlFor="config-repo-url">
+                      {githubListed ? "Or any git URL" : "Git URL"}
+                    </FieldLabel>
                     <Input
                       id="config-repo-url"
                       name="url"
@@ -378,47 +427,46 @@ function ConfigRepo({
                       className="font-mono"
                     />
                     <FieldDescription>
-                      Any public git remote over https.{" "}
-                      {githubConnections.length > 0 ? null : (
+                      Public, over https.
+                      {githubListed ? null : (
                         <>
-                          Connect GitHub on{" "}
+                          {" "}
+                          For a private repo, connect GitHub on{" "}
                           <Link to="/projects/$slug/integrations" params={{ slug: project.slug }}>
                             Integrations
-                          </Link>{" "}
-                          to pick a private repository.
+                          </Link>
+                          .
                         </>
                       )}
                     </FieldDescription>
                   </Field>
                 </>
               ) : null}
-              {choice ? (
-                <div className="flex flex-col items-start gap-3">
-                  {choice.kind === "diverged" ? (
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      disabled={Boolean(busy)}
-                      onClick={() => setChoice({ ...choice, kind: "replace" })}
-                    >
-                      Replace with {choice.remote.name}&apos;s main
-                    </Button>
-                  ) : null}
-                  {choice.kind === "replace"
-                    ? actionButton(
-                        "replace",
-                        "Replace",
-                        () => sync("pull", choice.remote.url, true),
-                        "destructive",
-                      )
-                    : actionButton(
-                        "force-push",
-                        choice.kind === "diverged"
-                          ? `Push iterate's to ${choice.remote.name}`
-                          : "Push iterate's anyway",
-                        () => sync("push", choice.remote.url, true),
-                        "destructive",
-                      )}
+              {diverged ? (
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-col gap-1.5">
+                    {actionButton(
+                      "force-pull",
+                      `Keep ${diverged.name}'s`,
+                      () => sync("pull", diverged.url, true),
+                      { variant: "destructive" },
+                    )}
+                    <p className="text-sm text-muted-foreground">
+                      iterate&apos;s main becomes {diverged.name}&apos;s, and the project
+                      republishes.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {actionButton(
+                      "force-push",
+                      "Keep iterate's",
+                      () => sync("push", diverged.url, true),
+                      { variant: "destructive" },
+                    )}
+                    <p className="text-sm text-muted-foreground">
+                      {diverged.name}&apos;s main is overwritten with iterate&apos;s.
+                    </p>
+                  </div>
                 </div>
               ) : null}
               <Failure error={error} />
@@ -530,14 +578,15 @@ function GithubRepositories({
   }, [api, projectId, token, account]);
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-sm font-medium">
-        {account} on GitHub{listed ? "" : ": loading repositories…"}
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        {account} on GitHub
+        {listed ? null : <Spinner className="size-3" />}
       </span>
       <Failure error={listed?.error} />
       <ul className="flex flex-col divide-y" aria-label={`${account}'s repositories`}>
         {listed?.names.map((name) => (
           <li key={name} className="flex items-center justify-between gap-2 py-2">
-            <span className="font-mono text-sm">{name}</span>
+            <span className="min-w-0 font-mono text-sm break-all">{name}</span>
             <Button
               type="button"
               variant="outline"
@@ -671,7 +720,7 @@ function ProjectCreationFailed({ context, offset }: { context: ProjectContext; o
       .then((page) => {
         if (disposed) return;
         const read = z.object({ error: z.string() }).safeParse(page.events[0]?.payload);
-        setError(read.data?.error ?? "The failure's event could not be read.");
+        setError(read.data?.error || "The failure's event could not be read.");
       })
       .catch(
         (caught: unknown) =>

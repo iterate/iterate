@@ -129,8 +129,8 @@ static void note_order(char mark) {
   if (order_length + 1U < sizeof(order_log)) order_log[order_length++] = mark;
 }
 
-/* `byte_count` bytes of PCM16, all `fill`, as the base64 a `pcm` payload
- * carries. */
+/* `byte_count` bytes of PCM16, all `fill`, as the padded base64 a `pcm`
+ * payload carries. */
 static const char *pcm_b64(size_t byte_count, uint8_t fill) {
   static const char alphabet[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -153,7 +153,8 @@ static const char *pcm_b64(size_t byte_count, uint8_t fill) {
         : ((uint32_t)fill << 16);
     encoded[out++] = alphabet[(triple >> 18) & 0x3FU];
     encoded[out++] = alphabet[(triple >> 12) & 0x3FU];
-    if (left == 2U) encoded[out++] = alphabet[(triple >> 6) & 0x3FU];
+    encoded[out++] = left == 2U ? alphabet[(triple >> 6) & 0x3FU] : '=';
+    encoded[out++] = '=';
   }
   encoded[out] = '\0';
   return encoded;
@@ -869,6 +870,27 @@ static void append_frames_keeps_one_padded_base64_body(void) {
   assert(iterate_kit_voice_stream_close(&fixture.voice_stream) == CAPNWEB_OK);
 }
 
+/* The one decoder every received base64 goes through: strict and padded. */
+static void base64_decode_is_strict_and_padded(void) {
+  uint8_t out[8];
+  size_t length = 99U;
+  assert(iterate_kit_base64_decode("QUJDREVGR0g=", 12U, out, sizeof(out), &length));
+  assert(length == 8U && memcmp(out, "ABCDEFGH", 8U) == 0);
+  assert(iterate_kit_base64_decode("QQ==", 4U, out, sizeof(out), &length));
+  assert(length == 1U && out[0] == 'A');
+  assert(iterate_kit_base64_decode("", 0U, out, sizeof(out), &length) && length == 0U);
+  /* Unpadded, padding mid-text, and characters outside the alphabet. */
+  assert(!iterate_kit_base64_decode("QUJDREVGR0g", 11U, out, sizeof(out), &length));
+  assert(!iterate_kit_base64_decode("QQ==QUJD", 8U, out, sizeof(out), &length));
+  assert(!iterate_kit_base64_decode("QU%D", 4U, out, sizeof(out), &length));
+  assert(!iterate_kit_base64_decode("====", 4U, out, sizeof(out), &length));
+  /* Past capacity, or refused anywhere, it writes nothing. */
+  memset(out, 0x5a, sizeof(out));
+  assert(!iterate_kit_base64_decode("QUJDREVGR0hJ", 12U, out, sizeof(out), &length));
+  assert(!iterate_kit_base64_decode("QUJD%%%%", 8U, out, sizeof(out), &length));
+  assert(out[0] == 0x5a && out[7] == 0x5a);
+}
+
 static void keepalive_is_quiet_for_twenty_seconds_after_success(void) {
   struct fixture fixture;
   size_t before;
@@ -947,6 +969,7 @@ int main(void) {
   terminal_fence_stops_later_events_in_its_batch();
   close_waits_for_server_callback_before_slot_reuse();
   append_frames_keeps_one_padded_base64_body();
+  base64_decode_is_strict_and_padded();
   keepalive_is_quiet_for_twenty_seconds_after_success();
   terminal_rejects_unsafe_reason_without_an_ephemeral_append();
   return 0;

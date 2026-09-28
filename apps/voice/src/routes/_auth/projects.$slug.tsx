@@ -1,21 +1,15 @@
 import { createFileRoute, useRouter, useRouterState } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useFacetLiveState } from "iterate/react";
-import { AppShell } from "@iterate-com/ui/components/app-shell";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@iterate-com/ui/components/breadcrumb";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
-import { publishedVersion } from "@iterate-com/agents/install";
+import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
@@ -30,11 +24,21 @@ const VoiceLiveView = z.object({
 });
 type VoiceLiveView = z.infer<typeof VoiceLiveView>;
 
+/** The agents and voice builds an install commits, at one commit (@iterate-com/shared/pkg-pr-new
+ *  `publishedCommit`, which says why the app's Worker resolves it). */
+const publishedApps = createServerFn().handler(async () => {
+  const commit = await publishedCommit("@iterate-com/voice", import.meta.env.VITE_SOURCE_COMMIT);
+  return {
+    agents: pkgPrNewVersion("@iterate-com/agents", commit),
+    voice: pkgPrNewVersion("@iterate-com/voice", commit),
+  };
+});
+
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
-    // the URL names the project by slug (its id works too); one this sign-in lacks → sign in again
-    const project = projects.find((item) => item.slug === params.slug || item.id === params.slug);
+    // the URL names the project by slug; one this sign-in lacks → sign in again
+    const project = projects.find((item) => item.slug === params.slug);
     if (!project) return context.signInFor(params.slug);
     // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule. One that
     // exists but fails is Call's error to report, never a reason to install over it.
@@ -59,22 +63,10 @@ function CallPage() {
   const { projects, project, voice } = Route.useLoaderData();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
-    <AppShell
+    <ProjectAppShell
       app="Voice"
       projects={projects}
-      activeProjectId={project.id}
-      projectHref={(item) => `/projects/${item.slug}`}
-      header={
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem className="hidden md:inline-flex">Voice</BreadcrumbItem>
-            <BreadcrumbSeparator className="hidden md:inline-flex" />
-            <BreadcrumbItem>
-              <BreadcrumbPage className="font-mono">{project.slug}</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      }
+      project={project}
       account={info.principal}
       locationKey={href}
     >
@@ -83,7 +75,7 @@ function CallPage() {
       ) : (
         <InstallVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
       )}
-    </AppShell>
+    </ProjectAppShell>
   );
 }
 
@@ -98,12 +90,7 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
       try {
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
-        const commit = import.meta.env.VITE_SOURCE_COMMIT;
-        const [agents, voice] = await Promise.all([
-          publishedVersion("@iterate-com/agents", commit),
-          publishedVersion("@iterate-com/voice", commit),
-        ]);
-        await ensureVoiceAgent(itx, { agents, voice }, openaiKey);
+        await ensureVoiceAgent(itx, await publishedApps(), openaiKey);
         // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
         // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
         // install made. Without it the router reloads a route it already has data for in the
@@ -252,14 +239,14 @@ function Phone({ project }: { project: string }) {
               )}
             />
             <span>
-              {live.status === "live" ? (view?.phase ?? "live") : live.status}
+              {live.status === "live" ? view?.phase || "live" : live.status}
               {view?.answering ? " · speaking" : ""}
               {view?.lastEnd ? ` · ${view.lastEnd.reason}` : ""}
               {live.error ? ` · ${live.error}` : ""}
             </span>
           </p>
           <ol className="flex flex-col gap-2">
-            {(view?.transcript ?? []).map((turn, index) => (
+            {(view?.transcript || []).map((turn, index) => (
               <li
                 key={index}
                 className={cn(

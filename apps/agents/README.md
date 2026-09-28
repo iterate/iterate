@@ -7,8 +7,7 @@ catalog, lifecycle, model loop and sandbox setup), and voice is `@iterate-com/vo
 facet, not a platform built-in. This folder is the web app and the tests that drive both packages.
 
 - `src/` — the web app: chat, attachments, live state, events and traces.
-- `scripts/` — the voice call/device tools and `install-packages.ts`, which installs or upgrades
-  the packages in an existing project.
+- `scripts/` — the voice call and device tools.
 - `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.
 
 A project installs the app from a folder of its config repo: `agents/package.json` pins
@@ -28,8 +27,9 @@ Mask the sandbox's specific `itx.agents` grant too when denying access to the co
 
 The loader resolves the pinned package through esm.sh and locks it. Installation also rebinds
 existing normal agents to the current runtime; their grants and history are retained. Reinstalling
-is safe. Existing projects are not silently migrated by a platform deployment:
-`scripts/install-packages.ts` upgrades one.
+is safe. A platform deployment upgrades no project: a project upgrades by committing a newer pin to
+its `agents/` folder, which its config worker installs from that commit
+(configs/with-agents/worker.ts).
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 

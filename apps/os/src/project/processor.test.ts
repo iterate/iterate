@@ -513,6 +513,7 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
       release: async () => {},
       setPrimaryHostname: async (hostname) => void written.push(hostname),
       provider: null,
+      connect: async () => null,
     }),
   );
   const blockers: (() => Promise<unknown>)[] = [];
@@ -545,6 +546,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
+      connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
       provider: {
         provision: async (name) => {
           calls.push(`provision ${name}`);
@@ -555,7 +557,10 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       },
     }),
   );
-  const appended: { idempotencyKey?: string; payload: { error?: string | null } }[] = [];
+  const appended: {
+    idempotencyKey?: string;
+    payload: { error?: string | null; cloudflare?: { connect: unknown } | null };
+  }[] = [];
   const owe = async (
     name: string,
     verb: "add" | "remove",
@@ -597,6 +602,11 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
     ["project/hostname-remove:www.acme.test:8", null],
     ["project/hostname-add:www.acme.test:9", "This deployment cannot add custom hostnames."],
   ]);
+  // a hostname not yet live carries the one-click link its DNS provider offers
+  expect(appended[0]!.payload.cloudflare).toMatchObject({
+    status: "pending",
+    connect: { provider: "Cloudflare", url: "https://dc.test/apply/www.acme.test" },
+  });
 });
 
 test("ProjectProcessor — one request per hostname at a time: a remove asked while an add runs waits for it, and the same worker runs it once the add is answered — no further delivery needed", async () => {
@@ -611,6 +621,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
+      connect: async () => null,
       provider: {
         provision: async () => {
           await held;
@@ -654,6 +665,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
+      connect: async () => null,
       provider: {
         provision: async () => {
           provisions += 1;
@@ -699,6 +711,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
       claim: async () => {},
       release: async (name) => void calls.push(`release ${name}`),
       setPrimaryHostname: async () => {},
+      connect: async () => null,
       provider: {
         provision: async () => observation("active"),
         remove: async (name) => void calls.push(`remove ${name}`),
@@ -772,7 +785,7 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   const calls: string[] = [];
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
-  const processor: ProjectProcessor = new ProjectProcessor(
+  const processor = new ProjectProcessor(
     () => Promise.reject(new Error("unused")),
     () => Promise.reject(new Error("unused")),
     () => null,
@@ -993,6 +1006,7 @@ function observation(status: string) {
     status,
     sslStatus: status,
     records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
+    connect: null,
   };
 }
 

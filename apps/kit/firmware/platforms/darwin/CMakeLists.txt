@@ -17,8 +17,7 @@ add_library(iterate-kit-darwin STATIC
   itx_transport.c
   provisioning.c
   restart.c
-  tls_stream.c
-  websocket_client.c)
+  tls_stream.c)
 
 target_include_directories(iterate-kit-darwin PUBLIC include)
 target_compile_features(iterate-kit-darwin PUBLIC c_std_99)

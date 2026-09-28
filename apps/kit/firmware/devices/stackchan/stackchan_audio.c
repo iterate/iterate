@@ -167,14 +167,12 @@ static void store_volume(uint8_t percent) {
 /* Chunk meta stashed by the last successful codec read (single consumer). */
 static uint32_t last_chunk_sequence;
 static uint64_t last_chunk_captured_us;
-static bool last_chunk_content_active;
 
 static atomic_bool epoch_reset_pending;
 static atomic_uint epoch_resets_total;
 static atomic_bool capture_failed_flag;
 static atomic_bool playback_failed_flag;
 static atomic_bool capture_tap_enabled;
-static atomic_bool playback_content_active;
 static volatile uint32_t capture_driver_failures;
 static volatile uint32_t playback_driver_failures;
 /*
@@ -259,7 +257,6 @@ static enum iterate_kit_status codec_read(
   }
   last_chunk_sequence = chunk.sequence;
   last_chunk_captured_us = chunk.captured_through_at_us;
-  last_chunk_content_active = chunk.playback_content_active;
   *sample_count = STACKCHAN_AUDIO_CHUNK_SAMPLES;
   return ITERATE_KIT_OK;
 }
@@ -350,7 +347,6 @@ static bool IRAM_ATTR i2s_tap(
       &capture_reserve,
       sequence,
       completed_at_us,
-      atomic_load_explicit(&playback_content_active, memory_order_acquire),
       pcm,
       bytes);
   return false;
@@ -610,13 +606,6 @@ static void io_task_main(void *argument) {
             (STACKCHAN_AUDIO_CHUNK_SAMPLES - filled) * sizeof(int16_t));
       }
       /*
-       * Published BEFORE the write, conservatively: at worst one capture
-       * edge uses processed AEC output, while publishing raw microphone
-       * during an uncertain speaker edge could leak self-talk upstream.
-       */
-      atomic_store_explicit(
-          &playback_content_active, content, memory_order_release);
-      /*
        * CREDIT THE LEDGER FROM HERE, like every other board does from its
        * hardware task — DMA completion runs from inside the write, so
        * crediting afterwards would fabricate a starve. Only real answer
@@ -651,8 +640,6 @@ static void io_task_main(void *argument) {
         }
         if (consecutive_write_errors >= IO_FAILURE_LIMIT) {
           speaker_io_enabled = false;
-          atomic_store_explicit(
-              &playback_content_active, false, memory_order_release);
           atomic_store_explicit(
               &playback_failed_flag, true, memory_order_release);
           ESP_LOGE(tag, "speaker I/O disabled after repeated failures");
@@ -750,15 +737,10 @@ struct iterate_kit_audio_codec stackchan_audio_codec(void) {
 }
 
 void stackchan_audio_last_chunk_meta(
-    uint32_t *sequence,
-    uint64_t *captured_through_at_us,
-    bool *playback_content_active_out) {
+    uint32_t *sequence, uint64_t *captured_through_at_us) {
   if (sequence != NULL) *sequence = last_chunk_sequence;
   if (captured_through_at_us != NULL) {
     *captured_through_at_us = last_chunk_captured_us;
-  }
-  if (playback_content_active_out != NULL) {
-    *playback_content_active_out = last_chunk_content_active;
   }
 }
 

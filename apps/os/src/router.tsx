@@ -1,10 +1,10 @@
 import { createRouter, type LocationRewrite } from "@tanstack/react-router";
 import { createIsomorphicFn } from "@tanstack/react-start";
-import { issuerRequestNonce } from "./issuer-request-context.server.ts";
+import { issuerRequestContext } from "./issuer-request-context.server.ts";
 import { routeTree } from "./routeTree.gen.ts";
 
 const cspNonce = createIsomorphicFn()
-  .server(() => issuerRequestNonce())
+  .server(() => issuerRequestContext().nonce)
   .client(() => undefined);
 
 /** The consent page's query is the OAuth authorization request, and it must stay byte for byte

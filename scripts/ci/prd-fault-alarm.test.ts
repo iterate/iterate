@@ -59,7 +59,7 @@ test("the 2026-09-23 fault window pages with hosts, healed facets and collapsed 
     }),
   ).toBe(
     [
-      "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2>",
+      "🚨 prd fault page: 07:00–07:30 UTC <@U067G4QRFK2> <@U099JH9TAF2>",
       "• 13 5xx responses: garple.com 7, lispwoso.com 6",
       "• 1815 platform-failure heals: project 1279, repo 536",
       "• 1201 errors: ProjectDurableObject.jsrpc 1199, internal error; reference = … 2",
@@ -195,7 +195,7 @@ test.for([
   expect(logWindow(new Date("2026-09-23T07:45:00Z"), state).from.toISOString()).toContain(from);
 });
 
-test("a new 5xx pages; its repeats reply in the page's thread without mentioning anyone", async () => {
+test("a new 5xx pages; its repeats reply in the page's thread, and every post mentions Jonas and Misha", async () => {
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(2));
@@ -204,7 +204,7 @@ test("a new 5xx pages; its repeats reply in the page's thread without mentioning
       {
         channel,
         text: [
-          "🚨 prd fault page: 06:58–07:28 UTC <@U067G4QRFK2>",
+          "🚨 prd fault page: 06:58–07:28 UTC <@U067G4QRFK2> <@U099JH9TAF2>",
           "• 1 5xx responses: lispwoso.com 1",
           "<https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs>",
           "No state from the last run: an incident already paged pages again.",
@@ -214,7 +214,7 @@ test("a new 5xx pages; its repeats reply in the page's thread without mentioning
         channel,
         thread_ts: "1.0",
         reply_broadcast: false,
-        text: "still failing, 07:28–07:43 UTC\n• 2 more 5xx responses: lispwoso.com (3 in all)",
+        text: "still failing, 07:28–07:43 UTC <@U067G4QRFK2> <@U099JH9TAF2>\n• 2 more 5xx responses: lispwoso.com (3 in all)",
       },
     ],
   });
@@ -247,13 +247,13 @@ test("a different 5xx during an open incident pages at once", async () => {
   expect(slack.posts[1]).toMatchObject({
     channel,
     text: expect.stringMatching(
-      /^🚨 prd fault page: 07:28–07:43 UTC <@U067G4QRFK2>\n• 1 5xx responses: garple.com 1\n/,
+      /^🚨 prd fault page: 07:28–07:43 UTC <@U067G4QRFK2> <@U099JH9TAF2>\n• 1 5xx responses: garple.com 1\n/,
     ),
   });
   expect(slack.posts[1]).not.toHaveProperty("thread_ts");
 });
 
-test("an incident that grows tenfold is broadcast to the channel with a mention", async () => {
+test("an incident that grows tenfold is broadcast to the channel", async () => {
   const slack = fakeSlack();
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(9));
@@ -263,13 +263,13 @@ test("an incident that grows tenfold is broadcast to the channel with a mention"
       channel,
       thread_ts: "1.0",
       reply_broadcast: true,
-      text: "🚨 grew tenfold, 07:28–07:43 UTC <@U067G4QRFK2>\n• 9 more 5xx responses: lispwoso.com (10 in all)",
+      text: "🚨 grew tenfold, 07:28–07:43 UTC <@U067G4QRFK2> <@U099JH9TAF2>\n• 9 more 5xx responses: lispwoso.com (10 in all)",
     },
     {
       channel,
       thread_ts: "1.0",
       reply_broadcast: false,
-      text: "still failing, 07:43–07:58 UTC\n• 1 more 5xx responses: lispwoso.com (11 in all)",
+      text: "still failing, 07:43–07:58 UTC <@U067G4QRFK2> <@U099JH9TAF2>\n• 1 more 5xx responses: lispwoso.com (11 in all)",
     },
   ]);
 });
@@ -961,9 +961,9 @@ test("a pinned workaround posts once when its heal has been absent PIN_QUIET_DAY
       [],
       [],
       [
-        "✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no `iterate-context.platform-failure-alarm-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
-        "✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`). prd has logged no `facet.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
-        "✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts. prd has logged no `workers.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2>",
+        "✅ Cloudflare seems to have fixed held Durable Object alarms: delete the overdue watch in apps/os/src/alarm-coordinator.ts. prd has logged no `iterate-context.platform-failure-alarm-*` since 2026-09-23 (28 days) <@U067G4QRFK2> <@U099JH9TAF2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader defect at facet start: delete the restart in apps/os/src/context/facet-host.ts (`isFacetStartPlatformFailure`). prd has logged no `facet.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2> <@U099JH9TAF2>",
+        "✅ Cloudflare seems to have fixed the Worker Loader clone-version defect in workers.get: delete its retire and replay in apps/os/src/context/built-ins.ts. prd has logged no `workers.platform-failure-*` since 2026-09-23 (28 days) <@U067G4QRFK2> <@U099JH9TAF2>",
       ],
       [],
       [],

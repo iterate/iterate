@@ -71,6 +71,26 @@ test.for([
     ],
   },
   {
+    name: "reads optional chains like the references they end in",
+    source: `
+      declare const input: { nested?: { label?: string; items?: string[]; count?: number } } | undefined;
+      export const checks = [
+        input?.nested?.label !== undefined,
+        input?.nested?.label ?? "Default",
+        Array.isArray(input?.nested?.items),
+        input?.nested?.count !== undefined,
+        input?.nested?.count ?? 0,
+      ];
+      export const obj = { ...(input?.nested?.label && { label: input?.nested?.label }) };
+    `,
+    reports: [
+      "Trust the declared string/object type",
+      "Use || for a string/object fallback",
+      "This value is already an array",
+      "Write the property directly",
+    ],
+  },
+  {
     // The explicit undefined check in b is still a typed truthiness report, but b is not an
     // optional-property omission pattern.
     name: "leaves real type discrimination and conditional computation alone",

@@ -92,7 +92,8 @@ enum iterate_kit_voice_stream_failure {
 };
 
 struct iterate_kit_voice_stream_options {
-  /** Stream path for the call, e.g. "/agents/voice/v23/waveshare". */
+  /** Stream path for the call, e.g.
+   *  "/agents/voice/waveshare/2026-09-28-101500-<activation>". */
   const char *stream_path;
   /** Client-owned, RAM-only activation for the local microphone edge. */
   const char *activation;
@@ -218,6 +219,18 @@ enum capnweb_status iterate_kit_voice_stream_append_frames(
     const char *activation);
 
 /**
+ * Encode padded RFC 4648 base64: the one encoder, for microphone PCM and the
+ * WebSocket upgrade's key alike. Returns the characters written, always a
+ * multiple of four and never NUL-terminated, or 0 when `destination` cannot
+ * hold them all (nothing is written then).
+ */
+size_t iterate_kit_base64_encode(
+    const uint8_t *bytes,
+    size_t byte_count,
+    char *destination,
+    size_t destination_capacity);
+
+/**
  * Append an authoritative terminal event for `activation`.
  *
  * This is used when a local activation ends before the stream has accepted it;
@@ -256,6 +269,21 @@ const char *iterate_kit_voice_stream_state_name(
     enum iterate_kit_voice_stream_state state);
 const char *iterate_kit_voice_stream_failure_name(
     enum iterate_kit_voice_stream_failure failure);
+
+/**
+ * Decode strict, padded RFC 4648 base64: the one decoder for every base64 a
+ * board receives (speaker PCM, screen chunks), because every sender pads.
+ * Length a multiple of four, `=` only as the last one or two characters, and
+ * every other character in the alphabet; the empty text is zero bytes. The
+ * whole text is checked before anything is written, so a refused one leaves
+ * `destination` untouched, as is one that would decode past its capacity.
+ */
+bool iterate_kit_base64_decode(
+    const char *text,
+    size_t text_length,
+    uint8_t *destination,
+    size_t destination_capacity,
+    size_t *decoded_length);
 
 #ifdef __cplusplus
 }

@@ -16,24 +16,18 @@ struct iterate_kit_audio_processor_properties {
   uint32_t sample_rate_hz;
   size_t frame_samples;
   bool requires_reference_channel;
-  bool uses_playout_activity;
 };
 
 /**
  * One capture-clock-aligned DSP frame.
  *
  * `near` is the microphone plane. `reference` is the capture-clock-aligned
- * loudspeaker reference returned by the codec when required.
- * `playout_activity` is a separate per-sample policy plane: zero means no
- * intended far-end content and nonzero means content was rendered. Keeping it
- * separate prevents reference noise from selecting an uplink branch. All
- * input planes and `output` contain exactly properties.frame_samples PCM16
- * samples.
+ * loudspeaker reference returned by the codec when required. All input planes
+ * and `output` contain exactly properties.frame_samples PCM16 samples.
  */
 struct iterate_kit_audio_processor_frame {
   const int16_t *near;
   const int16_t *reference;
-  const int16_t *playout_activity;
   int16_t *output;
   size_t sample_count;
 };

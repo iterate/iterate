@@ -24,11 +24,11 @@ bool iterate_kit_board_boot_steps(
 
 /** Slot bytes and nominal clock must describe the same 16 kHz PCM contract. */
 bool iterate_kit_i2s_codec_valid_channel(
-    i2s_port_t port, const i2s_std_config_t *config,
+    int port, const i2s_std_config_t *config,
     const struct iterate_kit_pcm_shape *shape,
     uint16_t frames, uint8_t descriptors) {
   const size_t bytes = iterate_kit_pcm_bytes_for_frames(shape, frames);
-  return (unsigned)port < SOC_I2S_NUM && bytes > 0U && bytes <= 4092U &&
+  return (port == I2S_NUM_0 || port == I2S_NUM_1) && bytes > 0U && bytes <= 4092U &&
       descriptors > 0U &&
       config->clk_cfg.sample_rate_hz == 16000U * shape->ratio &&
       config->slot_cfg.data_bit_width == shape->bits &&

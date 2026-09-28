@@ -1,8 +1,8 @@
 # Prd fault alarm: every 15 minutes, reads every first-party prd Worker's logs since the last run (os-prd
 # and its clients, scripts/ci/prd-fault-alarm.ts PRD_WORKERS) and pages Slack
 # #error-pulse on any 5xx, a burst of platform-failure heals, or any error. Each fault is an
-# incident: a new one pages at the top level mentioning Jonas, its repeats reply in that page's
-# thread. The page is the alarm: the run goes red only when it could not read the logs or post to
+# incident: a new one pages at the top level, its repeats reply in that page's thread, each
+# mentioning Jonas and Misha. The page is the alarm: the run goes red only when it could not read the logs or post to
 # Slack, because a scheduled run reports on main's head commit, where red reads as "this commit
 # broke". Why and thresholds: scripts/ci/prd-fault-alarm.ts. Depot registers the schedule once this
 # file is on the default branch.
@@ -37,14 +37,12 @@ jobs:
       GITHUB_REPOSITORY: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Read the previous run's state
         run: |-
-          export DEPOT_TOKEN
-          DEPOT_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
+          export DEPOT_CI_TELEMETRY_TOKEN
+          DEPOT_CI_TELEMETRY_TOKEN="$(doppler secrets get DEPOT_CI_TELEMETRY_TOKEN --plain --project _shared --config preview)" &&
             pnpm tsx scripts/ci/prd-fault-alarm.ts previous-state --out test-results/prd-fault-alarm/previous.json ||
             echo "::warning::no previous state: this run pages every fault as new"
       - name: Read the prd Workers' logs, page on a fault

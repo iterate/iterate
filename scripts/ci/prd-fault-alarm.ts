@@ -1,12 +1,11 @@
 // Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the first-party prd Workers' Logs
 // since its last run and pages #error-pulse on any 5xx, a burst of platform-failure heals, or any error.
-// On 2026-09-23 a Cloudflare fault let each first-party facet start answer ONE call for ~2.5 hours:
-// ~1,800 heals and ~2,400 errors per half hour, 41 homepage 500s on lispwoso.com and garple.com —
-// and our recovery kept most requests green, so only the logs knew.
+// It reads the logs because the platform's recovery can keep most requests green through a
+// Cloudflare fault, so the heals and errors it logs are the only sign.
 //
 // Each fault is an incident: a 5xx host, a healed facet's name, or an error message. A new one pages
-// at the top level, mentioning Jonas; its repeats go quietly into that page's thread, back in the
-// channel (and mentioning Jonas) once it grows tenfold; a day unseen closes it. The memory is the
+// at the top level; its repeats go into that page's thread, back in the channel once it grows
+// tenfold; a day unseen closes it. Every post mentions Jonas and Misha. The memory is the
 // run's `prd-fault-alarm-state` artifact: where the next read starts and the open incidents'
 // threads. Without it a run reads the last half hour and pages everything as new — a repeat, never
 // a miss.
@@ -24,6 +23,7 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
@@ -46,8 +46,7 @@ import { saveNewestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
- *  of them pages; before 2026-09-24 only os-prd's did, and voice.iterate.com answered robots.txt
- *  with a 500 unseen. */
+ *  of them pages, a client's as much as the platform's. */
 const PRD_WORKERS = [
   osEnvs.prd!,
   dashEnvs.prd,
@@ -283,7 +282,7 @@ export function triageIncidents(
   state: AlarmState | null,
 ) {
   const open = Object.fromEntries(
-    Object.entries(state?.incidents ?? {}).filter(
+    Object.entries(state?.incidents || {}).filter(
       ([, incident]) => Date.parse(incident.lastSeen) > window.to.getTime() - 24 * 3_600_000,
     ),
   );
@@ -341,7 +340,7 @@ export function triageIncidents(
     thread,
     broadcast,
     text: [
-      broadcast ? `🚨 grew tenfold, ${span} ${onCallMention}` : `still failing, ${span}`,
+      `${broadcast ? "🚨 grew tenfold" : "still failing"}, ${span} ${onCallMention}`,
       ...lines,
       recovery,
     ]
@@ -971,9 +970,17 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
   return expected;
 }
 
-/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
+/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one.
+ *  Depot is read with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview). */
 export async function previousState(options: { out: string }) {
-  return saveNewestArtifactFile({ ...stateArtifact, out: options.out });
+  const token = z
+    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
+    .min(1)
+    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
+  return saveNewestArtifactFile((method, body) => depotCiApi(method, body, token), {
+    ...stateArtifact,
+    out: options.out,
+  });
 }
 
 if (isMainModule(import.meta.url))

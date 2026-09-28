@@ -1,9 +1,9 @@
 // install.ts — how a project installs voice. Like the agents app it builds on, voice is a SOURCE the
 // project owns: a folder of its config repo (`voice/` by convention) holding a package.json that pins
-// this package and names its `main`, worker.ts, which re-exports the voice worker and its two facet
-// classes (`voiceFolder`). `installVoice` mounts that source as `itx.voice`; the press's facets load the
-// same source. Nothing here is the runtime, so a config worker imports `@iterate-com/voice/install`
-// without loading it.
+// this package and names its `main`, worker.ts, which re-exports the voice worker and its relay facet
+// class (`voiceFolder`). `installVoice` mounts that source as `itx.voice`; the press's relay facet
+// loads the same source. Nothing here is the runtime, so a config worker imports
+// `@iterate-com/voice/install` without loading it.
 import type {} from "./api.ts";
 // registers `itx.voice` on InstalledAppRoots
 import {
@@ -19,13 +19,13 @@ import { SCREEN_FONT_CSS } from "./screen-font.ts";
 
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
-/** The source a project installs voice from, by file: `version` is what package.json pins (a
- *  pkg.pr.new URL, or an npm range once the package is on npm). */
+/** The source a project installs voice from, by file: `version` is what package.json pins, a
+ *  pkg.pr.new URL at a commit (@iterate-com/agents/install `agentsFolder` says why) or an npm
+ *  version once the package is on npm. */
 export function voiceFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ main: "worker.ts", dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,
-    "worker.ts":
-      'export { default, VoiceAgentDurableObject, VoiceDelegateDurableObject } from "@iterate-com/voice";\n',
+    "worker.ts": 'export { default, VoiceAgentDurableObject } from "@iterate-com/voice";\n',
   };
 }
 
@@ -66,7 +66,7 @@ export async function installVoice(
       match: "itx.voice",
       target: ["itx", "workers", ["get", { source, cacheKey }]],
       description:
-        "The project's installed voice service: setupVoiceAgent({ activation }), setImage({ device, image }), health()",
+        "The project's installed voice service: setupVoiceAgent({ streamPath, activation, screen? }), setImage({ device, image }), health()",
     },
   });
 }

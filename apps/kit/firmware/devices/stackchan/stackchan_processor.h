@@ -28,12 +28,8 @@ enum {
  *     (one persistent state, so 8 ms chunk boundaries create no step);
  *   saturating x8 digital gain on the analogue divider reference
  *     (the divider is measured 9-18 dB below the echo entering the mic);
- *   constant saturating x10 gain on the processed output — the shipped
- *     CONSTANT_PROCESSED uplink policy. The playback-activity-switched
- *     policy (raw x6 with an eight-frame hangover) was the A/B control and
- *     is deliberately not carried: it exists in the adopted
- *     aec_uplink_selector for a future re-measurement, and this processor
- *     therefore declares uses_playout_activity = false.
+ *   constant saturating x10 gain on the processed output, which is always
+ *     the uplink.
  *
  * ESP-SR exposes no filter reset, so reset() destroys and recreates the
  * engine — losing adaptation deliberately, because continuing a filter whose
@@ -48,15 +44,6 @@ struct iterate_kit_audio_processor stackchan_processor(void);
 
 /** Engine rebuilds forced by reset(), and rebuilds that failed. */
 uint32_t stackchan_processor_recreates(void);
-
-/**
- * How many times the canceller had to settle for the fallback mode.
- *
- * Nonzero means the board is NOT running the mode the source asks for. A
- * calibration sweep that could not see this would compare two firmware builds
- * that were secretly the same one.
- */
-uint32_t stackchan_processor_mode_fallbacks(void);
 
 /** The esp-sr `AEC_MODE_*` the canceller is actually running in. */
 uint32_t stackchan_processor_mode(void);

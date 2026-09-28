@@ -73,7 +73,8 @@ export const simpleTruthinessCheckRule: StrictRule = {
     }
     const spreadGuards = new WeakSet<Node>();
     let file: TypeAwareLintFileService | undefined;
-    function typeOf(node: Node) {
+    function typeOf(node: Node): Type | undefined {
+      if (node.type === "ChainExpression") return typeOf(node.expression);
       if (!node.range) return undefined;
       file ||= getTypeAwareLintFileService(context);
       // The member's start points at its receiver (input), not its value (input.foo).
@@ -224,6 +225,7 @@ export const simpleTruthinessCheckRule: StrictRule = {
 function isReference(node: Node): boolean {
   return (
     node.type === "Identifier" ||
+    (node.type === "ChainExpression" && isReference(node.expression)) ||
     (node.type === "MemberExpression" && !node.computed && isReference(node.object))
   );
 }

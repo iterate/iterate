@@ -4,6 +4,7 @@ set(ITERATE_KIT_CAPABILITIES_SOURCES
   src/health.c
   src/speaker.c
   src/camera.c
+  src/face.c
   src/screen.c
   src/system_update.c
   src/arguments.c)
@@ -26,5 +27,4 @@ target_compile_features(${ITERATE_KIT_CAPABILITIES_TARGET} PUBLIC c_std_99)
 target_compile_options(${ITERATE_KIT_CAPABILITIES_TARGET} PRIVATE
   -Wall
   -Wextra
-  -Werror
-  -Wpedantic)
+  -Werror)

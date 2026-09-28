@@ -30,6 +30,7 @@ export async function connectToOpenApi(
   const specUrl = typeof specOrUrl === "string" ? specOrUrl : undefined;
   const spec =
     typeof specOrUrl === "string" ? await fetchDocument(itx, specOrUrl, options) : specOrUrl;
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- a fetched spec is JSON that fetchDocument only casts, so this typeof is its one shape check
   if (typeof spec?.openapi !== "string")
     throw new Error(`connectToOpenApi: ${specUrl || "the document"} is not an OpenAPI 3 document`);
   const operations = listOperations(spec);
@@ -188,7 +189,7 @@ const OpenApiParameter = z.object({
  *  `undefined` for an external ref or a missing target. */
 function resolveInternalRef(root: unknown, ref: string): unknown {
   if (!ref.startsWith("#/")) return undefined;
-  let node: unknown = root;
+  let node = root;
   for (const segment of ref
     .slice(2)
     .split("/")

@@ -4,10 +4,11 @@
 // own fetches leave through the project's egress. Two rows, one per way a dependency is named:
 //   • an npm range: hono routes the request, @iterate-com/capnweb's HTTP batch calls the pet shop;
 //   • a vendor's SDK from pkg.pr.new: @iterate-com/petshop-sdk (packages/petshop-sdk) — the PR's own
-//     build when the PR published one (it changed the SDK), else main's — the typed client a vendor
-//     would ship, used from typed TypeScript.
+//     build when the PR published one (it changed the SDK), else main's, pinned at its commit as
+//     every writer pins one — the typed client a vendor would ship, used from typed TypeScript.
 // Both answer the pet shop's catalogue for the shopper whose bearer the request carries: the seeded
 // pets, and whatever the suite's other pet-shop rows added meanwhile.
+import { pinPkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { expect, test } from "vitest";
 import { openItx, runId } from "./support/client.ts";
 import { publishConfigWorker } from "./support/config-worker.ts";
@@ -55,7 +56,11 @@ test("a vendor's SDK from pkg.pr.new: @iterate-com/petshop-sdk, typed, lists the
   const sdkAt = (ref: string) =>
     `https://pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@${ref}`;
   const pr = process.env.PREVIEW_PR_NUMBER?.trim();
-  const version = pr && (await fetch(sdkAt(pr), { method: "HEAD" })).ok ? sdkAt(pr) : sdkAt("main");
+  const version = await pinPkgPrNewVersion(
+    "@iterate-com/petshop-sdk",
+    pr && (await fetch(sdkAt(pr), { method: "HEAD" })).ok ? sdkAt(pr) : sdkAt("main"),
+  );
+  expect(version).toMatch(/@iterate-com\/petshop-sdk@[0-9a-f]{40}$/);
   const pets = await petsFrom({
     slug: "npm-vendor",
     files: {

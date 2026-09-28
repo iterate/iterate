@@ -570,7 +570,7 @@ function untilIssue(failureSite: string, pattern: RegExp, timeoutMs = 10_000): P
   return until(
     `issue ${failureSite} ${pattern}`,
     async () =>
-      issues.find((i) => i.failureSite === failureSite && pattern.test(i.error?.message ?? "")),
+      issues.find((i) => i.failureSite === failureSite && pattern.test(i.error?.message || "")),
     timeoutMs,
   );
 }
@@ -734,7 +734,7 @@ async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   await s.append({ type: "mark" });
   return until("the first failure (a halt or a ladder attempt)", async () => {
     const row = await subscriptionRow(ctx, "u");
-    return row?.halted !== undefined || (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+    return row?.halted || (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
   });
 }
 

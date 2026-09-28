@@ -3,7 +3,7 @@
 // popup that stops arrow keys on bubble, as Base UI's does — but never out of a field, never with a
 // modifier, and ← on the oldest loaded event reads the page below and steps onto it.
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
 import { EventInspector } from "./event-inspector.tsx";
 import type { ContextViewEvent } from "./types.tsx";
@@ -51,7 +51,7 @@ type Props = Parameters<typeof EventInspector>[0];
 
 /** The inspector mounted in the document; disposing unmounts it and clears the page. */
 async function mount(props: Omit<Props, "onClose" | "older"> & { older?: Props["older"] }) {
-  const root: Root = createRoot(document.body.appendChild(document.createElement("div")));
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
   const rerender = (next: typeof props) =>
     act(() =>
       root.render(

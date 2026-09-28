@@ -132,11 +132,11 @@ function fileHintLine(file: FileAttachment): string {
   return `[Attached file: ${file.filename} (${file.contentType}, ${String(file.size)} bytes) — read it with \`await itx.files.get(${JSON.stringify(file.path)}).bytes()\`]`;
 }
 
-/** The chunk-coalescing window: how much streamed output rides one `llm-response-frame`
- *  append — ~7 repaints a second, and one commit per window instead of per token. */
-const CHUNK_WINDOW_MS = 150;
-/** A window that grew past this lands early rather than as one oversized append. */
-const CHUNK_WINDOW_MAX_CHARS = 64_000;
+/** The coalescing window: how much streamed text rides one `llm-response-frame` append — ~7
+ *  repaints a second, and one commit per window instead of per token. */
+const FRAME_WINDOW_MS = 150;
+/** A window whose text grew past this lands early rather than as one oversized append. */
+const FRAME_WINDOW_MAX_CHARS = 64_000;
 /** The idle watchdog: a stream that carries nothing for this long fails the attempt, so a stalled
  *  provider never wedges a turn until its expiry. The host's byte transport times out on the same
  *  budget. */
@@ -217,8 +217,8 @@ function normalizeUsage(raw: unknown): LlmUsage | undefined {
   return { inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens };
 }
 
-/** One OpenAI Responses API stream event — the ones this loop reads; the rest pass through as
- *  chunks a feed may ignore. */
+/** One OpenAI Responses API stream event — the loop reads the few types it knows and skips the
+ *  rest. */
 const ResponsesEvent = z.looseObject({ type: z.string() });
 
 /** Read an SSE body frame by frame, handing each `data:` JSON to `onEvent`; the reader is cancelled
@@ -405,7 +405,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return {
           ...state,
           config: {
-            llm: { model: patch.llm?.model ?? state.config.llm.model },
+            llm: { model: patch.llm?.model || state.config.llm.model },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
@@ -627,7 +627,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
           idempotencyKey: this.idempotencyKey("codemode-prose", event),
-          payload: { message: outcome.prose, llmRequestOffset },
+          payload: {
+            message: outcome.prose,
+            llmRequestOffset,
+            ...(outcome.kind === "script" && { besideScript: true }),
+          },
         });
       if (consequences.length > 0) blockProcessorWhile(() => append(...consequences));
     }
@@ -807,10 +811,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     }
   }
 
-  /** The model over the conversation up to the request, STREAMED: each coalescing window of provider
-   *  events is one ephemeral `llm-response-frame` (a feed renders the answer as it is written); ONE
-   *  batch then settles the request, lands the assistant's words and reports the cost, so an eviction
-   *  between them is impossible. An interruption settles the request itself (processEvent) — an
+  /** The model over the conversation up to the request, STREAMED: each coalescing window of the
+   *  answer's text and thinking is one ephemeral `llm-response-frame` (a feed renders the answer as
+   *  it is written); ONE batch then settles the request, lands the assistant's words and reports the
+   *  cost, so an eviction between them is impossible. An interruption settles the request itself (processEvent) — an
    *  aborted stream ends here silently, and a success that raced it loses on the settle key. */
   async #runLlmRequest(
     open: NonNullable<AgentState["openRequest"]>,
@@ -859,23 +863,22 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           }
         }
       const messages = buildChatMessages(items, images, tree);
-      // THE CHUNK WINDOWS: provider events pile into one buffer; a window
-      // closes CHUNK_WINDOW_MS after its first event (or at the size cap) and lands as one
-      // ephemeral append, windows in order — each waits for the one before. Nothing is stored:
-      // the settlement below carries the durable text.
+      // THE WINDOWS: the text and thinking the stream adds pile into one buffer; a window closes
+      // FRAME_WINDOW_MS after its first delta (or at the size cap) and lands as one ephemeral
+      // append, windows in order — each waits for the one before. Nothing is stored: the
+      // settlement below carries the durable text.
       const llmRequestOffset = open.requestedAtOffset;
-      let window: unknown[] = [];
-      let windowChars = 0;
+      let responseDelta = "";
+      let thinkingDelta = "";
       let windowOpen = false;
       let sequence = 0;
-      let windows: Promise<void> = Promise.resolve();
+      let windows = Promise.resolve();
       const closeWindow = () => {
         windowOpen = false;
-        if (window.length === 0) return;
-        const chunks = window;
-        window = [];
-        windowChars = 0;
-        const payload = { llmRequestOffset, chunks, sequence: sequence++ };
+        if (!responseDelta && !thinkingDelta) return;
+        const payload = { llmRequestOffset, responseDelta, thinkingDelta, sequence: sequence++ };
+        responseDelta = "";
+        thinkingDelta = "";
         windows = windows
           .then(() =>
             append({
@@ -918,22 +921,24 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           model: open.model,
           messages,
           signal: controller.signal,
-          onChunk: (chunk, textDelta) => {
+          onDelta: (text, thinking) => {
             if (controller.signal.aborted) return;
             clearTimeout(idle);
             idle = setTimeout(
               () => controller.abort(new Error("the model stream stalled")),
               STREAM_IDLE_BUDGET_MS,
             );
+            if (!text && !thinking) return; // a bookkeeping event: alive, nothing to show
             // The partial accrues BEFORE buffering: an interrupt keeps the whole streamed text even
             // when its last window never landed.
-            inFlight.partialText += textDelta;
-            window.push(chunk);
-            windowChars += JSON.stringify(chunk).length;
-            if (windowChars >= CHUNK_WINDOW_MAX_CHARS) return closeWindow();
+            inFlight.partialText += text;
+            responseDelta += text;
+            thinkingDelta += thinking;
+            if (responseDelta.length + thinkingDelta.length >= FRAME_WINDOW_MAX_CHARS)
+              return closeWindow();
             if (windowOpen) return;
             windowOpen = true;
-            void this.#sleep(CHUNK_WINDOW_MS).then(closeWindow);
+            void this.#sleep(FRAME_WINDOW_MS).then(closeWindow);
           },
         });
       } catch (error) {
@@ -983,9 +988,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   }
 
   /** One STREAMED model call over the conversation so far: every provider event the stream carries
-   *  reaches `onChunk` as it arrives, with the text it adds ("" for a reasoning or bookkeeping
-   *  event); the call answers the whole text once the stream ends, with the usage the provider
-   *  reported. Aborting `signal` stops the stream; the call then rejects.
+   *  reaches `onDelta` as it arrives, with the answer text and the thinking it adds (both "" for a
+   *  bookkeeping event); the call answers the whole text once the stream ends, with the usage the
+   *  provider reported. Aborting `signal` stops the stream; the call then rejects.
    *
    *  Two routes by the model's name. The host invokes Workers AI under this context's rules and
    *  relays any raw body through an app-owned byte transport. A `@cf/…` answer may be streamed or
@@ -997,17 +1002,17 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     model,
     messages,
     signal,
-    onChunk,
+    onDelta,
   }: {
     model: string;
     messages: ChatMessage[];
     signal: AbortSignal;
-    onChunk(chunk: unknown, textDelta: string): void;
+    onDelta(text: string, thinking: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }> {
     if (model.startsWith("@cf/")) {
       // The model is configuration, so the transport result is validated below rather than trusted.
       const { path } = await this.#identity();
-      const raw: unknown = await this.deps.runModel(
+      const raw = await this.deps.runModel(
         path,
         model,
         { messages, stream: true },
@@ -1021,7 +1026,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
           const delta = chunk.success ? chunk.data.response || "" : "";
           text += delta;
-          onChunk(event, delta);
+          onDelta(delta, "");
           const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
           if (reported.success && reported.data.usage !== undefined)
             usage = normalizeUsage(reported.data.usage) ?? usage;
@@ -1029,13 +1034,13 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         if (text.trim() === "") throw new Error("the model answered with no text");
         return { text: text.trim(), usage };
       }
-      // A binding (or a lent fake) that answered whole: the one chunk there is.
+      // A binding (or a lent fake) that answered whole: the one delta there is.
       const answer = ChatAnswer.parse(raw);
       const text = (
         "response" in answer ? answer.response : answer.choices[0]!.message.content
       ).trim();
       if (text === "") throw new Error("the model answered with no text");
-      onChunk(raw, text);
+      onDelta(text, "");
       return { text };
     }
     // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
@@ -1045,7 +1050,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
     // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
-    const raw: unknown = await this.deps.runModel(
+    const raw = await this.deps.runModel(
       path,
       `openai/${model}`,
       {
@@ -1080,8 +1085,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       if (type === "response.output_text.delta") {
         const delta = typeof event.data.delta === "string" ? event.data.delta : "";
         text += delta;
-        onChunk(raw, delta);
-      } else if (type === "response.reasoning_summary_text.delta") onChunk(raw, "");
+        onDelta(delta, "");
+      } else if (type === "response.reasoning_summary_text.delta")
+        onDelta("", typeof event.data.delta === "string" ? event.data.delta : "");
       else if (type === "response.completed" || type === "response.incomplete") {
         const done = z
           .looseObject({ response: z.looseObject({ usage: z.unknown() }) })

@@ -64,7 +64,7 @@ const DISCONNECTED_MESSAGE =
  *  cause is the binding's own. */
 function messagesOf(error: unknown): string {
   const messages: string[] = [];
-  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
+  for (let cause = error, depth = 0; cause instanceof Error && depth < 3; depth++) {
     messages.push(cause.message);
     cause = cause.cause;
   }

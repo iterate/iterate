@@ -24,8 +24,8 @@ test-results/
 ├── ctest/junit.xml                 the Test job: Kit's firmware host tests
 ├── ci-telemetry/
 │   ├── raw/<runner>.json           each runner's telemetry: one per Vitest workspace, one for Playwright
-│   └── manifest.json               the finalizer's completeness check (upload-test-telemetry.ts)
-├── flake-records/[<suite>/]*.jsonl createFlake / createFailing / retry lines, plus suite-summary.json
+│   └── manifest.json               the finalizer's completeness check (test-telemetry-finalizer.ts)
+├── flake-records/<suite>/*.jsonl   createFlake / createFailing / retry lines, plus suite-summary.json
 ├── playwright-output/<test>/       trace.zip, test-failed-*.png, error-context.md, videos, spec screenshots
 ├── playwright-html/                Playwright's HTML report
 └── playwright-results.json         Playwright's JSON reporter
@@ -53,7 +53,7 @@ a different tree than the deploy built: compare `target.deploymentId` with the d
 | Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
 | createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)    |
 | Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
-| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/upload-test-telemetry.ts`'s finalizer   |
+| The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/test-telemetry-finalizer.ts`            |
 | The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |
 | Kit firmware host tests (CTest)                                                   | `ctest/junit.xml`                                                   | `--output-junit`, which `pnpm --dir apps/kit firmware:test:host` passes to CTest; not in the telemetry |
 | The deployed target (e2e jobs)                                                    | `target.json`                                                       | `runSuite`, before the suite: the preview, the OS deployment `/version` names, the apps' URLs          |
@@ -146,8 +146,6 @@ never reached R2.
 Everything CI keeps in R2 lives in **`iterate-ci`**, on the dev/preview account
 (`ciBucketEnvs.ci` in `envs.ts`), under `evidence/`. `evidence/local/` and `state/` are reserved
 for laptop runs and the guards' state ([#3110](https://github.com/iterate/iterate/issues/3110)).
-`tables/tests/` holds per-test Parquet copies from before
-[#3247](https://github.com/iterate/iterate/pull/3247); nothing reads it now.
 
 One bucket, because an R2 API token scopes to buckets, never to a prefix, and CI has one
 credential that reaches every bucket anyway ([credentials](#credentials)); lifecycle rules and
@@ -235,7 +233,7 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
 - `evidence/ci/trust=main/`: 365 days (`evidence-main-after-365-days`).
 - `evidence/ci/trust=pr/`: 90 days (`evidence-pr-after-90-days`).
 - `evidence/local/`: 30 days (`evidence-local-after-30-days`).
-- `tables/` and `state/`: never deleted. Nothing in CI deletes objects.
+- `state/`: never deleted. Nothing in CI deletes objects.
 - **No bucket lock is set** (30 days on `trust=main/` would stop even CI's token deleting them);
   whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).
 
@@ -270,7 +268,7 @@ Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN` and
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
-   # nothing expires tables/ or state/
+   # nothing expires state/
    doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle list iterate-ci
    ```
 

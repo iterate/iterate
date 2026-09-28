@@ -31,6 +31,7 @@ import {
   StreamProcessor,
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
+import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
 import { defaultFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -38,6 +39,7 @@ import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
+import type { DomainConnectLink } from "./domain-connect.ts";
 
 /** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
  *  commit as the worker's modules (package.json's `main` the main module, every `.js` file under
@@ -88,6 +90,9 @@ export type ProjectHostnames = {
   release(hostname: string): Promise<void>;
   setPrimaryHostname(hostname: string | null): Promise<void>;
   provider: CustomHostnameProvider | null;
+  /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
+   *  (domain-connect.ts `domainConnectLinkOf`). */
+  connect(hostname: string): Promise<DomainConnectLink | null>;
 };
 
 /** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
@@ -205,7 +210,7 @@ export class ProjectProcessor extends StreamProcessor<
             ...state.hostnames,
             [event.payload.hostname]: {
               requested: { verb: "add", offset: event.offset },
-              cloudflare: known?.cloudflare ?? null,
+              cloudflare: known?.cloudflare || null,
               error: null,
             },
           },
@@ -508,9 +513,14 @@ export class ProjectProcessor extends StreamProcessor<
         let commitOid: string | null;
         const reference = state.creation?.configRepoTemplate;
         try {
-          const changes = reference
-            ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
-            : defaultFiles;
+          // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
+          // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
+          // that cannot be pinned fails the creation, like a download that fails.
+          const changes = await pinPkgPrNewDependencies(
+            reference
+              ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
+              : defaultFiles,
+          );
           // The seed checks the template's entry with the loader's own rule (`readPackage`).
           readPackage(
             Object.fromEntries(changes.map((file) => [file.path, file.content])),
@@ -593,7 +603,17 @@ export class ProjectProcessor extends StreamProcessor<
       if (problem) throw new Error(problem);
       await hostnames.claim(hostname);
       claimed = true;
-      cloudflare = await hostnames.provider.provision(hostname);
+      const observed = await hostnames.provider.provision(hostname);
+      // one click at the owner's DNS provider, while there is something to add: best effort — a
+      // provider that cannot be asked leaves the records to add by hand
+      const live = observed.status === "active" && observed.sslStatus === "active";
+      const connect = live
+        ? null
+        : await hostnames.connect(hostname).catch((caught: unknown) => {
+            console.warn(`domain connect for ${hostname}: ${String(caught)}`);
+            return null;
+          });
+      cloudflare = { ...observed, connect };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
       if (claimed && !provisioned) await hostnames!.release(hostname);

@@ -21,7 +21,7 @@ test("a leg that restored this key's ESP-IDF from Depot Cache uses it and downlo
 
   expect(result).toMatchObject({
     status: 0,
-    stdout: expect.stringContaining("Using ESP-IDF v5.4.2 from Depot Cache"),
+    stdout: expect.stringContaining("Using ESP-IDF v6.1 from Depot Cache"),
   });
   expect(result.stdout).not.toContain("::warning::");
   expect(readFileSync(leg.githubEnv, "utf8")).toBe(

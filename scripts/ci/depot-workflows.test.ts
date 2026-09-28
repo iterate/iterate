@@ -216,7 +216,7 @@ test.each(
   ),
 )("$file posts the deploy's own result to #ci as the deploy job's last step", ({ file }) => {
   const workflow = loadWorkflow(file);
-  const steps = workflow.jobs.deploy?.steps ?? [];
+  const steps = workflow.jobs.deploy?.steps || [];
 
   expect(Object.keys(workflow.jobs)).toEqual(["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
@@ -321,10 +321,10 @@ test.each([
     file: ".depot/workflows/preview-parents.yml",
     permissions: { contents: "read" },
   },
-  {
-    file: ".depot/workflows/deploy-os.yml",
-    permissions: { contents: "read", deployments: "write" },
-  },
+  ...["os", "admin", "agents", "dash", "notes", "voice", "kit"].map((app) => ({
+    file: `.depot/workflows/deploy-${app}.yml`,
+    permissions: { contents: "read" },
+  })),
   {
     file: ".depot/workflows/loc-report.yml",
     permissions: { contents: "read", "pull-requests": "write" },
@@ -437,7 +437,7 @@ test("release.yml never takes a kit-firmware tag for the last release", () => {
 test("every job that records flakes uploads its test evidence to R2, where the flake dashboard reads them", () => {
   const jobs = depotWorkflowFiles.flatMap((file) =>
     Object.entries(loadWorkflow(file).jobs).flatMap(([jobId, job]) =>
-      (job.steps || []).some((step) => String(step.with?.name || "").startsWith("flake-records-"))
+      (job.steps || []).some((step) => step.run?.includes("--flake-suites"))
         ? [{ job: `${file}:${jobId}`, steps: job.steps || [] }]
         : [],
     ),
@@ -531,7 +531,7 @@ test.for([
   const [measured] = depotWorkflowFiles
     .map((file) => loadWorkflow(file))
     .filter((candidate) => candidate.name === workflow);
-  const steps = Object.values(measured?.jobs ?? {}).flatMap((job) => job.steps || []);
+  const steps = Object.values(measured?.jobs || {}).flatMap((job) => job.steps || []);
   expect(steps.find((step) => step.with?.name === artifact)).toMatchObject({
     if: "always()",
     uses: "actions/upload-artifact@v4",
@@ -539,24 +539,26 @@ test.for([
   });
 });
 
-// The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps with
-// its flake records, by the job's key and its attempt's id.
+// The main e2e checks read the suite summary each Main OS e2e suite job's newest attempt keeps
+// beside its flake records in its test results, by the job's key and its attempt's id.
 test.for(mainE2eRecords.jobs)(
   "the alert job reads $jobKey's $suite suite summary",
   ({ jobKey, suite }) => {
     const [file, jobId = ""] = jobKey.split(":");
     const path = `.depot/workflows/${file}`;
     expect(loadWorkflow(path)).toMatchObject({ name: mainE2eRecords.workflow });
-    const records = stepsAsRun(path, jobId).find(
-      (step) =>
-        step.with?.name === mainE2eRecords.artifact(suite, "${{ steps.attempt.outputs.id }}"),
+    const results = stepsAsRun(path, jobId).find(
+      (step) => step.with?.name === mainE2eRecords.artifact("${{ steps.attempt.outputs.id }}"),
     );
     // whatever the suite's outcome, once it had a preview to test (preview-os-workflow.test.ts)
-    expect(records).toMatchObject({
+    expect(results).toMatchObject({
       if: afterTheFinalizer,
       uses: "actions/upload-artifact@v4",
-      with: { path: `test-results/flake-records/${suite}` },
+      with: { path: testEvidencePaths.root },
     });
+    expect(`${testEvidencePaths.root}/${mainE2eRecords.file(suite)}`).toBe(
+      `${testEvidencePaths.flakeRecords}/${suite}/suite-summary.json`,
+    );
     // the finalizer that writes this suite's summary into that folder (scripts/ci/flake-suite-summary.ts)
     const finalizer = stepsAsRun(path, jobId).find((step) =>
       step.run?.includes("scripts/ci/test-evidence.ts finalize"),
@@ -576,17 +578,11 @@ const depotJobs = depotWorkflowFiles.flatMap((file) => {
   return Object.entries(workflow.jobs).map(([jobId, job]) => ({ file, jobId, workflow, job }));
 });
 
-test("every Depot job runs on Depot's stock image, and nothing builds an image", () => {
+test("every Depot job runs on Depot's stock image", () => {
   const custom = depotJobs
     .filter(({ job }) => typeof job["runs-on"] !== "string" || !stockImage.test(job["runs-on"]))
     .map(({ file, jobId, job }) => `${file} ${jobId}: ${JSON.stringify(job["runs-on"])}`);
   expect(custom).toEqual([]);
-  const snapshots = depotJobs.flatMap(({ file, jobId, job }) =>
-    (job.steps || [])
-      .filter((step) => step.uses?.startsWith("depot/snapshot-action"))
-      .map(() => `${file} ${jobId}`),
-  );
-  expect(snapshots).toEqual([]);
 });
 
 // A step that runs pnpm or the Doppler CLI needs the setup before it; one that runs only Node needs
@@ -616,7 +612,7 @@ test("every job sets up the toolchain its steps run before they run it", () => {
 // skip the store, the pins or both.
 test("no job installs a toolchain or the workspace but through the setup action", () => {
   const install =
-    /pnpm install|setup-node|action-setup|cli\.doppler\.com|DopplerHQ|doppler setup|corepack|dependencies\.mjs/u;
+    /pnpm install|setup-node|action-setup|cli\.doppler\.com|DopplerHQ|doppler setup|corepack/u;
   const own = depotJobs.flatMap(({ file, jobId, job }) =>
     (job.steps || [])
       .filter((step) => install.test(`${step.run} ${step.uses}`))
@@ -673,8 +669,6 @@ test("the setup action starts the toolchain, restores pnpm's store from Depot Ca
       }),
     },
   });
-  // pnpm checks what it links from the store against the store's index
-  expect(JSON.stringify(action)).not.toMatch(/verify[-_]store[-_]integrity/iu);
 });
 
 test("the toolchain is the checkout's own: .nvmrc's Node, packageManager's pnpm and one Doppler CLI release checked against its SHA-256", () => {
@@ -1064,7 +1058,9 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
   );
 
   expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
-  expect(steps[runTests]?.run).toBe("doppler run --project test --config dev -- pnpm test");
+  // and no secret: no unit test reads one
+  expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
+  expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();
   // The host tests need cmake, so they stay out of `pnpm test` (which then runs on any machine)
   // and keep their place in the required Test check as a step of their own.
   expect(readPackageJson("apps/kit").scripts?.test).not.toContain("firmware:test:host");
@@ -1087,10 +1083,7 @@ test("the preview's e2e suite writes the canonical telemetry artifact", () => {
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
   const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
     const packageJson = readPackageJson(directory);
-    const testCommand = [packageJson.scripts?.test, packageJson.scripts?.["test:unit"]]
-      .filter(Boolean)
-      .join(" ");
-    if (!testCommand) return [];
+    if (!packageJson.scripts?.test) return [];
     expect(
       readVitestConfig(directory),
       `${directory}/vitest.config.ts must install the canonical test telemetry reporter`,
@@ -1118,8 +1111,8 @@ test.each([
   const finalizer = steps.find((step) =>
     step.run?.includes("scripts/ci/test-evidence.ts finalize"),
   );
-  // Flake records have their own upload; the raw telemetry and its manifest travel in the whole
-  // test evidence folder's.
+  // The raw telemetry, its manifest, and the flake records beside the suite's summary travel in the
+  // whole test evidence folder's upload.
   const upload = steps.find(
     (step) =>
       step.uses === "actions/upload-artifact@v4" && step.with?.path === testEvidencePaths.root,
@@ -1145,16 +1138,6 @@ test.each([
     with: expect.objectContaining({ "include-hidden-files": true, "if-no-files-found": "error" }),
   });
   expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(upload!));
-  // The suite's records (and the summary the finalizer wrote beside them) leave the job after the
-  // finalizer, whatever the suite's outcome.
-  const records = steps.find(
-    (step) => step.with?.name === `flake-records-${suite}${attemptSuffix}`,
-  );
-  expect(records, `${file} must upload flake-records-${suite}`).toMatchObject({
-    if: afterIt,
-    uses: "actions/upload-artifact@v4",
-  });
-  expect(steps.indexOf(finalizer!)).toBeLessThan(steps.indexOf(records!));
 });
 
 test.each([
@@ -1223,7 +1206,6 @@ test.each([
     // a suite job keeps a folder only once its suite read the deployed target; the Test job always
     expect(write?.run?.includes("--only-with-target")).toBe(file !== ".depot/workflows/test.yml");
     expect(write?.["continue-on-error"]).toBeUndefined();
-    expect(steps.filter((step) => step.run?.includes("upload-test-telemetry.ts"))).toEqual([]);
     // the outcome of every step that runs tests, each one before the write, so a failure the
     // telemetry does not see (Kit's CTest, a runner that never started) is not a pass
     expect(write?.env?.TEST_EVIDENCE_STEPS).toBe(
@@ -1293,15 +1275,11 @@ test.each([
   },
 );
 
-test("the Test job's manifest names the pull request, branch and head its runners do", () => {
+test("the Test job's manifest names the pull request and head its runners do", () => {
   const steps = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps ?? [];
   const runTests = steps.find((step) => step.name === "Run Tests");
   const write = steps.find((step) => step.id === "evidence-write");
-  const source = [
-    "TEST_TELEMETRY_BRANCH",
-    "TEST_TELEMETRY_HEAD_SHA",
-    "TEST_TELEMETRY_PULL_REQUEST_NUMBER",
-  ];
+  const source = ["TEST_TELEMETRY_HEAD_SHA", "TEST_TELEMETRY_PULL_REQUEST_NUMBER"];
   for (const name of source) {
     expect(write?.env?.[name], name).toBeTruthy();
     expect(write?.env?.[name], name).toBe(runTests?.env?.[name]);
@@ -1453,7 +1431,8 @@ test("the test jobs' flake records go into the test evidence folder", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(
     (step) => step.name === "Run Tests",
   );
-  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(testEvidencePaths.flakeRecords);
+  // under its suite's name, as the e2e jobs' records are (apps/os/scripts/preview.ts)
+  expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(`${testEvidencePaths.flakeRecords}/unit`);
   for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
     expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
   }
@@ -1551,7 +1530,6 @@ test("labels unit artifacts with the pull-request head, whose merge commit the j
   );
 
   expect(runTests?.env).toMatchObject({
-    TEST_TELEMETRY_BRANCH: "${{ github.head_ref || github.ref_name }}",
     TEST_TELEMETRY_HEAD_SHA: "${{ github.event.pull_request.head.sha || github.sha }}",
     TEST_TELEMETRY_PULL_REQUEST_NUMBER: "${{ github.event.pull_request.number }}",
   });

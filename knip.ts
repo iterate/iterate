@@ -44,7 +44,7 @@ export default {
       // The programs .depot/workflows run (knip reads no Depot workflows); the modules beside them
       // get unused-export checks.
       entry: [
-        "ci/{create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-inherit,shadcn-drift,sync-ci-telemetry,test-evidence,upload-test-telemetry}.ts",
+        "ci/{context-sweep,create-release,loc-report,merges-with-main,notify,pr-dashboard,prd-fault-alarm,prd-post-deploy-check,preview-inherit,shadcn-drift,sync-ci-telemetry,test-evidence,test-telemetry-finalizer}.ts",
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
@@ -123,10 +123,6 @@ export default {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },
-    "apps/iterate-com-inbound-email": {
-      // vite.config.ts names the Worker's main inline.
-      entry: ["src/worker.ts!"],
-    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       entry: ["public/app.js"],
@@ -152,6 +148,14 @@ export default {
       ignoreDependencies: ["cloudflare"],
     },
     "packages/voice": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+    },
+    "packages/github-sync": {
+      entry: ["src/**/*.test.ts"],
+      project: ["src/**/*.ts", "tsdown*.ts"],
+    },
+    "packages/ai-linter": {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],
     },

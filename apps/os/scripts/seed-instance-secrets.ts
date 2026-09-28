@@ -85,7 +85,7 @@ export default async function seedInstanceSecrets(options: {
     console.log(
       `lent ${key.path} to every project: ${everyProject?.borrowed} borrow it, ${everyProject?.kept.length} keep their own, ${everyProject?.failed.length} failed`,
     );
-    for (const failed of everyProject?.failed ?? [])
+    for (const failed of everyProject?.failed || [])
       console.log(`  ${failed.projectId}: ${failed.error}`);
   }
 }

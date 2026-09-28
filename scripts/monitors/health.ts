@@ -13,32 +13,34 @@
 //                             its own daily thread and pages
 //
 // A page is one block, `🔴 <what> at <commit>` or `🟢 …`, its details as bullets and a link to the
-// run that measured it; a red one mentions Jonas once. The message ends with the state now of every
-// signal the job pages; the health job's also names main e2e's, from Main OS e2e's state. A check
-// that could not read what it judges, or found its probe broken, fails the job after the others have
-// paged: a scheduled run reports on main's head, where red reads as "this commit broke", so a page
-// never turns a job red. Main OS e2e's page job reports on the commit its run tested, so a broken
-// probe of the slow rows is a ⚪ page there, on its change of state (./e2e.ts), and the job fails only
-// when it cannot judge its run or post.
+// run that measured it; the first mentions Jonas and Misha, as every #error-pulse message does. The
+// message ends with the state now of every signal the job pages; the health job's also names main
+// e2e's, from Main OS e2e's state. A check that could not read what it judges, or found its probe
+// broken, fails the job after the others have paged: a scheduled run reports on main's head, where
+// red reads as "this commit broke", so a page never turns a job red. Main OS e2e's page job reports
+// on the commit its run tested, so a broken probe of the slow rows is a ⚪ page there, on its change
+// of state (./e2e.ts), and the job fails only when it cannot judge its run or post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes. A state of another `schemaVersion`
 // is not read: the job starts over, as a first run does. A run off main pages nothing and prints what
-// it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, mentioning nobody,
-// keeping no state and sending nothing to PostHog.
+// it would; `--test-page` posts every check's verdict now, marked 🧪 TEST RUN, keeping no state and
+// sending nothing to PostHog.
 //
+// Every command reads Depot with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview):
 //   pnpm tsx scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
-//   DEPOT_TOKEN=… pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
+//   pnpm tsx scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
 //     [--main-e2e-state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
-//   DEPOT_TOKEN=… pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
+//   pnpm tsx scripts/monitors/health.ts main-e2e --ref <git ref> [--workflow-id <id>] \
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { osEnvs } from "../../envs.ts";
-import { depotCiApi, saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
+import { saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
 import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "../ci/slack.ts";
@@ -106,12 +108,11 @@ function suiteTone(state: SuiteState | undefined): Page["tone"] {
   return state === "red" || state === "green" ? state : "none";
 }
 
-/** The run's one message: each page as a block, the first red one mentioning Jonas (a test run
- *  mentions nobody), then every signal's state now. Pure. */
+/** The run's one message: each page as a block, the first mentioning Jonas and Misha, then every
+ *  signal's state now. Pure. */
 export function renderMessage(input: { pages: Page[]; now: Signal[]; testRun: boolean }) {
-  const mentioned = input.testRun ? undefined : input.pages.find((page) => page.tone === "red");
-  const blocks = input.pages.flatMap((page) => [
-    `${EMOJI[page.tone]} ${page.headline}${page === mentioned ? ` ${onCallMention}` : ""}`,
+  const blocks = input.pages.flatMap((page, index) => [
+    `${EMOJI[page.tone]} ${page.headline}${index === 0 ? ` ${onCallMention}` : ""}`,
     ...page.details.map((detail) => `• ${detail}`),
     ...(page.link ? [`<${page.link}|the run>`] : []),
   ]);
@@ -130,7 +131,7 @@ export async function run(options: {
   mainE2eState?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post every check's verdict now, marked 🧪, mentioning nobody. */
+  /** Post every check's verdict now, marked 🧪. */
   testPage?: boolean;
   /** Print the message instead of posting it. */
   dryRun?: boolean;
@@ -163,13 +164,13 @@ export async function run(options: {
   const ttg = await attempt("PR time to green", () =>
     checkTtg({ depot, memory: state.ttg, now: Date.now(), testRun, runUrl }),
   );
-  failures.push(...(real?.failures ?? []), ...(latency?.failures ?? []));
+  failures.push(...(real?.failures || []), ...(latency?.failures || []));
 
-  const realModel = real?.memory ?? state.e2e;
+  const realModel = real?.memory || state.e2e;
   const next: HealthState = {
     schemaVersion: 1,
-    ttg: ttg?.memory ?? state.ttg,
-    latency: latency?.memory ?? state.latency,
+    ttg: ttg?.memory || state.ttg,
+    latency: latency?.memory || state.latency,
     // real-model e2e's alone: Main OS e2e keeps main e2e's
     e2e: {
       suites: { "real-model e2e": realModel.suites["real-model e2e"] },
@@ -177,8 +178,8 @@ export async function run(options: {
     },
   };
   const pages = [
-    ...(real?.pages ?? []),
-    ...(latency?.pages ?? []),
+    ...(real?.pages || []),
+    ...(latency?.pages || []),
     ...(ttg?.page ? [ttg.page] : []),
   ];
   const text =
@@ -198,12 +199,12 @@ export async function run(options: {
           name: "latency",
           tone: next.latency.red.length > 0 ? "red" : "green",
         },
-        { name: "PR time to green", tone: ttg?.status ?? "none" },
+        { name: "PR time to green", tone: ttg?.status || "none" },
       ],
       testRun,
     });
   await postThenKeep({ text, dryRun, keep, stateOut: options.stateOut, next });
-  const events = [...(ttg?.events ?? []), ...(latency?.events ?? [])];
+  const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
   else
@@ -226,7 +227,7 @@ export async function mainE2e(options: {
   state?: string;
   /** Where to write the state for the next run. */
   stateOut?: string;
-  /** Post this run's verdicts now, marked 🧪, mentioning nobody. */
+  /** Post this run's verdicts now, marked 🧪. */
   testPage?: boolean;
   /** Print the message instead of posting it. */
   dryRun?: boolean;
@@ -302,9 +303,9 @@ export async function judgeMainE2eRun(input: {
 /** The Depot CI API with the organization token (Doppler _shared/preview) bound. */
 function depotApi(): DepotApi {
   const token = z
-    .string({ error: "DEPOT_TOKEN is required (Doppler _shared/preview)" })
+    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
     .min(1)
-    .parse(process.env.DEPOT_TOKEN);
+    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
   return (method, body) => depotCiApi(method, body, token);
 }
 
@@ -380,7 +381,10 @@ export async function previousState(options: {
   of?: "health" | "main-e2e";
 }) {
   console.log(
-    await saveNewestArtifactFile({ ...stateArtifacts[options.of || "health"], out: options.out }),
+    await saveNewestArtifactFile(depotApi(), {
+      ...stateArtifacts[options.of || "health"],
+      out: options.out,
+    }),
   );
 }
 

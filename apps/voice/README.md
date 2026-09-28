@@ -3,9 +3,9 @@
 A browser phone for a project's voice agent: log in with iterate, pick a project in the sidebar's
 switcher, press Call, talk. The page frames itself in packages/ui's `AppShell`, the shell every
 OS app shares.
-The page is the Kit device in a browser — the same three appends and one subscription the board
-makes (`apps/agents/scripts/voice-call.ts`), with the browser's microphone and speaker on either
-end and the relay's live state on screen.
+The page is the Kit device in a browser — the call client `@iterate-com/voice/call` makes the
+board's appends and subscription (`apps/agents/scripts/voice-call.ts` runs the same client from
+Node), with the browser's microphone and speaker on either end and the relay's live state on screen.
 
 ## Shape
 
@@ -13,9 +13,10 @@ end and the relay's live state on screen.
   entry, with Voice's client name and home.
 - `src/routes/_auth/projects.$slug.tsx` — the one page. `useLiveState` from `iterate/react` subscribes to the
   relay's `voice-agent` live view (phase, answering, transcript, last end) on the call's context.
-- `src/call.ts` — one call: `itx.voice.setupVoiceAgent({streamPath, activation})` on a fresh
-  context, a subscription for `speaker-frame` and the call facts, ephemeral `mic-frame` appends twenty a
-  second, a keepalive, and `call-ended` on hang up.
+- `src/call.ts` — one call: `itx.voice.health()`, then `startVoiceCall` (`@iterate-com/voice/call`:
+  the press on a fresh `/agents/voice/web/…` context, the subscription, the `mic-frame` appends, the
+  keepalive and `call-ended` on hang up) wired to the worklets: the capture's frames go up, the
+  answer's frames go to the playback queue.
 - `src/audio.ts` + `public/worklets/*.js` — one 16 kHz `AudioContext`; the capture worklet posts
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
@@ -23,8 +24,9 @@ end and the relay's live state on screen.
 A project without a voice agent gets **Install voice** in place of Call: an OpenAI key field if the
 project has no `/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, the
 installer Kit's Prepare runs too): the config repo gets `agents/` and `voice/` folders pinning the
-`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (main's
-when pkg.pr.new has none), and both are installed from them. It works against any platform the app
+`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (else
+the commit main's builds are at, which the app's Worker asks pkg.pr.new for), and both are
+installed from them. It works against any platform the app
 connects to, a self-hosted one included.
 
 ## Run

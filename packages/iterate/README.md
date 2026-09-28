@@ -158,9 +158,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
     certificate: `create-requested` → `created` or `create-failed`, `delete-requested` → `deleted`,
     `hostname-remove-requested` → `hostname-removed`. A failure that is retried rather than
     reported gets no `-failed` fact.
-  - An answer that is also a fact of its own names the ask by id:
-    `voice-agent/delegation-requested` is answered by one `commentary-added` carrying its
-    `delegationId`.
+  - An answer that is also a fact of its own names the ask's offset: the assistant's
+    `agent/context-added` carries the `llmRequestOffset` of the `llm-request-requested` it answers.
 - **One verb pair per kind of change:**
   - `added` / `removed` for membership in a set: `organization/member-added`,
     `organization/project-added`, hostnames.

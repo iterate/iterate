@@ -10,9 +10,10 @@ packages:
   - apps/browser-extension
   - apps/dummy-petshop
   - apps/ci-reports
-  - apps/iterate-com-inbound-email
   - packages/agents
+  - packages/ai-linter
   - packages/cli
+  - packages/github-sync
   - packages/iterate
   - packages/petshop-sdk
   - packages/voice

@@ -237,6 +237,10 @@ static void pump(void) {
       if (strstr(message, "setupVoiceAgent") != NULL) {
         assert(copy_setup_stream_path(
             message, setup_stream_path, sizeof(setup_stream_path)));
+        /* Named for its client; a board without a screen sends none. */
+        assert(strncmp(setup_stream_path, "/agents/voice/host_test_open_mic/",
+                       sizeof("/agents/voice/host_test_open_mic/") - 1U) == 0);
+        assert(strstr(message, "\"screen\"") == NULL);
       }
       if (pull == NULL) continue;
       {
@@ -321,7 +325,8 @@ static const char *frames_b64(size_t frames) {
         (left == 2U ? ((uint32_t)fill << 8) : 0U);
     encoded[out++] = alphabet[(triple >> 18) & 0x3FU];
     encoded[out++] = alphabet[(triple >> 12) & 0x3FU];
-    if (left == 2U) encoded[out++] = alphabet[(triple >> 6) & 0x3FU];
+    encoded[out++] = left == 2U ? alphabet[(triple >> 6) & 0x3FU] : '=';
+    encoded[out++] = '=';
   }
   encoded[out] = '\0';
   return encoded;

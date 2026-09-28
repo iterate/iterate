@@ -402,25 +402,7 @@ static void compute_motion(
 /* ------------------------------------------------------------------------- */
 /* Mouth mapping and coarticulation                                          */
 
-static const face_sprite_viseme_map_t *find_viseme(
-    const face_sprite_atlas_t *atlas,
-    uint8_t viseme_set,
-    uint8_t viseme)
-{
-    for (uint16_t index = 0U;
-         index < atlas->viseme_map_count;
-         ++index) {
-        const face_sprite_viseme_map_t *entry =
-            &atlas->viseme_map[index];
-        if (entry->viseme_set == viseme_set &&
-            entry->viseme == viseme) {
-            return entry;
-        }
-    }
-    return NULL;
-}
-
-static uint8_t fallback_role(
+static uint8_t mouth_role(
     const face_sprite_selector_t *selector,
     const face_render_key_t *render_key)
 {
@@ -475,33 +457,12 @@ uint8_t face_sprite_select_mouth_slot(
         return FACE_SPRITE_MOUTH_SLOT_NONE;
     }
 
-    const face_sprite_viseme_map_t *mapped = NULL;
-    if (render_key->viseme_weight >=
-        atlas->selector.explicit_viseme_min) {
-        if (render_key->viseme_blend >= 128U) {
-            mapped = find_viseme(
-                atlas, render_key->viseme_set,
-                render_key->viseme_secondary);
-        }
-        if (mapped == NULL) {
-            mapped = find_viseme(
-                atlas, render_key->viseme_set,
-                render_key->viseme);
-        }
-    }
-    if (mapped != NULL) {
-        if (role != NULL) {
-            *role = mapped->role;
-        }
-        return mapped->mouth_slot;
-    }
-
     const uint8_t selected_role =
-        fallback_role(&atlas->selector, render_key);
+        mouth_role(&atlas->selector, render_key);
     if (role != NULL) {
         *role = selected_role;
     }
-    const uint8_t slot = atlas->fallback_slots[selected_role];
+    const uint8_t slot = atlas->role_slots[selected_role];
     return slot < atlas->mouth_slot_count
         ? slot
         : FACE_SPRITE_MOUTH_SLOT_NONE;
@@ -573,7 +534,7 @@ static void update_mouth(
         transition_role(player->current_role, target_role);
     const uint8_t intermediate_slot =
         intermediate < FACE_SPRITE_MOUTH_ROLE_COUNT
-            ? atlas->fallback_slots[intermediate]
+            ? atlas->role_slots[intermediate]
             : FACE_SPRITE_MOUTH_SLOT_NONE;
     if (intermediate != target_role &&
         intermediate_slot < atlas->mouth_slot_count &&
@@ -1024,8 +985,6 @@ static bool validate_atlas(const face_sprite_atlas_t *atlas)
             FACE_SPRITE_MOUTH_SLOT_NONE ||
         atlas->bank_count == 0U ||
         atlas->banks == NULL ||
-        (atlas->viseme_map_count > 0U &&
-         atlas->viseme_map == NULL) ||
         (atlas->sequence_count > 0U &&
          atlas->sequences == NULL) ||
         atlas->cycle_count > FACE_SPRITE_MAX_CYCLES ||
@@ -1037,13 +996,13 @@ static bool validate_atlas(const face_sprite_atlas_t *atlas)
     for (uint8_t role = 0U;
          role < FACE_SPRITE_MOUTH_ROLE_COUNT;
          ++role) {
-        const uint8_t slot = atlas->fallback_slots[role];
+        const uint8_t slot = atlas->role_slots[role];
         if (slot != FACE_SPRITE_MOUTH_SLOT_NONE &&
             slot >= atlas->mouth_slot_count) {
             return false;
         }
     }
-    if (atlas->fallback_slots[FACE_SPRITE_MOUTH_REST] ==
+    if (atlas->role_slots[FACE_SPRITE_MOUTH_REST] ==
         FACE_SPRITE_MOUTH_SLOT_NONE) {
         return false;
     }
@@ -1055,25 +1014,6 @@ static bool validate_atlas(const face_sprite_atlas_t *atlas)
     for (uint8_t index = 0U; index < atlas->bank_count; ++index) {
         if (!validate_bank(atlas, &atlas->banks[index])) {
             return false;
-        }
-    }
-    for (uint16_t index = 0U;
-         index < atlas->viseme_map_count;
-         ++index) {
-        const face_sprite_viseme_map_t *entry =
-            &atlas->viseme_map[index];
-        if (entry->mouth_slot >= atlas->mouth_slot_count ||
-            (entry->role >= FACE_SPRITE_MOUTH_ROLE_COUNT &&
-             entry->role != FACE_SPRITE_MOUTH_SLOT_NONE)) {
-            return false;
-        }
-        for (uint16_t earlier = 0U; earlier < index; ++earlier) {
-            if (atlas->viseme_map[earlier].viseme_set ==
-                    entry->viseme_set &&
-                atlas->viseme_map[earlier].viseme ==
-                    entry->viseme) {
-                return false;
-            }
         }
     }
     for (uint8_t index = 0U;
@@ -1130,7 +1070,7 @@ static void reset_player(face_sprite_player_t *player)
 {
     const face_sprite_atlas_t *atlas = player->atlas;
     const uint8_t rest =
-        atlas->fallback_slots[FACE_SPRITE_MOUTH_REST];
+        atlas->role_slots[FACE_SPRITE_MOUTH_REST];
     player->last_clock = 0U;
     player->mouth_since = 0U;
     player->target_since = 0U;
@@ -1330,7 +1270,7 @@ static bool face_sprite_render_snapshot_to(
         snapshot.atlas, render_key, &role);
     if (slot == FACE_SPRITE_MOUTH_SLOT_NONE) {
         slot = snapshot.atlas
-            ->fallback_slots[FACE_SPRITE_MOUTH_REST];
+            ->role_slots[FACE_SPRITE_MOUTH_REST];
         role = FACE_SPRITE_MOUTH_REST;
     }
     snapshot.last_clock = sample_clock;

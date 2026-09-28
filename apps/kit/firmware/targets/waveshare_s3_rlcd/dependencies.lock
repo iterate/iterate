@@ -1,6 +1,6 @@
 dependencies:
   capnweb:
-    component_hash: dbff099730db7a0e270611f2cb222b10659d2a1e78e9e8f4803f6de7786a6659
+    component_hash: e25e2ac663f3d2d08b5592fd20dea8e9a321b0b39b6eb56795e448da8a1ade66
     dependencies:
     - name: idf
       version: '>=5.4'
@@ -8,7 +8,7 @@ dependencies:
       git: https://github.com/iterate/capnweb.git
       path: c
       type: git
-    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+    version: a9e3703f62eb09d21d8b3af3abf666180f4609a7
   espressif/esp_codec_dev:
     component_hash: df70f10af8d7b922add7b9d07372c9c97ab356e58d72b7a892050227c2d44348
     dependencies:
@@ -20,24 +20,24 @@ dependencies:
       type: service
     version: 1.5.11
   espressif/led_strip:
-    component_hash: 28c6509a727ef74925b372ed404772aeedf11cce10b78c3f69b3c66799095e2d
+    component_hash: 28621486f77229aaf81c71f5e15d6fbf36c2949cf11094e07090593e659e7639
     dependencies:
     - name: idf
       require: private
-      version: '>=4.4'
+      version: '>=5.0'
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 2.5.5
+    version: 3.0.3
   idf:
     source:
       type: idf
-    version: 5.4.2
+    version: 6.1.0
 direct_dependencies:
 - capnweb
 - espressif/esp_codec_dev
 - espressif/led_strip
 - idf
-manifest_hash: f5ce700b9635eae1cba0a4baca8508f3a70673bc35697c660efde9480fd970a1
+manifest_hash: df7e15f98f8438c7fd49f012828190937000c3d4114bfe16620d9199be79069e
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

@@ -28,14 +28,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'schedule' && github.event.repository.default_branch || github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
+      # prd's Cloudflare credentials and operator bearer from Doppler os/prd, which the script
+      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts).
       - name: Sweep prd's contexts (report-only)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/context-sweep.ts
+        run: pnpm tsx scripts/ci/context-sweep.ts --env prd
   notify:
     needs:
       - sweep

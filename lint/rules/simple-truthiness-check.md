@@ -15,13 +15,16 @@ if (input.items) consume(input.items);
 const label = input.foo || "Default";
 ```
 
-This enforces part of the existing [truthiness review policy](../../rules/structure/simplify-truthiness-checks.md).
+Try hard not to care about the difference between falsy values: something is
+badly wrong when a plain object means one thing as `null` and another as
+`undefined`, `false`, `""` or `0`.
 
 The rule reports conditional spreads that merely repeat the guarded value,
 null/undefined comparisons, redundant `typeof`/`Array.isArray` checks on typed
-values, and `??`/`??=` for strings and objects. Type-based checks currently inspect
-identifiers and property references. They preserve number/boolean/bigint unions,
-unknown/any input validation, and real string-versus-object discrimination.
+values, and `??`/`??=` for strings and objects. Type-based checks inspect
+identifiers, property references and optional chains of them (`input?.label`).
+They preserve number/boolean/bigint unions, unknown/any input validation, and
+real string-versus-object discrimination.
 Existing `use-isnan` handles invalid direct comparisons with NaN.
 
 There is no automatic fix: changing empty-string handling or property presence

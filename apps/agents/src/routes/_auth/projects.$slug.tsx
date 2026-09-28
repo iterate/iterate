@@ -2,6 +2,7 @@
 import type {} from "@iterate-com/agents";
 import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
 import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
@@ -24,7 +25,8 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
-import { ensureAgents, publishedVersion } from "@iterate-com/agents/install";
+import { ensureAgents } from "@iterate-com/agents/install";
+import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
@@ -62,6 +64,16 @@ const withAgents = (itx: Project) =>
  *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
  *  into the answer being written. */
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-frame"];
+
+/** The agents build Install agents commits: this app's own commit's, else main's now, at a commit
+ *  (`publishedCommit`), resolved in the app's Worker because a page cannot read pkg.pr.new's
+ *  commit header. */
+const publishedAgents = createServerFn().handler(async () =>
+  pkgPrNewVersion(
+    "@iterate-com/agents",
+    await publishedCommit("@iterate-com/agents", import.meta.env.VITE_SOURCE_COMMIT),
+  ),
+);
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every
@@ -119,11 +131,7 @@ function AgentsPage() {
             if (!data.installed) {
               // The SDK models the public API as promises; capnweb's stub has the
               // same runtime methods with additional pipelining types.
-              const version = await publishedVersion(
-                "@iterate-com/agents",
-                import.meta.env.VITE_SOURCE_COMMIT,
-              );
-              await ensureAgents(itx as unknown as IterateContextApi, version);
+              await ensureAgents(itx as unknown as IterateContextApi, await publishedAgents());
               await router.invalidate({ sync: true });
               return;
             }

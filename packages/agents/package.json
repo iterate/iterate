@@ -15,7 +15,6 @@
     "./contract": "./src/contract.ts",
     "./processor": "./src/processor.ts",
     "./codemode-format": "./src/codemode-format.ts",
-    "./system-prompt": "./src/system-prompt.ts",
     "./ai-transport-source": "./src/ai-transport-source.ts"
   },
   "files": [
@@ -43,10 +42,6 @@
       "./codemode-format": {
         "types": "./dist/codemode-format.d.mts",
         "import": "./dist/codemode-format.mjs"
-      },
-      "./system-prompt": {
-        "types": "./dist/system-prompt.d.mts",
-        "import": "./dist/system-prompt.mjs"
       },
       "./ai-transport-source": {
         "types": "./dist/ai-transport-source.d.mts",

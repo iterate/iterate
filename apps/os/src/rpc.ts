@@ -13,10 +13,10 @@ import {
 } from "./session.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 
-/** Cap’n Web always terminates at /api in the stateless edge. Its root is an
- * already-authorized session — or, on a socket opened BARE (api.ts: no credential on the upgrade),
- * a root that authorizes IN-BAND: `authenticate({ type: "bearer", token })` runs the token through
- * the same gate and binds this transport to its grant. Authority never comes from a later
+/** Cap’n Web always terminates at /api in the stateless edge. Its root holds what the upgrade's
+ * credential resolved — nothing, on a socket opened BARE (api.ts). `authenticate({ type: "bearer",
+ * token })` runs the token through the same gate and binds this transport to its grant, or, when
+ * the upgrade already bound one, must name that grant. Authority never comes from a later
  * caller-supplied actor; a transport carries one grant for its life. */
 export async function rpcResponse(
   request: Request,
@@ -43,8 +43,9 @@ export async function rpcResponse(
     }),
   });
   // THE GRANT THIS TRANSPORT CARRIES: the upgrade's (resolved by the gate before this call), or the
-  // one an in-band `authenticate` binds — once; a second token on the same socket is refused, a
-  // refreshed token is a new socket (the guard below closes this one at the grant's expiry).
+  // one an in-band `authenticate` binds — once. A second binding on a bare socket is refused, and so
+  // is an in-band token naming another grant on an upgrade-bound one; a refreshed token is a new
+  // socket (the guard below closes this one at the grant's expiry).
   let bound = auth;
   let binding = false; // an `authenticate` in flight: a second one on the same socket is refused at once
   let bindSocket: ((authorization: Authorization) => void) | undefined;
@@ -59,11 +60,20 @@ export async function rpcResponse(
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.
-      if (bound || binding) throw new Error("This transport already carries a session");
+      if (binding || (bound && !auth)) throw new Error("This transport already carries a session");
       binding = true;
       try {
         const authorization = await authorizationForToken(env, token, addresses, "api");
         if (!authorization) return null;
+        if (auth) {
+          // THE TOKEN RODE THE UPGRADE TOO (Kit: its key-refused backoff reads the upgrade's 401).
+          // It must name the grant the gate already bound this transport to.
+          const same =
+            authorization.principal.actor === auth.principal.actor &&
+            authorization.grant?.grantId === auth.grant?.grantId;
+          if (!same) throw new Error("This transport already carries a session");
+          return authorityOf(auth);
+        }
         if (authorization.grant) ctx.waitUntil(recordGrantUse(env, authorization.grant));
         bound = authorization;
         bindSocket?.(authorization);

@@ -1,0 +1,56 @@
+{
+  "name": "@iterate-com/ai-linter",
+  "version": "0.1.0",
+  "description": "Lints a GitHub repository's pull requests against the repository's own rules folder, with an LLM and TypeSafe's Jev, as a check and review threads",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/ai-linter"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./install": "./src/install.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./install": {
+        "types": "./dist/install.d.mts",
+        "import": "./dist/install.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@babel/parser": "7.29.9",
+    "yaml": "catalog:"
+  },
+  "peerDependencies": {
+    "iterate": "*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@babel/types": "7.29.8",
+    "@cloudflare/workers-types": "catalog:",
+    "@types/node": "catalog:",
+    "iterate": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

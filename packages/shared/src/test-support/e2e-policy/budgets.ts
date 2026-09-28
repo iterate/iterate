@@ -86,7 +86,7 @@ export const SLOW_ROW_PATHS = [
 ];
 
 /**
- * The Test job's row budget: the telemetry finalizer (scripts/ci/upload-test-telemetry.ts) prints
+ * The Test job's row budget: the telemetry finalizer (scripts/ci/test-telemetry-finalizer.ts) prints
  * every unit or Workers row that ran longer than this and is not listed below. A warning only.
  */
 export const UNIT_ROW_WARN_MS = 10_000;

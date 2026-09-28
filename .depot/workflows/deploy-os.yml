@@ -1,7 +1,6 @@
 name: Deploy OS
 permissions:
   contents: read
-  deployments: write
 concurrency:
   # Every ref deploys to the same production Worker (os-prd:
   # os.iterate.com, mcp.iterate.com, *.iterate.app). Never interrupt a
@@ -79,8 +78,8 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm tsx scripts/ci/prd-post-deploy-check.ts check --previous-version "${{ steps.previous.outputs.version }}"
-      # The deploy's own result to #ci; a deploy that failed, was cancelled or hit the job's timeout
-      # posts failure. `always()`, because `!cancelled()` is false once the job is cancelled, and a
+      # The deploy's own result: a success to #ci; a deploy that failed, was cancelled or hit the
+      # job's timeout pages #error-pulse. `always()`, because `!cancelled()` is false once the job is cancelled, and a
       # timeout ends the job by cancelling it.
       - name: Notify Slack
         if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}

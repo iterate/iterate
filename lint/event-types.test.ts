@@ -5,7 +5,8 @@ import { expect, test } from "vitest";
 // Every `events.iterate.com/…` literal in a tracked file names `<namespace>/<event>`: an allowed
 // namespace, a lowercase kebab-case event, never a third segment. The rules:
 // packages/iterate/README.md#event-types. A template (`events.iterate.com/${x}`) or a placeholder
-// (`<namespace>`, `…`, `*`) is skipped.
+// (`<namespace>`, `…`, `*`) is skipped, and so is the AI linter's fixture of labelled code from
+// past pull requests, whose text must stay as it was measured.
 
 const NAMESPACES = new Set([
   "itx",
@@ -37,7 +38,18 @@ const EVENT = /^[a-z0-9]+(?:-[a-z0-9]+)*-?$/;
 test("every events.iterate.com literal is `<namespace>/<event>` under an allowed namespace", () => {
   const rows = execFileSync(
     "git",
-    ["grep", "-n", "-I", "--full-name", "-F", "events.iterate.com/", "--", ".", ":!pnpm-lock.yaml"],
+    [
+      "grep",
+      "-n",
+      "-I",
+      "--full-name",
+      "-F",
+      "events.iterate.com/",
+      "--",
+      ".",
+      ":!pnpm-lock.yaml",
+      ":!packages/ai-linter/src/fixtures/jev-cases.json",
+    ],
     { cwd: resolve(import.meta.dirname, ".."), encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
   const found: string[] = [];

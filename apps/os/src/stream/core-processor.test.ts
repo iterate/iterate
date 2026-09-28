@@ -520,7 +520,7 @@ test("rewrite rules: a well-formed match the boundary accepts reduces even when 
     event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
     state: CoreContract.initialState(),
   });
-  expect(Object.keys(reduced?.itxExpressionRewriteRules ?? {})).toHaveLength(1);
+  expect(Object.keys(reduced?.itxExpressionRewriteRules || {})).toHaveLength(1);
 });
 
 test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only while the row's target is still that — a replacement survives a stale undo, identity kept; a mask's undo names `null`", () => {

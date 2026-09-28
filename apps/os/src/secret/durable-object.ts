@@ -964,13 +964,11 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
           throw new SecretRefused(
             `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
           );
-        return stored?.record.material ?? null;
+        return stored?.record.material || null;
       };
       // A refresh-and-retry needs the request twice; clone while it is undisturbed. (The cast is
       // workers-types' Request<Cf> vs the bare Request the pure half takes.)
-      let retry: Request | null = stored?.record.refresh
-        ? (request.clone() as unknown as Request)
-        : null;
+      let retry = stored?.record.refresh ? (request.clone() as unknown as Request) : null;
       let substituted: Request;
       try {
         substituted = await substituteProjectSecrets(request, resolve);

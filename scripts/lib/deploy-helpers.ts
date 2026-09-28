@@ -141,8 +141,8 @@ async function runStreamingCaptured(
  * and throw when it never does — a deploy is only done once the env answers.
  *
  * The window is deliberately generous: a fresh worker version can answer 503
- * at the edge for tens of seconds while it propagates (measured 2026-07-09 on
- * preview slots: dashboard 503 for ~30-60s after a green `wrangler deploy`).
+ * at the edge for tens of seconds while it propagates (measured 2026-07-09: a
+ * dashboard answered 503 for ~30-60s after a green `wrangler deploy`).
  * A success at attempt 12 costs nothing extra; giving up early fails the
  * whole deploy+e2e job, whose retry costs ~5 minutes.
  */
@@ -186,9 +186,7 @@ export async function smokeResponse(
  * always cleaned up — code + secrets land atomically in one worker version.
  * Durable Object classes ride the same upload: the config's declarative
  * `exports` map is reconciled server-side per deploy, so a brand-new env's
- * first upload and a steady-state redeploy are the same single command (the
- * legacy migrations flow needed a classless bootstrap deploy first; exports
- * does not — verified live 2026-07-08).
+ * first upload and a steady-state redeploy are the same single command.
  */
 export async function deployWithSecrets(input: {
   /** App root the wrangler commands run in. */

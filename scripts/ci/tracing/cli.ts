@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { ciReportsEnvs } from "../../../envs.ts";
-import { depotCiApi } from "../depot.ts";
 import { getOctokit } from "../github.ts";
 import {
   assembleTrace,

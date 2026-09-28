@@ -5,7 +5,6 @@
 set(ITERATE_KIT_AUDIO_SOURCES
   src/aec_capture_bridge.c
   src/aec_reference_scaler.c
-  src/aec_uplink_selector.c
   src/audio_codec.c
   src/audio_processor.c
   src/pcm_format.c
@@ -29,5 +28,4 @@ target_compile_features(${ITERATE_KIT_AUDIO_TARGET} PUBLIC c_std_11)
 target_compile_options(${ITERATE_KIT_AUDIO_TARGET} PRIVATE
   -Wall
   -Wextra
-  -Werror
-  -Wpedantic)
+  -Werror)

@@ -23,6 +23,7 @@ import {
   untilValue,
 } from "../../os/e2e/support/client.ts";
 import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
+import { reduceAgentFeed, toAgentEvent } from "../src/lib/agent-events.ts";
 import { openAgentItx } from "./support.ts";
 import {
   RED_PNG_BASE64,
@@ -197,8 +198,9 @@ test("the loop: a person's words → the model → a script run against itx → 
   ]);
   const said = (type: string) => log.filter((e) => e.type === type).map((e) => e.payload);
   expect(said("events.iterate.com/agent/web-message-sent")).toEqual([
-    // The tag's prose and the bare reply alike are appended directly, each with the request it came from.
-    { message: "Let me store that.", llmRequestOffset: expect.any(Number) },
+    // The tag's prose and the bare reply alike are appended directly, each with the request it came
+    // from; the tag's is marked as written beside its script.
+    { message: "Let me store that.", llmRequestOffset: expect.any(Number), besideScript: true },
     { message: "Stored 42 under answer.", llmRequestOffset: expect.any(Number) },
   ]);
   expect(said("events.iterate.com/agent/summary-updated")).toEqual([
@@ -368,6 +370,77 @@ test("a script that returns nothing ends the turn: no result item, no further re
   expect((await support.facets.get("agent").snapshot()).state).toMatchObject({
     pendingLlmRequestTrigger: null,
     openRequest: null,
+  });
+});
+
+test("words sent while a script runs are answered at once: the feed shows the reply above the still-running script, which settles into one clean activity", async () => {
+  const itx = await openAgentItx(freshCtx("agent-reply-mid-script"));
+  const support = itx.cd("/agents/support");
+  const ai = new FakeAi([
+    '<codemode status="Waiting for go">\nwhile ((await itx.kv.get("go")) !== "yes") await new Promise((resolve) => setTimeout(resolve, 200));\n</codemode>',
+    "Still waiting for go.",
+  ]);
+  await support.provide("itx.ai", ai);
+  await itx.agents.create("/agents/support");
+  const agent = itx.agents.get("/agents/support");
+  await operatorPrompt(support);
+  await configureModel(support);
+  const feed = (log: unknown[], idle: boolean) =>
+    reduceAgentFeed(
+      log.flatMap((raw) => toAgentEvent(raw) ?? []),
+      idle,
+    );
+  try {
+    await agent.message("Wait for go.");
+    await untilValue(
+      "the script runs",
+      () => readAll(support),
+      (all) => all.some((e) => e.type === "events.iterate.com/itx/run-requested"),
+      { describe: short },
+    );
+    await agent.message("Still there?");
+    const replied = await untilValue(
+      "the answer to the words sent mid-script",
+      () => readAll(support),
+      (all) => all.some((e) => e.type === "events.iterate.com/agent/web-message-sent"),
+      { describe: short },
+    );
+    expect(short(replied)).not.toContain("itx/run-settled");
+    const midScript = feed(replied, false);
+    expect(midScript.items).toMatchObject([
+      { kind: "user", text: "Wait for go." },
+      { kind: "user", text: "Still there?" },
+      { kind: "assistant", text: "Still waiting for go." },
+    ]);
+    expect(midScript.state.live?.steps).toMatchObject([
+      { kind: "llm", status: "done", outcome: "completed" },
+      { kind: "code", status: "running" },
+      { kind: "llm", status: "done", outcome: "completed" },
+    ]);
+  } finally {
+    await itx.kv.put("go", "yes");
+  }
+  const settled = await untilValue(
+    "the script's settlement",
+    () => readAll(support),
+    (all) => all.some((e) => e.type === "events.iterate.com/itx/run-settled"),
+    { describe: short },
+  );
+  expect(feed(settled, false)).toMatchObject({
+    state: { live: null },
+    items: [
+      { kind: "user", text: "Wait for go." },
+      { kind: "user", text: "Still there?" },
+      { kind: "assistant", text: "Still waiting for go." },
+      {
+        kind: "activity",
+        steps: [
+          { kind: "llm", outcome: "completed" },
+          { kind: "code", success: true },
+          { kind: "llm", outcome: "completed" },
+        ],
+      },
+    ],
   });
 });
 

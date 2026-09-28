@@ -19,7 +19,7 @@ enum {
     TEST_CELL_MOUTH_CUSTOM,
     TEST_CELL_OVERLAY,
     TEST_CELL_COUNT,
-    TEST_MOUTH_SLOT_COUNT = 23,
+    TEST_MOUTH_SLOT_COUNT = 4,
 };
 
 enum {
@@ -98,50 +98,12 @@ static const uint16_t TEST_MOUTHS_NEUTRAL[TEST_MOUTH_SLOT_COUNT] = {
     TEST_CELL_MOUTH_HALF,
     TEST_CELL_MOUTH_WIDE,
     TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_REST,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_CUSTOM,
 };
 
 static const uint16_t TEST_MOUTHS_JOY[TEST_MOUTH_SLOT_COUNT] = {
     TEST_CELL_MOUTH_REST,
     TEST_CELL_MOUTH_HALF,
     TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_REST,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
-    TEST_CELL_MOUTH_WIDE,
-    TEST_CELL_MOUTH_CUSTOM,
-    TEST_CELL_MOUTH_HALF,
     TEST_CELL_MOUTH_CUSTOM,
 };
 
@@ -210,20 +172,6 @@ static const face_sprite_bank_t TEST_BANKS[] = {
     },
 };
 
-static const face_sprite_viseme_map_t TEST_VISEMES[] = {
-    { FACE_VISEME_SET_OVR15, FACE_VISEME_AA, 2,
-      FACE_SPRITE_MOUTH_WIDE },
-    { FACE_VISEME_SET_OVR15, FACE_VISEME_E, 1,
-      FACE_SPRITE_MOUTH_HALF },
-    { FACE_VISEME_SET_OVR15, FACE_VISEME_PP, 0,
-      FACE_SPRITE_MOUTH_PRESS },
-    /* The highest Microsoft22 id proves this is not a 15-viseme ABI. */
-    { FACE_VISEME_SET_MICROSOFT22, 21, 21,
-      FACE_SPRITE_MOUTH_SLOT_NONE },
-    { FACE_VISEME_SET_CUSTOM, 42, 22,
-      FACE_SPRITE_MOUTH_SLOT_NONE },
-};
-
 static const face_sprite_cycle_t TEST_CYCLES[] = {
     { 11, 2, 0, 100 },
 };
@@ -239,8 +187,6 @@ static const face_sprite_atlas_t TEST_ATLAS = {
         (uint16_t)(sizeof(TEST_PALETTE) / sizeof(TEST_PALETTE[0])),
     .cell_count = TEST_CELL_COUNT,
     .mouth_slot_count = TEST_MOUTH_SLOT_COUNT,
-    .viseme_map_count =
-        (uint16_t)(sizeof(TEST_VISEMES) / sizeof(TEST_VISEMES[0])),
     .bank_count =
         (uint8_t)(sizeof(TEST_BANKS) / sizeof(TEST_BANKS[0])),
     .sequence_count = 0,
@@ -249,7 +195,7 @@ static const face_sprite_atlas_t TEST_ATLAS = {
     .background = 0x0000,
     .selector = FACE_SPRITE_SELECTOR_DEFAULTS,
     .timing = FACE_SPRITE_TIMING_DEFAULTS,
-    .fallback_slots = {
+    .role_slots = {
         0, 0, 1, 1, 2, 1, 0, 1, 3,
     },
     .palette = TEST_PALETTE,
@@ -257,7 +203,6 @@ static const face_sprite_atlas_t TEST_ATLAS = {
     .blob = TEST_BLOB,
     .blob_size = sizeof(TEST_BLOB),
     .banks = TEST_BANKS,
-    .viseme_map = TEST_VISEMES,
     .sequences = NULL,
     .cycles = TEST_CYCLES,
     .name = "production-test-atlas",
@@ -304,8 +249,6 @@ static face_render_key_t neutral_key(void)
     memset(&key, 0, sizeof(key));
     key.controls.eye_left_open = 255;
     key.controls.eye_right_open = 255;
-    key.viseme = FACE_VISEME_NONE;
-    key.viseme_secondary = FACE_VISEME_NONE;
     key.schema_version = FACE_RENDER_KEY_SCHEMA_VERSION;
     return key;
 }
@@ -333,12 +276,8 @@ static void test_validation(void)
     broken.mouth_slot_count = 3;
     assert(!face_sprite_player_init(&player, &broken));
 
-    face_sprite_viseme_map_t duplicate[2] = {
-        TEST_VISEMES[0], TEST_VISEMES[0],
-    };
     broken = TEST_ATLAS;
-    broken.viseme_map = duplicate;
-    broken.viseme_map_count = 2;
+    broken.role_slots[FACE_SPRITE_MOUTH_REST] = FACE_SPRITE_MOUTH_SLOT_NONE;
     assert(!face_sprite_player_init(&player, &broken));
 
     face_sprite_cell_t bad_cells[TEST_CELL_COUNT];
@@ -359,36 +298,33 @@ static void test_validation(void)
     assert(face_sprite_player_init(&player, &broken));
 }
 
-static void test_vocabularies_and_fallback(void)
+/* The energy-driven controls pick a role; the atlas's role_slots draw it. */
+static void test_energy_roles(void)
 {
-    face_render_key_t key = neutral_key();
-    uint8_t role = FACE_SPRITE_MOUTH_SLOT_NONE;
-
-    key.controls.mouth_open = 240;
-    key.controls.mouth_width = 220;
-    assert(face_sprite_select_mouth_slot(
-               &TEST_ATLAS, &key, &role) == 2);
-    assert(role == FACE_SPRITE_MOUTH_WIDE);
-
-    key.viseme_set = FACE_VISEME_SET_MICROSOFT22;
-    key.viseme = 21;
-    key.viseme_weight = 255;
-    assert(face_sprite_select_mouth_slot(
-               &TEST_ATLAS, &key, &role) == 21);
-    assert(role == FACE_SPRITE_MOUTH_SLOT_NONE);
-
-    key.viseme_set = FACE_VISEME_SET_CUSTOM;
-    key.viseme = 42;
-    assert(face_sprite_select_mouth_slot(
-               &TEST_ATLAS, &key, &role) == 22);
-
-    key.viseme_set = FACE_VISEME_SET_OVR15;
-    key.viseme = FACE_VISEME_AA;
-    key.viseme_secondary = FACE_VISEME_E;
-    key.viseme_blend = 200;
-    assert(face_sprite_select_mouth_slot(
-               &TEST_ATLAS, &key, &role) == 1);
-    assert(role == FACE_SPRITE_MOUTH_HALF);
+    const struct {
+        uint8_t open, width, round, press, teeth;
+        uint8_t role, slot;
+    } cases[] = {
+        { 0, 0, 0, 0, 0, FACE_SPRITE_MOUTH_REST, 0 },
+        { 0, 0, 0, 200, 0, FACE_SPRITE_MOUTH_PRESS, 0 },
+        { 100, 0, 0, 0, 0, FACE_SPRITE_MOUTH_HALF, 1 },
+        { 240, 220, 0, 0, 0, FACE_SPRITE_MOUTH_WIDE, 2 },
+        { 200, 0, 200, 0, 0, FACE_SPRITE_MOUTH_ROUND, 1 },
+        { 200, 0, 200, 0, 200, FACE_SPRITE_MOUTH_TONGUE, 3 },
+    };
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        face_render_key_t key = neutral_key();
+        uint8_t role = FACE_SPRITE_MOUTH_SLOT_NONE;
+        key.controls.mouth_open = cases[index].open;
+        key.controls.mouth_width = cases[index].width;
+        key.controls.mouth_round = cases[index].round;
+        key.controls.mouth_press = cases[index].press;
+        key.controls.mouth_teeth = cases[index].teeth;
+        assert(face_sprite_select_mouth_slot(
+                   &TEST_ATLAS, &key, &role) == cases[index].slot);
+        assert(role == cases[index].role);
+    }
 }
 
 static void test_render_guards_and_rich_actions(void)
@@ -452,9 +388,8 @@ static void test_debounce_and_clock_reset(void)
     face_sprite_player_t player;
     face_render_key_t key = neutral_key();
     uint16_t pixels[FACE_RENDER_PIXEL_COUNT];
-    key.viseme_set = FACE_VISEME_SET_OVR15;
-    key.viseme = FACE_VISEME_AA;
-    key.viseme_weight = 255;
+    key.controls.mouth_open = 240;
+    key.controls.mouth_width = 220;
     key.controls.flags = FACE_KEYFRAME_FLAG_SPEAKING;
 
     assert(face_sprite_player_init(&player, &TEST_ATLAS));
@@ -471,8 +406,6 @@ static void test_debounce_and_clock_reset(void)
         &player, &key, 2240, pixels, FACE_RENDER_PIXEL_COUNT));
     assert(player.current_slot == 2);
 
-    key.viseme = FACE_VISEME_NONE;
-    key.viseme_weight = 0;
     key.controls.mouth_open = 0;
     key.controls.flags = 0;
     assert(face_sprite_render(
@@ -551,12 +484,9 @@ static void test_pure_snapshot_path(void)
     uint16_t interleaved[FACE_RENDER_PIXEL_COUNT];
     uint16_t replay[FACE_RENDER_PIXEL_COUNT];
 
-    wide.viseme_set = FACE_VISEME_SET_OVR15;
-    wide.viseme = FACE_VISEME_AA;
-    wide.viseme_weight = 255;
-    pressed.viseme_set = FACE_VISEME_SET_OVR15;
-    pressed.viseme = FACE_VISEME_PP;
-    pressed.viseme_weight = 255;
+    wide.controls.mouth_open = 240;
+    wide.controls.mouth_width = 220;
+    pressed.controls.mouth_press = 200;
 
     assert(face_sprite_player_init(&validated, &TEST_ATLAS));
     assert(face_sprite_render_snapshot(
@@ -707,14 +637,10 @@ static void test_idle_motion_needs_layers_not_just_flags(void)
 int main(void)
 {
     assert(sizeof(face_render_key_t) == FACE_RENDER_KEY_BYTES);
-    assert(FACE_RENDER_KEY_BYTES == 40);
-    /* Cast to int: GCC's -Werror=enum-compare rejects comparing constants
-     * from two different anonymous enums, and clang does not — so this line
-     * built on a Mac and broke CI. */
-    assert((int)TEST_MOUTH_SLOT_COUNT > (int)FACE_VISEME_COUNT);
+    assert(FACE_RENDER_KEY_BYTES == 34);
 
     test_validation();
-    test_vocabularies_and_fallback();
+    test_energy_roles();
     test_render_guards_and_rich_actions();
     test_debounce_and_clock_reset();
     test_determinism_and_palette_cycle();
@@ -724,7 +650,7 @@ int main(void)
 
     printf(
         "face_sprite_sheet_test: PASS "
-        "(40-byte IR, %u mouth slots, 5 viseme mappings)\n",
+        "(34-byte IR, %u mouth slots)\n",
         TEST_MOUTH_SLOT_COUNT);
     return 0;
 }

@@ -10,9 +10,9 @@ import {
 } from "./do-cost.ts";
 
 const now = new Date("2026-09-04T05:41:00Z");
-const runUrl = "https://github.com/iterate/iterate/actions/runs/1";
+const runUrl = "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a";
 const links =
-  "<https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak|incident docs> <https://github.com/iterate/iterate/actions/runs/1|workflow run> ($12.50/M GB-s, 1000 DO-hours ≈ $5.60)";
+  "<https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak|incident docs> <https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a|workflow run> ($12.50/M GB-s, 1000 DO-hours ≈ $5.60)";
 
 test("the headline is one sentence about $/day; the table and the breach are replies", () => {
   const thread = renderDailyThread({
@@ -307,7 +307,7 @@ test.for([
   }).toEqual(expected);
 });
 
-test("a page names the rate, the multiple, Jonas and the top spenders; a test run mentions nobody", () => {
+test("a page names the rate, the multiple, Jonas and Misha and the top spenders; a test run's is marked", () => {
   const hours = [
     { hour: "2026-09-21T21:00:00Z", doHours: 8307 },
     { hour: "2026-09-21T22:00:00Z", doHours: 5000 },
@@ -335,19 +335,19 @@ test("a page names the rate, the multiple, Jonas and the top spenders; a test ru
       {
         label: "dev/preview",
         text: [
-          "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2>",
+          "🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2> <@U099JH9TAF2>",
           "Top spenders, trailing hour:",
           "• os-next-preview_pr2828-control-plane-cleanup_IterateContextDurableObject  ~$31/h",
           "• os-next-preview_pr2847-investigate-li-e10d90_IterateContextDurableObject  ~$13/h",
           "• os-preview-7_SandboxLiteDurableObject  ~$0.09/h",
-          `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread.`,
+          `Pages again in 3h while it lasts; hourly readings are in today's "We're spending" thread in #ci.`,
           links,
         ].join("\n"),
       },
     ],
   });
   expect(renderDailyThread({ ...input, testRun: true }).pages[0]?.text.split("\n")[0]).toBe(
-    "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling.",
+    "🧪 TEST RUN — 🚨 DO cost page for dev/preview: ~$47/h (≈ $1,121/day), 16.6× the ceiling. <@U067G4QRFK2> <@U099JH9TAF2>",
   );
 });
 
@@ -450,24 +450,70 @@ test.for([
     name: "a quiet hour",
     hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 20 }],
     expected: { breached: false, pagesPosted: 0 },
+    posts: [
+      { channel: "CI", text: "We're spending" },
+      { channel: "CI", thread_ts: "999.0", text: "```" },
+    ],
   },
   {
     name: "an hour over the page tier, paged",
     hours: [{ hour: "2026-09-21T20:00:00Z", doHours: 2789 }],
     expected: { breached: true, pagesPosted: 1 },
+    posts: [
+      { channel: "PULSE", text: "🚨 DO cost page for dev/preview" },
+      { channel: "CI", text: "We're spending" },
+      { channel: "CI", thread_ts: "999.0", text: "```" },
+      { channel: "CI", thread_ts: "999.0", text: "🚨 Durable Objects hours over 500" },
+    ],
   },
-])("the run resolves: $name", async ({ hours, expected }) => {
-  const slack = fakeSlack([]);
-  await expect(
-    postDailyThread({
-      slack: slack.client,
-      channel: "C1",
-      now: new Date("2026-09-21T21:41:00Z"),
-      readings: [reading("dev/preview", hours)],
-      runUrl,
-      testRun: false,
-    }),
-  ).resolves.toEqual(expected);
+])(
+  "the run resolves: $name; the day's thread is in #ci, a page in #error-pulse",
+  async ({ hours, expected, posts }) => {
+    const slack = fakeSlack([]);
+    await expect(
+      postDailyThread({
+        slack: slack.client,
+        channels: { thread: "CI", pages: "PULSE" },
+        now: new Date("2026-09-21T21:41:00Z"),
+        readings: [reading("dev/preview", hours)],
+        runUrl,
+        testRun: false,
+      }),
+    ).resolves.toEqual(expected);
+    expect(slack.writes.filter(([method]) => method === "chat.postMessage")).toMatchObject(
+      posts.map(({ text, ...post }) => [
+        "chat.postMessage",
+        { ...post, text: expect.stringContaining(text) },
+      ]),
+    );
+  },
+);
+
+test("the day's headline is found behind a busy #ci's first page, and rewritten, not posted again", async () => {
+  const at = Date.parse("2026-09-21T21:41:00Z") / 1000;
+  const slack = fakeSlack([
+    { ts: String(at - 7200), bot_id: "B1", text: "We're spending $1/day on durable objects …" },
+    ...Array.from({ length: 250 }, (_, index) => ({
+      ts: String(at - 3600 + index),
+      bot_id: "B1",
+      text: ":large_green_circle: PR opened: …",
+    })),
+  ]);
+  await postDailyThread({
+    slack: slack.client,
+    channels: { thread: "CI", pages: "PULSE" },
+    now: new Date("2026-09-21T21:41:00Z"),
+    readings: [reading("dev/preview", [{ hour: "2026-09-21T20:00:00Z", doHours: 20 }])],
+    runUrl,
+    testRun: false,
+  });
+  expect(slack.writes).toMatchObject([
+    ["chat.postMessage", { channel: "CI", thread_ts: String(at - 7200) }],
+    [
+      "chat.update",
+      { channel: "CI", ts: String(at - 7200), text: expect.stringContaining("We're spending") },
+    ],
+  ]);
 });
 
 test("a probe that could not run fails the run once its reply is posted", async () => {
@@ -475,7 +521,7 @@ test("a probe that could not run fails the run once its reply is posted", async 
   await expect(
     postDailyThread({
       slack: slack.client,
-      channel: "C1",
+      channels: { thread: "CI", pages: "PULSE" },
       now,
       readings: [
         {
@@ -526,15 +572,23 @@ function reading(
   };
 }
 
-/** A WebClient stand-in: serves `messages` as the channel history (honouring `oldest`, as Slack
- * does) and as the thread's replies, and records every write. */
+/** A WebClient stand-in: serves `messages` as the channel history (honouring `oldest`, newest first
+ * and `limit` to a page, as Slack does) and as the thread's replies, and records every write. */
 function fakeSlack(messages: Array<{ ts: string; bot_id: string; text: string }>) {
   const writes: Array<[string, unknown]> = [];
   const client = {
     conversations: {
-      history: async (args: { oldest: string }) => ({
-        messages: messages.filter((message) => Number(message.ts) >= Number(args.oldest)),
-      }),
+      history: async (args: { oldest: string; limit: number; cursor?: string }) => {
+        const since = messages
+          .filter((message) => Number(message.ts) >= Number(args.oldest))
+          .sort((a, b) => Number(b.ts) - Number(a.ts));
+        const start = Number(args.cursor || 0);
+        const end = start + args.limit;
+        return {
+          messages: since.slice(start, end),
+          response_metadata: { next_cursor: end < since.length ? String(end) : "" },
+        };
+      },
       replies: async () => ({ messages }),
     },
     chat: {

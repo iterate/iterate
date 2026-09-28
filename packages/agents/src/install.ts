@@ -12,22 +12,9 @@ type InstallTarget = Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
   processors: Pick<IterateContextApi["processors"], "enable">;
 };
 
-/** A pkg.pr.new build of a package in this repository: `ref` is a commit, a PR number or `main`. */
-export const pkgPrNewVersion = (name: string, ref: string) =>
-  `https://pkg.pr.new/iterate/iterate/${name}@${ref}`;
-
-/** The build of package `name` an app installs: its own commit's when pkg.pr.new has published it
- *  (every main commit, and a PR head that changed the package), else main's. */
-export async function publishedVersion(name: string, commit: string | undefined) {
-  if (commit) {
-    const version = pkgPrNewVersion(name, commit);
-    if ((await fetch(version, { method: "HEAD" })).ok) return version;
-  }
-  return pkgPrNewVersion(name, "main");
-}
-
-/** The source a project installs the agents app from, by file: `version` is what package.json pins
- *  (a pkg.pr.new URL, or an npm range once the package is on npm). */
+/** The source a project installs the agents app from, by file: `version` is what package.json pins,
+ *  a pkg.pr.new URL at a full commit (the loader refuses a branch; the apps pin theirs with
+ *  @iterate-com/shared/pkg-pr-new `publishedCommit`) or an npm version once the package is on npm. */
 export function agentsFolder(version: string): Record<string, string> {
   return {
     "package.json": `${JSON.stringify({ main: "index.ts", dependencies: { "@iterate-com/agents": version } }, null, 2)}\n`,

@@ -12,6 +12,7 @@
 //     login: { allowedEmails, password, emailCode: { from }, google: { scopes }, cloudflare: { scopes }, github: {}, adminIssuer, testEmailDomain },
 //     admins,
 //     customHostnames: { zone, zoneId, dcvDelegationUuid, reservedZones }, cloudflareApiToken,
+//     domainConnect: { privateKey },
 //     posthogProjectKey,
 //     integrations: {
 //       slack: { oauthClientId, oauthClientSecret, webhookSigningSecret, scopes, slackOrigin },
@@ -168,6 +169,9 @@ export const AppConfig = z.object({
           hostname: dnsName,
           project: z.string().trim().min(1, REQUIRED),
           excludedHostnames: z.array(dnsName).optional(),
+          /** A verified Email Routing destination every message to an address on `hostname` is
+           *  also forwarded to (integrations/email.ts). */
+          forwardEmailTo: z.email().optional(),
         })
         .optional(),
     })
@@ -188,6 +192,12 @@ export const AppConfig = z.object({
    *  today a project's custom hostnames (edit on `customHostnames.zone`). Blank ⇒ none; a custom
    *  hostname is then refused with that reason rather than half-provisioned. */
   cloudflareApiToken: redacted(z.string().trim().default("")),
+  /** DOMAIN CONNECT (project/domain-connect.ts): the private half of the key our template's apply
+   *  links are signed with — PKCS#8, base64 DER — whose public half is TXT `_dck1.iterate.com`.
+   *  Unset ⇒ a hostname offers no one-click DNS; its owner adds the records by hand. */
+  domainConnect: z
+    .object({ privateKey: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)) })
+    .optional(),
   /** PostHog's project key (envs.ts `posthogProjectKey`, prd only): the issuer's pages start
    *  posthog-js with it (issuer.functions.ts) and every `reportIssue` becomes a `$exception` in
    *  PostHog Error Tracking (posthog.ts). A public key, not a secret. Blank ⇒ no PostHog. */

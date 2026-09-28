@@ -28,7 +28,8 @@ await installAgents(
 `installAgents` enables the catalog processor on `/`, writes the `itx.agents` rewrite rule to the
 collection facet, and rebinds every existing agent to the source; `ensureAgents` commits the folder
 first when the repo has none (the Agents app's **Install agents**). The loader resolves the pinned
-build through esm.sh and locks its first resolution, so upgrade by pinning a newer commit.
+build through esm.sh once and keeps it, and refuses a branch or PR ref (`…@main`), so the folder
+names a full commit and an upgrade commits a newer one.
 
 Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.

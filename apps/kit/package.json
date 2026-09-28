@@ -19,7 +19,6 @@
     "firmware:build": "node ./scripts/firmware-release.ts build"
   },
   "dependencies": {
-    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@iterate-com/voice": "workspace:*",

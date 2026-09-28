@@ -1,22 +1,22 @@
-// scripts/voice-call.ts — ONE voice conversation on a FRESH context, the shape the ESP32
-// HAVPE has: a warm authenticated capnweb session, then "press the button = a new stream now".
-//
-// It makes the device's exact calls: `root.voice.setupVoiceAgent({ streamPath, activation })` (the
-// project's root worker puts the voice facet and `call-started` on the fresh context in one append;
-// prepare the project at https://k.iterate.com), a live subscription for what the device would hear,
-// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame plus a `commentary-added` fact
-// when there is nothing to say), the terminal. It writes what came back to a WAV and prints the
+// scripts/voice-call.ts — ONE voice conversation from Node, the shape the ESP32 HAVPE has: a warm
+// authenticated capnweb session, then "press the button = a new stream now". The call itself is
+// `@iterate-com/voice/call`'s client (the press, the subscription, the microphone appends, the
+// keepalive, the terminal — prepare the project at https://k.iterate.com); this script feeds it
+// microphone frames from a 16 kHz mono PCM16 WAV (or one silent frame, with `--say`'s words handed
+// to the call's agent as a person's message), writes what came back to a WAV and prints the
 // timeline from the press.
 //
 //   WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… \
 //   pnpm exec tsx scripts/voice-call.ts --utterance ask.wav --out answer.wav
-//   pnpm exec tsx scripts/voice-call.ts --say "Say: ready."
+//   pnpm exec tsx scripts/voice-call.ts --say "Say exactly: ready."
 //
 // ITERATE_BEARER_TOKEN is a personal access token for the project
 // (`pnpm exec iterate --config prd tokens create`). PROJECT=prj-voice.
+import type {} from "@iterate-com/agents";
 import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { startVoiceCall } from "@iterate-com/voice/call";
 import type { RpcPromise } from "capnweb";
 import type { IterateContextApiWith } from "iterate/api";
 import { createCli } from "trpc-cli";
@@ -25,7 +25,6 @@ import { connect } from "./client.ts";
 const FRAME_MS = 50;
 const BYTES_PER_MS = 32; // 16 kHz mono PCM16
 const now = () => Date.now();
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** 16 kHz mono PCM16 WAV → the PCM bytes (chunk-aware: `say` writes its fmt chunk after others). */
 function pcmFromWav(file: string) {
@@ -76,15 +75,14 @@ function wavFromPcm(pcm: Uint8Array): Uint8Array {
   return Buffer.concat([header, pcm]);
 }
 
-/** ONE voice conversation on a fresh context, making exactly the device's calls; prints the
- *  timeline from the press. PROJECT (env) names the project, default prj-voice. */
+/** ONE voice conversation on a fresh context through the call client; prints the timeline from
+ *  the press. PROJECT (env) names the project, default prj-voice. */
 export default async function voiceCall(
   options: {
-    /** The fresh context's path; default /calls/<now>. */
-    path?: string;
     /** A 16 kHz mono PCM16 WAV to send as microphone frames. */
     utterance?: string;
-    /** Text sent as a `commentary-added` fact after one silent frame. */
+    /** Words handed to the call's agent once the call is live, as a person's message: the live
+     *  model speaks the agent's answer. */
     say?: string;
     /** Where to write what came back as a WAV; default /tmp/voice-call-<now>.wav. */
     out?: string;
@@ -93,7 +91,6 @@ export default async function voiceCall(
   } = {},
 ): Promise<void> {
   const PROJECT = process.env.PROJECT || "prj-voice";
-  const CONTEXT_PATH = options.path || `/calls/${Date.now().toString(36)}`;
   const UTTERANCE = options.utterance;
   const SAY = options.say;
   const OUT = options.out || `/tmp/voice-call-${Date.now().toString(36)}.wav`;
@@ -104,122 +101,73 @@ export default async function voiceCall(
   // ONE warm authenticated session and the project root — what a connected device holds.
   const warm0 = now();
   using connection = await connect();
-  // The project installed voice (https://k.iterate.com prepares it), so its root has `voice`: the
-  // assertion iterate/api's `IterateContextApiWith` documents for a root that knows an app is there.
+  // The project installed voice beside the agents app (https://k.iterate.com prepares both), so its
+  // root has `voice` and `agents`: the assertion iterate/api's `IterateContextApiWith` documents for
+  // a root that knows its apps are there.
   const root = connection.session.projects.get(PROJECT) as RpcPromise<
-    IterateContextApiWith<"voice">
+    IterateContextApiWith<"voice" | "agents">
   >;
-  await root.invoke(["itx", ["whoami"]]);
+  await root.whoami();
   console.log(`session + project root ready in ${now() - warm0}ms`);
 
-  // THE PRESS: a fresh context, the processor enabled on it, a live callback for the answer.
-  const itx = root.cd(CONTEXT_PATH);
+  // THE PRESS: a fresh context, its agent and the relay on it, a live callback for the answer.
   const t0 = now();
   const at = () => now() - t0;
-  const activation = crypto.randomUUID().replace(/-/g, "");
   const marks: Record<string, number> = {};
   const speaker: Uint8Array[] = [];
   const transcript: string[] = [];
   let ended: string | null = null;
   let accepted: (() => void) | null = null;
   const acceptedPromise = new Promise<void>((resolve) => (accepted = resolve));
-
-  // THE PRESS: the root worker appends the voice facet's subscription row and `call-started` on
-  // this fresh context in one append. PIPELINED with the subscription below: neither depends on
-  // the other's answer, so both go out now.
-  const setupPromise = Promise.resolve(
-    root.voice.setupVoiceAgent({ streamPath: CONTEXT_PATH, activation }),
-  ).then(({ streamPath }) => {
-    marks.setup = at();
-    return { streamPath };
-  });
-
-  await itx.subscribe({
-    name: "device",
-    consumes: [
-      "events.iterate.com/voice-agent/call-started",
-      "events.iterate.com/voice-agent/conversation-accepted",
-      "events.iterate.com/voice-agent/call-ended",
-      "events.iterate.com/voice-agent/speaker-frame",
-      "events.iterate.com/voice-agent/utterance-transcribed",
-      "events.iterate.com/voice-agent/answer-transcribed",
-      "events.iterate.com/voice-agent/delegation-requested",
-      "events.iterate.com/voice-agent/provider-error-reported",
-      "events.iterate.com/voice-agent/provider-disconnected",
-    ],
-    target: (events: any[]) => {
-      for (const raw of events) {
-        const event = JSON.parse(JSON.stringify(raw));
-        const p = event.payload ?? {};
-        switch (event.type) {
-          case "events.iterate.com/voice-agent/speaker-frame":
-            marks.firstSpeakerFrame ??= at();
-            if (p.pcm) speaker.push(Buffer.from(p.pcm, "base64"));
-            if (p.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
-            break;
-          case "events.iterate.com/voice-agent/conversation-accepted":
-            marks.accepted = at();
-            marks.handshakeTookMs = p.handshakeTookMs;
-            marks.upgradeTookMs = p.upgradeTookMs;
-            accepted?.();
-            break;
-          case "events.iterate.com/voice-agent/call-ended":
-            ended = String(p.reason);
-            marks.ended = at();
-            break;
-          case "events.iterate.com/voice-agent/utterance-transcribed":
-            transcript.push(`listener: ${p.text}`);
-            console.log(`[${at()}ms] listener: ${p.text}`);
-            break;
-          case "events.iterate.com/voice-agent/answer-transcribed":
-            transcript.push(`assistant: ${p.text}`);
-            console.log(`[${at()}ms] assistant: ${p.text}`);
-            break;
-          case "events.iterate.com/voice-agent/delegation-requested":
-            console.log(
-              `[${at()}ms] delegation ${p.delegationId} with ${p.transcript?.length ?? 0} turns`,
-            );
-            break;
-          default:
-            marks[event.type] ??= at();
-            if (
-              event.type === "events.iterate.com/voice-agent/provider-error-reported" ||
-              event.type === "events.iterate.com/voice-agent/provider-disconnected"
-            )
-              console.log(`[${at()}ms] ${event.type}: ${JSON.stringify(p).slice(0, 300)}`);
-        }
+  const call = await startVoiceCall(root, {
+    client: "cli",
+    onSpeakerFrame: (frame) => {
+      marks.firstSpeakerFrame ??= at();
+      if (frame.pcm) speaker.push(Buffer.from(frame.pcm, "base64"));
+      if (frame.lastFrameOfAnswer) marks[`answerDone#${speaker.length}`] = at();
+    },
+    onFact: (fact) => {
+      switch (fact.type) {
+        case "events.iterate.com/voice-agent/conversation-accepted":
+          marks.accepted = at();
+          marks.handshakeTookMs = fact.payload.handshakeTookMs;
+          marks.upgradeTookMs = fact.payload.upgradeTookMs;
+          accepted?.();
+          break;
+        case "events.iterate.com/voice-agent/call-ended":
+          ended = fact.payload.reason;
+          marks.ended = at();
+          break;
+        case "events.iterate.com/voice-agent/utterance-transcribed":
+          transcript.push(`listener: ${fact.payload.text}`);
+          console.log(`[${at()}ms] listener: ${fact.payload.text}`);
+          break;
+        case "events.iterate.com/voice-agent/answer-transcribed":
+          transcript.push(`assistant: ${fact.payload.text}`);
+          console.log(`[${at()}ms] assistant: ${fact.payload.text}`);
+          break;
+        case "events.iterate.com/agent/context-added":
+          // What the relay handed the agent, and the agent's replies (a script step, or the
+          // answer the live model speaks).
+          if (fact.payload.role === "user")
+            console.log(`[${at()}ms] to the agent: ${fact.payload.content}`);
+          if (fact.payload.role === "assistant" && fact.payload.llmRequestOffset)
+            console.log(`[${at()}ms] agent: ${fact.payload.content.slice(0, 300)}`);
+          break;
+        case "events.iterate.com/voice-agent/provider-error-reported":
+        case "events.iterate.com/voice-agent/provider-disconnected":
+          marks[fact.type] ??= at();
+          console.log(`[${at()}ms] ${fact.type}: ${JSON.stringify(fact.payload).slice(0, 300)}`);
+          break;
+        default:
+          marks[fact.type] ??= at();
       }
     },
   });
-  marks.subscribed = at();
-  const setup = await setupPromise;
-  if (setup.streamPath !== CONTEXT_PATH) throw new Error(`setup answered ${JSON.stringify(setup)}`);
+  marks.started = at();
 
   // THE MICROPHONE: 50 ms frames on a wall clock, never awaited one by one (a device's outbox),
-  // then silence until the answer had its say. The call itself was minted by the press's
-  // `call-started` append.
-  let pending = 0;
-  let failed = 0;
-  const sendFrame = (pcm: Uint8Array) => {
-    pending++;
-    Promise.resolve(
-      itx.append({
-        type: "events.iterate.com/voice-agent/mic-frame",
-        ephemeral: true,
-        payload: {
-          activation,
-          pcm: Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString("base64"),
-        },
-      }),
-    ).then(
-      () => pending--,
-      (error: unknown) => {
-        pending--;
-        failed++;
-        if (failed <= 3) console.log(`mic append failed: ${String(error).slice(0, 200)}`);
-      },
-    );
-  };
+  // then silence until the answer had its say.
   const frameBytes = FRAME_MS * BYTES_PER_MS;
   const frames: Uint8Array[] = [];
   for (let i = 0; i < micPcm.length; i += frameBytes)
@@ -232,28 +180,19 @@ export default async function voiceCall(
   while (frameIndex < totalFrames) {
     const due = startedAt + frameIndex * FRAME_MS;
     const wait = due - now();
-    if (wait > 0) await sleep(wait);
-    sendFrame(frames[frameIndex] ?? silence);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    const pcm = frames[frameIndex] ?? silence;
+    call.sendMicFrame(Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength).toString("base64"));
     frameIndex++;
     if (SAY && frameIndex === 1) {
-      // Nothing to say into the microphone: hand the model a fact to paraphrase once the call is live.
-      void acceptedPromise.then(() =>
-        itx.append({
-          type: "events.iterate.com/voice-agent/commentary-added",
-          payload: { activation, delegationId: null, content: SAY },
-        }),
-      );
+      // Nothing to say into the microphone: hand the agent the words once the call is live.
+      void acceptedPromise.then(() => root.agents.get(call.streamPath).message(SAY));
     }
     if (ended) break;
   }
-  while (pending > 0) await sleep(20);
 
-  await itx.append({
-    type: "events.iterate.com/voice-agent/call-ended",
-    payload: { activation, reason: "voice-call script done" },
-  });
+  await call.hangUp("voice-call script done");
   marks.terminalSent = at();
-  await sleep(500);
 
   const pcm = Buffer.concat(speaker);
   writeFileSync(OUT, wavFromPcm(pcm));
@@ -261,11 +200,9 @@ export default async function voiceCall(
     JSON.stringify(
       {
         project: PROJECT,
-        path: CONTEXT_PATH,
-        activation,
-        micFrames: frameIndex,
-        micAppendFailures: failed,
-        speakerFrames: speaker.length,
+        path: call.streamPath,
+        activation: call.activation,
+        stats: call.stats,
         speakerMs: pcm.length / BYTES_PER_MS,
         out: OUT,
         transcript,

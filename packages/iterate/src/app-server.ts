@@ -119,7 +119,7 @@ async function grantSummary(resource: string, bearer: string) {
       signal: AbortSignal.timeout(5_000),
     }),
   );
-  using session = api.authenticate({ type: "bearer" });
+  using session = api.authenticate({ type: "bearer", token: bearer });
   const info = session.info();
   const projects = session.projects.list();
   const [{ principal }, list] = await Promise.all([info, projects]);
@@ -340,7 +340,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (request.method !== "GET") return new Response("Method not allowed", { status: 405 });
     const host = await held();
     return Response.json(
-      { issuer: host?.issuer ?? null, defaultIssuer: issuer },
+      { issuer: host?.issuer || null, defaultIssuer: issuer },
       { headers: { "Cache-Control": "no-store" } },
     );
   }

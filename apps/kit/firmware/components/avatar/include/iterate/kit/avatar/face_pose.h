@@ -3,27 +3,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-enum {
-    FACE_VISEME_AA = 0,
-    FACE_VISEME_E = 1,
-    FACE_VISEME_I = 2,
-    FACE_VISEME_O = 3,
-    FACE_VISEME_U = 4,
-    FACE_VISEME_PP = 5,
-    FACE_VISEME_SS = 6,
-    FACE_VISEME_TH = 7,
-    FACE_VISEME_DD = 8,
-    FACE_VISEME_FF = 9,
-    FACE_VISEME_KK = 10,
-    FACE_VISEME_NN = 11,
-    FACE_VISEME_RR = 12,
-    FACE_VISEME_CH = 13,
-    FACE_VISEME_SIL = 14,
-    FACE_VISEME_COUNT = 15,
-    FACE_VISEME_NONE = 255,
-    FACE_PHONEME_NONE = 255,
-};
-
 typedef enum {
     FACE_ACTIVITY_IDLE = 0,
     FACE_ACTIVITY_LISTENING,
@@ -48,9 +27,6 @@ typedef struct {
     uint8_t eye_open;
     int8_t gaze_x;
     int8_t gaze_y;
-    uint8_t viseme;
-    uint8_t phoneme;
-    uint8_t confidence;
     uint8_t activity;
     bool speaking;
 } face_pose_t;

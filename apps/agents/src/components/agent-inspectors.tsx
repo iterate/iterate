@@ -24,7 +24,7 @@ import {
   type AgentUiActivity,
   type AgentUiLlmStep,
 } from "../lib/events/agent-ui-reducer.ts";
-import { sliceText, type StreamText } from "../lib/chunked-text.ts";
+import { sliceText } from "../lib/chunked-text.ts";
 import { formatDateTime, llmTrace, scriptTrace, type LlmTrace } from "../lib/agent-events.ts";
 import { MessageResponse } from "./message.tsx";
 import { StreamingCursor, StreamingText } from "./streaming-text.tsx";
@@ -230,8 +230,7 @@ function ResponseView({
   scriptRequestOffset: number | undefined;
 }) {
   const streaming = Boolean(liveStep);
-  const thinking: StreamText | null =
-    liveStep && liveStep.thinkingText.length > 0 ? liveStep.thinkingText : null;
+  const thinking = liveStep && liveStep.thinkingText.length > 0 ? liveStep.thinkingText : null;
   const raw = liveStep
     ? sliceText(liveStep.responseText)
     : outcome.status === "succeeded"

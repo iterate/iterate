@@ -49,22 +49,11 @@ const ACCOUNT_PAGES = [
   { to: "/activity", label: "Activity", icon: Activity },
 ] as const;
 
-export function DashNav({
-  project,
-  host,
-}: {
-  project: { id: string; slug: string } | null;
-  /** the project's own site (its config worker), null when this deployment has no project hosts */
-  host: string | null;
-}) {
-  return project ? <ProjectNav project={project} host={host} /> : <TopLevelNav />;
-}
-
 /** Inside a project: its overview, how to connect over MCP, its secrets, its own site, and the first-party apps
  *  opened on it — every app
  *  serves `/projects/<slug>`, so the links are the convention, and a signed-out click proves the
  *  apps' OAuth returns to the deep link. */
-function ProjectNav({
+export function ProjectNav({
   project,
   host,
 }: {
@@ -141,7 +130,7 @@ function ProjectNav({
 
 /** Outside a project: the projects and organizations lists, the account pages; the tree — every
  *  organization the person belongs to, its projects under it; and the other first-party apps. */
-function TopLevelNav() {
+export function TopLevelNav() {
   const matchRoute = useMatchRoute();
   const { apps } = root.useLoaderData();
   return (

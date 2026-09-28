@@ -105,7 +105,15 @@ export interface OsEnv {
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
    *  specific Worker routes on that zone continue to take precedence. */
-  projectWildcard?: { hostname: string; project: string; excludedHostnames?: string[] };
+  projectWildcard?: {
+    hostname: string;
+    project: string;
+    excludedHostnames?: string[];
+    /** A verified Email Routing destination (the account's Destination addresses) that every
+     *  message to an address on `hostname` is also forwarded to, as it arrived, once the project
+     *  has it (apps/os src/integrations/email.ts). */
+    forwardEmailTo?: string;
+  };
   /** The zone this deployment serves projects' own hostnames on as a Cloudflare for SaaS provider
    *  (apps/os src/project/custom-hostnames.ts): its fallback origin `cname.<zone>` is the
    *  deployment's, reached through the one `*\/*` route the generator adds. The worker creates each
@@ -175,6 +183,8 @@ export const osEnvs: Record<string, OsEnv> = {
     projectWildcard: {
       hostname: "iterate.com",
       project: "iterate",
+      // the Google Group of everything sent to an iterate.com address
+      forwardEmailTo: "iterate-com@nustom.com",
       // These first-party origins have their own routes and, but for Notes, OAuth clients. A missing
       // route must never make their client IDs look like clients of the cheese-game project at consent.
       excludedHostnames: [
@@ -453,17 +463,6 @@ export const ciReportsEnvs: Record<
     dopplerConfig: "preview",
     workerName: "ci-reports",
     baseUrl: "https://ci-reports.iterate-dev-preview.workers.dev",
-  },
-};
-
-/** apps/iterate-com-inbound-email — iterate.com's inbound mail: the Worker the Email Routing catch-all
- *  on the iterate.com zone delivers to (the zone's rule, set by hand, names it). No routes, no DNS of
- *  its own; _shared/prd supplies its Cloudflare credentials. */
-export const iterateComInboundEmailEnvs = {
-  prd: {
-    cloudflareAccountId: PRD_ACCOUNT_ID,
-    dopplerConfig: "prd",
-    workerName: "iterate-com-inbound-email",
   },
 };
 

@@ -1,22 +1,14 @@
 #ifndef ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 #define ITERATE_KIT_PLATFORMS_ITX_TRANSPORT_H
 
-/*
- * ESP-IDF's public WebSocket/lwIP headers intentionally use GCC extensions
- * such as include_next. Treat this platform boundary as a system header so
- * strict consumers can retain -Wpedantic for their own code.
- */
-#if defined(__GNUC__)
-#pragma GCC system_header
-#endif
-
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/itx_outbox_sender.h"
-#include "iterate/kit/platforms/esp_idf_websocket_connection.h"
+#include "iterate/kit/platforms/esp_tls_stream.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
 #include "iterate/kit/voice_device_profile.h"
+#include "iterate/kit/websocket_client.h"
 #include "iterate/kit/websocket_frame_writer.h"
 #include "iterate/kit/websocket_text.h"
 #include "iterate/kit/wifi_status.h"
@@ -45,16 +37,17 @@ extern "C" {
 enum {
   /*
    * ESP-IDF defines StackType_t as uint8_t on its supported embedded ports,
-   * so its FreeRTOS stack-depth APIs and this buffer are byte-sized. The task
-   * stack is statically reserved to make the connection's RAM cost visible.
-   * Its size is shared with the lower WebSocket/TLS boundary because the
-   * synchronous handshake, not control-message processing, sets the peak.
-   * 512 bytes of retained headroom is the fail-closed floor below which another
-   * TLS/WebSocket start is unsafe. Control messages are capped at 2 KiB so one
-   * fragmented RPC cannot create an unbounded reassembly allocation.
+   * so its FreeRTOS stack-depth APIs and this buffer are byte-sized. The stack
+   * is statically reserved: visible RAM rather than an allocator gamble. The
+   * stream's connect, not control-message processing, sets the peak: ESP-TLS
+   * verifies the server's certificate on this task's stack, and a production
+   * M5StickS3 trace proved that 3072 bytes crosses the stack canary inside
+   * mbedTLS P-384 verification. Once clean physical runs report the
+   * minimum-ever headroom, that evidence may justify a smaller value. 512 bytes
+   * of retained headroom is the fail-closed floor below which another
+   * TLS/WebSocket start is unsafe.
    */
-  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES =
-      ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
+  ITERATE_KIT_ESP_IDF_NETWORK_TASK_STACK_BYTES = 8192,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   /*
    * One full microphone append (ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND
@@ -75,7 +68,7 @@ enum {
    */
   ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
   /*
-   * A refused key (iterate_kit_esp_idf_websocket_refused_credential) is asked
+   * A refused key (iterate_kit_itx_refused_credential) is asked
    * again after a minute, doubling to ten. Setting the device up again is what
    * mends it, and that rewrites the key and reboots, so a retry serves only a
    * refusal that ends on its own: a key minted moments ago that has not
@@ -85,6 +78,17 @@ enum {
   ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS = 60000,
   ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS = 600000,
 };
+
+/*
+ * A 401 or 403 answer to the upgrade is the OS refusing the key the upgrade
+ * carried, before any session exists: unknown, expired, ended, or without the
+ * scope `/api` needs. The same key gets the same answer however soon it is
+ * asked again. A network failure or a 5xx is different: a prompt retry can
+ * outlast it.
+ */
+static inline bool iterate_kit_itx_refused_credential(int32_t upgrade_status) {
+  return upgrade_status == 401 || upgrade_status == 403;
+}
 
 /**
  * Application-visible lifecycle, not a mirror of ESP-IDF callback events.
@@ -252,7 +256,7 @@ struct iterate_kit_itx_transport_lifecycle {
 };
 
 /**
- * ESP-IDF transport state. The network task alone owns the taskless WebSocket,
+ * ESP-IDF transport state. The network task alone owns the WebSocket client,
  * copies complete bounded messages into the SPSC inbox, and consumes the SPSC
  * outbox. The application task alone owns the Cap'n Web session.
  *
@@ -283,8 +287,8 @@ struct iterate_kit_itx_transport {
   struct iterate_kit_websocket_text_inbox control_inbox;
   struct iterate_kit_websocket_text_outbox control_outbox;
   /*
-   * The taskless connection embeds exactly one receive chunk and one masked
-   * transmit frame. Keeping these buffers visible in sizeof(transport) makes
+   * The client borrows exactly one receive chunk and one masked transmit
+   * frame, which also hold the upgrade's answer and request. Keeping these buffers visible in sizeof(transport) makes
    * the control plane's permanent RAM cost auditable and prevents reconnect
    * pressure from growing a heap queue.
    */
@@ -302,7 +306,8 @@ struct iterate_kit_itx_transport {
   uint8_t websocket_transmit_storage[
       ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(
           ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY)];
-  struct iterate_kit_esp_idf_websocket_connection websocket;
+  struct iterate_kit_websocket_client websocket;
+  struct iterate_kit_esp_tls_stream stream;
   /*
    * A resumable write borrows the outbox head until the complete RFC 6455 frame
    * has reached the lower transport. Retaining the acquisition prevents the

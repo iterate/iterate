@@ -8,21 +8,21 @@ path and a namespace for fresh conversations, with no per-board model choice.
 
 ## Where code belongs
 
-| Path                        | Owns                                                                                                                                                                                                                                                                               |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `components/core`           | Cap’n Web peer, itx mount and stream subscription, WebSocket framing, provisioning image decode, session grammar, the announcer (what a board says out loud, and when), microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
-| `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                                                                                |
-| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; screens, cameras and servos where the hardware exists                                                                                                                                       |
-| `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                                                                           |
-| `components/tinyvoice`      | the board's own small speech synthesizer: a phoneme script in, 16 kHz PCM out, spoken or sung to a tune ([Status voice](#status-voice))                                                                                                                                            |
-| `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                                                                       |
-| `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, ESP-TLS WebSocket transport, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                                                                      |
-| `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                                                                         |
-| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec interface, VoiceProcessingIO echo cancellation, OpenSSL WebSocket transport, provisioning read from a file                                                                                                                            |
-| `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                                                                                     |
-| `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                                                                                    |
-| `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                                                                             |
-| `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                                                                                |
+| Path                        | Owns                                                                                                                                                                                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `components/core`           | Cap’n Web peer, itx mount and stream subscription, the WebSocket client, provisioning image decode, session grammar, the announcer (what a board says out loud, and when), microphone flush and playout; it includes no audio or platform header (`tests/verify_core_boundary.cmake`) |
+| `components/audio`          | PCM conversion, AEC processing and audio accounting                                                                                                                                                                                                                                   |
+| `components/capabilities`   | the lent capabilities: conversation, health, speaker and system update on every board; screens, cameras and servos where the hardware exists                                                                                                                                          |
+| `components/avatar`         | the PCM-clocked talking head ([its README](components/avatar/README.md))                                                                                                                                                                                                              |
+| `components/tinyvoice`      | the board's own small speech synthesizer: a phoneme script in, 16 kHz PCM out, spoken or sung to a tune ([Status voice](#status-voice))                                                                                                                                               |
+| `components/voice`          | the voice loop: activation, continuous capture, the two audio tasks and the itx session, compiled once per platform it links                                                                                                                                                          |
+| `platforms/iterate_esp_idf` | the ESP-IDF platform: Wi-Fi, the ESP-TLS byte stream, the `iterate_kit` partition, OTA, the RTC restart note, board table, codecs, LED ring and wake word                                                                                                                             |
+| `platforms/host`            | the host ESP-IDF (`esp_idf/esp_idf.h`): the ESP-IDF primitives the loop names, on a laptop                                                                                                                                                                                            |
+| `platforms/darwin`          | the Mac platform: CoreAudio behind the codec interface, VoiceProcessingIO echo cancellation, the OpenSSL byte stream, provisioning read from a file                                                                                                                                   |
+| `devices/<board>`           | board-only pins, codecs, display and DSP facts                                                                                                                                                                                                                                        |
+| `targets/<board>`           | target composition, partitions and SDK defaults                                                                                                                                                                                                                                       |
+| `devices/mac`               | the Mac as a board: `iterate-kit-mac`, with the keyboard as its button                                                                                                                                                                                                                |
+| `tests`                     | host tests; `tests/fakes/esp_idf` is the scriptable platform half a loop test needs                                                                                                                                                                                                   |
 
 The loop reaches its platform through five headers under
 `iterate/kit/platforms/`: `provisioning.h`, `reset_reason.h`, `restart_note.h`,
@@ -30,12 +30,13 @@ The loop reaches its platform through five headers under
 `iterate_kit_itx_transport_*` only; no `iterate_kit_esp_*` or darwin name
 appears in it.
 Each platform provides all five under its own `include/iterate/kit/platforms/`:
-on ESP the `iterate_kit` partition, `esp_reset_reason`, an RTC note, OTA and an
-ESP-TLS WebSocket over Wi-Fi; on the Mac a file, `"started"`, print-and-exit,
-refused, and an OpenSSL WebSocket. Because the transport header defines the
-struct the loop keeps, `components/voice/CMakeLists.txt` compiles the loop once
-per platform it can link: `iterate-kit-voice` against the ESP headers for the
-host tests, `iterate-kit-voice-mac` against darwin's for the Mac.
+on ESP the `iterate_kit` partition, `esp_reset_reason`, an RTC note, OTA and the
+WebSocket client over ESP-TLS on Wi-Fi; on the Mac a file, `"started"`,
+print-and-exit, refused, and the same client over OpenSSL. Because the
+transport header defines the struct the loop keeps,
+`components/voice/CMakeLists.txt` compiles the loop once per platform it can
+link: `iterate-kit-voice` against the ESP headers for the host tests,
+`iterate-kit-voice-mac` against darwin's for the Mac.
 
 Do not fork the voice loop for a board. All clients capture before the stream
 mounts, retain opening audio, flush the first PCM immediately when ready, and
@@ -71,8 +72,8 @@ clock master/MCLK, GPIO polarity, amplifier polarity, gain, DMA sizes, and AEC
 reference. Give a new board a stable `facts.device_name`; firmware derives the
 itx expression it answers, `itx.clients.<device_name>` (every character outside
 `[A-Za-z0-9_]` replaced by `_`, because the far end spells that name in
-JavaScript), and its conversation namespace `/agents/voice/v23/<device_name>`
-from it.
+JavaScript), and its conversation namespace `/agents/voice/<client>`, where
+`<client>` is that `itx.clients` name, from it.
 
 USB-C boards using a FUSB302B can reuse `fusb302_esp_start()` with their I2C
 device and voltage/current/power limits. The driver is a fixed-supply PD 2.0
@@ -108,7 +109,9 @@ each row padded to whole bytes. Panel-native packing belongs to the driver.
 `packages/voice/src/screen.ts` validates metadata and converts
 browser PNGs at the advertised resolution; `voice.setImage` waits for a bounded
 refresh acknowledgment. E-paper submits to a separate task so image updates
-cannot stall voice capture, playback or button handling. The voice loop checks
+cannot stall voice capture, playback or button handling. StackChan lends its
+face's 320x240 glass: an RGB565 frame is painted from PSRAM and stays until
+`setImage(null)` gives the glass back to the face. The voice loop checks
 registered capabilities to include screen guidance in a call. See the
 [NOTE4 adapter](devices/zectrix_note4/README.md) and
 [Waveshare adapter](devices/waveshare_s3_rlcd/README.md).
@@ -143,8 +146,9 @@ one is logged as `status voice: "…"`.
 
 ## Build and provision
 
-Install ESP-IDF and build from the target directory. Use a fresh generated SDK
-config after changing defaults or partitions:
+Install ESP-IDF 6.1, the release `scripts/ci/esp-idf.sh` pins, and build from
+the target directory. Use a fresh generated SDK config after changing defaults
+or partitions:
 
 ```sh
 cd apps/kit/firmware/targets/<board>
@@ -223,14 +227,15 @@ mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
 failures.
 
 The device dials `wss://<os base url host>/api` — the OS's public endpoint — with
-the blob's key as `Authorization: Bearer` on the upgrade: a personal access
+the blob's key as `Authorization: Bearer` on the upgrade, and again in-band in
+`authenticate`: a personal access
 token the Kit page minted for the person who set the device up, scoped to the
-one project, revocable from that person's sessions list. Both transports send
-it, ESP-TLS on a board and OpenSSL on the Mac. The blob's project id is the
-project's `prj_<hex>` id; `projects.get` also accepts its slug (`prj-voice`).
-The mount's three calls, the subscription shape and the delivery contract are
-documented where they live: `components/core/include/iterate/kit/itx_mount.h`
-and `stream_subscription.h`.
+one project, revocable from that person's sessions list. The one WebSocket
+client sends it, over ESP-TLS on a board and OpenSSL on the Mac. The blob's
+project id is the project's `prj_<hex>` id; `projects.get` also accepts its slug
+(`prj-voice`). The mount's three calls, the subscription shape and the delivery
+contract are documented where they live:
+`components/core/include/iterate/kit/itx_mount.h` and `stream_subscription.h`.
 
 The device keeps one authenticated WebSocket and Cap'n Web session. Stream
 `subscribe()` and live-state `subscribe()` create independent subscription
@@ -248,10 +253,54 @@ error. The voice loop reserves two call slots so a new call can open while the
 previous call finishes releasing its resources.
 
 A button press or wake word starts capture immediately and chooses a fresh
-`/agents/voice/v23/<device_name>/<UTC timestamp>-<activation>` path. Setup puts
-the ordinary Agent and voice processor on that stream. Opening PCM stays in
+`/agents/voice/<client>/<UTC timestamp>-<activation>` path, the convention every
+voice caller follows. Setup puts the ordinary Agent and voice processor on that
+stream; a board with a screen also sends its client name as `screen`, which
+gives the call its screen guide. Opening PCM stays in
 the device's bounded FIFO until setup and the direct stream subscription are
 ready. Microphone and speaker events travel directly through that stream.
+
+## Over-the-air updates
+
+Every board lends `system.update({url, sha256})`. Nothing calls it on its own,
+and Kit has no update button: an update is a call made by whoever holds the
+board's project, such as an agent in that project, or a script that connects the
+way `apps/agents/scripts/voice-board.ts` does:
+
+```ts
+await root.clients[device].system.update({
+  url: `https://k.iterate.com/firmware/${deviceId}/${version}/iterate-kit-${target}.bin`,
+  sha256: "…", // 64 lowercase hex digits
+});
+```
+
+`url` is the board's own release app image, served by Kit's firmware proxy.
+`sha256` is that file's digest. GitHub lists it for each release asset:
+
+```sh
+gh api "repos/iterate/iterate/releases/tags/kit-firmware/<device id>/<version>" \
+  --jq '.assets[] | select(.name == "iterate-kit-<target>.bin") | .digest'
+```
+
+Drop the `sha256:` prefix. The call answers `true` once the download is
+scheduled. It rejects a malformed request (a `TypeError`: the url must be https),
+a second update while one is in flight, and the Mac, which has no OTA slot.
+`components/capabilities/src/system_update.c` validates the call, and
+`platforms/iterate_esp_idf/system_update.c` does the rest:
+
+1. `esp_https_ota` streams the image into the inactive slot, `ota_0` or `ota_1`
+   in `targets/common/partitions-*.csv`. It runs on a low-priority task on
+   core 0, so a call in progress keeps its audio.
+2. The slot is read back, and its SHA-256 must equal `sha256`.
+3. `esp_https_ota_finish` validates the image and selects the slot. The board
+   restarts, and its health then reports `restartNote: "system-update"`.
+4. `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` boots the new image pending
+   verification. The transport marks it valid when it first reaches READY. A
+   reset before then boots the previous image. That includes the voice loop's
+   own restart after 7 minutes without READY.
+
+A failed update leaves the running image in place, and the serial log says why.
+To the caller, it is an update after which the board did not restart.
 
 ## Release and proof
 

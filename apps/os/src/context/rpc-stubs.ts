@@ -564,7 +564,7 @@ export function itxExpressionEndingInFetch(expr: ItxExpression): ItxExpression {
     throw new Error(
       `fetch takes no expression args — the live Request rides in as the runtime arg (got ${JSON.stringify(terminal.fetchArgs)})`,
     );
-  return [...(terminal?.steps ?? expr), "fetch"];
+  return [...(terminal?.steps || expr), "fetch"];
 }
 
 /** A LIVE call that is the terminal fetch carrying the one Request — `[..., ["fetch", request]]`, or

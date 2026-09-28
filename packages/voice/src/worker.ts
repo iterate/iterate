@@ -3,13 +3,14 @@
  * The voice service, explicitly mounted at `itx.voice`, is what
  * a device calls on the button press:
  *
- *   await root.voice.setupVoiceAgent({ streamPath, activation })   // → { streamPath }
+ *   await root.voice.setupVoiceAgent({ streamPath, activation, screen? })   // → { streamPath }
  *
- * Normal agent creation establishes the parent link, sandbox and catalog entry. Then the voice
- * processors replace the default agent processor: one append installs their subscriptions and
- * starts the call, so the relay dials the provider before the first microphone frame arrives.
- * The device carries no source or class name: both facets load the project's installed voice
- * source, the one this worker runs (install.ts keeps it in project KV).
+ * The call is an agent: normal agent creation establishes the parent link, sandbox, catalog entry
+ * and the agents app's processor, which answers every delegation. Then one append installs the
+ * voice relay's subscription, starts the call (so the relay dials the provider before the first
+ * microphone frame arrives) and gives the agent its spoken-conversation instructions. The device
+ * carries no source or class name: the relay loads the project's installed voice source, the one
+ * this worker runs (install.ts keeps it in project KV).
  */
 import type {} from "@iterate-com/agents";
 // registers `itx.agents` on InstalledAppRoots
@@ -17,9 +18,9 @@ import { bytesToBase64 } from "@iterate-com/shared/base64";
 import type { IterateContextApiWith } from "iterate/api";
 import { ConfigWorker, z } from "iterate/sdk";
 import type { VoiceApi } from "./api.ts";
-import { VOICE_DELEGATE_CONSUMES } from "./events.ts";
 import { ScreenInfo, ScreenImageInput, renderScreenPixels } from "./screen.ts";
 import SCREEN_CONTEXT from "./screen-context.md";
+import VOICE_CONTEXT from "./voice-context.md";
 
 /** What install.ts writes at `voice/runtime`: the installed source and its content hash, which the
  *  loader caches an isolate under, so a new source is a new key. */
@@ -157,23 +158,33 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
    * the microphone frames carry it. */
   async setupVoiceAgent(options: Parameters<VoiceApi["setupVoiceAgent"]>[0]) {
-    const streamPath = options.streamPath || `/agents/voice/${crypto.randomUUID()}`;
+    const { streamPath } = options;
     if (!streamPath.startsWith("/")) {
       throw new Error(`voice streamPath must be absolute; received ${JSON.stringify(streamPath)}`);
     }
-    const deviceMatch = /^\/agents\/voice\/v23\/([A-Za-z0-9_-]+)\//.exec(streamPath);
-    const screenDevice =
-      options.screen === true && deviceMatch?.[1] ? deviceMatch[1].replaceAll("-", "_") : undefined;
+    // the device `setImage` will be asked to draw on, so it is held to the same name
+    const screenDevice = options.screen
+      ? ScreenImageInput.shape.device.parse(options.screen)
+      : undefined;
     return this.withItx(async (scope) => {
       // `itx.agents` is the rewrite rule the agents app mounts, which install.ts requires first.
       const itx = scope as IterateContextApiWith<"agents">;
       const { cacheKey, source } = await installedRuntime(itx);
-      // Normal agent creation establishes the creator link and script sandbox before
-      // either loaded voice processor needs project code, egress or tools.
+      // Normal agent creation establishes the creator link, the script sandbox and the agent
+      // that answers the call's delegations, before the relay needs project code or egress.
       await itx.agents.create(streamPath);
-      const conversation = itx.cd(streamPath);
-      await conversation.processors.disable("agent");
-      await conversation.append(
+      /* The agent's instructions are its own `context-added` items, which start no turn: the
+       * first turn is the first hand-over (voice-agent.ts). */
+      const instruction = (key: string, content: string) => ({
+        type: "events.iterate.com/agent/context-added",
+        idempotencyKey: `voice-agent/${key}:${options.activation}`,
+        payload: {
+          role: "developer",
+          content,
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+        },
+      });
+      await itx.cd(streamPath).append(
         {
           type: "events.iterate.com/itx/subscription-configured",
           payload: {
@@ -193,26 +204,6 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
           },
         },
         {
-          type: "events.iterate.com/itx/subscription-configured",
-          payload: {
-            /* Not "agent": that is the normal agent processor this press disabled above. */
-            name: "voice-delegate",
-            target: [
-              "itx",
-              "facets",
-              [
-                "get",
-                "voice-delegate",
-                { source, cacheKey, className: "VoiceDelegateDurableObject" },
-              ],
-              "processEventBatch",
-            ],
-            /* The delegate contract's own list (events.ts): context, the relay's delegations, and
-             * its own answers (to settle the pending fold). */
-            consumes: [...VOICE_DELEGATE_CONSUMES],
-          },
-        },
-        {
           type: "events.iterate.com/voice-agent/call-started",
           idempotencyKey: `voice-agent/call:${options.activation}`,
           payload: {
@@ -220,17 +211,9 @@ export default class VoiceWorker extends ConfigWorker implements VoiceApi {
             conversationId: `conv_${options.activation}`,
           },
         },
+        instruction("voice-context", VOICE_CONTEXT),
         ...(screenDevice
-          ? [
-              {
-                type: "events.iterate.com/agent/context-added",
-                idempotencyKey: `voice-agent/screen-context:${options.activation}`,
-                payload: {
-                  role: "developer",
-                  content: SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice!),
-                },
-              },
-            ]
+          ? [instruction("screen-context", SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice))]
           : []),
       );
       return { streamPath };

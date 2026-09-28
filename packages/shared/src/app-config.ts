@@ -88,7 +88,7 @@ function warnUnknownKeys(raw: unknown, schema: z.ZodTypeAny, path: string[]): vo
   const object = z.record(z.string(), z.unknown()).safeParse(raw);
   if (!object.success) return;
   // unwrap() and shape hand back loosely typed schemas; the walk checks each with instanceof
-  let current: z.ZodTypeAny = schema;
+  let current = schema;
   while (
     current instanceof z.ZodDefault ||
     current instanceof z.ZodPrefault ||

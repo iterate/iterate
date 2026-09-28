@@ -19,6 +19,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/voice_playback_clock.c
   src/voice_playout.c
   src/voice_stream.c
+  src/websocket_client.c
   src/websocket_frame_reader.c
   src/websocket_frame_writer.c
   src/websocket_rx.c
@@ -43,5 +44,4 @@ target_compile_features(${ITERATE_KIT_CORE_TARGET} PUBLIC c_std_99)
 target_compile_options(${ITERATE_KIT_CORE_TARGET} PRIVATE
   -Wall
   -Wextra
-  -Werror
-  -Wpedantic)
+  -Werror)

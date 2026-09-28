@@ -1,5 +1,5 @@
 import { RUN_DEADLINE_MS, RunRequested, RunSettled } from "iterate/stream/run";
-import { AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
+import { AgentContract, AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
 import type { StreamEvent } from "./stream-event.ts";
 
@@ -9,6 +9,10 @@ import type { StreamEvent } from "./stream-event.ts";
 // streamed text. Only a durable fact closes a step: `agent/llm-request-settled`
 // a model call, the context's `itx/run-settled` a script (the platform settles
 // every run, `deadline` or `interrupted` included).
+
+/** One streamed window of an answer, as the agent's contract spells it. */
+const LlmResponseFrame =
+  AgentContract.events["events.iterate.com/agent/llm-response-frame"].payloadSchema;
 
 export type AgentUiLlmStep = {
   kind: "llm";
@@ -29,6 +33,9 @@ export type AgentUiLlmStep = {
    * from the assistant event). The derived views are then the story: pretty
    * rendering collapses the raw response text behind the raw toggles. */
   interpreted?: boolean;
+  /** True once this request's reply went out while only older work still ran
+   * (see emitAssistantMessageItem): nothing is held for that work to release. */
+  repliedAtOnce?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   durationMs?: number;
@@ -438,7 +445,7 @@ function reduceAgentUiEvent(
         ...(files.length === 0 ? {} : { files }),
         timestampMs,
       };
-      return emitAssistantMessageItem(marked, items, item);
+      return emitAssistantMessageItem(marked, items, item, extractedFromRequest);
     }
 
     case "events.iterate.com/agent/llm-request-requested": {
@@ -468,19 +475,11 @@ function reduceAgentUiEvent(
     }
 
     case "events.iterate.com/agent/llm-response-frame": {
-      const llmRequestOffset = readLlmRequestOffset(event);
-      if (llmRequestOffset == null) return state;
-      const payload = readPayloadRecord(event);
-      // One coalesced window: the provider chunks it carries, in order.
-      const chunks = Array.isArray(payload?.chunks) ? payload.chunks : [];
-      let responseDelta = "";
-      let thinkingDelta = "";
-      for (const chunk of chunks) {
-        const deltas = llmChunkDeltas(chunk);
-        responseDelta += deltas.responseDelta;
-        thinkingDelta += deltas.thinkingDelta;
-      }
-      if (responseDelta === "" && thinkingDelta === "") return state;
+      // One coalesced window: the text and thinking it adds, as the processor extracted them.
+      const frame = LlmResponseFrame.safeParse(event.payload);
+      if (!frame.success) return state;
+      const { llmRequestOffset, responseDelta, thinkingDelta } = frame.data;
+      if (!responseDelta && !thinkingDelta) return state;
       return updateLlmStep(state, llmRequestOffset, (step) => ({
         ...step,
         responseText:
@@ -605,11 +604,20 @@ function reduceAgentUiEvent(
       // surface a sent message: settle the activity here and flush. A paused
       // loop is the same situation even with no deferred messages: the pause
       // fact already landed (possibly mid-request), no follow-up round is
-      // coming, and no second pause will arrive to close the activity.
+      // coming, and no second pause will arrive to close the activity. A
+      // reply that already went out at once is the same: when this script
+      // returned nothing (the turn ends, no follow-up round) nothing else
+      // closes the activity. A script that returned a value is followed by a
+      // request that joins this activity, so it stays open for that.
+      const turnEnds = settlement.status === "succeeded" && settlement.result === undefined;
+      const repliedAtOnce = next.live.steps.some(
+        (candidate) => candidate.kind === "llm" && candidate.repliedAtOnce,
+      );
       if (
         (next.deferredAssistantMessages.length > 0 ||
           next.queuedUserMessages.length > 0 ||
-          next.paused) &&
+          next.paused ||
+          (repliedAtOnce && turnEnds)) &&
         !isAgentUiActivityWorking(next.live)
       ) {
         return flushDeferredMessages(settleLive(next, timestampMs, items), items);
@@ -736,23 +744,53 @@ function emitUserMessageItem(
 /**
  * Assistant output belongs after the activity that produced it. Transport
  * adapters all use this path so a Slack/Telegram echo cannot split a running
- * script group while web output remains deferred.
+ * script group while web output remains deferred. The one exception is the
+ * answer of a finished request while only OLDER work still runs (input sent
+ * during a long script): nothing that request started is running, so the
+ * reply lands at once, above the still-live activity, after the held replies
+ * before it in log order. The activity stays live and whole until its own
+ * settlements close it; the request's step is marked, so a script settlement
+ * that ends the turn closes it (see itx/run-settled).
  */
 function emitAssistantMessageItem(
   state: AgentUiState,
   items: AgentUiItem[],
   item: AgentUiMessageItem,
+  llmRequestOffset: number | null,
 ): AgentUiState {
+  // A live activity that survives settleLive is working.
   const settled = settleLive(state, item.timestampMs, items);
-  if (isAgentUiActivityWorking(settled.live)) {
-    return {
-      ...settled,
-      deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
-    };
+  if (!settled.live) {
+    const flushed = flushDeferredMessages(settled, items);
+    items.push(item);
+    return flushed;
   }
-  const flushed = settled.live ? settled : flushDeferredMessages(settled, items);
-  items.push(item);
-  return flushed;
+  if (llmRequestOffset !== null && onlyOlderWorkRuns(settled.live, llmRequestOffset)) {
+    items.push(...settled.deferredAssistantMessages, item);
+    const replied = updateLlmStep(settled, llmRequestOffset, (step) => ({
+      ...step,
+      repliedAtOnce: true,
+    }));
+    return { ...replied, deferredAssistantMessages: [] };
+  }
+  return {
+    ...settled,
+    deferredAssistantMessages: [...settled.deferredAssistantMessages, item],
+  };
+}
+
+/** Whether the request at `llmRequestOffset` finished in `live` and every step still running there
+ *  began before it: work the request did not start, so its answer does not wait for that work. */
+function onlyOlderWorkRuns(live: AgentUiActivity, llmRequestOffset: number): boolean {
+  const request = live.steps.find(
+    (step) => step.kind === "llm" && step.llmRequestOffset === llmRequestOffset,
+  );
+  if (request?.status !== "done") return false;
+  return live.steps.every(
+    (step) =>
+      step.status === "done" ||
+      (step.kind === "code" ? step.requestOffset : step.llmRequestOffset) < llmRequestOffset,
+  );
 }
 
 /** Mark the llm step whose committed assistant event is `assistantEventOffset`
@@ -783,44 +821,6 @@ function updateLlmStep(
   const steps = [...state.live.steps];
   steps[index] = update(step);
   return { ...state, live: { ...state.live, steps } };
-}
-
-/**
- * The response/thinking text deltas inside one streamed LLM chunk, in the
- * shapes @iterate-com/agents processor.ts puts into `llm-response-frame`:
- * OpenAI Responses API events for a partner model, and a `@cf/` Workers AI
- * model's raw SSE events (`{ response }`, or `choices[].delta` from a model
- * that speaks the OpenAI chat format).
- */
-function llmChunkDeltas(chunk: unknown): {
-  responseDelta: string;
-  thinkingDelta: string;
-} {
-  if (typeof chunk === "string") return { responseDelta: chunk, thinkingDelta: "" };
-  if (!isRecord(chunk)) return { responseDelta: "", thinkingDelta: "" };
-
-  // OpenAI Responses API stream events: { type: "response.output_text.delta", delta } and the
-  // reasoning summary's { type: "response.reasoning_summary_text.delta", delta }.
-  if (typeof chunk.type === "string" && typeof chunk.delta === "string") {
-    if (chunk.type === "response.output_text.delta")
-      return { responseDelta: chunk.delta, thinkingDelta: "" };
-    if (chunk.type === "response.reasoning_summary_text.delta")
-      return { responseDelta: "", thinkingDelta: chunk.delta };
-    return { responseDelta: "", thinkingDelta: "" };
-  }
-  // Workers AI: { response: "tok" }
-  if (typeof chunk.response === "string") {
-    return { responseDelta: chunk.response, thinkingDelta: "" };
-  }
-  // OpenAI-compatible chat completions: { choices: [{ delta: { content, reasoning_content } }] }
-  if (Array.isArray(chunk.choices) && isRecord(chunk.choices[0])) {
-    const delta = isRecord(chunk.choices[0].delta) ? chunk.choices[0].delta : undefined;
-    return {
-      responseDelta: typeof delta?.content === "string" ? delta.content : "",
-      thinkingDelta: typeof delta?.reasoning_content === "string" ? delta.reasoning_content : "",
-    };
-  }
-  return { responseDelta: "", thinkingDelta: "" };
 }
 
 function readUsageTokens(usage: unknown): { input?: number; output?: number } {

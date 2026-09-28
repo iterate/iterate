@@ -423,11 +423,7 @@ test("a test job keeps its evidence whenever its suite read its deployed target,
         "Upload the test evidence to R2",
         "${{ always() && steps.evidence-write.outputs.manifest == 'written' }}",
       ],
-      // the Depot artifacts also after a step that failed before it could say it kept them
-      [
-        "Upload flake records",
-        "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}",
-      ],
+      // the Depot artifact also after a step that failed before it could say it kept them
       [
         "Upload results",
         "${{ always() && (steps.evidence-write.outputs.evidence == 'kept' || steps.evidence-write.outcome == 'failure') }}",

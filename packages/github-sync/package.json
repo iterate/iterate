@@ -1,0 +1,50 @@
+{
+  "name": "@iterate-com/github-sync",
+  "version": "0.1.0",
+  "description": "Keeps a project's config repo and its GitHub repository one history: GitHub's pushes are pulled in, the project's commits are pushed out",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/github-sync"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./install": "./src/install.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./install": {
+        "types": "./dist/install.d.mts",
+        "import": "./dist/install.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "iterate": "*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "iterate": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

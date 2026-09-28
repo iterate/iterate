@@ -431,24 +431,38 @@ async function readRun(depot: DepotApi, runId: string) {
     ),
   );
   const preview = checks.find(({ workflow }) => workflow.name === "Preview OS");
+  const e2eAttempt = preview?.jobs
+    .find(({ job }) => job?.jobKey === "preview-os.yml:e2e")
+    ?.attempts.find(({ attempt }) => attempt?.attempt === 1)?.attempt?.attemptId;
   return {
     metrics,
     firstExecutions,
-    summary: preview && (await readE2eSummary(depot, runId, preview.workflow.workflowId)),
+    summary:
+      preview && e2eAttempt
+        ? await readE2eSummary(
+            depot,
+            { runId, workflowId: preview.workflow.workflowId },
+            e2eAttempt,
+          )
+        : undefined,
   };
 }
 
-/** The suite summary of the Preview OS e2e job's first attempt (preview-os.yml uploads it as
- *  `flake-records-preview-e2e-attempt-<id>`), or undefined when it uploaded none. */
-async function readE2eSummary(depot: DepotApi, runId: string, workflowId: string) {
+/** The suite summary of the Preview OS e2e job's first attempt, in the test results it uploaded
+ *  (preview-os.yml `preview-os-test-artifacts-attempt-<id>`), or undefined when it uploaded none. */
+async function readE2eSummary(
+  depot: DepotApi,
+  workflow: { runId: string; workflowId: string },
+  attemptId: string,
+) {
   const files = await workflowArtifact(
     depot,
-    { runId, workflowId },
-    (name) => name.startsWith("flake-records-preview-e2e"),
+    workflow,
+    (name) => name === `preview-os-test-artifacts-attempt-${attemptId}`,
     "first",
   );
   // A cancelled e2e job uploads its records without a summary.
-  const bytes = files?.["suite-summary.json"];
+  const bytes = files?.["flake-records/preview-e2e/suite-summary.json"];
   if (!bytes) return undefined;
   return z
     .object({ slowRows: FlakeSuiteSummary.shape.slowRows })
@@ -512,7 +526,11 @@ const RunMetrics = z.object({
                 .array(
                   z.object({
                     attempt: z
-                      .object({ attempt: z.number(), finishedAt: z.string().default("") })
+                      .object({
+                        attemptId: z.string(),
+                        attempt: z.number(),
+                        finishedAt: z.string().default(""),
+                      })
                       .optional(),
                   }),
                 )

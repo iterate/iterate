@@ -134,18 +134,16 @@ struct iterate_kit_voice_answer_note {
  * What the codec knows about the chunk it just handed over.
  *
  * Only one board's driver can answer any of this, and the capture bridge needs
- * all of it: a sequence that gaps when the DMA does, a capture-completion
- * timestamp that lets each egress frame be back-dated, and whether the far end
- * was audible while this chunk was recorded. A board that cannot say fills
- * nothing and the loop synthesises a monotonic timeline instead, which is what
- * the other three did implicitly by having no bridge at all.
+ * all of it: a sequence that gaps when the DMA does, and a capture-completion
+ * timestamp that lets each egress frame be back-dated. A board that cannot say
+ * fills nothing and the loop synthesises a monotonic timeline instead, which
+ * is what the other three did implicitly by having no bridge at all.
  */
 struct iterate_kit_voice_capture_meta {
   /** The capture timeline broke; the filter must restart on current audio. */
   bool epoch_reset;
   uint32_t sequence;
   uint64_t captured_through_at_us;
-  bool playback_content_active;
 };
 
 /** The two audio interfaces a board hands the loop once it has powered them. */

@@ -232,7 +232,7 @@ export async function lendRpcStubOverPager(
     } | null;
     throw Object.assign(
       new Error(
-        refusal?.message ??
+        refusal?.message ||
           `rpc stub pager upgrade returned ${response.status} without a WebSocket`,
       ),
       refusal?.code ? { code: refusal.code } : {},

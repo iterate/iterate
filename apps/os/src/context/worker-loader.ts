@@ -9,7 +9,9 @@
 // `LOADER.get(id, getCode)` runs `getCode` only when no isolate is warm under `id` — "although it is
 // unusual for it to be called more than once", it MAY be — and "if anything about the content
 // changes, you must use a new ID". So a source is EITHER its modules, literally (the key is then
-// their content hash — the same content can never mean different code), OR an itx EXPRESSION that
+// their content hash — the same content can never mean different code, its npm dependencies
+// included: each resolves once per version as written, and a pkg.pr.new branch, which would load
+// another build under the same key, is refused, module-resolution.ts), OR an itx EXPRESSION that
 // PRODUCES the modules, in which case the caller MUST name the `cacheKey` (a build id, a commit): the
 // producer runs inside `getCode`, i.e. only on a cold isolate, and the caller owns "same key ⇒ same
 // code". A producer without a key is refused: hashing the expression would be the stale-code trap.
