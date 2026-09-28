@@ -12,9 +12,11 @@
 //                  member's, and whether the mail is automated; nothing is refused for it, the reader
 //                  decides. Mail for no project is rejected (a bounce the sender sees); a failure of
 //                  ours throws, and the sending server retries.
-//   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, with
-//                  project files attached, then `email/sent` on `/integrations/email`. Given
-//                  `inReplyToOffset`, a message on that log, it answers it in its thread.
+//   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, or for
+//                  the project wildcard's project any address on its domain (`hello@iterate.com`),
+//                  with project files attached, then `email/sent` on `/integrations/email`. Given
+//                  `inReplyToOffset`, a message on that log, it answers it in its thread, from the
+//                  address it arrived at when the project may send from that one.
 // Both record their fact through `recordEmail`, as the platform: the `email` facet folds only
 // those (email/processor.ts).
 import PostalMime, { type Address } from "postal-mime";
@@ -101,6 +103,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
 
 /** What `itx.email.send` takes, checked here: it arrives over the wire. */
 const SendInput = z.object({
+  from: z.string().optional(),
   to: z.union([z.string(), z.array(z.string())]).optional(),
   cc: z.union([z.string(), z.array(z.string())]).optional(),
   subject: z.string().optional(),
@@ -116,8 +119,11 @@ export async function sendEmail(
     /** The project's own slice of the files bucket, its key prefix (`<projectId>/`). */
     FILES: R2Bucket;
     filesPrefix: string;
-    /** The project's address and its display name. */
-    from: { email: string; name: string };
+    /** The project's own address, its display name, and the domain whose every address it may
+     *  send from too (the project wildcard's, for its project), or null. */
+    address: string;
+    name: string;
+    ownDomain: string | null;
     emailContext: Pick<ReachableContext, "invoke" | "read">;
     caller: Caller;
   },
@@ -132,6 +138,20 @@ export async function sendEmail(
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
   const subject = request.subject || answered?.subject || "";
+  const mayUse = (address: string) =>
+    address === scope.address ||
+    (!!scope.ownDomain &&
+      /^[^@\s<>]+@[^@\s<>]+$/.test(address) &&
+      address.endsWith(`@${scope.ownDomain}`));
+  const answeredAt = answered?.receivedAt.toLowerCase();
+  const from =
+    request.from?.trim().toLowerCase() ||
+    (answeredAt && mayUse(answeredAt) ? answeredAt : scope.address);
+  if (!mayUse(from))
+    throw codedError(
+      "FORBIDDEN",
+      `itx.email.send: this project sends from ${scope.address}${scope.ownDomain ? ` or any address @${scope.ownDomain}` : ""}, not ${from}`,
+    );
   if (to.length + cc.length === 0 || !(request.text || request.html))
     throw codedError(
       "INVALID_INPUT",
@@ -152,7 +172,7 @@ export async function sendEmail(
   );
   const references = answered?.references || [];
   const sent = await scope.EMAIL.send({
-    from: scope.from,
+    from: { email: from, name: scope.name },
     to,
     ...(cc.length > 0 && { cc }),
     subject,
@@ -177,7 +197,7 @@ export async function sendEmail(
     type: "events.iterate.com/email/sent",
     payload: {
       messageId: bareMessageIdsOf(sent.messageId)[0] ?? null,
-      from: scope.from.email,
+      from,
       to,
       cc,
       subject,
@@ -209,8 +229,9 @@ async function recordEmail(
 }
 
 /** What a reply to the message at `offset` on `/integrations/email` takes from it: its recipients
- *  (the author, or where they asked for replies; for our own message, the same people again), its
- *  subject, and the threading ids. */
+ *  (the author, or where they asked for replies; for our own message, the same people again), the
+ *  address it reached us at (for our own message, the one we sent it from), its subject, and the
+ *  threading ids. */
 async function answeredMessageOf(emailContext: Pick<ReachableContext, "read">, offset: number) {
   const [event] = (await emailContext.read(offset - 1, 1)).events;
   const found = event?.offset === offset ? event : undefined;
@@ -232,6 +253,7 @@ async function answeredMessageOf(emailContext: Pick<ReachableContext, "read">, o
   return {
     to: received ? [received.replyTo || received.from] : message.to,
     cc: received ? [] : message.cc,
+    receivedAt: received ? received.envelope.to : message.from,
     subject: /^re:/i.test(message.subject) ? message.subject : `Re: ${message.subject}`,
     inReplyTo: message.messageId,
     references: [...message.references, ...(message.messageId ? [message.messageId] : [])],

@@ -500,6 +500,9 @@ interface BuildBuiltInsDeps {
   deployId: string;
   /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
   ingressRouting: IngressRouting;
+  /** The domain one project owns outright (app-config.ts `urls.projectWildcard`: iterate.com, the
+   *  `iterate` project's): that project may send from any address on it (`itx.email.send`). */
+  projectWildcard: { hostname: string; project: string } | undefined;
   /** The Dash that this platform instance names for human administration. */
   dashOrigin: string;
   /** The deployment's platform admins (app-config.ts `admins`): with the admin bearer, the
@@ -1878,12 +1881,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "INVALID_CONTEXT",
             "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
           );
+        const wildcard = deps.projectWildcard;
         return sendEmail(
           {
             EMAIL: env.EMAIL,
             FILES: env.FILES,
             filesPrefix: r2Prefix,
-            from: { email: `${slug}@${domain}`, name: slug },
+            address: `${slug}@${domain}`,
+            name: slug,
+            ownDomain:
+              wildcard && [slug, projectId].includes(wildcard.project) ? wildcard.hostname : null,
             emailContext: deps.context(EMAIL_PATH),
             caller: hopCaller(),
           },

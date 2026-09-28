@@ -13,6 +13,8 @@
     // the landing page's pointer (control-plane.test.ts)
     "APP_CONFIG_URLS__DASH": "https://dash.test",
     "APP_CONFIG_URLS__INGRESS_ROUTING": "{\"type\":\"subdomains\",\"hostname\":\"projects.test\"}",
+    // __workers-tests__/email.test.ts: wildcard.test's mail is project wildcard-mail's
+    "APP_CONFIG_URLS__PROJECT_WILDCARD": "{\"hostname\":\"wildcard.test\",\"project\":\"wildcard-mail\"}",
     // projects' own hostnames, on a SaaS zone whose Cloudflare API the tests fake
     // (project-host-routing.test.ts); the consent test claims one directly (issuer-bootstrap.test.ts)
     "APP_CONFIG_CUSTOM_HOSTNAMES": "{\"zone\":\"saas.test\",\"zoneId\":\"zone-saas\",\"dcvDelegationUuid\":\"dcv-uuid\",\"reservedZones\":[\"control.test\",\"dash.test\",\"projects.test\",\"saas.test\"]}",

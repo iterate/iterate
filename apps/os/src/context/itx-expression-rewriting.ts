@@ -111,7 +111,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   files:
     "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
   email:
-    "the project's mail at `<slug>@<email domain>`: `email.send({ to, subject, text?, html?, attachments?: [{ path }] })`, or `{ inReplyToOffset, text }` to answer a message; mail in and out lands on `/integrations/email`, threaded by its `email` facet",
+    "the project's mail at `<slug>@<email domain>`: `email.send({ to, subject, text?, html?, from?, attachments?: [{ path }] })`, or `{ inReplyToOffset, text }` to answer a message; mail in and out lands on `/integrations/email`, threaded by its `email` facet",
 } as const satisfies Record<string, string>;
 
 /** A built-in root's name — a key of the record above. */

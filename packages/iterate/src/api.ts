@@ -459,6 +459,10 @@ export type FileHandle = {
  *  `Re:` subject and threading headers are the defaults. Each attachment is a project file
  *  (`itx.files`). */
 export type EmailSendInput = {
+  /** The project's own address by default (a reply's: the address the answered message reached);
+   *  the project that owns the deployment's project wildcard domain may name any address there
+   *  (`hello@iterate.com`). Any other address is refused. */
+  from?: string;
   to?: string | string[];
   cc?: string | string[];
   subject?: string;
