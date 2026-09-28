@@ -239,6 +239,35 @@ static void normalized_gestures_use_the_shared_grammar(void) {
 
 }
 
+/* A text panel's two lines: the state, and the status or the board's hint,
+ * redrawn only when they change or were never shown. */
+static void status_text_table(void) {
+  const struct {
+    struct iterate_kit_voice_view view;
+    const char *title, *status;
+  } rows[] = {
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_CONNECTING}, "CONNECTING", "PRESS KEY"},
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_IDLE, .status = ""}, "READY", "PRESS KEY"},
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_IDLE, .status = "call ended"}, "READY", "CALL ENDED"},
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_LISTENING}, "LISTENING", "PRESS KEY"},
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING}, "SPEAKING", "PRESS KEY"},
+    {{.screen = ITERATE_KIT_VOICE_SCREEN_SPEAKING, .fault = true}, "FAULT", "PRESS KEY"},
+    {{.status = "a status far longer than thirty-one characters"}, "CONNECTING",
+     "A STATUS FAR LONGER THAN THIRTY"},
+  };
+  for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+    struct iterate_kit_board_status_text text = {0};
+    assert(iterate_kit_board_status_text(&text, &rows[i].view, "PRESS KEY"));
+    assert(strcmp(text.title, rows[i].title) == 0 && strcmp(text.status, rows[i].status) == 0);
+    /* Not shown yet: still due. Shown: due again only when a line changes. */
+    assert(iterate_kit_board_status_text(&text, &rows[i].view, "PRESS KEY"));
+    text.shown = true;
+    assert(!iterate_kit_board_status_text(&text, &rows[i].view, "PRESS KEY"));
+    assert(iterate_kit_board_status_text(&text, &rows[i].view, "PRESS OK") ==
+           (rows[i].view.status == NULL || rows[i].view.status[0] == '\0'));
+  }
+}
+
 static void down_edge_wakes_before_release(void) {
   struct iterate_kit_session session = {0};
   struct iterate_kit_session_actions actions;
@@ -268,5 +297,6 @@ int main(void) {
   iterate_kit_board_defaults_table();
   normalized_gestures_use_the_shared_grammar();
   down_edge_wakes_before_release();
+  status_text_table();
   return 0;
 }

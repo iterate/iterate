@@ -58,8 +58,9 @@ need a table. A normal table board needs only:
    callbacks and `app_main()`.
 2. `devices/<board>/CMakeLists.txt` — that code and direct dependencies.
 3. `targets/<board>/CMakeLists.txt` — common components plus the device.
-4. `targets/<board>/sdkconfig.defaults` — chip, flash, PSRAM, partition and
-   wake-model settings specific to this target.
+4. `targets/<board>/sdkconfig.defaults` — chip, flash, PSRAM and wake-model
+   settings specific to this target, and its flash size's partition table:
+   `targets/common/partitions-16mb.csv` or `partitions-8mb.csv`.
 
 Put GPIO/I2C/I2S facts, boot/reset order, codec register scripts, volume,
 physical controls, chimes and wake-word model in the table. Add code only where
@@ -181,13 +182,14 @@ pnpm firmware:build:host
 firmware/.build/host/iterate-kit-mac --config /tmp/cfg.bin --name mac
 ```
 
-`--config` takes the ITERKIT1 image `tools/make-config-image.py` writes for a
-board; the Wi-Fi fields ride along unused. It speaks its [status](#status-voice)
-through the laptop's speaker too, so `--status-voice` can be auditioned here. `--name` sets the device name, `mac`
-by default. `--no-aec` keeps the plain capture and playback queues instead of
-VoiceProcessingIO. Space or return presses the button and `q` leaves; when
-stdin is not a terminal the button is remote-only. The Mac lends
-`itx.clients.<name>` with the shared capabilities plus `button.press`, so
+`--config` takes a board's ITERKIT1 image ([Provisioning](#provisioning)); the
+Wi-Fi fields ride along unused. It speaks its [status](#status-voice) through
+the laptop's speaker too, so the image's status voice can be auditioned here.
+`--name` sets the device name, `mac` by default. `--no-aec` keeps the plain
+capture and playback queues instead of VoiceProcessingIO. Space or return
+presses the button, through the session grammar every board's press takes, and
+`q` leaves; when stdin is not a terminal, only `conversation.start()` starts a
+call. The Mac lends `itx.clients.<name>` with the shared capabilities, so
 `voice-board.ts --device <name>` proves it the way it proves a board. Its
 `system.update` mounts and refuses; a restart the loop asks for prints the note
 and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
@@ -195,34 +197,28 @@ and ends the process. Health carries `macCaptureFrames`, `macCaptureDropped`,
 
 ### Provisioning
 
-Kit Flasher's **Prepare device** step installs the voice agent when missing,
-asks for an OpenAI key if needed, and verifies `itx.voice.health()` before it mints a personal access token scoped to that
-project with no expiry, listed as the device (`Kit <board> <date>`) in the
-person's OS sessions list. The browser writes Wi-Fi, OS URL, project id and that
-token into the versioned `iterate_kit` partition on the connected board.
-Credentials never enter the Kit worker or a URL. The token is retired by
-revocation from that list.
-
-To write that partition by hand instead — which is how a bench board is
-provisioned — use `tools/make-config-image.py`. Its `--offset-for <target>`
-reads the offset out of the target's own partition CSV; assuming one corrupts
-the application and leaves the board looking absent rather than offline.
+A board's `iterate_kit` partition holds its versioned ITERKIT1 image: Wi-Fi, the
+OS URL, the project id and a personal access token scoped to that project. Kit
+writes it as it flashes the board ([Kit's README](../README.md#what-a-person-needs)
+says how the token is minted and revoked). A bench board, or `iterate-kit-mac
+--config`, gets the same image from the same encoder
+(`src/firmware/config-image.ts`), run from `apps/kit`:
 
 ```sh
-python3 tools/make-config-image.py \
+pnpm exec tsx scripts/config-image.ts image \
   --wifi-ssid <ssid> --wifi-password <password> \
   --os-base-url https://os.iterate.com \
   --project-id prj-voice --project-api-key "$KIT_TOKEN" \
-  --status-voice greensleeves \
-  --out /tmp/cfg.bin
-python -m esptool --chip esp32s3 -p /dev/cu.usbmodem2101 \
-  write_flash "$(python3 tools/make-config-image.py --offset-for havpe)" /tmp/cfg.bin
+  --status-voice greensleeves --out /tmp/cfg.bin
+python -m esptool --chip esp32s3 -p <port> \
+  write_flash "$(pnpm exec tsx scripts/config-image.ts offset havpe)" /tmp/cfg.bin
 ```
 
-`$KIT_TOKEN` is a personal access token scoped to the project: the one Kit
-Flasher's Prepare device step mints, or one from the Dash's Sessions page or
+`offset <target>` reads the partition's offset from the target's partition
+table; an image written anywhere else corrupts the application and leaves the
+board looking absent rather than offline. `$KIT_TOKEN` is a personal access
+token scoped to the project: from the Dash's Sessions page, or
 `pnpm exec iterate tokens create --name <board> --project <project> --never-expires`.
-The same image is what `iterate-kit-mac --config` reads.
 
 At boot, firmware rejects a missing or invalid partition, joins Wi-Fi and
 mounts. Health classifies provisioning, Wi-Fi/authentication, mount and audio
@@ -302,7 +298,9 @@ a second update while one is in flight, and the Mac, which has no OTA slot.
    own restart after 7 minutes without READY.
 
 A failed update leaves the running image in place, and the serial log says why.
-To the caller, it is an update after which the board did not restart.
+To the caller, it is an update after which the board did not restart. An update
+writes only the app slot, so a change to a board's partition table reaches it
+only through a USB flash.
 
 ## Release and proof
 
@@ -322,7 +320,7 @@ esptool.py --chip esp32s3 write_flash \
   "$(jq -r .configurationPartition.offset manifest.json)" /tmp/cfg.bin
 ```
 
-`/tmp/cfg.bin` is an image from `tools/make-config-image.py` (see Provisioning).
+`/tmp/cfg.bin` is an image from `scripts/config-image.ts` ([Provisioning](#provisioning)).
 The build runs CI's checks (flash layout, inputs, an unchanged tree) and reports
 its version as `dev`. Do not edit release offsets by hand or substitute
 downloaded binaries.

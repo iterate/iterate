@@ -303,10 +303,7 @@ EXT_RAM_BSS_ATTR static struct {
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_peer peer;
-  /* Remote control events share the local intent path. */
-  struct iterate_kit_device_event device_event_storage
-      [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
-  struct iterate_kit_device_event_queue device_events;
+  /* conversation.start()/end(): latched edges, taken with the board's poll. */
   struct iterate_kit_conversation_control conversation_control;
   struct iterate_kit_voice_stream voice_streams[2];
   struct iterate_kit_voice_stream *voice_stream;
@@ -1715,30 +1712,6 @@ static bool initialise_rings(void) {
              runtime.outbox_lengths) == ITERATE_KIT_OK;
 }
 
-/*
- * One intent path for both sources, exactly as the app loop already assumes:
- * an RPC lands on the same two display-owned flags a physical button sets, so
- * remote and local control cannot disagree about what the device is doing.
- */
-static enum iterate_kit_status handle_device_event(
-    void *context, const struct iterate_kit_device_event *event) {
-  (void)context;
-  switch ((enum iterate_kit_device_event_type)event->type) {
-    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
-      if (!atomic_load_explicit(&runtime.capture_muted, memory_order_acquire) &&
-          runtime.pending_terminal_count < TERMINAL_PENDING_CAPACITY) {
-        runtime.view.wants_call = true;
-      }
-      return ITERATE_KIT_OK;
-    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
-      end_local_activation("button", "call ended");
-      return ITERATE_KIT_OK;
-    case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
-      break;
-  }
-  return ITERATE_KIT_INVALID_ARGUMENT;
-}
-
 /* Defined beside health_json, which it adapts. */
 static size_t render_health(void *context, char *out, size_t capacity);
 
@@ -1746,7 +1719,8 @@ static bool initialise_connection(void) {
   /*
    * Four shared (conversation control, speaker, health,
    * system.update) plus whatever the board has of its own: an AEC stage,
-   * servos, a camera, a screen to fill. The busiest board mounts eight.
+   * servos, a camera, a screen to fill. The busiest board, StackChan, mounts
+   * nine.
    */
   static struct iterate_kit_module modules[12];
   static struct iterate_kit_speaker speaker;
@@ -1757,23 +1731,8 @@ static bool initialise_connection(void) {
   struct iterate_kit_itx_transport_options transport_options;
   struct iterate_kit_peer_options peer_options;
 
-  {
-    const struct iterate_kit_device_event_queue_options event_options = {
-      .storage = runtime.device_event_storage,
-      .capacity = ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY,
-      .handler = {.context = NULL, .handle = handle_device_event},
-      .observer = {.context = NULL, .observe = NULL},
-    };
-    if (iterate_kit_device_event_queue_init(
-            &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
-        iterate_kit_conversation_control_init(
-            &runtime.conversation_control, &runtime.device_events) !=
-            ITERATE_KIT_OK) {
-      return false;
-    }
-    modules[module_count++] =
-        iterate_kit_conversation_control_module(&runtime.conversation_control);
-  }
+  modules[module_count++] =
+      iterate_kit_conversation_control_module(&runtime.conversation_control);
   /*
    * TURN IT UP. Every board here shipped at a volume somebody measured once
    * and nobody could change without a reflash, and every one was reported as
@@ -2720,14 +2679,13 @@ void iterate_kit_voice_loop_step(void) {
       }
     }
     /*
-     * ...and drain what those methods queued. A capability that accepts an
-     * intent and never delivers it is worse than one that is absent: the
-     * first proof run of this board's new conversation.start() returned
-     * success, and health() then reported wantsCall FALSE forever, because
-     * the event sat in a queue nothing was reading.
+     * ...and the remote press, every pass: conversation.start()/end() latched
+     * the start_call/end_call edges a press gives. The intent block below
+     * applies the end first, so an end and a start in one pass are a restart.
      */
-    (void)iterate_kit_device_event_poll(
-        &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
+    runtime.intent.start_call |= runtime.conversation_control.start_call;
+    runtime.intent.end_call |= runtime.conversation_control.end_call;
+    runtime.conversation_control = (struct iterate_kit_conversation_control){0};
     /*
      * Publish the mounted project connection at idle. A direct child stream is
      * deliberately per-call, so requiring one here would leave an idle board
@@ -3186,10 +3144,9 @@ void iterate_kit_voice_loop_step(void) {
       static bool call_active_shown;
 
       /*
-       * One intent path for both sources: a physical button edge and an RPC
-       * call land on the same two flags, so remote and local control cannot
-       * disagree about what the device is doing (the M5StickS3 does the same
-       * through its device-event queue).
+       * One intent path for both sources: a physical press and
+       * conversation.start()/end() reach the same two edges, so remote and
+       * local control cannot disagree about what the device is doing.
        */
       const bool wants_call = runtime.view.wants_call;
       /*

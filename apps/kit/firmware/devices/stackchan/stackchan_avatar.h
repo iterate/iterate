@@ -117,13 +117,11 @@ uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void);
 /**
  * Consumes one completed face tap, if one is pending.
  *
- * `*left_half` reports which half of the panel the tap pressed — the only
- * coordinate the board UI needs, remembered from the press because the
- * release sample carries no position. The dedicated input owner counts taps
- * so a quick pair cannot collapse into one latest-state update. This
- * consumer is constant-time and never touches the shared I2C bus.
+ * The dedicated input owner counts taps so a quick pair cannot collapse into
+ * one latest-state update. This consumer is constant-time and never touches
+ * the shared I2C bus.
  */
-bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half);
+bool iterate_kit_stackchan_avatar_take_face_tap(void);
 
 /**
  * Consumes one PMIC side-button tap, if one is pending.
@@ -133,12 +131,6 @@ bool iterate_kit_stackchan_avatar_take_face_tap(bool *left_half);
  * tool now. Long presses never arrive here: the AXP2101 owns hard power-off.
  */
 bool iterate_kit_stackchan_avatar_take_side_button_tap(void);
-
-/** Inject the side-button tap / a face tap at panel x, into the SAME pending
- * latches the physical sampler fills — one handler path for finger and
- * capability alike. */
-void iterate_kit_stackchan_avatar_inject_side_button(void);
-void iterate_kit_stackchan_avatar_inject_face_tap(uint16_t x);
 
 /**
  * Accepts one 128-sample frame which has completed speaker DMA.

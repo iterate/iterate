@@ -45,6 +45,19 @@ struct iterate_kit_screen {
 
 size_t iterate_kit_screen_frame_bytes(uint16_t width, uint16_t height,
                                     enum iterate_kit_screen_format format);
+
+/* The status text a 400x300 monochrome board shows while no image is lent. */
+enum {
+  ITERATE_KIT_SCREEN_STATUS_WIDTH = 400,
+  ITERATE_KIT_SCREEN_STATUS_HEIGHT = 300,
+  ITERATE_KIT_SCREEN_STATUS_BYTES =
+      ITERATE_KIT_SCREEN_STATUS_WIDTH / 8 * ITERATE_KIT_SCREEN_STATUS_HEIGHT,
+};
+/** Clear `mono1`, a 400x300 MONO1 frame of ITERATE_KIT_SCREEN_STATUS_BYTES, and
+ *  draw ITERATE with `title` and `status` beneath it, each line centred, in a
+ *  5x7 font of A-Z; any other character is a space, and a line too wide for the
+ *  panel is left out. */
+void iterate_kit_screen_draw_status(uint8_t *mono1, const char *title, const char *status);
 bool iterate_kit_screen_init(struct iterate_kit_screen *screen,
                             const struct iterate_kit_screen_driver *driver,
                             uint8_t *buffer, size_t capacity);

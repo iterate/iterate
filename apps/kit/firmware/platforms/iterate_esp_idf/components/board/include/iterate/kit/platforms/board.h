@@ -53,8 +53,8 @@ struct iterate_kit_board_sounds {
  * a dial, side buttons). board.c runs its own half of each op first, then extra's:
  * extra->start before the codec; extra->present after the ring; board.c reads
  * GPIO and read_gestures, applies the grammar and chimes, then extra->poll handles
- * board-only UI. extra->health is appended; button.gpio >= 0 mounts button.press
- * first, then extra->modules appends the board-only capabilities.
+ * board-only UI. extra->health is appended; extra->modules are the board-only
+ * capabilities.
  */
 struct iterate_kit_board {
   struct iterate_kit_board_facts facts;    /* .speaker.set_volume/.volume filled by board.c */
@@ -124,8 +124,20 @@ enum iterate_kit_status iterate_kit_board_restore_volume(
  * App task only; board-specific mute feedback may immediately replace the bar.
  */
 enum iterate_kit_status iterate_kit_board_nudge_volume(int step);
-/** Queue a synthetic down edge in the same classifier as physical controls. */
+/** The wake word's press: a synthetic down edge in the table button's classifier. */
 void iterate_kit_board_inject_press(void);
+/** The two lines a board's status text panel shows, and whether it shows them yet. */
+struct iterate_kit_board_status_text {
+  const char *title; /**< FAULT, CONNECTING, READY, LISTENING or SPEAKING */
+  char status[32];   /**< the view's status in upper case, or the board's hint */
+  bool shown;        /**< the board sets it once the panel shows these lines */
+};
+/** Set `text` to `view`'s lines, `hint` standing in for an empty status. True
+ * when the panel must draw them: they changed, or they are not shown yet.
+ * A board clears `shown` when an image leaves its panel. */
+bool iterate_kit_board_status_text(
+    struct iterate_kit_board_status_text *text,
+    const struct iterate_kit_voice_view *view, const char *hint);
 /** Apply the shared grammar to normalized input. Exposed for focused host
  * tests; board.c is the only firmware caller. */
 void iterate_kit_board_apply_gestures(

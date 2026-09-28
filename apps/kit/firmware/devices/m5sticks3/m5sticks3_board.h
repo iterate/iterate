@@ -22,15 +22,9 @@ extern "C" {
  */
 bool m5sticks3_board_init(void);
 
-/** Poll M5Unified's buttons; call from the app loop. */
-void m5sticks3_board_poll(void);
-
-/** One latched, debounced press of either physical call button. */
+/** Poll M5Unified's buttons on the app task: true on a debounced press of
+ *  either physical call button. */
 bool m5sticks3_board_take_call_press(void);
-
-/** Inject a call-button press into the same pending latch the poller fills
- * — one handler path for a physical press and a capability request alike. */
-void m5sticks3_board_inject_call_press(void);
 
 /* --- the 240x135 status screen -------------------------------------------- */
 

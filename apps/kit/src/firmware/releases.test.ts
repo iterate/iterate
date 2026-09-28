@@ -119,7 +119,7 @@ function github(refs: unknown, init?: ResponseInit) {
       name: device.name,
       version,
       builds: [{ chipFamily: "ESP32-S3", parts: [{ path: "./bootloader.bin", offset: 0 }] }],
-      configurationPartition: { offset: 0x410000, size: 0x1000 },
+      configurationPartition: { offset: 0x510000, size: 0x1000 },
     });
   });
 }

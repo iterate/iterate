@@ -63,7 +63,6 @@ struct ui_model {
 };
 
 ui_model ui;
-bool call_press_pending;
 
 const char *state_label(enum m5sticks3_ui_state state) {
   switch (state) {
@@ -370,20 +369,12 @@ bool m5sticks3_board_init(void) {
   return true;
 }
 
-void m5sticks3_board_poll(void) {
+bool m5sticks3_board_take_call_press(void) {
   M5.update();
   /* M5Unified reports these only after its GPIO debounce has accepted the
    * down edge. Either physical button enters the shared start/end grammar;
    * no local hold or release policy remains. */
-  if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed()) call_press_pending = true;
-}
-
-void m5sticks3_board_inject_call_press(void) { call_press_pending = true; }
-
-bool m5sticks3_board_take_call_press(void) {
-  const bool pressed = call_press_pending;
-  call_press_pending = false;
-  return pressed;
+  return M5.BtnA.wasPressed() || M5.BtnB.wasPressed();
 }
 
 void m5sticks3_ui_present(const struct iterate_kit_voice_view *view) {

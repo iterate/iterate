@@ -114,13 +114,12 @@ export function firmwareInputs(repoRoot: string, target: string) {
         `:(exclude)${FIRMWARE_DIRECTORY}/targets/${board}`,
       ]),
     // the host build (firmware/CMakeLists.txt), the host and Mac platforms, the host tests, and the
-    // tools that make bench configuration images and port a board to the Mac
+    // tool that finds a board's serial port by its MAC address
     ...[
       "CMakeLists.txt",
       "platforms/host",
       "platforms/darwin",
       "tests",
-      "tools/make-config-image.py",
       "tools/port-for-mac.sh",
     ].map((path) => `:(exclude)${FIRMWARE_DIRECTORY}/${path}`),
     `:(exclude,glob)${FIRMWARE_DIRECTORY}/components/*/tests/**`,

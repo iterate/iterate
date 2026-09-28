@@ -1,19 +1,9 @@
 #include "iterate/kit/configuration.h"
 #include "configuration_fixture.h"
 
+#include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-
-#define CHECK(condition)                                                     \
-  do {                                                                       \
-    if (!(condition)) {                                                      \
-      fprintf(stderr, "%s:%d: check failed: %s\n",                         \
-          __FILE__, __LINE__, #condition);                                   \
-      abort();                                                               \
-    }                                                                        \
-  } while (0)
 
 /*
  * The browser/CLI flasher writes this image with TypeScript and firmware reads
@@ -31,17 +21,17 @@ static void decodes_the_typescript_golden_image(void) {
           iterate_kit_test_configuration_image,
           sizeof(iterate_kit_test_configuration_image));
 
-  CHECK(error == ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(configuration.wifi_ssid, "studio") == 0);
-  CHECK(strcmp(
+  assert(error == ITERATE_KIT_CONFIGURATION_OK);
+  assert(strcmp(configuration.wifi_ssid, "studio") == 0);
+  assert(strcmp(
       configuration.wifi_password,
       "correct horse battery staple") == 0);
-  CHECK(strcmp(
+  assert(strcmp(
       configuration.os_base_url,
       "https://os.iterate2.com") == 0);
-  CHECK(strcmp(configuration.project_id, "prj_voice_lab") == 0);
-  CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
-  CHECK(sizeof(configuration) <= 424U);
+  assert(strcmp(configuration.project_id, "prj_voice_lab") == 0);
+  assert(strcmp(configuration.project_api_key, "itxk_secret") == 0);
+  assert(sizeof(configuration) <= 424U);
 }
 
 /*
@@ -61,14 +51,14 @@ static void classifies_corruption_without_partial_credentials(void) {
   corrupted[sizeof(corrupted) - 1U] ^= 1U;
   memset(&configuration, 0xa5, sizeof(configuration));
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
       &configuration, corrupted, sizeof(corrupted)) ==
       ITERATE_KIT_CONFIGURATION_CHECKSUM_MISMATCH);
-  CHECK(configuration.wifi_ssid[0] == '\0');
-  CHECK(configuration.wifi_password[0] == '\0');
-  CHECK(configuration.os_base_url[0] == '\0');
-  CHECK(configuration.project_id[0] == '\0');
-  CHECK(configuration.project_api_key[0] == '\0');
+  assert(configuration.wifi_ssid[0] == '\0');
+  assert(configuration.wifi_password[0] == '\0');
+  assert(configuration.os_base_url[0] == '\0');
+  assert(configuration.project_id[0] == '\0');
+  assert(configuration.project_api_key[0] == '\0');
 }
 
 /*
@@ -86,10 +76,10 @@ static void rejects_truncated_and_wrong_version_images(void) {
       sizeof(wrong_magic));
   wrong_magic[7] = '2';
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
       &configuration, iterate_kit_test_configuration_image, 15U) ==
       ITERATE_KIT_CONFIGURATION_TRUNCATED);
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
       &configuration, wrong_magic, sizeof(wrong_magic)) ==
       ITERATE_KIT_CONFIGURATION_UNSUPPORTED_VERSION);
 }
@@ -108,15 +98,15 @@ static void rejects_truncated_and_wrong_version_images(void) {
 static void builds_the_itx_websocket_endpoint_without_allocation(void) {
   char endpoint[ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY];
 
-  CHECK(iterate_kit_configuration_build_itx_websocket_url(
+  assert(iterate_kit_configuration_build_itx_websocket_url(
       "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "wss://os.iterate.com/api") == 0);
+  assert(strcmp(endpoint, "wss://os.iterate.com/api") == 0);
 
-  CHECK(iterate_kit_configuration_build_itx_websocket_url(
+  assert(iterate_kit_configuration_build_itx_websocket_url(
       "http://localhost:8787", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "ws://localhost:8787/api") == 0);
+  assert(strcmp(endpoint, "ws://localhost:8787/api") == 0);
 }
 
 /*
@@ -129,16 +119,16 @@ static void rejects_invalid_or_truncated_itx_websocket_endpoints(void) {
   char endpoint[8];
   memset(endpoint, 0xa5, sizeof(endpoint));
 
-  CHECK(iterate_kit_configuration_build_itx_websocket_url(
+  assert(iterate_kit_configuration_build_itx_websocket_url(
       "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_FIELD_TOO_LONG);
-  CHECK(endpoint[0] == '\0');
+  assert(endpoint[0] == '\0');
 
   endpoint[0] = 'x';
-  CHECK(iterate_kit_configuration_build_itx_websocket_url(
+  assert(iterate_kit_configuration_build_itx_websocket_url(
       "https://os.iterate.com/path", endpoint, sizeof(endpoint)) ==
       ITERATE_KIT_CONFIGURATION_INVALID_VALUE);
-  CHECK(endpoint[0] == '\0');
+  assert(endpoint[0] == '\0');
 }
 
 /*
@@ -160,12 +150,12 @@ static void decodes_the_flashed_image_with_an_unprefixed_project_and_a_full_leng
   for (index = 0U; index + 1U < sizeof(key); ++index) key[index] = 'k';
   key[sizeof(key) - 1U] = '\0';
 
-  CHECK(error == ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(configuration.os_base_url, "https://os.iterate2.com") == 0);
-  CHECK(strcmp(configuration.project_id, "prj-voice") == 0);
-  CHECK(strlen(configuration.project_api_key) ==
+  assert(error == ITERATE_KIT_CONFIGURATION_OK);
+  assert(strcmp(configuration.os_base_url, "https://os.iterate2.com") == 0);
+  assert(strcmp(configuration.project_id, "prj-voice") == 0);
+  assert(strlen(configuration.project_api_key) ==
       ITERATE_KIT_PROJECT_API_KEY_CAPACITY - 1U);
-  CHECK(strcmp(configuration.project_api_key, key) == 0);
+  assert(strcmp(configuration.project_api_key, key) == 0);
 }
 
 /* The golden image with a status-voice field appended, its checksum redone. */
@@ -175,7 +165,7 @@ static size_t with_status_voice(uint8_t *out, size_t capacity, const char *name)
   const size_t size = golden + 3U + name_length;
   uint32_t payload_size;
   uint32_t crc = UINT32_C(0xffffffff);
-  CHECK(size <= capacity);
+  assert(size <= capacity);
   memcpy(out, iterate_kit_test_configuration_image, golden);
   out[golden] = 6U;
   out[golden + 1U] = (uint8_t)name_length;
@@ -204,28 +194,28 @@ static void decodes_the_status_voice_and_defaults_what_it_does_not_know(void) {
   uint8_t image[256];
   struct iterate_kit_configuration configuration;
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
             &configuration, iterate_kit_test_configuration_image,
             sizeof(iterate_kit_test_configuration_image)) == ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
+  assert(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
             &configuration, image, with_status_voice(image, sizeof(image), "daisy-bell")) ==
         ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_DAISY_BELL);
-  CHECK(strcmp(configuration.wifi_ssid, "studio") == 0);
+  assert(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_DAISY_BELL);
+  assert(strcmp(configuration.wifi_ssid, "studio") == 0);
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
             &configuration, image, with_status_voice(image, sizeof(image), "off")) ==
         ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_OFF);
-  CHECK(strcmp(iterate_kit_status_voice_name(ITERATE_KIT_STATUS_VOICE_OFF), "off") == 0);
+  assert(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_OFF);
+  assert(strcmp(iterate_kit_status_voice_name(ITERATE_KIT_STATUS_VOICE_OFF), "off") == 0);
 
-  CHECK(iterate_kit_configuration_decode(
+  assert(iterate_kit_configuration_decode(
             &configuration, image, with_status_voice(image, sizeof(image), "sea-shanty")) ==
         ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
-  CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
+  assert(configuration.status_voice == ITERATE_KIT_STATUS_VOICE_GREENSLEEVES);
+  assert(strcmp(configuration.project_api_key, "itxk_secret") == 0);
 }
 
 int main(void) {

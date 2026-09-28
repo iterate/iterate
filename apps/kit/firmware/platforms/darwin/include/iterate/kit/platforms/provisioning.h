@@ -3,7 +3,7 @@
 
 /*
  * Provisioning on a Mac: the same ITERKIT1 image a board carries in its
- * `iterate_kit` partition (tools/make-config-image.py), read from a file.
+ * `iterate_kit` partition (apps/kit/scripts/config-image.ts), read from a file.
  * The Wi-Fi fields ride along unused; the OS origin, project id and key are
  * what the loop dials with.
  */

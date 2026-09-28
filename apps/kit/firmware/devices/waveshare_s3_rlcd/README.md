@@ -27,8 +27,6 @@ idf.py -C apps/kit/firmware/targets/waveshare_s3_rlcd \
   -D SDKCONFIG=/tmp/iterate-rlcd-voice.sdkconfig build
 ```
 
-The voice target reserves configuration at `0x410000`.
-
 Identify MAC `94:A9:90:CD:51:B8` using `tools/port-for-mac.sh`; USB paths change.
 Factory boot: `03_Fac`, IDF 5.5.2. Private 16 MiB factory-backup SHA-256:
 `bcc1a40deab31029bcc28700a255ace1f4dd1454dc2fd79cdc3c4e70a8866c86`.

@@ -379,30 +379,6 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   return true;
 }
 
-/*
- * `button.press()` / `button.end()` — the two physical buttons, injectable.
- * They set the same pending latches the fingers do, so the handler path is
- * ONE path and the loop's button audit records both alike.
- */
-static const char *const button_press_path[] = {"button", "press"};
-static const char *const button_end_path[] = {"button", "end"};
-
-static enum capnweb_status button_press(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  waveshare_buttons_inject_upper();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
-static enum capnweb_status button_end(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  waveshare_buttons_inject_lower();
-  return capnweb_reply_set_boolean(reply, true);
-}
-
 static bool wear_face(void *context, size_t index) {
   (void)context;
   return waveshare_avatar_request_face(index);
@@ -410,32 +386,18 @@ static bool wear_face(void *context, size_t index) {
 
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
-  static const struct iterate_kit_method board_methods[] = {
-    {button_press_path, 2U, button_press},
-    {button_end_path, 2U, button_end},
-  };
   static struct iterate_kit_face face;
   static const struct iterate_kit_face_driver face_driver = {
     .context = NULL,
     .slug_at = face_avatar_registry_slug_at,
     .wear = wear_face,
   };
-  size_t count = 0U;
   (void)context;
-  if (capacity < 2U) return 0U;
-  out[count++] = (struct iterate_kit_module){
-    .methods = board_methods,
-    .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
-    .context = NULL,
-    .close = NULL,
-    .session_ended = NULL,
-  };
   /* `face.set({face})`: the buttons are the call's, so asking by name is the
    * one way to change this board's face. */
-  if (iterate_kit_face_init(&face, &face_driver) == ITERATE_KIT_OK) {
-    out[count++] = iterate_kit_face_module(&face);
-  }
-  return count;
+  if (capacity < 1U || iterate_kit_face_init(&face, &face_driver) != ITERATE_KIT_OK) return 0U;
+  out[0] = iterate_kit_face_module(&face);
+  return 1U;
 }
 
 /** Present the display and drain mouth timing each pass; board.c owns the view. */
