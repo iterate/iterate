@@ -175,11 +175,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
-          PREVIEW_APPS: ${{ inputs.apps || 'all' }}
+          APPS: ${{ inputs.apps || 'all' }}
           # the PR head, which a template-changing PR's quick-launch links read the template at
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
-        run: doppler run --project os --config preview -- pnpm preview deploy
+        run: doppler run --project os --config preview -- pnpm preview deploy --pr "$PR_NUMBER" --apps "$APPS"
 
   # THE TWO SUITES, E2E tests and Browser specs: one job each, side by side, and ONE DEFINITION.
   # Browser specs runs E2E tests' steps (the `suite-steps` anchor); the two differ only in the suite
@@ -305,8 +304,9 @@ jobs:
           doppler run --project _shared --config preview --fallback "$RUNNER_TEMP/doppler-shared-preview" -- true ||
             echo "::warning title=Doppler prefetch::_shared/preview not saved; the evidence upload fetches it"
       # Set up, wait for this run's deploy when it has one, then the suite
-      # (apps/os/scripts/preview.ts `runSuite`). The trace's Test phase is this step
-      # (scripts/ci/tracing/tracing.ts).
+      # (apps/os/scripts/preview.ts `runSuite`) against the PR's deployment (`--pr`) or, on a
+      # test-only dispatch without a PR number, the newest of preview-name's (`--name`). The trace's
+      # Test phase is this step (scripts/ci/tracing/tracing.ts).
       - name: Run the suite against the preview
         id: suite
         if: steps.changes.outputs.preview != 'false'
@@ -315,15 +315,16 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          # the prefix a test-only dispatch without a PR number tests the newest deployment of
-          PREVIEW_NAME: ${{ inputs.preview-name }}
-          PREVIEW_PR_NUMBER: ${{ env.PR_NUMBER }}
+          DEPLOYMENT_PREFIX: ${{ inputs.preview-name }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          # the e2e suite's rows tagged `slow`; the specs have none
-          E2E_SLOW_ROWS: ${{ inputs.slow-rows }}
+          # `--slow-rows`: the e2e suite's rows tagged `slow`; the specs have none
+          SLOW_ROWS: ${{ inputs.slow-rows }}
           # the job whose end starts the suite, when this run deploys (scripts/ci/await-deploy.ts)
           PREVIEW_AWAIT_DEPLOY_JOB: ${{ (github.event_name == 'pull_request' || inputs.action == 'deploy') && 'deploy' || '' }}
-        run: doppler run --project os --config preview -- pnpm preview "$SUITE"
+        run: >-
+          doppler run --project os --config preview -- pnpm preview "$SUITE"
+          ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"}
+          ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}
       # THE STEP AFTER THE SUITE: the telemetry finalizer, then the test evidence manifest, once the
       # suite read its deployed target (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest

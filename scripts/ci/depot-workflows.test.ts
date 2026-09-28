@@ -851,7 +851,7 @@ test("the preview parents deploy from main, for the paths a PR gets a preview fo
         branches: ["main"],
         paths: [...previewPaths, ".depot/workflows/preview-parents.yml"],
       },
-      workflow_dispatch: { inputs: { ref: { required: false } } },
+      workflow_dispatch: null,
     },
     concurrency: { group: "preview-parents", "cancel-in-progress": false },
   });
@@ -887,13 +887,14 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 });
 
 // Each CI workflow of main that deploys a preview has a prefix of its own
-// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS): one run at a time, it deploys the commit
-// it tests as `<prefix>-<sha7>` and then deletes only the deployments before it
-// (`cleanup-superseded`), never a whole prefix's (`delete`).
+// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS), its DEPLOYMENT_PREFIX, which its
+// `pnpm preview` steps pass as `--name`: one run at a time, it deploys the commit it tests as
+// `<prefix>-<sha7>` and then deletes only the deployments before it (`cleanup-superseded`), never a
+// whole prefix's (`delete`).
 test("each CI workflow that deploys a preview deploys its own prefix's, one run at a time, and deletes only the ones its deployment supersedes", () => {
   const ownPreviews = depotWorkflowFiles.flatMap((file) => {
     const workflow = loadWorkflow(file);
-    const preview = workflow.env?.PREVIEW_NAME;
+    const preview = workflow.env?.DEPLOYMENT_PREFIX;
     return preview ? [{ file, preview, workflow }] : [];
   });
   expect(Object.fromEntries(ownPreviews.map(({ file, preview }) => [preview, file]))).toEqual({
@@ -909,18 +910,27 @@ test("each CI workflow that deploys a preview deploys its own prefix's, one run 
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
     const runs = steps.map((step) => step.run || "");
     expect(runs, file).toContainEqual(
-      "doppler run --project os --config preview -- pnpm preview deploy",
+      expect.stringMatching(
+        /^doppler run --project os --config preview -- pnpm preview deploy --name "\$DEPLOYMENT_PREFIX" --apps (all|none)$/,
+      ),
     );
     expect(runs, file).toContainEqual(
       "doppler run --project os --config preview -- pnpm preview cleanup-superseded",
     );
-    expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)$/));
+    expect(runs, file).not.toContainEqual(expect.stringMatching(/pnpm preview (delete|reset)\b/));
+    // one prefix per workflow, and no PR number anywhere: nothing is written to a pull request
+    const envs = [
+      ...Object.values(workflow.jobs).map((job) => job.env),
+      ...steps.map((step) => step.env),
+    ];
     expect(
-      steps.filter((step) => step.env?.PREVIEW_NAME || step.run?.includes("PREVIEW_NAME=")),
+      envs.filter((env) => env?.DEPLOYMENT_PREFIX),
       file,
     ).toEqual([]);
-    // no PR number anywhere: nothing is written to a pull request
-    expect(JSON.stringify(workflow), file).not.toContain("PREVIEW_PR_NUMBER");
+    expect(
+      [workflow.env, ...envs].filter((env) => env?.PR_NUMBER),
+      file,
+    ).toEqual([]);
   }
 });
 
@@ -993,7 +1003,7 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   for (const job of ["e2e", "specs"])
     for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
-  expect(e2e.env).toMatchObject({ E2E_SLOW_ROWS: "run" });
+  expect(e2e.env).toMatchObject({ SLOW_ROWS: "run" });
   // started with the run, each waits in its suite step for the deploy every main run makes
   for (const job of [e2e, specs]) expect(job.needs).toBeUndefined();
   expect(e2e.steps?.find((step) => step.id === "suite")?.env).toMatchObject({

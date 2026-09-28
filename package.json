@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "pnpm --dir apps/os dev",
     "getin": "pnpm --dir apps/os getin",
-    "os": "pnpm --dir apps/os",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs && pnpm typecheck:configs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
     "typecheck:configs": "tsc -p configs/default && tsc -p configs/with-agents",

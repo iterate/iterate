@@ -10,7 +10,7 @@ import { transformSync } from "oxc-transform";
 import { createCli } from "trpc-cli";
 
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
-import { markdownAnnotator } from "./markdown-annotator.ts";
+import { replaceMarkedSection } from "./markdown-annotator.ts";
 
 /**
  * Array order is match order: first-match-wins, most-specific globs first, so
@@ -41,7 +41,7 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
   { name: "Other", glob: "", priority: 8 },
 ];
 
-/** markdownAnnotator label for the managed PR-body section. */
+/** The label of the PR body's managed section (markdown-annotator.ts). */
 const bodySectionLabel = "loc-report";
 
 type ChangedFile = {
@@ -419,7 +419,7 @@ export default async function locReport(
   // Fetch the body fresh rather than trusting the event payload - the PR
   // description may have been edited since the event fired.
   const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: pullRequest.number });
-  const body = markdownAnnotator(pr.body || "", bodySectionLabel).update(section);
+  const body = replaceMarkedSection(pr.body || "", bodySectionLabel, section);
   await github.rest.issues.update({ ...repo, issue_number: pullRequest.number, body });
   console.log(`Updated LOC report section in PR #${pullRequest.number} body`);
 }

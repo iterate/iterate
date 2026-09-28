@@ -41,12 +41,6 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
   workflow_dispatch:
-    inputs:
-      ref:
-        description: Git ref to deploy. Leave empty for the current branch or commit.
-        required: false
-        type: string
-        default: ""
 
 jobs:
   deploy:
@@ -56,7 +50,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ github.sha }}
       - name: Setup
         uses: ./.depot/actions/setup
         with:

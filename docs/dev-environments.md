@@ -410,8 +410,8 @@ are paths on the one origin. Commands: `apps/os/README.md`.
   deployments. Closing the PR deletes all of them (`preview-delete.yml`). The
   nightly sweep (`preview-sweep.yml`) is the safety valve: it deletes a
   deployment whose PR closed without a delete, one an hour older than its
-  PR's newest, one more than 7 days old, and a hand-named one idle for
-  24 hours with no open PR branch of that name. The rules are a pure table in
+  PR's newest, one more than 7 days old, and one with no PR number (a
+  hand-picked name, not CI's own) idle for 24 hours. The rules are a pure table in
   `apps/os/scripts/preview-sweep.ts`. Until none are left, it also deletes the
   Worker Previews each PR used to get, on `os`, `<app>` and the former parents
   (`os-preview`, `<app>-preview`), once idle a day, and each former parent's
@@ -602,7 +602,6 @@ WORKER_BASE_URL=https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # delete it when done; otherwise the sweep takes it 24 h after it was made
-# (unless an open PR's head branch slugifies to the same name)
 doppler run --project os --config preview -- pnpm preview delete --name exp-<you>
 ```
 

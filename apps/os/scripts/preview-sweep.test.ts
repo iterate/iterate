@@ -113,28 +113,25 @@ test.for<{
   deployment: string;
   createdHoursAgo?: number;
   pullRequest?: PullRequestState;
-  openBranches?: string[] | "unknown";
   verdict: "stale" | "keep";
 }>(
   // prettier-ignore
   [
     { name: "1: created 8 days ago, PR open", deployment: "pr7-1111111", createdHoursAgo: 192, pullRequest: "open", verdict: "stale" },
-    { name: "1: created 8 days ago, its branch's PR open", deployment: "fix-foo-1111111", createdHoursAgo: 192, openBranches: ["fix/foo"], verdict: "stale" },
     { name: "2: PR closed, created an hour ago", deployment: "pr7-1111111", createdHoursAgo: 1, pullRequest: "closed", verdict: "stale" },
     { name: "2: PR does not exist", deployment: "pr7-1111111", createdHoursAgo: 1, pullRequest: "missing", verdict: "stale" },
     { name: "PR open, created 6 days ago", deployment: "pr7-1111111", createdHoursAgo: 144, pullRequest: "open", verdict: "keep" },
     { name: "PR lookup failed, created 6 days ago", deployment: "pr7-1111111", createdHoursAgo: 144, pullRequest: "unknown", verdict: "keep" },
-    { name: "4: no PR, created 25 h ago, no open branch of that name", deployment: "exp-watchdog-1111111", createdHoursAgo: 25, openBranches: ["fix/foo"], verdict: "stale" },
+    { name: "4: no PR, created 25 h ago", deployment: "exp-watchdog-1111111", createdHoursAgo: 25, verdict: "stale" },
     { name: "4: no PR, created 23 h ago", deployment: "exp-watchdog-1111111", createdHoursAgo: 23, verdict: "keep" },
-    { name: "4: no PR, created 2 days ago, an open PR's branch slugifies to it", deployment: "fix-foo-1111111", createdHoursAgo: 48, openBranches: ["fix/foo"], verdict: "keep" },
-    { name: "4: no PR, created 2 days ago, open branches unknown", deployment: "fix-foo-1111111", createdHoursAgo: 48, openBranches: "unknown", verdict: "keep" },
+    { name: "4: a branch's name, created 2 days ago: only `pr<n>` is a PR's", deployment: "fix-foo-1111111", createdHoursAgo: 48, verdict: "stale" },
     { name: "4: a CI workflow's own, created 30 h ago", deployment: "main-1111111", createdHoursAgo: 30, verdict: "keep" },
     { name: "4: a branch's that begins `main-`", deployment: "main-branch-1111111", createdHoursAgo: 30, verdict: "stale" },
     { name: "1: a CI workflow's own, created 8 days ago", deployment: "real-model-1111111", createdHoursAgo: 192, verdict: "stale" },
   ],
 )(
   "which deployments are stale (rules 1, 2 and 4): $name ⇒ $verdict",
-  ({ deployment, createdHoursAgo, pullRequest, openBranches, verdict }) => {
+  ({ deployment, createdHoursAgo, pullRequest, verdict }) => {
     const plan = planPreviewSweep({
       now: NOW,
       deployments: group([
@@ -143,7 +140,6 @@ test.for<{
           : worker(`${deployment}-os`, createdHoursAgo),
       ]),
       pullRequestStates: new Map<number, PullRequestState>(pullRequest ? [[7, pullRequest]] : []),
-      openPullRequestBranches: openBranches === "unknown" ? undefined : openBranches || [],
     });
     expect(plan).toMatchObject([{ deployment: { name: deployment }, verdict }]);
   },
@@ -158,7 +154,6 @@ test("the sweep keeps the last deployment that deployed while a newer push's dep
       worker("pr7-2222222-dash", 2),
     ]),
     pullRequestStates: new Map([[7, "open"]]),
-    openPullRequestBranches: [],
   });
   expect(plan).toMatchObject([
     { deployment: { name: "pr7-1111111" }, verdict: "keep" },
@@ -185,7 +180,6 @@ test.for<{ name: string; olderHoursAgo?: number; verdict: "stale" | "keep" }>(
           : worker("pr7-1111111-os", olderHoursAgo),
       ]),
       pullRequestStates: new Map([[7, "open"]]),
-      openPullRequestBranches: [],
     });
     expect(plan).toMatchObject([
       { deployment: { name: "pr7-2222222" }, verdict: "keep" },
