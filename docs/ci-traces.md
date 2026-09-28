@@ -29,6 +29,11 @@ Worker's `DEPOT_CI_TELEMETRY_TOKEN` secret, from Doppler `_shared/preview`), wit
 ZIP directory and the requested entry only. Each response's CSP confines the page to its own
 artifact's path.
 
+`/explainers/<ref>/<name>` opens `explainers/<name>.html` of `iterate/iterate` at a branch, tag or
+commit, read from GitHub (the repository is public), so a pull request can link the explainer on its
+own branch: `/explainers/<branch>/<name>`. An explainer is a standalone HTML page, served as
+committed.
+
 ## What the trace shows
 
 The report shows the workflow, its jobs, each test job's Setup, Test and Finish
