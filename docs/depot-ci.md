@@ -726,8 +726,10 @@ The preview sweep and the context sweep keep one page per incident (`keepPage` i
 `scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then `Impact:`, `Do:`, the ids to act on and one
 link. A later run that finds the incident still there edits the page, which notifies nobody; the
 first run that finds it gone edits its first line to start `✅ resolved:` and replies once in its
-thread, mentioning both. The page's first line is its state, so the channel's history is the only
-state a poster keeps. Only a run on main pages; a 🧪 test run (each workflow's `test-run` input)
+thread, mentioning both. Older open pages of the same incident are marked resolved by an edit
+alone. The page's first line is its state, so the channel's history is the only state a poster
+keeps; a run that sees only part of an incident (the preview sweep's stuck namespaces) carries
+forward what the open page names until reads confirm it gone. Only a run on main pages; a 🧪 test run (each workflow's `test-run` input)
 posts to #ci, mentions nobody and never reads #error-pulse.
 
 ## Health
