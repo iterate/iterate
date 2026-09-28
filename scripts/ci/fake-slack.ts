@@ -104,7 +104,7 @@ export function fakeSlack(options: { now: number; failUpdates?: boolean }) {
             Number(message.ts) <= Number(args.latest || Infinity),
         );
         // Slack pages from the window's oldest end when `oldest` comes without `latest`
-        const fromOldest = args.oldest !== undefined && args.latest === undefined;
+        const fromOldest = Boolean(args.oldest) && !args.latest;
         const ordered = inWindow.sort((a, b) =>
           fromOldest ? Number(a.ts) - Number(b.ts) : Number(b.ts) - Number(a.ts),
         );
