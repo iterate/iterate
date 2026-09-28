@@ -34,6 +34,9 @@ export async function writeFlakeSuiteSummary(input: {
   );
   const source = artifacts[0] || input.artifacts[0];
   if (!source) throw new Error("Cannot identify the CI run for the flake suite summary");
+  // the summary links its job, which a Depot job's telemetry names (DEPOT_JOB_URL)
+  if (!source.ci.depotJobUrl)
+    throw new Error(`${source.artifactId} names no Depot job for the flake suite summary to link`);
   const branch = source.ci.branch || "";
   const completeness = analyzeTestTelemetryCompleteness(
     artifacts,
@@ -124,12 +127,9 @@ export async function writeFlakeSuiteSummary(input: {
         slowRows: slowRows.some((test) => test.state !== "skipped") ? "ran" : "skipped",
       }),
     diagnostics: [...new Set(diagnostics)],
-    runUrl:
-      source.ci.depotJobUrl ||
-      source.ci.workflowRunUrl ||
-      `https://github.com/${source.ci.repository}/commit/${input.headSha}`,
+    runUrl: source.ci.depotJobUrl,
   });
-  const directory = suite === "unit" ? input.directory : join(input.directory, suite);
+  const directory = join(input.directory, suite);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "suite-summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
 }

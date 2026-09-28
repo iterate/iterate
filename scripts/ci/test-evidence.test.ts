@@ -43,7 +43,7 @@ const environment = {
 const commit = "c".repeat(40);
 const source = { commit, tree: "7".repeat(40), dirty: false, lockfileSha256: "1".repeat(64) };
 const toolchain = { node: "v24.8.0", platform: "linux", arch: "x64" };
-/** The telemetry finalizer's check (upload-test-telemetry.ts) when nothing is missing. */
+/** The telemetry finalizer's check (test-telemetry-finalizer.ts) when nothing is missing. */
 const completeCheck = {
   artifactCount: 2,
   cancelled: false,

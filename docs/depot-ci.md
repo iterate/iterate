@@ -119,8 +119,9 @@ depot ci artifacts download "$artifact_id" \
 ### Artifacts per job attempt
 
 The Test job and the preview and main test jobs name every evidence artifact
-after the job attempt that uploaded it: `flake-records-<suite>-attempt-<id>`
-and `<unit|preview-os|main-os>-test-artifacts-attempt-<id>`. The job's first step reads `<id>` from `DEPOT_JOB_URL`
+after the job attempt that uploaded it: `<unit|preview-os|main-os>-test-artifacts-attempt-<id>`,
+the job's whole `test-results/`, its flake records and suite summary under
+`flake-records/<suite>/`. The job's first step reads `<id>` from `DEPOT_JOB_URL`
 (`…?job=<job>&attempt=<id>`), and `depot ci artifacts list` shows the same id
 as each artifact's `attempt_id`. A retried job therefore keeps the failed
 attempt's telemetry, flake records and Playwright traces beside the retry's.

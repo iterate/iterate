@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@zip.js/zip.js": "2.18.2",
     "mime": "4.1.0",
     "zod": "catalog:"

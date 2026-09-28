@@ -7,16 +7,20 @@
 // no longer holds is an orphan. Report-only unless `--destroy`, which destroys each orphan through
 // `session.contexts.destroy` — refused for a global context and for any project that still exists.
 //
-//   doppler run --project os --config prd -- pnpm tsx scripts/ci/context-sweep.ts [--destroy]
+//   pnpm tsx scripts/ci/context-sweep.ts --env prd [--destroy]
 //
-// Needs CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID (the deployment's account) and the
-// deployment's APP_CONFIG (its operator bearer). Exits non-zero when an object could not say who it
-// is or an orphan could not be destroyed; orphans alone are the report, not a failure.
-import { parseArgs } from "node:util";
+// The deployment's Cloudflare credentials and APP_CONFIG (its operator bearer) come from its own
+// Doppler config (scripts/lib/env-context.ts `resolveEnvContext`, which refuses a Doppler account
+// that is not envs.ts's). It fails when an object could not say who it is or an orphan could not be
+// destroyed; orphans alone are the report, not a failure.
 import type { IterateSessionApi } from "iterate/api";
 import { connectIterate } from "iterate/node";
-import { osEnvs } from "../../envs.ts";
+import { createCli } from "trpc-cli";
+import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { OS_DOPPLER_PROJECT, osEnvs } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
+import { resolveEnvContext } from "../lib/env-context.ts";
 
 /** One stored object as the sweep sees it. */
 export type SweptContext = Awaited<ReturnType<IterateSessionApi["contexts"]["identify"]>>[number];
@@ -47,64 +51,42 @@ export function classifyContexts(contexts: SweptContext[], liveProjectIds: Reado
   return report;
 }
 
-async function main() {
-  const { values } = parseArgs({
-    options: {
-      destroy: { type: "boolean", default: false },
-      env: { type: "string", default: "prd" },
-    },
-  });
-  const target = osEnvs[values.env!];
-  if (!target) throw new Error(`no osEnvs entry ${values.env}`);
-  const token = required("CLOUDFLARE_API_TOKEN");
-  const account = required("CLOUDFLARE_ACCOUNT_ID");
-  const api = `https://api.cloudflare.com/client/v4/accounts/${account}/workers/durable_objects/namespaces`;
-  const cloudflare = async <T>(
-    url: string,
-  ): Promise<{ result: T; result_info?: { cursor?: string } }> => {
-    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-    const body = (await response.json()) as { success: boolean; errors: unknown; result: T };
-    if (!body.success) throw new Error(`${url}: ${JSON.stringify(body.errors)}`);
-    return body as never;
-  };
+/** The largest page Cloudflare's List Objects API answers. The API client hands back no cursor, so
+ *  the sweep reads one page and refuses a full one, which may be cut off. */
+const OBJECTS_PAGE = 10_000;
 
-  // Every page; a Worker Preview's namespaces are listed under its parent's script, marked
-  // `preview` (scripts/lib/do-reset.ts `getWorkerDoNamespaces`), and are not this deployment's.
-  const matches: { id: string }[] = [];
-  for (let page = 1; ; page++) {
-    const batch = (
-      await cloudflare<{ id: string; class?: string; script?: string; preview?: unknown }[]>(
-        `${api}?per_page=100&page=${page}`,
-      )
-    ).result;
-    matches.push(
-      ...batch.filter(
-        (row) =>
-          row.class === "IterateContextDurableObject" &&
-          row.script === target.workerName &&
-          !row.preview,
-      ),
-    );
-    if (batch.length < 100) break;
-  }
-  if (matches.length !== 1)
+/** Sweep the context namespace of the OS deployment `env`: report every orphan, and with `destroy`
+ *  destroy each. */
+export default async function contextSweep(options: {
+  /** The OS deployment to sweep (envs.ts osEnvs). */
+  env: string;
+  /** Destroy each orphan (session.contexts.destroy). */
+  destroy?: boolean;
+}) {
+  const ctx = await resolveEnvContext({
+    envs: osEnvs,
+    dopplerProject: OS_DOPPLER_PROJECT,
+    env: options.env,
+  });
+  const target = ctx.env;
+  const namespaces = (await getWorkerDoNamespaces(ctx, target.workerName)).filter(
+    ({ className }) => className === "IterateContextDurableObject",
+  );
+  if (namespaces.length !== 1)
     throw new Error(
-      `expected one IterateContextDurableObject namespace on ${target.workerName}, found ${matches.length}`,
+      `expected one IterateContextDurableObject namespace on ${target.workerName}, found ${namespaces.length}`,
     );
-  const namespace = matches[0]!;
-  const stored: string[] = [];
-  for (let cursor: string | undefined; ;) {
-    const page = await cloudflare<{ id: string; hasStoredData?: boolean }[]>(
-      `${api}/${namespace.id}/objects?limit=10000${cursor ? `&cursor=${cursor}` : ""}`,
-    );
-    stored.push(...page.result.filter((row) => row.hasStoredData).map((row) => row.id));
-    cursor = page.result_info?.cursor;
-    if (!cursor || page.result.length === 0) break;
-  }
+  const { namespaceId } = namespaces[0]!;
+  const objects = await ctx.cf<{ id: string; hasStoredData?: boolean }[]>(
+    `/workers/durable_objects/namespaces/${namespaceId}/objects?limit=${OBJECTS_PAGE}`,
+  );
+  if (objects.length >= OBJECTS_PAGE)
+    throw new Error(`${OBJECTS_PAGE} or more context objects: the listing may be cut off`);
+  const stored = objects.filter((row) => row.hasStoredData).map((row) => row.id);
 
   const config = parseAppConfig({
-    APP_CONFIG: required("APP_CONFIG"),
-    APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
+    APP_CONFIG: ctx.secrets.APP_CONFIG,
+    APP_CONFIG_SECRETS__KEY: ctx.secrets.APP_CONFIG_SECRETS__KEY,
   });
   using connection = await connectIterate({
     baseUrl: target.baseUrl,
@@ -119,7 +101,7 @@ async function main() {
 
   const destroyed: string[] = [];
   const failed: { id: string; error: string }[] = [];
-  if (values.destroy)
+  if (options.destroy)
     for (const orphan of report.orphans)
       try {
         await session.contexts.destroy(orphan.id);
@@ -131,8 +113,8 @@ async function main() {
   console.log(
     JSON.stringify({
       event: "context-sweep.report",
-      env: values.env,
-      namespace: namespace.id,
+      env: options.env,
+      namespace: namespaceId,
       stored: stored.length,
       live: report.live.length,
       global: report.global.length,
@@ -148,14 +130,10 @@ async function main() {
   for (const context of report.unidentified)
     console.log(`unidentified ${context.id}: ${context.error}`);
   for (const failure of failed) console.log(`destroy failed ${failure.id}: ${failure.error}`);
-  if (report.unidentified.length || failed.length) process.exitCode = 1;
+  if (report.unidentified.length || failed.length)
+    throw new Error(
+      `${report.unidentified.length} object(s) could not say who they are, ${failed.length} orphan(s) not destroyed`,
+    );
 }
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value)
-    throw new Error(`${name} is not set (run under doppler run --project os --config prd)`);
-  return value;
-}
-
-if (process.argv[1]?.endsWith("context-sweep.ts")) await main();
+if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "context-sweep" }).run();

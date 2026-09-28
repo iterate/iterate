@@ -92,7 +92,7 @@ Vitest (retry-telemetry-reporter.ts) / Playwright (playwright-telemetry-reporter
                     │
                     ▼  if: always()
   scripts/ci/test-evidence.ts finalize --flake-suites unit|specs|preview-e2e
-     upload-test-telemetry.ts's finalizer:
+     test-telemetry-finalizer.ts:
      checks every expected runner left a complete artifact
      writes test-results/ci-telemetry/manifest.json
      writes the job's suite's suite-summary.json beside its flake records
@@ -126,7 +126,7 @@ aggregate duration per test, not each attempt's: do not rank a retried row as a 
 The finalizer fails the job, after writing the manifest and the summaries, when:
 
 - an expected workspace left no artifact: the Test workflow passes `--expect-unit-workspaces`, read
-  from the checkout (every workspace package with a `test` or `test:unit` script, never a list in
+  from the checkout (every workspace package with a `test` script, never a list in
   test.yml, [Which tree a pull request's CI tests](depot-ci.md#which-tree-a-pull-requests-ci-tests));
   Preview OS and Main OS e2e name theirs in `TEST_TELEMETRY_EXPECTED_WORKSPACES`;
 - a sentinel was never replaced (a runner started and was killed);
@@ -147,7 +147,7 @@ artifact_id="$(depot ci artifacts list "$depot_run_id" --org 0p91s0lz49 --output
 depot ci artifacts download "$artifact_id" --org 0p91s0lz49 --output-file /tmp/unit.zip
 unzip -q /tmp/unit.zip -d /tmp/unit
 jq '.tests[] | {moduleId, fullName, durationMs, retryCount, firstFailure}' /tmp/unit/ci-telemetry/raw/*.json
-pnpm tsx scripts/ci/upload-test-telemetry.ts --artifact-root /tmp/unit/ci-telemetry
+pnpm tsx scripts/ci/test-telemetry-finalizer.ts --artifact-root /tmp/unit/ci-telemetry
 ```
 
 ### Adding or changing a reporter

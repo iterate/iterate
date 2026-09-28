@@ -1,9 +1,9 @@
 // The suite jobs' wait for their run's deploy (./await-deploy.ts), against the monitors' fake Depot
 // on a fake clock. What the wait runs before and after is apps/os/scripts/preview.ts's.
 import { expect, onTestFinished, test, vi } from "vitest";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { fakeDepot } from "../monitors/fake-depot.ts";
 import { AWAIT_DEPLOY, awaitDeploy } from "./await-deploy.ts";
-import { depotCiApi } from "./depot.ts";
 
 type Row = {
   name: string;

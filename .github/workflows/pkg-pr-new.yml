@@ -36,7 +36,7 @@ jobs:
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .nvmrc
       - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice...
       - run: pnpm --dir packages/iterate build
       - run: pnpm --dir packages/cli build

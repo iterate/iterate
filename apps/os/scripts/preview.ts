@@ -705,11 +705,11 @@ async function seedSignIn(
 }
 
 /** Each suite's test telemetry identity, pinned rather than read from pnpm's ambient package name:
- *  the workspace is what its job's CI finalizer (`upload-test-telemetry.ts --flake-suites specs`
+ *  the workspace is what its job's CI finalizer (`test-evidence.ts finalize --flake-suites specs`
  *  or `preview-e2e`, which expects that one workspace) and scripts/ci/flake-suite-summary.ts match
- *  the suite by, and each suite records its flake lines into its own `flake-records-<suite>`
- *  directory (relative to GITHUB_WORKSPACE). Only when the workflow asks for telemetry
- *  (TEST_TELEMETRY_ARTIFACT_DIR): a run from a laptop records nothing. */
+ *  the suite by, and each suite records its flake lines into its own `flake-records/<suite>`
+ *  directory (relative to GITHUB_WORKSPACE), as the Test job's `unit` does. Only when the workflow
+ *  asks for telemetry (TEST_TELEMETRY_ARTIFACT_DIR): a run from a laptop records nothing. */
 const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, string>> = process.env
   .TEST_TELEMETRY_ARTIFACT_DIR
   ? {

@@ -23,6 +23,7 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
@@ -45,8 +46,7 @@ import { saveNewestArtifactFile } from "./depot.ts";
 import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
- *  of them pages; before 2026-09-24 only os-prd's did, and voice.iterate.com answered robots.txt
- *  with a 500 unseen. */
+ *  of them pages, a client's as much as the platform's. */
 const PRD_WORKERS = [
   osEnvs.prd!,
   dashEnvs.prd,
@@ -970,9 +970,17 @@ export function deployResetSummaries(events: z.infer<typeof WorkerErrorEvent>[])
   return expected;
 }
 
-/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one. */
+/** The newest main run's state, written to `out`; nothing when no run of the last 20 kept one.
+ *  Depot is read with DEPOT_CI_TELEMETRY_TOKEN (Doppler _shared/preview). */
 export async function previousState(options: { out: string }) {
-  return saveNewestArtifactFile({ ...stateArtifact, out: options.out });
+  const token = z
+    .string({ error: "DEPOT_CI_TELEMETRY_TOKEN is required (Doppler _shared/preview)" })
+    .min(1)
+    .parse(process.env.DEPOT_CI_TELEMETRY_TOKEN);
+  return saveNewestArtifactFile((method, body) => depotCiApi(method, body, token), {
+    ...stateArtifact,
+    out: options.out,
+  });
 }
 
 if (isMainModule(import.meta.url))

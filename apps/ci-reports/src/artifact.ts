@@ -6,6 +6,8 @@ import {
 } from "@zip.js/zip.js/lib/zip-core-native.js";
 import mime from "mime";
 import { z } from "zod";
+import { depotCiApi } from "@iterate-com/shared/depot-api";
+import { HttpAnswerError } from "@iterate-com/shared/platform-retry";
 
 /**
  * `/<artifact-id>/<file>`: one file of a public Depot CI artifact of iterate/iterate, read out of
@@ -39,22 +41,13 @@ export async function serveDepotArtifact(
     return new Response("Invalid path", { status: 400 });
   }
   if (file && !safePath(file)) return new Response("Invalid path", { status: 400 });
-  const download = await fetchArtifact(
-    "https://api.depot.dev/depot.ci.v1.CIService/GetArtifactDownloadURL",
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "x-depot-org": "0p91s0lz49",
-      },
-      body: JSON.stringify({ artifactId }),
-      signal: AbortSignal.timeout(15_000),
-    },
-  );
-  if (download.status === 404)
-    return new Response("Artifact not found or expired", { status: 404 });
-  if (!download.ok) throw new Error(`Depot artifact lookup returned HTTP ${download.status}`);
+  const depot = (method: string, body: object) =>
+    depotCiApi(method, body, token, { fetch: fetchArtifact });
+  const download = await depot("GetArtifactDownloadURL", { artifactId }).catch((error: unknown) => {
+    if (error instanceof HttpAnswerError && error.status === 404) return undefined;
+    throw error;
+  });
+  if (!download) return new Response("Artifact not found or expired", { status: 404 });
   const result = z
     .object({
       artifact: z.object({
@@ -65,19 +58,10 @@ export async function serveDepotArtifact(
       }),
       url: z.url().startsWith("https://"),
     })
-    .parse(await download.json());
-  const workflow = await fetchArtifact("https://api.depot.dev/depot.ci.v1.CIService/GetWorkflow", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      "x-depot-org": "0p91s0lz49",
-    },
-    body: JSON.stringify({ workflowId: result.artifact.workflowId }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!workflow.ok) throw new Error(`Depot workflow lookup returned HTTP ${workflow.status}`);
-  const source = z.object({ repo: z.string() }).parse(await workflow.json());
+    .parse(download);
+  const source = z
+    .object({ repo: z.string() })
+    .parse(await depot("GetWorkflow", { workflowId: result.artifact.workflowId }));
   if (
     source.repo !== "iterate/iterate" ||
     result.artifact.artifactId !== artifactId ||

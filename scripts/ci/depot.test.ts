@@ -1,73 +1,68 @@
-import { expect, onTestFinished, test, vi } from "vitest";
-import { depotCiApi } from "./depot.ts";
+// depot.test.ts — the state a job hands its next run: which run's artifact `newestArtifactFile`
+// reads. Depot's API client itself is packages/shared/src/depot-api.test.ts's.
+import { expect, test } from "vitest";
+import { fakeDepot } from "../monitors/fake-depot.ts";
+import { newestArtifactFile } from "./depot.ts";
 
-// Preview OS trace, PR #2970, attempt 144gszhm0r: "Error: Depot GetJobAttemptLogs returned HTTP 500".
-test("a read Depot answers with one 500 is asked again, with a warn, and succeeds", async () => {
-  const depot = depotAnswering(500, 200);
+const state = { workflow: "Health", artifact: "health-state", file: "state.json" };
 
-  await expect(
-    depotCiApi("GetJobAttemptLogs", { attemptId: "a" }, "token", { fetch: depot.fetch }),
-  ).resolves.toEqual({ lines: [] });
-
-  expect(depot).toMatchObject({ calls: ["GetJobAttemptLogs", "GetJobAttemptLogs"] });
-  expect(depot.warn).toHaveBeenCalledOnce();
-  expect(depot.warn).toHaveBeenCalledWith({
-    event: "depot.platform-failure-retry",
-    kind: "disconnected",
-    request: "Depot GetJobAttemptLogs",
-    status: 500,
-    message: 'Depot GetJobAttemptLogs answered HTTP 500: {"code":"internal"}',
-    attempt: 1,
-    retryInMs: 2_000,
+test.for<{
+  name: string;
+  runs: { status: string; createdAt: string; state?: string }[];
+  expected: string | undefined;
+}>([
+  {
+    name: "the newest run's state, a running one's included",
+    runs: [
+      { status: "finished", createdAt: "2026-09-28T09:00:00Z", state: "older" },
+      { status: "running", createdAt: "2026-09-28T10:00:00Z", state: "newest" },
+    ],
+    expected: "newest",
+  },
+  {
+    name: "a failed run's state counts, and a run that kept none is passed over",
+    runs: [
+      { status: "failed", createdAt: "2026-09-28T09:00:00Z", state: "kept before it failed" },
+      { status: "finished", createdAt: "2026-09-28T10:00:00Z" },
+    ],
+    expected: "kept before it failed",
+  },
+  {
+    name: "a cancelled run's state is not read",
+    runs: [{ status: "cancelled", createdAt: "2026-09-28T10:00:00Z", state: "cancelled" }],
+    expected: undefined,
+  },
+  { name: "no run kept one", runs: [], expected: undefined },
+])("the state a job hands on: $name", async ({ runs, expected }) => {
+  const depot = fakeDepot({
+    Health: runs.map((run, index) => ({
+      workflowId: `wf-${index}`,
+      runId: `run-${index}`,
+      status: run.status,
+      trigger: "schedule",
+      sha: "a".repeat(40),
+      createdAt: run.createdAt,
+      artifacts: run.state ? { "health-state": { "state.json": run.state } } : undefined,
+    })),
   });
+  expect(await newestArtifactFile(depot, state)).toBe(expected);
 });
 
-test("a read whose connection fails is asked again", async () => {
-  const depot = depotAnswering("reset", 200);
-
-  await expect(
-    depotCiApi("ListArtifacts", { runId: "r" }, "token", { fetch: depot.fetch }),
-  ).resolves.toEqual({ lines: [] });
-
-  expect(depot.calls).toHaveLength(2);
-  expect(depot.warn).toHaveBeenCalledWith(
-    expect.objectContaining({ status: "network", message: "Depot ListArtifacts: fetch failed" }),
+test("a state artifact without its file fails, naming the run", async () => {
+  const depot = fakeDepot({
+    Health: [
+      {
+        workflowId: "wf-broken",
+        runId: "run-broken",
+        status: "finished",
+        trigger: "schedule",
+        sha: "a".repeat(40),
+        createdAt: "2026-09-28T10:00:00Z",
+        artifacts: { "health-state": { "other.json": "{}" } },
+      },
+    ],
+  });
+  await expect(newestArtifactFile(depot, state)).rejects.toThrow(
+    "health-state of wf-broken holds no state.json",
   );
 });
-
-test.for([
-  { method: "GetWorkflow", answer: 404, error: "Depot GetWorkflow answered HTTP 404" },
-  { method: "GetWorkflow", answer: 401, error: "Depot GetWorkflow answered HTTP 401" },
-  { method: "DispatchWorkflow", answer: 500, error: "Depot DispatchWorkflow answered HTTP 500" },
-  { method: "RetryJob", answer: "reset" as const, error: "fetch failed" },
-])("$method answered $answer fails at once", async ({ method, answer, error }) => {
-  const depot = depotAnswering(answer, 200);
-
-  await expect(depotCiApi(method, {}, "token", { fetch: depot.fetch })).rejects.toThrow(error);
-
-  expect(depot.calls).toHaveLength(1);
-  expect(depot.warn).not.toHaveBeenCalled();
-});
-
-/** A Depot API answering each call with the next of `answers`: a status, or "reset" for a
- *  connection that fails the way undici's fetch does; `warn` spies on console.warn. CI_HTTP's
- *  waits run on a fake clock that moves on whenever nothing else is left to run, each at its
- *  longest (`Math.random` at 1). */
-function depotAnswering(...answers: (number | "reset")[]) {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  vi.setTimerTickMode("nextTimerAsync");
-  onTestFinished(() => void vi.useRealTimers());
-  vi.spyOn(Math, "random").mockReturnValue(1);
-  const calls: string[] = [];
-  const fetch = vi.fn(async (url: string | URL | Request) => {
-    calls.push(String(url).split("/").pop()!);
-    const answer = answers.shift();
-    if (answer === undefined) throw new Error("the test's Depot has no more answers");
-    if (answer === "reset") throw new TypeError("fetch failed");
-    return new Response(answer === 200 ? '{"lines":[]}' : '{"code":"internal"}', {
-      status: answer,
-    });
-  }) as unknown as typeof globalThis.fetch;
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  return { fetch, calls, warn };
-}

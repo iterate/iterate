@@ -7,9 +7,9 @@ test("a folder's suites come from its flake-records paths, and it counts once it
   const planned = planReads(
     [
       ...folder("main", "job1/testrun_a", "2026-01-10T10:00:00Z", [
-        "flake-records/flake-records-1.jsonl",
-        "flake-records/flake-records-2.jsonl",
-        "flake-records/suite-summary.json",
+        "flake-records/unit/flake-records-1.jsonl",
+        "flake-records/unit/flake-records-2.jsonl",
+        "flake-records/unit/suite-summary.json",
       ]),
       ...folder("pr", "job2/testrun_b", "2026-01-10T11:00:00Z", [
         "flake-records/preview-e2e/flake-records-1.jsonl",
@@ -37,10 +37,10 @@ test("a folder's suites come from its flake-records paths, and it counts once it
       uploadedAt: "2026-01-10T10:00:00Z",
       newest: true,
       recordKeys: [
-        key("main", "job1/testrun_a", "flake-records/flake-records-1.jsonl"),
-        key("main", "job1/testrun_a", "flake-records/flake-records-2.jsonl"),
+        key("main", "job1/testrun_a", "flake-records/unit/flake-records-1.jsonl"),
+        key("main", "job1/testrun_a", "flake-records/unit/flake-records-2.jsonl"),
       ],
-      summaryKey: key("main", "job1/testrun_a", "flake-records/suite-summary.json"),
+      summaryKey: key("main", "job1/testrun_a", "flake-records/unit/suite-summary.json"),
       readSummary: true,
     },
   ]);
@@ -51,11 +51,11 @@ test("every main run of the window is read, each suite's newest runs with their 
   const runs = Array.from({ length: recentRuns.newest + 200 }, (_, n) => {
     const uploadedAt = new Date(now.getTime() - n * 60_000).toISOString();
     return folder(n % 10 === 0 ? "main" : "pr", `job${n}/testrun_${n}`, uploadedAt, [
-      "flake-records/suite-summary.json",
+      "flake-records/unit/suite-summary.json",
     ]);
   });
   const tooOld = folder("main", "old/testrun_old", "2026-01-03T11:59:00Z", [
-    "flake-records/suite-summary.json",
+    "flake-records/unit/suite-summary.json",
   ]);
 
   const planned = planReads([...runs.flat(), ...tooOld], now);
