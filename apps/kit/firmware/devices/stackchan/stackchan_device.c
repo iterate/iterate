@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -89,7 +90,7 @@ static uint64_t last_present_ms;
  * memory cannot spare) and holds it until `setImage(null)`, which `present`
  * turns back into the face.
  */
-static struct iterate_kit_screen screen;
+EXT_RAM_BSS_ATTR static struct iterate_kit_screen screen;
 static bool screen_ready;
 static bool image_lent;
 

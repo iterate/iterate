@@ -83,7 +83,7 @@ const char *state_label(enum m5sticks3_ui_state state) {
  * The avatar sidecar. Everything about it is deliberately small: one registry,
  * one PSRAM source frame, and a sample clock that advances with real time so
  * the ambient performance layer (blinks, glances, breathing) animates without
- * this board needing the CoreS3's analyzer task, mutex or screenshot path.
+ * this board needing the CoreS3's analyzer task.
  */
 namespace {
 
