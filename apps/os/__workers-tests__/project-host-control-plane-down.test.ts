@@ -3,7 +3,7 @@
 // under test (Vite's built worker, in this isolate) has never looked either up — a fresh isolate, as
 // a deploy's are — then makes the worker's catalog reads to D1 throw workerd's opaque internal
 // error, lose their connection, or not answer until the row lets them. An /api session's reads
-// give up at their own 3 s deadline instead (src/rpc.ts). The worker also answers requests no row
+// give up at their own 5 s deadline instead (src/rpc.ts). The worker also answers requests no row
 // made — a local port prober's `GET /` on its socket reads the hostname table for `localhost` — so
 // a row fails only the kinds of read its own host makes, and counts a read by what it asked.
 import { exports } from "cloudflare:workers";
@@ -101,7 +101,7 @@ test("a signed-in visitor whose access read fails while admission read through: 
   ]);
 });
 
-test("/api while the control plane's reads hang: projects.get answers UNAVAILABLE (overloaded) at its 3 s deadline, logged once, and the late answer serves the next call", async () => {
+test("/api while the control plane's reads hang: projects.get answers UNAVAILABLE (overloaded) at its 5 s deadline, logged once, and the late answer serves the next call", async () => {
   const session = await signedInSession(
     `api-deadline-${crypto.randomUUID().slice(0, 8)}@example.com`,
   );
@@ -125,15 +125,15 @@ test("/api while the control plane's reads hang: projects.get answers UNAVAILABL
   expect(refusal).toMatchObject({
     code: "UNAVAILABLE",
     data: { kind: "overloaded", retryAfterMs: 10_000 },
-    message: "The control plane failed accessibleTo: no answer within 3000 ms",
+    message: "The control plane failed accessibleTo: no answer within 5000 ms",
   });
-  expect(waited).toBeGreaterThanOrEqual(2_900);
-  expect(waited).toBeLessThan(4_500);
+  expect(waited).toBeGreaterThanOrEqual(4_900);
+  expect(waited).toBeLessThan(6_500);
   expect(controlPlaneWarns(warn)).toEqual([
     {
       event: "control-plane.platform-failure-read-deadline",
       method: "accessibleTo",
-      waitedMs: 3_000,
+      waitedMs: 5_000,
     },
   ]);
 

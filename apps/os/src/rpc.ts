@@ -51,9 +51,9 @@ export async function rpcResponse(
   const input: SessionInput = {
     contextNamespace: env.ITERATE_CONTEXT,
     waitUntil: (promise) => ctx.waitUntil(promise),
-    // A read unanswered in 3 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
-    // bound.
-    controlPlane: new ControlPlane(env, { readDeadlineMs: 3_000 }),
+    // A read unanswered in 5 s is UNAVAILABLE (overloaded), not a call held until D1's own 30 s
+    // bound. About 1 in 2,000 D1 and DO calls take a fixed extra ~3.0 s (measured 2026-09-28).
+    controlPlane: new ControlPlane(env, { readDeadlineMs: 5_000 }),
     appConfig: appConfigOf(env),
     platformOrigin,
     onProjectAccess: (projectId) => projects.add(projectId),
