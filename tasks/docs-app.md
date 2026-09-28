@@ -183,6 +183,11 @@ set of CodeMirror extensions, so switching later is cheap.
 - Checked by hand in the harness (now two `DocEditor`s over an in-page stand-in for the processor):
   typing reaches the other editor with the typist's cursor and name, undo takes back only your own
   line, an agent's commit shows up in both. The spec's second-person keystrokes were replayed there.
+- On the preview a doc page failed with "Unable to preload CSS for …/assets/projects._slug-….css":
+  Atomic's stylesheet, imported from `extensions.ts`, became a CSS file of its own, which Vite
+  preloads from the origin's root, outside the project's base path. It's now `@import`ed by
+  `src/styles.css`, the one stylesheet the page already links under its base path. The spec caught
+  it; the harness didn't (no base path there).
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.

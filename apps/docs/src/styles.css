@@ -1,4 +1,8 @@
 @import "@iterate-com/ui/globals.css";
+/* Atomic's editor styles here, in the page's one stylesheet, not imported from the editor's module:
+   Vite splits a module's CSS into a file of its own and preloads it from the origin's root, which
+   under a project's base path is another app's (packages/ui/src/apps/base-path.ts). */
+@import "@atomic-editor/editor/styles.css";
 
 @source "../src/**/*.{ts,tsx}";
 

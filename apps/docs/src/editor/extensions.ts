@@ -3,7 +3,6 @@
 // Markdown mode are the same editor with the preview in or out of `preview`, so the text, the
 // selection and the undo history carry across a switch. Undo is Yjs's (doc-session.ts): it undoes
 // this person's edits and leaves everyone else's.
-import "@atomic-editor/editor/styles.css";
 import {
   atomicEditorTheme,
   atomicMarkdownSyntax,

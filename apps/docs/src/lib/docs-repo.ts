@@ -7,11 +7,12 @@ export function docPaths(paths: string[]) {
   return paths.filter((path) => path.endsWith(".md")).sort();
 }
 
-/** The path a new doc called `title` gets: its words, lowercased and dashed, `.md` on. "" when the
- *  title has no letters or digits. */
+/** The path a new doc called `title` gets: its words, lowercased and dashed, `.md` on (once: a
+ *  title "plan.md" is plan.md). "" when the title has no letters or digits. */
 export function newDocPath(title: string) {
   const slug = title
     .toLowerCase()
+    .replace(/\.md$/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
   return slug ? `${slug}.md` : "";

@@ -6,10 +6,10 @@
     "dev": "vite dev",
     "build": "vite build",
     "typecheck": "pnpm routes:check && tsc --noEmit",
-    "deploy": "tsx scripts/app.ts deploy",
-    "ensure-resources": "tsx scripts/app.ts ensure-resources",
-    "routes:generate": "tsx scripts/app.ts generate-route-tree",
-    "routes:check": "tsx scripts/app.ts generate-route-tree --check"
+    "deploy": "node scripts/app.ts deploy",
+    "ensure-resources": "node scripts/app.ts ensure-resources",
+    "routes:generate": "node scripts/app.ts generate-route-tree",
+    "routes:check": "node scripts/app.ts generate-route-tree --check"
   },
   "dependencies": {
     "@atomic-editor/editor": "0.6.2",
@@ -46,7 +46,6 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "wrangler": "catalog:"
