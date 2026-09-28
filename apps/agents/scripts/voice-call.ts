@@ -151,7 +151,7 @@ export default async function voiceCall(
           // answer the live model speaks).
           if (fact.payload.role === "user")
             console.log(`[${at()}ms] to the agent: ${fact.payload.content}`);
-          if (fact.payload.role === "assistant" && fact.payload.llmRequestOffset !== undefined)
+          if (fact.payload.role === "assistant" && fact.payload.llmRequestOffset)
             console.log(`[${at()}ms] agent: ${fact.payload.content.slice(0, 300)}`);
           break;
         case "events.iterate.com/voice-agent/provider-error-reported":
