@@ -50,8 +50,11 @@ Then go to the first line that fits:
 - **The service is Slack, Google, Cloudflare, GitHub (as a GitHub App installation) or Waitrose.**
   These are built in. Say this, and stop:
 
-  > <Service> is built into iterate: open your project's **Integrations** page in the Dash and
-  > press **Connect** next to it.
+  > <Service> is built into iterate: open https://dash.iterate.com/projects/<projectSlug>/integrations
+  > and press **Connect** next to <Service>.
+
+  `projectSlug` is in what step 1 returned. That link is the only one to send: don't make up
+  another.
 
   If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
   them), carry on at step 2.
