@@ -1,6 +1,6 @@
 // install.ts — how a project installs the agents app. The app is a SOURCE the project owns: a folder
-// of its config repo (`agents/` by convention) holding a package.json that pins this package and an
-// index.ts that re-exports its two Durable Object classes (`agentsFolder`). `installAgents` mounts
+// of its config repo (`agents/` by convention) holding a package.json that pins this package and names
+// its `main`, index.ts, which re-exports the two Durable Object classes (`agentsFolder`). `installAgents` mounts
 // that source: the collection facet as the `itx.agents` rewrite rule, the `agents` processor on `/`,
 // and the same source for every agent's facet. Nothing here is the runtime, so a config worker
 // imports `@iterate-com/agents/install` without loading it.
@@ -30,7 +30,7 @@ export async function publishedVersion(name: string, commit: string | undefined)
  *  (a pkg.pr.new URL, or an npm range once the package is on npm). */
 export function agentsFolder(version: string): Record<string, string> {
   return {
-    "package.json": `${JSON.stringify({ dependencies: { "@iterate-com/agents": version } }, null, 2)}\n`,
+    "package.json": `${JSON.stringify({ main: "index.ts", dependencies: { "@iterate-com/agents": version } }, null, 2)}\n`,
     "index.ts":
       'export { AgentCollectionDurableObject, AgentDurableObject } from "@iterate-com/agents";\n',
   };

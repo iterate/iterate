@@ -10,7 +10,7 @@ a project installs this package; the platform ships none of it. It runs on the a
 A project installs voice from a folder of its config repo, beside the agents app's `agents/`:
 
 ```text
-voice/package.json   { "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" } }
+voice/package.json   { "main": "worker.ts", "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" } }
 voice/worker.ts      export { default, VoiceAgentDurableObject, VoiceDelegateDurableObject } from "@iterate-com/voice";
 ```
 

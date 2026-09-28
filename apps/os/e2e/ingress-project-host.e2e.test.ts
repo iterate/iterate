@@ -32,6 +32,7 @@ import {
  *  at `/` with a RELATIVE script, the script at `/app.js`, an echo of what it was handed at `/echo`,
  *  and a WebSocket echo on an upgrade — and any other routing slug is its own 404, naming the slug. */
 const SRC_SITE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": String.raw`import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Site extends WorkerEntrypoint {
   fetch(request) {
@@ -237,7 +238,16 @@ export default class extends WorkerEntrypoint {
     await publishConfigWorker(itx, [
       "itx",
       "workers",
-      ["get", { source: { "worker.js": router, "mini-app.js": miniApp } }],
+      [
+        "get",
+        {
+          source: {
+            "package.json": '{"main":"worker.js"}',
+            "worker.js": router,
+            "mini-app.js": miniApp,
+          },
+        },
+      ],
     ]);
     using notes = newWebSocketRpcSession<{
       add(text: string): Promise<{ text: string }[]>;

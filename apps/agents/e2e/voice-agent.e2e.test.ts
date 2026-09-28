@@ -63,6 +63,7 @@ deployedOnly(
         "get",
         {
           source: {
+            "package.json": '{"main":"worker.js"}',
             "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint {
   async fetch(request) {

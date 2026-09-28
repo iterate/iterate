@@ -60,6 +60,7 @@ test("the edge picks the project only: `<routingSlug>--<project>` and the apex b
  *  empty expression, as the edge spells it) and a provided row — forging the routing slug each time:
  *  what the config worker then sees is the platform's answer. */
 const SRC_FORGER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Forger extends WorkerEntrypoint {
   async run() {
@@ -96,6 +97,7 @@ test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.
 
 /** An app whose body is three chunks, 100 ms apart: still streaming after its Response is handed on. */
 const SRC_SLOW_APP = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Slow extends WorkerEntrypoint {
   fetch() {
@@ -115,6 +117,7 @@ export default class Slow extends WorkerEntrypoint {
 /** The config worker's router, as the SDK teaches it: one `withItx` round trip per request, released
  *  once the app's Response is in, while its body still streams. */
 const SRC_WITH_ITX_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { ConfigWorker } from "iterate/sdk";
 export default class extends ConfigWorker {
   fetch(request) {
@@ -306,6 +309,7 @@ test("a project's primary hostname: once a live hostname is made primary, itx.ur
 
 /** A config worker that says which host it answered, and the routing slug it saw. */
 const SRC_HOSTNAME_SITE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { ConfigWorker } from "iterate/sdk";
 export default class extends ConfigWorker {
   fetch(request) {

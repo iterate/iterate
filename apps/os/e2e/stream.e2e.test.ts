@@ -459,6 +459,7 @@ test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted meth
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class Waiter extends WorkerEntrypoint {

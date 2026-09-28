@@ -23,6 +23,7 @@ import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host
 
 /** A loaded worker that says whatever the test hands it through its own `env.ITX` — loaded code. */
 const SAY = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class extends WorkerEntrypoint {
@@ -37,6 +38,7 @@ export default class extends WorkerEntrypoint {
  *  answers — and says how many such calls this instance holds. */
 const COUNTER = {
   source: {
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump", "hang", "hanging"];

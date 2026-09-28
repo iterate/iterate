@@ -63,6 +63,7 @@ createFailing(realModelOnly, /hung and would never generate a response/, {
 /** A facet that asks the default model for one word, streamed, the raw Response asked for as the
  *  agents ask for it, and drains the SSE body itself. */
 const STREAMER_SOURCE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 import { withItx } from "iterate/with-itx";
 export class StreamerDurableObject extends FacetDurableObject {

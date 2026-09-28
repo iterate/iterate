@@ -37,9 +37,11 @@ test("itx.workers.get({ source: src }) (stateless) + itx.facets.get(name, spec) 
   // The two sources, handed over INLINE — each EXPORTS its host object (the contract): a
   // WorkerEntrypoint or a DurableObject class. No host-injected wrapper.
   const SRC_GREET = JSON.stringify({
+    "package.json": '{"main":"worker.js"}',
     "worker.js": entrypoint("async run(name) { return `hi ${name}`; }"),
   });
   const SRC_COUNTER = JSON.stringify({
+    "package.json": '{"main":"worker.js"}',
     "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump", "value"];
@@ -84,7 +86,15 @@ test("itx.workers.get takes the modules INLINE", async () => {
   const inline = await itx.invoke([
     "itx",
     "workers",
-    ["get", { source: { "worker.js": entrypoint("async run(x) { return x * 2; }") } }],
+    [
+      "get",
+      {
+        source: {
+          "package.json": '{"main":"worker.js"}',
+          "worker.js": entrypoint("async run(x) { return x * 2; }"),
+        },
+      },
+    ],
     ["run", 21],
   ]);
   expect(inline).toBe(42);
@@ -97,6 +107,7 @@ test("itx.workers.get takes the modules INLINE", async () => {
       "get",
       {
         source: {
+          "package.json": '{"main":"worker.js"}',
           "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";
 export default class extends WorkerEntrypoint {
@@ -121,7 +132,10 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
     produced: string[] = [];
     get(name: string): Record<string, string> {
       this.produced.push(name);
-      return { "worker.js": entrypoint(`async run(x) { return "${name}:" + x; }`) };
+      return {
+        "package.json": '{"main":"worker.js"}',
+        "worker.js": entrypoint(`async run(x) { return "${name}:" + x; }`),
+      };
     }
   }
   const codeStore = new CodeStore();
@@ -157,6 +171,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
     get(): Record<string, string> {
       this.produced++;
       return {
+        "package.json": '{"main":"worker.js"}',
         "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 export class CounterDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "bump"];
@@ -236,6 +251,7 @@ test("facets.get: a facet whose producer threw once materializes on the next att
 // `itx.os.projects.get(id).rename(…)` shape) rides one POST. The credentials ride in ctx.props like
 // the url does.
 const SRC_REMOTE = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newHttpBatchRpcSession } from "iterate/sdk";
@@ -279,6 +295,7 @@ test("a userspace worker dials a remote capnweb API with the url in ctx.props, b
 
 // ── worker A: a stateful DO with a getter chain that bottoms out at callLater(ms, cb) ──
 const SRC_WORKER_A = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `
 import { RpcTarget } from "cloudflare:workers";
 import { FacetDurableObject } from "iterate/sdk";
@@ -302,6 +319,7 @@ export default CounterDurableObject;`,
 
 // ── worker B: reaches A via withItx(env.ITX, …) and writes the natural mid-chain dotted call ──
 const SRC_WORKER_B = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { withItx } from "iterate/sdk";

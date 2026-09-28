@@ -140,7 +140,10 @@ export class BumpCounterDurableObject extends FacetDurableObject {
 `;
 test("a facet TWO rows host survives the removal of ONE of them — memo and storage intact (the delete is the LAST hosting row's, or the survivor would rebuild from 0 and re-run every effect)", async () => {
   const context = stub("prj_shared_facet");
-  const spec = { source: { "worker.js": BUMP_COUNTER_SRC }, className: "BumpCounterDurableObject" };
+  const spec = {
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": BUMP_COUNTER_SRC },
+    className: "BumpCounterDurableObject",
+  };
   const target: ItxExpression = ["itx", "facets", ["get", "shared", spec], "processEventBatch"];
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append({
@@ -197,7 +200,10 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
           "get",
           "counter",
           {
-            source: { "worker.js": COUNTER_SOURCE.replace("state.n + 1", "state.n + 10") },
+            source: {
+              "package.json": '{"main":"worker.js"}',
+              "worker.js": COUNTER_SOURCE.replace("state.n + 1", "state.n + 10"),
+            },
             className: "CounterDurableObject",
           },
         ],
@@ -501,7 +507,7 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
       target: [
         "itx",
         "workers",
-        ["get", { source: { "worker.js": FLAKY_SRC } }],
+        ["get", { source: { "package.json": '{"main":"worker.js"}', "worker.js": FLAKY_SRC } }],
         "processEventBatch",
       ],
       consumes: ["mark"],
@@ -573,7 +579,10 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
         [
           "get",
           name,
-          { source: { "worker.js": COUNTER_SOURCE }, className: "CounterDurableObject" },
+          {
+            source: { "package.json": '{"main":"worker.js"}', "worker.js": COUNTER_SOURCE },
+            className: "CounterDurableObject",
+          },
         ],
         "processEventBatch",
       ],

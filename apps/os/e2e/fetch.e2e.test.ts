@@ -50,6 +50,7 @@ import { SOURCES } from "./support/sources.ts";
  *  `x-itx-expression` naming the stub — a native fetch hop, which carries a WebSocket (Workers RPC
  *  does not). */
 const SRC_DEVICE_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Router extends WorkerEntrypoint {
   fetch(request) {
@@ -172,6 +173,7 @@ test("a missing project secret in the URL query is a loud 502 naming the URL —
 // binding with the x-itx-expression header, riding the DO's expression fetch; no capnweb client anywhere ──
 
 const SRC_PROVIDER = {
+  "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the provider's scope and lend are held on globalThis on purpose: the rows below pin a lent stub's lifetime
   "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
 class WsDevice extends RpcTarget {
@@ -226,6 +228,7 @@ export default class Provider extends WorkerEntrypoint {
 };
 
 const SRC_CONSUMER = {
+  "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Consumer extends WorkerEntrypoint {
   async run(kind) {

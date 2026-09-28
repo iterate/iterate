@@ -1,7 +1,7 @@
 // install.ts — how a project installs voice. Like the agents app it builds on, voice is a SOURCE the
 // project owns: a folder of its config repo (`voice/` by convention) holding a package.json that pins
-// this package and a worker.ts that re-exports the voice worker and its two facet classes
-// (`voiceFolder`). `installVoice` mounts that source as `itx.voice`; the press's facets load the
+// this package and names its `main`, worker.ts, which re-exports the voice worker and its two facet
+// classes (`voiceFolder`). `installVoice` mounts that source as `itx.voice`; the press's facets load the
 // same source. Nothing here is the runtime, so a config worker imports `@iterate-com/voice/install`
 // without loading it.
 import type {} from "./api.ts";
@@ -23,7 +23,7 @@ const VoiceHealth = z.object({ ok: z.literal(true) });
  *  pkg.pr.new URL, or an npm range once the package is on npm). */
 export function voiceFolder(version: string): Record<string, string> {
   return {
-    "package.json": `${JSON.stringify({ dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,
+    "package.json": `${JSON.stringify({ main: "worker.ts", dependencies: { "@iterate-com/voice": version } }, null, 2)}\n`,
     "worker.ts":
       'export { default, VoiceAgentDurableObject, VoiceDelegateDurableObject } from "@iterate-com/voice";\n',
   };

@@ -191,7 +191,7 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the module: the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
@@ -203,7 +203,8 @@ test("run: the module: the script spliced in verbatim, a default WorkerEntrypoin
   expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
   expect(module["worker.js"]).toContain("script(itx),");
   expect(module["worker.js"]).not.toContain("ITX.get()");
-  expect(Object.keys(module)).toEqual(["worker.js"]);
+  expect(module["package.json"]).toBe('{"main":"worker.js"}');
+  expect(Object.keys(module)).toEqual(["package.json", "worker.js"]);
 });
 
 test("run: the module's run() races the script against RUN_DEADLINE_MS in its own isolate: a script that never settles is given up on at the deadline — the call ends, the itx is disposed, no timer is left", async () => {

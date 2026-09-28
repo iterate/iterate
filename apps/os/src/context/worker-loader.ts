@@ -206,7 +206,13 @@ export async function prepareConfinedWorker(
           describe: () => ({ name: opts.owner, where }),
         },
       );
-      return requireFiles(typeof produced === "string" ? { "worker.js": produced } : produced);
+      // A producer that answers one module's text (a `readFile`, a `kv.get`) answers the source of
+      // that one module, named as its `main`.
+      return requireFiles(
+        typeof produced === "string"
+          ? { "package.json": '{"main":"worker.js"}', "worker.js": produced }
+          : produced,
+      );
     };
   }
   // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,

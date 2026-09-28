@@ -35,7 +35,10 @@ test(
           [
             "get",
             name,
-            { source: { "worker.js": SOURCE }, className: "TimedOutSiblingDurableObject" },
+            {
+              source: { "package.json": '{"main":"worker.js"}', "worker.js": SOURCE },
+              className: "TimedOutSiblingDurableObject",
+            },
           ],
           "processEventBatch",
         ],

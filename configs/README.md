@@ -8,8 +8,8 @@ downloader live in `packages/shared/src/config-repo-template`.
 - `with-agents/` — homepage plus the agents app (the `@iterate-com/agents` package, run from the
   `agents/` folder's re-export), installed on `project/created` and on commits that change `agents/`.
 
-A template must contain `worker.ts`, the main module. It and the files it imports may be TypeScript
-or JavaScript, and import packages by name as listed in `package.json` (`iterate/*` and `zod` come
+A template's `package.json` names its main module in `"main"` (`worker.ts` in both presets). It and
+the files it imports may be TypeScript or JavaScript, and import packages by name as listed in `package.json` (`iterate/*` and `zod` come
 from the platform). The worker extends `ConfigWorker` from `iterate/sdk` and reaches the project
 through `this.withItx((itx) => …)`, which releases everything the call reached; lint refuses a raw
 `env.ITX.get()` (`iterate/no-raw-itx-get`). Optional `iterate.json` declares an `events` array; the
