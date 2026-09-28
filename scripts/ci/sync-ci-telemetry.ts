@@ -2,8 +2,8 @@
  * THE CI TELEMETRY SYNC (`.depot/workflows/ci-telemetry.yml`, hourly): one PostHog event per Depot
  * workflow run and one per job attempt, saying which workflow and job ran for which pull request,
  * branch and commit, on which runner size, how long it queued and ran, and how it ended. Nothing per
- * test: per-test events were over 70% of the PostHog project's ingestion when #2494 cut delivery to
- * zero, and test data stays in the Depot artifacts (docs/ci-test-telemetry.md).
+ * test, which was over 70% of the PostHog project's ingestion: test data stays in the Depot
+ * artifacts (docs/ci-test-telemetry.md).
  *
  * A schedule rather than a last step in every workflow: a step inside a workflow cannot see that
  * workflow's own outcome or duration, a cancelled workflow skips it, and it would boot one more
