@@ -2,9 +2,10 @@
 
 import type { IngressRouting } from "./packages/iterate/src/project-ingress.ts";
 
-/** Cloudflare account names, IDs, and shared credentials for account-wide tooling.
- * dev/preview shares one account; use its preview credentials, not a preview slot. */
-const cloudflareAccounts = {
+/** The two Cloudflare accounts, and the Doppler config whose CLOUDFLARE_API_TOKEN and
+ * CLOUDFLARE_ACCOUNT_ID reach each one for account-wide tooling (scripts/monitors/do-cost.ts).
+ * Dev and every preview share one account. */
+export const cloudflareAccounts = {
   prd: {
     cloudflareAccountId: "04b3b57291ef2626c6a8daa9d47065a7",
     dopplerProject: "_shared",
