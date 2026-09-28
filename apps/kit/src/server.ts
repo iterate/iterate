@@ -17,7 +17,7 @@ export default createServerEntry(
       const firmware = await proxyFirmwareFile(request, fetch);
       if (firmware) return firmware;
       return (
-        deviceClientMetadata(new URL(request.url)) ??
+        deviceClientMetadata(new URL(request.url)) ||
         deviceAuth(
           request,
           {
