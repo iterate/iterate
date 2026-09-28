@@ -15,7 +15,7 @@ extern "C" {
 /** The loudest this board is allowed to go; see the note at the setter. */
 enum { STACKCHAN_AUDIO_VOLUME_CEILING = 100 };
 
-/** Applies 0-100 to the AW88298, clamped, and reports what it took. */
+/** Applies a percent board.c already clamped to the AW88298 and reports it. */
 enum iterate_kit_status stackchan_audio_set_volume(
     uint8_t percent, uint8_t *applied);
 uint8_t stackchan_audio_volume(void);

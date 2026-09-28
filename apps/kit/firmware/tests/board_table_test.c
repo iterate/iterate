@@ -30,13 +30,13 @@ static void volume_table(void) {
 }
 
 /* What the board's one volume path was asked for, standing in for board.c's
- * ESP half: it clamps to a 70 ceiling, like the Note4. */
+ * ESP half. */
 static uint8_t set_calls, set_last;
 static enum iterate_kit_status set_answer;
 static enum iterate_kit_status record_set(uint8_t percent, uint8_t *applied) {
+  (void)applied;
   ++set_calls;
   set_last = percent;
-  if (applied != NULL) *applied = percent > 70U ? 70U : percent;
   return set_answer;
 }
 

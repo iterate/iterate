@@ -762,17 +762,15 @@ uint32_t stackchan_audio_epoch_resets(void) {
  * and past about 60 the whole budget goes on loudness: the residual jumps ten
  * decibels and an interruption stops arriving at all.
  *
- * The ceiling below is not a physical limit — the amplifier will happily go to
- * 100 — so this method can still put the board into the deaf band. That is
+ * The board's volume ceiling is not a physical limit — the amplifier will
+ * happily go to 100 — so a volume change can still put the board into the deaf
+ * band. That is
  * deliberate, because a person may want the volume and not the interruption;
  * it is worth knowing that is the trade being made.
  */
 enum iterate_kit_status stackchan_audio_set_volume(
     uint8_t percent, uint8_t *applied) {
   if (speaker == NULL) return ITERATE_KIT_UNAVAILABLE;
-  if (percent > STACKCHAN_AUDIO_VOLUME_CEILING) {
-    percent = STACKCHAN_AUDIO_VOLUME_CEILING;
-  }
   if (esp_codec_dev_set_out_vol(speaker, (int)percent) != ESP_CODEC_DEV_OK) {
     return ITERATE_KIT_IO_ERROR;
   }

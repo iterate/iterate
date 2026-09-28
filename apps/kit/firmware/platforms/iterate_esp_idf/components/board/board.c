@@ -341,9 +341,6 @@ static bool start(void *context, struct iterate_kit_board_audio *out) {
   if (board->facts.speaker.volume != NULL) {
     volume_percent = board->facts.speaker.volume(board->facts.speaker.context);
   }
-  /* The board starts before the transport, whose init recovers a full or
-   * newer-format partition; until then there is simply no level to restore. */
-  (void)nvs_flash_init();
   if (iterate_kit_board_restore_volume(iterate_kit_board_set_volume) != ITERATE_KIT_OK) {
     ESP_LOGW("board", "kept volume not restored; playing at %u", (unsigned)volume_percent);
   }
@@ -472,6 +469,16 @@ static size_t iterate_kit_board_modules(
 /** Install shared startup, presentation, controls, health and modules, then run. */
 void iterate_kit_board_run(const struct iterate_kit_board *value) {
   board = value;
+  /* NVS holds the kept volume and is required by ESP-IDF Wi-Fi. A full or
+   * newer-format partition cannot be used as it is; erase is the documented
+   * recovery. Other errors stay unrecovered, because a blanket erase would
+   * destroy unrelated durable device state, and Wi-Fi start reports them. */
+  esp_err_t nvs = nvs_flash_init();
+  if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    nvs = nvs_flash_erase();
+    if (nvs == ESP_OK) nvs = nvs_flash_init();
+  }
+  if (nvs != ESP_OK) ESP_LOGE("board", "NVS not started: %s", esp_err_to_name(nvs));
   volume_percent = board->facts.speaker.ceiling;
   struct iterate_kit_board_facts facts = iterate_kit_board_defaults(board);
   facts.speaker.set_volume = set_volume;
