@@ -129,14 +129,17 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
-      // back to the project's Hostnames page in the dash, which re-checks the hostname it names
-      connect: async (hostname) =>
-        config.domainConnect && config.urls.dash
+      // back to the project's Hostnames page in the dash — addressed by the project's slug, as the
+      // dash's routes are — which re-checks the hostname it names
+      connect: async (hostname) => {
+        const slug = (await controlPlane.getProject(projectId))?.slug;
+        return config.domainConnect && config.urls.dash && slug
           ? domainConnectLinkOf(hostname, {
               privateKey: config.domainConnect.privateKey.exposeSecret(),
-              redirectUri: `${config.urls.dash}/projects/${projectId}/hostnames?connected=${encodeURIComponent(hostname)}`,
+              redirectUri: `${config.urls.dash}/projects/${slug}/hostnames?connected=${encodeURIComponent(hostname)}`,
             })
-          : null,
+          : null;
+      },
     };
   }
 

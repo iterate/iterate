@@ -87,10 +87,13 @@ function ProjectHostnames() {
       type: "events.iterate.com/project/primary-hostname-configured",
       payload: { hostname },
     });
-  // back from the DNS provider: check the hostname it wrote the records for, once
+  // back from the DNS provider: check the hostname it wrote the records for, once — only one the
+  // project already has, so a crafted link can do no more than check it again
   const checkedConnected = useRef<string | null>(null);
+  const connectedIsOurs = Boolean(search.connected && read?.data?.hostnames[search.connected]);
   useEffect(() => {
     if (!context || !search.connected || checkedConnected.current === search.connected) return;
+    if (!connectedIsOurs) return;
     checkedConnected.current = search.connected;
     context
       .append({
@@ -101,7 +104,7 @@ function ProjectHostnames() {
         setError(caught instanceof Error ? caught.message : String(caught)),
       );
     void navigate({ search: {}, replace: true });
-  }, [context, search.connected, navigate]);
+  }, [context, search.connected, connectedIsOurs, navigate]);
   const add = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const hostname = String(new FormData(event.currentTarget).get("hostname"));

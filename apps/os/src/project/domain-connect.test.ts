@@ -4,12 +4,14 @@
 import { expect, test } from "vitest";
 import { domainConnectLinkOf, domainConnectZonesOf, signedApplyUrl } from "./domain-connect.ts";
 
-test.each([
+test.for([
   {
+    name: "a subdomain of a registrable domain",
     hostname: "iterate.templestein.com",
     zones: [{ domain: "templestein.com", host: "iterate" }],
   },
   {
+    name: "deeper: every zone above it, most specific first",
     hostname: "iterate.shop.example.co.uk",
     zones: [
       { domain: "shop.example.co.uk", host: "iterate" },
@@ -17,9 +19,12 @@ test.each([
       { domain: "co.uk", host: "iterate.shop.example" },
     ],
   },
-  // a bare domain has no host to put the records under: the template requires one
-  { hostname: "templestein.com", zones: [] },
-])("the zones $hostname may live in, most specific first", ({ hostname, zones }) => {
+  {
+    name: "a bare domain has no host to put the records under: the template requires one",
+    hostname: "templestein.com",
+    zones: [],
+  },
+])("the zones a hostname may live in: $name", ({ hostname, zones }) => {
   expect(domainConnectZonesOf(hostname)).toEqual(zones);
 });
 
