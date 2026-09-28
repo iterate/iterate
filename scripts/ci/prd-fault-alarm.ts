@@ -51,13 +51,11 @@ import {
 } from "../../envs.ts";
 import { saveNewestArtifactFile } from "./depot.ts";
 import {
-  escalationText,
   getSlackClient,
-  markResolved,
   onCallMention,
   pageChannel,
   pageText,
-  resolvedText,
+  resolvePage,
   slackEscape,
 } from "./slack.ts";
 
@@ -270,7 +268,11 @@ export async function alarm(input: {
     ? { pins: {}, posts: [] }
     : pinnedWorkarounds(reading.healEvents, window, input.state);
   // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
-  const owed = triage.page || triage.updates.length > 0 || pinned.posts.length > 0;
+  const owed =
+    triage.page ||
+    triage.updates.length > 0 ||
+    triage.resolved.length > 0 ||
+    pinned.posts.length > 0;
   const slack = owed ? input.slack?.() : undefined;
   const channel = pageChannel(testRun);
   const pages = triage.pages;
@@ -287,6 +289,8 @@ export async function alarm(input: {
         reply_broadcast: update.reply.broadcast,
       });
   }
+  for (const page of triage.resolved)
+    if (slack) await resolveFaultPage(slack, { channel, ...page });
   if (triage.page && slack) {
     const posted = await slack.chat.postMessage({ channel, text: triage.page.text });
     // The client throws on an error, and every posted message has its ts.
@@ -299,6 +303,7 @@ export async function alarm(input: {
       update.text && `edit ${update.ts}:\n${update.text}`,
       update.reply && `reply in ${update.ts}:\n${update.reply.text}`,
     ]),
+    ...triage.resolved.map((page) => `resolve ${page.ts}: ${page.why}`),
     ...pinned.posts,
   ]
     .filter(Boolean)
@@ -339,6 +344,27 @@ async function editPage(slack: WebClient, page: { channel: string; ts: string; t
     );
     const posted = await slack.chat.postMessage({ channel: page.channel, text: page.text });
     return posted.ts!;
+  }
+}
+
+/** Resolves a page (slack.ts resolvePage). One Slack refuses to edit (EditRefusal) stays as it
+ *  was and leaves the state all the same: its incidents are closed. */
+async function resolveFaultPage(
+  slack: WebClient,
+  page: { channel: string; ts: string; text: string; why: string },
+) {
+  try {
+    await resolvePage(slack, page);
+  } catch (error) {
+    const refusal = EditRefusal.safeParse(error);
+    if (!refusal.success) throw error;
+    console.warn(
+      JSON.stringify({
+        event: "prd-fault-alarm.resolve-refused",
+        ts: page.ts,
+        reason: refusal.data.data.error,
+      }),
+    );
   }
 }
 
@@ -457,9 +483,9 @@ type PageUpdate = {
  * What a window owes Slack. Each incident it sees that is open on a page counts there: the page is
  * edited with the running count, and its thread hears of a change of state — grown tenfold since
  * the channel last heard, or back in a burst after an hour's quiet (at most every six hours) —
- * broadcast to the channel. An incident unseen for a day closes; a page whose incidents all closed is marked
- * resolved and its thread says so. The incidents with no open page open one new page. `pages` is
- * the next state's open pages, the new one to be added once posted. Pure.
+ * broadcast to the channel. An incident unseen for a day closes; a page whose incidents all closed
+ * is `resolved` (slack.ts resolvePage) and leaves the state. The incidents with no open page open
+ * one new page. `pages` is the next state's open pages, the new one to be added once posted. Pure.
  */
 export function triageIncidents(
   reading: FaultReading,
@@ -513,6 +539,7 @@ export function triageIncidents(
     });
   }
   const updates: PageUpdate[] = [];
+  const resolved: { ts: string; text: string; why: string }[] = [];
   const open: Page[] = [];
   for (const page of pages) {
     const incidents = Object.values(page.incidents);
@@ -522,13 +549,10 @@ export function triageIncidents(
         .map((incident) => incident.lastSeen)
         .sort()
         .at(-1)!;
-      updates.push({
+      resolved.push({
         ts: page.ts,
-        text: markResolved(text),
-        reply: {
-          text: resolvedText(`no sighting for a day, quiet since ${stamp(lastSeen, now)}`, testRun),
-          broadcast: false,
-        },
+        text,
+        why: `no sighting for a day, quiet since ${stamp(lastSeen, now)}`,
       });
       continue;
     }
@@ -539,10 +563,7 @@ export function triageIncidents(
       reply: lines
         ? {
             text: [
-              escalationText(
-                `prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC`,
-                testRun,
-              ),
+              `🚨 prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC ${onCallMention}`,
               ...lines,
             ].join("\n"),
             broadcast: true,
@@ -557,6 +578,7 @@ export function triageIncidents(
   return {
     page,
     updates: updates.filter((update) => update.text || update.reply),
+    resolved,
     pages: open,
   };
 }
@@ -604,6 +626,7 @@ function renderFaultPage(incidents: Record<string, Incident>, now: number, testR
     what: `prd: ${what}`,
     impact: [`since ${stamp(firstSeen, now)}`, ...bullets, ...more].join("\n"),
     action: `open <https://dash.cloudflare.com/${PRD_ACCOUNT_ID}/workers-and-pages/observability|Workers Logs> for these rays; /debug-os-worker`,
+    link: null,
     testRun,
   });
 }

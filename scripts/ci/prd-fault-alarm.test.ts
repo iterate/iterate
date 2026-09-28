@@ -252,25 +252,23 @@ test("an incident back in a burst after an hour's quiet is broadcast; a lone ret
   });
 });
 
-test("a page whose incidents went a day unseen is resolved: its first line and a reply say so", () => {
+test("a page whose incidents all went a day unseen is resolved, and leaves the state", () => {
   const first = triageAt("07:30", reading5xx(1), null);
   const dayLater = triageAt("07:30", quiet, first.next, "2026-09-24");
   expect(dayLater).toMatchObject({
     triage: {
       page: null,
-      updates: [
+      updates: [],
+      resolved: [
         {
           ts: "1.0",
           text: [
-            `✅ resolved: prd: 1 visitor 5xx ${mentions}`,
+            `🚨 prd: 1 visitor 5xx ${mentions}`,
             "Impact: since 09-23 07:28 UTC",
             "• ✅ visitor 5xx: lispwoso.com 1 · quiet since 09-23 07:28 UTC",
             doLine,
           ].join("\n"),
-          reply: {
-            text: `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`,
-            broadcast: false,
-          },
+          why: "no sighting for a day, quiet since 09-23 07:28 UTC",
         },
       ],
     },
@@ -506,6 +504,21 @@ test("a new incident's page is posted to #error-pulse; its repeat is a chat.upda
     updates: [{ channel, ts: "1.0", text: expect.stringMatching(/^🚨 prd: 3 visitor 5xx /u) }],
   });
   expect(slack.posts).toHaveLength(1);
+});
+
+test("a resolved page's first line is edited to ✅ resolved:, then its thread says why", async () => {
+  const slack = fakeSlack();
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  expect({
+    updates: slack.updates.map((update) => [update.ts, String(update.text).split("\n")[0]]),
+    replies: slack.posts.slice(1).map((post) => [post.thread_ts, post.text]),
+  }).toEqual({
+    updates: [["1.0", `✅ resolved: prd: 1 visitor 5xx ${mentions}`]],
+    replies: [
+      ["1.0", `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+    ],
+  });
 });
 
 test("a page Slack refuses to edit is posted again, and its thread and state move there", async () => {
