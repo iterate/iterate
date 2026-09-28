@@ -22,9 +22,9 @@ export function secretMaterialOf(value: string): SecretMaterial {
     return value;
   }
   // JSON.parse answers any JSON value; only an object (not null, an array, a number) has fields.
-  const object = JsonObject.safeParse(parsed);
+  const object = JSONObject.safeParse(parsed);
   return object.success ? object.data : value;
 }
 
 /** A JSON object: the one JSON value whose fields `{ field }` can pick. */
-const JsonObject = z.record(z.string(), z.unknown());
+const JSONObject = z.record(z.string(), z.unknown());

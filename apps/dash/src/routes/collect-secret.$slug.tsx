@@ -1,11 +1,7 @@
-// /collect-secret/<slug> — where an agent's collection link lands (`itx.secrets.collectFromUser`,
-// apps/os/src/context/built-ins.ts): one card on a plain background, outside the Dash's shell and
-// framed like the issuer's sign-in and consent pages, where a person enters a value the agent must
-// never see in chat. The link fixes the project (`project`, the id the slug must name), the platform
-// (`platform`, the one this Dash is connected to), the secret's `path` and the origins (`urls`) its
-// value may be sent to; `description` is the requester's own words, quoted, and `agent` the agent
-// messaged once the value is saved. A visitor without a session signs in and comes back to this
-// URL; one whose sign-in lacks the project is offered another.
+// /collect-secret/<slug> — the collection-link page; see `collectFromUser` in packages/iterate/src/api.ts.
+// One card outside the Dash's shell, framed like the issuer's sign-in and consent pages.
+// A visitor without a session signs in and returns here; one whose sign-in lacks the project
+// is offered another.
 
 // registers `itx.agents` on InstalledAppRoots
 import type {} from "@iterate-com/agents";
