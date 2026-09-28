@@ -35,8 +35,8 @@
 // its own (`<parent>-itx`, `-oauth`, `-files`, `-db`, `-repos`) and its previews'
 // (`<parent>-<preview>-<suffix>`), but never a legacy slot's (`os-preview-<n>-repos`, a number where
 // the preview's name would be; the legacy platform's, thousands of repos each), nor one the account
-// has for something else (preview-config.ts accountResourceNames). One still holding a preview
-// waits for the legacy rule to take it.
+// has for something else (preview-config.ts accountResourceNames), nor a deployment's member, whatever
+// its prefix. One still holding a preview waits for the legacy rule to take it.
 //
 // EVERY OTHER WORKER stays: envs.ts's on this account (preview-config.ts accountWorkerNames) and any
 // worker envs.ts does not name (`unmappedWorkers`), which the plan lists for a person to judge.
@@ -282,9 +282,12 @@ export function planFormerParents(input: {
   return FORMER_PARENTS.flatMap((parent) => {
     if (input.deployedWorkerNames.has(parent)) return [];
     const worker = input.workers.includes(parent);
+    // a deployment's member is never a former parent's, even one whose prefix begins with its name
+    // (`--name os-preview-foo` makes `os-preview-foo-<sha7>-os-db`)
     const resources = input.resources.filter(
       (resource) =>
         !input.accountResourceNames.has(resource.name) &&
+        !previewDeploymentOfMember(resource, input.suffixes) &&
         isFormerParentResource(parent, resource, input.suffixes),
     );
     if (!worker && resources.length === 0) return [];

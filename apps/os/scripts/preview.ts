@@ -1046,12 +1046,12 @@ async function openPullRequestBranches() {
   }
 }
 
-/** LEGACY, from before per-commit deployments (2026-09-25): the Worker Previews each PR used to get
- *  on main on dev's workers and, before those were renamed, on the former parents (preview-config.ts
- *  FORMER_PARENTS), each holding a Durable Object namespace per class of the account's 500 — and
- *  apps/os's previews' resources (`<os worker>-<preview>-<binding>`). The stale ones go
- *  (preview-sweep.ts `planLegacyWorkerPreviewSweep`). Delete this, and the sweep's call, once a run
- *  logs "no Worker Previews left". */
+/** THE LEGACY WORKER PREVIEWS still on main on dev's workers and the former parents
+ *  (preview-config.ts FORMER_PARENTS), each holding a Durable Object namespace per class of the
+ *  account's 500, and the resources of `os`'s and `os-preview`'s previews
+ *  (`<worker>-<preview>-<binding>`): the stale ones go (preview-sweep.ts
+ *  `planLegacyWorkerPreviewSweep`). No deploy makes a Worker Preview, so this and the sweep's call
+ *  go once a run logs "no Worker Previews left". */
 async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) {
   const osWorkers = [MAIN_ON_DEV.workerName, "os-preview"];
   const workers = [

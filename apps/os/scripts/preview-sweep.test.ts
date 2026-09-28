@@ -250,6 +250,28 @@ test.for<{
   );
 });
 
+test("a deployment whose prefix begins with a former parent's name keeps its resources: they are the deployment's, not the former parent's", () => {
+  const deployment: PreviewMember[] = [
+    d1("os-preview-foo-a1b2c3d-os-db", 2),
+    { kind: "kv", name: "os-preview-foo-a1b2c3d-os-oauth-kv", id: "k" },
+    { kind: "r2", name: "os-preview-foo-a1b2c3d-os-files", id: "os-preview-foo-a1b2c3d-os-files" },
+    {
+      kind: "artifacts",
+      name: "os-preview-foo-a1b2c3d-os-repos",
+      id: "os-preview-foo-a1b2c3d-os-repos",
+    },
+  ];
+  const plan = planFormerParents({
+    workers: ["os", "os-preview", "os-preview-foo-a1b2c3d-os"],
+    deployedWorkerNames: accountWorkerNames(),
+    accountResourceNames: accountResourceNames(),
+    resources: [...osPreviewResources(), ...deployment],
+    suffixes: suffixes(),
+    previewsLeft: new Map(),
+  });
+  expect(plan).toMatchObject([{ name: "os-preview", resources: osPreviewResources() }]);
+});
+
 test("a former parent envs.ts deploys again, and a resource the account has for something else, are never a former parent's", () => {
   const plan = planFormerParents({
     workers: ["os", "os-preview", "dash-preview"],
