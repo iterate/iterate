@@ -368,9 +368,10 @@ function slackPoster(testRun: boolean): PagePoster {
       return z.string().parse(posted.ts);
     },
     async update(ts, text) {
-      const edited = await updatePage(slack, { channel, ts, text });
-      if (edited === "edited") console.log(`[health] edited ${ts}:\n${text}`);
-      return edited;
+      // this job keeps its pages in its own state, so a deleted page and a frozen one are alike
+      if ((await updatePage(slack, { channel, ts, text })) !== "edited") return "gone";
+      console.log(`[health] edited ${ts}:\n${text}`);
+      return "edited";
     },
   };
 }

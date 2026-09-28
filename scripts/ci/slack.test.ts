@@ -224,12 +224,18 @@ test.for([
   expect(writes(slack)).toEqual(updateError ? [edit] : [edit, reply]);
 });
 
-// A page Slack can no longer edit (PAGE_GONE_ERRORS): deleted, or past the workspace's edit window.
-const goneRows = [...PAGE_GONE_ERRORS].map((error) => ({ error }));
+// A page Slack can no longer edit (PAGE_GONE_ERRORS): deleted, or past the workspace's edit window
+// and still in the channel ("frozen"). A frozen page is closed by a reply in its thread sent to the
+// channel too, which findOpenPages reads; a deleted one is not in the history at all.
+const FROZEN_ERRORS = [...PAGE_GONE_ERRORS].filter((error) => error !== "message_not_found");
+const goneRows = [...PAGE_GONE_ERRORS].map((error) => ({
+  error,
+  frozen: error !== "message_not_found",
+}));
 
 test.for(goneRows)(
-  "resolvePage: a page Slack answers $error to gets its resolution top-level",
-  async ({ error }) => {
+  "resolvePage: a page Slack answers $error to gets its resolution once, in its thread and the channel when it is still there",
+  async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const page = slack.seed("#error-pulse", `:rotating_light: page ${MENTIONS}`, {
       updateError: error,
@@ -241,11 +247,18 @@ test.for(goneRows)(
       text: page.text,
       why: "back under 2",
     });
-    expect(writes(slack).at(-1)).toEqual({
-      method: "chat.postMessage",
-      channel: errorPulse,
-      text: `✅ resolved: back under 2 ${MENTIONS}`,
-    });
+    const text = `✅ resolved: back under 2 ${MENTIONS}`;
+    expect(writes(slack).slice(1)).toEqual([
+      frozen
+        ? {
+            method: "chat.postMessage",
+            channel: errorPulse,
+            thread_ts: page.ts,
+            reply_broadcast: true,
+            text,
+          }
+        : { method: "chat.postMessage", channel: errorPulse, text },
+    ]);
     expect(warn).toHaveBeenCalledWith(
       JSON.stringify({ event: "slack.page-gone", channel: errorPulse, ts: page.ts, reason: error }),
     );
@@ -269,8 +282,8 @@ test("resolvePage: a deleted page gets its resolution top-level", async () => {
 });
 
 test.for(goneRows)(
-  "keepPage: an open page Slack answers $error to is posted again",
-  async ({ error }) => {
+  "keepPage: an open page Slack answers $error to is posted again, and closed naming no one when it is still there",
+  async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const page = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
       updateError: error,
@@ -293,13 +306,24 @@ test.for(goneRows)(
         text: `🚨 sweep: stuck n=2 ${MENTIONS}`,
       },
       { method: "chat.postMessage", channel: errorPulse, text: `🚨 sweep: stuck n=2 ${MENTIONS}` },
+      ...(frozen
+        ? [
+            {
+              method: "chat.postMessage",
+              channel: errorPulse,
+              thread_ts: page.ts,
+              reply_broadcast: true,
+              text: "✅ resolved: this page moved to a new message, which Slack lets this bot edit",
+            },
+          ]
+        : []),
     ]);
   },
 );
 
 test.for(goneRows)(
-  "keepPage: an older page Slack answers $error to is passed over, and the newest is kept",
-  async ({ error }) => {
+  "keepPage: an older page Slack answers $error to is closed naming no one when it is still there, and the newest is kept",
+  async ({ error, frozen }) => {
     const slack = fakeSlack({ now });
     const older = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
       ageHours: 2,
@@ -325,6 +349,17 @@ test.for(goneRows)(
         ts: older.ts,
         text: `✅ resolved: sweep: stuck n=1 ${MENTIONS}`,
       },
+      ...(frozen
+        ? [
+            {
+              method: "chat.postMessage",
+              channel: errorPulse,
+              thread_ts: older.ts,
+              reply_broadcast: true,
+              text: "✅ resolved: a newer page follows this incident",
+            },
+          ]
+        : []),
       {
         method: "chat.update",
         channel: errorPulse,
@@ -338,6 +373,68 @@ test.for(goneRows)(
         text: `✅ resolved: the sweep succeeded ${MENTIONS}`,
       },
     ]);
+  },
+);
+
+// Over several runs, a page Slack can no longer edit is resolved exactly once: a frozen one stays in
+// the channel's history, which is these posters' only state, so each run reads it again.
+test.for([
+  ...FROZEN_ERRORS.flatMap((error) => [
+    {
+      name: `${error}, the incident still there, then gone`,
+      error,
+      renders: [true, false, false, false],
+      steps: ["edit", "resolve"],
+    },
+    {
+      name: `${error}, the incident gone`,
+      error,
+      renders: [false, false, false, false],
+      steps: ["resolve"],
+    },
+  ]),
+  {
+    name: "deleted, the incident still there, then gone",
+    error: "deleted",
+    renders: [true, false, false, false],
+    steps: ["post", "resolve"],
+  },
+])(
+  "keepPage over four runs: a page Slack cannot edit is resolved once ($name)",
+  async ({ error, renders, steps: expected }) => {
+    const slack = fakeSlack({ now });
+    const page = slack.seed("#error-pulse", `:rotating_light: sweep: stuck n=1 ${MENTIONS}`, {
+      ageHours: 1,
+      updateError: error === "deleted" ? undefined : error,
+    });
+    if (error === "deleted") await slack.client.chat.delete({ channel: errorPulse, ts: page.ts });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const input = {
+      marker: "sweep: stuck",
+      sinceHours: 720,
+      now: new Date(now),
+      why: "the sweep succeeded",
+    };
+    const steps = [];
+    for (const present of renders)
+      steps.push(
+        await keepPage(slack.client, {
+          ...input,
+          render: async () => (present ? `🚨 sweep: stuck n=2 ${MENTIONS}` : undefined),
+        }),
+      );
+    expect({
+      steps: steps.filter((step) => step !== "none"),
+      resolutions: slack
+        .timeline("#error-pulse")
+        .filter((message) => message.text === `✅ resolved: the sweep succeeded ${MENTIONS}`)
+        .length,
+      open: await findOpenPages(slack.client, { ...input, channel: errorPulse }),
+    }).toEqual({
+      steps: expected,
+      resolutions: 1,
+      open: [],
+    });
   },
 );
 

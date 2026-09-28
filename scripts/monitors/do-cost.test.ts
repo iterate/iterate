@@ -467,10 +467,11 @@ test("an old 🧪 page in #error-pulse is no incident: the real run posts its ow
 });
 
 // A page is open for OPEN_PAGE_HOURS (48): past that, an incident is paged again, and the new page
-// resolves the older one by an edit alone. One Slack can no longer edit is left as it is.
+// resolves the older one naming no one: by an edit, or, when Slack can no longer edit it, by a reply
+// in its thread sent to the channel too, which closes it for every later run.
 test.for([
   { name: "is resolved by an edit alone", updateError: undefined },
-  { name: "that Slack can no longer edit is passed over", updateError: "edit_window_closed" },
+  { name: "that Slack can no longer edit is closed by a reply", updateError: "edit_window_closed" },
 ])(
   "an incident past 48 hours is paged again, and its older page $name",
   async ({ updateError }) => {
@@ -493,12 +494,83 @@ test.for([
         ts: older.ts,
         text: expect.stringMatching(/^✅ resolved: DO cost page for dev\/preview: ~\$12\/h/),
       },
+      ...(updateError
+        ? [
+            {
+              method: "chat.postMessage",
+              channel: PULSE,
+              thread_ts: older.ts,
+              reply_broadcast: true,
+              text: "✅ resolved: a newer page follows this incident",
+            },
+          ]
+        : []),
       {
         method: "chat.postMessage",
         channel: PULSE,
         text: expect.stringMatching(/^🚨 DO cost page for dev\/preview: ~\$11\/h/),
       },
     ]);
+  },
+);
+
+// do-cost runs hourly and keeps no state but #error-pulse, so a page Slack can no longer edit is
+// read again every run: it must be resolved once, not once an hour. `hours` are dev/preview's
+// DO-hours an hour, from three hours before the first run; each run reads the three before it.
+test.for(
+  ["edit_window_closed", "cant_update_message"].flatMap((updateError) => [
+    {
+      name: `${updateError}, the incident still there, then gone`,
+      updateError,
+      hours: [2000, 2000, 2000, 40, 40, 40, 40, 40],
+      actions: ["edit", "edit", "resolve"],
+    },
+    {
+      name: `${updateError}, the incident gone`,
+      updateError,
+      hours: [2000, 40, 40, 40, 40, 40, 40, 40],
+      actions: ["resolve"],
+    },
+  ]),
+)(
+  "hourly runs resolve a page Slack cannot edit once ($name)",
+  async ({ updateError, hours, actions }) => {
+    const first = Date.parse("2026-09-28T12:41:00Z");
+    const slack = fakeSlack({ now: first });
+    slack.seed("#error-pulse", openPage("2,124").text, { ageHours: 2, updateError });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const taken: string[] = [];
+    for (let run = 0; run < hours.length - 3; run++) {
+      const at = new Date(first + run * 3600_000);
+      slack.clock.now = at.getTime();
+      const startOfHour = Date.parse(at.toISOString().slice(0, 13) + ":00:00Z");
+      const { pages } = await postDailyThread({
+        slack: slack.client,
+        now: at,
+        readings: [
+          reading(
+            "dev/preview",
+            hours.slice(run, run + 3).map((doHours, index) => ({
+              hour: new Date(startOfHour - (3 - index) * 3600_000)
+                .toISOString()
+                .replace(".000", ""),
+              doHours,
+            })),
+          ),
+        ],
+        runUrl,
+        testRun: false,
+      });
+      for (const page of pages) if (page.action !== "none") taken.push(page.action);
+    }
+    const resolutions = slack
+      .timeline("#error-pulse")
+      .filter((message) => message.text.startsWith("✅ resolved: back under"));
+    expect({ actions: taken, resolutions: resolutions.length }).toEqual({
+      actions,
+      resolutions: 1,
+    });
   },
 );
 

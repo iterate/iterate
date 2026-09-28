@@ -560,6 +560,7 @@ test("a page Slack refuses to edit is posted again, and its thread and state mov
     posts: [
       [undefined, `🚨 prd: 1 visitor 5xx ${mentions}`],
       [undefined, `🚨 prd: 10 visitor 5xx ${mentions}`],
+      [page!.ts, "✅ resolved: this page moved to a new message, which Slack lets this bot edit"],
       [reposted!.ts, `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`],
     ],
     pages: [reposted!.ts],
