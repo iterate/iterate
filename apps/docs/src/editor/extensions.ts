@@ -14,6 +14,7 @@ import {
   startAsteriskList,
   tables,
 } from "@atomic-editor/editor";
+import { ATOMIC_CODE_LANGUAGES } from "@atomic-editor/editor/code-languages";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
@@ -52,8 +53,9 @@ const formattingKeymap = Prec.highest(
   ),
 );
 
-/** Atomic's colours from the app's theme (packages/ui globals.css): Atomic's own defaults are a
- *  dark theme, inline code included. */
+/** Atomic's colours from the app's theme (packages/ui globals.css), which is light only: Atomic's
+ *  own defaults are a dark theme, inline code and code blocks' syntax colours included (the `hl-`
+ *  ones, GitHub's light palette here; a fence's language name is `hl-variable`). */
 const theme = EditorView.theme({
   "&": {
     "--atomic-editor-fg": "var(--foreground)",
@@ -72,6 +74,19 @@ const theme = EditorView.theme({
     "--atomic-editor-selection-bg": "var(--accent)",
     "--atomic-editor-font": "var(--font-sans, system-ui)",
     "--atomic-editor-measure": "100%",
+    "--atomic-editor-hl-comment": "#6a737d",
+    "--atomic-editor-hl-escape": "#005cc5",
+    "--atomic-editor-hl-function": "#6f42c1",
+    "--atomic-editor-hl-invalid": "#cb2431",
+    "--atomic-editor-hl-keyword": "#d73a49",
+    "--atomic-editor-hl-number": "#005cc5",
+    "--atomic-editor-hl-operator": "#d73a49",
+    "--atomic-editor-hl-property": "#005cc5",
+    "--atomic-editor-hl-regexp": "#032f62",
+    "--atomic-editor-hl-string": "#032f62",
+    "--atomic-editor-hl-tag": "#22863a",
+    "--atomic-editor-hl-type": "#e36209",
+    "--atomic-editor-hl-variable": "var(--foreground)",
     fontSize: "15px",
   },
   "&.cm-focused": { outline: "none" },
@@ -97,7 +112,12 @@ export function docEditorExtensions(options: {
     extendEmphasisPair,
     autoCloseCodeFence,
     EditorView.lineWrapping,
-    markdown({ base: markdownLanguage, extensions: highlightMarkdown }),
+    // code blocks highlight in their fence's language, each grammar fetched when a doc first uses it
+    markdown({
+      base: markdownLanguage,
+      codeLanguages: ATOMIC_CODE_LANGUAGES,
+      extensions: highlightMarkdown,
+    }),
     atomicMarkdownSyntax,
     atomicEditorTheme,
     theme,
