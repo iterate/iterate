@@ -90,9 +90,9 @@ test("a probe that could not run is said so in the headline and the reply, never
   });
 });
 
-// The 2026-09-21 os-next preview pin runaway, hour by hour (dev/preview: ceiling 500 DO-hours
-// ≈ $2.81/h, page tier $10/h ≈ 1,778 DO-hours/hour). Current usage is the higher of the last
-// complete hour and this hour projected to 60 minutes. With no page open, only the page tier pages.
+// Hourly DO-hours recorded on dev/preview on 2026-09-21 (ceiling 500 DO-hours ≈ $2.81/h, page
+// tier $10/h ≈ 1,778 DO-hours/hour). Current usage is the higher of the last complete hour and
+// this hour projected to 60 minutes. With no page open, only the page tier pages.
 test.for([
   {
     name: "a quiet hour: no page",
@@ -269,9 +269,9 @@ test.for([
   expect(decidePage({ account: thread.accounts[0]!, open, runUrl })).toMatchObject(expected);
 });
 
-// The over-ceiling readings of 2026-09-21/22 in #error-pulse, each the hour before the run that
-// posted it ("Latest: 20:00 → 2,124" at 20:42), under today's thresholds; an hour with no reading
-// is quiet (40 DO-hours on dev/preview, 1 on prd).
+// Fixture: the hourly DO-hours readings in #error-pulse's DO cost posts of 2026-09-21/22, keyed by
+// the hour each reading covers, replayed under the current thresholds. An hour with no reading is
+// quiet (40 DO-hours on dev/preview, 1 on prd).
 const INCIDENT = {
   "dev/preview": {
     quiet: 40,
