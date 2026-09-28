@@ -4,12 +4,12 @@
 // The headline is one sentence, rewritten every hour: "We're spending $X/day
 // on durable objects based on current usage ($A dev/preview, $B prd)". The
 // thread's first reply is the per-account table (latest hour, today so far,
-// hours over the ceiling, pinned invocations), also rewritten every hour;
-// anything that needs a human — an hour over the ceiling, a probe that could
-// not run — is a further reply. An account at its page tier ($/hour) also gets
-// a NEW top-level message in #error-pulse that @-mentions Jonas and Misha and
-// names the top spenders, repeated every PAGE_REPEAT_HOURS while it lasts:
-// edits and thread replies notify nobody.
+// hours over the ceiling, pinned invocations), also rewritten every hour; an
+// hour over the ceiling or a probe that could not run is a further reply, a
+// routine reading that pages nobody. Only an account at its page tier ($/hour)
+// reaches a human: a NEW top-level message in #error-pulse that @-mentions Jonas
+// and Misha and names the top spenders, repeated every PAGE_REPEAT_HOURS while it
+// lasts.
 // Exists because the 2026-09-01 preview stream-DO wake loop burned ~$300/hour
 // for 28 hours before a human noticed it on the bill — and the 2026-09-21
 // os-next preview pin runaway reached $87/hour with this alarm red for a day,

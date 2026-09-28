@@ -711,8 +711,9 @@ and OTLP JSON export.
 
 #error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
 (`onCallMention` in `scripts/ci/slack.ts`), thread replies and 🧪 test pages included: the pages
-below, the prd fault alarm, a failed prd deploy and a failed scheduled workflow
-(`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
+below, the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the
+preview sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed prd deploy and a failed
+scheduled workflow (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each prd deploy that
 succeeded, each pull request event, the PR dashboard and the Durable Object cost alarm's daily
 thread.
 
