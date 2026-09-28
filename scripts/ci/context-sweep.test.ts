@@ -8,7 +8,7 @@ import {
   backUpAndDestroy,
   classifyContexts,
   reconnecting,
-  sweepMessages,
+  sweepPosts,
   type SweptContext,
 } from "./context-sweep.ts";
 
@@ -224,73 +224,102 @@ const report = {
   recent: 0,
   destroyFailed: 0,
 };
-const run = { refName: "main", runUrl: "https://depot.dev/run" };
-
+const run = { runUrl: "https://depot.dev/run", testRun: false };
 test.for([
   {
-    name: "a report-only run is routine, in #ci alone",
-    messages: sweepMessages({ ...run, result: "success", report: { ...report, orphans: 0 } }),
-    expected: [
-      {
-        channel: "C0B3QJSU32A",
-        text: "🧹 Context sweep of prd on main: 172 stored, 111 live, 18 global, 0 orphans\n<https://depot.dev/run|View the Depot job>",
-      },
-    ],
+    name: "a report-only run is one #ci line and no page",
+    posts: sweepPosts({ ...run, result: "success", report }),
+    expected: {
+      result:
+        "🧹 context sweep of prd: 172 objects: 111 live, 18 global, 43 orphans (report-only) · <https://depot.dev/run|run>",
+      page: undefined,
+    },
   },
   {
-    name: "a run that destroyed orphans is routine too (the crash hunt leaves some every night): #ci alone, naming the backups",
-    messages: sweepMessages({
+    name: "a run that destroyed orphans is routine (the crash hunt leaves some every night): no page",
+    posts: sweepPosts({
       ...run,
       result: "success",
-      report: {
-        ...report,
-        destroyed: 41,
-        recent: 2,
-        backups: "r2://iterate-ci/backups/context-sweep/prd/r/",
-      },
+      report: { ...report, destroyed: 41, recent: 2, emptied: 3, backups: "r2://b/prd/r/" },
     }),
-    expected: [
-      {
-        channel: "C0B3QJSU32A",
-        text: "🧹 Context sweep of prd on main: 172 stored, 111 live, 18 global, 43 orphans; 41 orphans destroyed, each backed up first to r2://iterate-ci/backups/context-sweep/prd/r/; 2 orphans active in the last hour, left for the next run\n<https://depot.dev/run|View the Depot job>",
-      },
-    ],
+    expected: {
+      result:
+        "🧹 context sweep of prd: 172 objects: 111 live, 18 global, 43 orphans (41 destroyed, 2 recent), 3 emptied · <https://depot.dev/run|run>",
+      page: undefined,
+    },
   },
   {
-    name: "a run that failed posts to #ci and pages #error-pulse with what failed",
-    messages: sweepMessages({
+    name: "a run that failed is a #ci line and a page naming what failed",
+    posts: sweepPosts({
       ...run,
       result: "failure",
       report: { ...report, unidentified: 1, destroyed: 41, destroyFailed: 1, backups: "r2://b/" },
     }),
-    expected: [
-      {
-        channel: "C0B3QJSU32A",
-        text: "🚨 Context sweep of prd on main (failure): 172 stored, 111 live, 18 global, 43 orphans; 1 could not say who they are; 41 orphans destroyed, each backed up first to r2://b/; 1 orphans not destroyed\n<https://depot.dev/run|View the Depot job>",
-      },
-      {
-        channel: "C09K1CTN4M7",
-        text: "🚨 Context sweep of prd on main (failure): 172 stored, 111 live, 18 global, 43 orphans; 1 could not say who they are; 41 orphans destroyed, each backed up first to r2://b/; 1 orphans not destroyed <@U067G4QRFK2> <@U099JH9TAF2>\n<https://depot.dev/run|View the Depot job>",
-      },
-    ],
+    expected: {
+      result:
+        "🚨 context sweep failed on prd: 172 objects: 111 live, 18 global, 43 orphans (41 destroyed, 1 not destroyed), 1 unidentified · <https://depot.dev/run|run>",
+      page: failedPage(
+        "context sweep failed on prd: 1 object(s) could not say who they are, 1 orphan(s) not destroyed",
+      ),
+    },
   },
   {
-    name: "a run that ended before its report still posts to both",
-    messages: sweepMessages({ ...run, result: "cancelled", report: undefined }),
-    expected: [
-      {
-        channel: "C0B3QJSU32A",
-        text: "🚨 Context sweep on main (cancelled): it failed before its report\n<https://depot.dev/run|View the Depot job>",
-      },
-      {
-        channel: "C09K1CTN4M7",
-        text: "🚨 Context sweep on main (cancelled): it failed before its report <@U067G4QRFK2> <@U099JH9TAF2>\n<https://depot.dev/run|View the Depot job>",
-      },
-    ],
+    name: "a run that timed out after its report pages with how it ended",
+    posts: sweepPosts({ ...run, result: "cancelled", report }),
+    expected: {
+      result:
+        "🚨 context sweep failed on prd (cancelled): 172 objects: 111 live, 18 global, 43 orphans (report-only) · <https://depot.dev/run|run>",
+      page: failedPage("context sweep failed on prd: the job ended cancelled"),
+    },
   },
-])("$name", ({ messages, expected }) => {
+  {
+    name: "a run that ended before its report still posts and pages",
+    posts: sweepPosts({ ...run, result: "cancelled", report: undefined }),
+    expected: {
+      result: "🚨 context sweep failed before its report (cancelled) · <https://depot.dev/run|run>",
+      page: failedPage("context sweep failed before its report (cancelled)"),
+    },
+  },
+  {
+    name: "a test run is 🧪 and its page mentions nobody",
+    posts: sweepPosts({ ...run, testRun: true, result: "failure", report: undefined }),
+    expected: {
+      result:
+        "🧪 TEST RUN — 🚨 context sweep failed before its report (failure) · <https://depot.dev/run|run>",
+      page: [
+        "🧪 TEST RUN — 🚨 context sweep failed before its report (failure)",
+        "Impact: orphan contexts stay stored and billed until a sweep succeeds",
+        "Do: open the run: its log names each object that could not say who it is and each orphan not destroyed, with the error",
+        "<https://depot.dev/run|run>",
+      ].join("\n"),
+    },
+  },
+])("$name", ({ posts, expected }) => {
   // exact: a stray mention on a routine post, or a missing one on a page, must fail
-  expect(messages).toEqual(expected);
+  expect(posts).toEqual(expected);
+});
+
+test("a routine night's #ci line, at five-digit counts, is one line of at most 120 characters besides its link", () => {
+  const { result } = sweepPosts({
+    ...run,
+    result: "success",
+    report: {
+      ...report,
+      stored: 12_345,
+      live: 11_000,
+      global: 1_200,
+      orphans: 145,
+      destroyed: 140,
+      recent: 3,
+      emptied: 2,
+      backups: "r2://b/",
+    },
+  });
+  const text = result.replace(/<[^|]+\|run>/u, "run");
+  expect({ text, lines: text.split("\n").length, short: text.length <= 120 }).toMatchObject({
+    lines: 1,
+    short: true,
+  });
 });
 
 function context(id: string, projectId: string, path = "/"): SweptContext {
@@ -318,4 +347,14 @@ function event(offset: number, createdAt = "2026-09-28T00:00:00.000Z") {
     createdAt,
     source: { origin: "/" },
   };
+}
+
+/** A failing sweep's page, as it pages #error-pulse. */
+function failedPage(what: string) {
+  return [
+    `🚨 ${what} <@U067G4QRFK2> <@U099JH9TAF2>`,
+    "Impact: orphan contexts stay stored and billed until a sweep succeeds",
+    "Do: open the run: its log names each object that could not say who it is and each orphan not destroyed, with the error",
+    "<https://depot.dev/run|run>",
+  ].join("\n");
 }

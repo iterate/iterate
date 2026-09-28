@@ -722,6 +722,14 @@ succeeded, each pull request event, the PR dashboard, the Durable Object cost al
 each context sweep's result, the orphans it destroyed included (the crash hunt leaves some every
 night), and the 🧪 test pages.
 
+The preview sweep and the context sweep keep one page per incident (`keepPage` in
+`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then `Impact:`, `Do:`, the ids to act on and one
+link. A later run that finds the incident still there edits the page, which notifies nobody; the
+first run that finds it gone edits its first line to start `✅ resolved:` and replies once in its
+thread, mentioning both. The page's first line is its state, so the channel's history is the only
+state a poster keeps. Only a run on main pages; a 🧪 test run (each workflow's `test-run` input)
+posts to #ci, mentions nobody and never reads #error-pulse.
+
 ## Health
 
 Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/health.ts`:

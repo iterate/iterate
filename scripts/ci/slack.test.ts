@@ -4,8 +4,10 @@ import { expect, test } from "vitest";
 import {
   escalationText,
   findOpenPage,
+  keepPage,
   markResolved,
   pageChannel,
+  pageStep,
   pageText,
   resolvedText,
   resolvePage,
@@ -28,17 +30,25 @@ test.for([
     expected: `🧪 TEST RUN — 🚨 prd deploy failed\nImpact: prd serves the previous OS\nDo: open the run\n<https://depot.dev/run|run>`,
   },
   {
+    name: "the ids an action needs go between what to do and the link",
+    testRun: false,
+    link: "https://depot.dev/run",
+    details: ["• os-pr3159-repos", "• os-pr3271-repos"],
+    expected: `🚨 prd deploy failed ${MENTIONS}\nImpact: prd serves the previous OS\nDo: open the run\n• os-pr3159-repos\n• os-pr3271-repos\n<https://depot.dev/run|run>`,
+  },
+  {
     name: "a run with no link has no link line",
     testRun: false,
     link: null,
     expected: `🚨 prd deploy failed ${MENTIONS}\nImpact: prd serves the previous OS\nDo: open the run`,
   },
-])("pageText: $name", ({ testRun, link, expected }) => {
+])("pageText: $name", ({ testRun, link, details, expected }) => {
   expect(
     pageText({
       what: "prd deploy failed",
       impact: "prd serves the previous OS",
       action: "open the run",
+      details,
       link,
       testRun,
     }),
@@ -194,8 +204,64 @@ test.for([
   expect(slack.writes).toEqual(writes);
 });
 
+test.for([
+  { name: "none open, the incident there: post", open: false, text: "🚨 n=1", step: "post" },
+  { name: "open, the incident still there: edit", open: true, text: "🚨 n=2", step: "edit" },
+  { name: "open, the incident gone: resolve", open: true, text: undefined, step: "resolve" },
+  { name: "none open, nothing there: nothing", open: false, text: undefined, step: "none" },
+])("pageStep: $name", ({ open, text, step }) => {
+  const page = open ? { ts: "1.0", text: ":rotating_light: n=1" } : undefined;
+  expect(pageStep(page, text)).toMatchObject({ step });
+});
+
+test("keepPage: one incident over five nights is posted, edited twice, resolved once, then left alone", async () => {
+  const slack = fakeSlack([]);
+  const night = (ids: string[]) =>
+    keepPage(slack.client, {
+      marker: "preview sweep: Cloudflare will not delete",
+      sinceHours: 720,
+      now: new Date(at * 1000),
+      text: ids.length
+        ? pageText({
+            what: `preview sweep: Cloudflare will not delete ${ids.length} Artifacts namespace(s)`,
+            impact: "each counts toward the account's limit",
+            action: "escalate to Cloudflare with these ids",
+            details: ids,
+            link: null,
+            testRun: false,
+          })
+        : undefined,
+      why: "Cloudflare deleted them",
+    });
+  const steps = [];
+  for (const ids of [["• a"], ["• a"], ["• a", "• b"], [], []]) steps.push(await night(ids));
+  expect({ steps, writes: slack.writes.map(([call]) => call) }).toEqual({
+    steps: ["post", "edit", "edit", "resolve", "none"],
+    writes: ["chat.postMessage", "chat.update", "chat.update", "chat.update", "chat.postMessage"],
+  });
+  expect(slack.writes.slice(-2)).toEqual([
+    [
+      "chat.update",
+      {
+        channel: "C09K1CTN4M7",
+        ts: String(at),
+        text: `✅ resolved: preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) ${MENTIONS}\nImpact: each counts toward the account's limit\nDo: escalate to Cloudflare with these ids\n• a\n• b`,
+      },
+    ],
+    [
+      "chat.postMessage",
+      {
+        channel: "C09K1CTN4M7",
+        thread_ts: String(at),
+        text: `✅ resolved: Cloudflare deleted them ${MENTIONS}`,
+      },
+    ],
+  ]);
+});
+
 /** A WebClient stand-in: `messages` is the channel's history, served newest first a page of
- * `limit` at a time from `oldest`; every write is recorded. */
+ * `limit` at a time from `oldest`; every write is recorded, and a top-level post or an edit lands
+ * in the history. */
 function fakeSlack(
   messages: Array<{ ts: string; bot_id: string; text: string }>,
   updateFails = false,
@@ -217,13 +283,17 @@ function fakeSlack(
       },
     },
     chat: {
-      postMessage: async (args: unknown) => {
+      postMessage: async (args: { text: string; thread_ts?: string }) => {
         writes.push(["chat.postMessage", args]);
-        return { ok: true, ts: "2.0" };
+        const ts = String(at + messages.length);
+        if (!args.thread_ts) messages.push({ ts, bot_id: "B1", text: args.text });
+        return { ok: true, ts };
       },
-      update: async (args: unknown) => {
+      update: async (args: { ts: string; text: string }) => {
         writes.push(["chat.update", args]);
         if (updateFails) throw new Error("an_error");
+        const message = messages.find(({ ts }) => ts === args.ts);
+        if (message) message.text = args.text;
         return { ok: true };
       },
     },

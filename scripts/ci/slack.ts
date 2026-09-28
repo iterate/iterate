@@ -66,11 +66,13 @@ export function pageChannel(testRun: boolean) {
 }
 
 /** One incident's top-level message: what broke with both mentions, who or what it affects, the
- *  first thing to do, and the one link. A test run's is marked 🧪 and mentions nobody. */
+ *  first thing to do, any lines that action needs (the ids to escalate), and the one link. A test
+ *  run's is marked 🧪 and mentions nobody. */
 export function pageText(input: {
   what: string;
   impact: string;
   action: string;
+  details?: string[];
   link: string | null;
   testRun: boolean;
 }) {
@@ -78,6 +80,7 @@ export function pageText(input: {
     input.testRun ? `🧪 TEST RUN — 🚨 ${input.what}` : `🚨 ${input.what} ${onCallMention}`,
     `Impact: ${input.impact}`,
     `Do: ${input.action}`,
+    ...(input.details || []),
     input.link && `<${input.link}|run>`,
   ]
     .filter(Boolean)
@@ -159,4 +162,39 @@ export async function resolvePage(
     // a 🧪 test page is never open (findOpenPage), so this resolves a real one
     text: resolvedText(input.why, false),
   });
+}
+
+/** What a run does with one incident's page, given its open page (if any) and this run's page text
+ *  (none when the incident is gone): post, edit, resolve, or nothing. Pure. */
+export function pageStep(
+  open: { ts: string; text: string } | undefined,
+  text: string | undefined,
+):
+  | { step: "post"; text: string }
+  | { step: "edit"; ts: string; text: string }
+  | { step: "resolve"; ts: string; text: string }
+  | { step: "none" } {
+  if (!text) return open ? { step: "resolve", ...open } : { step: "none" };
+  return open ? { step: "edit", ts: open.ts, text } : { step: "post", text };
+}
+
+/**
+ * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it,
+ * edits it while the incident lasts (an edit notifies nobody), or resolves it with `why` once this
+ * run finds the incident gone (pageStep). Returns the step taken. A 🧪 test run posts its page to
+ * #ci itself and never calls this.
+ */
+export async function keepPage(
+  slack: WebClient,
+  input: { marker: string; sinceHours: number; now: Date; text: string | undefined; why: string },
+) {
+  const channel = pageChannel(false);
+  const { marker, sinceHours, now } = input;
+  const open = await findOpenPage(slack, { channel, marker, sinceHours, now });
+  const step = pageStep(open, input.text);
+  if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
+  if (step.step === "edit") await slack.chat.update({ channel, ts: step.ts, text: step.text });
+  if (step.step === "resolve")
+    await resolvePage(slack, { channel, ts: step.ts, text: step.text, why: input.why });
+  return step.step;
 }

@@ -183,17 +183,36 @@ test("a create refused any other way throws at once, never read again", async ()
   expect(api).toMatchObject({ requests: [`GET ${ROUTE}`, "POST /artifacts/namespaces"] });
 });
 
-test("the sweep's page names each stuck namespace, what to escalate, and the run", () => {
+test.for([
+  {
+    name: "the sweep's page names each stuck namespace, the oldest's date, what to escalate, and the run",
+    testRun: false,
+    firstLine:
+      "🚨 preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) <@U067G4QRFK2> <@U099JH9TAF2>",
+  },
+  {
+    name: "a test run's stuck-namespace page is 🧪 and mentions nobody",
+    testRun: true,
+    firstLine:
+      "🧪 TEST RUN — 🚨 preview sweep: Cloudflare will not delete 2 Artifacts namespace(s)",
+  },
+])("$name", ({ testRun, firstLine }) => {
   const page = renderStuckArtifactsNamespacesPage(
-    [{ namespace: NAMESPACE, repoCount: 1, createdAt: "2026-09-22T13:11:36Z" }],
-    "https://depot.dev/orgs/x/workflows/y",
+    [
+      { namespace: NAMESPACE, repoCount: 1, createdAt: "2026-09-22T13:11:36Z" },
+      { namespace: "os-pr3159-repos", repoCount: undefined, createdAt: "2026-09-20T08:00:00Z" },
+    ],
+    { jobUrl: "https://depot.dev/orgs/x/workflows/y", testRun },
   );
 
+  // exact: the page is what the on-call reads
   expect(page.split("\n")).toEqual([
-    "🚨 preview sweep: Cloudflare will not delete 1 Artifacts namespace(s) <@U067G4QRFK2> <@U099JH9TAF2>",
-    `• ${NAMESPACE}: repo_count 1 but no repos listed; the namespace DELETE answers 409/10202 "Namespace is not empty" (created 2026-09-22)`,
-    "A Cloudflare Artifacts fault, not a commit's: escalate it to Cloudflare with these names. The sweep tries again each night.",
-    "<https://depot.dev/orgs/x/workflows/y|sweep run>",
+    firstLine,
+    "Impact: each counts toward the account's limit; the oldest since 2026-09-20",
+    "Do: escalate to Cloudflare with these ids: a Cloudflare Artifacts fault, not a commit's. The sweep tries again each night.",
+    `• ${NAMESPACE}: repo_count 1 but no repos listed; its DELETE answers 409/10202 "Namespace is not empty" (created 2026-09-22)`,
+    '• os-pr3159-repos: repo_count ? but no repos listed; its DELETE answers 409/10202 "Namespace is not empty" (created 2026-09-20)',
+    "<https://depot.dev/orgs/x/workflows/y|run>",
   ]);
 });
 

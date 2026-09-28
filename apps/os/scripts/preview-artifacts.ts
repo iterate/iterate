@@ -6,7 +6,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
 import type { OsEnv } from "../../../envs.ts";
-import { onCallMention } from "../../../scripts/ci/slack.ts";
+import { pageText } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
@@ -180,22 +180,30 @@ export async function deleteArtifactsNamespace(
   return undefined;
 }
 
-/** The sweep's page for the namespaces Cloudflare would not delete: what to escalate, and to whom. */
+/** The first words of the sweep's page for the namespaces Cloudflare will not delete, by which the
+ *  next night's sweep finds it open (scripts/ci/slack.ts `keepPage`). */
+export const STUCK_ARTIFACTS_PAGE_MARKER = "preview sweep: Cloudflare will not delete";
+
+/** The sweep's page for the namespaces Cloudflare will not delete: what to escalate. Pure. */
 export function renderStuckArtifactsNamespacesPage(
   stuck: StuckArtifactsNamespace[],
-  jobUrl: string | undefined,
+  input: { jobUrl: string | undefined; testRun: boolean },
 ) {
-  return [
-    `🚨 preview sweep: Cloudflare will not delete ${stuck.length} Artifacts namespace(s) ${onCallMention}`,
-    ...stuck.map(
+  const oldest = stuck
+    .flatMap(({ createdAt }) => (createdAt ? [createdAt.slice(0, 10)] : []))
+    .sort()[0];
+  return pageText({
+    what: `${STUCK_ARTIFACTS_PAGE_MARKER} ${stuck.length} Artifacts namespace(s)`,
+    impact: `each counts toward the account's limit${oldest ? `; the oldest since ${oldest}` : ""}`,
+    action:
+      "escalate to Cloudflare with these ids: a Cloudflare Artifacts fault, not a commit's. The sweep tries again each night.",
+    details: stuck.map(
       ({ namespace, repoCount, createdAt }) =>
-        `• ${namespace}: repo_count ${repoCount ?? "?"} but no repos listed; the namespace DELETE answers 409/10202 "Namespace is not empty"${createdAt ? ` (created ${createdAt.slice(0, 10)})` : ""}`,
+        `• ${namespace}: repo_count ${repoCount ?? "?"} but no repos listed; its DELETE answers 409/10202 "Namespace is not empty"${createdAt ? ` (created ${createdAt.slice(0, 10)})` : ""}`,
     ),
-    "A Cloudflare Artifacts fault, not a commit's: escalate it to Cloudflare with these names. The sweep tries again each night.",
-    jobUrl && `<${jobUrl}|sweep run>`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    link: input.jobUrl || null,
+    testRun: input.testRun,
+  });
 }
 
 /** The namespace's row, or undefined for its 404/10200. The namespace itself is what answers "does

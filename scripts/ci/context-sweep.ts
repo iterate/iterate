@@ -46,7 +46,7 @@ import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
-import { getSlackClient, onCallMention, slackChannelIds } from "./slack.ts";
+import { getSlackClient, keepPage, pageText, slackChannelIds } from "./slack.ts";
 
 /** One stored object as the sweep sees it. */
 export type SweptContext = Awaited<ReturnType<IterateSessionApi["contexts"]["identify"]>>[number];
@@ -169,20 +169,43 @@ export default async function contextSweep(options: {
     );
 }
 
-/** Posts a sweep job's result (context-sweep.yml's notify job): to #ci always, and to #error-pulse
- *  when it failed. REPORT is the sweep job's `report` output (empty when it
- *  failed before its report), RESULT its result; the link is the notify job's own Depot page. */
-export async function post() {
-  const slack = getSlackClient();
-  for (const message of sweepMessages({
+/** Posts a sweep job's result (context-sweep.yml's notify job; see sweepPosts): the line to #ci,
+ *  and the one #error-pulse page kept for a failing sweep (slack.ts `keepPage`), which the next run
+ *  that succeeds resolves. REPORT is the sweep job's `report` output (empty when it failed before
+ *  its report), RESULT its result; the link is the notify job's own Depot page. Only a run on main
+ *  posts; one on another ref prints. A 🧪 test run posts its line, and its page if it failed, to #ci
+ *  alone. */
+export async function post(options: {
+  /** post to #ci as a 🧪 TEST RUN, mentioning nobody; #error-pulse is never read */
+  testRun?: boolean;
+}) {
+  const testRun = Boolean(options.testRun);
+  const posts = sweepPosts({
     report: process.env.REPORT
       ? ContextSweepReport.parse(JSON.parse(process.env.REPORT))
       : undefined,
     result: required("RESULT"),
-    refName: required("GITHUB_REF_NAME"),
     runUrl: required("DEPOT_JOB_URL"),
-  }))
-    await slack.chat.postMessage(message);
+    testRun,
+  });
+  console.log([posts.result, posts.page].filter(Boolean).join("\n\n"));
+  if (!testRun && process.env.GITHUB_REF !== "refs/heads/main")
+    return console.log("not a run on main: nothing posted");
+  const slack = getSlackClient();
+  await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text: posts.result });
+  if (testRun) {
+    if (posts.page)
+      await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text: posts.page });
+    return;
+  }
+  const step = await keepPage(slack, {
+    marker: SWEEP_PAGE_MARKER,
+    sinceHours: 30 * 24,
+    now: new Date(),
+    text: posts.page,
+    why: "the context sweep succeeded",
+  });
+  console.log(`#error-pulse page: ${step}`);
 }
 
 /** What one sweep found and did: counts of the objects Cloudflare lists as holding data, by what
@@ -316,39 +339,69 @@ export async function reconnecting(connect: () => Promise<IterateConnection>) {
 
 const RECONNECT_FAILED = "the session's socket closed and connecting again failed";
 
-/** A sweep's Slack posts: its result to #ci, and the same to #error-pulse, mentioning Jonas and
- *  Misha, when it did not succeed. Destroying orphans is routine: the nightly crash hunt leaves
- *  about 14 a night. Pure. */
-export function sweepMessages(input: {
+/** The first words of a failing sweep's page, by which the next run finds it open. */
+const SWEEP_PAGE_MARKER = "context sweep failed";
+
+/** A sweep's Slack posts: its one-line result for #ci, and its page for #error-pulse when it did
+ *  not succeed. Destroying orphans is routine (the nightly crash hunt leaves about 14 a night), so
+ *  a run that destroyed some pages no one. Pure. */
+export function sweepPosts(input: {
   report: ContextSweepReport | undefined;
   /** The sweep job's result: `success`, `failure`, `cancelled`. */
   result: string;
-  refName: string;
   runUrl: string;
+  testRun: boolean;
 }) {
-  const { report } = input;
-  const failed = input.result !== "success";
-  const summary = report
-    ? [
-        `${report.stored} stored, ${report.live} live, ${report.global} global, ${report.orphans} orphans`,
-        report.emptied && `${report.emptied} just emptied`,
-        report.unidentified && `${report.unidentified} could not say who they are`,
-        report.destroyed &&
-          `${report.destroyed} orphans destroyed, each backed up first to ${report.backups}`,
-        report.recent && `${report.recent} orphans active in the last hour, left for the next run`,
-        report.destroyFailed && `${report.destroyFailed} orphans not destroyed`,
-      ]
-        .filter(Boolean)
-        .join("; ")
-    : "it failed before its report";
-  const text = `${failed ? "🚨" : "🧹"} Context sweep${report ? ` of ${report.env}` : ""} on ${input.refName}${failed ? ` (${input.result})` : ""}: ${summary}`;
-  const link = `<${input.runUrl}|View the Depot job>`;
-  return [
-    { channel: slackChannelIds["#ci"], text: `${text}\n${link}` },
-    ...(failed
-      ? [{ channel: slackChannelIds["#error-pulse"], text: `${text} ${onCallMention}\n${link}` }]
-      : []),
-  ];
+  const { report, result, testRun } = input;
+  const failed = result !== "success";
+  const test = testRun ? "🧪 TEST RUN — " : "";
+  const run = `<${input.runUrl}|run>`;
+  if (!report) {
+    const what = `${SWEEP_PAGE_MARKER} before its report (${result})`;
+    return {
+      result: `${test}🚨 ${what} · ${run}`,
+      page: failed ? sweepPage(what, input) : undefined,
+    };
+  }
+  const orphanOutcomes = [
+    `${report.destroyed} destroyed`,
+    report.recent && `${report.recent} recent`,
+    report.destroyFailed && `${report.destroyFailed} not destroyed`,
+  ].filter(Boolean);
+  const counts = [
+    `${report.live} live`,
+    `${report.global} global`,
+    `${report.orphans} orphans ${report.backups ? `(${orphanOutcomes.join(", ")})` : "(report-only)"}`,
+    report.emptied && `${report.emptied} emptied`,
+    report.unidentified && `${report.unidentified} unidentified`,
+  ].filter(Boolean);
+  const head = failed
+    ? `🚨 ${SWEEP_PAGE_MARKER} on ${report.env}${result === "failure" ? "" : ` (${result})`}`
+    : `🧹 context sweep of ${report.env}`;
+  const line = `${test}${head}: ${report.stored} objects: ${counts.join(", ")} · ${run}`;
+  if (!failed) return { result: line, page: undefined };
+  const failures = [
+    report.unidentified && `${report.unidentified} object(s) could not say who they are`,
+    report.destroyFailed && `${report.destroyFailed} orphan(s) not destroyed`,
+  ].filter(Boolean);
+  return {
+    result: line,
+    page: sweepPage(
+      `${SWEEP_PAGE_MARKER} on ${report.env}: ${failures.join(", ") || `the job ended ${result}`}`,
+      input,
+    ),
+  };
+}
+
+function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
+  return pageText({
+    what,
+    impact: "orphan contexts stay stored and billed until a sweep succeeds",
+    action:
+      "open the run: its log names each object that could not say who it is and each orphan not destroyed, with the error",
+    link: input.runUrl,
+    testRun: input.testRun,
+  });
 }
 
 /** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with the environment's
