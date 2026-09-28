@@ -39,6 +39,7 @@ test("loadFirmwareManifest: fetches from Kit's origin and makes the part paths a
     new URL("https://k.iterate.com/firmware/test-device/000001-2026-01-01-abcdef0/manifest.json"),
   );
   expect(manifest).toEqual({
+    name: "Test device",
     version: release.version,
     builds: [
       {
@@ -124,6 +125,7 @@ test("loadFirmwareManifest: loads what apps/kit/scripts/firmware-release.ts publ
   const manifest = await loadFirmwareManifest({ deviceId: device.id, version }, serving(published));
 
   expect(manifest).toMatchObject({
+    name: device.name,
     version,
     builds: [
       {
@@ -137,27 +139,16 @@ test("loadFirmwareManifest: loads what apps/kit/scripts/firmware-release.ts publ
   });
 });
 
-test("prepareInstall: adds the install's configuration image under the device's name, until disposed", async () => {
+test("prepareInstall: adds the install's configuration image to the release, until disposed", async () => {
   stubKitPage();
   const nativeFetch = globalThis.fetch;
   const manifest = await loadFirmwareManifest(release, serving(releaseManifest));
 
-  const install = prepareInstall(
-    manifest,
-    {
-      id: "test-device",
-      target: "test",
-      name: "Renamed device",
-      description: "",
-      vendor: { name: "Test", icon: "test.png", url: "https://example.com/" },
-      startCall: "",
-    },
-    configuration,
-  );
+  const install = prepareInstall(manifest, configuration);
 
   expect(install).toMatchObject({
     manifest: {
-      name: "Renamed device",
+      name: "Test device",
       version: release.version,
       builds: [
         {
@@ -182,7 +173,7 @@ test("prepareInstall: adds the install's configuration image under the device's 
 /** The page the loader runs on; the Kit vitest config unstubs it after each test. */
 function stubKitPage() {
   vi.stubGlobal("window", {
-    location: { href: "https://k.iterate.com/devices/test-device/firmware/latest" },
+    location: { href: "https://k.iterate.com/devices/test-device" },
   });
 }
 

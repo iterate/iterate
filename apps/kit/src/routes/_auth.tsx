@@ -9,7 +9,7 @@ export const Route = createFileRoute("/_auth")({
   ssr: false,
   beforeLoad: async ({ location }) => {
     const response = await fetch("/device-session.json", { cache: "no-store" });
-    const model = /^\/devices\/([^/]+)\//.exec(location.pathname)?.[1];
+    const model = /^\/devices\/([^/]+)/.exec(location.pathname)?.[1];
     if (response.status === 401) throw redirect({ to: "/", search: { device: model } });
     if (!response.ok) throw new Error("Could not check device sign-in. Please reload.");
     const deviceSession = z

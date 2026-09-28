@@ -11,7 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
-import { Route as AuthDevicesDeviceIdFirmwareFirmwareVersionRouteImport } from "./routes/_auth/devices.$deviceId.firmware.$firmwareVersion.tsx";
+import { Route as AuthDevicesDeviceIdRouteImport } from "./routes/_auth/devices.$deviceId.tsx";
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -22,37 +22,32 @@ const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
   getParentRoute: () => rootRouteImport,
 } as any);
-const AuthDevicesDeviceIdFirmwareFirmwareVersionRoute =
-  AuthDevicesDeviceIdFirmwareFirmwareVersionRouteImport.update({
-    id: "/devices/$deviceId/firmware/$firmwareVersion",
-    path: "/devices/$deviceId/firmware/$firmwareVersion",
-    getParentRoute: () => AuthRoute,
-  } as any);
+const AuthDevicesDeviceIdRoute = AuthDevicesDeviceIdRouteImport.update({
+  id: "/devices/$deviceId",
+  path: "/devices/$deviceId",
+  getParentRoute: () => AuthRoute,
+} as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
-  "/devices/$deviceId/firmware/$firmwareVersion": typeof AuthDevicesDeviceIdFirmwareFirmwareVersionRoute;
+  "/devices/$deviceId": typeof AuthDevicesDeviceIdRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
-  "/devices/$deviceId/firmware/$firmwareVersion": typeof AuthDevicesDeviceIdFirmwareFirmwareVersionRoute;
+  "/devices/$deviceId": typeof AuthDevicesDeviceIdRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
-  "/_auth/devices/$deviceId/firmware/$firmwareVersion": typeof AuthDevicesDeviceIdFirmwareFirmwareVersionRoute;
+  "/_auth/devices/$deviceId": typeof AuthDevicesDeviceIdRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/devices/$deviceId/firmware/$firmwareVersion";
+  fullPaths: "/" | "/devices/$deviceId";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/devices/$deviceId/firmware/$firmwareVersion";
-  id:
-    | "__root__"
-    | "/"
-    | "/_auth"
-    | "/_auth/devices/$deviceId/firmware/$firmwareVersion";
+  to: "/" | "/devices/$deviceId";
+  id: "__root__" | "/" | "/_auth" | "/_auth/devices/$deviceId";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -76,23 +71,22 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthRouteImport;
       parentRoute: typeof rootRouteImport;
     };
-    "/_auth/devices/$deviceId/firmware/$firmwareVersion": {
-      id: "/_auth/devices/$deviceId/firmware/$firmwareVersion";
-      path: "/devices/$deviceId/firmware/$firmwareVersion";
-      fullPath: "/devices/$deviceId/firmware/$firmwareVersion";
-      preLoaderRoute: typeof AuthDevicesDeviceIdFirmwareFirmwareVersionRouteImport;
+    "/_auth/devices/$deviceId": {
+      id: "/_auth/devices/$deviceId";
+      path: "/devices/$deviceId";
+      fullPath: "/devices/$deviceId";
+      preLoaderRoute: typeof AuthDevicesDeviceIdRouteImport;
       parentRoute: typeof AuthRoute;
     };
   }
 }
 
 interface AuthRouteChildren {
-  AuthDevicesDeviceIdFirmwareFirmwareVersionRoute: typeof AuthDevicesDeviceIdFirmwareFirmwareVersionRoute;
+  AuthDevicesDeviceIdRoute: typeof AuthDevicesDeviceIdRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
-  AuthDevicesDeviceIdFirmwareFirmwareVersionRoute:
-    AuthDevicesDeviceIdFirmwareFirmwareVersionRoute,
+  AuthDevicesDeviceIdRoute: AuthDevicesDeviceIdRoute,
 };
 
 const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
