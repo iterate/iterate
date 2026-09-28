@@ -268,9 +268,8 @@ test.for(["provider mismatch", "declined consent"])(
   },
 );
 
-// The flow cookie is signed with the session-signing secret, as every platform claim set is: the
-// callback reads its own kind alone, and a sign-in's claims only as a sign-in's. The control row,
-// the sign-in's own claims signed again, gets past the flow to the provider's state check.
+// A callback reads only its own kind (identity.ts `Flow`). The control row, the sign-in's own claims
+// signed again, gets past the flow to the provider's state check.
 test.for<[string, (flow: Record<string, unknown>) => Record<string, unknown>, string]>([
   ["its own claims", (flow) => flow, "Sign-in was refused or expired. Please start again."],
   [
