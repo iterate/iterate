@@ -82,7 +82,8 @@ struct iterate_kit_stackchan_avatar_metrics {
 esp_err_t iterate_kit_stackchan_avatar_start(void);
 
 /**
- * Requests an exact compiled sprite-set slug from the control-plane owner.
+ * Requests compiled sprite set `index` from the control-plane owner (the face
+ * capability resolves `face.set`'s slug to it).
  *
  * The Cap'n Web task must not mutate the registry while the low-priority
  * display task is rendering it. This call therefore validates the immutable
@@ -91,8 +92,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void);
  * admitted, and the display owner applies it within one 66 ms visual tick.
  * Several requests in that interval deliberately coalesce to the newest one.
  */
-esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(
-    const char *slug, size_t slug_length);
+esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(size_t index);
 
 /**
  * Publishes the newest semantic conversation state to the display owner.

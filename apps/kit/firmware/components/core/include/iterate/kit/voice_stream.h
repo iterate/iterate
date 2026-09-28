@@ -269,6 +269,21 @@ const char *iterate_kit_voice_stream_state_name(
 const char *iterate_kit_voice_stream_failure_name(
     enum iterate_kit_voice_stream_failure failure);
 
+/**
+ * Decode strict, padded RFC 4648 base64: the one decoder for every base64 a
+ * board receives (speaker PCM, screen chunks), because every sender pads.
+ * Length a multiple of four, `=` only as the last one or two characters, and
+ * every other character in the alphabet; the empty text is zero bytes. The
+ * whole text is checked before anything is written, so a refused one leaves
+ * `destination` untouched, as is one that would decode past its capacity.
+ */
+bool iterate_kit_base64_decode(
+    const char *text,
+    size_t text_length,
+    uint8_t *destination,
+    size_t destination_capacity,
+    size_t *decoded_length);
+
 #ifdef __cplusplus
 }
 #endif

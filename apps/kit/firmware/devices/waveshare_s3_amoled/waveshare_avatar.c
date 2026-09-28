@@ -90,17 +90,13 @@ static struct {
   face_pose_t pose;
   uint32_t render_failures;
   /*
-   * The face somebody has asked for but the renderer has not adopted yet.
-   *
-   * An INDEX rather than a name: a slug would be a string written by one task
-   * and read by another, and this is one machine word. The epoch is what makes
-   * the handoff safe without a lock — the renderer only acts when it differs
-   * from the epoch it last applied, so a request that lands mid-render is
-   * picked up by the next one instead of being half-seen.
+   * The face somebody has asked for but the renderer has not adopted yet:
+   * catalogue index + 1, zero for none, as StackChan and the Stick hold it.
+   * One word, so the handoff needs no lock: a request stores it and the
+   * renderer takes it with one exchange, and a request that lands mid-render
+   * is picked up whole by the next frame.
    */
-  volatile size_t requested_index;
-  volatile uint32_t request_epoch;
-  uint32_t applied_epoch;
+  uint32_t pending_face_index_plus_one;
 } face;
 
 /*
@@ -301,6 +297,13 @@ void waveshare_avatar_set_listening(bool listening) {
   face_animator_push_event(&face.animator, &event);
 }
 
+bool waveshare_avatar_request_face(size_t index) {
+  if (!face.ready || index >= face_avatar_registry_count()) return false;
+  __atomic_store_n(
+      &face.pending_face_index_plus_one, (uint32_t)index + 1U, __ATOMIC_RELEASE);
+  return true;
+}
+
 /* --- reader: LVGL task ----------------------------------------------------- */
 
 bool waveshare_avatar_render(
@@ -310,10 +313,10 @@ bool waveshare_avatar_render(
 
   if (!face.ready || rgb565 == NULL) return false;
   /* Adopt a requested face here, on the only task that may touch the registry. */
-  if (face.request_epoch != face.applied_epoch) {
-    const size_t wanted = face.requested_index;
-    face.applied_epoch = face.request_epoch;
-    if (face_avatar_registry_select(&face.registry, wanted)) {
+  const uint32_t requested = __atomic_exchange_n(
+      &face.pending_face_index_plus_one, 0U, __ATOMIC_ACQ_REL);
+  if (requested != 0U) {
+    if (face_avatar_registry_select(&face.registry, (size_t)(requested - 1U))) {
       ESP_LOGI(tag, "face is now %s",
                face_avatar_registry_current_slug(&face.registry));
     }

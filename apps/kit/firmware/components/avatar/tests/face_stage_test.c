@@ -6,52 +6,39 @@
 
 int main(void)
 {
-    assert(sizeof(face_stage_cue_t) == FACE_STAGE_CUE_BYTES);
     face_render_key_t key;
     memset(&key, 0, sizeof(key));
     key.controls.mouth_open = 173U;
     key.controls.mouth_width = 141U;
     key.controls.expression = FACE_ACTIVITY_LISTENING;
-    key.viseme = FACE_VISEME_TH;
-    key.viseme_weight = 210U;
+    key.controls.look_x = -40;
+    key.controls.look_y = 22;
+    key.audio_level = 90U;
     key.schema_version = FACE_RENDER_KEY_SCHEMA_VERSION;
 
-    const face_stage_cue_t cue = {
-        .start_sample = 1600U,
-        .attack_samples = 1600U,
-        .hold_samples = 3200U,
-        .release_samples = 1600U,
-        .cue_id = 17U,
-        .expression = FACE_EXPRESSION_WARM,
-        .gesture = FACE_GESTURE_NOD,
-        .gaze_target = FACE_GAZE_USER,
-        .blend_mode = FACE_STAGE_BLEND_REPLACE,
-        .easing = FACE_STAGE_EASE_SMOOTHSTEP,
-        .interrupt_mode = FACE_STAGE_INTERRUPT_BLEND,
-        .intensity = 220U,
-        .valence = 62,
-        .arousal = 130U,
-    };
-
-    assert(!face_stage_cue_apply(&cue, 1599U, &key));
-    assert(face_stage_cue_apply(&cue, 2400U, &key));
+    /* A held expression owns the face's actions and affect, never the mouth. */
+    assert(face_stage_apply_held_expression(FACE_EXPRESSION_WARM, &key));
     assert(key.controls.mouth_open == 173U);
     assert(key.controls.mouth_width == 141U);
-    assert(key.viseme == FACE_VISEME_TH);
-    assert(key.viseme_weight == 210U);
-    assert(key.mouth_corner_left > 0);
-    assert(key.mouth_corner_right > 0);
-    assert(key.affect_valence > 0);
+    assert(key.audio_level == 90U);
     assert(key.controls.expression == FACE_ACTIVITY_LISTENING);
     assert(key.stage_expression == FACE_EXPRESSION_WARM);
+    assert(key.expression_weight == UINT8_MAX);
+    assert(key.mouth_corner_left == 36);
+    assert(key.mouth_corner_right == 36);
+    assert(key.affect_valence == 52);
+    assert(key.controls.look_x == 0);
+    assert(key.controls.look_y == 0);
 
-    const int8_t attack_corner = key.mouth_corner_left;
-    assert(face_stage_cue_apply(&cue, 4000U, &key));
-    assert(key.mouth_corner_left > attack_corner);
+    /* Skeptical is asymmetric: its right eye and brow lead. */
+    assert(face_stage_apply_held_expression(FACE_EXPRESSION_SKEPTICAL, &key));
+    assert(key.eye_right_squint > key.eye_left_squint);
+    assert(key.brow_outer_right > key.brow_outer_left);
 
-    face_render_key_t ended;
-    memset(&ended, 0, sizeof(ended));
-    assert(!face_stage_cue_apply(&cue, 8001U, &ended));
+    const face_render_key_t before = key;
+    assert(!face_stage_apply_held_expression(FACE_EXPRESSION_COUNT, &key));
+    assert(memcmp(&key, &before, sizeof(key)) == 0);
+    assert(!face_stage_apply_held_expression(FACE_EXPRESSION_JOY, NULL));
 
     puts("face_stage_test: PASS");
     return 0;

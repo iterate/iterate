@@ -74,6 +74,8 @@ static const struct iterate_kit_register_script scripts[] = {
 #include "esp_timer.h"
 
 #include "iterate/kit/audio_processor.h"
+#include "iterate/kit/avatar/face_avatar_registry.h"
+#include "iterate/kit/capabilities/face.h"
 #include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/platforms/i2s_codec.h"
 #include "capnweb/capnweb.h"
@@ -401,22 +403,39 @@ static enum capnweb_status button_end(
   return capnweb_reply_set_boolean(reply, true);
 }
 
+static bool wear_face(void *context, size_t index) {
+  (void)context;
+  return waveshare_avatar_request_face(index);
+}
+
 static size_t modules(
     void *context, struct iterate_kit_module *out, size_t capacity) {
   static const struct iterate_kit_method board_methods[] = {
     {button_press_path, 2U, button_press},
     {button_end_path, 2U, button_end},
   };
+  static struct iterate_kit_face face;
+  static const struct iterate_kit_face_driver face_driver = {
+    .context = NULL,
+    .slug_at = face_avatar_registry_slug_at,
+    .wear = wear_face,
+  };
+  size_t count = 0U;
   (void)context;
-  if (capacity < 1U) return 0U;
-  out[0] = (struct iterate_kit_module){
+  if (capacity < 2U) return 0U;
+  out[count++] = (struct iterate_kit_module){
     .methods = board_methods,
     .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
     .context = NULL,
     .close = NULL,
     .session_ended = NULL,
   };
-  return 1U;
+  /* `face.set({face})`: the buttons are the call's, so asking by name is the
+   * one way to change this board's face. */
+  if (iterate_kit_face_init(&face, &face_driver) == ITERATE_KIT_OK) {
+    out[count++] = iterate_kit_face_module(&face);
+  }
+  return count;
 }
 
 /** Present the display and drain mouth timing each pass; board.c owns the view. */

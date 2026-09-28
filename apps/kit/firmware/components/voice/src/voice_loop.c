@@ -356,7 +356,7 @@ EXT_RAM_BSS_ATTR static struct {
    *
    * `metrics()` is a const reader now, so the app task could call it — but the
    * bridge holds no atomics and a multi-word counter read from another task
-   * can still tear. Mirroring here is the same shape the uplink selector uses.
+   * can still tear.
    */
   atomic_uint aec_bridge_failures;
   atomic_uint aec_bridge_reset_failures;
@@ -1099,7 +1099,7 @@ void iterate_kit_voice_loop_playback_step(void) {
  * lock, allocation or hidden capacity.
  *
  * At 320 in / 320 processed / 320 out it degenerates to an exact pass-through
- * — four memcpys and one `iterate_kit_audio_processor_process` call — with
+ * — three memcpys and one `iterate_kit_audio_processor_process` call — with
  * ONE real semantic change against a direct path:
  *
  *   A FAILED PROCESS NOW EMITS 320 SAMPLES OF SILENCE INSTEAD OF DROPPING THE
@@ -1118,13 +1118,11 @@ static enum iterate_kit_status bridge_process(
     void *context,
     const int16_t *near_samples,
     const int16_t *reference_samples,
-    const int16_t *playout_samples,
     int16_t *clean_samples,
     size_t sample_count) {
   const struct iterate_kit_audio_processor_frame frame = {
     .near = near_samples,
     .reference = reference_samples,
-    .playout_activity = playout_samples,
     .output = clean_samples,
     .sample_count = sample_count,
   };
@@ -1595,7 +1593,6 @@ void iterate_kit_voice_loop_capture_step(void) {
    */
   static int16_t near_chunk[FRAME_SAMPLES];
   static int16_t reference_chunk[FRAME_SAMPLES];
-  static int16_t activity_chunk[FRAME_SAMPLES];
   struct iterate_kit_voice_capture_meta meta;
   size_t sample_count = 0U;
   runtime.capture_generation_inflight = atomic_load_explicit(
@@ -1646,29 +1643,12 @@ void iterate_kit_voice_loop_capture_step(void) {
           ITERATE_KIT_OK) {
     ++runtime.mic_process_failures;
   }
-  {
-    /*
-     * The far-active plane is a POLICY signal the codec samples, never the
-     * analogue reference: noise must not select an uplink branch. Refilled
-     * only when it changes, because it is constant for whole answers and
-     * constantly zero on a board that cannot report it.
-     */
-    static int16_t activity_level;
-    const int16_t level = meta.playback_content_active ? 1 : 0;
-    if (level != activity_level) {
-      activity_level = level;
-      for (size_t index = 0U; index < FRAME_SAMPLES; ++index) {
-        activity_chunk[index] = level;
-      }
-    }
-  }
   if (iterate_kit_aec_capture_bridge_push_aligned(
           &runtime.capture_bridge,
           meta.sequence,
           meta.captured_through_at_us,
           near_chunk,
           reference_chunk,
-          activity_chunk,
           chunk_samples) != ITERATE_KIT_OK) {
     ++runtime.mic_process_failures;
   }
@@ -2148,7 +2128,7 @@ static size_t health_json(char *out, size_t capacity) {
       /* Opening inputs and capture-gate state. */
       "\"hasStreamCap\":%s,\"outboxFree\":%u,"
       "\"gateOpen\":%s,\"activationStartedMs\":%" PRIu64
-      ",\"firstMicAppendOffsetMs\":%" PRId64 ",\"t\":%" PRIu64
+      ",\"firstMicAppendOffsetMs\":%" PRId64
       ",\"uptimeMs\":%" PRIu64,
       iterate_kit_itx_transport_state_name(transport.state),
       iterate_kit_voice_stream_state_name(runtime.voice_stream->state),
@@ -2172,7 +2152,6 @@ static size_t health_json(char *out, size_t capacity) {
           ? INT64_C(-1)
           : (int64_t)iterate_kit_voice_elapsed_ms(
                 runtime.first_mic_append_at_ms, runtime.activation_started_at_ms),
-      now,
       now);
   if (written <= 0 || (size_t)written >= capacity) return 0U;
   used = (size_t)written;
@@ -2324,14 +2303,13 @@ static void park_with_fault(const char *what) {
  */
 static bool start_board(void) {
   /*
-   * The bridge's five buffers, caller-owned for its whole life and sized for
-   * the largest cadence any board declares. Internal RAM on purpose: four of
+   * The bridge's four buffers, caller-owned for its whole life and sized for
+   * the largest cadence any board declares. Internal RAM on purpose: three of
    * them are what a board's DSP reads and writes every frame, and the one
    * board with a real canceller runs esp-sr over them inline.
    */
   static int16_t bridge_near[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_reference[ITERATE_KIT_VOICE_FRAME_SAMPLES];
-  static int16_t bridge_playout[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_clean[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   static int16_t bridge_egress[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   struct iterate_kit_board_audio audio;
@@ -2367,7 +2345,6 @@ static bool start_board(void) {
       .egress_frame_samples = FRAME_SAMPLES,
       .near_frame = bridge_near,
       .reference_frame = bridge_reference,
-      .playout_frame = bridge_playout,
       .clean_frame = bridge_clean,
       .processing_frame_capacity = ITERATE_KIT_VOICE_FRAME_SAMPLES,
       .egress_frame = bridge_egress,

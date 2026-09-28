@@ -46,9 +46,6 @@ void face_pose_apply_keyframe(
     pose->activity = keyframe->expression;
     pose->speaking =
         (keyframe->flags & FACE_KEYFRAME_FLAG_SPEAKING) != 0;
-    pose->viseme = FACE_VISEME_NONE;
-    pose->phoneme = FACE_PHONEME_NONE;
-    pose->confidence = 0;
 }
 
 void face_render_key_from_pose(
@@ -59,15 +56,10 @@ void face_render_key_from_pose(
     }
     memset(render_key, 0, sizeof(*render_key));
     face_keyframe_from_pose(pose, &render_key->controls);
-    render_key->viseme = pose->viseme;
-    render_key->phoneme = pose->phoneme;
-    render_key->viseme_weight = pose->confidence;
     const uint32_t compressed_level =
         ((uint32_t)pose->level * 255U + 4095U) / 8192U;
     render_key->audio_level = (uint8_t)(
         compressed_level > 255U ? 255U : compressed_level);
-    render_key->viseme_set = FACE_VISEME_SET_OVR15;
-    render_key->viseme_secondary = FACE_VISEME_NONE;
     render_key->speech_phase =
         pose->speaking ? FACE_SPEECH_ACTIVE : FACE_SPEECH_IDLE;
     render_key->affect_arousal = render_key->audio_level;
@@ -83,9 +75,6 @@ void face_pose_apply_render_key(
         return;
     }
     face_pose_apply_keyframe(pose, &render_key->controls);
-    pose->viseme = render_key->viseme;
-    pose->phoneme = render_key->phoneme;
-    pose->confidence = render_key->viseme_weight;
     pose->level = (uint16_t)(
         ((uint32_t)render_key->audio_level * 8192U + 127U) / 255U);
 }

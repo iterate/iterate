@@ -221,7 +221,6 @@ static const struct iterate_kit_audio_processor_properties
       .sample_rate_hz = 16000U,
       .frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
       .requires_reference_channel = true,
-      .uses_playout_activity = true,
     };
 
 static void passthrough_is_an_exact_in_place_safe_processor(void)
@@ -261,16 +260,13 @@ static void a_failed_echo_processor_cannot_leak_raw_microphone_audio(void)
   };
   int16_t near[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   int16_t reference[ITERATE_KIT_VOICE_FRAME_SAMPLES];
-  int16_t activity[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   int16_t output[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   memset(near, 0x11, sizeof(near));
   memset(reference, 0x22, sizeof(reference));
-  memset(activity, 0x33, sizeof(activity));
   memset(output, 0x44, sizeof(output));
   const struct iterate_kit_audio_processor_frame frame = {
     .near = near,
     .reference = reference,
-    .playout_activity = activity,
     .output = output,
     .sample_count = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   };
@@ -284,14 +280,6 @@ static void a_failed_echo_processor_cannot_leak_raw_microphone_audio(void)
   struct iterate_kit_audio_processor_frame missing = frame;
   memset(output, 0x55, sizeof(output));
   missing.reference = NULL;
-  assert(iterate_kit_audio_processor_process(&processor, &missing) ==
-         ITERATE_KIT_INVALID_ARGUMENT);
-  for (size_t index = 0U; index < ITERATE_KIT_VOICE_FRAME_SAMPLES; ++index) {
-    assert(output[index] == 0);
-  }
-  missing = frame;
-  memset(output, 0x66, sizeof(output));
-  missing.playout_activity = NULL;
   assert(iterate_kit_audio_processor_process(&processor, &missing) ==
          ITERATE_KIT_INVALID_ARGUMENT);
   for (size_t index = 0U; index < ITERATE_KIT_VOICE_FRAME_SAMPLES; ++index) {

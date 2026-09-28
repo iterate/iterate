@@ -13,10 +13,9 @@
  * performances without owning audio state, allocating memory, or changing
  * articulation. The same function is therefore usable from ESP-IDF and WASM.
  *
- * AI-authored stage directions remain a separate, stronger layer. Ambient
- * head/gaze motion continues under an authored emotion, while upper-face
- * expression is automatically attenuated when a non-neutral stage cue has
- * high weight.
+ * A held expression (face_stage.h) is a stronger layer: ambient head/gaze
+ * motion continues under it, while upper-face expression is attenuated in
+ * proportion to a non-neutral expression's weight.
  */
 typedef struct {
     uint32_t seed;
@@ -91,7 +90,7 @@ _Static_assert(
  * Apply one pure sample-clock-addressed performance frame in place.
  *
  * Dense speech articulation is immutable here: mouth controls (bytes 0..4),
- * activity/flags (10..11), and viseme/audio/speech fields (12..19) are left
+ * activity/flags (10..11), and audio/speech fields (12..13) are left
  * untouched. Eye, gaze, and brow controls in the same compact prefix are
  * intentionally available to the performance layer.
  */

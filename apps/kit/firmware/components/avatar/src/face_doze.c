@@ -83,7 +83,6 @@ void face_doze_prepare_render_key(face_render_key_t *render_key)
                    (uint8_t)~FACE_KEYFRAME_FLAG_SPEAKING) |
                   FACE_KEYFRAME_FLAG_BLINKING);
     render_key->speech_phase = FACE_SPEECH_IDLE;
-    render_key->viseme_weight = 0U;
     render_key->audio_level = 0U;
 
     /*

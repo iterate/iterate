@@ -15,7 +15,6 @@ static const struct iterate_kit_audio_processor_properties
         .sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
         .frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
         .requires_reference_channel = false,
-        .uses_playout_activity = false,
 };
 
 static enum iterate_kit_status passthrough_reset(void *context) {
@@ -64,9 +63,7 @@ enum iterate_kit_status iterate_kit_audio_processor_process(
       frame->sample_count == processor->properties->frame_samples;
   if (frame == NULL || frame->near == NULL || !output_extent_is_safe ||
       (processor->properties->requires_reference_channel &&
-       frame->reference == NULL) ||
-      (processor->properties->uses_playout_activity &&
-       frame->playout_activity == NULL)) {
+       frame->reference == NULL)) {
     if (output_extent_is_safe) {
       memset(frame->output,
              0,

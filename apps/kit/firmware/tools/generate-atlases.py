@@ -9,8 +9,8 @@ What IS committed, per pack, in components/avatar/assets/:
                (palette index 0 is transparent; the PLTE colors are only a
                viewing aid - the authoritative RGB565 palette is in the JSON)
   <pack>.json  everything else: palette(s), cell geometry and sprite-map
-               placement, mouth slot arrays, viseme maps, expression banks,
-               both atlas structs' fields, and the catalog entry
+               placement, mouth slot arrays, mouth role slots, expression
+               banks, both atlas structs' fields, and the catalog entry
 
 Usage (stdlib python3 only, no dependencies):
 
@@ -264,7 +264,7 @@ def _emit_atlas_definition(pack: dict, atlas: dict, palette_name: str, palette_c
         symbol += f"_{atlas['variant']}"
     flag_tokens = pack["atlas_flags"]
     flags_text = " |\n        ".join(flag_tokens) if flag_tokens else "0"
-    fallback_text = ", ".join(str(v) for v in pack["fallback_slots"])
+    role_text = ", ".join(str(v) for v in pack["role_slots"])
     return (
         f"const face_sprite_atlas_t {symbol} = {{\n"
         "    .magic = FACE_SPRITE_MAGIC,\n"
@@ -276,7 +276,6 @@ def _emit_atlas_definition(pack: dict, atlas: dict, palette_name: str, palette_c
         f"    .palette_count = {palette_count},\n"
         f"    .cell_count = {len(pack['cells'])},\n"
         f"    .mouth_slot_count = {len(pack['mouths'][0])},\n"
-        f"    .viseme_map_count = {len(pack['visemes'])},\n"
         f"    .bank_count = {len(pack['banks'])},\n"
         "    .sequence_count = 0,\n"
         "    .cycle_count = 0,\n"
@@ -285,14 +284,13 @@ def _emit_atlas_definition(pack: dict, atlas: dict, palette_name: str, palette_c
         "    .reserved = 0,\n"
         "    .selector = FACE_SPRITE_SELECTOR_DEFAULTS,\n"
         "    .timing = FACE_SPRITE_TIMING_DEFAULTS,\n"
-        f"    .fallback_slots = {{ {fallback_text} }},\n"
+        f"    .role_slots = {{ {role_text} }},\n"
         "    .reserved_slots = {0, 0, 0},\n"
         f"    .palette = {palette_name},\n"
         f"    .cells = {prefix}_cells,\n"
         f"    .blob = {prefix}_blob,\n"
         f"    .blob_size = sizeof({prefix}_blob),\n"
         f"    .banks = {prefix}_banks,\n"
-        f"    .viseme_map = {prefix}_visemes,\n"
         "    .sequences = NULL,\n"
         "    .cycles = NULL,\n"
         f'    .name = "{atlas["name"]}",\n'
@@ -339,12 +337,6 @@ def emit_atlas_c(pack: dict, cell_pixels: list[bytes]) -> str:
             + ", ".join(str(v) for v in slots)
             + ",\n};\n"
         )
-
-    map_lines = [f"    {{ {a}, {b}, {c}, {d} }}," for a, b, c, d in pack["visemes"]]
-    parts.append(
-        f"static const face_sprite_viseme_map_t {prefix}_visemes"
-        f"[{len(map_lines)}] = {{\n" + "\n".join(map_lines) + "\n};\n"
-    )
 
     bank_lines = [_emit_bank(prefix, bank) for bank in pack["banks"]]
     parts.append(
@@ -427,9 +419,6 @@ def parse_atlas_c(path: Path) -> dict:
     for index in range(len(re.findall(rf"uint16_t {prefix}_mouths_\d+\[", text))):
         mouths.append(_ints(array_body(rf"uint16_t {prefix}_mouths_{index}\[\d+\] = \{{(.*?)\}};")))
 
-    visemes_body = array_body(rf"face_sprite_viseme_map_t {prefix}_visemes\[\d+\] = \{{(.*?)\}};")
-    visemes = [list(_ints(m)) for m in re.findall(r"\{ ([^{}]+) \},", visemes_body)]
-
     bank_re = re.compile(
         r"    \{\n"
         r"        \.target = \{ (-?\d+), (-?\d+), (-?\d+), (-?\d+), (-?\d+), \{0, 0, 0\} \},\n"
@@ -467,7 +456,6 @@ def parse_atlas_c(path: Path) -> dict:
         r"    \.palette_count = (\d+),\n"
         r"    \.cell_count = (\d+),\n"
         r"    \.mouth_slot_count = (\d+),\n"
-        r"    \.viseme_map_count = (\d+),\n"
         r"    \.bank_count = (\d+),\n"
         r"    \.sequence_count = 0,\n"
         r"    \.cycle_count = 0,\n"
@@ -476,14 +464,13 @@ def parse_atlas_c(path: Path) -> dict:
         r"    \.reserved = 0,\n"
         r"    \.selector = FACE_SPRITE_SELECTOR_DEFAULTS,\n"
         r"    \.timing = FACE_SPRITE_TIMING_DEFAULTS,\n"
-        r"    \.fallback_slots = \{ ([^}]+) \},\n"
+        r"    \.role_slots = \{ ([^}]+) \},\n"
         r"    \.reserved_slots = \{0, 0, 0\},\n"
         r"    \.palette = (\w+),\n"
         rf"    \.cells = {prefix}_cells,\n"
         rf"    \.blob = {prefix}_blob,\n"
         rf"    \.blob_size = sizeof\({prefix}_blob\),\n"
         rf"    \.banks = {prefix}_banks,\n"
-        rf"    \.viseme_map = {prefix}_visemes,\n"
         r"    \.sequences = NULL,\n"
         r"    \.cycles = NULL,\n"
         r'    \.name = "([^"]+)",\n'
@@ -492,21 +479,21 @@ def parse_atlas_c(path: Path) -> dict:
     )
     atlases = []
     atlas_flags: list[str] | None = None
-    fallback_slots: list[int] | None = None
+    role_slots: list[int] | None = None
     native = None
     for m in atlas_re.finditer(text):
-        (symbol, nw, nh, scale, palette_count, cell_count, mouth_count, viseme_count,
-         bank_count, flags_text, background, fallback, palette_name, name) = m.groups()
-        if (int(cell_count), int(mouth_count), int(viseme_count), int(bank_count)) != (
-            len(cells), len(mouths[0]), len(visemes), len(banks)
+        (symbol, nw, nh, scale, palette_count, cell_count, mouth_count,
+         bank_count, flags_text, background, roles, palette_name, name) = m.groups()
+        if (int(cell_count), int(mouth_count), int(bank_count)) != (
+            len(cells), len(mouths[0]), len(banks)
         ):
             raise ValueError(f"{path}: atlas {symbol} counts disagree with parsed arrays")
         flags = [t.strip() for t in flags_text.split("|")]
         if atlas_flags is None:
             atlas_flags = flags
-            fallback_slots = _ints(fallback)
+            role_slots = _ints(roles)
             native = (int(nw), int(nh), int(scale))
-        elif flags != atlas_flags or _ints(fallback) != fallback_slots or native != (int(nw), int(nh), int(scale)):
+        elif flags != atlas_flags or _ints(roles) != role_slots or native != (int(nw), int(nh), int(scale)):
             raise ValueError(f"{path}: atlas {symbol} diverges in shared fields")
         base_symbol = f"face_sprite_{prefix}_atlas"
         if symbol == base_symbol:
@@ -554,11 +541,10 @@ def parse_atlas_c(path: Path) -> dict:
         "transparent_index": 0,
         "palette565": palette,
         "atlas_flags": atlas_flags,
-        "fallback_slots": fallback_slots,
+        "role_slots": role_slots,
         "atlases": atlases,
         "cells": [{k: c[k] for k in ("w", "h", "ox", "oy")} for c in cells],
         "mouths": mouths,
-        "visemes": visemes,
         "banks": banks,
     }
     return pack | {"_cell_pixels": cell_pixels}
@@ -637,14 +623,14 @@ def dump_pack_json(pack: dict) -> str:
     scalars = ("prefix", "native_width", "native_height", "scale", "transparent_index")
     for key in scalars:
         lines.append(f'  "{key}": {inline(pack[key])},')
-    for key in ("palette565", "atlas_flags", "fallback_slots"):
+    for key in ("palette565", "atlas_flags", "role_slots"):
         lines.append(f'  "{key}": {inline(pack[key])},')
     lines.append('  "atlases": [')
     for atlas in pack["atlases"]:
         lines.append(f"    {inline(atlas)},")
     lines[-1] = lines[-1].rstrip(",")
     lines.append("  ],")
-    for key in ("cells", "mouths", "visemes", "banks"):
+    for key in ("cells", "mouths", "banks"):
         lines.append(f'  "{key}": [')
         for item in pack[key]:
             lines.append(f"    {inline(item)},")

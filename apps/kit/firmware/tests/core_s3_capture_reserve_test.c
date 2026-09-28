@@ -20,21 +20,6 @@ static void fill_dma(
   }
 }
 
-static enum iterate_kit_core_s3_capture_push_result push_capture(
-    struct iterate_kit_core_s3_capture_reserve *reserve,
-    uint32_t sequence,
-    uint64_t captured_through_at_us,
-    const void *pcm,
-    size_t bytes) {
-  return iterate_kit_core_s3_capture_reserve_push_raw(
-      reserve,
-      sequence,
-      captured_through_at_us,
-      false,
-      pcm,
-      bytes);
-}
-
 /*
  * The IDF ISR borrows a DMA pointer only until its callback returns. A reserve
  * which stores that pointer, or publishes its slot before the copy completes,
@@ -53,11 +38,11 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
   fill_dma(first, 100);
   fill_dma(second, 2000);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 41U, 8000U, first, sizeof(first)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 42U, 16000U, second, sizeof(second)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   memset(first, 0, sizeof(first));
@@ -96,37 +81,6 @@ static void accepted_dma_is_copied_and_delivered_in_order(void) {
 }
 
 /*
- * Far-active selection is capture metadata, not a second stream which capture
- * may wait for. The high-priority owner snapshots the speaker decision made
- * immediately before the matching microphone read. Preserve that decision in
- * the same publication as the RX samples so later scheduling cannot attach a
- * newer speaker state to an older microphone edge.
- */
-static void playback_activity_is_owned_by_the_capture_edge(void) {
-  struct iterate_kit_core_s3_capture_reserve reserve;
-  assert(
-      iterate_kit_core_s3_capture_reserve_init(&reserve) ==
-      ITERATE_KIT_OK);
-  int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
-  fill_dma(dma, 500);
-
-  assert(
-      iterate_kit_core_s3_capture_reserve_push_raw(
-          &reserve,
-          1U,
-          8000U,
-          true,
-          dma,
-          sizeof(dma)) == ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
-
-  struct iterate_kit_core_s3_capture_chunk chunk;
-  assert(
-      iterate_kit_core_s3_capture_reserve_take(&reserve, &chunk) ==
-      ITERATE_KIT_CORE_S3_CAPTURE_TAKE_CHUNK);
-  assert(chunk.playback_content_active);
-}
-
-/*
  * A starved AEC task can leave all eight 8 ms reserve slots occupied while
  * I2S continues recording. Draining those 64 ms after recovery would make the
  * remote conversation lag and would train AEC across a known timeline hole.
@@ -146,7 +100,7 @@ static void overflow_discards_the_whole_stale_epoch(void) {
        ++index) {
     fill_dma(dma, (int16_t)(index * 100));
     assert(
-        push_capture(
+        iterate_kit_core_s3_capture_reserve_push_raw(
             &reserve,
             100U + index,
             (uint64_t)(index + 1U) * 8000U,
@@ -156,7 +110,7 @@ static void overflow_discards_the_whole_stale_epoch(void) {
   }
   fill_dma(dma, 9000);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 108U, 72000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_FULL);
 
@@ -173,7 +127,7 @@ static void overflow_discards_the_whole_stale_epoch(void) {
 
   fill_dma(dma, 12000);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 109U, 80000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
@@ -209,11 +163,11 @@ static void dma_sequence_gap_poison_is_fail_closed(void) {
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 700);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 6U, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 8U, 24000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_DISCONTINUITY);
 
@@ -227,7 +181,7 @@ static void dma_sequence_gap_poison_is_fail_closed(void) {
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_EMPTY);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 9U, 32000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
@@ -258,7 +212,7 @@ static void external_discontinuity_destroys_queued_capture(void) {
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 300);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, UINT32_MAX, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   iterate_kit_core_s3_capture_reserve_note_discontinuity(&reserve);
@@ -269,7 +223,7 @@ static void external_discontinuity_destroys_queued_capture(void) {
           &reserve, &chunk) ==
       ITERATE_KIT_CORE_S3_CAPTURE_TAKE_RESET_EPOCH);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 0U, 16000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
@@ -299,11 +253,11 @@ static void malformed_dma_poison_is_observable(void) {
   int16_t dma[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
   fill_dma(dma, 30);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 1U, 8000U, dma, sizeof(dma)) ==
       ITERATE_KIT_CORE_S3_CAPTURE_ACCEPTED);
   assert(
-      push_capture(
+      iterate_kit_core_s3_capture_reserve_push_raw(
           &reserve, 2U, 16000U, dma, sizeof(dma) - 2U) ==
       ITERATE_KIT_CORE_S3_CAPTURE_DROPPED_INVALID);
 
@@ -321,7 +275,6 @@ static void malformed_dma_poison_is_observable(void) {
 
 int main(void) {
   accepted_dma_is_copied_and_delivered_in_order();
-  playback_activity_is_owned_by_the_capture_edge();
   overflow_discards_the_whole_stale_epoch();
   dma_sequence_gap_poison_is_fail_closed();
   external_discontinuity_destroys_queued_capture();

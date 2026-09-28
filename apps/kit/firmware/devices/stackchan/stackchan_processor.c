@@ -12,7 +12,6 @@
 #include "esp_log.h"
 
 #include "iterate/kit/aec_reference_scaler.h"
-#include "iterate/kit/aec_uplink_selector.h"
 #include "iterate/kit/pcm_high_pass.h"
 
 static const char tag[] = "stackchan-aec";
@@ -33,38 +32,25 @@ enum {
   /* Saturating digital gain on the analogue divider reference. */
   REFERENCE_SCALE_MULTIPLIER = 8,
   /*
-   * The donor's final uplink gains. Raw x6 is inert under the shipped
-   * constant-processed policy but is the measured value the switched A/B
-   * policy would use; processed x10 is what the wire carries.
+   * The donor's final uplink gain on the processed plane, sized so provider
+   * VAD hears the otherwise quiet but bounded signal.
    */
-  RAW_GAIN_MULTIPLIER = 6,
   PROCESSED_GAIN_MULTIPLIER = 10,
-  PROCESSED_HANGOVER_FRAMES = 8,
 };
 
 static struct {
   void *aec;
   struct iterate_kit_pcm_high_pass near_high_pass;
-  struct iterate_kit_aec_uplink_selector selector;
   int16_t near_scratch[STACKCHAN_PROCESSOR_FRAME_SAMPLES];
   int16_t reference_scratch[STACKCHAN_PROCESSOR_FRAME_SAMPLES];
   int16_t clean_scratch[STACKCHAN_PROCESSOR_FRAME_SAMPLES];
   uint64_t reference_clipped_samples;
+  uint64_t uplink_clipped_samples;
   uint32_t recreates;
-  uint32_t mode_fallbacks;
   int mode;
   uint32_t recreate_failures;
   bool initialized;
 } state;
-
-/*
- * The selector demands a far-active plane even though the shipped constant
- * policy ignores it; this processor declares uses_playout_activity = false,
- * so the plane is a documented zero. Re-measuring the switched policy would
- * wire the codec's per-chunk activity bit through here instead.
- */
-static const int16_t
-    zero_playout_plane[STACKCHAN_PROCESSOR_FRAME_SAMPLES];
 
 static bool create_engine(int mode) {
   aec_config_t config = {
@@ -75,12 +61,16 @@ static bool create_engine(int mode) {
     .sample_rate = SAMPLE_RATE_HZ,
     .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
     /*
-     * FULL DUPLEX, BECAUSE BOTH PEOPLE TALK AT ONCE AND THAT IS THE POINT.
+     * AEC_MODE_VOIP_HIGH_PERF, THE ONE MODE ESP-SR CREATES ON THIS BOARD.
+     * FD_HIGH_PERF, FD_LOW_COST and SR_HIGH_PERF all refuse to create here
+     * (the board reported `aecMode: 4` after trying each in turn), and asking
+     * for an absent mode on every reset spends failed allocations against the
+     * capture deadline.
      *
-     * This was AEC_MODE_VOIP_HIGH_PERF. VOIP mode brings its own aggressive
-     * residual suppressor, and measured on this board it does not merely
-     * attenuate the near end during double-talk — it destroys it. Same words,
-     * same distance, same microphone (`voice_stream aec`, 2026-08-11):
+     * Its cost is double-talk. VOIP mode brings its own aggressive residual
+     * suppressor, and measured on this board it does not merely attenuate the
+     * near end during double-talk — it destroys it. Same words, same
+     * distance, same microphone (`voice_stream aec`, 2026-08-11):
      *
      *   board silent    whisper reads "Stop talking right now, please stop."
      *   board playing   whisper reads nothing at all
@@ -93,11 +83,11 @@ static bool create_engine(int mode) {
      * suppressor deciding which time-frequency cells belong to the far end and
      * being wrong about the ones that carry the words.
      *
-     * esp-sr offers a mode built for exactly this case and nobody had tried
-     * it. AEC_MODE_FD_* trades some pure-echo suppression for keeping the near
-     * end intact, which is the right trade here: the echo residual has never
-     * been the failure — no word of the assistant has ever reached the uplink
-     * at any volume — and the interruption always has.
+     * AEC_MODE_FD_* trades some pure-echo suppression for keeping the near
+     * end intact, which would be the right trade here: the echo residual has
+     * never been the failure — no word of the assistant has ever reached the
+     * uplink at any volume — and the interruption always has. It is worth one
+     * flash again whenever an esp-sr upgrade might create it.
      */
     .mode = mode,
     /* Documented inert under VOIP mode, where the engine supplies its own. */
@@ -124,71 +114,8 @@ static bool create_engine(int mode) {
     state.aec = NULL;
     return false;
   }
+  state.mode = mode;
   return true;
-}
-
-/**
- * Build the canceller, falling back to the mode that is known to work.
- *
- * FAILING CLOSED TOOK THE WHOLE BOARD WITH IT. `AEC_MODE_FD_HIGH_PERF` was
- * tried here on 2026-08-11 for its double-talk behaviour; it did not create,
- * `create_engine` correctly refused, and the consequence of refusing was a
- * device that never mounted anything at all — no capability host, no voice_stream
- * channel, and a USB console that says nothing on this board, so no way to see
- * why from the outside. Recovering it needed a reflash of the previous
- * firmware.
- *
- * Failing closed is still right for the FRAME CADENCE, which is a correctness
- * claim the rest of the capture path depends on. It is wrong as a response to
- * "this mode is unavailable", because there is a mode that is available and
- * running with cancellation is unambiguously better than not running. So the
- * cadence check stays inside {@link create_engine} and the choice of mode
- * becomes a preference with a floor under it.
- *
- * `mode_fallbacks` and `aecMode` in the census are what make the fallback
- * honest: a board silently running a mode nobody chose is how a calibration
- * sweep comes to measure the same configuration twice and report it as two
- * results. On this silicon the first attempt already falls back — measured
- * `aecModeFallbacks: 3` with FD_HIGH_PERF asked for — so esp-sr here simply
- * does not carry the full-duplex modes, and the list below finds that out at
- * boot rather than costing a flash per guess.
- */
-static const int AEC_MODE_PREFERENCE[] = {
-  /*
-   * ONE ENTRY, BECAUSE ESP-SR HERE HAS ONLY ONE.
-   *
-   * The list was FD_HIGH_PERF, FD_LOW_COST, SR_HIGH_PERF and then this; the
-   * board reported `aecMode: 4` (VOIP_HIGH_PERF) with 307 fallbacks, so all
-   * three preferred modes refuse to create on this silicon and the walk down
-   * the list bought nothing but work.
-   *
-   * It bought worse than nothing. `processor_reset` runs the whole list, the
-   * capture epoch resets on a missed deadline, and three failed allocations
-   * per reset was enough to keep missing them: 307 recreates against 306
-   * capture-epoch resets in 37 seconds, against 2 recreates in three hours
-   * before. An adaptive filter thrown away eight times a second cannot
-   * converge at any volume, so a "cheap" probe for an absent mode had turned
-   * itself into the very failure being chased.
-   *
-   * The machinery stays — one flash can try a mode again, and `aecMode` says
-   * what is running — but nothing unavailable is asked for on the hot path.
-   */
-  AEC_MODE_VOIP_HIGH_PERF,
-};
-
-static bool create_engine_with_fallback(void) {
-  size_t index;
-  for (index = 0U;
-       index < sizeof(AEC_MODE_PREFERENCE) / sizeof(AEC_MODE_PREFERENCE[0]);
-       ++index) {
-    if (create_engine(AEC_MODE_PREFERENCE[index])) {
-      state.mode = AEC_MODE_PREFERENCE[index];
-      if (index > 0U) ++state.mode_fallbacks;
-      ESP_LOGI(tag, "AEC running in mode %d", AEC_MODE_PREFERENCE[index]);
-      return true;
-    }
-  }
-  return false;
 }
 
 static enum iterate_kit_status processor_reset(void *context) {
@@ -206,7 +133,7 @@ static enum iterate_kit_status processor_reset(void *context) {
     state.aec = NULL;
   }
   ++state.recreates;
-  if (!create_engine_with_fallback()) {
+  if (!create_engine(AEC_MODE_VOIP_HIGH_PERF)) {
     ++state.recreate_failures;
     return ITERATE_KIT_IO_ERROR;
   }
@@ -248,18 +175,16 @@ static enum iterate_kit_status processor_process(
       state.reference_scratch,
       state.clean_scratch);
   /*
-   * The shipped uplink policy: the processed plane, always, at a saturating
-   * x10 — sized so provider VAD sees the otherwise quiet but bounded signal.
-   * Adaptive AGC, speaker-time muting, and weakened double-talk gates are
-   * deliberately forbidden; see the header.
+   * The uplink is the processed plane, always, at the same memoryless
+   * saturating gain the reference gets. Adaptive AGC, speaker-time muting, and
+   * weakened double-talk gates are deliberately forbidden; see the header.
    */
-  return iterate_kit_aec_uplink_selector_process(
-      &state.selector,
-      state.near_scratch,
-      zero_playout_plane,
+  return iterate_kit_aec_reference_scale(
       state.clean_scratch,
       frame->output,
-      STACKCHAN_PROCESSOR_FRAME_SAMPLES);
+      STACKCHAN_PROCESSOR_FRAME_SAMPLES,
+      PROCESSED_GAIN_MULTIPLIER,
+      &state.uplink_clipped_samples);
 }
 
 static const struct iterate_kit_audio_processor_ops processor_ops = {
@@ -272,25 +197,18 @@ static const struct iterate_kit_audio_processor_properties
   .sample_rate_hz = SAMPLE_RATE_HZ,
   .frame_samples = STACKCHAN_PROCESSOR_FRAME_SAMPLES,
   .requires_reference_channel = true,
-  .uses_playout_activity = false,
 };
 
 bool stackchan_processor_init(void) {
   if (state.initialized) {
     return true;
   }
-  if (!create_engine_with_fallback()) {
+  if (!create_engine(AEC_MODE_VOIP_HIGH_PERF)) {
     return false;
   }
   if (iterate_kit_pcm_high_pass_init(
           &state.near_high_pass, NEAR_HIGH_PASS_DECAY_Q15) !=
-          ITERATE_KIT_OK ||
-      iterate_kit_aec_uplink_selector_init(
-          &state.selector,
-          ITERATE_KIT_AEC_UPLINK_CONSTANT_PROCESSED,
-          PROCESSED_HANGOVER_FRAMES,
-          RAW_GAIN_MULTIPLIER,
-          PROCESSED_GAIN_MULTIPLIER) != ITERATE_KIT_OK) {
+      ITERATE_KIT_OK) {
     return false;
   }
   state.initialized = true;
@@ -311,10 +229,6 @@ uint32_t stackchan_processor_mode(void) {
   return (uint32_t)state.mode;
 }
 
-uint32_t stackchan_processor_mode_fallbacks(void) {
-  return state.mode_fallbacks;
-}
-
 uint32_t stackchan_processor_recreates(void) {
   return state.recreates;
 }
@@ -332,5 +246,5 @@ uint64_t stackchan_processor_near_high_pass_clipped_samples(void) {
 }
 
 uint64_t stackchan_processor_uplink_clipped_samples(void) {
-  return state.selector.clipped_samples;
+  return state.uplink_clipped_samples;
 }

@@ -1004,36 +1004,19 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
 }
 
 
-esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(
-    const char *slug, size_t slug_length) {
-  if (slug == NULL || slug_length == 0U) {
+esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(size_t index) {
+  if (index >= face_avatar_registry_count()) {
     return ESP_ERR_INVALID_ARG;
   }
   if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
       __atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) == 0U) {
     return ESP_ERR_INVALID_STATE;
   }
-
-  const size_t avatar_count = face_avatar_registry_count();
-  for (size_t index = 0U; index < avatar_count; ++index) {
-    const char *const candidate = face_avatar_registry_slug_at(index);
-    if (candidate == NULL) {
-      continue;
-    }
-    const size_t candidate_length = strlen(candidate);
-    if (candidate_length == slug_length &&
-        memcmp(candidate, slug, slug_length) == 0) {
-      if (index >= UINT32_MAX) {
-        return ESP_ERR_INVALID_SIZE;
-      }
-      __atomic_store_n(
-          &owner.pending_avatar_index_plus_one,
-          (uint32_t)index + 1U,
-          __ATOMIC_RELEASE);
-      return ESP_OK;
-    }
-  }
-  return ESP_ERR_INVALID_ARG;
+  __atomic_store_n(
+      &owner.pending_avatar_index_plus_one,
+      (uint32_t)index + 1U,
+      __ATOMIC_RELEASE);
+  return ESP_OK;
 }
 
 esp_err_t iterate_kit_stackchan_avatar_request_status(

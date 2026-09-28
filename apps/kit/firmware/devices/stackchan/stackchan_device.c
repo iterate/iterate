@@ -33,7 +33,9 @@
 #include "esp_timer.h"
 
 #include "iterate/kit/capabilities/arguments.h"
+#include "iterate/kit/avatar/face_avatar_registry.h"
 #include "iterate/kit/capabilities/camera.h"
+#include "iterate/kit/capabilities/face.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/conversation_overlay.h"
@@ -266,10 +268,9 @@ static void poll(void *context, struct iterate_kit_voice_intent *out) {
 
 /*
  * WHAT THE CODEC KNOWS ABOUT THE CHUNK IT JUST HANDED OVER, which on this
- * board is all three things the bridge needs and on the others is none of
- * them: a DMA sequence that gaps when the hardware does, a completion
- * timestamp that back-dates each egress frame, and whether the far end was
- * audible while this chunk was recorded.
+ * board is both things the bridge needs and on the others is neither: a DMA
+ * sequence that gaps when the hardware does, and a completion timestamp that
+ * back-dates each egress frame.
  *
  * The epoch latch is CONSUMED here, so it must only be read once per accepted
  * chunk — which is exactly when the loop calls this.
@@ -279,8 +280,7 @@ static void capture_meta(
   (void)context;
   out->epoch_reset = stackchan_audio_take_epoch_reset();
   stackchan_audio_last_chunk_meta(
-      &out->sequence, &out->captured_through_at_us,
-      &out->playback_content_active);
+      &out->sequence, &out->captured_through_at_us);
 }
 
 static uint8_t volume(void *context) {
@@ -432,39 +432,9 @@ static enum capnweb_status screen_show(
   }
 }
 
-/*
- * `face.set({face})` — the ONLY face changer this board has: the side button
- * opens conversations, so a face nobody can ask for by name is a face the
- * robot never makes. The slug is validated against the compiled catalogue by
- * the avatar itself.
- */
-static const char *const face_set_path[] = {"face", "set"};
-
-static enum capnweb_status face_set(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  struct capnweb_value object = {0};
-  struct capnweb_value slug = {0};
-  char buffer[48];
-  size_t length = 0U;
+static bool wear_face(void *context, size_t index) {
   (void)context;
-  if (!iterate_kit_read_object_argument(call, &object) ||
-      !capnweb_value_object_get(&object, "face", &slug) ||
-      capnweb_value_copy_string(&slug, buffer, sizeof(buffer), &length) !=
-          CAPNWEB_OK) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "face.set needs {face} as a catalogue slug");
-  }
-  if (iterate_kit_stackchan_avatar_request_sprite_set(buffer, length) !=
-      ESP_OK) {
-    return capnweb_reply_set_error(
-        reply,
-        "Error",
-        "unknown face — the catalogue is dot-matrix-oracle, furnace-imp, "
-        "karakuri-brass, moonscope, starbyte");
-  }
-  return capnweb_reply_set_boolean(reply, true);
+  return iterate_kit_stackchan_avatar_request_sprite_set(index) == ESP_OK;
 }
 
 /*
@@ -550,7 +520,6 @@ static size_t modules(
   static const struct iterate_kit_method board_methods[] = {
     {screen_fill_path, 2U, screen_fill},
     {screen_show_path, 2U, screen_show},
-    {face_set_path, 2U, face_set},
     {button_press_path, 2U, button_press},
     {touch_tap_path, 2U, touch_tap},
     {head_nod_path, 2U, head_nod},
@@ -559,9 +528,15 @@ static size_t modules(
   static struct iterate_kit_servos servos;
   static struct iterate_kit_camera camera;
   static struct iterate_kit_camera screen;
+  static struct iterate_kit_face face;
+  static const struct iterate_kit_face_driver face_driver = {
+    .context = NULL,
+    .slug_at = face_avatar_registry_slug_at,
+    .wear = wear_face,
+  };
   size_t count = 0U;
   (void)context;
-  if (capacity < 4U) return 0U;
+  if (capacity < 5U) return 0U;
   if (body != NULL) {
     /*
      * The donor envelope, enforced before any narrowing: enclosure linkage and
@@ -620,6 +595,14 @@ static size_t modules(
       out[count++] = iterate_kit_camera_module(&screen);
     }
   }
+  /*
+   * `face.set({face})`, the ONLY face changer this board has: the side button
+   * opens conversations, so a face nobody can ask for by name is a face the
+   * robot never makes.
+   */
+  if (iterate_kit_face_init(&face, &face_driver) == ITERATE_KIT_OK) {
+    out[count++] = iterate_kit_face_module(&face);
+  }
   out[count++] = (struct iterate_kit_module){
     .methods = board_methods,
     .method_count = sizeof(board_methods) / sizeof(board_methods[0]),
@@ -670,7 +653,6 @@ static size_t health(void *context, char *out, size_t capacity) {
        * every board runs one.
        */
       {"aecRecreates", stackchan_processor_recreates()},
-      {"aecModeFallbacks", stackchan_processor_mode_fallbacks()},
       {"aecMode", stackchan_processor_mode()},
       {"aecRecreateFailures", stackchan_processor_recreate_failures()},
       {"aecReferenceClipped",
