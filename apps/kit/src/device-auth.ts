@@ -3,7 +3,6 @@ import type { BrowserSession } from "iterate/app-session";
 import { isLocalOrigin, sameOriginPath } from "iterate/lib";
 import { kitEnvs } from "../../../envs.ts";
 import { DEFAULT_FIRMWARE_VERSION, findFirmwareDevice } from "./firmware/catalog.ts";
-import { deviceVendors } from "./firmware/device-client.ts";
 
 /** Kit chooses a fresh client BEFORE consent. The stored identity then follows setup to the board.
  *  The platform it signs in to is `defaultIssuer` (`APP_CONFIG urls.os`), or another iterate platform
@@ -43,13 +42,12 @@ export async function deviceAuth(
       const answer = await deps.issuerAnswersAt(issuer);
       if (answer) return refused(answer);
     }
-    const vendor = deviceVendors[device.id]!;
     // Local OAuth uses dynamic registration; deployed clients publish their own HTTPS metadata.
     const metadataOrigin = isLocalOrigin(url.origin) ? kitEnvs.prd.baseUrl : url.origin;
     const client = {
       id: `${metadataOrigin}/devices/${device.id}/clients/${crypto.randomUUID()}.json`,
       name: device.name,
-      logoUri: `${metadataOrigin}/vendors/${vendor.icon}`,
+      logoUri: `${metadataOrigin}/vendors/${device.vendor.icon}`,
     };
     // A deliberate POST replaces only this browser's installer session, never a flashed token. When
     // ending it fails (its platform is down, or gone), nothing new starts: the page says so and

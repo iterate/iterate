@@ -318,8 +318,8 @@ type Partition = ReturnType<typeof readPartitionTable>[number];
 /**
  * A release's `manifest.json`: a standard esp-web-tools manifest (https://esphome.github.io/esp-web-tools/)
  * whose part paths are relative to the manifest, plus `configurationPartition`, the region Kit fills
- * with the install's configuration image at flash time. Kit also adds the device's current name and
- * its install options then, so a renamed device still flashes its old releases.
+ * with the install's configuration image at flash time. Kit also sets the manifest's `name` to the
+ * device's current name then, so a renamed device still flashes its old releases.
  *
  * There is no `configurationFormat` field while `ITERKIT1` is the only configuration format; a firmware
  * change that needs a new one adds it (apps/kit/firmware/AGENTS.md).

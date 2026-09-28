@@ -144,7 +144,14 @@ test("prepareInstall: adds the install's configuration image under the device's 
 
   const install = prepareInstall(
     manifest,
-    { id: "test-device", target: "test", name: "Renamed device", description: "", startCall: "" },
+    {
+      id: "test-device",
+      target: "test",
+      name: "Renamed device",
+      description: "",
+      vendor: { name: "Test", icon: "test.png", url: "https://example.com/" },
+      startCall: "",
+    },
     configuration,
   );
 

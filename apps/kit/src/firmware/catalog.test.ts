@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { firmwareCatalog } from "./catalog.ts";
@@ -27,4 +27,18 @@ test.for(firmwareCatalog)("$id has its own target and device directories", ({ ta
     existsSync(join(firmware, "targets", target)),
     existsSync(join(firmware, "devices", target)),
   ]).toEqual([true, true]);
+});
+
+// A board names itself by its catalog id: voice_loop.c builds its `itx.clients` name and every call's
+// path from `.device_name`.
+test.for(firmwareCatalog)("$id is the name its firmware reports", ({ id, target }) => {
+  const directory = join(import.meta.dirname, "../../firmware/devices", target);
+  const names = readdirSync(directory)
+    .filter((file) => file.endsWith("_device.c"))
+    .flatMap((file) => [
+      ...readFileSync(join(directory, file), "utf8").matchAll(/\.device_name = "([^"]+)"/g),
+    ])
+    .map((match) => match[1]);
+
+  expect(names).toEqual([id]);
 });

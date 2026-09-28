@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, getRouteApi, redirect } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -31,29 +31,21 @@ import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
 import {
-  DEFAULT_DEVICE_ID,
   DEFAULT_FIRMWARE_VERSION,
   FIRMWARE_REPOSITORY,
   findFirmwareDevice,
   firmwareReleaseTag,
 } from "../../firmware/catalog.ts";
-import { deviceVendors } from "../../firmware/device-client.ts";
 import { selectFirmware } from "../../firmware/releases.ts";
 
 export const Route = createFileRoute("/_auth/devices/$deviceId/firmware/$firmwareVersion")({
   // the project's slug, so the OpenAI key check below follows the picker (and a link keeps it)
   validateSearch: z.object({ project: z.string().optional().catch(undefined) }),
-  beforeLoad: ({ params }) => {
-    const device = findFirmwareDevice(params.deviceId);
-    if (!device) {
-      throw redirect({
-        to: "/devices/$deviceId/firmware/$firmwareVersion",
-        params: {
-          deviceId: DEFAULT_DEVICE_ID,
-          firmwareVersion: DEFAULT_FIRMWARE_VERSION,
-        },
-      });
-    }
+  // `_auth` has already sent every other model to `/`, and device-session.json names only a
+  // catalog device, so this session's device is the one in the URL.
+  beforeLoad: ({ context }) => {
+    const device = findFirmwareDevice(context.deviceSession.deviceId);
+    if (!device) throw new Error(`Kit has no device ${context.deviceSession.deviceId}.`);
     return { device };
   },
   // In the browser (`_auth` is `ssr: false`), which lists the releases itself (releases.ts). A
@@ -244,8 +236,8 @@ function KitPage() {
               </div>
               <FieldDescription className="flex items-center gap-2">
                 <img
-                  src={`/vendors/${deviceVendors[device.id]!.icon}`}
-                  alt={deviceVendors[device.id]!.name}
+                  src={`/vendors/${device.vendor.icon}`}
+                  alt={device.vendor.name}
                   className="size-6 object-contain"
                 />
                 {device.description}

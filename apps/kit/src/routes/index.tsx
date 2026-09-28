@@ -18,7 +18,6 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { DEFAULT_DEVICE_ID, findFirmwareDevice, firmwareCatalog } from "../firmware/catalog.ts";
-import { deviceVendors } from "../firmware/device-client.ts";
 
 export const Route = createFileRoute("/")({
   validateSearch: z.object({
@@ -42,7 +41,6 @@ function DevicePicker() {
     findFirmwareDevice(search.device || "")?.id || DEFAULT_DEVICE_ID,
   );
   const device = findFirmwareDevice(deviceId)!;
-  const vendor = deviceVendors[device.id]!;
   return (
     <main className="flex min-h-svh items-center justify-center p-6">
       <section className="flex w-full max-w-md flex-col gap-6">
@@ -78,8 +76,8 @@ function DevicePicker() {
             </Select>
             <FieldDescription className="flex items-center gap-2">
               <img
-                src={`/vendors/${vendor.icon}`}
-                alt={vendor.name}
+                src={`/vendors/${device.vendor.icon}`}
+                alt={device.vendor.name}
                 className="size-6 object-contain"
               />
               {device.description}
