@@ -3,7 +3,8 @@
 // they are (the `/oauth2/userinfo` resource, consent.ts `identify`), and an address the preview's
 // `admins` lists is signed in there as themselves. This worker plays both: itself at ORIGIN as the
 // issuer (prd's part), and, under a second configuration, the preview at PREVIEW whose fetches to
-// either origin reach the right one.
+// either origin reach the right one. The preview serves its projects as paths on its own origin, as
+// every preview does, so a project's app shares the origin the flow's cookie is on.
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
@@ -11,18 +12,34 @@ import { appSession } from "iterate/app-server";
 import worker from "../src/worker.ts";
 import { platformAddressesOf } from "../src/app-config.ts";
 import { authorizationForToken } from "../src/oauth.ts";
+import { publishConfigWorker } from "../e2e/support/config-worker.ts";
 import { authorizationRequest, call, helpers, issuerApprover } from "./oauth-support.ts";
-import { loginPassword, ORIGIN } from "./support.ts";
+import { adminCredentials, loginPassword, openSession, ORIGIN } from "./support.ts";
 
 const PREVIEW = "https://pr1-os.iterate-dev-preview.workers.dev";
 const previewEnv = {
   ...env,
   APP_CONFIG_URLS__OS: PREVIEW,
+  APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
   APP_CONFIG_LOGIN__ADMIN_ISSUER: ORIGIN,
   APP_CONFIG_ADMINS: JSON.stringify(["boss@admins.test"]),
 } as typeof env;
 const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/`));
-const FLOW_COOKIE = "__Host-iterate-admin-sign-in";
+const FLOW_COOKIE = "__Host-itx-admin-sign-in";
+
+/** A site that answers with the cookies it was handed, and tries to set the flow's cookie beside
+ *  one of its own. */
+const SRC_PLANTING_APP = {
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Planting extends WorkerEntrypoint {
+  fetch(request) {
+    const headers = new Headers();
+    headers.append("Set-Cookie", "${FLOW_COOKIE}=planted; Path=/; Secure; HttpOnly; SameSite=Lax");
+    headers.append("Set-Cookie", "theme=light; Path=/");
+    return Response.json({ cookie: request.headers.get("cookie") }, { headers });
+  }
+}`,
+};
 
 test("an admin: the issuer asks only who they are, and the preview signs them in as themselves and sends them on", async () => {
   bothOriginsReachable();
@@ -109,6 +126,23 @@ test("a callback without the flow's cookie — another browser, or a forged one 
     );
     expect(refused.headers.getSetCookie().join()).not.toContain("__Host-itx-session=");
   }
+});
+
+test("a project's app on the preview's origin is never handed the flow's cookie, and cannot set one", async () => {
+  const flowCookie = cookieOf(await startSignIn("/login"), FLOW_COOKIE);
+  const project = await (
+    await openSession()
+  )
+    .authenticate(adminCredentials())
+    .projects.create({ project: "flow-cookie" });
+  await publishConfigWorker(project, ["itx", "workers", ["get", { source: SRC_PLANTING_APP }]]);
+  const answer = await previewFetch(
+    `${PREVIEW}/projects/flow-cookie/site/`,
+    `${flowCookie}; theme=dark`,
+  );
+  expect(answer, await answer.clone().text()).toMatchObject({ status: 200 });
+  expect(await answer.json()).toEqual({ cookie: "theme=dark" });
+  expect(answer.headers.getSetCookie()).toEqual(["theme=light; Path=/"]);
 });
 
 test("a userinfo token says who its person is and nothing else: /api refuses it, and its grant reaches no project", async () => {

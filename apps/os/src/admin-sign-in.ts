@@ -35,8 +35,10 @@ export const ADMIN_SIGN_IN_PATH = "/.auth/admin-sign-in";
 export const ADMIN_SIGN_IN_CALLBACK_PATH = `${ADMIN_SIGN_IN_PATH}/callback`;
 export const ADMIN_SIGN_IN_CLIENT_PATH = `${ADMIN_SIGN_IN_PATH}/client.json`;
 
-/** The cookie holding one browser's pending sign-in. `__Host-`: this origin's alone. */
-const FLOW_COOKIE = "__Host-iterate-admin-sign-in";
+/** The cookie holding one browser's pending sign-in. `__Host-`: this origin's alone; `itx-`: a
+ *  platform cookie, which no project app is handed or may set (browser-client.ts `appCookies`,
+ *  worker.ts `withoutPlatformHeaders`) — under paths routing the app shares this origin. */
+const FLOW_COOKIE = "__Host-itx-admin-sign-in";
 const FLOW_MS = 10 * 60_000;
 const clearFlowCookie = `${FLOW_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`;
 

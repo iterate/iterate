@@ -24,7 +24,7 @@
 // modules for unit tests and fixtures. Browser E2E is the root Playwright suite (specs/AGENTS.md).
 
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,10 +33,11 @@ import {
   E2E_CI_RETRIES,
   E2E_SLOW_ROW_TIMEOUT_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
+import JSON5 from "json5";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import { vitestReporters } from "../../packages/shared/src/test-support/e2e-policy/vitest-reporters.ts";
-import { COMPATIBILITY_DATE } from "../../scripts/lib/wrangler-config.ts";
+import { readWranglerBase } from "./scripts/generate-wrangler-config.ts";
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -147,6 +148,42 @@ function runtimeStorage() {
   };
 }
 
+/** THE WORKERS SUITE'S WRANGLER CONFIG, derived from wrangler.base.jsonc (`readWranglerBase`, the
+ *  template every deployment's and preview's config derives from) so the two cannot disagree: the
+ *  compatibility date and flags, the Durable Objects and their `exports`, the LOADER, the assets and
+ *  the local D1, KV and R2 are the base's. What differs is written down in two places: the keys
+ *  wrangler.test.jsonc sets over the base (the suite's configuration), and here, the bindings
+ *  wrangler's local runtime can only proxy to the real products — `ai`, `browser` and `artifacts`,
+ *  for which vitest-pool-workers would start a remote proxy session at boot (an account to pick, a
+ *  network to reach). The suite never calls `itx.ai`, `itx.browser` or `itx.cfArtifacts`, and
+ *  `env.AI`, `env.BROWSER` and `env.ARTIFACTS` are undefined in it; the e2e suite boots from the
+ *  Vite-built config with them (e2e/support/worker-config.ts). The code under test is Vite's built
+ *  entry. Written once per vitest process to a directory of its own, the base's relative paths made
+ *  absolute: wrangler resolves them, and reads a `.dev.vars`, beside the config file. */
+let workersWranglerConfig: string | undefined;
+function workersWranglerConfigPath() {
+  if (workersWranglerConfig) return workersWranglerConfig;
+  const { ai: _ai, browser: _browser, artifacts: _artifacts, ...base } = readWranglerBase();
+  const fromApp = (path: string) => fileURLToPath(new URL(path, import.meta.url));
+  const dir = mkdtempSync(join(tmpdir(), "os-workers-config-"));
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  workersWranglerConfig = join(dir, "wrangler.json");
+  writeFileSync(
+    workersWranglerConfig,
+    JSON.stringify({
+      ...base,
+      ...JSON5.parse(readFileSync(fromApp("./wrangler.test.jsonc"), "utf8")),
+      main: fromApp("./dist/server/index.js"),
+      assets: { ...base.assets, directory: fromApp(base.assets.directory) },
+      d1_databases: base.d1_databases.map((database: { migrations_dir: string }) => ({
+        ...database,
+        migrations_dir: fromApp(database.migrations_dir),
+      })),
+    }),
+  );
+  return workersWranglerConfig;
+}
+
 /** `files` by module id, then shuffled (Fisher–Yates) with mulberry32 seeded by `seed`: one seed, one
  *  order, on any machine. */
 function seededOrder(files: TestSpecification[], seed: number) {
@@ -240,12 +277,10 @@ export default defineConfig({
           cloudflareTest(async () => {
             const storage = runtimeStorage();
             return {
-              main: "./dist/server/index.js",
-              wrangler: { configPath: "./wrangler.test.jsonc" },
+              wrangler: { configPath: workersWranglerConfigPath() },
               miniflare: {
                 resourcePersistencePath: storage.dir,
                 serviceBindings: { TEST_STORAGE: () => storage.empty() },
-                compatibilityDate: COMPATIBILITY_DATE,
                 bindings: {
                   TEST_MIGRATIONS: await readD1Migrations(
                     fileURLToPath(new URL("./src/control-plane/db/migrations", import.meta.url)),

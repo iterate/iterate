@@ -468,12 +468,6 @@ test("a user's secrets are their own: A's set lives at /users/<a>/secrets/x and 
   expect(await a.user.secrets.list()).toEqual([aRow]);
 });
 
-// parked: these need machinery from later increments (the privileged account facet and the
-// transport-admission gate — the deferred path-mask enforcement pass), so they are
-// documented as skips rather than expected-fails — revisit by 2026-11-15
-test.skip("the account facet's processEventBatch is not client-callable (needs the privileged account facet)", () => {});
-test.skip("a user cannot SUBSCRIBE to another user's log via the pager (needs the transport-admission gate)", () => {});
-
 /** A signed-in human's session: the admin fixture with `as` upserts the user and vends their session
  *  (src/session.ts `IterateRpcTarget.authenticate`). The bare `openSession()` entry point is `any` (it also
  *  lends live stubs); a read helper names the real root type, so the session it vends is fully typed —
