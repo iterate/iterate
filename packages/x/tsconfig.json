@@ -1,8 +1,0 @@
-{
-  // Worker code, typed against the Cloudflare types: the X bot runs as loaded Durable Objects.
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "types": ["@cloudflare/workers-types"]
-  },
-  "include": ["src", "tsdown.config.ts"]
-}

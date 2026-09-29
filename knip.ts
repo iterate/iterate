@@ -149,9 +149,6 @@ export default {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],
     },
-    "packages/x": {
-      entry: ["src/**/*.test.ts"],
-    },
     "packages/github-sync": {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],

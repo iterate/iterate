@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
 import type { ShopDeps } from "./state.ts";
 
@@ -72,27 +71,5 @@ export async function handleXRequest(request: Request, deps: ShopDeps): Promise<
   if (!token) return error("unauthorized", 401);
   if (request.method === "GET" && url.pathname === "/2/users/me")
     return Response.json({ data: { id: token.grant.id, username: token.grant.username } });
-  // Stable fixtures let the bot tests distinguish a verified author from an impersonator.
-  if (request.method === "GET" && /^\/2\/tweets\/\d+$/.test(url.pathname)) {
-    const id = url.pathname.split("/").at(-1)!;
-    return Response.json({
-      data: {
-        id,
-        text: "@iteratebot hello",
-        author_id: id === "112" ? "67890" : "12345",
-        entities: { mentions: [{ username: "iteratebot" }] },
-      },
-    });
-  }
-  if (request.method === "POST" && url.pathname === "/2/tweets") {
-    if (!token.grant.scope.split(" ").includes("tweet.write"))
-      return error("insufficient_scope", 403);
-    if (token.grant.id === "101") return error("write_outcome_unknown", 503);
-    const body = z
-      .object({ text: z.string(), reply: z.object({ in_reply_to_tweet_id: z.string() }) })
-      .parse(await request.json());
-    if (body.text === "reject this fixture") return error("invalid_reply", 400);
-    return Response.json({ data: { id: "99999", text: body.text } }, { status: 201 });
-  }
   return new Response("Not Found", { status: 404 });
 }
