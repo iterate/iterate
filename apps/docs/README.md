@@ -31,4 +31,5 @@ What's next (comments, docs.iterate.com): [tasks/docs-app.md](../../tasks/docs-a
 Local dev is Notes': `pnpm dev`, reached through a project behind `iterate tunnel`
 ([Notes' README](../notes/README.md)). The browser proof is [specs/docs](../../specs/docs).
 
-Deploy: `pnpm --dir apps/docs run deploy --env prd` (the `docs` Doppler project's `prd` config).
+Deploy: `pnpm --dir apps/docs run deploy --env prd`. Docs has no secrets, so it deploys from
+`_shared`'s `prd` Doppler config (`dopplerProject` in [scripts/app.ts](scripts/app.ts)).

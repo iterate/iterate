@@ -13,7 +13,7 @@ setup:
     path: apps/agents/
   - project: notes
     path: apps/notes/
-  - project: docs
+  - project: _shared
     path: apps/docs/
   - project: admin
     path: apps/admin/

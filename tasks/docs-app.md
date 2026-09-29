@@ -8,8 +8,8 @@ size: large
 Status: parts 1 and 2 built. Part 1: a docs app you can write in. Part 2: live co-editing through
 a per-doc processor from `@iterate-com/docs`, which also autosaves and takes in commits made
 elsewhere. The browser spec (two people, an agent's commit) runs on the PR preview only; locally the
-package has unit tests and the page was checked in a harness. Not done: the `docs` Doppler project
-(prd deploy), docs.iterate.com, comments.
+package has unit tests and the page was checked in a harness. Not done: routing the iterate
+project's `docs` slug to the prd Worker, docs.iterate.com, comments.
 
 ## Goal
 
@@ -66,7 +66,7 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
       `FIRST_PARTY_APPS`, `start-app-config` `urls`, `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`,
       `preview-paths.ts` and the preview workflows' `paths`, `deploy-docs.yml` _(plus the prd fault
       alarm, `playwright.config.ts`, `DOCS_BASE_URL` in `apps/os/scripts/preview.ts`, and the docs that
-      list the clients; the `docs` Doppler project itself still needs creating, see log)_
+      list the clients; no Doppler project of its own: it deploys from `_shared`, see log)_
 - [x] `apps/docs/config-worker.ts` serving the `docs` routing slug _(fetches through to `docs.iterate.workers.dev`)_
 - [x] Doc list + "New doc" (creates `/repos/docs` idempotently, like Notes creates its repo) _(`projects.$slug.index.tsx`)_
 - [x] Editor: CodeMirror + Atomic live preview (inline preview, tables, images), Rich / Markdown
@@ -190,8 +190,10 @@ set of CodeMirror extensions, so switching later is cheap.
   were replayed there to pin its expected text.
 - Enter twice after a nested list item lifts it a level (CodeMirror's markdown keymap) instead of
   leaving the list, so the spec's second edit extends an earlier line instead.
-- Before prd: `doppler projects create docs`, then a `prd` config inheriting `_shared.prd`
-  (`.agents/skills/creating-an-app/references/doppler.md`). Not done here: shared infra.
+- ~~Before prd: `doppler projects create docs`, then a `prd` config inheriting `_shared.prd`.~~
+  _2026-09-29: a Docs project would hold only what it inherits (Notes' `prd` has eight names, all
+  from `_shared`), so `StartApp.dopplerProject` is now a required field and Docs passes
+  `"_shared"`, as `apps/ci-reports` already does. The creating-an-app skill says so._
 - Local `scripts` tests `ci/toolchain.test.ts` and `ci/tracing/tracing.test.ts` fail on macOS's bash
   3.2 (`inherit_errexit`); unrelated, green on CI's Linux.
 - 2026-09-28, part 2. The app package was also named `@iterate-com/docs`; renamed it

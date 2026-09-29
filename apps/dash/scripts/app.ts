@@ -6,6 +6,7 @@ import { startAppCli } from "../../../scripts/lib/start-app.ts";
  *  On a custom domain: its route and DNS record follow from the baseUrl in envs.ts. */
 export const dash = {
   name: "dash",
+  dopplerProject: "dash",
   root: new URL("..", import.meta.url),
   envs: dashEnvs,
 };

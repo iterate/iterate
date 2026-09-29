@@ -54,8 +54,11 @@ export interface StartAppEnv extends DeployableEnv {
 
 /** What apps/<app>/scripts/app.ts declares; everything in this module is the same program over it. */
 export interface StartApp {
-  /** "dash": the directory under apps/, the Doppler project and the local-dev worker all carry this name. */
+  /** "dash": the directory under apps/ and the local-dev worker carry this name. */
   name: string;
+  /** The Doppler project whose `preview`/`prd` configs deploy it: the app's own ("dash"), or
+   *  "_shared" for an app with no secrets of its own. */
+  dopplerProject: string;
   /** The app's directory — `new URL("..", import.meta.url)` from scripts/app.ts. */
   root: URL;
   /** The app's map in envs.ts. */
@@ -216,7 +219,7 @@ async function deploy(app: StartApp, options: { env: string }) {
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
     envs: app.envs,
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
     env: options.env,
     workerName: (env) => env.workerName,
     servingUrl: (env) => env.baseUrl,
@@ -229,7 +232,7 @@ async function deploy(app: StartApp, options: { env: string }) {
 async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext({
     envs: app.envs,
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
     env: options.env,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(

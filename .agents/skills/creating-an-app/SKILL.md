@@ -17,8 +17,9 @@ instead.
 
 Copy `scripts/app.ts` and `src/routes/` from `apps/voice`:
 
-- `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`) plus the CLI line. `name` is
-  the directory, the Doppler project and the local Worker name.
+- `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`, `dopplerProject`) plus the CLI
+  line. `name` is the directory and the local Worker name; `dopplerProject` is `"_shared"` unless
+  the app has secrets of its own ([Doppler setup](references/doppler.md)).
 - `src/routes/`: `__root.tsx` (`AppDocument`), the landing page `index.tsx`, and `_auth.tsx`, which
   is `ssr: false` with `createIterateClient({ scopes })` in `beforeLoad`. An app a project proxies
   under paths ingress needs Notes' `basePath` too (`apps/notes/src/base-path.ts`).
@@ -55,7 +56,7 @@ parents workflow once the app is on `main`.
 
 Read [Doppler setup](references/doppler.md). Then copy `.depot/workflows/deploy-dash.yml` to
 `deploy-<app>.yml`, and change the name, the concurrency group, the `paths` (the app's
-directory and the workflow itself), the Doppler project, the `working-directory`, and
+directory and the workflow itself), the `working-directory`, and
 `APP_DISPLAY_NAME`. Depot registers triggers from the default branch, so the
 workflow first runs after it lands on `main` ([Depot CI](../../../docs/depot-ci.md)).
 
