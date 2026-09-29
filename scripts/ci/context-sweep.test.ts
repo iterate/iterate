@@ -3,7 +3,7 @@
 // prd's own token writes, that a deploy's reset mid-sweep is asked again rather than failing the
 // run, and where each run's result is posted. Cloudflare's listing, the session and R2 are the
 // script's IO, left out.
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamPage } from "iterate/api";
 import type { IterateConnection } from "iterate/node";
 import { PREVIEW_AND_DEV_ACCOUNT_ID, PRD_ACCOUNT_ID } from "../../envs.ts";
@@ -11,6 +11,7 @@ import { fakeDoppler } from "../lib/fake-doppler.ts";
 import contextSweep, {
   backUpAndDestroy,
   classifyContexts,
+  identifyEach,
   reconnecting,
   sweepPosts,
   type SweptContext,
@@ -332,6 +333,61 @@ test("a routine night's #ci line, at five-digit counts, is one line of at most 1
     lines: 1,
     short: true,
   });
+});
+
+const RESET = "Error: Durable Object reset because its code was updated.";
+const NOBODY =
+  "Error: IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.";
+
+// Each identify call's ids, and what it answers: an id's answers are used in turn, the last again.
+test.for<{
+  name: string;
+  answers: Record<string, string[]>;
+  closedFirst?: boolean;
+  expected: { calls: string[]; contexts: SweptContext[] };
+}>([
+  {
+    name: "an object a deploy's reset answered for is asked again, and says who it is (prd, 2026-09-29 10:06)",
+    answers: { a: ["ok"], b: [RESET, "ok"] },
+    expected: { calls: ["a,b", "b"], contexts: [identity("a"), identity("b")] },
+  },
+  {
+    name: "an object still reset once CI_HTTP's waits run out stays unidentified, with the reset",
+    answers: { a: ["ok"], b: [RESET] },
+    expected: {
+      calls: ["a,b", "b", "b", "b", "b"],
+      contexts: [identity("a"), { id: "b", error: RESET }],
+    },
+  },
+  {
+    name: "an object nothing was born at is not asked again: it is emptied",
+    answers: { a: ["ok"], b: [NOBODY] },
+    expected: { calls: ["a,b"], contexts: [identity("a"), { id: "b", error: NOBODY }] },
+  },
+  {
+    name: "a batch whose session a deploy closed is asked again",
+    answers: { a: ["ok"], b: ["ok"] },
+    closedFirst: true,
+    expected: { calls: ["a,b", "a,b"], contexts: [identity("a"), identity("b")] },
+  },
+])("$name", async ({ answers, closedFirst, expected }) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(Math, "random").mockReturnValue(1);
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const calls: string[] = [];
+  const asked: Record<string, number> = {};
+  const contexts = await identifyEach(["a", "b"], async (ids) => {
+    calls.push(ids.join(","));
+    if (closedFirst && calls.length === 1) throw new Error("Peer closed WebSocket");
+    return ids.map((id): SweptContext => {
+      const answer =
+        answers[id]![Math.min((asked[id] = (asked[id] ?? 0) + 1) - 1, answers[id]!.length - 1)]!;
+      return answer === "ok" ? identity(id) : { id, error: answer };
+    });
+  });
+  expect({ calls, contexts }).toEqual(expected);
 });
 
 test("a sweep that destroys refuses a deployment without a backup bucket before it reads anything", async () => {
