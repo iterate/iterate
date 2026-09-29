@@ -3,12 +3,23 @@ import path from "node:path";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { expect, test, vi } from "vitest";
 import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
+import { templates } from "../generated/config-templates.js";
 import { ProjectProcessor } from "./processor.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 
 const reference = `github:example/config#${"a".repeat(40)}&path:starter`;
 const worker = "export default {fetch() {return new Response('My project')}}";
 const manifest = '{"main":"worker.ts"}';
+/** This checkout's build of the agents and voice (scripts/published-package-commit.ts), never
+ *  `@main`. */
+const commit = checkoutPublishedPackageCommit(
+  path.resolve(import.meta.dirname, "../../../.."),
+  process.env.PREVIEW_HEAD_SHA,
+);
+const ourBuilds = {
+  "@iterate-com/agents": pkgPrNewVersion("@iterate-com/agents", commit),
+  "@iterate-com/voice": pkgPrNewVersion("@iterate-com/voice", commit),
+};
 
 test("omitting a template seeds the default project: the homepage, and the agents and voice apps pinned to one commit's build", async () => {
   const fixture = project();
@@ -22,17 +33,9 @@ test("omitting a template seeds the default project: the homepage, and the agent
   expect(fixture.files()?.["voice.ts"]).toBe(
     'export { default, VoiceAgentDurableObject } from "@iterate-com/voice";\n',
   );
-  // this checkout's build (scripts/published-package-commit.ts), never `@main`
-  const commit = checkoutPublishedPackageCommit(
-    path.resolve(import.meta.dirname, "../../../.."),
-    process.env.PREVIEW_HEAD_SHA,
-  );
   expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
     main: "worker.ts",
-    dependencies: {
-      "@iterate-com/agents": pkgPrNewVersion("@iterate-com/agents", commit),
-      "@iterate-com/voice": pkgPrNewVersion("@iterate-com/voice", commit),
-    },
+    dependencies: ourBuilds,
   });
   expect(fixture.downloadTemplate).not.toHaveBeenCalled();
   expect(fixture.itx.append).not.toHaveBeenCalled();
@@ -41,6 +44,16 @@ test("omitting a template seeds the default project: the homepage, and the agent
   // the tip comes first, and nothing is read back.
   expect(fixture.repo.tip).not.toHaveBeenCalled();
   expect(fixture.repo.readFile).not.toHaveBeenCalled();
+});
+
+test("a preset is seeded from the build, its agents and voice pinned as the default's are: nothing is downloaded", async () => {
+  const fixture = project();
+  await create(fixture, templates.find(({ label }) => label === "Heartbeat")!.reference);
+  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  expect(fixture.files()?.["worker.ts"]).toContain('key: "heartbeat"');
+  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
+    dependencies: ourBuilds,
+  });
 });
 
 test("every package.json under configs/ names its folder's main module", () => {

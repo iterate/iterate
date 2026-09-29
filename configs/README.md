@@ -15,24 +15,24 @@ downloader live in `packages/shared/src/config-repo-template`.
   `heartbeat` on `/` every five minutes and wakes the project each time.
 - `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules.
 
-A template's `package.json` names its main module in `"main"` (`worker.ts` in both). It and the
+A template's `package.json` names its main module in `"main"` (`worker.ts` in each). It and the
 files it imports may be TypeScript or JavaScript, and import packages by name as listed in
 `package.json` (`iterate/*` and `zod` come from the platform). The worker extends
 `IterateConfigEntrypoint` from `iterate/sdk`, whose docstrings say what its `fetch` and
 `processEvent` are handed; each template's `AGENTS.md` says what its own do.
 
-A template may list a pkg.pr.new dependency at a branch (`@iterate-com/agents@main` in
-`default/`): the seed writes it at the commit pkg.pr.new names for it then, because the loader
-loads a pkg.pr.new package only at a full commit (`pinPkgPrNewDependencies` in
-`packages/shared/src/pkg-pr-new.ts`). `devDependencies` are copied as written. The platform build
-embeds `default/` with both pins already at this checkout's own build (apps/os
-`scripts/published-package-commit.ts`).
+The platform build embeds every folder here with `@iterate-com/agents` and `@iterate-com/voice`
+pinned to this checkout's own build (apps/os `scripts/published-package-commit.ts`). Any other
+template may list a pkg.pr.new dependency at a branch (`…@main`): the seed writes it at the commit
+pkg.pr.new names for it then, because the loader loads a pkg.pr.new package only at a full commit
+(`pinPkgPrNewDependencies` in `packages/shared/src/pkg-pr-new.ts`). `devDependencies` are copied as
+written.
 
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from
 `https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and `typescript` as
 devDependencies, and the packages the worker imports as dependencies, so `npm install && npx tsc`
 checks a project's checkout, while the loader links the running platform's SDK (an `iterate` absent
-from `dependencies` is the platform's). In this repo, `pnpm typecheck:configs` checks both templates
+from `dependencies` is the platform's). In this repo, `pnpm typecheck:configs` checks every template
 against the workspace packages.
 
 `session.projects.templates()` lists presets: every folder but `default`. `projects.create({
@@ -40,6 +40,5 @@ project, configRepoTemplate })` also accepts custom references such as
 `github:owner/repo#main&path:templates/example`. The API resolves the ref to a commit before
 persisting the creation request. Omit it for the default template.
 
-The build generates preset references using the repository commit.
-That commit must be available on GitHub and contain these folders before preset cloning can work.
-The default template is embedded in the platform build and needs no GitHub request.
+The build lists each preset under a reference at the repository commit, and a creation naming that
+reference is seeded from the build's copy, with no GitHub request.
