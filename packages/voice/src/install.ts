@@ -179,12 +179,10 @@ export async function voiceVersion(project: {
 }
 
 /**
- * AN UPGRADE of the project's voice to `version`: the root package.json's pin, committed on the tip
- * it read (refused if main moved meanwhile; a file already so commits nothing, and the tip's outcome
- * answers), then that commit's outcome on `/`, past any give-up for now (`unavailable`), which
- * leaves it owed. Published, a press from 5 s on loads the new build (`voiceAgentFacetSpec`);
- * refused, main moving on included, it throws why and the person upgrades again. The agents app
- * keeps its build: the config pins it too. Answers the commit.
+ * Upgrades the project's voice pin to `version` and returns the published commit, following the
+ * commit and publication protocol documented by `upgradeAgents` in packages/agents/src/install.ts.
+ * A press from 5 s after publication loads the new build (`voiceAgentFacetSpec`); the agents app
+ * keeps its separately pinned build.
  */
 export async function upgradeVoice(
   project: Pick<IterateContextApi, "waitForEvent"> & {
@@ -205,6 +203,8 @@ export async function upgradeVoice(
     parent: tip,
     changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
   });
+  // one deadline for the whole wait: a give-up for now does not restart it
+  const deadline = Date.now() + 120_000;
   for (let afterOffset = 0; ;) {
     const outcome = await project.waitForEvent({
       type: [
@@ -213,7 +213,7 @@ export async function upgradeVoice(
       ],
       payload: { commitOid },
       afterOffset,
-      timeoutMs: 120_000,
+      timeoutMs: Math.max(1, deadline - Date.now()),
     });
     if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
     if (!outcome.payload?.unavailable)

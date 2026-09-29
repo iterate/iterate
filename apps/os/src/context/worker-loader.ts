@@ -126,11 +126,8 @@ export function namedWorkerLoad(
  *  key ⇒ same code — the author's bug) and is replayed until upstream lands.
  *
  *  ONE RECOVERY AT A TIME: every caller that finds the id dead while a recovery runs waits on that
- *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`. On prd at
- *  14:36 UTC on 2026-09-24 the iterate project's config worker's first load after a deploy failed,
- *  and a scanner sent 4,502 requests in 31 s: each ran its own producer, ~915 concurrent
- *  `repo.modules` calls on one repo facet instead of one, and its host answered 503 for ~70 s. The
- *  recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
+ *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`, so a burst of
+ *  callers runs one producer against the repo facet, not one each. The recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
  *  per incarnation: a new incarnation never waits on a promise its dead predecessor left behind. */
 /** A source resolved into what the loader takes (module-resolution.ts). */
 type ResolvedWorker = Awaited<ReturnType<typeof resolveModules>>;
@@ -148,8 +145,7 @@ const loaderIdGenerations = new Map<
 let retiredGenerationSalt: string | undefined;
 /** THE LOADER ID OF `base`'s `generation`, as this isolate spells it. Generation 0 is `base`, which
  *  every isolate shares, so a warm entry serves them all. A later one replaces an entry that failed,
- *  and the Worker Loader shares an entry by id across the isolates of a machine (on prd, 2026-09-29,
- *  a replay under `#1` answered in 1–2 ms from an isolate that had never loaded it; workerd#7485):
+ *  and the Worker Loader shares an entry by id across the isolates of a machine (workerd#7485):
  *  so a generation past 0 carries this isolate's salt, and a replay loads fresh code, not a
  *  sibling's failing entry. The one nonce a loader id may carry: it grows identities with failures,
  *  one per failure per isolate, never with requests. */

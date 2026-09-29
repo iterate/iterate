@@ -1692,7 +1692,8 @@ export class SubscriptionDelivery {
     const delivery = record.deliveries.get(event.offset);
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
-    // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`).
+    // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`):
+    // any rejection may carry them or not, so both are read as unknown and checked where used.
     const { validUntil, unpublishedConfig } = (error ?? {}) as {
       validUntil?: unknown;
       unpublishedConfig?: unknown;

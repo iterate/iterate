@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { agentsVersion, installAgents, upgradeAgents } from "./install.ts";
 
 test("installAgents enables the catalog processor on the root, then writes the itx.agents rule to it", async () => {
@@ -98,11 +98,17 @@ test.for([
 
 test("the platform's give-up for now (`unavailable`) is no outcome: an upgrade waits past it for the publication the platform still owes", async () => {
   const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
   const upgrade = upgradeAgents(config.project, newer);
   await vi.waitFor(() => expect(config.commits).toHaveLength(1));
+  // a minute later the give-up lands: the wait after it has what is left of the two minutes
+  vi.setSystemTime(Date.now() + 60_000);
   config.land(FAILED, "commit-1", { error: "esm.sh answered 503", unavailable: true });
   config.land(UPDATED, "commit-1");
   expect(await upgrade).toBe("commit-1");
+  const [, [second]] = vi.mocked(config.project.waitForEvent).mock.calls;
+  expect(second?.timeoutMs).toBeLessThanOrEqual(60_000);
 });
 
 /** The facet spec every row and rule of the app names: a class of the config repo's `agents.ts`,

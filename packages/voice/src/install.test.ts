@@ -214,11 +214,17 @@ test.for([
 
 test("the platform's give-up for now (`unavailable`) is no outcome: an upgrade waits past it for the publication the platform still owes", async () => {
   const root = project();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
   const upgrade = upgradeVoice(root, newer);
   await vi.waitFor(() => expect(root.commits).toHaveLength(1));
+  // a minute later the give-up lands: the wait after it has what is left of the two minutes
+  vi.setSystemTime(Date.now() + 60_000);
   root.land(FAILED, { commitOid: "commit-1", error: "esm.sh answered 503", unavailable: true });
   root.land(UPDATED, { commitOid: "commit-1" });
   expect(await upgrade).toBe("commit-1");
+  const [, [second]] = root.waitForEvent.mock.calls;
+  expect(second?.timeoutMs).toBeLessThanOrEqual(60_000);
 });
 
 /** Where every rule and row of voice names its code: `voice.ts` of the project's published config

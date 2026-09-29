@@ -90,6 +90,8 @@ export async function upgradeAgents(
     parent: tip,
     changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
   });
+  // one deadline for the whole wait: a give-up for now does not restart it
+  const deadline = Date.now() + 120_000;
   for (let afterOffset = 0; ;) {
     const outcome = await project.waitForEvent({
       type: [
@@ -98,7 +100,7 @@ export async function upgradeAgents(
       ],
       payload: { commitOid },
       afterOffset,
-      timeoutMs: 120_000,
+      timeoutMs: Math.max(1, deadline - Date.now()),
     });
     if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
     if (!outcome.payload?.unavailable)
