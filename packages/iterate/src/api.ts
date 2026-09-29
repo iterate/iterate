@@ -146,7 +146,7 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      client?: { platform: IterateAppProvider };
+      client?: { platform: IntegrationProvider };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
@@ -159,12 +159,6 @@ export type SecretRefresh =
       installationId: string;
       client: { platform: "github" } | { project: "github" };
     }
-  /** Waitrose's login, the username/password → session-token archetype bundled with the platform
-   *  (apps/os/src/integrations/waitrose.ts `exchange`): POST the Android app's `NewSession` GraphQL
-   *  mutation with `username`/`password` from the material → `accessToken`. Waitrose has no refresh
-   *  grant — re-login IS the refresh — so one strategy covers the first-use mint and the 401
-   *  re-mint. */
-  | { kind: "waitrose-session"; graphqlUrl: string }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
    *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
    *  the NEXT material — keep what the next login needs (`{ ...material, accessToken }`). It runs
@@ -232,14 +226,7 @@ export type SecretHmacVerification = {
 /** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
  *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
  *  kinds below are read off it. */
-export const INTEGRATION_PROVIDERS = [
-  "slack",
-  "google",
-  "cloudflare",
-  "github",
-  "waitrose",
-  "x",
-] as const;
+export const INTEGRATION_PROVIDERS = ["slack", "google", "cloudflare", "github", "x"] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
 /** Each provider's name as a person reads it, wherever a page or a message names one. */
@@ -248,20 +235,15 @@ export const INTEGRATION_PROVIDER_NAMES = {
   google: "Google",
   cloudflare: "Cloudflare",
   github: "GitHub",
-  waitrose: "Waitrose",
   x: "X",
 } as const satisfies Record<IntegrationProvider, string>;
 
-/** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
- *  but Waitrose, a username and a password. */
-export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
-
 /** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
  *  GitHub's connect is its App's install instead. */
-export type OAuthIntegrationProvider = Exclude<IterateAppProvider, "github">;
+export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
 
 /** The providers a person signs in with, each through iterate's app there. */
-export type SignInProvider = Exclude<IterateAppProvider, "slack" | "x">;
+export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -829,7 +811,7 @@ export interface IterateContextApi {
     ): Promise<{ authorizationUrl?: string; connection: string }>;
     disconnect(provider: IntegrationProvider, connection: string): Promise<void>;
     requestFromUser(
-      provider: IterateAppProvider,
+      provider: IntegrationProvider,
       options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
@@ -1065,7 +1047,7 @@ export interface IterateSessionApi {
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
-    iterateAppProviders: IterateAppProvider[];
+    iterateAppProviders: IntegrationProvider[];
     /** what iterate's app asks for there, by provider — what a project needs of your account before
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;

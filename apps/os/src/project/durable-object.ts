@@ -33,7 +33,6 @@ import {
   type FinishConnectAnswer,
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
-import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
@@ -61,7 +60,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     "repos",
     "workspaces",
     "confirmIntegrationMove",
-    "connectWaitrose",
     "acceptGithubCallback",
   ];
 
@@ -235,14 +233,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
         ...input,
         connection: assertConnectionName(input?.connection),
       }),
-    );
-  }
-
-  /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
-   *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/`. */
-  connectWaitrose(input: { connection: string; account: string }): Promise<void> {
-    return this.#onConnection("waitrose", input?.connection, () =>
-      connectWaitrose(this.#integrationScope(), input),
     );
   }
 

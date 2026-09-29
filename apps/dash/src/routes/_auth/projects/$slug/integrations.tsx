@@ -1,11 +1,11 @@
 // /projects/<slug>/integrations — the project's connections (the `project` facet's live state on
 // `/`), each provider's Connect sheet and the forms it leads to. The flows themselves — a person's own
-// account, iterate's app or your own, Waitrose's login, moving an account another project holds — are in
+// account, iterate's app or your own, moving an account another project holds — are in
 // apps/os/docs/integrations.md. The sheet is one URL: `?connect=<provider>` (`&scopes=` from an agent's
-// `requestFromUser`), `?own=<provider>&connection=<name>`, `?waitrose=1`, `?move=<offer>`.
+// `requestFromUser`), `?own=<provider>&connection=<name>`, `?move=<offer>`.
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { Blocks, CheckIcon, CopyIcon, ShoppingBasket } from "lucide-react";
+import { Blocks, CheckIcon, CopyIcon } from "lucide-react";
 import { z } from "zod";
 import {
   AlertDialog,
@@ -37,13 +37,12 @@ import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,
   INTEGRATION_PROVIDERS,
-  type IterateAppProvider,
+  type IntegrationProvider,
   type SignInProvider,
 } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import { WaitroseForm } from "../../../../components/waitrose.tsx";
-import { connectWaitrose, freshConnectionName } from "../../../../lib/connections.ts";
+import { freshConnectionName } from "../../../../lib/connections.ts";
 import { addGithubSignInHref, httpOriginOf } from "../../../../lib/origins.ts";
 import { stepUpUrl } from "../../../../lib/scopes.ts";
 
@@ -99,8 +98,6 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
     scopes: z.string().optional().catch(undefined),
     own: OwnAppProvider.optional().catch(undefined),
     connection: z.string().optional().catch(undefined),
-    /** Another Waitrose account, signed in with a username and password. */
-    waitrose: z.literal(1).optional().catch(undefined),
     /** A provider's callback's offer to move an account another project holds here (signed by the
      *  platform, apps/os integrations/connections.ts `IntegrationMoveOffer`). */
     move: z.string().optional().catch(undefined),
@@ -116,8 +113,6 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
 
 /** A provider's mark, beside its name. */
 function ProviderLogo({ provider }: { provider: Provider }) {
-  if (provider === "waitrose")
-    return <ShoppingBasket aria-hidden="true" className="size-5 text-muted-foreground" />;
   return <img src={`/logos/${provider}.svg`} alt="" aria-hidden="true" className="size-5" />;
 }
 
@@ -173,7 +168,7 @@ function ProjectIntegrations() {
   const here = `${window.location.origin}/projects/${project.slug}/integrations`;
   const askedScopes = search.scopes?.split(" ").filter(Boolean);
   /** Another account through iterate's app. */
-  const connectAnother = async (input: { provider: IterateAppProvider; scopes?: string[] }) =>
+  const connectAnother = async (input: { provider: IntegrationProvider; scopes?: string[] }) =>
     z
       .object({ authorizationUrl: z.string().url() })
       .parse(
@@ -251,7 +246,7 @@ function ProjectIntegrations() {
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 md:p-8">
       <h1 className="text-2xl font-semibold tracking-tight">Integrations</h1>
-      {error && !own && !connecting && !search.waitrose && !moveOffer && (
+      {error && !own && !connecting && !moveOffer && (
         <p role="alert" data-type="error" className="text-sm text-destructive">
           {error}
         </p>
@@ -288,16 +283,7 @@ function ProjectIntegrations() {
                   onClick={() => {
                     setError(null);
                     setFailedUse(null);
-                    // Waitrose with no account of your own: the sign-in form is the only choice
-                    const noneOfYours =
-                      yourAccountsStatus !== "loading" &&
-                      !yourAccounts.some((row) => row.provider === "waitrose");
-                    void navigate({
-                      search:
-                        provider === "waitrose" && noneOfYours
-                          ? { waitrose: 1 }
-                          : { connect: provider },
-                    });
+                    void navigate({ search: { connect: provider } });
                   }}
                 >
                   {connections.length > 0 ? "Connect another" : "Connect"}
@@ -389,15 +375,15 @@ function ProjectIntegrations() {
           </ul>
         </section>
       )}
-      {/* ONE sheet: the Connect picker, and the forms it leads to (your own app, Waitrose) */}
+      {/* ONE sheet: the Connect picker, and the forms it leads to (your own app) */}
       <Sheet
-        open={Boolean(connecting || own || search.waitrose || moveOffer || search.other)}
+        open={Boolean(connecting || own || moveOffer || search.other)}
         onOpenChange={(open) => !open && !blocking && void closeSheet()}
       >
         <SheetContent
           side="right"
           showCloseButton={!blocking}
-          initialFocus={own || search.waitrose ? firstField : undefined}
+          initialFocus={own ? firstField : undefined}
           className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
         >
           {moveOffer && (
@@ -416,14 +402,14 @@ function ProjectIntegrations() {
               }
             />
           )}
-          {search.other && !connecting && !own && !search.waitrose && !moveOffer && (
+          {search.other && !connecting && !own && !moveOffer && (
             <OtherService
               projectSlug={project.slug}
               mcpServer={mcpServerOf(info)}
               platformOrigin={httpOriginOf(info.platformOrigin)}
             />
           )}
-          {connecting && !own && !search.waitrose && !moveOffer && (
+          {connecting && !own && !moveOffer && (
             <div className="flex h-full flex-col">
               <SheetHeader>
                 <SheetTitle className="flex items-center gap-2">
@@ -491,15 +477,7 @@ function ProjectIntegrations() {
                     />
                   )}
                 <div className="flex flex-col gap-2">
-                  {connecting.provider === "waitrose" ? (
-                    <Button
-                      variant={offersYourOwn ? "outline" : "default"}
-                      disabled={Boolean(busy)}
-                      onClick={() => void navigate({ search: { waitrose: 1 }, replace: true })}
-                    >
-                      Sign in to {another("Waitrose")} Waitrose account
-                    </Button>
-                  ) : info.iterateAppProviders.includes(connecting.provider) ? (
+                  {info.iterateAppProviders.includes(connecting.provider) ? (
                     <ConnectButton
                       provider={connecting.provider}
                       variant={offersYourOwn ? "outline" : "default"}
@@ -540,21 +518,6 @@ function ProjectIntegrations() {
                 </div>
               </div>
             </div>
-          )}
-          {search.waitrose && (
-            <WaitroseForm
-              firstField={firstField}
-              onBack={
-                yourAccounts.some((row) => row.provider === "waitrose")
-                  ? () => void navigate({ search: { connect: "waitrose" }, replace: true })
-                  : undefined
-              }
-              onPendingChange={(pending) => setBusy(pending ? "waitrose" : null)}
-              onConnect={async (credentials) => {
-                await connectWaitrose(api.projects.get(project.id), "project", credentials);
-                await closeSheet();
-              }}
-            />
           )}
           {own && (
             <OwnAppForm
@@ -809,11 +772,9 @@ function ConnectionItem({
             <AlertDialogDescription>
               {row.ownerUserId
                 ? `Agents here stop using it. It stays connected to ${yours ? "you" : "its owner"}.`
-                : row.provider === "waitrose"
-                  ? "Its username and password are deleted, and agents here stop using it."
-                  : row.provider === "slack" || row.provider === "github"
-                    ? `Its token is deleted and events from this ${noun} stop.`
-                    : "Its token is deleted."}
+                : row.provider === "slack" || row.provider === "github"
+                  ? `Its token is deleted and events from this ${noun} stop.`
+                  : "Its token is deleted."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

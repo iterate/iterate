@@ -9,11 +9,9 @@ import { z } from "zod";
 /** The published provider list (iterate/api `INTEGRATION_PROVIDERS`) and its kinds, parsed. */
 export const IntegrationProvider = z.enum(INTEGRATION_PROVIDERS);
 export type IntegrationProvider = z.infer<typeof IntegrationProvider>;
-/** iterate/api `IterateAppProvider`: Waitrose connects with a username and password, no app. */
-export const IterateAppProvider = IntegrationProvider.exclude(["waitrose"]);
 /** iterate/api `OAuthIntegrationProvider`, whose callback is
  *  `/api/integrations/<provider>/callback`: GitHub's connect is its App's install. */
-export const OAUTH_INTEGRATION_PROVIDERS = IterateAppProvider.exclude(["github"]).options;
+export const OAUTH_INTEGRATION_PROVIDERS = IntegrationProvider.exclude(["github"]).options;
 
 /** One connection, as its owner's root records it, by the connection's log path
  *  (`/integrations/<provider>/<connection>`). */
@@ -26,7 +24,7 @@ export const IntegrationConnectionRow = z.object({
   /** Which OAuth app the token was issued to: iterate's (the deployment's) or the project's own. */
   client: z.enum(["iterate", "project"]),
   /** What the provider calls the account: a Slack workspace's name, a Google or Cloudflare address,
-   *  a GitHub login, a Waitrose username, or an X handle. */
+   *  a GitHub login, or an X handle. */
   account: z.string(),
   /** Its id there: the Slack team, the Google or Cloudflare user, the GitHub installation (a
    *  project's) or user (a person's), or the X user ID. */
@@ -82,10 +80,6 @@ export const IntegrationEventCatalog = {
       "A GitHub App installation (a project's) or a GitHub user (a person's, from signing in) was connected: the connection's secret holds or mints its token.",
     ),
     "events.iterate.com/github/disconnected": disconnected,
-    "events.iterate.com/waitrose/connected": connected(
-      "A Waitrose account was connected: its username and password are in the connection's secret, which logs in on first use and on a 401.",
-    ),
-    "events.iterate.com/waitrose/disconnected": disconnected,
   },
 };
 
