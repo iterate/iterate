@@ -5,11 +5,12 @@ size: small
 
 # Copybara experiment: one-way copies of parts of iterate/iterate
 
-**Status:** rounds 1 and 2 done. This PR never merges: it's the experiment and the place to bikeshed the real layout.
+**Status:** round 3 starting: iterate/os0929 has to pass the self-host recipe. This PR never merges: it's the experiment and the place to bikeshed the real layout.
 
-- Round 1: `packages/` copied to iterate/copybara0929. Every scenario below ran, and the copy stayed in sync.
-- Round 2: the layout for the real thing (`copybara/`), with two copies, iterate/os0929 and iterate/packages0929. Each copy got exactly its own commits, and the checks passed.
-- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants). Then the open layout questions: does `iterate/os` build on its own, and which root-only files (LICENSE, issue template) does it get?
+- Round 1 (done): `packages/` copied to iterate/copybara0929, and every scenario below ran.
+- Round 2 (done): the `copybara/` layout, with two copies, iterate/os0929 and iterate/packages0929. Each got exactly its own commits.
+- Round 3 (now): what iterate/os has to contain so self-hosting works from it: the build's files, a slimmed workspace and lockfile, a check that a fresh clone builds, and baked templates.
+- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants).
 
 ## Why
 
@@ -63,6 +64,45 @@ For us, the copy only moves when a deploy succeeds, not on every push:
   - Local runs (Homebrew's `openjdk` 26, since Copybara needs 25+) are for getting the config right before pushing.
 - **Other GitHub Apps:** about 20 apps are installed on "all repositories" in the org (cursor, claude, devin, graphite, autofix-ci, linear, depot, cloudflare-workers-and-pages, iterate, iterate-preview-1, iterate-misha, …), so they attach to the new repo automatically. For a private copy with no PRs and no workflows they do nothing. For a public `iterate/os` that's "locked down to the max", switch them to selected repositories.
 - **The iterate platform:** `@iterate-com/github-sync` keeps two remotes on _one_ history (fast-forward only, same commits). A copy of a subset of files needs different commits, so github-sync can't do this. A platform-native version (the push webhook starts a processor that pushes the copy) would be a good user-space test later. It would need the custom-CLI route, and a test of the platform's git on a 1.25 GB repo. Not for this experiment.
+
+## Round 3: self-hosting from the copy
+
+**The test:** the self-host recipe (`apps/os/public/setup-prompt.md`, served at os.iterate.com/setup-prompt.md) has to keep working with only its clone URL changed. So a fresh clone of the copy must pass:
+
+```bash
+git clone --depth 1 https://github.com/iterate/os0929 && cd os0929
+pnpm install --frozen-lockfile                       # the recipe runs plain `pnpm install`; frozen proves the lockfile
+CLOUDFLARE_ENV=self-host pnpm --filter os build
+cd apps/os && pnpm exec wrangler deploy --config dist/server/wrangler.json --dry-run
+```
+
+A real deploy needs a Cloudflare account with Artifacts access; the dry run proves the repo side.
+
+**What the build needs outside `apps/os`** (traced from `apps/os/scripts/build.ts`, `generate-wrangler-config.ts` and `vite.config.ts`):
+
+- the workspace packages `packages/iterate`, `packages/shared` and `packages/ui`
+- `envs.ts`, and `scripts/lib/{deploy-helpers,env-context,wrangler-config}.ts`
+- `configs/`, which `build.ts` bakes in as project templates
+- root files: a `package.json`, `pnpm-workspace.yaml` and `pnpm-lock.yaml`, `tsconfig.base.json`, `.nvmrc`, and the `patches/` the lockfile uses
+
+**Why the root files can't be copied as they are:**
+
+- The root lockfile covers all 22 workspace packages, so `--frozen-lockfile` fails in a copy with 4.
+- The root `package.json` runs husky and `scripts/lockfile-stamp.ts` on every install, and lists devDependencies for lint, specs and CI.
+- `pnpm-workspace.yaml` lists 22 packages, and its catalog, overrides and patches cover all of them.
+
+**The plan:**
+
+- [ ] The `os` workflow copies the build's files, listed by hand in `copybara/copy.bara.sky`
+- [ ] `copybara/os/package.json`: the copy's root manifest, written by hand. No scripts, and only the dependencies the root-level files import
+- [ ] `copybara/os/pnpm-workspace.yaml` and `copybara/os/pnpm-lock.yaml`, generated from the root's: the copy's 4 packages, the root's settings, and the catalog, patches and lockfile trimmed to what those packages use. `pnpm install --lockfile-only` in a scratch folder holding only the copy's manifests does the trimming
+- [ ] **Dependencies are a subset of the root's:** every package the copy's lockfile resolves is in the root lockfile at the same version. Each copied package's lockfile entry equals the root's, and `copybara/os/package.json` asks for the same versions as the root. The copy never resolves anything the root hasn't
+- [ ] A check fails when the generated files are stale or break the subset rule
+- [ ] The Copybara job clones the copy fresh after each push and runs the four commands above
+- [ ] **Templates are baked** (option A in the explainer): every `configs/` template goes into the Worker as `default` already does, each file with its source path, target path and content (the fields a shadcn registry item has). A creation records `builtin:<name>@<build sha>`. Custom `github:owner/repo#…` templates are unchanged. A preview bakes the PR's own templates, so `preview-config.ts`'s quick-launch rewrite to the PR head goes
+- [ ] Record what `iterate/os` contains, as input for the `core/` restructure
+
+Later, not in round 3: a template registry served by the Worker (shadcn's item format), once features get added to existing projects. Links that name iterate/iterate (the MCP tool's examples link, the recipe's clone URL, `packages/iterate`'s npm metadata, the dash's commit links) wait for the real `iterate/os`.
 
 ## Where the copies' files live (for the real `iterate/os`)
 
@@ -166,6 +206,9 @@ Through the Preview OS job, with the origin ref being this branch:
 8. **This PR never merges.** It's the experiment and the place to bikeshed the real layout.
 9. **Files live under `copybara/`:** one `copy.bara.sky`, plus a `copybara/<name>/` folder of root-only files per copy. Copies keep this repo's paths. (See Where the copies' files live.)
 10. **Round 2 copies to iterate/os0929 and iterate/packages0929;** iterate/copybara0929 is deleted.
+11. **The self-host recipe is the test of what `iterate/os` contains:** it keeps working with only the clone URL changed.
+12. **The copy's root manifests live in `copybara/os/`:** `package.json` written by hand, the workspace file and lockfile generated from the root's, with dependencies a subset of the root's, checked in CI.
+13. **Built-in templates are baked into the Worker for now,** recorded as `builtin:<name>@<sha>`. A registry served by the Worker (shadcn's format) comes later, when features get added to existing projects.
 
 ## Implementation notes
 
