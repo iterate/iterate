@@ -212,24 +212,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
     paths: ["AGENTS.md", "agents.ts", "package.json", "tsconfig.json", "voice.ts", "worker.ts"],
   });
-  // published: the seed is the first publication, as the generation of its commit's fact on `/`,
-  // and the apex answers its homepage (subdomain routing under the test's base) — within a
-  // snapshot's lifetime of the pointer's landing
-  const [seed] = await untilValue(
-    "the seed published",
-    async () =>
-      (await readAll(itx)).filter((e) => e.type === "events.iterate.com/project/worker-updated"),
-    (published) => published.length > 0,
-  );
-  const seedFact = (await readAll(itx)).find(
-    (e) =>
-      e.type === "events.iterate.com/repo/commit-completed" &&
-      e.payload.commitOid === seed.payload.commitOid,
-  );
-  expect(seed).toMatchObject({
-    payload: { generation: seedFact?.offset },
-    source: { platform: true },
-  });
+  // published: the apex answers the seed's homepage (subdomain routing under the test's base)
   await until("the apex answers the seed", async () =>
     (await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim() ===
     `Homepage of project ${slug}`
@@ -537,10 +520,10 @@ test("one-shot HTTP batch whoami at /api, an inline-source worker, and a dotted 
   const SRC_MINE = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Mine extends WorkerEntrypoint {
   async run() {
-    const { projectId } = await withItx(this.env.ITX, (itx) => itx.whoami());
+    using itx = this.getItx();
+    const { projectId } = await itx.whoami();
     return \`from-inline:\${projectId}\`;
   }
 }`,

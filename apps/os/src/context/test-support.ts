@@ -1,6 +1,11 @@
 // context/test-support.ts — what the context unit tests share.
 import { vi } from "vitest";
-import { InvokeHandle, type ItxExpression } from "iterate/expression";
+import {
+  InvokeHandle,
+  parse,
+  parseItxExpressionPrefix,
+  type ItxExpression,
+} from "iterate/expression";
 import type { Caller } from "../caller.ts";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";
 
@@ -29,19 +34,39 @@ export async function settle<T>(run: () => Promise<T>) {
   }
 }
 
-/** A resolver's reach beyond its own context (itx-expression-rewriting.ts `ItxExpressionResolver`),
- *  for a unit test of ONE context whose fakes stand in for its built-ins: every other context's
- *  table is empty, and a call that would run elsewhere is recorded in `located` and answers where
- *  it went. The Workers suite crosses real contexts (__workers-tests__/rule-snapshots.test.ts). */
-export function oneContextReach(rulesOf: Record<string, ItxExpressionRewriteRule[]> = {}) {
+/** When a live snapshot expires: never within a test, and finite, as a refusal's `validUntil`. */
+export const FAR = 8.64e15;
+
+/** `"match ⇒ target — description"`: `null` a mask; a target may hold holes (`@`). */
+export function rule(spelled: string): ItxExpressionRewriteRule {
+  const [, match, target, description] = /^(.+?) ⇒ (.+?)(?: — (.+?))?$/.exec(spelled)!;
+  return {
+    match: parseItxExpressionPrefix(match!),
+    target: target === "null" ? null : parse(target!, { holes: true }),
+    description,
+  };
+}
+
+/** One context's reach: every other context's table is `rulesOf[path]` (the first `expiredReads`
+ *  snapshots already expired), and a call that would run elsewhere is recorded and answers where. */
+export function oneContextReach({
+  rulesOf = {},
+  expiredReads = 0,
+}: { rulesOf?: Record<string, ItxExpressionRewriteRule[]>; expiredReads?: number } = {}) {
   const located: { path: string; expression: ItxExpression; args: unknown[]; caller: Caller }[] =
     [];
+  const snapshotsRead: string[] = [];
   return {
     located,
+    snapshotsRead,
     reach: {
       projectId: "prj_unit",
       recordLoopLimit: () => {},
-      snapshotOf: async (path: string) => ({ rules: rulesOf[path] || [], expiresAt: Infinity }),
+      snapshotOf: async (path: string) => {
+        snapshotsRead.push(path);
+        const expired = snapshotsRead.length <= expiredReads;
+        return { rules: rulesOf[path] || [], expiresAt: expired ? Date.now() - 1 : FAR };
+      },
       workersOf: (path: string) => ({
         get: (spec: unknown) => new InvokeHandle((steps) => ({ workersOf: path, spec, steps })),
       }),

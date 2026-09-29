@@ -3,7 +3,7 @@
 // reads the commit itself (processor.ts); the notice only says to look. Its own saves come back
 // through here too, and the doc's catch-up finds nothing new.
 import { z } from "zod";
-import type { WithItx } from "iterate/sdk";
+import type { IterateContextApi } from "iterate/api";
 import {
   StreamProcessor,
   type ProcessEventArgs,
@@ -24,10 +24,10 @@ const CommitCompleted = z.object({
 
 export class DocsProcessor extends StreamProcessor<DocsState> {
   contract = DocsContract;
-  readonly #withItx: WithItx;
-  constructor(withItx: WithItx) {
+  readonly #getItx: () => IterateContextApi & Disposable;
+  constructor(getItx: () => IterateContextApi & Disposable) {
     super();
-    this.#withItx = withItx;
+    this.#getItx = getItx;
   }
 
   override reduce({ event, state }: ReduceArgs<DocsState>): DocsState | undefined {
@@ -52,18 +52,17 @@ export class DocsProcessor extends StreamProcessor<DocsState> {
       .map((path) => docContextPath({ repo, path }))
       .filter((context) => state.opened.includes(context));
     if (changed.length === 0) return;
-    blockProcessorWhile(() =>
-      this.#withItx((itx) =>
-        Promise.all(
-          changed.map((context) =>
-            itx.cd(context).append({
-              type: COMMIT_NOTICED,
-              ephemeral: true,
-              payload: { commitOid: commit.data.commitOid },
-            }),
-          ),
+    blockProcessorWhile(async () => {
+      using itx = this.#getItx();
+      await Promise.all(
+        changed.map((context) =>
+          itx.cd(context).append({
+            type: COMMIT_NOTICED,
+            ephemeral: true,
+            payload: { commitOid: commit.data.commitOid },
+          }),
         ),
-      ),
-    );
+      );
+    });
   }
 }

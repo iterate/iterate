@@ -549,7 +549,9 @@ test("raceAbort: a dial that answers before any abort hands its body over unread
 /** The reduce never reaches the context; the saga and the model call are the e2e's. */
 const processor = () =>
   new AgentProcessor({
-    withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
+    getItx: () => {
+      throw new Error("the reduce reaches no itx");
+    },
     now: () => 0,
     sleep: () => Promise.resolve(),
   });

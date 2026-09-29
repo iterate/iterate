@@ -1,6 +1,4 @@
-// sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base
-// class: the platform's `deliverEvent` hands `processEvent` one event and the project's root, the
-// scope of ONE `withItx` round trip that is released once the handler settles, even when it throws.
+// sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base class.
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
 import { IterateConfigEntrypoint, type IterateConfigProcessEventArgs } from "./index.ts";
@@ -42,6 +40,24 @@ test("the defaults: an event is ignored and every request is not found", async (
   });
 });
 
+test("`using itx = this.getItx()` releases the scope and every call made through it as its block ends", async () => {
+  const log: string[] = [];
+  await configEntrypoint(log).appendThroughGetItx("/child");
+  expect(log).toEqual([
+    "get",
+    "cd(/child).append",
+    "dispose cd(/child).append",
+    "dispose cd(/child)",
+    "dispose root",
+  ]);
+});
+
+test("callWithCause refuses getItx: no caller gets the scope", async () => {
+  await expect(configEntrypoint([]).callWithCause(undefined, [["getItx"]])).rejects.toMatchObject({
+    code: "NOT_A_METHOD",
+  });
+});
+
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`
  *  overrides `processEvent` when given. */
 function configEntrypoint(
@@ -74,6 +90,10 @@ function configEntrypoint(
   const entrypoint = new (class extends IterateConfigEntrypoint {
     override processEvent(args: IterateConfigProcessEventArgs) {
       return handler?.(args);
+    }
+    async appendThroughGetItx(path: string) {
+      using itx = this.getItx();
+      await itx.cd(path).append({ type: "events.iterate.com/test/pong-sent" });
     }
   })({} as never, env as never);
   // the shim's base class keeps no constructor arguments; the runtime's sets `env` from them

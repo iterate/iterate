@@ -8,11 +8,12 @@
 // published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
 // certificate, once the seed's publication has landed. THE PUBLICATION OF THE CONFIG REPO: every
 // `repo/commit-completed` from `/repos/config` gets ONE outcome on `/`, as the generation of its
-// fact's offset — its commit published (publication.ts) while it is still `main`'s head: the pointer
-// `itx.config` moved to it, then `project/worker-updated`; or `project/worker-update-failed`, a
-// commit refused or one main moved on from first — so a commit changes the project's code
-// everywhere, and whoever made it can wait for its outcome by its oid. Subscribed to `/` (the row `session.projects.create` enables), it runs again
-// after every eviction: an attempt lost with an incarnation is simply run again by the next — the
+// fact's offset — its commit published (publication.ts) if it is `main`'s head as its attempt
+// begins: the pointer `itx.config` moved to it and `project/worker-updated`, in one batch; or
+// `project/worker-update-failed`, a commit refused or one main moved on from first — so a commit
+// changes the project's code everywhere, and whoever made it can wait for its outcome by its oid.
+// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every
+// eviction: an attempt lost with an incarnation is simply run again by the next — the
 // repo tolerates existing, a born `main` refuses the seed, a publication is keyed by its generation,
 // the ingress and the certificate are keyed. Its reach is its constructor's arguments; a
 // unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or hands it a fake
@@ -33,7 +34,6 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
 import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
 import { defaultFiles, templateFiles } from "../generated/config-templates.js";
@@ -114,21 +114,21 @@ export class ProjectProcessor extends StreamProcessor<
 > {
   readonly contract = ProjectContract;
 
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly downloadTemplate: TemplateDownload;
   private readonly hostnames: () => ProjectHostnames | null;
   private readonly deletion: () => ProjectDeletion | null;
   private readonly publisher: () => ProjectPublisher | null;
 
   constructor(
-    withItx: WithItx<ItxEntrypointScope>,
+    getItx: () => ItxEntrypointScope & Disposable,
     downloadTemplate: TemplateDownload,
     hostnames: () => ProjectHostnames | null = () => null,
     deletion: () => ProjectDeletion | null = () => null,
     publisher: () => ProjectPublisher | null = () => null,
   ) {
     super();
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
     this.deletion = deletion;
@@ -326,7 +326,9 @@ export class ProjectProcessor extends StreamProcessor<
             {
               commitOid: event.payload.commitOid,
               offset: event.offset,
-              ...(event.source?.cause && { cause: event.source.cause }),
+              ...(event.source?.cause && {
+                cause: { ...event.source.cause, parent: `${event.path}@${event.offset}` },
+              }),
             },
           ],
         };
@@ -529,7 +531,11 @@ export class ProjectProcessor extends StreamProcessor<
   /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
    *  is, born by an earlier attempt or another commit. */
   async #seed(state: ProjectState): Promise<void> {
-    await this.withItx((itx) => itx.repos.create("/repos/config"));
+    // its own block: the template's download below outlasts it
+    {
+      using itx = this.getItx();
+      await itx.repos.create("/repos/config");
+    }
     const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
     // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
     // of the tip first — one Artifacts round trip less on every creation, and the one that hung
@@ -557,17 +563,18 @@ export class ProjectProcessor extends StreamProcessor<
         Object.fromEntries(changes.map((file) => [file.path, file.content])),
         "The config template",
       );
-      const seeded = (await this.withItx((itx) =>
-        config(itx).commitFiles({
-          message: reference ? `seed: ${reference}` : "seed: minimal project config",
-          changes,
-          parent: null,
-        }),
-      )) as unknown as { commitOid: string | null };
+      using itx = this.getItx();
+      // Over the loopback stub the commit's answer types as an RPC result; the wire copied it.
+      const seeded = (await config(itx).commitFiles({
+        message: reference ? `seed: ${reference}` : "seed: minimal project config",
+        changes,
+        parent: null,
+      })) as unknown as { commitOid: string | null };
       commitOid = seeded.commitOid;
     } catch (error) {
+      using itx = this.getItx();
       // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+      commitOid = (await config(itx).tip()) as unknown as string | null;
       if (!commitOid) throw error;
       console.info({
         event: "project.seed-on-born-main",
@@ -587,8 +594,10 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   /** ONE OUTCOME for the commit fact `commit`, as generation `commit.offset` (publication.ts). A
-   *  commit that is still `main`'s head is admitted: the pointer, as the platform — its write
-   *  answers once every context resolves through it — then `project/worker-updated`. A commit the
+   *  commit that is `main`'s head as an attempt begins and that the probe admits is published: the
+   *  pointer and `project/worker-updated` in ONE batch as the platform, so no state of `/` holds
+   *  either without the other. Every context resolves through the pointer within SNAPSHOT_TTL_MS
+   *  of that batch (context/rule-snapshots.ts), and the append answers once it does. A commit the
    *  probe refuses, or one main moved on from (anyone may append a fact), is
    *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
    *  nothing more. A platform failure is met again after 5 s and 30 s, within
@@ -638,13 +647,11 @@ export class ProjectProcessor extends StreamProcessor<
           payload: { commitOid, generation, error: attempt.error },
         });
       const { manifest } = attempt;
-      await landOnce(publisher, ...configPointer(commitOid, manifest));
-      await landOnce(publisher, {
+      return landOnce(publisher, ...configPointer(commitOid, manifest), {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
       });
-      return;
     }
     await publisher.appendAsPlatform({
       type: "events.iterate.com/project/worker-update-failed",
@@ -775,8 +782,8 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
-/** A keyed platform fact landed once: an IDEMPOTENCY_CONFLICT is the same key an earlier attempt of
- *  this generation already landed. */
+/** A keyed platform batch landed once: an IDEMPOTENCY_CONFLICT is a key an earlier attempt of this
+ *  generation already landed, and a batch lands whole or not at all, so its outcome is there. */
 async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput[]): Promise<void> {
   try {
     await publisher.appendAsPlatform(...events);

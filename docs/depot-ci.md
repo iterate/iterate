@@ -617,7 +617,7 @@ Preview OS runs these jobs, each a check named for what it proves:
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/11** to **11/11**, and
+  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/10** to **10/10**, and
   **Browser specs** beside them gives their verdict.
 - **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
   only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
@@ -647,12 +647,12 @@ same names.
 With Playwright's full parallelism a spec starts as soon as a worker is free, so when
 `shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
 longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
-`ceil(specs / 6)` shards: 11 for 61 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
+`ceil(specs / 6)` shards: 10 for 58 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
 fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
 fullest shard holds `ceil(specs / shards)`.
 
-- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/11** to **11/11**.
+- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/10** to **10/10**.
   Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
   `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
   blob report in place of the HTML one.

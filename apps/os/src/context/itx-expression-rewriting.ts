@@ -1156,8 +1156,14 @@ export class ItxExpressionResolver {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
           if (hops === 0 && !liveRules) return { route: own(), validUntil, rules };
           // A refusal the snapshots gave stands only as long as they do (subscription-delivery.ts
-          // `#drainCursor` evaluates a dangling row once more then).
-          if (hops > 0 && error instanceof Error) Object.assign(error, { validUntil });
+          // evaluates a dangling row once more then). A refusal of the config pointer, which only a
+          // publication writes, says the project has published no config: the config birth row
+          // passes its event over.
+          if (hops > 0 && error instanceof Error)
+            Object.assign(error, {
+              validUntil,
+              ...(isConfigPointerMatch(entered) && { unpublishedConfig: true }),
+            });
           throw error;
         }
         const cdStep = fixedPoint[2];

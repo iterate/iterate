@@ -1,5 +1,4 @@
-// The inspector's pure halves, ported from the old platform's raw-event inspector (apps/os
-// `raw-event-inspector-panel.tsx`, removed in #2837): where the inspected offset sits in the loaded
+// The inspector's pure halves: where the inspected offset sits in the loaded
 // log (the event, its neighbours — by comparison, not offset ± 1, since a log's offsets are sparse
 // where ephemeral events were and a stale link still finds real neighbours), the gap to each, the
 // signal-first key order the raw event reads in, and which keydowns ← → must leave alone.

@@ -768,6 +768,14 @@ test.for([
     page: ["• visitor 5xx: garple.com 1 · last 07:30 UTC"],
   },
   {
+    name: "a platform failure the edge answered 503 pages as its host's visitor 5xx: no expected outcome",
+    events: () => [
+      platformFailureAnswered("stall", "https://garple.com/chat/events"),
+      invocation({ status: 503, url: "https://garple.com/chat/events", rayId: "stall" }),
+    ],
+    page: ["• visitor 5xx: garple.com 1 · last 07:30 UTC"],
+  },
+  {
     name: "a jsrpc summary of a call that logged its exception is that exception's one sighting",
     events: () => [
       invocation({
@@ -1862,6 +1870,19 @@ function line(options: {
       scriptVersion: { id: options.version || "502616fb-0000" },
       event: options.url ? { request: { url: options.url } } : undefined,
     },
+  };
+}
+
+/** The warn the visitor's own invocation logs when the edge answers a platform failure 503 (apps/os
+ *  src/worker.ts `platformFailureAnswer`). */
+function platformFailureAnswered(rayId: string, url: string) {
+  return {
+    timestamp: 42,
+    event: "worker.platform-failure-answered",
+    kind: "overloaded",
+    name: "worker",
+    $metadata: { type: "cf-worker", level: "warn", requestId: `${rayId}-visitor`, rayId },
+    $workers: { executionModel: "stateless", event: { request: { url } } },
   };
 }
 

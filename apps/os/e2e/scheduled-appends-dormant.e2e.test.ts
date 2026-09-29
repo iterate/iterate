@@ -4,14 +4,7 @@
 // stubs and the library's own connections), so the actor is idle the moment the sessions close.
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { expect, test } from "vitest";
-import {
-  disposeSessions,
-  freshCtx,
-  openItx,
-  readAll,
-  sleep,
-  withPublishedConfig,
-} from "./support/client.ts";
+import { disposeSessions, freshPublishedCtx, openItx, readAll, sleep } from "./support/client.ts";
 import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts";
 
 // Crosses the real idle eviction without a client or waitForEvent keeping the actor active. Measured on
@@ -40,8 +33,10 @@ const platformHeldTheAlarm = createFlake(
 platformHeldTheAlarm(
   "a disconnected userspace facet's deadline fires after the pins' release without another request",
   async () => {
-    const ctx = freshCtx("schedule_dormant");
-    const itx = await withPublishedConfig(openItx(ctx));
+    // On a child: other contexts read the root's rules, and each read keeps the context it lands
+    // on resident, so the dormancy this row proves is a context no one reads.
+    const { ctx, itx: root } = await freshPublishedCtx("schedule_dormant");
+    const itx = root.cd("/dormant");
     await itx.processors.enable("deadlines", {
       source: scheduledAppendFacetSource,
       className: "DeadlinesDurableObject",
@@ -51,7 +46,7 @@ platformHeldTheAlarm(
     disposeSessions();
     await sleep(22_000);
     const reconnectedAt = Date.now();
-    const reconnected = openItx(ctx);
+    const reconnected = openItx(ctx).cd("/dormant");
     // Committed already — or, when the platform held the alarm, by the reconnected actor.
     const first = await reconnected.waitForEvent({
       type: "job/timed-out",

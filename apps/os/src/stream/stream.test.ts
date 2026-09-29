@@ -311,8 +311,6 @@ test("the wake record says WHY, from the handler that ran first: a birth is a ca
   second.appendWakeRecord(CALL); // once per incarnation
   const third = bareStream({ storage });
   third.appendWakeRecord({ cause: "call", caller: "loaded" });
-  const fourth = bareStream({ storage });
-  fourth.appendWakeRecord({ cause: "alarm", due: ["schedule"] });
   const wokens = bareStream({ storage })
     .read(0)
     .events.filter((e) => e.type === "events.iterate.com/itx/woken")
@@ -321,7 +319,6 @@ test("the wake record says WHY, from the handler that ran first: a birth is a ca
     { incarnation: 1, cause: "call" },
     { incarnation: 2, cause: "alarm", due: ["retry"] },
     { incarnation: 3, cause: "call", caller: "loaded" },
-    { incarnation: 4, cause: "alarm", due: ["schedule"] },
   ]);
 });
 
@@ -350,7 +347,7 @@ test("the wake record settles what the last incarnation left open: every core `s
   expect(Object.keys(second.coreReducedState.scriptRuns)).toEqual(["4"]); // rebuilt from the checkpoint: still open
   const headBeforeWake = second.highestAssignedOffset();
   second.appendWakeRecord(CALL);
-  second.appendWakeRecord(ALARM); // once per incarnation: nothing more
+  second.appendWakeRecord({ cause: "alarm", due: [] }); // once per incarnation: nothing more
   const tail = second
     .read(headBeforeWake)
     .events.map((e) => [
@@ -436,39 +433,26 @@ test("appendBirthRecord(): a fresh store gets created@1 + woken@2 in ONE fanned-
   expect(second.coreReducedState).toMatchObject({ incarnation: 2 });
 });
 
-test("the birth events land in the birth's own batch, after created@1 and woken@2 and in their order, reduced like any append; a later incarnation appends none of them again", () => {
+test("the birth events land in the birth's own batch, after created@1 and woken@2; a later incarnation appends none of them again", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const batches: StreamEvent[][] = [];
-  const birthEvents: StreamEventInput[] = [
-    {
-      type: "events.iterate.com/itx/subscription-configured",
-      payload: {
-        name: "platform",
-        target: ["itx", "builtins", "platformHook", "deliverEvent"],
-        afterOffset: 0,
-        ordered: false,
-      },
-    },
-    { type: "events.garple.com/shop/opened", payload: {} },
+  const birthEvents = [
+    { type: "events.garple.com/shop/opened" },
+    { type: "events.garple.com/shop/stocked" },
   ];
   bareStream({ storage, batches, birthEvents }).appendBirthRecord();
+  const second = bareStream({ storage, batches, birthEvents });
+  second.appendBirthRecord();
+  second.appendWakeRecord(CALL);
   expect(batches.map((batch) => batch.map((e) => [e.type, e.offset]))).toEqual([
     [
       ["events.iterate.com/itx/created", 1],
       ["events.iterate.com/itx/woken", 2],
-      ["events.iterate.com/itx/subscription-configured", 3],
-      ["events.garple.com/shop/opened", 4],
+      ["events.garple.com/shop/opened", 3],
+      ["events.garple.com/shop/stocked", 4],
     ],
+    [["events.iterate.com/itx/woken", 5]],
   ]);
-  const second = bareStream({ storage, batches, birthEvents });
-  expect(second.coreReducedState.subscriptions.platform).toMatchObject({
-    configuredAtOffset: 3,
-    afterOffset: 0,
-    ordered: false,
-  });
-  second.appendBirthRecord();
-  second.appendWakeRecord(CALL);
-  expect(batches.at(-1)!.map((e) => e.type)).toEqual(["events.iterate.com/itx/woken"]);
 });
 
 test("an itx/paused event pauses the stream through its own core reduce: every non-control append refuses with STREAM_PAUSED, wholesale; the resume lands and reopens", () => {
@@ -789,5 +773,4 @@ const persistedEventRows = (storage: DurableObjectStorageSlice): number =>
 /** A wake a call caused, as the DO's other entry points record it; an alarm's, with what it came
  *  back for. */
 const CALL: Wake = { cause: "call", caller: "other" };
-const ALARM: Wake = { cause: "alarm", due: [] };
 const RETRY_ALARM: Wake = { cause: "alarm", due: ["retry"] };

@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./app-config": "./src/app-config.ts",
+    "./compatibility-date": "./src/compatibility-date.ts",
     "./depot-api": "./src/depot-api.ts",
     "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./integration-scopes": "./src/integration-scopes.ts",

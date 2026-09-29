@@ -483,9 +483,14 @@ test("disconnecting a person's account from a project fails loudly unless the po
       env: { ITERATE_CONTEXT: { getByName: () => ({ invoke: async () => appended.push(1) }) } },
       projectId: "prj_x",
       rootPath: "/",
-      withItx: async () => {
-        throw error;
-      },
+      getItx: () => ({
+        secrets: {
+          delete: async () => {
+            throw error;
+          },
+        },
+        [Symbol.dispose]: () => {},
+      }),
       storage: {},
     }) as unknown as IntegrationScope;
   const input = { provider: "google" as const, connection: "c" };

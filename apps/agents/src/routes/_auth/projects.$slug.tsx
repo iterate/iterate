@@ -173,9 +173,7 @@ function AgentsPage() {
                   check={(installed) => agentsBuild({ data: installed })}
                   upgrade={async (version) => {
                     using itx = await api.projects.get(project);
-                    // The SDK models the public API as promises; capnweb's stub has the same
-                    // runtime methods with additional pipelining types.
-                    await upgradeAgents(itx as unknown as IterateContextApi, version);
+                    await upgradeAgents(itx, version);
                     await router.invalidate({ sync: true });
                   }}
                 />

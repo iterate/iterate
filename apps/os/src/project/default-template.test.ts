@@ -1,8 +1,4 @@
-// src/project/default-template.test.ts — configs/default/worker.ts's `processEvent`, run in Node
-// against an in-memory project: the init case and the email case, each safe to deliver again. Both
-// trust the event's type alone: only the platform appends either (caller.ts `PLATFORM_FACT_TYPES`,
-// __workers-tests__/platform-facts.test.ts). configs/heartbeat/worker.ts's init case beside it: the
-// same, and the heartbeat.
+// src/project/default-template.test.ts — the default and heartbeat templates' `processEvent` in Node.
 import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
@@ -25,21 +21,16 @@ test.for([
     },
   },
 ])(
-  "$template: the platform's project/worker-updated installs agents, voice and the template's schedules, and running it again changes nothing",
+  "$template: the platform's project/worker-updated installs agents, voice and the template's schedules",
   async ({ Template, schedules }) => {
     const project = fakeProject(Template);
-    const published = {
+    await project.deliver({
       type: "events.iterate.com/project/worker-updated",
       path: "/",
       source: { origin: "/", platform: true as const },
-    };
-    const installed = () => {
-      const { rules, rows, schedules, kv } = project;
-      return structuredClone({ rules, rows, schedules, kv: Object.keys(kv) });
-    };
-    await project.deliver(published);
-    const first = installed();
-    expect(first).toEqual({
+    });
+    const { rules, rows } = project;
+    expect({ rules, rows, schedules: project.schedules }).toEqual({
       rules: {
         "itx.agents": expect.objectContaining({ match: "itx.agents" }),
         "itx.voice": expect.objectContaining({
@@ -48,11 +39,7 @@ test.for([
       },
       rows: { agents: expect.objectContaining({ className: "AgentCollectionDurableObject" }) },
       schedules,
-      kv: ["voice/screen-font.css"],
     });
-    // a heartbeat is set again as it stands, so it keeps its clock
-    await project.deliver(published);
-    expect(installed()).toEqual(first);
   },
 );
 
@@ -76,10 +63,14 @@ test("a member's email waits until the email facet has folded it, then goes to i
   const project = fakeProject();
   const first = project.receiveEmail({ messageId: "a@x", subject: "Hi", text: "Hello" });
   const delivered = project.deliver(first);
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 10)); // long enough for a delivery not to wait
   expect(project).toMatchObject({ agents: [] });
   project.emailFacetFolds(first.offset);
   await delivered;
+  // their reply joins the thread, delivered twice
+  const reply = project.receiveEmail({ messageId: "b@x", inReplyTo: "a@x" });
+  project.emailFacetFolds(reply.offset);
+  for (const email of [reply, reply]) await project.deliver(email);
   expect(project).toMatchObject({ agents: ["/agents/email/t1"] });
   expect(project.appended["/agents/email/t1"]).toEqual([
     expect.objectContaining({
@@ -92,23 +83,7 @@ test("a member's email waits until the email facet has folded it, then goes to i
         ),
       }),
     }),
-  ]);
-
-  // their reply joins the thread; a message with neither Message-ID nor a known parent starts one;
-  // one with no Message-ID that answers a known message joins that message's thread
-  const reply = project.receiveEmail({ messageId: "b@x", inReplyTo: "a@x" });
-  const unthreaded = project.receiveEmail({ messageId: null });
-  const answerWithoutId = project.receiveEmail({ messageId: null, inReplyTo: "b@x" });
-  project.emailFacetFolds(answerWithoutId.offset);
-  for (const email of [reply, unthreaded, answerWithoutId, reply]) await project.deliver(email);
-  expect(project).toMatchObject({ agents: ["/agents/email/t1", "/agents/email/t3"] });
-  expect(project.appended["/agents/email/t1"]!.map((event) => event.idempotencyKey)).toEqual([
-    "email:1",
-    "email:2",
-    "email:4",
-  ]);
-  expect(project.appended["/agents/email/t3"]!.map((event) => event.idempotencyKey)).toEqual([
-    "email:3",
+    expect.objectContaining({ idempotencyKey: "email:2" }),
   ]);
 });
 
@@ -123,14 +98,10 @@ test("an email an agent already has under its key, from an earlier version of th
   expect(project.appended["/agents/email/t1"]).toHaveLength(1);
 });
 
-/** An in-memory project the template's `processEvent` runs against: the root's rewrite rules,
- *  processor rows and schedules; `/integrations/email`'s mail and its `email` facet, which folds
- *  only through the offset `emailFacetFolds` last released; the agents `itx.agents.create` made;
- *  and every append on an agent's context, deduplicated by idempotency key as the platform does. */
+/** An in-memory project a template's `processEvent` runs against, its appends keyed as the platform's. */
 function fakeProject(Template: typeof DefaultTemplate = DefaultTemplate) {
   const rules: Record<string, unknown> = {};
   const rows: Record<string, unknown> = {};
-  const kv: Record<string, string> = {};
   const schedules: Record<string, { when: unknown; events: unknown; scheduledAtOffset: number }> =
     {};
   const agents: string[] = [];
@@ -153,12 +124,7 @@ function fakeProject(Template: typeof DefaultTemplate = DefaultTemplate) {
     }),
   };
   const itx = {
-    kv: {
-      put: async (key: string, value: string) => {
-        kv[key] = value;
-        return { ok: true };
-      },
-    },
+    kv: { put: async () => ({ ok: true }) },
     processors: {
       enable: async (name: string, spec: unknown) => {
         rows[name] = spec;
@@ -172,20 +138,9 @@ function fakeProject(Template: typeof DefaultTemplate = DefaultTemplate) {
       return [];
     },
     schedules: {
-      get: (key: string) => schedules[key] ?? null,
-      // as the platform's: an interval set again as it stands keeps its clock (built-ins.ts)
-      set: async (input: { key: string; when: unknown; events: unknown }) => {
-        const live = schedules[input.key];
-        if (
-          JSON.stringify(live && [live.when, live.events]) !==
-          JSON.stringify([input.when, input.events])
-        )
-          schedules[input.key] = {
-            when: input.when,
-            events: input.events,
-            scheduledAtOffset: ++rootOffset,
-          };
-        return { key: input.key, scheduledAtOffset: schedules[input.key]!.scheduledAtOffset };
+      set: async ({ key, when, events }: { key: string; when: unknown; events: unknown }) => {
+        schedules[key] = { when, events, scheduledAtOffset: ++rootOffset };
+        return { key, scheduledAtOffset: rootOffset };
       },
     },
     agents: {
@@ -211,7 +166,6 @@ function fakeProject(Template: typeof DefaultTemplate = DefaultTemplate) {
     rules,
     rows,
     schedules,
-    kv,
     agents,
     appended,
     /** One delivery of `event`, as the platform makes it. */

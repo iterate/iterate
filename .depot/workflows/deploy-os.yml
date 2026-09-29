@@ -58,10 +58,17 @@ jobs:
           # a production deploy never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
       # `/version` answers `<version id> <origin>` (apps/os/src/worker.ts): the id prd serves before
-      # this deploy, so the host check waits for the new one. Empty when prd does not answer.
+      # this deploy, so the host check waits for the new one. `parked` when prd serves erase-data's
+      # parked worker (scripts/lib/parked-worker/worker.js), whose 503 names the erase. Empty when
+      # prd does not answer.
       - name: Read the version prd serves
         id: previous
-        run: echo "version=$(curl -fsS --max-time 10 https://os.iterate.com/version | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        run: |
+          if answer=$(curl -sS --fail-with-body --max-time 10 https://os.iterate.com/version); then
+            echo "version=${answer%% *}"
+          elif [[ $answer == "This environment's data was erased"* ]]; then
+            echo "version=parked"
+          fi >> "$GITHUB_OUTPUT"
       # The Doppler project is envs.ts OS_DOPPLER_PROJECT; the deployed Cloudflare Worker is
       # os-prd.
       - name: Deploy apps/os
@@ -74,8 +81,9 @@ jobs:
       # the new version (≤ 60 s), one GET of each production project host
       # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still
       # answering 421 or 5xx, or not at all, or a `/version` that never moves, pages #error-pulse and
-      # fails this workflow. Faults on the new version are the prd fault alarm's (prd-fault-alarm.yml,
-      # every 15 minutes).
+      # fails this workflow; the page names the version to roll back to. After an erase, hosts that
+      # answer 421 until `project-seed apply` post to #ci and pass. Faults on the new version are the
+      # prd fault alarm's (prd-fault-alarm.yml, every 15 minutes).
       - name: Check the project hosts
         id: check
         env:

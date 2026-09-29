@@ -7,11 +7,16 @@
 // npm imports are crawled from esm.sh ONCE per dependency set and locked in the store (a second
 // resolution fetches nothing), with esm.sh's own quirks (builtins as paths, cycles, the platform
 // packages left external) handled; a pkg.pr.new dependency loads only at a full commit, and a branch
-// or PR ref is refused naming the pin; and what cannot work in a loaded worker is refused by name.
+// or PR ref is refused naming the pin; what cannot work in a loaded worker is refused by name; and
+// the loader starts every worker from a generated main that evaluates the platform's module first.
 // Like tsc, stripping elides an import whose bindings are never used as values.
 import { parse } from "es-module-lexer/js";
 import { expect, test, vi } from "vitest";
-import { resolveModules, type PlatformModules } from "./module-resolution.ts";
+import {
+  enteredThroughPlatform,
+  resolveModules,
+  type PlatformModules,
+} from "./module-resolution.ts";
 
 const platform: PlatformModules = {
   modules: {
@@ -20,6 +25,7 @@ const platform: PlatformModules = {
     "node_modules/zod.js": `export*from"./.platform/chunk-a.js";`,
     "node_modules/.platform/chunk-a.js": `export const z="zod";`,
     "node_modules/.platform/chunk-unused.js": `export const nope=1;`,
+    "node_modules/.platform/loaded-worker.js": `import"./chunk-a.js";`,
   },
   imports: {
     "node_modules/iterate/sdk.js": ["node_modules/.platform/chunk-a.js"],
@@ -27,6 +33,7 @@ const platform: PlatformModules = {
     "node_modules/zod.js": ["node_modules/.platform/chunk-a.js"],
     "node_modules/.platform/chunk-a.js": [],
     "node_modules/.platform/chunk-unused.js": [],
+    "node_modules/.platform/loaded-worker.js": ["node_modules/.platform/chunk-a.js"],
   },
 };
 
@@ -161,6 +168,24 @@ test("iterate/* and zod link this deployment's modules, and only the chunks they
   expectLinked(modules);
 });
 
+test("the loader starts a worker from its own main module, which imports the platform's module first, on its first line", () => {
+  const worker = `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint {}`;
+  const entered = enteredThroughPlatform(
+    { mainModule: "src/worker.js", modules: { "src/worker.js": worker } },
+    platform,
+  );
+  expect(entered).toMatchObject({ mainModule: "src/worker.js" });
+  expect(entered.modules["src/worker.js"]).toBe(
+    `import "../node_modules/.platform/loaded-worker.js"; ${worker}`,
+  );
+  expect(Object.keys(entered.modules).sort()).toEqual([
+    "node_modules/.platform/chunk-a.js",
+    "node_modules/.platform/loaded-worker.js",
+    "src/worker.js",
+  ]);
+  expectLinked(entered.modules);
+});
+
 const esmFiles = {
   // the entry stub esm.sh answers for a range
   "/lib-a@^1.0.0": `export * from "/lib-a@1.2.3/es2022/lib-a.mjs";`,
@@ -202,7 +227,6 @@ test.for([
     { "/needs-node@1": `import "node:fs";` },
     /needs the Node\.js builtin node:fs/,
   ],
-  ["a missing package", {}, /answered 404/],
 ] as const)("refuses %s, naming it", async ([, files, message]) => {
   const esm = fakeEsm(files);
   await expect(

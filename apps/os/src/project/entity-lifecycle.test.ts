@@ -103,7 +103,9 @@ for (const contract of [RepoContract, WorkspaceContract]) {
       // The reduce never reaches the context; the sagas are the e2e's.
       const processor = new EntityLifecycleProcessor(
         contract,
-        () => Promise.reject(new Error("the reduce reaches no itx")),
+        () => {
+          throw new Error("the reduce reaches no itx");
+        },
         () => path,
       );
       // A repo's state also carries its origin (repo/contract.ts), untouched by the lifecycle.

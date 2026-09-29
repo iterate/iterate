@@ -744,9 +744,9 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
  *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
- *  deployment's Agents, Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out
- *  in its Dash (AGENTS_BASE_URL, NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL,
- *  ADMIN_BASE_URL; their specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
+ *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
+ *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their
+ *  specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
  *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
  *  each row to its timeout ceiling (e2e/support/setup.ts), and the PR's number as
  *  PREVIEW_PR_NUMBER, by which the pkg.pr.new rows find the PR's own builds. */
@@ -763,7 +763,6 @@ async function runSuite(
     suite === "specs"
       ? {
           WORKER_BASE_URL: url,
-          AGENTS_BASE_URL: appUrl("agents"),
           NOTES_BASE_URL: appUrl("notes"),
           DOCS_BASE_URL: appUrl("docs"),
           VOICE_BASE_URL: appUrl("voice"),

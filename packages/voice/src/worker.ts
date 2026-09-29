@@ -25,7 +25,8 @@ import VOICE_CONTEXT from "./voice-context.md";
 
 export default class VoiceWorker extends IterateConfigEntrypoint implements VoiceApi {
   async health() {
-    const { projectId } = await this.withItx((itx) => itx.whoami());
+    using itx = this.getItx();
+    const { projectId } = await itx.whoami();
     return { ok: true as const, projectId };
   }
 
@@ -33,51 +34,51 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
   async setImage(rawInput: Parameters<VoiceApi["setImage"]>[0]) {
     const input = ScreenImageInput.parse(rawInput);
     const startedAt = Date.now();
-    // One round trip for the whole upload, bounded by the screen's refreshTimeoutMs.
-    return this.withItx(async (scope) => {
-      // ITX mounts are dynamic remote capabilities. Validate their returned
-      // metadata at the boundary; this interface describes the methods we call.
-      const itx = scope as unknown as {
-        browser: {
-          quickAction(action: "screenshot", options: Record<string, unknown>): Promise<Uint8Array>;
-        };
-        clients: Record<
-          string,
-          {
-            screen: {
-              info(): Promise<unknown>;
-              setImage(
-                input: null | { uploadId: number; offset: number; format: string; data: string },
-              ): Promise<unknown>;
-            };
-          }
-        >;
+    // One scope for the whole upload, bounded by the screen's refreshTimeoutMs.
+    using scope = this.getItx();
+    // ITX mounts are dynamic remote capabilities. Validate their returned
+    // metadata at the boundary; this interface describes the methods we call.
+    const itx = scope as unknown as {
+      browser: {
+        quickAction(action: "screenshot", options: Record<string, unknown>): Promise<Uint8Array>;
       };
-      const screen = itx.clients[input.device]!.screen;
-      const info = ScreenInfo.parse(await screen.info());
-      if (!input.image) {
-        const transferStartedAt = Date.now();
-        await screen.setImage(null);
-        const transferMs = Date.now() - transferStartedAt;
-        return {
-          shown: false as const,
-          bytes: 0,
-          renderMs: 0,
-          transferMs,
-          totalMs: Date.now() - startedAt,
-        };
-      }
-      const format = input.image.format || info.preferredFormat;
-      if (!info.formats.includes(format)) throw new Error(`Screen does not support ${format}`);
-      const renderStartedAt = Date.now();
-      const png = await itx.browser.quickAction("screenshot", {
-        html: input.image.html,
-        viewport: { width: info.width, height: info.height, deviceScaleFactor: 1 },
-        // A screenshot can succeed even when an <img> is a broken-link icon.
-        // Gate capture on decoded images and loaded fonts, with a bounded wait.
-        addScriptTag: [
-          {
-            content: `
+      clients: Record<
+        string,
+        {
+          screen: {
+            info(): Promise<unknown>;
+            setImage(
+              input: null | { uploadId: number; offset: number; format: string; data: string },
+            ): Promise<unknown>;
+          };
+        }
+      >;
+    };
+    const screen = itx.clients[input.device]!.screen;
+    const info = ScreenInfo.parse(await screen.info());
+    if (!input.image) {
+      const transferStartedAt = Date.now();
+      await screen.setImage(null);
+      const transferMs = Date.now() - transferStartedAt;
+      return {
+        shown: false as const,
+        bytes: 0,
+        renderMs: 0,
+        transferMs,
+        totalMs: Date.now() - startedAt,
+      };
+    }
+    const format = input.image.format || info.preferredFormat;
+    if (!info.formats.includes(format)) throw new Error(`Screen does not support ${format}`);
+    const renderStartedAt = Date.now();
+    const png = await itx.browser.quickAction("screenshot", {
+      html: input.image.html,
+      viewport: { width: info.width, height: info.height, deviceScaleFactor: 1 },
+      // A screenshot can succeed even when an <img> is a broken-link icon.
+      // Gate capture on decoded images and loaded fonts, with a bounded wait.
+      addScriptTag: [
+        {
+          content: `
           document.documentElement.removeAttribute("data-iterate-screen-assets");
           Promise.all([
             ...Array.from(document.images, image => { image.loading = "eager"; return image.decode(); }),
@@ -87,65 +88,64 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
             () => document.documentElement.setAttribute("data-iterate-screen-assets", "failed"),
           );
         `,
-          },
-        ],
-        waitForSelector: { selector: '[data-iterate-screen-assets="ready"]', timeout: 5000 },
-        screenshotOptions: { type: "png", fullPage: false },
-      });
-      const renderMs = Date.now() - renderStartedAt;
-      const bitmap = renderScreenPixels(
-        png instanceof Uint8Array ? png : new Uint8Array(png),
-        info,
-        format,
-      );
-      const uploadId = Math.floor(Math.random() * 0x7fffffff);
-      const transferStartedAt = Date.now();
-      let slowestChunkMs = 0;
-      for (let offset = 0; offset < bitmap.length; offset += info.maxChunkBytes) {
-        const expected = Math.min(offset + info.maxChunkBytes, bitmap.length);
-        const sentAt = Date.now();
-        const answer = screen.setImage({
-          uploadId,
-          format,
-          offset,
-          data: bytesToBase64(bitmap.subarray(offset, expected)),
-        });
-        // The chunk that completes the frame is answered once the panel shows it, and fails if the
-        // refresh fails (apps/kit/firmware/components/capabilities/src/screen.c). Its bound is the
-        // screen's refreshTimeoutMs on top of the slowest round trip an earlier chunk took.
-        let refreshDeadline: ReturnType<typeof setTimeout> | undefined;
-        const acknowledged = await (expected < bitmap.length
-          ? answer
-          : Promise.race([
-              answer,
-              new Promise<never>((_, reject) => {
-                refreshDeadline = setTimeout(
-                  () => reject(new Error("Screen refresh timed out")),
-                  slowestChunkMs + info.refreshTimeoutMs,
-                );
-              }),
-            ]).finally(() => {
-              if (refreshDeadline) clearTimeout(refreshDeadline);
-            }));
-        slowestChunkMs = Math.max(slowestChunkMs, Date.now() - sentAt);
-        if (acknowledged !== expected) {
-          throw new Error(
-            `screen acknowledged ${String(acknowledged)} bytes; expected ${String(expected)}`,
-          );
-        }
-      }
-      const transferMs = Date.now() - transferStartedAt;
-      return {
-        shown: true as const,
-        width: info.width,
-        height: info.height,
-        format,
-        bytes: bitmap.length,
-        renderMs,
-        transferMs,
-        totalMs: Date.now() - startedAt,
-      };
+        },
+      ],
+      waitForSelector: { selector: '[data-iterate-screen-assets="ready"]', timeout: 5000 },
+      screenshotOptions: { type: "png", fullPage: false },
     });
+    const renderMs = Date.now() - renderStartedAt;
+    const bitmap = renderScreenPixels(
+      png instanceof Uint8Array ? png : new Uint8Array(png),
+      info,
+      format,
+    );
+    const uploadId = Math.floor(Math.random() * 0x7fffffff);
+    const transferStartedAt = Date.now();
+    let slowestChunkMs = 0;
+    for (let offset = 0; offset < bitmap.length; offset += info.maxChunkBytes) {
+      const expected = Math.min(offset + info.maxChunkBytes, bitmap.length);
+      const sentAt = Date.now();
+      const answer = screen.setImage({
+        uploadId,
+        format,
+        offset,
+        data: bytesToBase64(bitmap.subarray(offset, expected)),
+      });
+      // The chunk that completes the frame is answered once the panel shows it, and fails if the
+      // refresh fails (apps/kit/firmware/components/capabilities/src/screen.c). Its bound is the
+      // screen's refreshTimeoutMs on top of the slowest round trip an earlier chunk took.
+      let refreshDeadline: ReturnType<typeof setTimeout> | undefined;
+      const acknowledged = await (expected < bitmap.length
+        ? answer
+        : Promise.race([
+            answer,
+            new Promise<never>((_, reject) => {
+              refreshDeadline = setTimeout(
+                () => reject(new Error("Screen refresh timed out")),
+                slowestChunkMs + info.refreshTimeoutMs,
+              );
+            }),
+          ]).finally(() => {
+            if (refreshDeadline) clearTimeout(refreshDeadline);
+          }));
+      slowestChunkMs = Math.max(slowestChunkMs, Date.now() - sentAt);
+      if (acknowledged !== expected) {
+        throw new Error(
+          `screen acknowledged ${String(acknowledged)} bytes; expected ${String(expected)}`,
+        );
+      }
+    }
+    const transferMs = Date.now() - transferStartedAt;
+    return {
+      shown: true as const,
+      width: info.width,
+      height: info.height,
+      format,
+      bytes: bitmap.length,
+      renderMs,
+      transferMs,
+      totalMs: Date.now() - startedAt,
+    };
   }
 
   /** The press. `activation` is the device's call identity: the call starts under it at boot and
@@ -159,56 +159,54 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
     const screenDevice = options.screen
       ? ScreenImageInput.shape.device.parse(options.screen)
       : undefined;
-    return this.withItx(async (scope) => {
-      // `itx.agents` is the rewrite rule the agents app mounts, installed by the same init case.
-      const itx = scope as IterateContextApiWith<"agents">;
-      // Normal agent creation establishes the creator link, the script sandbox and the agent
-      // that answers the call's delegations, before the relay needs project code or egress.
-      await itx.agents.create(streamPath);
-      /* The agent's instructions are its own `context-added` items, which start no turn: the
-       * first turn is the first hand-over (voice-agent.ts). */
-      const instruction = (key: string, content: string) => ({
-        type: "events.iterate.com/agent/context-added",
-        idempotencyKey: `voice-agent/${key}:${options.activation}`,
-        payload: {
-          role: "developer",
-          content,
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        },
-      });
-      await itx.cd(streamPath).append(
-        {
-          type: "events.iterate.com/itx/subscription-configured",
-          payload: {
-            name: "voice-agent",
-            target: [
-              "itx",
-              "facets",
-              ["get", "voice-agent", voiceAgentFacetSpec],
-              "processEventBatch",
-            ],
-            /* Every durable event, plus the two ephemeral types a processor only sees by name. */
-            consumes: [
-              "*",
-              "events.iterate.com/voice-agent/mic-frame",
-              "events.iterate.com/voice-agent/keepalive",
-            ],
-          },
-        },
-        {
-          type: "events.iterate.com/voice-agent/call-started",
-          idempotencyKey: `voice-agent/call:${options.activation}`,
-          payload: {
-            activation: options.activation,
-            conversationId: `conv_${options.activation}`,
-          },
-        },
-        instruction("voice-context", VOICE_CONTEXT),
-        ...(screenDevice
-          ? [instruction("screen-context", SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice))]
-          : []),
-      );
-      return { streamPath };
+    // `itx.agents` is the rewrite rule the agents app mounts, installed by the same init case.
+    using itx = this.getItx() as IterateContextApiWith<"agents"> & Disposable;
+    // Normal agent creation establishes the creator link, the script sandbox and the agent
+    // that answers the call's delegations, before the relay needs project code or egress.
+    await itx.agents.create(streamPath);
+    /* The agent's instructions are its own `context-added` items, which start no turn: the
+     * first turn is the first hand-over (voice-agent.ts). */
+    const instruction = (key: string, content: string) => ({
+      type: "events.iterate.com/agent/context-added",
+      idempotencyKey: `voice-agent/${key}:${options.activation}`,
+      payload: {
+        role: "developer",
+        content,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
     });
+    await itx.cd(streamPath).append(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "voice-agent",
+          target: [
+            "itx",
+            "facets",
+            ["get", "voice-agent", voiceAgentFacetSpec],
+            "processEventBatch",
+          ],
+          /* Every durable event, plus the two ephemeral types a processor only sees by name. */
+          consumes: [
+            "*",
+            "events.iterate.com/voice-agent/mic-frame",
+            "events.iterate.com/voice-agent/keepalive",
+          ],
+        },
+      },
+      {
+        type: "events.iterate.com/voice-agent/call-started",
+        idempotencyKey: `voice-agent/call:${options.activation}`,
+        payload: {
+          activation: options.activation,
+          conversationId: `conv_${options.activation}`,
+        },
+      },
+      instruction("voice-context", VOICE_CONTEXT),
+      ...(screenDevice
+        ? [instruction("screen-context", SCREEN_CONTEXT.replaceAll("{{DEVICE}}", screenDevice))]
+        : []),
+    );
+    return { streamPath };
   }
 }

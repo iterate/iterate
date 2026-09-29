@@ -1,5 +1,4 @@
-// The context view's filter row, the old platform's (apps/os `stream-feed-filters.tsx`, removed in
-// #2837): a search box that takes the focus when the row opens (Escape empties it), the log's types
+// The context view's filter row: a search box that takes the focus when the row opens (Escape empties it), the log's types
 // as chips with their counts (a ticked type the loaded log lacks still shows, at 0, so it can be
 // unticked), an offset range `from`–`to`, and one "clear". Every value is the view's URL state; this
 // only renders it and hands back patches.

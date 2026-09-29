@@ -36,7 +36,7 @@
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
-import { freshCtx, openItx, rejection } from "./support/client.ts";
+import { freshCtx, freshPublishedCtx, openItx, rejection } from "./support/client.ts";
 import { MiB, blob, isDurableObjectReset, settle } from "./support/isolate-ceilings.ts";
 import { deployedOnly, projectHostsAreLocal } from "./support/project-host.ts";
 import { enableFixtureProcessor } from "./support/sources.ts";
@@ -192,7 +192,14 @@ test.sequential(
     expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await itx.append({ type: "after" });
-    expect(next).toMatchObject({ offset: marker.offset + 1 }); // the refused batch burned no offset, wrote nothing
+    // the refused batch burned no offset and wrote nothing: every offset since the marker is an event
+    // the log holds (an alarm pass writes ephemeral traces into the same offset sequence)
+    const { events } = await itx.readEvents(marker.offset - 1, 500, { includeEphemeral: true });
+    const since = events.filter((event: { offset: number }) => event.offset <= next.offset);
+    expect(since.map((event: { offset: number }) => event.offset)).toEqual(
+      Array.from({ length: next.offset - marker.offset + 1 }, (_, i) => marker.offset + i),
+    );
+    expect(since.map((event: { type: string }) => event.type)).not.toContain("blob");
   },
 );
 
@@ -365,7 +372,7 @@ function seededLog(): Promise<{ ctx: string; offsets: number[] }> {
 }
 
 async function seedLog(): Promise<{ ctx: string; offsets: number[] }> {
-  seedCtx ||= freshCtx("membudget");
+  seedCtx ||= (await freshPublishedCtx("membudget")).ctx;
   const itx = openItx(seedCtx);
   const offsets: number[] = [];
   for (let n = 0; n < EVENT_COUNT; n++) {

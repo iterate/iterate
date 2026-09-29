@@ -216,14 +216,14 @@ test("a reply on a doc whose processor has just started again still shows the do
 test("the root's docs processor tells only the opened docs a commit changed", async () => {
   const root = memoryStream("/");
   const noticed: { path: string; event: StreamEventInput }[] = [];
-  const docs = new DocsProcessor((call) =>
-    Promise.resolve(
-      call({
+  const docs = new DocsProcessor(
+    () =>
+      ({
         cd: (path: string) => ({
           append: (event: StreamEventInput) => noticed.push({ path, event }),
         }),
-      } as any),
-    ),
+        [Symbol.dispose]: () => {},
+      }) as any,
   );
   root.engines.push(new ProcessorEngine(docs, { stream: root.stream, storage: memoryStorage() }));
   root.stream.append(
@@ -266,18 +266,17 @@ function openDoc(
   const start = (autosave: { idleMs: number; maxMs: number }) => {
     const processor = new DocProcessor({
       sql: storage.sql as unknown as SqlStorage,
-      withItx: (call) =>
-        Promise.resolve(
-          call({
-            whoami: () => ({ path: "/docs/config/plan.md" }),
-            // the repos are the root's, as on the platform
-            cd: (path: string) => {
-              if (path !== "/") throw new Error(`only the root has repos, not ${path}`);
-              return { repos: { get: () => repo } };
-            },
-            append: log.stream.append,
-          } as any),
-        ),
+      getItx: () =>
+        ({
+          whoami: () => ({ path: "/docs/config/plan.md" }),
+          // the repos are the root's, as on the platform
+          cd: (path: string) => {
+            if (path !== "/") throw new Error(`only the root has repos, not ${path}`);
+            return { repos: { get: () => repo } };
+          },
+          append: log.stream.append,
+          [Symbol.dispose]: () => {},
+        }) as any,
       publishLiveState: () => engine.publishLiveState(),
       autosave,
     });

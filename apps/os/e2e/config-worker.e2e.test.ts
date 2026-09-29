@@ -1,20 +1,17 @@
-// A config entrypoint subscribed by an explicit `workers.get` target with `ordered: false` (the
-// fan-out kind) gets one event per `deliverEvent` call. Loading one neither configures ingress nor
-// follows repository commits: only a project's own processor publishes its `/repos/config`, whose
-// pointer `itx.config` both the apex and every birth row name (the last row). The repo a worker's
-// source is read from is born through the collection (`itx.repos.create(path)`) and addressed as
-// `itx.repos.get(path)`.
+// A config entrypoint on a fan-out row gets one event per `deliverEvent` call, and a project's config
+// worker moves with its commits. Birth rows are birth-rows.test's; the apex is website-publication's.
 import { expect, test } from "vitest";
-import { freshCtx, openItx, readAll, until } from "./support/client.ts";
-
-test("a newborn context carries its birth subscription to the project's config entrypoint", async () => {
-  const child = openItx(freshCtx("config-birth")).cd("/child");
-  expect(await child.subscriptions.get("config")).toMatchObject({
-    name: "config",
-    target: "itx.cd('/').config.deliverEvent",
-    ordered: false,
-  });
-});
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
+import {
+  adminCredentials,
+  createdProject,
+  freshCtx,
+  openItx,
+  publicationOf,
+  readAll,
+  session,
+  until,
+} from "./support/client.ts";
 
 test("an explicit cross-context fan-out target gets each event of a batch in its own call", async () => {
   const root = openItx(freshCtx("config-explicit"));
@@ -32,19 +29,9 @@ test("an explicit cross-context fan-out target gets each event of a batch in its
     ],
     consumes: ["events.iterate.com/test/ping-sent"],
   });
-  const pings = await child.append(
-    { type: "events.iterate.com/test/ping-sent" },
-    { type: "events.iterate.com/test/ping-sent" },
-  );
-  const pongs = () =>
-    readAll(root).then((events) =>
-      events.filter((event) => event.type === "events.iterate.com/test/pong-sent"),
-    );
-  await until(
-    "the worker answered each ping on the root",
-    async () => (await pongs()).length === 2,
-  );
-  expect((await pongs()).map((pong) => pong.payload).sort((a, b) => a.pinged - b.pinged)).toEqual(
+  const pings = await child.append(PING, PING);
+  const pongs = await Promise.all(pings.map((ping: { offset: number }) => pongFor(root, ping)));
+  expect(pongs.map((pong) => pong.payload)).toEqual(
     pings.map((ping: { offset: number }) => ({
       version: "kv",
       from: "/child",
@@ -68,49 +55,29 @@ test("a repo-backed worker changes when its explicit subscription spec is update
     target: ["itx", "workers", ["get", spec], "deliverEvent"],
     consumes: ["events.iterate.com/test/ping-sent", "events.iterate.com/repo/commit-completed"],
   });
-  const [ping1] = await root.append({ type: "events.iterate.com/test/ping-sent" });
-  await until("v1 answered", async () =>
-    (await readAll(root)).find(
-      (event) =>
-        event.type === "events.iterate.com/test/pong-sent" &&
-        event.payload?.pinged === ping1.offset &&
-        event.payload?.version === "v1",
-    ),
-  );
+  const [ping1] = await root.append(PING);
+  expect((await pongFor(root, ping1)).payload).toMatchObject({ version: "v1" });
   const second = await repo.writeFile("worker.ts", source("v2"));
   // Even delivery of a commit fact does not mutate routing or subscriptions inside the config entrypoint.
   await root.append({
     type: "events.iterate.com/repo/commit-completed",
     payload: { commitOid: second.commitOid },
   });
-  const [stillOld] = await root.append({ type: "events.iterate.com/test/ping-sent" });
-  await until("the existing spec remains selected", async () =>
-    (await readAll(root)).find(
-      (event) =>
-        event.type === "events.iterate.com/test/pong-sent" &&
-        event.payload?.pinged === stillOld.offset &&
-        event.payload?.version === "v1",
-    ),
-  );
+  const [stillOld] = await root.append(PING);
+  expect((await pongFor(root, stillOld)).payload).toMatchObject({ version: "v1" });
   await root.subscribe({
     name: "pong",
     ordered: false,
     target: ["itx", "workers", ["get", { ...spec, cacheKey: second.commitOid }], "deliverEvent"],
     consumes: ["events.iterate.com/test/ping-sent"],
   });
-  const [ping2] = await root.append({ type: "events.iterate.com/test/ping-sent" });
-  await until("v2 answered", async () =>
-    (await readAll(root)).find(
-      (event) =>
-        event.type === "events.iterate.com/test/pong-sent" &&
-        event.payload?.pinged === ping2.offset &&
-        event.payload?.version === "v2",
-    ),
-  );
+  const [ping2] = await root.append(PING);
+  expect((await pongFor(root, ping2)).payload).toMatchObject({ version: "v2" });
 });
 
-test("a project's config worker runs one version: a commit moves its processEvent with its fetch", async () => {
-  const root = openItx(freshCtx("config-follows-tip"));
+test("a config commit moves the worker's processEvent, and one made at depth 7 publishes at 7 and inits at 8", async () => {
+  const ctx = freshCtx("config-follows-tip");
+  const root = openItx(ctx);
   await root.repos.create("/repos/config");
   const repo = root.repos.get("/repos/config");
   // The config repo holds its first worker before the project is created, as a template's does:
@@ -122,47 +89,24 @@ test("a project's config worker runs one version: a commit moves its processEven
       { path: "worker.ts", content: source("v1") },
     ],
   });
-  await root.processors.enable("project");
-  await root.append({
-    type: "events.iterate.com/project/create-requested",
-    payload: { slug: "config-follows-tip", orgId: "test" },
-  });
-  await root.waitForEvent({
-    type: "events.iterate.com/project/created",
-    afterOffset: 0,
-    timeoutMs: 60_000,
-  });
-  const pongFor = async (label: string) => {
-    const [ping] = await root.append({ type: "events.iterate.com/test/ping-sent" });
-    return await until(label, async () =>
-      (await readAll(root)).find(
-        (event) =>
-          event.type === "events.iterate.com/test/pong-sent" &&
-          event.payload?.pinged === ping.offset,
-      ),
-    );
-  };
-  expect((await pongFor("the first commit's processEvent")).payload).toMatchObject({
-    version: "v1",
-  });
-  // The second commit changes only the worker: its publication moves `itx.config`, which the apex
-  // (fetch) and the root's birth row (processEvent) both name.
-  const second = await repo.commitFiles({
+  await createdProject(root, "config-follows-tip");
+  const [first] = await root.append(PING);
+  expect((await pongFor(root, first)).payload).toMatchObject({ version: "v1" });
+  // our own code calling the platform back seven hand-offs into a chain (src/cause.ts) commits v2
+  const chain = `a deep chain of ${ctx}`;
+  const deep = session({ [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain, depth: 7 }) })
+    .authenticate(adminCredentials())
+    .projects.get(ctx);
+  const second = await deep.repos.get("/repos/config").commitFiles({
     message: "v2",
     changes: [{ path: "worker.ts", content: source("v2") }],
   });
-  await until("the second commit published", async () =>
-    (await readAll(root)).find(
-      (event) =>
-        event.type === "events.iterate.com/project/worker-updated" &&
-        event.payload?.commitOid === second.commitOid,
-    ),
-  );
-  expect((await pongFor("the second commit's processEvent")).payload).toMatchObject({
-    version: "v2",
-  });
-  // The second commit's worker is handed its own publication: its init case.
-  await until("the second commit's worker saw its own publication", async () =>
+  const published = await publicationOf(root, second.commitOid);
+  expect(published.source.cause).toMatchObject({ chain, depth: 7 });
+  const [next] = await root.append(PING);
+  expect((await pongFor(root, next)).payload).toMatchObject({ version: "v2" });
+  // v2's worker is handed its own publication, its init case, one hand-off deeper
+  const initRan = await until("v2's worker saw its own publication", async () =>
     (await readAll(root)).find(
       (event) =>
         event.type === "events.iterate.com/test/publication-seen" &&
@@ -170,11 +114,21 @@ test("a project's config worker runs one version: a commit moves its processEven
         event.payload?.commitOid === second.commitOid,
     ),
   );
+  expect(initRan.source.cause).toMatchObject({ chain, depth: 8 });
 });
 
-/** A config entrypoint that answers each ping it is handed with one pong on the root, and says
- *  which version was handed each publication. An array (a batch) has no `type`, so it answers
- *  nothing. */
+const PING = { type: "events.iterate.com/test/ping-sent" };
+
+/** The pong `root`'s config worker appended for `ping`. */
+const pongFor = (root: any, ping: { offset: number }) =>
+  until(`the pong for ${ping.offset}`, async () =>
+    (await readAll(root)).find(
+      (event) =>
+        event.type === "events.iterate.com/test/pong-sent" && event.payload?.pinged === ping.offset,
+    ),
+  );
+
+/** A config entrypoint: one pong on the root per ping, and which version saw each publication. */
 const source = (version: string) => `import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class extends IterateConfigEntrypoint {
   async processEvent({ event, itx }) {

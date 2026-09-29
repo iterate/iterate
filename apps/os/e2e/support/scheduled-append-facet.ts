@@ -23,18 +23,20 @@ export class DeadlinesDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "hasAlarmHandler", "start", "finish"];
   processor = new Deadlines(this.ctx.props.name);
   hasAlarmHandler() { return typeof this.alarm === "function"; }
-  start(job, when) {
-    return this.withItx((itx) => itx.schedules.set({
+  async start(job, when) {
+    using itx = this.getItx();
+    return await itx.schedules.set({
       key: [this.ctx.props.name, job],
       when,
       events: [
         { type: "job/timed-out", payload: { job, owner: this.ctx.props.name } },
         { type: "job/timeout-audit", payload: { job, owner: this.ctx.props.name } },
       ],
-    }));
+    });
   }
-  finish(receipt) {
-    return this.withItx((itx) => itx.schedules.cancel(receipt));
+  async finish(receipt) {
+    using itx = this.getItx();
+    return await itx.schedules.cancel(receipt);
   }
 }`,
 };

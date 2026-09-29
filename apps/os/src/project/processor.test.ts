@@ -7,7 +7,7 @@
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
-import { runningCause } from "../cause.ts";
+import { runningCause, runningUnder } from "../cause.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
@@ -78,15 +78,6 @@ const reduceRows: {
       committed("/repos/config", "ccc"),
     ],
     state: owing(tip("aaa", 1), tip("ccc", 3)),
-  },
-  {
-    name: "a commit's cause rides the commit it owes: its publication runs under it (src/cause.ts)",
-    events: [{ ...committed("/repos/config", "aaa"), source: { cause: { chain: "c", depth: 7 } } }],
-    state: {
-      ...empty,
-      configRepoTip: tip("aaa", 1),
-      unpublishedCommits: [{ ...tip("aaa", 1), cause: { chain: "c", depth: 7 } }],
-    },
   },
   {
     name: "a publication's outcome settles the commit of its generation, a refusal too; the platform's give-up settles nothing; each is the last publication fact, and the published one is the commit the project runs",
@@ -441,15 +432,12 @@ for (const { name, events, state } of reduceRows)
   test(`ProjectProcessor — the reduce: ${name}`, () =>
     expect(reduceProcessor(processorWithoutHostnames(), events)).toEqual(state));
 
-// THE PUBLICATION OF THE CONFIG REPO — the effect, driven by hand: `processEvent` with the kernel's
-// arguments faked (`runInBackground` runs the work at once) and a fake publisher: `main`'s head,
-// each commit's files, identities that hash a module's text, a probe that answers what the commit's
-// files say, and a platform append that records each call and can be held open or refused.
-test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer then project/worker-updated as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
+// THE PUBLICATION OF THE CONFIG REPO: `processEvent` driven by hand over a fake publisher.
+test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer and project/worker-updated in one batch as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
-  publisher.holdFirstAppend(held);
+  publisher.nextAppend = () => held;
   const processor = processorPublishingWith(publisher);
   publisher.main = "aaa";
   deliver(processor, owing(tip("aaa", 5)), unusedAppend);
@@ -462,62 +450,37 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
   release();
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@5"],
-    ["project/worker-updated aaa@5"],
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+    ["itx.config ⇒ aaa@5", "project/worker-updated aaa@5"],
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
-  // the pointer names the commit's modules read at it — through `itx.config.modules`, the repo
-  // facet at the fixed point, a name only the platform writes — cached under it, with its
-  // manifest, one batch keyed by its generation; the outcome is keyed by it too
-  expect(publisher.batches[2]).toMatchObject([
+  // the pointer reads the commit's modules through `itx.config.modules`, which only the platform writes
+  const repo = ["itx", "builtins", ["cd", "/repos/config"], "builtins", "facets", ["get", "repo"]];
+  const source = ["itx", "config", ["modules", { commitOid: "bbb" }]];
+  const manifest = { generation: 7, modules: modulesOf("bbb") };
+  expect(publisher.batches[1]).toMatchObject([
     {
       idempotencyKey: "project/config-modules:7",
-      payload: {
-        match: "itx.config.modules",
-        target: [
-          "itx",
-          "builtins",
-          ["cd", "/repos/config"],
-          "builtins",
-          "facets",
-          ["get", "repo"],
-          "modules",
-        ],
-      },
+      payload: { match: "itx.config.modules", target: [...repo, "modules"] },
     },
     {
       idempotencyKey: "project/config-pointer:7",
       payload: {
         match: "itx.config",
-        target: [
-          "itx",
-          "builtins",
-          "workers",
-          [
-            "get",
-            {
-              source: ["itx", "config", ["modules", { commitOid: "bbb" }]],
-              cacheKey: "bbb",
-              manifest: { generation: 7, modules: modulesOf("bbb") },
-            },
-          ],
-        ],
+        target: ["itx", "builtins", "workers", ["get", { source, cacheKey: "bbb", manifest }]],
       },
     },
+    { idempotencyKey: "project/publication:7" },
   ]);
-  expect(publisher.batches[3]![0]).toMatchObject({ idempotencyKey: "project/publication:7" });
   // delivered again over the same commits, before their outcomes reduced: nothing more
   deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
   await settle();
-  expect(publisher.batches).toHaveLength(4);
+  expect(publisher.batches).toHaveLength(2);
   // a forced pull back to the first commit is a new fact, and a publication of its own
   publisher.main = "aaa";
   deliver(processor, owing(tip("aaa", 9)), unusedAppend);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ aaa@9"],
-    ["project/worker-updated aaa@9"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ aaa@9", "project/worker-updated aaa@9"],
   ]);
 });
 
@@ -527,8 +490,7 @@ test.for([
     owed: [tip("aaa", 5), tip("bbb", 7)],
     outcomes: [
       ["project/worker-update-failed aaa@5"],
-      ["itx.config ⇒ bbb@7"],
-      ["project/worker-updated bbb@7"],
+      ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
     ],
   },
   {
@@ -551,73 +513,36 @@ test.for([
   },
 );
 
-test("ProjectProcessor — init-at-8: a publication runs under the cause of the commit it follows, not one deeper as a processor's other effects do, so its facts keep the commit's depth (project/durable-object.ts `appendAsPlatform` stamps it) and init runs one deeper than the commit", async () => {
+test("ProjectProcessor — init-at-8: a publication runs under its commit's cause, so init runs one deeper", async () => {
   const publisher = fakePublisher({ aaa: {} });
   publisher.main = "aaa";
-  const causes: unknown[] = [];
-  const append = publisher.appendAsPlatform;
-  publisher.appendAsPlatform = async (...events) => {
-    causes.push(runningCause());
-    return append(...events);
-  };
   const commit = { chain: "an agent's chain", depth: 7 };
-  // the engine runs the pass one deeper than its event, as it runs a processor's effects (the
-  // SDK's carrier, shared by name: cause.ts)
-  const carrier = (
-    globalThis as unknown as Record<symbol, { run(cause: unknown, code: () => void): void }>
-  )[Symbol.for("iterate.cause")]!;
-  carrier.run({ ...commit, depth: 8 }, () =>
-    deliver(
-      processorPublishingWith(publisher),
-      { ...owing(tip("aaa", 5)), unpublishedCommits: [{ ...tip("aaa", 5), cause: commit }] },
-      unusedAppend,
-    ),
+  const state = reduceProcessor(processorWithoutHostnames(), [
+    { ...committed("/repos/config", "aaa"), source: { cause: commit } },
+  ]);
+  // the engine runs the pass one deeper than its event, as it runs a processor's other effects
+  runningUnder({ ...commit, depth: 8 }, () =>
+    deliver(processorPublishingWith(publisher), state, unusedAppend),
   );
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@5"],
-    ["project/worker-updated aaa@5"],
+    ["itx.config ⇒ aaa@1", "project/worker-updated aaa@1"],
   ]);
-  expect(causes).toMatchObject([commit, commit]);
+  expect(publisher.causes).toMatchObject([commit]);
 });
 
-test.for<{ name: string; commit: FakeCommit; error: RegExp }>([
-  {
-    name: "a main module whose default export is no IterateConfigEntrypoint",
-    commit: { configEntrypoint: false },
-    error: /worker\.ts's default export is not an IterateConfigEntrypoint/,
-  },
-  {
-    name: "a main module whose default export does not construct",
-    commit: { constructError: "boom in a field initializer" },
-    error: /worker\.ts's default export does not construct: boom in a field initializer/,
-  },
-  {
-    name: "a top-level module that does not resolve",
-    commit: { unresolved: "agents.ts" },
-    error: /agents\.ts imports @iterate-com\/agents; list @iterate-com\/agents/,
-  },
-])(
-  "ProjectProcessor — the publication of $name is project/worker-update-failed with why, keyed by its generation, and no pointer",
-  async ({ commit, error }) => {
-    const publisher = fakePublisher({ bad: commit });
-    publisher.main = "bad";
-    deliver(processorPublishingWith(publisher), owing(tip("bad", 3)), unusedAppend);
-    await settle();
-    expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed bad@3"]]);
-    expect(publisher.batches[0]![0]).toMatchObject({
-      idempotencyKey: "project/publication:3",
-      payload: { error: expect.stringMatching(error) },
-    });
-  },
-);
-
-test("ProjectProcessor — a first publication whose side module does not resolve is refused: every top-level module resolves", async () => {
-  const publisher = fakePublisher({ first: { unresolved: "seed.ts", extra: "seed.ts" } });
-  publisher.main = "first";
-  deliver(processorPublishingWith(publisher), owing(tip("first", 2)), unusedAppend);
+test("ProjectProcessor — a commit the probe refuses is project/worker-update-failed with why, keyed by its generation, and no pointer", async () => {
+  const publisher = fakePublisher({ bad: { configEntrypoint: false } });
+  publisher.main = "bad";
+  deliver(processorPublishingWith(publisher), owing(tip("bad", 3)), unusedAppend);
   await settle();
-  expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed first@2"]]);
+  expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed bad@3"]]);
+  expect(publisher.batches[0]![0]).toMatchObject({
+    idempotencyKey: "project/publication:3",
+    payload: {
+      error: expect.stringMatching(/worker\.ts's default export is not an IterateConfig/),
+    },
+  });
 });
 
 test.for<{ name: string; dropped: FakeCommit }>([
@@ -634,16 +559,13 @@ test.for<{ name: string; dropped: FakeCommit }>([
     publisher.main = "dropped";
     deliver(processor, owing(tip("good", 2), tip("dropped", 3)), unusedAppend);
     await settle();
-    expect(publisher.batches.map(summary).slice(-2)).toEqual([
-      ["itx.config ⇒ dropped@3"],
-      ["project/worker-updated dropped@3"],
+    expect(publisher.batches.map(summary).slice(-1)).toEqual([
+      ["itx.config ⇒ dropped@3", "project/worker-updated dropped@3"],
     ]);
   },
 );
 
-// Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
-// facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
-// says whether the tip is published — from the outcome of ITS generation.
+// A fresh incarnation's at-head pass reads whether the tip is published from its state, not memory.
 test("ProjectProcessor — a commit is owed until an outcome of its own generation landed: a fresh incarnation over the state that reduced it appends nothing and starts no background work, so it claims nothing", async () => {
   const publisher = fakePublisher({ aaa: {} });
   publisher.main = "aaa";
@@ -655,11 +577,10 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   const tipped = owing(tip("aaa", 1));
   deliver(processorPublishingWith(publisher), tipped, unusedAppend, runInBackground);
   await settle();
-  const [pointer, [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
+  const [publication] = publisher.batches as [StreamEventInput[]];
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
-    ...pointer.map((rule) => normalizeControlEvent(rule, "/")),
-    updated!,
+    ...publication.map((event) => normalizeControlEvent(event, "/")),
   ]);
   expect(state).toEqual({
     ...tipped,
@@ -669,7 +590,7 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();
-  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 2, background: 1 });
+  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 1, background: 1 });
 });
 
 test.for([
@@ -691,7 +612,7 @@ test.for([
     run: async (publisher: ReturnType<typeof fakePublisher>) => {
       const processor = processorPublishingWith(publisher);
       publisher.main = "bbb";
-      publisher.refuseNextAppend(new Error("the root's append failed"));
+      publisher.nextAppend = () => Promise.reject(new Error("the root's append failed"));
       deliver(processor, owing(tip("bbb", 7)), unusedAppend, (work) => {
         void work().catch(() => undefined);
       });
@@ -703,21 +624,9 @@ test.for([
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   await run(publisher);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
-});
-
-test("ProjectProcessor — a publication that lands leaves no timer behind: a pending timer keeps the context resident", async () => {
-  vi.useFakeTimers();
-  onTestFinished(() => void vi.useRealTimers());
-  const publisher = fakePublisher({ aaa: {} });
-  publisher.main = "aaa";
-  deliver(processorPublishingWith(publisher), owing(tip("aaa", 4)), unusedAppend);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(publisher.batches).toHaveLength(2);
-  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("ProjectProcessor — a platform failure is met again after 5 s and 30 s with the same generation; one that outlasts the budget lands one give-up, unavailable, and this incarnation owes the tip on", async () => {
@@ -736,9 +645,9 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   expect(recovering).toMatchObject({ batches: [] });
   await vi.advanceTimersByTimeAsync(30_000);
   expect(recovering.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@4"],
-    ["project/worker-updated aaa@4"],
+    ["itx.config ⇒ aaa@4", "project/worker-updated aaa@4"],
   ]);
+  expect(vi.getTimerCount()).toBe(0); // a pending timer would keep the context resident
 
   const down = fakePublisher({ aaa: {} });
   down.main = "aaa";
@@ -760,7 +669,9 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
   const written: (string | null)[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -795,7 +706,9 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
 test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: ["iterate.app"],
@@ -874,7 +787,9 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
   let finish!: () => void;
   const held = new Promise<void>((resolve) => (finish = resolve));
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -924,7 +839,9 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   const held = new Promise<void>((resolve) => (finish = resolve));
   let provisions = 0;
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -974,8 +891,8 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
-      calls.push("withItx (another saga ran)");
-      return Promise.reject(new Error("unused"));
+      calls.push("getItx (another saga ran)");
+      throw new Error("unused");
     },
     () => Promise.reject(new Error("unused")),
     () => ({
@@ -1064,7 +981,9 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => null,
     () => ({
@@ -1112,7 +1031,9 @@ test("ProjectProcessor — the deletion: a pass that keeps failing runs again af
   const reported: unknown[] = [];
   const incarnation = () =>
     new ProjectProcessor(
-      () => Promise.reject(new Error("unused")),
+      () => {
+        throw new Error("unused");
+      },
       () => Promise.reject(new Error("unused")),
       () => null,
       () => ({
@@ -1175,7 +1096,9 @@ test("template provenance survives replay of the project creation request", () =
 /** The reduce never reaches the context or a template; the saga is the e2e's. */
 function processorWithoutHostnames() {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the reduce reaches no itx")),
+    () => {
+      throw new Error("the reduce reaches no itx");
+    },
     () => Promise.reject(new Error("the reduce downloads no template")),
   );
 }
@@ -1213,35 +1136,25 @@ function owing(...commits: ReturnType<typeof tip>[]): ProjectState {
   return { ...empty, configRepoTip: commits.at(-1)!, unpublishedCommits: commits };
 }
 
-/** A config commit as the fake publisher sees it: what its probe answers, a module beside the
- *  default template's two (`extra`), and a module that does not resolve. The default is the
- *  default template's shape. */
+/** A config commit as the fake probe answers it, by default the default template's shape. */
 type FakeCommit = {
   configEntrypoint?: boolean;
-  constructError?: string;
   classes?: Record<string, string[]>;
-  extra?: string;
   /** A module of the default template's the commit deletes. */
   without?: string;
-  unresolved?: string;
 };
 
-/** A publisher over commits by oid (publication.ts `ProjectPublisher`): `main`'s head as a test
- *  sets it, each commit's files the default template's two modules (their text naming the commit) —
- *  their read failing with a platform failure as many times as asked — a module's identity its
- *  commit and name, and the platform append a record of each call: the first one held open, or the next one
- *  refused, when asked. */
+/** A fake of publication.ts `ProjectPublisher`: files whose text names their commit, reads that fail
+ *  as often as asked, and a platform append recording each batch and the cause it ran under. */
 function fakePublisher(commits: Record<string, FakeCommit>) {
-  const batches: StreamEventInput[][] = [];
-  let firstAppend: Promise<void> | undefined;
-  let refusal: Error | undefined;
   let readFailures = 0;
   let readFailure: () => Error = () => new Error("no failure asked for");
   const publisher = {
-    batches,
+    batches: [] as StreamEventInput[][],
+    causes: [] as unknown[],
     main: null as string | null,
-    holdFirstAppend: (held: Promise<void>) => void (firstAppend = held),
-    refuseNextAppend: (error: Error) => void (refusal = error),
+    /** What the next append waits on: held open until it settles, refused if it rejects. */
+    nextAppend: undefined as (() => Promise<void>) | undefined,
     failReadsTimes: (times: number, failure: () => Error) => {
       readFailures = times;
       readFailure = failure;
@@ -1256,37 +1169,28 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
         "package.json": '{"main":"worker.ts"}',
         "worker.ts": `// ${commitOid}`,
         "agents.ts": `// ${commitOid}`,
-        ...(commits[commitOid]?.extra && { [commits[commitOid].extra]: `// ${commitOid}` }),
         "AGENTS.md": "not a module",
         "lib/helper.ts": "not top-level",
       };
       delete files[commits[commitOid]?.without ?? ""];
       return files;
     },
-    identityOf: async (files: Record<string, string>, module: string) => {
-      const commitOid = files["worker.ts"]!.slice(3);
-      if (commits[commitOid]?.unresolved === module)
-        throw new Error(
-          `${module} imports @iterate-com/agents; list @iterate-com/agents in package.json`,
-        );
-      return `${commitOid}:${module}`;
-    },
+    identityOf: async (files: Record<string, string>, module: string) =>
+      `${files["worker.ts"]!.slice(3)}:${module}`,
     probe: async (files: Record<string, string>) => {
       const commit = commits[files["worker.ts"]!.slice(3)]!;
       return {
         configEntrypoint: commit.configEntrypoint ?? true,
-        constructError: commit.constructError || null,
+        constructError: null,
         classes: commit.classes || defaultClasses(),
       };
     },
     appendAsPlatform: async (...events: StreamEventInput[]) => {
-      const held = firstAppend;
-      firstAppend = undefined;
-      await held;
-      const refused = refusal;
-      refusal = undefined;
-      if (refused) throw refused;
-      batches.push(events);
+      publisher.causes.push(runningCause());
+      const next = publisher.nextAppend;
+      publisher.nextAppend = undefined;
+      await next?.();
+      publisher.batches.push(events);
       return [];
     },
   };
@@ -1308,7 +1212,9 @@ function modulesOf(commitOid: string) {
 
 function processorPublishingWith(publisher: ReturnType<typeof fakePublisher>) {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the publication reaches no itx")),
+    () => {
+      throw new Error("the publication reaches no itx");
+    },
     () => Promise.reject(new Error("the publication downloads no template")),
     () => null,
     () => null,

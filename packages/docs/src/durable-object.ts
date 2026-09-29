@@ -14,7 +14,7 @@ export class DocDurableObject extends StreamProcessorDurableObject<
 
   processor = new DocProcessor({
     sql: this.ctx.storage.sql,
-    withItx: (call) => this.withItx(call),
+    getItx: () => this.getItx(),
     publishLiveState: () => this.publishLiveState(),
     // a minute after the first unsaved edit, however much typing follows (or sooner: the last tab
     // leaving); each commit to a repo like /repos/config republishes the project's site
@@ -29,5 +29,5 @@ export class DocDurableObject extends StreamProcessorDurableObject<
 export class DocsDurableObject extends StreamProcessorDurableObject<
   ProcessorState<typeof DocsContract>
 > {
-  processor = new DocsProcessor((call) => this.withItx(call));
+  processor = new DocsProcessor(() => this.getItx());
 }

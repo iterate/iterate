@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { resetWorkerDurableObjects } from "./do-reset.ts";
@@ -45,16 +46,19 @@ test.for([
     workerName,
     cwd: wrangler.dir,
     credentials: { CLOUDFLARE_API_TOKEN: "test-token", CLOUDFLARE_ACCOUNT_ID: "test-account" },
-    compatibilityDate: "2026-09-01",
+    compatibilityDate: COMPATIBILITY_DATE,
   });
   expect(wrangler.deployed()).toEqual(
     exports && {
       command: "exec wrangler deploy --config",
+      // Cloudflare's version list says what a rollback onto this version does
+      annotations:
+        "--tag erase-parked --message erase-data's parked worker: a rollback onto it deletes every Durable Object",
       credentials: "test-token test-account",
       config: {
         name: workerName,
         main: "worker.js",
-        compatibility_date: "2026-09-01",
+        compatibility_date: COMPATIBILITY_DATE,
         workers_dev: false,
         preview_urls: true,
         exports,
@@ -74,7 +78,8 @@ function resetCtx(workers: string[], namespaces: unknown[]) {
 }
 
 /** A `pnpm` on PATH that records the parked deploy instead of running wrangler: the command, the
- *  credentials it was handed, and the config and module it would upload. */
+ *  version's tag and message, the credentials it was handed, and the config and module it would
+ *  upload. */
 function fakeWrangler() {
   const directory = temporaryDirectory();
   const dir = directory.path;
@@ -87,6 +92,8 @@ function fakeWrangler() {
       'printf "%s" "$CLOUDFLARE_API_TOKEN $CLOUDFLARE_ACCOUNT_ID" > credentials',
       'cp "$5" wrangler.json',
       'cp "$(dirname "$5")/worker.js" worker.js',
+      "shift 5",
+      'printf "%s" "$*" > annotations',
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -98,6 +105,7 @@ function fakeWrangler() {
       existsSync(join(dir, "command"))
         ? {
             command: read("command"),
+            annotations: read("annotations"),
             credentials: read("credentials"),
             config: JSON.parse(read("wrangler.json")),
             worker: read("worker.js"),

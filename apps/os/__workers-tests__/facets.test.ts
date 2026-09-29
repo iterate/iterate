@@ -12,6 +12,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";
@@ -24,6 +25,7 @@ import {
   APP_FACET,
   CLONE_VERSION_TEXT,
   CLONE_VERSION_WORKER,
+  OPAQUE_TEXT_WORKER,
   COUNTING_TALLY,
   flakyCounter,
   FRAGILE,
@@ -41,6 +43,7 @@ import {
 import {
   adminCredentials,
   openSession,
+  freshProject,
   readLog,
   releasePins,
   signedInSession,
@@ -57,7 +60,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props: how a 
     async (_instance, state) => {
       // A fixed key: low-cardinality by construction (the loader cacheKey rule), tests only.
       const worker = env.LOADER.get("probe:facet-props:v1", () => ({
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         mainModule: "probe.js",
         modules: { "probe.js": IDENTITY_PROBE },
       }));
@@ -90,7 +93,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
       return {
         entryKind: Object.getPrototypeOf(entry)?.constructor?.name,
         classKind: Object.getPrototypeOf(klass)?.constructor?.name,
-        // `snapshot()` catches up from the context's log through `withItx` — the loopback the class
+        // `snapshot()` catches up from the context's log through `getItx` — the loopback the class
         // minted from its props — so a fresh context answers the processor's empty view.
         snapshot: await facet.snapshot(),
       };
@@ -595,7 +598,13 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
-      { incarnation: incarnation + 1, cause: "call", caller: "other", facetsReset: ["plain"] },
+      {
+        incarnation: incarnation + 1,
+        cause: "call",
+        caller: "other",
+        call: "itx.readEvents",
+        facetsReset: ["plain"],
+      },
     ],
   ]);
 });
@@ -791,9 +800,11 @@ test.for([
     // every durable event counted once — no double, no loss
     expect(await snapshot<{ n: number }>(ctx, "flaky")).toMatchObject({ state: { n: durable } });
     // The loaded identity was retired once: a fresh isolate. `loaderIdBefore` may already be the
-    // retry's (`…#1`) when the configure batch was pushed, rejected and retried before `until`'s
-    // first read landed.
-    expect(await kv(ctx, "facet:flaky:loader-id")).toBe(`${loaderIdBefore.replace(/#1$/, "")}#1`);
+    // retry's (`…#1.<salt>`) when the configure batch was pushed, rejected and retried before
+    // `until`'s first read landed.
+    expect(await kv(ctx, "facet:flaky:loader-id")).toEqual(
+      expect.stringContaining(`${loaderIdBefore.replace(/#1\.\w+$/, "")}#1.`),
+    );
     const rows = (await s.invoke("itx.processors.list()")) as {
       hostedFacet: { restarts: number };
     }[];
@@ -802,11 +813,13 @@ test.for([
 );
 
 // A facet whose own outbound call gave up (an overloaded hop) rejects with that hop's UNAVAILABLE,
-// workerd's opaque text for its message: the facet-start defect's text, coded.
-test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try", async () => {
+// workerd's opaque text for its message: the facet-start defect's text, coded. Its push is the
+// platform's failure (src/stream/subscription-delivery.ts `#reportFacetRowFailure`), never an issue.
+test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try, logged as the platform's", async () => {
   const ctx = "prj_facet_coded_internal_error";
   const s = stub(ctx);
   const errors = vi.spyOn(console, "error");
+  const warns = vi.spyOn(console, "warn");
   const failure = { code: "UNAVAILABLE", data: { kind: "overloaded", retryAfterMs: 10_000 } };
   await s.append({
     type: "events.iterate.com/itx/subscription-configured",
@@ -828,17 +841,29 @@ test("a facet call that rejects with a hop below's coded platform failure, worke
   const loaderId = await until("the facet materialized at configure", () =>
     kv<string>(ctx, "facet:flaky:loader-id"),
   );
-  await until("the push's failure is reported", async () =>
-    issueLines(errors).some((line) => JSON.stringify(line).includes("cn4da7sq5qdv4vobadb1tse3")),
-  );
+  const pushFailed = await logged(warns, "subscription-delivery.platform-failure-deliver");
   const rows = (await s.invoke("itx.processors.list()")) as {
     hostedFacet: { restarts: number };
   }[];
   expect({
+    pushFailed,
+    issues: issueLines(errors).filter((line) =>
+      JSON.stringify(line).includes("cn4da7sq5qdv4vobadb1tse3"),
+    ),
     loaderId: await kv<string>(ctx, "facet:flaky:loader-id"),
     restarts: rows.map((row) => row.hostedFacet.restarts),
     tries: ((await s.invoke("itx.facets.get('flaky').tries()")) as unknown[]).length,
-  }).toEqual({ loaderId, restarts: [0], tries: 1 });
+  }).toMatchObject({
+    pushFailed: {
+      kind: "overloaded",
+      name: "flaky",
+      message: expect.stringContaining("cn4da7sq5qdv4vobadb1tse3"),
+    },
+    issues: [],
+    loaderId,
+    restarts: [0],
+    tries: 1,
+  });
 });
 
 test("a platform start that rejects with the platform's clone-version text restarts once under a fresh loaded identity, and the facet answers", async () => {
@@ -872,7 +897,7 @@ export class StartsFlaky extends FacetDurableObject {
   expect({
     loaderId: await kv(ctx, "facet:flaky:loader-id"),
     restarts: await kv(ctx, "facet:flaky:restarts"),
-  }).toEqual({ loaderId: `${loaderIdBefore}#1`, restarts: 1 });
+  }).toEqual({ loaderId: expect.stringContaining(`${loaderIdBefore}#1.`), restarts: 1 });
 });
 
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
@@ -1038,13 +1063,17 @@ test.for([
   {
     name: "a GET is replayed once on a fresh isolate and answers",
     first: { method: "GET" },
-    firstAnswer: { status: 200, text: "GET from a healthy isolate" },
+    firstAnswer: { status: 200, retryAfter: null, text: "GET from a healthy isolate" },
     event: "workers.platform-failure-retry",
   },
   {
-    name: "a POST with a body is not replayed: it fails, and the next request answers from a fresh isolate",
+    name: "a POST with a body is not replayed: a 503 to ask again, and the next request answers from a fresh isolate",
     first: { method: "POST", body: "form=1" },
-    firstAnswer: { status: 500, text: `expression fetch error: ${CLONE_VERSION_TEXT}\n` },
+    firstAnswer: {
+      status: 503,
+      retryAfter: "1",
+      text: `expression fetch error: workers.get(spec).fetch: ${CLONE_VERSION_TEXT}\n`,
+    },
     event: "workers.platform-failure-retire",
   },
 ])(
@@ -1065,12 +1094,17 @@ test.for([
           },
         }),
       );
-      return { status: response.status, text: await response.text() };
+      return {
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+        text: await response.text(),
+      };
     };
 
     expect(await page(first)).toEqual(firstAnswer);
     expect(await page({ method: "GET" })).toEqual({
       status: 200,
+      retryAfter: null,
       text: "GET from a healthy isolate",
     });
     expect(
@@ -1088,6 +1122,39 @@ test.for([
     ]);
   },
 );
+
+// The opaque spelling of the same defect counts only when the runtime raised it: a loaded worker
+// whose OWN code throws that text reaches the caller marked `remote` (workerd
+// `exceptionToPropagate`), so its identity is kept and nothing is replayed.
+test("a loaded worker whose own code throws workerd's opaque text keeps its identity: no retire, no replay", async () => {
+  const s = stub("prj_worker_throws_opaque_text");
+  const warns = vi.spyOn(console, "warn");
+  const page = async () => {
+    const response = await s.fetch(
+      new Request("https://site.test/", {
+        headers: {
+          "x-itx-expression": JSON.stringify([
+            "itx",
+            "workers",
+            ["get", { source: OPAQUE_TEXT_WORKER }],
+          ]),
+        },
+      }),
+    );
+    return { status: response.status, text: await response.text() };
+  };
+  const first = await page();
+  expect(first).toMatchObject({ status: 500 });
+  expect(first.text).toContain("internal error; reference = thrown-by-code");
+  // the same isolate answers again: its load counter says so
+  expect(await page()).toMatchObject({
+    status: 500,
+    text: expect.stringContaining("load 1, call 2"),
+  });
+  expect(
+    warns.mock.calls.filter(([line]) => String(line?.event).startsWith("workers.platform-failure")),
+  ).toEqual([]);
+});
 
 test("a burst of 20 concurrent callers after a loaded worker's failed cold load runs the producer once, and every caller gets the site", async () => {
   const s = stub("prj_loader_recovers_once");
@@ -1366,7 +1433,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "loaded processor", method: "revive", byExpression: "FORBIDDEN" },
   // Nor is what a class has but never listed: the SDK's own plumbing.
   { facet: "account", method: "listPublicMethods", byExpression: "FORBIDDEN" },
-  { facet: "account", method: "withItx", byExpression: "FORBIDDEN" },
+  { facet: "account", method: "getItx", byExpression: "FORBIDDEN" },
   { facet: "loaded processor", method: "publishLiveState", byExpression: "FORBIDDEN" },
   // The `secret` facet lists its reads alone.
   { facet: "secret", method: "write", byExpression: "FORBIDDEN" },
@@ -1446,57 +1513,31 @@ test("a signed-in person reaches `itx.facets.get(name)` on every context they ho
   );
 });
 
-test("`processors.enable` with changed code configures the new code, and with the same code again appends nothing", async () => {
-  const ctx = "prj_enable_upgrades_source";
-  const enable = (spec: FacetSpec) =>
-    stub(ctx).invoke(["itx", "processors", ["enable", "tally", spec]]);
-  const configured = async () =>
-    (await readLog(ctx)).filter(
-      (event) =>
-        event.type === "events.iterate.com/itx/subscription-configured" &&
-        (event.payload as { name?: string }).name === "tally",
-    ).length;
-  await enable(HELLO_PROCESSOR);
-  await enable(HELLO_PROCESSOR);
-  expect(await configured()).toBe(1);
-  const source = HELLO_PROCESSOR.source as Record<string, string>;
-  const changed: FacetSpec = {
-    ...HELLO_PROCESSOR,
-    source: {
-      "package.json": '{"main":"worker.js"}',
-      "worker.js": `${source["worker.js"]}\n// the next version`,
-    },
-  };
-  await enable(changed);
-  expect(await configured()).toBe(2);
-  await enable(changed);
-  expect(await configured()).toBe(2);
-});
-
-test("`processors.enable` naming another worker, or another module of it, configures it; the same name again appends nothing", async () => {
-  const ctx = `prj_enable_names_${crypto.randomUUID().slice(0, 8)}`;
-  const enable = (source: unknown, mainModule = "agents.ts") =>
-    stub(ctx).invoke([
-      "itx",
-      "processors",
-      ["enable", "tally", { className: "Tally", mainModule, source }],
-    ]);
-  const configured = async () =>
-    (await readLog(ctx)).filter(
-      (event) =>
-        event.type === "events.iterate.com/itx/subscription-configured" &&
-        (event.payload as { name?: string }).name === "tally",
-    ).length;
-  await enable(["itx", ["cd", "/"], "config"]);
-  await enable(["itx", ["cd", "/"], "config"]);
-  expect(await configured()).toBe(1);
-  await enable(["itx", ["cd", "/"], "staging"]);
-  expect(await configured()).toBe(2);
-  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
-  expect(await configured()).toBe(3);
-  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
-  expect(await configured()).toBe(3);
-});
+test.for([
+  { name: "changed code", first: HELLO_PROCESSOR, next: changedHello() },
+  { name: "another worker", first: namedTally("config"), next: namedTally("staging") },
+  {
+    name: "another module of the worker",
+    first: namedTally("staging"),
+    next: namedTally("staging", "tally.ts"),
+  },
+])(
+  "`processors.enable` with $name configures it, and the same spec again appends nothing",
+  async ({ first, next }) => {
+    const ctx = freshProject("prj_enable");
+    const configured: number[] = [];
+    for (const spec of [first, first, next, next]) {
+      await stub(ctx).invoke(["itx", "processors", ["enable", "tally", spec]]);
+      const rows = (await readLog(ctx)).filter(
+        (event) =>
+          event.type === "events.iterate.com/itx/subscription-configured" &&
+          (event.payload as { name?: string }).name === "tally",
+      );
+      configured.push(rows.length);
+    }
+    expect(configured).toEqual([1, 1, 2, 2]);
+  },
+);
 
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {
   const session = await signedInSession("placement-enable@example.com");
@@ -2147,4 +2188,19 @@ async function projectWithSecret(slug: string) {
       project.cd("/secrets/hook").invoke(["itx", "facets", ["get", "secret"], call]),
     verifies,
   };
+}
+
+/** HELLO_PROCESSOR's next version: the same class, from changed code. */
+function changedHello(): FacetSpec {
+  const source = HELLO_PROCESSOR.source as Record<string, string>;
+  const worker = `${source["worker.js"]}\n// the next version`;
+  return {
+    ...HELLO_PROCESSOR,
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": worker },
+  };
+}
+
+/** A Tally named by the root's worker `name`, in module `mainModule` of it. */
+function namedTally(name: string, mainModule = "agents.ts"): FacetSpec {
+  return { className: "Tally", mainModule, source: ["itx", ["cd", "/"], name] };
 }

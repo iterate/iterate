@@ -22,7 +22,7 @@
 // and appends `docs/comment-reanchored` for one that now matches only loosely (the quote refreshed
 // to the text it matches), matches nothing (detached), or matches again after being detached.
 import * as Y from "yjs";
-import type { WithItx } from "iterate/sdk";
+import type { IterateContextApi } from "iterate/api";
 import {
   StreamProcessor,
   type ProcessEventArgs,
@@ -52,7 +52,7 @@ type DocDeps = {
   sql: SqlStorage;
   /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc). The repos
    *  are the root's (`itx.cd("/").repos`), which loaded code reaches from anywhere in its project. */
-  withItx: WithItx;
+  getItx: () => IterateContextApi & Disposable;
   /** Re-project the live state after a change outside a batch (the host's `publishLiveState`). */
   publishLiveState: () => void;
   /** When to save: `idleMs` after the last edit, and at most `maxMs` after the first unsaved one. */
@@ -193,7 +193,10 @@ export class DocProcessor extends StreamProcessor<DocState> {
 
   async #loadOnce() {
     const { sql } = this.#deps;
-    this.#ref = docOf((await this.#deps.withItx((itx) => itx.whoami())).path);
+    {
+      using itx = this.#deps.getItx();
+      this.#ref = docOf((await itx.whoami()).path);
+    }
     const doc = new Y.Doc();
     const updates = sql
       .exec<{ data: ArrayBuffer }>("SELECT data FROM doc_updates ORDER BY seq")
@@ -214,11 +217,10 @@ export class DocProcessor extends StreamProcessor<DocState> {
       this.#editors = new Set(JSON.parse(meta.editors || "[]"));
       this.#savedBy = JSON.parse(meta.savedBy || "[]");
     } else {
-      const { tip, text } = await this.#deps.withItx(async (itx) => {
-        const repo = itx.cd("/").repos.get(this.#ref.repo);
-        const tip = await repo.tip();
-        return { tip, text: tip ? await repo.readFile(this.#ref.path, { commitOid: tip }) : null };
-      });
+      using itx = this.#deps.getItx();
+      const repo = itx.cd("/").repos.get(this.#ref.repo);
+      const tip = await repo.tip();
+      const text = tip ? await repo.readFile(this.#ref.path, { commitOid: tip }) : null;
       this.#base = { oid: tip || "", text: text || "" };
       doc.getText("file").insert(0, this.#base.text);
       this.#writeMeta();
@@ -280,22 +282,21 @@ export class DocProcessor extends StreamProcessor<DocState> {
     const editors = [...this.#editors];
     const { repo, path } = this.#ref;
     try {
-      const result = await this.#deps.withItx((itx) =>
-        itx
-          .cd("/")
-          .repos.get(repo)
-          .commitFiles({
-            // git's trailers, after a blank line: everyone but the author
-            message: [
-              `docs: edit ${path}`,
-              ...(editors.length > 1 ? [""] : []),
-              ...editors.slice(1).map((editor) => `Co-authored-by: ${editor} <${editor}>`),
-            ].join("\n"),
-            changes: [{ path, content: text }],
-            parent: this.#base.oid || null,
-            author: editors[0] ? { name: editors[0], email: editors[0] } : undefined,
-          }),
-      );
+      using itx = this.#deps.getItx();
+      const result = await itx
+        .cd("/")
+        .repos.get(repo)
+        .commitFiles({
+          // git's trailers, after a blank line: everyone but the author
+          message: [
+            `docs: edit ${path}`,
+            ...(editors.length > 1 ? [""] : []),
+            ...editors.slice(1).map((editor) => `Co-authored-by: ${editor} <${editor}>`),
+          ].join("\n"),
+          changes: [{ path, content: text }],
+          parent: this.#base.oid || null,
+          author: editors[0] ? { name: editors[0], email: editors[0] } : undefined,
+        });
       this.#base = { oid: result.commitOid || this.#base.oid, text };
       this.#savedBy = editors;
       this.#saveError = null;
@@ -320,15 +321,14 @@ export class DocProcessor extends StreamProcessor<DocState> {
    *  tip is `base`. */
   async #catchUp(): Promise<boolean> {
     const { path } = this.#ref;
-    const { tip, theirs } = await this.#deps.withItx(async (itx) => {
+    let tip: string | null;
+    let theirs: string | null = null;
+    {
+      using itx = this.#deps.getItx();
       const repo = itx.cd("/").repos.get(this.#ref.repo);
-      const tip = await repo.tip();
-      return {
-        tip,
-        theirs:
-          tip && tip !== this.#base.oid ? await repo.readFile(path, { commitOid: tip }) : null,
-      };
-    });
+      tip = await repo.tip();
+      if (tip && tip !== this.#base.oid) theirs = await repo.readFile(path, { commitOid: tip });
+    }
     if (!tip || tip === this.#base.oid) return false;
     const ours = this.#text();
     // the file deleted at the tip: keep the live text, which the next save writes back
@@ -339,14 +339,14 @@ export class DocProcessor extends StreamProcessor<DocState> {
     const update = this.#replaceText(ours, merged);
     this.#base = { oid: tip, text: theirsText };
     this.#writeMeta();
-    if (update)
-      await this.#deps.withItx((itx) =>
-        itx.append({
-          type: EDIT_FRAME,
-          ephemeral: true,
-          payload: { update: toBase64(update), client: "processor" },
-        }),
-      );
+    if (update) {
+      using itx = this.#deps.getItx();
+      await itx.append({
+        type: EDIT_FRAME,
+        ephemeral: true,
+        payload: { update: toBase64(update), client: "processor" },
+      });
+    }
     this.#deps.publishLiveState();
     await this.#reanchor(merged);
     return true;
@@ -364,7 +364,9 @@ export class DocProcessor extends StreamProcessor<DocState> {
       const quote = found && quoteAt(text, found.from, found.to);
       return [{ type: COMMENT_REANCHORED, payload: { thread: thread.id, quote } }];
     });
-    if (events.length > 0) await this.#deps.withItx((itx) => itx.append(...events));
+    if (events.length === 0) return;
+    using itx = this.#deps.getItx();
+    await itx.append(...events);
   }
 
   /** Turn the live text from `from` into `to` in one transaction; the update it made, if any. */

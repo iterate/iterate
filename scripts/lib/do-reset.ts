@@ -10,6 +10,10 @@
  * checked-in tombstone can know what a previous deployment left on the
  * worker. A rejected deploy throws, and erase-data stops before any data.
  *
+ * The parked version stays in the worker's version list, and a rollback onto
+ * it deletes every Durable Object again, so it is tagged `erase-parked` with
+ * a message that says so.
+ *
  * The worker script and its routes stay (deleting a script cascades its
  * routes — the historical zombie-route/522 class); the worker serves the
  * parked 503 until the next real deploy, which recreates every class its
@@ -108,7 +112,17 @@ export async function resetWorkerDurableObjects(input: {
     );
     await runAsync(
       "pnpm",
-      ["exec", "wrangler", "deploy", "--config", join(parkedDir, "wrangler.json")],
+      [
+        "exec",
+        "wrangler",
+        "deploy",
+        "--config",
+        join(parkedDir, "wrangler.json"),
+        "--tag",
+        "erase-parked",
+        "--message",
+        "erase-data's parked worker: a rollback onto it deletes every Durable Object",
+      ],
       { cwd: input.cwd, env: input.credentials },
     );
   } finally {

@@ -20,7 +20,7 @@
 //     the real DO SQLite (event_chunks), an idempotent chunked retry dedupes, a mid-batch conflict rolls
 //     the chunk rows back, chunk rows stay invisible to paging, a surrogate pair straddling a chunk
 //     boundary survives (the JSON is sliced by UTF-16 code units)
-//   • `waitForEvent` through a LOADED worker's `withItx(env.ITX, …)` — the scope's method waits on
+//   • `waitForEvent` through a LOADED worker's `this.getItx()` — the scope's method waits on
 //     the DO and returns the committed event (the Workers-RPC path no other suite drives)
 
 import { expect, test } from "vitest";
@@ -35,27 +35,15 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   const itx = openItx(ctx);
   // A bare read sees the birth and wake records and the rows every context is born with.
   const page = await itx.invoke("itx.readEvents(0)");
-  expect(
-    page.events.map((e: { type: string; offset: number; payload: { name?: string } }) => [
-      e.type,
-      e.offset,
-      e.payload.name,
-    ]),
-  ).toEqual([
-    ["events.iterate.com/itx/created", 1, undefined],
-    ["events.iterate.com/itx/woken", 2, undefined],
-    ["events.iterate.com/itx/subscription-configured", 3, "config"],
-    ["events.iterate.com/itx/subscription-configured", 4, "platform"],
-  ]);
-  expect(page.events[0]).toMatchObject({ payload: { projectId: ctx, path: "/" } });
+  expect(page.events[0]).toMatchObject({ offset: 1, payload: { projectId: ctx, path: "/" } });
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // The first user append follows the birth rows. No offset is pinned: a root with no config pointer
-  // keeps a dangling `config` row, whose alarm writes ephemeral traces into the same offset sequence.
+  // The first user append follows the birth rows: a root with no config pointer passes its events
+  // over, so nothing of its `config` row's lands in between.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
-  expect(receipts[0]).toMatchObject({ type: "hello" });
+  expect(receipts[0]).toMatchObject({ offset: 5, type: "hello" });
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
@@ -64,12 +52,14 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
 
   // woken exactly once per incarnation, born exactly once ever: the durable log is exactly this
   await itx.invoke(`itx.append({ type: 'again' })`);
-  const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
-  expect(types).toEqual([
+  const names = (await itx.invoke("itx.readEvents(0)")).events.map(
+    (e: { type: string; payload?: { name?: string } }) => e.payload?.name || e.type,
+  );
+  expect(names).toEqual([
     "events.iterate.com/itx/created",
     "events.iterate.com/itx/woken",
-    "events.iterate.com/itx/subscription-configured",
-    "events.iterate.com/itx/subscription-configured",
+    "config",
+    "platform",
     "hello",
     "again",
   ]);
@@ -470,17 +460,17 @@ test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted meth
   const ctx = freshCtx("waitload");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`withItx(env.ITX, …)`
+  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`this.getItx()`
   // — the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Waiter extends WorkerEntrypoint {
-  run(afterOffset) {
-    return withItx(this.env.ITX, (itx) => itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 }));
+  async run(afterOffset) {
+    using itx = this.getItx();
+    return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
   }
 }`,
   };

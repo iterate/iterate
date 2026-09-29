@@ -29,7 +29,7 @@ export type IntegrationScope = {
   projectId: string;
   /** The owner's root: a project's `/`, a person's `/users/<id>`. */
   rootPath: string;
-  withItx: <T>(call: (itx: ItxEntrypointScope) => T) => Promise<Awaited<T>>;
+  getItx: () => ItxEntrypointScope & Disposable;
   storage: DurableObjectStorage;
 };
 
@@ -317,13 +317,12 @@ export const ignoredWebhook = (reason: string) => Response.json({ ok: true, igno
  *  a delete that already ran) is gone already; any other failure is the caller's, so the disconnect
  *  fails with the row standing and can be retried, never reporting a token gone that is not. */
 export async function deleteTokenSecret(
-  scope: Pick<IntegrationScope, "withItx">,
+  scope: Pick<IntegrationScope, "getItx">,
   provider: IntegrationProvider,
   connection: string,
 ): Promise<void> {
-  await scope
-    .withItx((itx) => itx.secrets.delete(tokenSecretPathOf(provider, connection)))
-    .catch((error: unknown) => {
-      if (errorCode(error) !== "SECRET_NOT_SET") throw error;
-    });
+  using itx = scope.getItx();
+  await itx.secrets.delete(tokenSecretPathOf(provider, connection)).catch((error: unknown) => {
+    if (errorCode(error) !== "SECRET_NOT_SET") throw error;
+  });
 }

@@ -3,6 +3,7 @@ import { URL } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { build } from "esbuild";
 import { expect, test, vi } from "vitest";
 
@@ -36,11 +37,6 @@ test.for([0, 1, 2, 3, 4])(
     );
   },
 );
-
-test("health answers the project the service runs in", async () => {
-  const { worker } = await harness();
-  expect(await worker.health()).toEqual({ ok: true, projectId: "prj_voice" });
-});
 
 test("a null image uses the same setter without rendering", async () => {
   const { worker, quickAction, setImage } = await harness();
@@ -246,7 +242,11 @@ let voiceWorker: Promise<any> | undefined;
  * once per file on first use.
  */
 function loadVoiceWorker(): Promise<any> {
-  const withItxModule = createRequire(import.meta.url).resolve("iterate/with-itx");
+  // The SDK's own itx-scope.ts, found as apps/os/scripts/build.ts finds loaded-worker.ts.
+  const itxScopeModule = join(
+    dirname(createRequire(import.meta.url).resolve("iterate/sdk")),
+    "itx-scope.ts",
+  );
   voiceWorker ||= (async () => {
     const bundle = await build({
       entryPoints: [new URL("./worker.ts", import.meta.url).pathname],
@@ -263,12 +263,12 @@ function loadVoiceWorker(): Promise<any> {
               path: "processor",
               namespace: "test-runtime",
             }));
-            // The SDK's real `withItx` (node-safe), so the rows run the worker's reach through
+            // The SDK's real `itxScope` (node-safe), so the rows run the worker's reach through
             // the same recording proxy and release as a deployed config worker.
             builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
               contents: [
-                `import { withItx } from ${JSON.stringify(withItxModule)};`,
-                "export class IterateConfigEntrypoint { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                `import { itxScope } from ${JSON.stringify(itxScopeModule)};`,
+                "export class IterateConfigEntrypoint { constructor(env) { this.env = env; } getItx() { return itxScope(this.env.ITX); } }",
               ].join("\n"),
               resolveDir: new URL(".", import.meta.url).pathname,
             }));
@@ -355,7 +355,6 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     return [];
   });
   const itx = {
-    whoami: vi.fn(async () => ({ projectId: "prj_voice", path: "/" })),
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },

@@ -234,7 +234,6 @@ for it. The Playwright config additionally honors the Playwright-conventional
 | `APP_CONFIG`, `APP_CONFIG_SECRETS__KEY` | Doppler (`os`, `preview` / `prd`)                           | The deployed target's credentials and login (`deployed-target.ts`)                                                                                | None — deployed runs throw without them     |
 | `E2E_RUN_ID`                            | Preview CI (`<run id>-<attempt>`), or you                   | The run's id, folded into every identifier a test mints                                                                                           | Minted once per run                         |
 | `PETSHOP_BASE_URL`                      | You                                                         | Which dummy petshop the secret and connection rows dial                                                                                           | `https://dummy-petshop.iterate.workers.dev` |
-| `AGENTS_BASE_URL`                       | The preview script, or you                                  | The Agents deployment the `agents` and `agents-phone` projects sign in to                                                                         | Unset → skipped locally, a failure in CI    |
 | `NOTES_BASE_URL`                        | The preview script, or you                                  | The Notes Worker the `notes` project's config worker fetches through to                                                                           | Unset → skipped locally, a failure in CI    |
 | `DOCS_BASE_URL`                         | The preview script, or you                                  | The Docs Worker the `docs` project's config worker fetches through to                                                                             | Unset → skipped locally, a failure in CI    |
 | `VOICE_BASE_URL`                        | The preview script, or you                                  | The Voice deployment the `voice` project signs in to                                                                                              | Unset → skipped locally, a failure in CI    |
@@ -433,8 +432,8 @@ claimed-work row in `context-residency.e2e.test.ts` is not `slow`: it waits 30 s
 its alarms, its claims or what its birth resets: the facet host, residency, RPC stubs and built-ins
 (`apps/os/src/context/`), the context Durable Object, the alarm coordinator, the processors,
 `apps/os/wrangler.base.jsonc` or the compatibility date (`COMPATIBILITY_DATE` in
-`scripts/lib/wrangler-config.ts`). Add the label before the push (the e2e job reads it when it
-starts):
+`packages/shared/src/compatibility-date.ts`). Add the label before the push (the e2e job reads it
+when it starts):
 
 ```bash
 gh api -X POST repos/iterate/iterate/issues/<n>/labels -f 'labels[]=slow-e2e'

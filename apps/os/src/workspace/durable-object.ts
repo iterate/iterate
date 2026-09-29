@@ -93,7 +93,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
    *  is this facet's own storage, born with it and deleted with it. */
   processor = new EntityLifecycleProcessor(
     WorkspaceContract,
-    (call) => this.withItx(call),
+    () => this.getItx(),
     () => this.#path,
   );
 
@@ -140,8 +140,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   async mounts(): Promise<Record<string, WorkspaceMount>> {
     await this.#created();
     const mounts: Record<string, WorkspaceMount> = {};
-    for (const { path } of await this.withItx((itx) => itx.repos.list()))
-      mounts[path] = { repo: path };
+    using itx = this.getItx();
+    for (const { path } of await itx.repos.list()) mounts[path] = { repo: path };
     return mounts;
   }
 
@@ -163,7 +163,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
   async #readMounted(path: string, mounts: Record<string, WorkspaceMount>): Promise<string | null> {
     const route = routeMount(mounts, path);
     if (!route) return null;
-    return this.withItx((itx) => itx.repos.get(route.repo).readFile(route.relativePath));
+    using itx = this.getItx();
+    return await itx.repos.get(route.repo).readFile(route.relativePath);
   }
 
   /** Write into the overlay (an empty string is a file); a whiteout at the path is overwritten. */
@@ -185,11 +186,11 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
     const resolved = absolutePath(path);
     const row = this.#row(resolved);
     const route = routeMount(await this.mounts(), resolved);
-    const mounted =
-      !!route &&
-      (await this.withItx((itx) => itx.repos.get(route.repo).listFiles())).paths.includes(
-        route.relativePath,
-      );
+    let mounted = false;
+    if (route) {
+      using itx = this.getItx();
+      mounted = (await itx.repos.get(route.repo).listFiles()).paths.includes(route.relativePath);
+    }
     if (mounted)
       this.#sql.exec(
         "INSERT INTO files (path, content, deleted) VALUES (?, '', 1) ON CONFLICT(path) DO UPDATE SET content = '', deleted = 1",
@@ -216,8 +217,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
     for (const row of this.#rows()) (row.deleted ? whiteouts : paths).add(row.path);
     await Promise.all(
       Object.entries(mounts).map(async ([mountPath, { repo }]) => {
-        for (const relativePath of (await this.withItx((itx) => itx.repos.get(repo).listFiles()))
-          .paths) {
+        using itx = this.getItx();
+        for (const relativePath of (await itx.repos.get(repo).listFiles()).paths) {
           const path = `${mountPath}/${relativePath}`;
           if (!whiteouts.has(path) && routeMount(mounts, path)?.mountPath === mountPath)
             paths.add(path);
@@ -252,7 +253,8 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       }
       let tip = tipPaths.get(route.mountPath);
       if (!tip) {
-        tip = new Set((await this.withItx((itx) => itx.repos.get(route.repo).listFiles())).paths);
+        using itx = this.getItx();
+        tip = new Set((await itx.repos.get(route.repo).listFiles()).paths);
         tipPaths.set(route.mountPath, tip);
       }
       byMount.get(route.mountPath)!.changes.push({
@@ -300,11 +302,10 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
         const path = row.path.slice(mountPath.length + 1);
         return row.deleted ? { path, delete: true as const } : { path, content: row.content };
       });
-    const committed = await this.withItx((itx) =>
-      itx.repos
-        .get(mount.repo)
-        .commitFiles({ message: input.message, changes, author: input.author }),
-    );
+    using itx = this.getItx();
+    const committed = await itx.repos
+      .get(mount.repo)
+      .commitFiles({ message: input.message, changes, author: input.author });
     // The commit landed: the overlay under this mount IS the tip now — drop it, whiteouts included.
     for (const { path } of mount.changes) this.#sql.exec("DELETE FROM files WHERE path = ?", path);
     return {
@@ -329,6 +330,7 @@ export class WorkspaceDurableObject extends StreamProcessorDurableObject<
       throw new Error(
         `workspace: name the mount to log — { scope } is one of ${mountPaths.map((path) => `"${path}"`).join(", ")}`,
       );
-    return this.withItx((itx) => itx.repos.get(mount.repo).log({ limit: input.limit }));
+    using itx = this.getItx();
+    return await itx.repos.get(mount.repo).log({ limit: input.limit });
   }
 }

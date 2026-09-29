@@ -156,7 +156,17 @@ test.for<{ name: string; who: keyof typeof writers; refused?: true }>([
   "every platform fact and config pointer row, appended or scheduled by $name",
   ({ who, refused }) => {
     const platformWrites = [
-      ...[...PLATFORM_FACT_TYPES].map((type) => ({ type, payload: {} })),
+      ...[
+        ...PLATFORM_FACT_TYPES,
+        // spelled out, so the list cannot lose them: the webhooks a processor trusts, and every
+        // provider's connection facts
+        "events.iterate.com/github/webhook-received",
+        "events.iterate.com/slack/webhook-received",
+        ...INTEGRATION_PROVIDERS.flatMap((provider) => [
+          `events.iterate.com/${provider}/connected`,
+          `events.iterate.com/${provider}/disconnected`,
+        ]),
+      ].map((type) => ({ type, payload: {} })),
       pointerRow(["itx", "config"], ["itx", ["cd", "/x"], "w"]),
       pointerRow(["itx", "config"], null),
       pointerRow(["itx", "config"], null, { ifTarget: ["itx", "w"] }),
@@ -182,19 +192,6 @@ test.for<{ name: string; who: keyof typeof writers; refused?: true }>([
       expect(() => refuseNonPlatformWrites([event], writers[who])).not.toThrow();
   },
 );
-
-test("the platform's facts are every provider's connection facts and the webhooks a processor trusts, besides the project's own", () => {
-  expect([...PLATFORM_FACT_TYPES]).toEqual(
-    expect.arrayContaining([
-      "events.iterate.com/github/webhook-received",
-      "events.iterate.com/slack/webhook-received",
-      ...INTEGRATION_PROVIDERS.flatMap((provider) => [
-        `events.iterate.com/${provider}/connected`,
-        `events.iterate.com/${provider}/disconnected`,
-      ]),
-    ]),
-  );
-});
 
 // ── the platform's idempotency keys — no other writer takes one first ──
 const writers = {

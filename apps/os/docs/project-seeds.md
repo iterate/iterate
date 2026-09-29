@@ -134,8 +134,9 @@ pnpm --dir apps/os project-seed verify-structure \
 overwrite one. `verify-structure` compares the deployment with it by what a
 recreation keeps: organizations by name, members by email and role, projects by
 ID, slug and organization name. It prints every difference and fails on a missing
-organization, membership or project. A captured user who has not signed in again,
-an empty organization and anything new are printed as notes.
+project, membership, or organization with projects. A captured user who has not
+signed in again, an organization with no projects (no seed carries one) and anything
+new are printed as notes.
 
 Only project IDs survive a recreation. `apply` recreates each member through
 sign-in's find-or-create by email and each organization under a fresh ID; a
@@ -195,7 +196,9 @@ After `apply` and `verify-structure`, restore them in this order:
    a member of the project. GitHub skips its prompt for someone who authorized the App before, and
    the callback answers "Done: GitHub is connected". Other providers connect again from the Dash's
    Integrations page. Check that `integration_routes` has the row and that a webhook lands on the
-   connection's log.
+   connection's log. To wait for a connect, read that row, or the project facet from
+   `iterate repl` at most once a minute. Never loop `itx run` on `/`: every run wakes the root
+   and writes three events to its log.
 2. **Origins**, with `repo.setOrigin(url)` and the archived URL. When the origin still has the
    pre-erase history (the erase does not reach GitHub), make it the base again:
    `repo.pull({ force: true })` (the Dash's "Keep GitHub's"), commit on top whatever the recreate
@@ -251,6 +254,16 @@ done
 If a deploy lands mid-restore anyway, wait for it to finish, then rerun `apply` for
 every seed with the same `--organization` and `--owners` as the first run, then
 `verify-structure`. Inside the restore window a rerun only finishes what was cut off.
+
+**Never roll `os-prd` back until `verify-structure` passes, and never onto a version
+tagged `erase-parked`.** The erase deploys a parked worker that deletes every Durable
+Object class. Its version stays in the Worker's version list with that tag, and a
+rollback onto it deletes every Durable Object again. After the deploy that follows
+the erase, every project host answers 421 until `apply` recreates its project. The
+post-deploy check posts that to #ci, says not to roll back, and passes. Any page it
+posts names the exact `wrangler rollback <version>`, or says there is no safe target.
+If a rollback lands on a parked version anyway, erase again, deploy, and rerun every
+`apply`.
 
 The erase refuses shared data resources while another worker still binds them,
 and refuses preview parents with multiple namespaces for a class. Retire any

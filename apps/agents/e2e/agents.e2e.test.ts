@@ -131,9 +131,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   await itx.agents.create("/agents/support"); // created once: answers at once, appends nothing
   expect(await readAll(itx.cd("/agents/support"))).toHaveLength(own.length);
   // an agent is no repo: the project's one repo is the config it was published from
-  expect(await itx.repos.list()).toEqual([
-    { path: "/repos/config", createdAt: expect.any(String) },
-  ]);
+  expect(await itx.repos.list()).toMatchObject([{ path: "/repos/config" }]);
 });
 
 test("the loop: a person's words → the model → a script run against itx → its result → the model → prose, then idle; the script's write is real", async () => {
@@ -659,8 +657,6 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   await itx.agents.create("/agents/support");
   await operatorPrompt(support);
   await configureModel(support);
-  // a name the root grants reaches its other contexts within a rule snapshot's lifetime
-  // (apps/os/src/context/rule-snapshots.ts)
   await until("the root's grant reaches the sandbox's list", async () =>
     ((await itx.cd("/agents/support/sandbox").rewriteRules.list()) as { match: string }[]).some(
       (row) => row.match === "itx.tool",
@@ -756,8 +752,6 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       payload: { match: "itx.agents", target: null },
     },
   );
-  // the root's grant reaches the sandbox within a rule snapshot's lifetime
-  // (apps/os/src/context/rule-snapshots.ts)
   await until("the root's catalogue answers through the jail's grant", () =>
     itx.cd(`${agentPath}/sandbox`).catalogue.search({ q: "ready" }),
   );
@@ -818,9 +812,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
     expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
     // the library root granted physically: its hops are the platform's, and list the project's one repo, its config
-    expect(settled[9]).toMatchObject({
-      result: [{ path: "/repos/config", createdAt: expect.any(String) }],
-    });
+    expect(settled[9]).toMatchObject({ result: [{ path: "/repos/config" }] });
     expect(settled[10]!.error).toMatch(/is masked/); // …but for its typed append, the script's own write: through the table
     // nothing moved: the root's table and the sandbox's are what the owner wrote
     expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);

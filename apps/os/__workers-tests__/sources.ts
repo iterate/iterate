@@ -206,10 +206,11 @@ export class CountingTallyDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "logReads"];
   processor = new TallyProcessor();
   #roundTrips = 0;
-  withItx(call) {
+  #baseGetItx = this.getItx;
+  getItx = () => {
     this.#roundTrips++;
-    return super.withItx(call);
-  }
+    return this.#baseGetItx();
+  };
   logReads() { return this.#roundTrips; }
 }
 `,
@@ -403,21 +404,50 @@ export const CLONE_VERSION_WORKER: WorkerSource = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 let isolate;
 export default class Site extends WorkerEntrypoint {
-  fetch(request) {
+  async fetch(request) {
     isolate ??= crypto.randomUUID();
-    return withItx(this.env.ITX, async (itx) => {
-      let bad = await itx.kv.get("bad-isolate");
-      if (!bad) {
-        await itx.kv.put("bad-isolate", isolate);
-        bad = isolate;
-      }
-      if (bad === isolate) throw new Error(${JSON.stringify(CLONE_VERSION_TEXT)});
-      return new Response(request.method + " from a healthy isolate");
-    });
+    using itx = this.getItx();
+    let bad = await itx.kv.get("bad-isolate");
+    if (!bad) {
+      await itx.kv.put("bad-isolate", isolate);
+      bad = isolate;
+    }
+    if (bad === isolate) throw new Error(${JSON.stringify(CLONE_VERSION_TEXT)});
+    return new Response(request.method + " from a healthy isolate");
   }
 }
 `,
 };
+
+/** A loaded worker whose own code throws workerd's opaque internal-error text on every call, and
+ *  says which load of its isolate and which call it is. */
+export const OPAQUE_TEXT_WORKER: WorkerSource = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+const loaded = (globalThis.loads = (globalThis.loads ?? 0) + 1);
+let calls = 0;
+export default class Site extends WorkerEntrypoint {
+  fetch() {
+    calls += 1;
+    throw new Error("internal error; reference = thrown-by-code (load " + loaded + ", call " + calls + ")");
+  }
+}
+`,
+};
+
+/** A loaded worker whose `deliverEvent(event)` runs `body` with its `itx`. */
+export const deliverEventWorker = (body: string): WorkerSource => ({
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async deliverEvent(event) {
+    using itx = this.getItx();
+    ${body}
+  }
+}
+`,
+});

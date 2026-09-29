@@ -19,6 +19,9 @@ export type ContextViewEvent = {
     processor?: { slug: string; version: string };
     /** The platform wrote this fact on the principal's behalf (apps/os/src/caller.ts `Caller.platform`). */
     platform?: true;
+    /** Why it happened (apps/os/src/cause.ts): the chain it belongs to, `<ISO> with <origin>
+     *  ~<nonce>`, how deep in it, and the event whose handling wrote it. */
+    cause?: { chain: string; depth: number; parent?: string };
   };
 };
 

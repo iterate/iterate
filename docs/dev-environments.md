@@ -313,8 +313,7 @@ channels. The local values in `scripts/dev.ts` are public dev values.
 The root Playwright config runs every app's browser specs from the root
 `specs/` directory, and `pnpm spec` runs them from the repo root. It has one
 project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
-with touch, for the sign-in and consent specs), `agents` (`specs/agents/`,
-skipped locally unless `AGENTS_BASE_URL` is set), `notes` (`specs/notes/`,
+with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
 skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
 skipped locally unless `VOICE_BASE_URL` is set), the other apps' projects and
 `suite` (the flake sentinel and the harness's own specs). Select one with `pnpm spec --project=os-phone`.

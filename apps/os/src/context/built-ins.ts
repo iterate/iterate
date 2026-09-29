@@ -85,13 +85,9 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
+import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
-import {
-  FacetHandle,
-  isMissingRpcMethod,
-  RpcStubHandle,
-  materializeItxHandleReference,
-} from "./dispatch.ts";
+import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
 import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -106,6 +102,7 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./path
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
+  isLoadedWorkerPlatformFailure,
   isWorkerModules,
   namedWorkerLoad,
   prepareConfinedWorker,
@@ -229,7 +226,7 @@ type PlatformIntegrationsVerbs = {
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
    *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
-   *  `withItx(env.ITX, …)` hands it) can spell `itx.builtins.append(…)`. */
+   *  `getItx()` hands it) can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. A project's `projectUrl` is its apex, `url()`'s answer (on the primary
    *  hostname when it has one), present when the call carries the platform origin. */
@@ -402,7 +399,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  event, `{ name, target: null }`: the DO deletes the facet the row hosted, storage included, before
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
-   *  so loaded code (`withItx(env.ITX, (itx) => itx.processors.enable(…))`) and a sibling
+   *  so loaded code (`using itx = this.getItx(); await itx.processors.enable(…)`) and a sibling
    *  (`itx.cd(p).processors…`) do it through the same built-in as a client. A hosted processor's
    *  `claim(name, at)` is its claim on this context's alarm — "revive me by `at`" while a
    *  `runInBackground` attempt is in flight, `null` to release — durable as a kv row, never an event. */
@@ -2373,22 +2370,6 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   >;
 }
 
-/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
- *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
-async function callWithItsCause(
-  entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
-  cause: Cause,
-  method: string,
-  args: unknown[],
-): Promise<unknown> {
-  try {
-    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
-  } catch (error) {
-    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
-    return await entrypoint[method]!(...args);
-  }
-}
-
 /** `itx.workers`: stateless loaded code, loaded where the call is and speaking for the context
  *  `iterateContextName` names — its loader identity, its `env.ITX` (`itxEntrypoint`), the producer
  *  of a source expression run as its loaded code (`invoke`). A context builds it for itself (the
@@ -2431,12 +2412,10 @@ export function workersRoot(deps: {
             `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
           );
         const [method, ...callArgs] = call;
-        if (method === "callWithCause")
-          throw codedError(
-            "NOT_A_METHOD",
-            "workers.get(spec).callWithCause: only the platform calls it",
-          );
-        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // Workers RPC reaches both on every loaded entrypoint (iterate src/sdk/loaded-worker.ts).
+        if (method === "callWithCause" || method === "getItx")
+          throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
+        // The cause reaches the loaded code (cause.ts) on the Request, or through `callWithCause`,
         // which every other method is called through. A loaded worker's `fetch` reads who is
         // asking off its Request (iterate/principal): the call's own caller, stamped here — never
         // what the Request says, which `fetch(url, { headers })` would let the code that called it
@@ -2462,17 +2441,19 @@ export function workersRoot(deps: {
         const worker = named
           ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };
-        // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
-        // names: a cached entry that answers V8's clone-version text answers it to every call
-        // under that loader id, and `itx.abort()` does not change the id. A call that meets it
-        // retires the identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is
-        // replayed on it once only when a replay cannot do anything twice: a GET or HEAD with no
-        // body. A request body may have been read and an RPC method may have run, so those still
-        // fail, and the call after them loads fresh.
-        const isCloneVersionFailure = (error: unknown): error is Error =>
-          error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+        // WORKAROUND for the Worker Loader defect `isLoadedWorkerPlatformFailure` names: a cached
+        // entry that meets it answers it to every call under that loader id, and `itx.abort()`
+        // does not change the id. A call that meets it retires the identity, so the next call
+        // loads fresh under the next generation; THIS call is replayed on it once only when a
+        // replay cannot do anything twice: a GET or HEAD with no body. A request body may have
+        // been read and an RPC method may have run, so those are not replayed. A call the defect
+        // failed and nothing replayed, or whose replay it failed too, is the platform's failure:
+        // UNAVAILABLE, `disconnected`, which the edge answers 503 with a Retry-After.
+        const unavailableNow = (failure: Error) =>
+          unavailableError("disconnected", `workers.get(spec).${method}: ${failure.message}`);
+        let loaderId: string | undefined;
         const attempt = async () => {
-          const { load, retire } = await prepareConfinedWorker({
+          const prepared = await prepareConfinedWorker({
             env: deps.env,
             deployId: deps.deployId,
             platformOrigin: deps.platformOrigin(),
@@ -2486,6 +2467,8 @@ export function workersRoot(deps: {
             invoke: worker.invoke,
             where: "workers.get",
           });
+          const { load, retire } = prepared;
+          loaderId = prepared.loaderId;
           try {
             const entrypoint = load().getEntrypoint(
               spec.className,
@@ -2498,7 +2481,7 @@ export function workersRoot(deps: {
             const called =
               method === "fetch" || !cause
                 ? Reflect.apply(fn, entrypoint, args)
-                : callWithItsCause(entrypoint, cause, method, args);
+                : entrypoint.callWithCause!(cause, [[method, ...args]]);
             if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the
@@ -2510,14 +2493,14 @@ export function workersRoot(deps: {
               throw error;
             });
           } catch (error) {
-            if (isCloneVersionFailure(error)) retire();
+            if (isLoadedWorkerPlatformFailure(error)) retire();
             throw error;
           }
         };
         try {
           return await attempt();
         } catch (error) {
-          if (!isCloneVersionFailure(error)) throw error;
+          if (!isLoadedWorkerPlatformFailure(error)) throw error;
           const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
           const replayable =
             request && !request.body && (request.method === "GET" || request.method === "HEAD");
@@ -2529,10 +2512,13 @@ export function workersRoot(deps: {
             name: iterateContextName,
             method,
             requestMethod: request?.method,
+            loaderId,
             message: error.message,
           });
-          if (!replayable) throw error;
-          return await attempt();
+          if (!replayable) throw unavailableNow(error);
+          return await attempt().catch((failure: unknown) => {
+            throw isLoadedWorkerPlatformFailure(failure) ? unavailableNow(failure) : failure;
+          });
         }
       }),
   };

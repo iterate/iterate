@@ -3,14 +3,14 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, publishConfig, readAll, until } from "../../os/e2e/support/client.ts";
 import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { facetStartedAt } from "../../os/e2e/support/residency-facets.ts";
-import { installWorkspaceAgents } from "./agents-source.ts";
 import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
+import { installWorkspaceApps } from "./support.ts";
 
-test("installing again, as the init case does after every commit, keeps agents, sandbox grants and conversation history", async () => {
+test("installing again keeps agents, sandbox grants and history, and puts back a removed agents rewrite", async () => {
   const itx = openItx(freshCtx("agents-install"));
   expect((await itx.rewriteRules.get("itx.agents"))?.target).toBeFalsy();
-  await installWorkspaceAgents(itx);
+  await installWorkspaceApps(itx);
   const rule = await itx.rewriteRules.get("itx.agents");
   const rootRows = await itx.processors.list();
   await itx.agents.create("/agents/support");
@@ -27,8 +27,12 @@ test("installing again, as the init case does after every commit, keeps agents, 
   const grants = await sandbox.rewriteRules.list();
   const history = await readAll(context);
   const agentRows = await context.processors.list();
+  await itx.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.agents", target: null },
+  });
 
-  await installWorkspaceAgents(itx);
+  await installWorkspaceApps(itx); // as the init case does after every commit
   expect(await itx.rewriteRules.get("itx.agents")).toEqual(rule);
   expect(await itx.processors.list()).toEqual(rootRows);
   expect(await itx.agents.list()).toEqual([
@@ -42,10 +46,7 @@ test("installing again, as the init case does after every commit, keeps agents, 
   expect(assistantWords(await readAll(context))).toEqual(["Before reinstall.", "After reinstall."]);
 });
 
-// Three publications, each landing only once no context can resolve through a snapshot of the
-// root older than its pointer (the 5 s snapshot TTL), and a rule lent on a context the agent read,
-// which waits out the same TTL: about 20 s locally and up to a minute on a preview, all real
-// platform time, so the row is tagged `slow` (docs/testing.md#slow-rows).
+// Three publications, each waiting out the 5 s snapshot TTL: up to a minute on a preview, so `slow`.
 test(
   "through publication: a commit that changes only the website keeps the agent running as it booted; one that changes the agents' code restarts it on its next call, its conversation kept",
   { tags: ["slow"], timeout: 120_000 },
@@ -84,33 +85,3 @@ test(
     expect(assistantWords(await readAll(context))).toEqual(["First.", "Second.", "Third."]);
   },
 );
-
-test("an event on an agent's context settles through its birth subscription to the fixture's config entrypoint, with no failed delivery", async () => {
-  const itx = openItx(freshCtx("agents-birth-row"));
-  await installWorkspaceAgents(itx);
-  await itx.agents.create("/agents/support");
-  const context = itx.cd("/agents/support");
-  const [pinged] = await context.append({ type: "events.iterate.com/test/ping-sent" });
-  await until("the ping settled", async () => {
-    const row = await context.subscriptions.get("config");
-    return row?.cursor && row.cursor.confirmedOffset >= pinged.offset;
-  });
-  expect(
-    (await readAll(context)).filter(
-      (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
-    ),
-  ).toEqual([]);
-});
-
-test("a removed agents rewrite is put back by the next install", async () => {
-  const itx = openItx(freshCtx("agents-reinstall"));
-  await installWorkspaceAgents(itx);
-  const installed = await itx.rewriteRules.get("itx.agents");
-  await itx.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.agents", target: null },
-  });
-  await installWorkspaceAgents(itx);
-  expect(await itx.rewriteRules.get("itx.agents")).toEqual(installed);
-  expect(await itx.agents.list()).toEqual([]);
-});

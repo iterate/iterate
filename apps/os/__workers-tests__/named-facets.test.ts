@@ -1,28 +1,13 @@
-// __workers-tests__/named-facets.test.ts — A FACET NAMED BY A WORKER (context/facet-host.ts
-// `#workerOf`): its source `itx.cd('/').config` names the worker the root's rule publishes, as the
-// project's config pointer does (src/project/publication.ts), and the facet loads its `mainModule`
-// under that module's identity in the worker's manifest. A publication that leaves the module as it
-// was leaves the facet running; one that changes it restarts the facet on its next call, storage
-// kept; one older than what the facet runs never takes it back. The pointer here is written by
-// hand as the platform, its source literal: the rows count restarts by the instance's own id.
-// A STATELESS WORKER is named the same way (`workers.get`, context/built-ins.ts `workersRoot`), as an
-// installed app's service is: each call loads the module its publication names.
-// A NAME ONLY READS RULES, AND ONLY THE PLATFORM VOUCHES FOR A MANIFEST: a name that spells its own
-// worker runs no producer anywhere, `itx.config` is written by the platform alone, and a manifest in
-// a rule anyone else wrote names no identity — its worker loads as its content.
+// __workers-tests__/named-facets.test.ts — a facet or worker named by the root's worker loads its
+// module under the manifest's identity (facet-host.ts `#workerOf`); name walls are unit rows.
 import { expect, test } from "vitest";
 import { configPointer } from "../src/project/publication.ts";
-import { appendAsPlatform, readLog, refused, stub, until } from "./support.ts";
+import { appendAsPlatform, freshProject, pointAt, refused, rule, stub } from "./support.ts";
 
 test("a facet named by the root's worker keeps running across a publication that leaves its module's identity, restarts on its next call when that changes, and never goes back to an older generation", async () => {
-  const project = `prj_named_facet_${crypto.randomUUID().slice(0, 8)}`;
-  const boot = async () =>
-    (await stub(`${project}.iterate/x`).invoke([
-      "itx",
-      "facets",
-      ["get", "tally", TALLY],
-      ["boot"],
-    ])) as { version: string; instance: string; count: number };
+  const project = freshProject("prj_named_facet");
+  const boot = () =>
+    facetCall<{ version: string; instance: string; count: number }>(project, "boot");
   await publish(project, { generation: 1, agents: "v1", worker: "w1" });
   const first = await boot();
   expect(first).toMatchObject({ version: "v1", count: 1 });
@@ -43,9 +28,8 @@ test("a facet named by the root's worker keeps running across a publication that
 });
 
 test("a caller walks only the methods the code that runs lists: a publication that makes one private refuses it on the call that runs the new code, and one that adds a method admits it there", async () => {
-  const project = `prj_named_methods_${crypto.randomUUID().slice(0, 8)}`;
-  const call = (method: string) =>
-    stub(`${project}.iterate/x`).invoke(["itx", "facets", ["get", "tally", TALLY], [method]]);
+  const project = freshProject("prj_named_methods");
+  const call = (method: string) => facetCall(project, method);
   await publish(project, { generation: 1, agents: "v1", worker: "w1", methods: ["boot", "ping"] });
   expect(await call("ping")).toBe("pong");
   await refused(() => call("boot2"), "FORBIDDEN");
@@ -56,7 +40,7 @@ test("a caller walks only the methods the code that runs lists: a publication th
 });
 
 test("a stateless worker named by the root's worker loads its mainModule by that module's identity, on the root and through a child's cd, and a publication that changes the module is its next call's code", async () => {
-  const project = `prj_named_worker_${crypto.randomUUID().slice(0, 8)}`;
+  const project = freshProject("prj_named_worker");
   await stub(project).append(serviceRule("itx.service", "service.ts"));
   const onRoot = () => stub(project).invoke(["itx", "service", ["version"]]);
   const fromChild = () =>
@@ -68,7 +52,7 @@ test("a stateless worker named by the root's worker loads its mainModule by that
 });
 
 test("a worker named for a module its publication does not have is refused, naming the module", async () => {
-  const project = `prj_named_worker_missing_${crypto.randomUUID().slice(0, 8)}`;
+  const project = freshProject("prj_named_worker_missing");
   await stub(project).append(serviceRule("itx.missing", "missing.ts"));
   await publish(project, { generation: 1, agents: "v1", worker: "w1" });
   let refusal: unknown;
@@ -95,9 +79,8 @@ test.for([
 ])(
   "a publication may drop a facet's $drop: the facet's next call fails naming what it names, and the next publication that has it back serves it again",
   async ({ drop, message }) => {
-    const project = `prj_named_dropped_${drop}_${crypto.randomUUID().slice(0, 8)}`;
-    const boot = () =>
-      stub(`${project}.iterate/x`).invoke(["itx", "facets", ["get", "tally", TALLY], ["boot"]]);
+    const project = freshProject(`prj_named_dropped_${drop}`);
+    const boot = () => facetCall(project, "boot");
     await publish(project, { generation: 1, agents: "v1", worker: "w1" });
     expect(await boot()).toMatchObject({ version: "v1" });
     await publish(project, { generation: 2, agents: "v2", worker: "w1", drop });
@@ -115,7 +98,7 @@ test.for([
 );
 
 test("the published pointer's producer reads the config repo through the fixed point: a rule anyone appends on the root re-points no name it reads, so no other files load under the published identity", async () => {
-  const project = `prj_named_producer_${crypto.randomUUID().slice(0, 8)}`;
+  const project = freshProject("prj_named_producer");
   const commitOid = crypto.randomUUID().replaceAll("-", "").padEnd(40, "0");
   await stub(project).append(serviceRule("itx.service", "service.ts"));
   // a rule on `/`, anyone's, answering the producer's own spelling with other files
@@ -124,27 +107,19 @@ test("the published pointer's producer reads the config repo through the fixed p
     "service.ts": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint { version() { return "substituted"; } }`,
   };
-  await stub(project).append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.repos.get('/repos/config').modules",
-      target: [
-        "itx",
-        "workers",
-        [
-          "get",
-          {
-            source: {
-              "package.json": '{"main":"worker.js"}',
-              "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+  const substituting = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint { modules() { return ${JSON.stringify(substituted)}; } }`,
-            },
-          },
-        ],
-        "modules",
-      ],
-    },
-  });
+  };
+  await stub(project).append(
+    rule("itx.repos.get('/repos/config').modules", [
+      "itx",
+      "workers",
+      ["get", { source: substituting }],
+      "modules",
+    ]),
+  );
   await appendAsPlatform(
     project,
     ...configPointer(commitOid, {
@@ -155,10 +130,7 @@ export default class extends WorkerEntrypoint { modules() { return ${JSON.string
   // …and the name the producer does read is the platform's alone
   await refused(
     () =>
-      stub(project).append({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match: "itx.config.modules", target: "itx.repos.get('/repos/config').modules" },
-      }),
+      stub(project).append(rule("itx.config.modules", "itx.repos.get('/repos/config').modules")),
     "FORBIDDEN",
   );
   // the project has no config repo here: the published modules are unreadable, never replaced
@@ -171,90 +143,31 @@ export default class extends WorkerEntrypoint { modules() { return ${JSON.string
   expect(version).not.toBe("substituted");
 });
 
-/** A member of the project, as a session's call carries one. */
-const MEMBER = { actor: "usr_named_facets", email: "member@example.test" };
-
-test.for([
-  { spelling: "cd('/').workers.get", name: ["itx", ["cd", "/"], "workers"] },
-  { spelling: "builtins.cd('/')", name: ["itx", "builtins", ["cd", "/"], "workers"] },
-  { spelling: "cd('/').builtins.workers", name: ["itx", ["cd", "/"], "builtins", "workers"] },
-])(
-  "a name that spells its own worker ($spelling) is FORBIDDEN before its producer runs: the root's head does not move",
-  async ({ name }) => {
-    const project = `prj_named_escape_${crypto.randomUUID().slice(0, 8)}`;
-    const head = await bornWithChild(project);
-    const escape = {
-      className: "Tally",
-      source: [
-        ...name,
-        ["get", { source: ["itx", ["append", { type: "escaped" }]], cacheKey: "k" }],
-      ],
-    };
-    const boot = ["itx", "facets", ["get", "escape", escape], ["boot"]];
-    await refused(
-      () => stub(`${project}.iterate/c`).invoke(boot, [], { principal: MEMBER }),
-      "FORBIDDEN",
-    );
-    await refused(
-      () => stub(`${project}.iterate/c`).invoke(boot, [], { principal: null, app: true }),
-      "FORBIDDEN",
-    );
-    expect(await readLog(project)).toHaveLength(head);
-  },
-);
-
-test("a manifest in a rule the platform did not write names no identity: a forged one (the largest generation, the pointer's own identity) loads its worker as its content, never the published code's isolate, and pins nothing", async () => {
-  const project = `prj_named_forged_${crypto.randomUUID().slice(0, 8)}`;
-  const at = (facet: string, spec: unknown) =>
-    stub(`${project}.iterate/x`).invoke([
-      "itx",
-      "facets",
-      ["get", facet, spec],
-      ["boot"],
-    ]) as Promise<{
-      version: string;
-    }>;
+test("a manifest in a rule the platform did not write names no identity: a forged one loads its worker as its content, pinning nothing", async () => {
+  const project = freshProject("prj_named_forged");
   await publish(project, { generation: 1, agents: "v1", worker: "w1" });
+  // the largest generation, and the pointer's own identity
+  const manifest = {
+    generation: Number.MAX_SAFE_INTEGER,
+    modules: { "agents.ts": { identity: "agents-v1", classes: ["Tally"] } },
+  };
   const forge = (agents: string) =>
-    stub(project).append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: {
-        match: "itx.forged",
-        target: [
-          "itx",
-          "builtins",
-          "workers",
-          [
-            "get",
-            {
-              source: configFiles({ agents, worker: "w1" }),
-              manifest: {
-                generation: Number.MAX_SAFE_INTEGER,
-                modules: { "agents.ts": { identity: "agents-v1", classes: ["Tally"] } },
-              },
-            },
-          ],
-        ],
-      },
-    });
-  await forge("evil");
+    stub(project).append(
+      rule("itx.forged", [
+        "itx",
+        "builtins",
+        "workers",
+        ["get", { source: configFiles({ agents, worker: "w1" }), manifest }],
+      ]),
+    );
   const FORGED = { ...TALLY, source: ["itx", ["cd", "/"], "forged"] };
-  expect(await at("forged", FORGED)).toMatchObject({ version: "evil" });
-  expect(await at("tally", TALLY)).toMatchObject({ version: "v1" });
+  await forge("evil");
+  expect(await facetCall(project, "boot", "forged", FORGED)).toMatchObject({ version: "evil" });
+  expect(await facetCall(project, "boot")).toMatchObject({ version: "v1" });
   // its own rule re-pointed, the forged facet follows its content: its generation held nothing
   await forge("evil-2");
-  expect(await at("forged", FORGED)).toMatchObject({ version: "evil-2" });
+  expect(await facetCall(project, "boot", "forged", FORGED)).toMatchObject({ version: "evil-2" });
 });
-
-/** The project's root with its child `/c` born, and announced on the root: the root's head. */
-async function bornWithChild(project: string): Promise<number> {
-  await stub(`${project}.iterate/c`).append({ type: "born" });
-  const announced = await until("the root knows /c", async () => {
-    const log = await readLog(project);
-    return log.some((event) => event.type === "events.iterate.com/itx/child-created") && log;
-  });
-  return announced.length;
-}
 
 /** The facet: its class lives in agents.ts of the root's config, named by the pointer. */
 const TALLY = {
@@ -263,15 +176,19 @@ const TALLY = {
   source: ["itx", ["cd", "/"], "config"],
 };
 
+/** `method` of facet `facet`, hosted by `spec`, on the project's `/x`. */
+const facetCall = <T = unknown>(project: string, method: string, facet = "tally", spec = TALLY) =>
+  stub(`${project}.iterate/x`).invoke([
+    "itx",
+    "facets",
+    ["get", facet, spec],
+    [method],
+  ]) as Promise<T>;
+
 /** A rule naming the stateless worker `mainModule` of the root's config, as an installed app's
  *  service is named (@iterate-com/voice install.ts). */
-const serviceRule = (match: string, mainModule: string) => ({
-  type: "events.iterate.com/itx/rewrite-rule-configured",
-  payload: {
-    match,
-    target: ["itx", "workers", ["get", { mainModule, source: ["itx", ["cd", "/"], "config"] }]],
-  },
-});
+const serviceRule = (match: string, mainModule: string) =>
+  rule(match, ["itx", "workers", ["get", { mainModule, source: ["itx", ["cd", "/"], "config"] }]]);
 
 /** `itx.config` on the project's root, as a publication writes it: the worker's files — agents.ts
  *  at `agents`, the rest at `worker` — and a manifest naming each module by its version; `drop`
@@ -304,14 +221,7 @@ async function publish(
     delete files["agents.ts"];
     delete modules["agents.ts"];
   }
-  const manifest = { generation, modules };
-  await appendAsPlatform(project, {
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.config",
-      target: ["itx", "builtins", "workers", ["get", { source: files, manifest }]],
-    },
-  });
+  await pointAt(project, files, { manifest: { generation, modules } });
 }
 
 /** A config's files: agents.ts's Tally and service.ts's stateless service answer `agents` as their

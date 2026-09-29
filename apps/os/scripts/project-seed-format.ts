@@ -135,8 +135,9 @@ export type DeploymentStructure = z.infer<typeof DeploymentStructure>;
 /** How a live deployment differs from a captured structure, by what survives a recreation: users
  * by email, organizations by name, memberships by (email, role), projects by ID and slug and their
  * organization's name. `problems` fail `verify-structure`; `notes` are what a restore does not
- * promise — a captured user or an empty organization nobody has recreated yet (sign-in recreates a
- * user; an empty organization has nothing to restore), and anything live that was not captured. */
+ * promise — a captured user or an organization with no projects nobody has recreated yet (sign-in
+ * recreates a user; no seed carries an organization with no projects), and anything live that was
+ * not captured. */
 export function compareStructure(captured: DeploymentStructure, live: DeploymentStructure) {
   const problems: string[] = [];
   const notes: string[] = [];
@@ -149,9 +150,10 @@ export function compareStructure(captured: DeploymentStructure, live: Deployment
     const want = members(captured, org.id);
     if (matches.length > 1)
       problems.push(`organization "${org.name}" exists ${matches.length} times`);
-    else if (!matches.length && (want.length || org.projects))
+    else if (!matches.length && org.projects)
       problems.push(`organization "${org.name}" is missing`);
-    else if (!matches.length) notes.push(`empty organization "${org.name}" was not recreated`);
+    else if (!matches.length)
+      notes.push(`organization "${org.name}" has no projects and was not recreated`);
     else {
       const have = members(live, matches[0]!.id);
       for (const member of want)

@@ -1,13 +1,10 @@
 // __workers-tests__/email.test.ts — a project's mail on the worker (src/integrations/email.ts), at
 // `<slug>@projects.test` here (wrangler.test.jsonc's ingress hostname).
-import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { EmailState } from "iterate/email";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
-import { receiveEmail } from "../src/integrations/email.ts";
-import type { Env } from "../src/env.ts";
-import { projectWithMember, readLog, snapshot, stub } from "./support.ts";
+import { deliverMail, projectWithMember, readLog, snapshot, stub } from "./support.ts";
 
 test("a message lands once per project address on /integrations/email with its attachment a project file, and a reply threads with it", async () => {
   const member = await projectWithMember("mailbox");
@@ -38,7 +35,7 @@ test("a message lands once per project address on /integrations/email with its a
   ].join("\r\n");
   // delivered twice to one address, and once to another of the project's
   for (const to of ["mailbox@projects.test", "mailbox@projects.test", "mailbox+cc@projects.test"])
-    expect(await deliver(to, invoice)).toMatchObject({ rejected: [], forwarded: [] });
+    expect(await deliverMail(to, invoice)).toMatchObject({ rejected: [], forwarded: [] });
 
   const [received, copy, ...again] = mailOf(await readLog(inbox));
   expect(again).toEqual([]);
@@ -88,14 +85,10 @@ test("a message lands once per project address on /integrations/email with its a
     payload: { match: "itx", target: "itx.cd('/')" },
   });
   expect(
-    await child.invoke([
-      "itx",
-      "email",
-      ["send", { to: "ann@example.com", subject: "From a child", text: "…" }],
-    ]),
+    await child.invoke(`itx.email.send({ to: "ann@example.com", subject: "Child", text: "…" })`),
   ).toMatchObject({ source: { origin: "/agents/a" } });
   // Their answer to the reply names the whole chain; the thread is the first message's.
-  await deliver(
+  await deliverMail(
     "mailbox+anything@projects.test",
     [
       "From: ann@example.com",
@@ -137,12 +130,12 @@ test("a member's verified message says so, and a forged one claiming to be their
       "",
       "Hello",
     ].join("\r\n");
-  await deliver(
+  await deliverMail(
     "members-mail@projects.test",
     fromTheMember(["mx.cloudflare.net; dkim=pass header.d=example.test; dmarc=none"], "real"),
   );
   // Cloudflare's real verdict on top, the sender's forged pass below it
-  await deliver(
+  await deliverMail(
     "members-mail@projects.test",
     fromTheMember(
       [
@@ -153,14 +146,10 @@ test("a member's verified message says so, and a forged one claiming to be their
     ),
   );
   expect(mailOf(await readLog(inbox)).map((event) => event.payload)).toMatchObject([
-    {
-      messageId: "real@example.test",
-      // a DKIM signature alone: verified, but not direct (anyone could re-send it)
-      sender: { verified: true, member: true, direct: false },
-    },
+    { messageId: "real@example.test", sender: { verified: true, member: true, direct: false } },
     {
       messageId: "forged@example.test",
-      sender: { verified: false, member: false, direct: false },
+      sender: { verified: false, member: false },
       authentication: { spf: "softfail", dkim: "none", dmarc: "none" },
     },
   ]);
@@ -171,7 +160,7 @@ test("the project wildcard's project receives mail at any address on its domain,
   const hello =
     "From: ann@example.com\r\nSubject: Hi\r\nMessage-ID: <hello@example.com>\r\n\r\nHello";
   // recorded for the project, and forwarded as it arrived to the wildcard's forwardEmailTo
-  expect(await deliver("hello@wildcard.test", hello)).toMatchObject({
+  expect(await deliverMail("hello@wildcard.test", hello)).toMatchObject({
     rejected: [],
     forwarded: ["everything@example.test"],
   });
@@ -183,8 +172,10 @@ test("the project wildcard's project receives mail at any address on its domain,
   const unforwardable =
     "From: ann@example.com\r\nSubject: Psst\r\nMessage-ID: <psst@example.com>\r\n\r\nPsst";
   expect(
-    await deliver("someone@wildcard.test", unforwardable, () => {
-      throw new Error("non-authenticated emails cannot be forwarded");
+    await deliverMail("someone@wildcard.test", unforwardable, {
+      forward: () => {
+        throw new Error("non-authenticated emails cannot be forwarded");
+      },
     }),
   ).toMatchObject({ rejected: [] });
   const [received, unforwarded] = mailOf(await readLog(inbox));
@@ -229,36 +220,13 @@ test("no other project sends from the wildcard's domain or from another project'
 test("mail for no project, or on another domain, bounces", async () => {
   await projectWithMember("bounces");
   const note = "From: ann@example.com\r\nSubject: Hi\r\n\r\nHello";
-  expect(await deliver("nobody-here@projects.test", note)).toMatchObject({
+  expect(await deliverMail("nobody-here@projects.test", note)).toMatchObject({
     rejected: ["No such address."],
   });
-  expect(await deliver("bounces@elsewhere.test", note)).toMatchObject({
+  expect(await deliverMail("bounces@elsewhere.test", note)).toMatchObject({
     rejected: ["No such address."],
   });
 });
-
-/** One delivery by Cloudflare Email Routing to `to`: what `receiveEmail` rejected it with, and the
- *  addresses it forwarded it to (`forward` runs first and may throw, as Email Routing's does). */
-async function deliver(to: string, mime: string, forward = (_to: string) => {}) {
-  const rejected: string[] = [];
-  const forwarded: string[] = [];
-  const raw = new TextEncoder().encode(mime);
-  // the fields of a ForwardableEmailMessage that `receiveEmail` reads
-  const message = {
-    from: "ann@example.com",
-    to,
-    raw: new Response(raw).body!,
-    rawSize: raw.byteLength,
-    headers: new Headers(),
-    setReject: (reason: string) => void rejected.push(reason),
-    forward: async (address: string) => {
-      forward(address);
-      forwarded.push(address);
-    },
-  } as unknown as ForwardableEmailMessage;
-  await receiveEmail(message, env as unknown as Env);
-  return { rejected, forwarded };
-}
 
 function mailOf(events: StreamEvent[]) {
   return events.filter((event) => event.type.startsWith("events.iterate.com/email/"));

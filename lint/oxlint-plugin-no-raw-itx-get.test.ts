@@ -1,8 +1,8 @@
-// iterate/no-raw-itx-get: code reaches its context through `withItx`, never a raw `ITX.get()`, in a
-// linted file or in a module it hands over as text (`"worker.js": `…``, `String.raw`, a const, a
-// `/* js */` template), and a withItx callback in a linted file never answers the live value it
-// releases. Each row is one file in a temp project linted once by the real oxlint binary; `reported`
-// is how many times the rule flags it.
+// iterate/no-raw-itx-get: code reaches its context with `using itx = this.getItx()`, never a raw
+// `ITX.get()`, in a linted file or in a module it hands over as text (`"worker.js": `…``,
+// `String.raw`, a const, a `/* js */` template), and a `getItx()` in a linted file is bound by
+// `using` or answered whole by an accessor. Each row is one file in a temp project linted once by
+// the real oxlint binary; `reported` is how many times the rule flags it.
 
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
@@ -82,25 +82,24 @@ const rows = [
       'const SRC = `export default class { run() { return this.env.ITX.get().whoami(); } }`;\nexport const S = { "worker.js": SRC };\n',
   },
   {
-    name: "a withItx callback answering its scope",
+    name: "a getItx() scope held in a const",
     reported: 1,
-    source: "function f(env) { return withItx(env.ITX, (itx) => itx); }",
+    source: "class W { async f() { const itx = this.getItx(); return await itx.whoami(); } }",
   },
   {
-    name: "a withItx callback answering an itx.cd(path) handle",
+    name: "a call chained on getItx()",
     reported: 1,
-    source: "class W { f(path) { return this.withItx((itx) => itx.cd(path)); } }",
+    source: "class W { f() { return this.getItx().whoami(); } }",
   },
   {
-    name: "a withItx callback returning a property of its scope",
+    name: "a getItx() scope passed on",
     reported: 1,
-    source: "function f(env) { return withItx(env.ITX, async (itx) => { return itx.repos; }); }",
+    source: "class W { f() { return new Notes(this.getItx()); } }",
   },
   {
-    name: "a withItx callback returning an awaited handle",
+    name: "an accessor's scope held in a let",
     reported: 1,
-    source:
-      "function f(env, path) { return withItx(env.ITX, async (itx) => { return await itx.cd(path); }); }",
+    source: "async function f(getItx) { let itx = getItx(); return await itx.whoami(); }",
   },
   {
     name: "two calls in one embedded module report once",
@@ -111,14 +110,25 @@ const rows = [
   },
   // ── not flagged ──
   {
-    name: "withItx on the binding",
+    name: "using getItx()",
     reported: 0,
-    source: "function f(env) { return withItx(env.ITX, (itx) => itx.whoami()); }",
+    source: "class W { async fetch() { using itx = this.getItx(); return await itx.whoami(); } }",
   },
   {
-    name: "an SDK host's withItx",
+    name: "await using, a typed getItx()",
     reported: 0,
-    source: "class W { fetch() { return this.withItx((itx) => itx.whoami()); } }",
+    source:
+      "type Itx = { whoami(): Promise<object> } & Disposable;\nclass W { getItx!: () => Itx; async f() { await using itx = (this.getItx() as Itx); return await itx.whoami(); } }\n",
+  },
+  {
+    name: "an accessor",
+    reported: 0,
+    source: "class W { notes = new Notes(() => this.getItx()); }",
+  },
+  {
+    name: "using an accessor's scope",
+    reported: 0,
+    source: "async function f(getItx) { using itx = getItx(); return await itx.whoami(); }",
   },
   {
     name: "the binding's fetch",
@@ -132,27 +142,16 @@ const rows = [
   },
   { name: "a map's get", reported: 0, source: "function f(map) { return map.get(); }" },
   {
-    name: "the releasing function's own get",
+    name: "the recording scope's own get",
     reported: 0,
-    source: "function withItx(entrypoint, call) { return call(entrypoint.get()); }",
+    source: "function itxScope(entrypoint) { return record(entrypoint.get()); }",
   },
   { name: "a fake binding", reported: 0, source: "const env = { ITX: { get: () => ({}) } };\n" },
-  {
-    name: "a withItx callback answering data",
-    reported: 0,
-    source:
-      "function f(env, path) { return withItx(env.ITX, async (itx) => [await itx.cd(path).whoami(), (await itx.whoami()).projectSlug]); }",
-  },
-  {
-    name: "a withItx callback answering a pipelined call",
-    reported: 0,
-    source: "class W { f(path) { return this.withItx((itx) => itx.cd(path).append({})); } }",
-  },
   {
     name: "an imported module text",
     reported: 0,
     source:
-      'import { WITH_ITX_MODULE } from "./with-itx-module.ts";\nexport const S = { "with-itx.js": WITH_ITX_MODULE };\n',
+      'import { SDK_MODULE } from "./sdk-module.ts";\nexport const S = { "sdk.js": SDK_MODULE };\n',
   },
   {
     name: "a string that mentions ITX.get()",
@@ -160,9 +159,11 @@ const rows = [
     source: 'export const note = "never call env.ITX.get() yourself";\n',
   },
   {
-    name: "an embedded module through withItx",
+    name: "an embedded module through getItx",
     reported: 0,
-    source: embeddedModule("  run() { return withItx(this.env.ITX, (itx) => itx.whoami()); }"),
+    source: embeddedModule(
+      "  async run() { using itx = this.getItx(); return await itx.whoami(); }",
+    ),
   },
   {
     name: "a disable above the module's key",
@@ -171,7 +172,7 @@ const rows = [
   },
 ];
 
-test("raw ITX.get() is refused wherever it hands out a scope, in a file and in the modules it embeds, and so is a withItx callback answering a live value; withItx answering data and other gets are not", () => {
+test("raw ITX.get() is refused wherever it hands out a scope, in a file and in the modules it embeds, and so is a getItx() no `using` binds; `using`, an accessor and other gets are not", () => {
   using fixture = createOxlintFixture({ rules: { "iterate/no-raw-itx-get": "error" } });
   const paths = rows.map((_, i) => `row-${i}.ts`);
   rows.forEach((row, i) => fixture.write(paths[i]!, row.source));
