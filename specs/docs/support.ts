@@ -3,7 +3,6 @@
 // a PR preview's `pr<N>` gets, apps/os/scripts/preview-config.ts `proxiedAppRoute`), and install
 // Docs in its config (`docs.ts` and a pin, @iterate-com/docs/install) at this commit's build. Then
 // consent for its host where it is one.
-import { execFileSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
 import { installDocs } from "@iterate-com/docs/install";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
@@ -25,12 +24,14 @@ export async function routeDocs(itx: any, docsWorker: URL) {
   await itx.fetchRoutes.set("docs", proxiedAppRoute("docs", docsWorker.href));
 }
 
-/** @iterate-com/docs as this commit published it: CI's head, else the checkout's (pushed). */
+/** @iterate-com/docs as this checkout's packages are published (specs/setup.ts
+ *  `PUBLISHED_PACKAGE_COMMIT`): a PR's head when it changes a package, else its merge base with
+ *  main, since pkg.pr.new publishes a PR only when it changes one. */
 export async function docsBuild() {
-  const head =
-    process.env.TEST_TELEMETRY_HEAD_SHA?.trim() ||
-    execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const version = pkgPrNewVersion("@iterate-com/docs", head);
+  const commit = process.env.PUBLISHED_PACKAGE_COMMIT;
+  if (!commit)
+    throw new Error("specs/setup.ts sets PUBLISHED_PACKAGE_COMMIT before the workers start");
+  const version = pkgPrNewVersion("@iterate-com/docs", commit);
   await expect
     .poll(async () => (await fetch(version, { method: "HEAD" })).status, {
       // timeout: fixture setup before any page, so the spinner-waiter has nothing to extend by; pkg.pr.new publishes a push's build beside its preview deploy, in about a minute

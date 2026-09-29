@@ -28,7 +28,12 @@ import { fileKind } from "../../lib/file-kind.ts";
 const docsBuild = createServerFn({ method: "GET" }).handler(async () => {
   const { env } = await import("cloudflare:workers");
   const ref = startAppConfigOf(env).pkgPrNewRef;
-  return pinPkgPrNewVersion("@iterate-com/docs", pkgPrNewVersion("@iterate-com/docs", ref));
+  const pinned = (build: string) =>
+    pinPkgPrNewVersion("@iterate-com/docs", pkgPrNewVersion("@iterate-com/docs", build));
+  if (ref === "main") return pinned("main");
+  // pkg.pr.new publishes a PR only when it changes a package (.github/workflows/pkg-pr-new.yml):
+  // a preview of one that changes none has no build of its own, and goes with main's
+  return pinned(ref).catch(() => pinned("main"));
 });
 
 /** One doc: `/projects/<slug>/<repo name>/<path in the repo>`, read at the repo's tip for the
