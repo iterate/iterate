@@ -1,22 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { ciReportsEnvs } from "../../../envs.ts";
+import { ciReportsEnvs, getEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy with Depot's token → the viewer answers (scripts/lib/deploy-app.ts). */
 export default async function deploy(options: { env: string }) {
-  await deployApp({
+  await deployApp(getEnv(options.env, ciReportsEnvs), {
+    dopplerProject: "_shared",
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/ci-reports",
-    envs: ciReportsEnvs,
-    dopplerProject: "_shared",
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
     requiredSecrets: ["DEPOT_CI_TELEMETRY_TOKEN"],
-    smokes: (env) => [
-      { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "viewer index" },
-    ],
+    smokes: [{ url: "/", ok: (response) => response.status === 200, label: "viewer index" }],
   });
 }
 

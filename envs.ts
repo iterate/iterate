@@ -39,6 +39,34 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
+/** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment, local dev and the e2e suite
+ *  alike (the Workers suite's rows opt in, apps/os __workers-tests__/support.ts
+ *  `bornWithBirthRows`): two fan-out rows (`ordered: false`), from the context's birth on. `config` delivers
+ *  every durable event to the project's config entrypoint — `itx.config`, the pointer on `/` to
+ *  its published config (apps/os src/project/publication.ts) — in the context itself: a context
+ *  born before the first publication delivers what waited once the pointer lands. `platform`
+ *  delivers each to the platform's own hook (apps/os src/platform-hook.ts). */
+export const PROJECT_CONTEXT_BIRTH_EVENTS = [
+  {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "config",
+      target: "itx.cd('/').config.deliverEvent",
+      afterOffset: 0,
+      ordered: false,
+    },
+  },
+  {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "platform",
+      target: "itx.builtins.platformHook.deliverEvent",
+      afterOffset: 0,
+      ordered: false,
+    },
+  },
+] as const;
+
 /** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
  *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
  *  Cloudflare resources. */
@@ -100,6 +128,11 @@ export interface OsEnv {
    *  generator derive the names from this, never from the worker name. No other Worker may bind
    *  them: erase-data refuses a shared store, and another Worker would read every project's repos. */
   resourceNamePrefix: string;
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (apps/os src/app-config.ts `contextBirthEvents`),
+   *  in order, after its birth certificate and first wake record — every deployment's are
+   *  `PROJECT_CONTEXT_BIRTH_EVENTS`. The generator hands them to the worker as
+   *  `APP_CONFIG_CONTEXT_BIRTH_EVENTS`. A change reaches the contexts born after it. Unset ⇒ none. */
+  contextBirthEvents?: readonly { type: string; payload?: Record<string, unknown> }[];
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
    *  specific Worker routes on that zone continue to take precedence. */
@@ -162,6 +195,7 @@ export const osEnvs: Record<string, OsEnv> = {
     ingressRouting: { type: "paths" },
     // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc).
     resourceNamePrefix: "os-parent",
+    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
     resources: {
       oauthKvId: "cc1ea2c05a104790aa2716a87f304b3a",
       itxKvId: "a5b73c18d78f4cafaa4fa5e67d7daadc",
@@ -207,6 +241,7 @@ export const osEnvs: Record<string, OsEnv> = {
       dcvDelegationUuid: "248299803bb79c97",
     },
     resourceNamePrefix: "os-prd",
+    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
     resources: {
       oauthKvId: "5d23b869bff94a32a8f8049edc7de122",
       itxKvId: "c8432f0a49c94ae3984040c4f503b8c2",
@@ -387,6 +422,7 @@ export function previewDeployment(name: string) {
     testEmailDomain: TEST_EMAIL_DOMAIN,
     petshopIntegrations: true,
     resourceNamePrefix: osWorker,
+    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
   };
   const apps = Object.fromEntries(
     PREVIEW_DEPLOYMENT_APPS.map((app) => [
@@ -402,12 +438,34 @@ export function previewDeployment(name: string) {
   return { name, prefix: match.groups.prefix!, sha: match.groups.sha!, os, apps };
 }
 
+/** THE ENTRY OF `envs` A NAME NAMES, with that name on it: what every deploy, provision and seed
+ *  script looks its `--env` up with, and hands to scripts/lib `deployApp` / `resolveEnvContext`.
+ *  Throws for a name `envs` has no entry for. */
+export function getEnv<E>(name: string, envs: Record<string, E>): E & { name: string } {
+  const env = envs[name];
+  if (!env)
+    throw new Error(
+      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(envs).join(", ")}`,
+    );
+  return { ...env, name };
+}
+
+/** An apps/os deployment and the name it was found by (`getOsEnv`): what the deploy,
+ *  preview and sweep scripts hold once they have looked their `--env` up. */
+export type OsDeployableEnv = OsEnv & { name: string };
+
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
- *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`); undefined for any
- *  other name. What building and deploying apps/os by name look up (vite.config.ts through
- *  generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to tell the two apart. */
-export function osEnv(name: string): OsEnv | undefined {
-  return osEnvs[name] || previewDeployment(name)?.os;
+ *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
+ *  it; throws for any other name. What building and deploying apps/os by name look up
+ *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
+ *  tell the two apart. */
+export function getOsEnv(name: string): OsDeployableEnv {
+  const env = osEnvs[name] || previewDeployment(name)?.os;
+  if (!env)
+    throw new Error(
+      `apps/os: unknown env ${JSON.stringify(name)}; known: ${Object.keys(osEnvs).join(", ")}, or a per-commit deployment's <prefix>-<sha7>`,
+    );
+  return { ...env, name };
 }
 
 /** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */

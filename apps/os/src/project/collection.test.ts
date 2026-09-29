@@ -33,7 +33,7 @@ test("a wait left on a replaced instance times out one slice; the next call find
       path,
       slicesTimedOut: 1,
       incarnation: 2,
-      reason: "request",
+      cause: "call",
     }),
   );
 });
@@ -75,7 +75,7 @@ function woken(offset: number, incarnation: number) {
   return {
     type: "events.iterate.com/itx/woken",
     offset,
-    payload: { incarnation, reason: "request" },
+    payload: { incarnation, cause: "call", caller: "other" },
   };
 }
 

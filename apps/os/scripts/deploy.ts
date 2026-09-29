@@ -1,7 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getOsEnv,
+  osResourceNames,
+  type OsDeployableEnv,
+} from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { appConfigSecretsOf } from "../../../scripts/lib/deploy-helpers.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { build } from "./build.ts";
@@ -10,7 +16,7 @@ import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
-/** Deploy apps/os to `--env`, any name envs.ts `osEnv` knows: `prd` (Deploy OS), `preview` (main on
+/** Deploy apps/os to `--env`, any name envs.ts `getOsEnv` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
  *  scripts/preview.ts `deploy`). */
 export default async function deploy(options: {
@@ -19,21 +25,12 @@ export default async function deploy(options: {
    *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
   withoutRoutes?: boolean;
 }) {
-  const env = osEnv(options.env);
-  if (!env)
-    throw new Error(
-      `apps/os: unknown env ${JSON.stringify(options.env)}; known: ${Object.keys(osEnvs).join(", ")}, or a per-commit deployment's <prefix>-<sha7>`,
-    );
-  await deployApp({
+  const env = getOsEnv(options.env);
+  await deployApp(env, {
+    dopplerProject: OS_DOPPLER_PROJECT,
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: { [options.env]: env },
-    dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    resources: (env) => env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The configuration is checked first, as the Worker will read it: the generated vars and these
@@ -44,6 +41,8 @@ export default async function deploy(options: {
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
     async prepare(ctx, secretValues, credentials) {
+      // every APP_CONFIG* var in the Doppler config, not only the two required below
+      Object.assign(secretValues, appConfigSecretsOf(ctx.secrets));
       // The pet shop's GitHub fake as iterate's GitHub App (generate-wrangler-config.ts has the other
       // fakes): its throwaway key is Doppler `os/preview`'s, so the App ships as a secret, not a var.
       if (ctx.env.petshopIntegrations)
@@ -52,7 +51,7 @@ export default async function deploy(options: {
           privateKey: previewGithubAppPrivateKey(),
         });
       parseAppConfig({
-        ...viteWranglerConfig(ctx.name, { localDev: false, port: "" }).vars,
+        ...viteWranglerConfig(env.name, { localDev: false, port: "" }).vars,
         ...secretValues,
       });
       const [, databaseId] = await Promise.all([
@@ -68,14 +67,14 @@ export default async function deploy(options: {
         },
       });
     },
-    smokes: (env) => [
+    smokes: [
       {
-        url: `${env.baseUrl}/version`,
+        url: "/version",
         ok: (response) => response.status === 200,
         label: "version",
       },
       {
-        url: `${env.baseUrl}/.well-known/oauth-authorization-server`,
+        url: "/.well-known/oauth-authorization-server",
         ok: (response) => response.status === 200,
         label: "OAuth discovery",
       },
@@ -85,7 +84,7 @@ export default async function deploy(options: {
         label: "MCP bearer challenge",
       },
       {
-        url: `${env.baseUrl}/api`,
+        url: "/api",
         ok: (response) => response.status === 401,
         label: "Cap’n Web bearer challenge",
       },
@@ -96,8 +95,8 @@ export default async function deploy(options: {
  *  (generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
  *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
- *  scripts/preview.ts `deletePreviewDeployment`. */
-async function createResources(ctx: EnvContext<OsEnv>) {
+ *  scripts/preview-delete.ts `deletePreviewDeployments`. */
+async function createResources(ctx: EnvContext<OsDeployableEnv>) {
   const names = osResourceNames(ctx.env.resourceNamePrefix);
   const [database] = await Promise.all([
     ensureD1(ctx.cf, names.db, "automatic"),

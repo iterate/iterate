@@ -5,7 +5,7 @@ import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 import { workerBaseUrl } from "../test-support/worker-base-url.ts";
-import { consent, publishDocsConfigWorker } from "./support.ts";
+import { consent, serveDocs } from "./support.ts";
 
 test("the sidebar shows a repo's docs as a tree, follows a doc an agent adds, switches repo, and ⌘K finds a doc by name", async ({
   page,
@@ -19,7 +19,7 @@ test("the sidebar shows a repo's docs as a tree, follows a doc an agent adds, sw
       routingSlug: "docs",
       path,
     })!;
-  await publishDocsConfigWorker(fixture.itx, new URL(helpers.appOrigin("docs")));
+  await serveDocs(fixture.itx, new URL(helpers.appOrigin("docs")));
   // another repo of the project, with a doc of its own
   await fixture.itx.repos.create("/repos/handbook");
   await fixture.itx.repos.get("/repos/handbook").writeFile("welcome.md", "# Welcome\n");

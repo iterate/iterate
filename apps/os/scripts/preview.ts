@@ -2,7 +2,8 @@
 // apps/os and each app on top, `<prefix>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed by
 // the same build and `wrangler deploy` as prd (scripts/deploy.ts, deployApp). The effects half; the
 // pure halves are scripts/preview-config.ts (naming, the PR body's section) and
-// scripts/preview-sweep.ts (which deployments go). Commands:
+// scripts/preview-sweep.ts (which deployments go), and a deployment's deletes are
+// scripts/preview-delete.ts. Commands:
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
@@ -11,7 +12,8 @@
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
-//   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
+//   delete              every deployment of a prefix: a closed PR's (preview-delete.yml), its PR
+//                       body's section folded
 //   sweep               the stale deployments, the legacy Worker Previews and the former parents
 //                       (preview-sweep.ts), nightly (preview-sweep.yml)
 //   deploy-parents      main on the dev/preview account, redeployed in place (preview-parents.yml)
@@ -30,19 +32,23 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
 import {
+  OS_DOPPLER_PROJECT,
+  getEnv,
+  getOsEnv,
+  osEnvs,
+  previewDeployment,
+  type OsDeployableEnv,
+} from "../../../envs.ts";
+import {
+  appConfigSecretsOf,
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
   runAsync,
   smoke,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import {
-  CloudflareApiError,
-  resolveEnvContext,
-  type EnvContext,
-} from "../../../scripts/lib/env-context.ts";
+import { resolveEnvContext, type EnvContext } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { depotApi, workflowsInProgress } from "../../../scripts/ci/depot.ts";
@@ -70,7 +76,6 @@ import {
   stuckNamespacesStillThere,
   type ArtifactsNamespaceRow,
   type Cf,
-  type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
   accountResourceNames,
@@ -79,7 +84,7 @@ import {
   appSignInLink,
   assertFreshInstall,
   configTemplateNames,
-  foldPreviousPreviewSection,
+  foldPreviewSection,
   FORMER_PARENTS,
   MAIN_ON_DEV,
   previewDeploymentName,
@@ -94,6 +99,12 @@ import {
   templateQuickLaunches,
 } from "./preview-config.ts";
 import {
+  deleteD1,
+  deleteKvNamespace,
+  deletePreviewDeployments,
+  deleteR2Bucket,
+} from "./preview-delete.ts";
+import {
   CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
   newestPreviewDeployment,
@@ -106,7 +117,6 @@ import {
   unmappedWorkers,
   workerlessNamespaces,
   WORKERLESS_PAGE_MARKER,
-  type PreviewDeploymentListing,
   type PreviewMember,
   type PullRequestState,
   type SweptNamespace,
@@ -135,7 +145,9 @@ type Command = z.infer<typeof Command>;
  *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
  *  that is not the dev/preview one. */
 const accountContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
+  resolveEnvContext(getEnv("preview", osEnvs), {
+    dopplerProject: OS_DOPPLER_PROJECT,
+  });
 
 function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -173,62 +185,6 @@ function checkedOutCommit() {
 // ── the account's deployments: listed, grouped by name (preview-sweep.ts), deleted ─────────────
 
 type KvNamespaceRow = { id: string; title: string };
-
-/** One already gone — the sweep racing the close job, a re-run — is deleted. */
-async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow) {
-  await cf(`/storage/kv/namespaces/${row.id}`, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 10013)) throw error;
-  });
-  console.log(`deleted KV namespace ${row.title}`);
-}
-
-/** Delete an R2 bucket: its objects first (the API refuses a bucket that still holds any), then the
- *  bucket. The first thousand-key page is read again until it is empty, twenty deletes in flight —
- *  a preview's e2e run leaves tens, the soak preview's bucket held 1,908 (measured 2026-09-23) — and
- *  a ceiling keeps that bounded. A bucket that does not exist is the expected case. */
-async function deleteR2Bucket(cf: Cf, bucketName: string) {
-  const route = `/r2/buckets/${bucketName}`;
-  let deletedObjects = 0;
-  for (let round = 1; ; round++) {
-    if (round > 50)
-      throw new Error(
-        `R2 bucket ${bucketName} still holds objects after ${deletedObjects} deletes`,
-      );
-    const objects = await cf<{ key: string }[]>(`${route}/objects?per_page=1000`).catch((error) => {
-      if (isCloudflareError(error, 404, 10006)) return undefined;
-      throw error;
-    });
-    if (!objects) return console.warn(`R2 bucket ${bucketName} did not exist; continuing.`);
-    if (objects.length === 0) break;
-    for (let i = 0; i < objects.length; i += 20) {
-      await Promise.all(
-        objects.slice(i, i + 20).map(({ key }) =>
-          // a key's slashes are its path: each segment encoded, the slashes kept
-          cf(`${route}/objects/${key.split("/").map(encodeURIComponent).join("/")}`, {
-            method: "DELETE",
-          }).catch((error) => {
-            // one already gone (a racing delete took it, or the whole bucket) is deleted
-            if (!(error instanceof CloudflareApiError && error.status === 404)) throw error;
-          }),
-        ),
-      );
-    }
-    deletedObjects += objects.length;
-  }
-  await cf(route, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 10006)) throw error;
-  });
-  console.log(`deleted R2 bucket ${bucketName} (${deletedObjects} objects)`);
-}
-
-/** One already gone — a PR's close racing the sweep, a re-run — is deleted: Cloudflare's 404/7404,
- *  the not-found wrangler reads a D1 lookup by. */
-async function deleteD1(cf: Cf, row: { uuid: string; name: string }) {
-  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 7404)) throw error;
-  });
-  console.log(`deleted D1 ${row.name}`);
-}
 
 /** A deployment's members' suffixes (preview-sweep.ts `previewMemberSuffixes`), wrangler naming
  *  its KV after the template's bindings. */
@@ -290,65 +246,6 @@ async function listPreviewDeployments(cf: Cf) {
   return groupPreviewDeployments(await listAccountMembers(cf), memberSuffixes());
 }
 
-/** A deployment's workers first, so nothing writes to what goes next, then its KV, R2 bucket, D1
- *  and Artifacts namespace; each member one at a time settles before any failure is named. One
- *  already gone is the expected case. Resolves to its Artifacts namespace when Cloudflare will not
- *  delete it (StuckArtifactsNamespace): the rest still goes, and the nightly sweep retries and
- *  pages it. */
-async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentListing) {
-  const failures: string[] = [];
-  const stuck: StuckArtifactsNamespace[] = [];
-  const settle = async (
-    members: PreviewMember[],
-    remove: (member: PreviewMember) => Promise<void>,
-  ) => {
-    const results = await Promise.allSettled(members.map(remove));
-    results.forEach((result, index) => {
-      if (result.status === "rejected")
-        failures.push(`${members[index]!.name}: ${describe(result.reason)}`);
-    });
-  };
-  const workers = deployment.members.filter((member) => member.kind === "worker");
-  await settle(workers, async ({ name }) => {
-    // `force`: a worker with Durable Object namespaces is refused without it
-    await cf(`/workers/scripts/${name}?force=true`, { method: "DELETE" }).catch((error) => {
-      if (!isCloudflareError(error, 404, 10007)) throw error;
-    });
-    console.log(`deleted worker ${name}`);
-  });
-  await settle(
-    deployment.members.filter((member) => member.kind !== "worker"),
-    async (member) => {
-      if (member.kind === "kv") return deleteKvNamespace(cf, { id: member.id, title: member.name });
-      if (member.kind === "r2") return deleteR2Bucket(cf, member.name);
-      if (member.kind === "d1") return deleteD1(cf, { uuid: member.id, name: member.name });
-      const refused = await deleteArtifactsNamespace(cf, member.name);
-      if (refused) stuck.push(refused);
-    },
-  );
-  if (failures.length > 0)
-    throw new Error(
-      `${deployment.name}: ${failures.length} member(s) not deleted\n  ${failures.join("\n  ")}`,
-    );
-  console.log(`deleted deployment ${deployment.name} (${deployment.members.length} members)`);
-  return stuck;
-}
-
-/** Delete each of `deployments`, then fail naming the ones that did not go. A namespace Cloudflare
- *  will not delete does not fail it: the caller reports on a commit that did not cause it, and the
- *  nightly sweep retries and pages it. */
-async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentListing[]) {
-  const failures: string[] = [];
-  const stuckNamespaces: StuckArtifactsNamespace[] = [];
-  for (const deployment of deployments) {
-    await deletePreviewDeployment(cf, deployment).then(
-      (stuck) => stuckNamespaces.push(...stuck),
-      (error) => failures.push(describe(error)),
-    );
-  }
-  return { failures, stuckNamespaces };
-}
-
 /** THE PREFIX'S DEPLOYMENTS THIS ONE SUPERSEDES (preview-sweep.ts `planSupersededCleanup`): each
  *  run's `Clean up superseded` job, once its own deployment is ready. Never the run's verdict: the
  *  job does not gate the checks, and what it leaves the next run's cleanup or the sweep takes. */
@@ -385,18 +282,32 @@ async function deploymentsUnderTest(name: string): Promise<ReadonlySet<string>> 
   return new Set(runs.map((run) => previewDeploymentName(prefix, run.sha)));
 }
 
-/** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. */
-async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }) {
-  const deployments = (await listPreviewDeployments(cf)).filter(
-    (deployment) => deployment.prefix === prefix,
+/** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. A PR's
+ *  body has its section folded first (preview-config.ts `foldPreviewSection`), since its links are
+ *  about to go dead and no deploy will replace them. A body write that fails is logged, never the
+ *  delete's failure. */
+async function deletePrefix(params: {
+  cf: Cf;
+  prefix: string;
+  prNumber: string | undefined;
+  dryRun: boolean;
+}) {
+  const deployments = (await listPreviewDeployments(params.cf)).filter(
+    (deployment) => deployment.prefix === params.prefix,
   );
   for (const deployment of deployments)
     console.log(
-      `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
+      `  ${params.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
     );
-  console.log(`${deployments.length} deployment(s) of ${prefix}`);
-  if (options.dryRun) return;
-  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, deployments);
+  console.log(`${deployments.length} deployment(s) of ${params.prefix}`);
+  if (params.dryRun) return;
+  if (params.prNumber && process.env.GITHUB_TOKEN)
+    await writePullRequestBody(
+      pullRequestBody(params.prNumber),
+      "the folded deleted section",
+      (body) => foldPreviewSection(body, "Deleted deployment"),
+    ).catch((error: unknown) => console.warn(`could not fold the section: ${describe(error)}`));
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(params.cf, deployments);
   for (const stuck of stuckNamespaces)
     console.warn(
       `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
@@ -446,7 +357,7 @@ async function deployStartApp(
  *  links to the others (start-app.ts startAppWorkerConfig). preview-parents.yml runs this on every
  *  push to main. Nothing a PR deploys depends on it. Side by side; every one settles before the
  *  failed ones are named. */
-async function deployParents(ctx: EnvContext<OsEnv>) {
+async function deployParents(ctx: EnvContext<OsDeployableEnv>) {
   const credentials = {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
@@ -483,11 +394,11 @@ async function resetParent(options: { dryRun: boolean }) {
 // ── the deployment ─────────────────────────────────────────────────────────────────────────────
 
 /** The deploy, with the PR body's section folded into a previous commit's beside it
- *  (preview-config.ts `foldPreviousPreviewSection`): a deploy that fails leaves it folded, and one
+ *  (preview-config.ts `foldPreviewSection`): a deploy that fails leaves it folded, and one
  *  that lands writes its own section after the fold has landed. A body write that fails is logged,
  *  never the deploy's failure. */
 async function deployPreview(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployableEnv>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
@@ -495,10 +406,8 @@ async function deployPreview(
   const folded =
     prNumber && process.env.GITHUB_TOKEN
       ? traceOperation("Fold the previous section", () =>
-          writePullRequestBody(
-            pullRequestBody(prNumber),
-            "the folded previous section",
-            foldPreviousPreviewSection,
+          writePullRequestBody(pullRequestBody(prNumber), "the folded previous section", (body) =>
+            foldPreviewSection(body, "Previous commit's deployment"),
           ),
         ).catch((error: unknown) =>
           console.warn(`could not fold the previous section: ${describe(error)}`),
@@ -511,7 +420,7 @@ async function deployPreview(
  *  (the first listed), all of its traffic on one version, the id `/version` answers with
  *  (src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
  *  answers 404 from some locations for seconds after the deploy's smokes have passed. */
-async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
+async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: string) {
   const { deployments } = await ctx.cf<{
     deployments: { versions: { version_id: string; percentage: number }[] }[];
   }>(`/workers/scripts/${workerName}/deployments`);
@@ -529,7 +438,7 @@ async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
  *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
  *  seed and the PR body's section side by side. */
 async function deployPreviewSteps(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployableEnv>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
@@ -574,8 +483,11 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
-  const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
+  const versionId = await deployedVersion(ctx, getOsEnv(name).workerName);
+  const config = parseAppConfig({
+    ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
+    ...appConfigSecretsOf(ctx.secrets),
+  });
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
   // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
   await traceOperation("Readiness gate", () =>
@@ -590,9 +502,9 @@ async function deployPreviewSteps(
   const signIn = prNumber
     ? signInLinks({
         url,
-        ingressRouting: osEnv(name)!.ingressRouting || null,
+        ingressRouting: getOsEnv(name).ingressRouting || null,
         // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
-        providerHint: new URL(osEnv(name)!.adminIssuer!).host,
+        providerHint: new URL(getOsEnv(name).adminIssuer!).host,
         prNumber,
         apps: deployedApps,
         changedPaths: await changed,
@@ -631,7 +543,7 @@ async function deployPreviewSteps(
   const [seeded] = await Promise.all([
     signIn
       ? traceOperation("Seed sign-in", () =>
-          seedSignIn(config, { url, ...signIn, admins: osEnv(name)!.admins || [] }),
+          seedSignIn(config, { url, ...signIn, admins: getOsEnv(name).admins || [] }),
         )
       : true,
     publish(true),
@@ -1429,7 +1341,8 @@ async function main(command: Command, options: PreviewOptions) {
     return cleanupSuperseded((await accountContext()).cf, current, { dryRun });
   }
   const prefix = resolvePreviewPrefix({ name: options.name, prNumber: pr });
-  if (command === "delete") return deletePrefix((await accountContext()).cf, prefix, { dryRun });
+  if (command === "delete")
+    return deletePrefix({ cf: (await accountContext()).cf, prefix, prNumber: pr, dryRun });
   if (command === "e2e" || command === "specs")
     return runSuite(
       command,

@@ -5,12 +5,15 @@ import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shar
 import { UNPROVISIONED } from "../../envs.ts";
 
 /**
- * The minimum an app's envs.ts entry must carry for the deploy tooling:
- * which Doppler config supplies secrets and which Cloudflare account the
- * env lives in. Each app's env interface (envs.ts OsEnv, KitEnv,
- * DummyPetshopEnv; start-app.ts StartAppEnv) extends this structurally.
+ * An app's envs.ts entry and the name it was found by (envs.ts `getEnv`,
+ * `getOsEnv`), as the deploy tooling needs every one: which Doppler
+ * config supplies its secrets and which Cloudflare account it lives in. The
+ * name (`prd`, `preview`, a per-commit deployment's `pr3144-a1b2c3d`) travels
+ * with the entry because the vite build runs in its own process and finds the
+ * entry again by it (`CLOUDFLARE_ENV`).
  */
 export interface DeployableEnv {
+  name: string;
   cloudflareAccountId: string;
   dopplerConfig: string;
 }
@@ -40,7 +43,6 @@ export class CloudflareApiError extends Error {
  * the environment is always selected by name.
  */
 export interface EnvContext<E extends DeployableEnv> {
-  name: string;
   env: E;
   /** The env's full Doppler secret set. */
   secrets: Record<string, string>;
@@ -51,39 +53,31 @@ export interface EnvContext<E extends DeployableEnv> {
 }
 
 /**
- * Resolve an environment name into a full context. `env` is the explicit
- * name from the caller's `--env` flag, the only way to choose one — this
- * function never reads argv or the environment for it.
+ * Resolve an env into a full context: its Doppler secrets, checked against
+ * the Cloudflare account envs.ts says it lives in. The caller looks the env
+ * up by its `--env` flag, the only way to choose one; this function never
+ * reads argv or the environment for it.
  */
-export async function resolveEnvContext<E extends DeployableEnv>(options: {
-  envs: Record<string, E>;
-  /** Doppler project the env's config lives in (e.g. "os", "dash"). */
-  dopplerProject: string;
-  /** The environment name (the caller's --env flag). */
-  env: string;
-}): Promise<EnvContext<E>> {
-  const name = options.env;
-  const env = options.envs[name];
-  if (!env) {
-    throw new Error(
-      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(options.envs).join(", ")}`,
-    );
-  }
-
+export async function resolveEnvContext<E extends DeployableEnv>(
+  env: E,
+  options: {
+    /** Doppler project the env's config lives in (e.g. "os", "dash"). */
+    dopplerProject: string;
+  },
+): Promise<EnvContext<E>> {
   const secrets = loadDopplerSecrets(options.dopplerProject, env.dopplerConfig);
 
   const accountId = secrets.CLOUDFLARE_ACCOUNT_ID;
   if (accountId !== env.cloudflareAccountId) {
     throw new Error(
       `Doppler config ${options.dopplerProject}/${env.dopplerConfig} carries ` +
-        `CLOUDFLARE_ACCOUNT_ID=${accountId} but envs.ts says ${name} lives in account ` +
+        `CLOUDFLARE_ACCOUNT_ID=${accountId} but envs.ts says ${env.name} lives in account ` +
         `${env.cloudflareAccountId}. Fix whichever is wrong before proceeding.`,
     );
   }
 
   const cfV4 = cloudflareApi(secrets.CLOUDFLARE_API_TOKEN);
   return {
-    name,
     env,
     secrets,
     cf: <T>(path: string, init?: RequestInit) => cfV4<T>(`/accounts/${accountId}${path}`, init),

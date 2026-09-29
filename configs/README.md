@@ -4,24 +4,29 @@ Project creation copies a template's files into a new `/repos/config` repository
 that copy: later template changes never overwrite it. The public GitHub reference parser and
 downloader live in `packages/shared/src/config-repo-template`.
 
-- `default/` — minimal homepage and instructions; no agent runtime or subscriptions.
-- `with-agents/` — homepage plus the agents app (the `@iterate-com/agents` package, run from the
-  `agents/` folder's re-export), installed on `project/created` and on commits that change `agents/`.
+- `default/` — the homepage, the agents and voice apps, and inbound email handed to agents.
+  `agents.ts` re-exports the agents app's two classes from the npm package `@iterate-com/agents`,
+  and `voice.ts` the voice service and its relay class from `@iterate-com/voice`; the init case of
+  `worker.ts` (`project/worker-updated`) calls `installAgents(itx)` and `installVoice(itx)`, which
+  name those modules of the published config, so a commit that changes neither leaves both apps
+  running; its `email/received` case gives each email thread from a member an agent of its own. It
+  sets no schedule: an idle project sleeps.
+- `heartbeat/` — `default/` plus a heartbeat its init case sets, a schedule that appends
+  `heartbeat` on `/` every five minutes and wakes the project each time.
+- `minimal/` — the homepage and an empty `processEvent`: no agents, no schedules.
 
-A template's `package.json` names its main module in `"main"` (`worker.ts` in both presets). It and
-the files it imports may be TypeScript or JavaScript, and import packages by name as listed in `package.json` (`iterate/*` and `zod` come
-from the platform). The worker extends `ConfigWorker` from `iterate/sdk` and reaches the project
-through `this.withItx((itx) => …)`, which releases everything the call reached; lint refuses a raw
-`env.ITX.get()` (`iterate/no-raw-itx-get`). Optional `iterate.json` declares an `events` array; the
-platform subscribes the config worker's `processEventBatch(events, range)` before emitting
-`project/created`, every later commit moves the subscription to that commit's worker and manifest,
-and `ConfigWorker` hands each event to `processEvent({ event, itx })`. Templates without that
-manifest have no lifecycle subscription.
+A template's `package.json` names its main module in `"main"` (`worker.ts` in both). It and the
+files it imports may be TypeScript or JavaScript, and import packages by name as listed in
+`package.json` (`iterate/*` and `zod` come from the platform). The worker extends
+`IterateConfigEntrypoint` from `iterate/sdk`, whose docstrings say what its `fetch` and
+`processEvent` are handed; each template's `AGENTS.md` says what its own do.
 
 A template may list a pkg.pr.new dependency at a branch (`@iterate-com/agents@main` in
-`with-agents/`): the seed writes it at the commit pkg.pr.new names for it then, because the loader
+`default/`): the seed writes it at the commit pkg.pr.new names for it then, because the loader
 loads a pkg.pr.new package only at a full commit (`pinPkgPrNewDependencies` in
-`packages/shared/src/pkg-pr-new.ts`). `devDependencies` are copied as written.
+`packages/shared/src/pkg-pr-new.ts`). `devDependencies` are copied as written. The platform build
+embeds `default/` with both pins already at this checkout's own build (apps/os
+`scripts/published-package-commit.ts`).
 
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from
 `https://pkg.pr.new/iterate/iterate/iterate@main`, `@cloudflare/workers-types` and `typescript` as
@@ -30,10 +35,11 @@ checks a project's checkout, while the loader links the running platform's SDK (
 from `dependencies` is the platform's). In this repo, `pnpm typecheck:configs` checks both templates
 against the workspace packages.
 
-`session.projects.templates()` lists presets. `projects.create({ project, configRepoTemplate })`
-also accepts custom references such as `github:owner/repo#main&path:templates/example`. The API
-resolves the ref to a commit before persisting the creation request. Omit it for the minimal seed.
+`session.projects.templates()` lists presets: every folder but `default`. `projects.create({
+project, configRepoTemplate })` also accepts custom references such as
+`github:owner/repo#main&path:templates/example`. The API resolves the ref to a commit before
+persisting the creation request. Omit it for the default template.
 
 The build generates preset references using the repository commit.
 That commit must be available on GitHub and contain these folders before preset cloning can work.
-The minimal seed is embedded in the platform build and needs no GitHub request.
+The default template is embedded in the platform build and needs no GitHub request.

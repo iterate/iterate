@@ -105,7 +105,7 @@ export const AccountContract = defineProcessorContract({
   slug: "account",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "8",
+  version: "9",
   description:
     "The user's account: authentications, personal access tokens, ended and used grants, consents, the catalog of the user's own secrets and the lends of them, and the person's own connections.",
   /** THE REDUCED STATE — the record of the account, folded from the facts above: what a client
@@ -191,8 +191,6 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/cloudflare/disconnected",
     "events.iterate.com/github/connected",
     "events.iterate.com/github/disconnected",
-    "events.iterate.com/waitrose/connected",
-    "events.iterate.com/waitrose/disconnected",
     "events.iterate.com/x/connected",
     "events.iterate.com/x/disconnected",
   ],

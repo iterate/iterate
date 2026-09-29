@@ -21,13 +21,15 @@
 //       github: { appId, appSlug, oauthClientId, oauthClientSecret, privateKey, webhookSecret, githubOrigin },
 //     },
 //     secrets: { key, previousKey, adminBearer },
+//     contextBirthEvents,
 //   }
 //
 // Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
 // `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
+// it). A deploy ships every `APP_CONFIG*` var of its Doppler config (scripts/lib/deploy-helpers.ts
+// `appConfigSecretsOf`), so a new key is set in Doppler alone. A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept. The mechanism is shared with the apps on top
 // (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
@@ -49,6 +51,7 @@ import type { OAuthIntegrationProvider } from "iterate/api";
 import { sha256Hex } from "./caller.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { normalizeContextBirthEvents } from "./stream/core-processor.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -105,7 +108,23 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ] as const;
 
-export const DEFAULT_X_SCOPES = ["tweet.read", "users.read", "offline.access"];
+/** What a Connect X asks for unless told otherwise: read and post, bookmarks, likes, follows, lists
+ *  and DMs, so an agent can use the account without a second consent. X grants only what the app's
+ *  own permissions allow; the granted set is what the connection records. */
+export const DEFAULT_X_SCOPES = [
+  "tweet.read",
+  "users.read",
+  "offline.access",
+  "tweet.write",
+  "media.write",
+  "bookmark.read",
+  "bookmark.write",
+  "like.read",
+  "follows.read",
+  "list.read",
+  "dm.read",
+  "dm.write",
+];
 
 /** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
  *  client's consent screen is verified for. */
@@ -372,6 +391,25 @@ export const AppConfig = z.object({
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
     .prefault({ key: "" }),
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (stream/stream.ts `appendBirthRecord`): ordinary
+   *  events, appended in the birth's own batch after `itx/created` and `itx/woken` — the platform's
+   *  stack of what every context starts with (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`: the config
+   *  entrypoint's fan-out row and the platform hook's). The context layer appends them without
+   *  reading them. Each is checked here, at boot, and kept as the append boundary stores it
+   *  (stream/core-processor.ts `normalizeContextBirthEvents`), so a malformed one fails the
+   *  deploy, not every project context. A change reaches the contexts born after it. From envs.ts
+   *  `contextBirthEvents`, as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`. Unset ⇒ none. */
+  contextBirthEvents: z
+    .array(
+      z.strictObject({
+        type: z.string().trim().min(1, REQUIRED),
+        payload: z.record(z.string(), z.unknown()).optional(),
+        idempotencyKey: z.string().trim().min(1, REQUIRED).optional(),
+      }),
+      { error: 'expected a JSON array of events, like [{ "type": "…", "payload": {…} }]' },
+    )
+    .default([])
+    .transform(normalizeContextBirthEvents),
 });
 
 /** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing

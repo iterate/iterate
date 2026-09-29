@@ -95,8 +95,9 @@ test("anyone appends anywhere: loaded code's cd(path).append reaches the root an
       await worker("/x").cdAppend(to, { type: "note", payload: { to }, source: forged }),
     ).toMatchObject({ ok: [{ path: to, type: "note", source: { origin: "/x" } }] });
   const [landed] = (await readAll(root)).filter((event) => event.type === "note");
-  // the forged principal and platform are gone
-  expect(landed).toEqual(expect.objectContaining({ source: { origin: "/x" } }));
+  // the forged principal and platform are gone; loaded code with no SDK begins its own chain
+  // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: nothing forged is left on the source
+  expect(landed.source).toEqual({ origin: "/x", cause: expect.objectContaining({ depth: 0 }) });
   // A JAIL: a bare `itx ⇒ null`. Its code appends nowhere, and no code appends into it: the hop
   // resolves `append` through the jail's own table. A member's session still writes the fixed point.
   await root.cd("/jail").provide("itx", null);

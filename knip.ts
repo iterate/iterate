@@ -26,9 +26,10 @@ export default {
   },
   workspaces: {
     ".": {
-      // The config-repo templates: the platform loads worker.ts as a project's config worker, and
-      // an app's folder (agents/index.ts) as that app's source.
-      entry: ["configs/*/worker.ts", "configs/*/*/index.ts"],
+      // The config-repo templates: the platform loads worker.ts as a project's config entrypoint,
+      // agents.ts as the module the agents app's facets load their classes from, and voice.ts as
+      // voice's service and relay.
+      entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
       project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).

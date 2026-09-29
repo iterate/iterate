@@ -69,7 +69,9 @@ export const coreEventRenderers: EventRenderers = {
     // drew it, and nothing more
     return (
       <span className="text-purple-700">
-        Woke · {str(p.reason, "?")} · incarnation {String(p.incarnation)}
+        Woke · {str(p.cause, "?")}
+        {Array.isArray(p.due) && p.due.length > 0 ? ` (${p.due.map(String).join(", ")})` : ""}
+        {typeof p.caller === "string" ? ` (${p.caller})` : ""} · incarnation {String(p.incarnation)}
       </span>
     );
   },

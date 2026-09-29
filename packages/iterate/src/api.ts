@@ -68,10 +68,26 @@ export type SubscriptionListEntry = {
   consumes?: string[];
   configuredAtOffset: number;
   afterOffset?: number;
+  /** `false`: a FAN-OUT row — one event per call, in any order, each event retried on its own and
+   *  dead-lettered alone (`itx/subscription-delivery-failed`). Its `cursor` is how far it has
+   *  admitted events, `pending` how many events wait for a retry, and `paused` whether new events
+   *  wait for the receiver (it failed the last few distinct events: one new event is let through at
+   *  each rung of the row's own probe). */
+  ordered?: false;
+  pending?: number;
+  paused?: boolean;
   /** Set when this row hosts a facet (a processor). `restarts`: how many times the platform failed
    *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
    *  defect the context works around; the count is the cheap way to ask "how often, here"). */
-  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
+  hostedFacet?: {
+    name: string;
+    className: string;
+    cacheKey?: string;
+    mainModule?: string;
+    /** The worker's name when the source is one (`FacetSpec`): any other source is not listed. */
+    source?: unknown;
+    restarts: number;
+  };
   /** Set for a row the context delivers at-least-once (an itx expression target; a facet and a lent
    *  stub own their progress): the offset the last acked call confirmed, the retry ladder's attempt
    *  and when the next attempt is due. */
@@ -84,8 +100,31 @@ export type SubscriptionListEntry = {
  *  `cacheKey` names the build, and the caller owns "same key ⇒ same code"). */
 export type WorkerSource = Record<string, string> | ItxExpressionInput;
 
-/** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`. */
-export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
+/** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`.
+ *  `source` is the code (its modules, or an expression that produces them under `cacheKey`), or —
+ *  an expression with NO `cacheKey` — the NAME of a loaded worker: one that resolves, as a call
+ *  would, to `itx.builtins.workers.get(spec)` in the table of the context whose rule it is
+ *  (`itx.cd('/').config`, the project's published config). The facet loads that worker's source,
+ *  its producer run with that context's authority. `mainModule` names the module of the source that
+ *  exports `className` when it is not the source's entry (`agents.ts` of a config repo whose entry
+ *  is `worker.ts`): the facet runs that module's own graph, and — named by a worker whose
+ *  `manifest` has it — restarts in place, storage kept, only when that module's identity changes,
+ *  never onto an older generation. */
+export type FacetSpec = {
+  source: WorkerSource;
+  cacheKey?: string;
+  className: string;
+  mainModule?: string;
+};
+
+/** What a worker's publisher records of its source: each top-level module's `identity` (the hash
+ *  of what the loader loads with it as the main module, npm dependencies included) and the classes
+ *  it exports that a loader hosts by name, and the publication's `generation`, which only grows.
+ *  The project's config pointer carries one for every published commit of `/repos/config`. */
+export type WorkerManifest = {
+  generation: number;
+  modules: Record<string, { identity: string; classes: string[] }>;
+};
 
 /** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
 export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
@@ -146,7 +185,7 @@ export type SecretRefresh =
       kind: "oauth-refresh-token";
       tokenEndpoint: string;
       clientAuth?: ClientAuth;
-      client?: { platform: IterateAppProvider };
+      client?: { platform: IntegrationProvider };
     }
   /** A GitHub App installation's token (`POST <apiOrigin>/app/installations/<id>/access_tokens`
    *  with an App JWT) → `accessToken`, minted on first use and on a 401. The App is the deployment's
@@ -159,12 +198,6 @@ export type SecretRefresh =
       installationId: string;
       client: { platform: "github" } | { project: "github" };
     }
-  /** Waitrose's login, the username/password → session-token archetype bundled with the platform
-   *  (apps/os/src/integrations/waitrose.ts `exchange`): POST the Android app's `NewSession` GraphQL
-   *  mutation with `username`/`password` from the material → `accessToken`. Waitrose has no refresh
-   *  grant — re-login IS the refresh — so one strategy covers the first-use mint and the 401
-   *  re-mint. */
-  | { kind: "waitrose-session"; graphqlUrl: string }
   /** EXCHANGE CODE: `source` is one ES module exporting `async function exchange(material, fetch)`,
    *  which logs in (any vendor's shape: a CSRF form and its cookie, a GraphQL mutation) and returns
    *  the NEXT material — keep what the next login needs (`{ ...material, accessToken }`). It runs
@@ -229,17 +262,18 @@ export type SecretHmacVerification = {
   field?: string;
 };
 
+/** What `secrets.verifyEquals(path, input)` checks: the candidate string a request presented (a
+ *  static header token, say), and which field of a JSON material is the secret (the whole
+ *  material when omitted). */
+export type SecretEqualsVerification = {
+  value: string;
+  field?: string;
+};
+
 /** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
  *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
  *  kinds below are read off it. */
-export const INTEGRATION_PROVIDERS = [
-  "slack",
-  "google",
-  "cloudflare",
-  "github",
-  "waitrose",
-  "x",
-] as const;
+export const INTEGRATION_PROVIDERS = ["slack", "google", "cloudflare", "github", "x"] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
 /** Each provider's name as a person reads it, wherever a page or a message names one. */
@@ -248,20 +282,15 @@ export const INTEGRATION_PROVIDER_NAMES = {
   google: "Google",
   cloudflare: "Cloudflare",
   github: "GitHub",
-  waitrose: "Waitrose",
   x: "X",
 } as const satisfies Record<IntegrationProvider, string>;
 
-/** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
- *  but Waitrose, a username and a password. */
-export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
-
 /** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
  *  GitHub's connect is its App's install instead. */
-export type OAuthIntegrationProvider = Exclude<IterateAppProvider, "github">;
+export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
 
 /** The providers a person signs in with, each through iterate's app there. */
-export type SignInProvider = Exclude<IterateAppProvider, "slack" | "x">;
+export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -564,6 +593,11 @@ export type RepoHandle = InvokeHandle & {
     parent?: string | null;
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
+  /** `/repos/config` only: until commit `commitOid` (a commit's answer) is the project's published
+   *  config, which the website and every context then run — its publication's generation — or a
+   *  throw with why it is not published: its publication was refused, or main moved past it. The
+   *  platform publishes each commit in the background, a few seconds after it lands. */
+  waitForPublication(commitOid: string): Promise<{ commitOid: string; generation: number }>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
   /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
    *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:
@@ -646,7 +680,8 @@ export interface IterateContextApi {
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
   cd(path: string): IterateContextApi;
   /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
-   *  (`everyMs`); a key set again is replaced; a receipt cancels exactly the definition it names. */
+   *  (`everyMs`); a key set again is replaced, but an interval set again as it stands keeps its
+   *  clock (a failed one is revived); a receipt cancels exactly the definition it names. */
   schedules: {
     set(
       input: ScheduledAppendInput,
@@ -766,6 +801,11 @@ export interface IterateContextApi {
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
      *  the field) answers false, never a description. */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
+    /** A presented string compared with a secret WITHOUT revealing it, for a credential a caller can
+     *  only send as it is (a webhook's static header token): one bit back, constant-time, run in the
+     *  secret's facet. A secret never set (or no string at the field) answers false. A replayable
+     *  token stays replayable: prefer `verifyHmac` wherever the sender signs. */
+    verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
     /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
      *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created
      *  later included, borrows it unless its path holds a secret of its own. The project's uses are
@@ -829,14 +869,15 @@ export interface IterateContextApi {
     ): Promise<{ authorizationUrl?: string; connection: string }>;
     disconnect(provider: IntegrationProvider, connection: string): Promise<void>;
     requestFromUser(
-      provider: IterateAppProvider,
+      provider: IntegrationProvider,
       options?: { scopes?: string[] },
     ): Promise<{ url: string }>;
   };
   /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
-   *  deletes the route); `match` answers the route a request takes, which the config worker forwards
-   *  to `route.target` with `x-itx-expression` through `env.ITX.fetch` (a WebSocket upgrade included). */
+   *  deletes the route); `match` answers the route a request takes. The platform serves a request a
+   *  route takes from `route.target` (a WebSocket upgrade included), before the config worker's
+   *  fetch; a write answers once no host is served from the routes before it. */
   fetchRoutes: {
     set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
     list(): Promise<FetchRouteEntry[]>;
@@ -890,12 +931,35 @@ export interface IterateContextApi {
     claim(name: string, at: number | null): Promise<void>;
   };
   workers: {
+    /** A stateless worker loaded from `spec`: `mainModule` loads that module of the source as its
+     *  entry in place of package.json's `main`; `manifest` is its publisher's record, which a facet
+     *  or a worker named by this worker reads. `source` is as `FacetSpec`'s: an expression with no
+     *  `cacheKey` is the NAME of a loaded worker (`itx.cd('/').config`), whose code each call loads,
+     *  `mainModule` by its identity in that worker's manifest. */
     get(spec: {
       source: WorkerSource;
       cacheKey?: string;
+      mainModule?: string;
+      manifest?: WorkerManifest;
       className?: string;
       props?: unknown;
     }): InvokeHandle;
+  };
+  /** THE PLATFORM'S OWN SUBSCRIBER, the target of a fan-out row a deployment's birth events give
+   *  every project context: `deliverEvent` is the delivery loop's call alone (FORBIDDEN to anyone
+   *  else). */
+  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
+  /** HTTP WEBHOOKS, the target of a fan-out row that sends each event to another server, Stripe's
+   *  way: `webhooks.get({ url, signingSecret? }).deliverEvent` POSTs the event as JSON from this
+   *  context through its own `itx.fetch` (a context that may not fetch sends nothing), with
+   *  `iterate-event-id: <projectId><path>@<offset>` (repeats share it) and, given a signing secret (a secret
+   *  path pinned to `url`'s origin), `iterate-timestamp` and `iterate-signature: v1=<hex
+   *  HMAC-SHA256 of "<timestamp>.<body>">`. A 2xx acks; any other status retries on the event's own
+   *  ladder (~44 h); a 410 halts the row until a resume. `deliverEvent` is the delivery loop's call
+   *  alone. A signature vouches for the PROJECT, not a context: a receiver checks the body's `path`,
+   *  and loaded code names a signing secret only at the project's root. */
+  webhooks: {
+    get(spec: { url: string; signingSecret?: string }): InvokeHandle;
   };
   /** A subscription: a pure itx expression, or a live callback lent to the registry (what live state
    *  uses); `null` removes the row. The handle's dispose removes it too. */
@@ -904,6 +968,9 @@ export interface IterateContextApi {
     target: ItxExpressionInput | ((events: unknown[], range: unknown) => void) | null;
     consumes?: string[];
     afterOffset?: number;
+    /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
+     *  retried and dead-lettered on its own. Absent: the ordered queue. */
+    ordered?: false;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a
@@ -1065,7 +1132,7 @@ export interface IterateSessionApi {
     mcpOrigin: string;
     /** the providers whose iterate app this deployment holds (APP_CONFIG `integrations`): a
      *  project connects through iterate's app only there, and brings its own app anywhere */
-    iterateAppProviders: IterateAppProvider[];
+    iterateAppProviders: IntegrationProvider[];
     /** what iterate's app asks for there, by provider — what a project needs of your account before
      *  it uses it (`integrations.connect(provider, { account })`) */
     iterateAppScopes: Partial<Record<OAuthIntegrationProvider, string[]>>;

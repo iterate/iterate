@@ -15,14 +15,18 @@ its processor holds the text as a Yjs `Y.Text` and saves it.
 - **`DocsProcessor`** ([src/root.ts](src/root.ts)), on the project's root: remembers which docs
   have been opened and tells each one when a commit to its repo changed it, so an agent's
   commit reaches the open editors.
-- **`ensureDoc(project, { repo, path }, version)`** ([src/install.ts](src/install.ts)): what the Docs page
-  calls as a doc opens. Idempotent.
+- **Installing it** ([src/install.ts](src/install.ts)): a project's config repo does, as it does
+  agents: `docs.ts` re-exports the processors (`docsModule`) and the root `package.json` pins
+  `@iterate-com/docs`. The processors load from that published config (`docsFacetSpec`), so a
+  commit to the pin upgrades them. `ensureDoc(project, { repo, path })` is what the Docs page calls
+  as a doc opens: it enables both processors. Idempotent.
 - **The wire** ([src/frames.ts](src/frames.ts)): event types, payload schemas, the live state.
 
 ```ts
 import { ensureDoc } from "@iterate-com/docs/install";
 
-const doc = await ensureDoc(project, { repo: "/repos/config", path: "plans/lisbon.md" }, version);
+// the project's config: docs.ts is `export { DocDurableObject, DocsDurableObject } from "@iterate-com/docs";`
+const doc = await ensureDoc(project, { repo: "/repos/config", path: "plans/lisbon.md" });
 const { update, stateVector } = await doc.facets.get("doc").sync(myStateVector, myClientId);
 ```
 

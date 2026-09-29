@@ -17,8 +17,7 @@ on:
       - "!apps/kit/firmware/**"
       - packages/ui/**
       - packages/shared/**
-      # Prepare's installer (@iterate-com/voice/install and @iterate-com/agents/install)
-      - packages/agents/**
+      # Prepare's voice check (@iterate-com/voice/install)
       - packages/voice/**
       - packages/iterate/**
       - package.json

@@ -38,7 +38,12 @@ import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
-import type { SecretHmacVerification, SecretMaterial, SecretRefresh } from "iterate/api";
+import type {
+  SecretEqualsVerification,
+  SecretHmacVerification,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/api";
 import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
@@ -91,6 +96,7 @@ import {
   signLendUse,
   substituteProjectSecrets,
   substituteSecretInFrame,
+  verifySecretEquals,
   verifySecretHmac,
   type SecretRecord,
 } from "../secrets.ts";
@@ -496,6 +502,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     return verifySecretHmac(material, input);
   }
 
+  /** THE EQUALS OPERATION: is `value` this secret's string (at `field`)? Opened HERE, one bit out,
+   *  the pin not consulted, exactly as `verifyHmac`: a secret never set or a material with no string
+   *  at the field answers false, and the comparison is constant-time. */
+  async verifyEquals(input: SecretEqualsVerification): Promise<boolean> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) return false;
+    const { material } = await this.#opened(stored);
+    return verifySecretEquals(material, input);
+  }
+
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
    *  platform-signed claim naming this context, a nonce only this attempt knows and `next`; the
    *  redirect URI is the platform's callback for the client (secret-oauth.ts). A new attempt replaces an unfinished one;
@@ -645,7 +661,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   };
 
   /** A CLIENT SECRET THIS SECRET HOLDS, for another secret's token request to `origin`
-   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`): the value, or the
+   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`) or a webhook's
+   *  signature to it (context/built-ins.ts `webhookSigningKey`): the value, or the
    *  string at `field` of a JSON one, while `origin` is in the pin, which binds this use as it binds
    *  every other. Only material of its own: a borrowed secret is refused. Never in `publicMethods`. */
   async clientSecretFor(input: { origin: string; field?: string }): Promise<string> {

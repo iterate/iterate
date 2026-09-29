@@ -11,7 +11,7 @@ import {
   appSignInLink,
   assertFreshInstall,
   configTemplateNames,
-  foldPreviousPreviewSection,
+  foldPreviewSection,
   MAX_PREVIEW_PREFIX_LENGTH,
   previewDeploymentName,
   previewDeploymentUrls,
@@ -127,8 +127,8 @@ const section = renderPullRequestSection({
     },
   ],
   templates: [
-    { name: "default", link: `${DASH}/.auth/login?next=default`, fromHead: "bbbbbbbbb0123456" },
-    { name: "with-agents", link: `${DASH}/.auth/login?next=with-agents` },
+    { name: "default", link: `${DASH}/.auth/login?next=default` },
+    { name: "minimal", link: `${DASH}/.auth/login?next=minimal`, fromHead: "bbbbbbbbb0123456" },
   ],
   seed: { project: "pr123", seeded: true },
 });
@@ -143,7 +143,7 @@ test("the PR body's managed section: the deployment, then one row per worker wit
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
     | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/notes/projects/pr123) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
+    New project from template: [default ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [minimal at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=minimal)"
   `);
 });
 
@@ -165,7 +165,7 @@ test("the PR body's managed section: says so when CI's seed of the test project 
 
 test("a new deploy folds the previous commit's section, keeping the author's text byte for byte; the next section it writes is unfolded again", () => {
   const body = withSection("What this PR does.\n");
-  const folded = foldPreviousPreviewSection(body);
+  const folded = foldPreviewSection(body, "Previous commit's deployment");
   expect(folded).toMatchInlineSnapshot(`
     "What this PR does.
 
@@ -178,7 +178,7 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
     | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/notes/projects/pr123) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
-    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
+    New project from template: [default ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [minimal at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=minimal)
 
     </details>
     <!-- /os-preview -->
@@ -186,24 +186,34 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
   `);
   expect(folded.startsWith("What this PR does.\n\n")).toBe(true);
   // folding twice (a retried deploy, a second push before the first deploy landed) changes nothing
-  expect(foldPreviousPreviewSection(folded)).toBe(folded);
+  expect(foldPreviewSection(folded, "Previous commit's deployment")).toBe(folded);
   expect(withSection(folded)).toBe(body);
 });
 
 test("a new deploy leaves a body without the section alone", () => {
-  expect(foldPreviousPreviewSection("What this PR does.\n")).toBe("What this PR does.\n");
+  expect(foldPreviewSection("What this PR does.\n", "Previous commit's deployment")).toBe(
+    "What this PR does.\n",
+  );
+});
+
+test("closing the PR folds its section as deleted, with nothing to replace it", () => {
+  const folded = foldPreviewSection(withSection("What this PR does.\n"), "Deleted deployment");
+  expect(folded).toContain(
+    "<!-- os-preview -->\n<details><summary>Deleted deployment: <code>pr123-ccccccc</code></summary>",
+  );
+  expect(withSection(folded)).toBe(withSection("What this PR does.\n"));
 });
 
 // ── template quick-launch links: the Dash's New project sheet, one click ──
 
 test("a `Sign in ↗` link is the app's own sign-in, landing where the link lands, suggesting the way a reviewer signs in and naming whom the consent page pre-fills", () => {
-  const link = appSignInLink(`${DASH}/projects?new=1&template=with-agents`, {
+  const link = appSignInLink(`${DASH}/projects?new=1&template=minimal`, {
     provider_hint: "os.iterate.com",
     login_hint: "pr123@preview.iterate.test",
   });
   expect(link.startsWith(`${DASH}/.auth/login?`)).toBe(true);
   expect(Object.fromEntries(new URL(link).searchParams)).toEqual({
-    next: "/projects?new=1&template=with-agents",
+    next: "/projects?new=1&template=minimal",
     provider_hint: "os.iterate.com",
     login_hint: "pr123@preview.iterate.test",
   });
@@ -280,21 +290,25 @@ test("the seed's route for a proxied app: the routing slug of its name, members 
 
 test("every configs/ directory is a config template", () => {
   expect(configTemplateNames(path.resolve(import.meta.dirname, "../../.."))).toEqual(
-    expect.arrayContaining(["default", "with-agents"]),
+    expect.arrayContaining(["default", "minimal"]),
   );
 });
 
 test.for([
   {
-    name: "a template this PR changes is the PR head's copy, an unchanged one its name",
-    changedPaths: ["configs/default/AGENTS.md", "configs/with-agents-v2/x.md"],
+    name: "a template this PR changes is the PR head's copy, an unchanged one its name, and default the preview's own",
+    changedPaths: [
+      "configs/default/AGENTS.md",
+      "configs/minimal/worker.ts",
+      "configs/other-v2/x.md",
+    ],
     expected: [
+      { name: "default", next: `${DASH}/projects?new=1&template=default` },
       {
-        name: "default",
+        name: "minimal",
         fromHead: "bbbbbbbbb0123456",
-        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fdefault`,
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fminimal`,
       },
-      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
     ],
   },
   {
@@ -302,14 +316,14 @@ test.for([
     changedPaths: ["apps/os/src/worker.ts", "configs/README.md"],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
-      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
+      { name: "minimal", next: `${DASH}/projects?new=1&template=minimal` },
     ],
   },
 ])("template quick-launch: $name", ({ changedPaths, expected }) => {
   expect(
     templateQuickLaunches({
       dashUrl: DASH,
-      templates: ["default", "with-agents"],
+      templates: ["default", "minimal"],
       changedPaths,
       headSha: "bbbbbbbbb0123456",
     }),
@@ -319,13 +333,13 @@ test.for([
 test("template quick-launch: the Dash reads the PR head's reference back out of the link", () => {
   const [link] = templateQuickLaunches({
     dashUrl: DASH,
-    templates: ["default"],
-    changedPaths: ["configs/default/AGENTS.md"],
+    templates: ["minimal"],
+    changedPaths: ["configs/minimal/AGENTS.md"],
     headSha: "bbbbbbbbb0123456",
   });
   expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
     new: "1",
-    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/default",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/minimal",
   });
 });
 

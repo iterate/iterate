@@ -19,41 +19,27 @@ import type { FacetSpec } from "iterate/api";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
+import { agentsFacetSpec } from "./install.ts";
+
+/** How long `create` and `delete` wait for the agent's certificate in all. */
+const CERTIFICATE_WAIT_MS = 30_000;
+/** How long ONE call on the agent's context waits before it is asked again on a fresh call, so an
+ *  instance Cloudflare replaces under the wait costs one slice (apps/os project/collection.ts
+ *  `TERMINAL_WAIT_SLICE_MS` says why). */
+const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly withItx: WithItx;
   private readonly catalog: () => Promise<AgentCatalogState>;
-  private readonly spec: () => Promise<FacetSpec>;
   private readonly base: string;
 
-  constructor(
-    withItx: WithItx,
-    catalog: () => Promise<AgentCatalogState>,
-    spec: () => Promise<FacetSpec>,
-    base = "/",
-  ) {
+  constructor(withItx: WithItx, catalog: () => Promise<AgentCatalogState>, base = "/") {
     super();
     this.withItx = withItx;
     this.catalog = catalog;
-    this.spec = spec;
     this.base = base;
-  }
-
-  /** Rebind every listed agent's `agent` row to this build when the app is installed or updated. A
-   * context whose row is off keeps it off; grants, sandbox rules and conversation history are
-   * untouched. */
-  async upgrade() {
-    const spec = await this.spec();
-    for (const { path } of await this.list()) {
-      await this.withItx(async (itx) => {
-        const context = itx.cd(path);
-        const rows = await context.processors.list();
-        if (rows.some((row) => row.name === "agent"))
-          await context.processors.enable("agent", spec);
-      });
-    }
   }
 
   get(path: string) {
@@ -92,7 +78,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       const dead = new Error(`agent ${path}: deleted — not re-creatable`);
       if ((await this.catalog()).deleted[path]) throw dead;
       const context = itx.cd(path);
-      const spec = await this.spec();
+      const spec = agentsFacetSpec("AgentDurableObject");
       // The facet is this app's AgentDurableObject and `snapshot()` the engine's
       // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
       const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
@@ -111,7 +97,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         ({ state } = await snapshot(["get", "agent", spec]));
       }
       if (state.deletion) throw dead;
-      // Rebind existing agents after an app upgrade without changing their grants or history.
+      // The agent's row: its birth enables it, and enabling it again appends nothing.
       await context.processors.enable("agent", spec);
       if (state.creation?.status === "created") return { path };
       let requestedAtOffset: number;
@@ -152,10 +138,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }
-      const settled = (await context.waitForEvent({
-        type: ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
-        afterOffset: requestedAtOffset,
-      })) as unknown as StreamEvent;
+      const settled = await agentCertificate(
+        context,
+        path,
+        ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
+        requestedAtOffset,
+      );
       if (settled.type === "events.iterate.com/agent/create-failed")
         throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);
       return { path };
@@ -216,10 +204,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
           })) as unknown as StreamEvent[];
           requestedAtOffset = requested!.offset;
         }
-        await context.waitForEvent({
-          type: "events.iterate.com/agent/deleted",
-          afterOffset: requestedAtOffset,
-        });
+        await agentCertificate(
+          context,
+          path,
+          ["events.iterate.com/agent/deleted"],
+          requestedAtOffset,
+        );
       }
       // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
       // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
@@ -229,6 +219,53 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         await context.processors.disable("agent");
       return { path };
     });
+  }
+}
+
+/** The first of `types` on the agent's log after `afterOffset`, waited for CERTIFICATE_WAIT_MS in
+ *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call: apps/os project/collection.ts
+ *  `#terminalFact`'s wait, whose doc says why the wake record rides along. */
+async function agentCertificate(
+  context: { waitForEvent(filter: object): unknown },
+  path: string,
+  types: string[],
+  afterOffset: number,
+): Promise<StreamEvent> {
+  const started = Date.now();
+  let after = afterOffset;
+  let slicesTimedOut = 0;
+  for (;;) {
+    const remainingMs = started + CERTIFICATE_WAIT_MS - Date.now();
+    if (remainingMs <= 0)
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `agent ${path}: no ${types.join(" or ")} after offset ${afterOffset} within ${CERTIFICATE_WAIT_MS}ms`,
+      );
+    let event: StreamEvent;
+    try {
+      // Over the loopback stub a wait's answer types as an RPC result; the wire copied it.
+      event = (await context.waitForEvent({
+        type: [...types, "events.iterate.com/itx/woken"],
+        afterOffset: after,
+        timeoutMs: Math.min(CERTIFICATE_WAIT_SLICE_MS, remainingMs),
+      })) as StreamEvent;
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      slicesTimedOut += 1;
+      continue;
+    }
+    if (event.type !== "events.iterate.com/itx/woken") return event;
+    if (slicesTimedOut > 0)
+      console.warn({
+        event: "agent-collection.platform-failure-wait-moved",
+        message:
+          "the agent's context was reborn under a wait that never saw it: waited again on the active instance",
+        path,
+        types: types.join(","),
+        waitedMs: Date.now() - started,
+        slicesTimedOut,
+      });
+    after = event.offset;
   }
 }
 

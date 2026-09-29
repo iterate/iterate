@@ -2,7 +2,7 @@
 // into threads. No effect: a PURE FOLD, so a unit test constructs it with `new` and reduces rows
 // (processor.test.ts).
 import { type ConsumedEvent, type ReduceArgs, StreamProcessor } from "iterate/stream/processor";
-import { EmailContract, type EmailState } from "./contract.ts";
+import { EmailContract, type EmailState } from "iterate/email";
 
 export class EmailProcessor extends StreamProcessor<
   EmailState,

@@ -1,4 +1,4 @@
-// Docs, served through a project's config worker (apps/docs/config-worker.ts) like Notes: a new doc
+// Docs, served on a project's `docs` routing slug like Notes: a new doc
 // in the project's config repo, written with the editor's shortcuts and co-edited live by two
 // people through the doc's processor (@iterate-com/docs); a commit an agent makes reaches both open
 // editors; and when both have left, the processor commits it all at once, the first to type as the
@@ -8,7 +8,7 @@ import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 import { workerBaseUrl } from "../test-support/worker-base-url.ts";
-import { consent, publishDocsConfigWorker } from "./support.ts";
+import { consent, serveDocs } from "./support.ts";
 
 test("two people write a doc together: shortcuts, each other's typing live, an agent's commit live, and one commit when they leave", async ({
   page,
@@ -22,7 +22,7 @@ test("two people write a doc together: shortcuts, each other's typing live, an a
       routingSlug: "docs",
       path,
     })!;
-  await publishDocsConfigWorker(fixture.itx, new URL(helpers.appOrigin("docs")));
+  await serveDocs(fixture.itx, new URL(helpers.appOrigin("docs")));
   await page.goto(proxied("/projects").href);
   if (ingressRouting?.type === "subdomains") await consent(page, proxied("/").host);
 

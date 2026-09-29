@@ -26,23 +26,32 @@
 //     so the alarm's pass retries its ladder.
 //   • A SUPERSEDED evaluation (the row replaced while its target evaluated) can neither classify nor
 //     invoke its replacement.
+//   • FAN-OUT (`ordered: false`): one event per call, at most eight out, each event on its own
+//     ladder and dead-lettered alone — a poison, a hung and a permanent event, an eviction mid-call,
+//     a receiver that is down, the memory budget, the loop rule and the writes it costs.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, test, vi } from "vitest";
 import { print, type ItxExpression } from "iterate/expression";
 import { codedError } from "iterate/lib";
-import type { StreamEvent, ScannedRange } from "iterate/stream/processor";
+import type { StreamEvent, StreamEventInput, ScannedRange } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
+import { causeOfDelivery, type Cause } from "../cause.ts";
 import { AlarmCoordinator } from "../alarm-coordinator.ts";
 import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
+import { SNAPSHOT_TTL_MS } from "../context/rule-snapshots.ts";
 import {
   RECENT_EPHEMERALS_BUDGET_CHARS,
   Stream,
   type DurableObjectStorageSlice,
+  type Wake,
 } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
 import { normalizeControlEvent } from "./core-processor.ts";
 
 const MiB = 1024 * 1024;
+/** The cause a rig's delivery runs under, as the DO's caller store holds it. */
+const causes = new AsyncLocalStorage<Cause>();
 
 // ── the pending push is bounded ──
 
@@ -527,15 +536,17 @@ test.for([
       }
     );
   });
+  const cause = { chain: "a test's chain", depth: 0 };
   const overhead = JSON.stringify({
     type: "blob",
     payload: { blob: "" },
-    source: { origin: "/" }, // the stream's own stamp of where an unstamped event came from
+    source: { cause, origin: "/" }, // the stream's own stamp of where an unstamped event came from
     createdAt: new Date().toISOString(),
   }).length;
   const [big] = rig.stream.append({
     type: "blob",
     payload: { blob: "x".repeat(8 * MiB - overhead - bodyShortfall) },
+    source: { cause },
   });
   // `history` must READ the page holding the big event (the whole log); `now` is "from now".
   rig.stream.append(
@@ -624,6 +635,56 @@ test("a rule re-point re-classifies, push → cursor: a facet row re-pointed at 
   await drainDeliveries();
   expect(sinkCalls).toBe(2);
   expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 2 });
+});
+
+// ── a target evaluated through another context's rules lasts as long as the snapshot it read ──
+
+test("an evaluated target is reused until the snapshot it was read through expires, then evaluated again; a callback revoked since is never called after", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    const calls: string[] = [];
+    const remotes: Record<string, unknown> = {
+      old: {
+        push: (events: { payload?: { n?: number } }[]) => void calls.push(`old:${ns(events)}`),
+      },
+      new: {
+        push: (events: { payload?: { n?: number } }[]) => void calls.push(`new:${ns(events)}`),
+      },
+    };
+    let remote = "old"; // what `itx.remote` resolves to in the other context's live table
+    const rig = incarnation(
+      (printed) => (printed === "itx.remote" ? remotes[remote] : undefined),
+      undefined,
+      { validForMs: 5_000 },
+    );
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name: "s", target: "itx.remote.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
+    );
+    const ping = async (n: number) => {
+      rig.stream.append({ type: "demo/ping", payload: { n } });
+      await drainDeliveries();
+    };
+    await ping(1);
+    const evaluatedAt = Date.now();
+    remote = "new"; // re-pointed there: this context's own table is unchanged
+    vi.setSystemTime(evaluatedAt + 4_999);
+    await ping(2);
+    vi.setSystemTime(evaluatedAt + 5_000);
+    await ping(3);
+    remote = "masked"; // revoked there
+    vi.setSystemTime(evaluatedAt + 10_000);
+    await ping(4);
+    expect(calls).toEqual(["old:1", "old:2", "new:3"]);
+    expect(rig.evaluated.filter((printed) => printed === "itx.remote")).toHaveLength(3);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // ── a superseded evaluation can neither classify nor invoke its replacement ──
@@ -1228,6 +1289,43 @@ test("alarm claim: a target whose CALL is refused as unresolvable (a sibling con
   expect(rig.delivery.deadlines()).toEqual([]);
 });
 
+test("alarm claim: a target another context's snapshot refused, read before the attempt, claims until that snapshot expires and is evaluated once more then; refused by a snapshot read since, it claims nothing", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    let snapshotSentAt = Date.now() - 1_000; // before the attempt: the other context may have the name by now
+    const rig = incarnation((printed) => {
+      if (printed !== "itx.far") return undefined;
+      throw Object.assign(codedError("NO_ITX_EXPRESSION_MATCH", "no rewrite rule matches at /"), {
+        validUntil: snapshotSentAt + SNAPSHOT_TTL_MS,
+      });
+    });
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name: "s", target: "itx.far.push", consumes: ["demo/ping"] },
+        },
+        "/",
+      ),
+    );
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await drainDeliveries();
+    const until = snapshotSentAt + SNAPSHOT_TTL_MS;
+    expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0, nextAttemptAtMs: until });
+    expect(rig.delivery.deadlines()).toMatchObject([{ name: "s", at: until }]);
+    vi.setSystemTime(until);
+    snapshotSentAt = Date.now(); // the attempt's own read
+    await rig.pass();
+    await drainDeliveries();
+    expect(rig.evaluated.filter((printed) => printed === "itx.far")).toHaveLength(2);
+    expect(rig.delivery.cursor("s")).toMatchObject({ attempt: 0 });
+    expect(rig.delivery.cursor("s")?.nextAttemptAtMs).toBeUndefined();
+    expect(rig.delivery.deadlines()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("alarm claim: a cursor row re-pointed at a facet drops its cursor and its claim on that rule commit; the delivery loop never pays for a target that owns its progress", async () => {
   const rig = parkedSinkRig();
   rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
@@ -1460,6 +1558,1112 @@ test.for([
   }).toEqual(expected);
 });
 
+// ── FAN-OUT: one event per call, any order, every event retried and dead-lettered on its own ──
+
+test("fan-out: a poison event does not hold up the events after it — they are acked before its first retry, and its ladder is its own", async () => {
+  const rig = fanOutRig({ behave: ({ n }) => (n === 2 ? "fail" : "ack") });
+  const [, poison] = rig.pings(1, 2, 3, 4);
+  await drainDeliveries();
+  expect(rig).toMatchObject({ acked: [1, 3, 4] });
+  expect(rig.records()).toMatchObject([{ offset: poison.offset, attempt: 1 }]);
+  // the settled prefix is past every event: acked, or pending a retry
+  expect(rig.delivery.cursor("f")).toMatchObject({ confirmedOffset: rig.head(), attempt: 0 });
+  expect(rig.delivery.cursor("f")?.nextAttemptAtMs).toBeUndefined();
+  await rig.passAfterEveryRung();
+  expect(rig.attemptsOf(2)).toBe(2);
+  expect(rig.records()).toMatchObject([{ offset: poison.offset, attempt: 2 }]);
+  expect(rig.stream.coreReducedState.subscriptions.f.halted).toBeUndefined();
+});
+
+test("fan-out: two failing events retry independently — each keeps its own attempt count, and one recovering acks alone", async () => {
+  let healed = false;
+  const rig = fanOutRig({
+    behave: ({ n }) => (n === 1 && healed ? "ack" : n === 3 ? "ack" : "fail"),
+  });
+  const [a, b] = rig.pings(1, 2, 3);
+  await drainDeliveries();
+  expect(rig.records()).toMatchObject([
+    { offset: a.offset, attempt: 1 },
+    { offset: b.offset, attempt: 1 },
+  ]);
+  await rig.passAfterEveryRung();
+  await rig.passAfterEveryRung();
+  expect(rig.records()).toMatchObject([
+    { offset: a.offset, attempt: 3 },
+    { offset: b.offset, attempt: 3 },
+  ]);
+  healed = true;
+  await rig.passAfterEveryRung();
+  expect(rig.records()).toMatchObject([{ offset: b.offset, attempt: 4 }]);
+  expect(rig).toMatchObject({ acked: [3, 1] });
+});
+
+test("fan-out: a failed event waits for its rung — five idle alarm passes before it deliver each event once", async () => {
+  const rig = fanOutRig({ behave: ({ n }) => (n === 2 || n === 3 ? "fail" : "ack") });
+  rig.pings(1, 2, 3, 4, 5);
+  await drainDeliveries();
+  for (let pass = 0; pass < 5; pass++) {
+    await rig.pass();
+    await drainDeliveries();
+  }
+  expect(rig).toMatchObject({ calls: [1, 2, 3, 4, 5], acked: [1, 4, 5] });
+});
+
+test.for([
+  {
+    name: "a PERMANENT_FAILURE of one event dead-letters that event alone, with no retry and no halt",
+    error: "PERMANENT_FAILURE",
+    expected: { deadLetters: 1, halted: false, acked: [1, 3], owed: [] },
+  },
+  {
+    name: "an EVENT_TOO_LARGE of one event dead-letters that event alone",
+    error: "EVENT_TOO_LARGE",
+    expected: { deadLetters: 1, halted: false, acked: [1, 3], owed: [] },
+  },
+  {
+    name: "NOT_A_METHOD is the target's, not the event's: the row halts, the event owed with its attempt unspent",
+    error: "NOT_A_METHOD",
+    expected: { deadLetters: 0, halted: true, acked: [1], owed: [2] },
+  },
+  {
+    name: "FORBIDDEN is the target's too: the row halts, the event owed",
+    error: "FORBIDDEN",
+    expected: { deadLetters: 0, halted: true, acked: [1], owed: [2] },
+  },
+] as const)("fan-out: $name", async ({ error, expected }) => {
+  const rig = fanOutRig({ behave: ({ n }) => (n === 2 ? codedError(error, "no") : "ack") });
+  rig.pings(1);
+  await drainDeliveries();
+  rig.pings(2);
+  await drainDeliveries();
+  rig.pings(3);
+  await drainDeliveries();
+  expect({
+    deadLetters: rig.deadLetters().length,
+    halted: Boolean(rig.stream.coreReducedState.subscriptions.f.halted),
+    acked: rig.acked,
+    owed: rig.records().map(({ offset }) => offset),
+  }).toEqual({ ...expected, owed: expected.owed.map(rig.offsetOf) });
+  for (const record of rig.records())
+    expect(record).toMatchObject({ attempt: 0, nextAttemptAtMs: null, leased: false });
+  if (expected.deadLetters)
+    expect(rig.deadLetters()[0]).toMatchObject({
+      payload: { name: "f", offset: rig.offsetOf(2), attempts: 1, error: "no" },
+    });
+});
+
+test("fan-out: a call that never answers keeps its slot past its 20 s watchdog; once all eight slots hold one, the incarnation is ended, and the next delivers the eight on their ladders and the ninth after them", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date", "setTimeout", "clearTimeout"] });
+  try {
+    const first = fanOutRig({ behave: ({ n }) => (n <= 8 ? "park" : "ack") });
+    first.pings(...range(1, 9));
+    await drainDeliveries();
+    expect(first).toMatchObject({ calls: range(1, 8), acked: [] }); // the bound: 9 waits
+    vi.advanceTimersByTime(20_000);
+    await drainDeliveries();
+    // every outcome is in — a failure each, on its rung — but no slot came back: no ninth call
+    expect(first).toMatchObject({ calls: range(1, 8), acked: [] });
+    expect(first.records()).toHaveLength(8);
+    expect(first.records()[0]).toMatchObject({
+      attempt: 1,
+      leased: false,
+      error: expect.stringContaining("no answer in 20s"),
+    });
+    expect(first).toMatchObject({
+      aborts: ['subscription "f": 8 deliveries unanswered past the watchdog'],
+    });
+    // THE NEXT INCARNATION, the receiver healthy again: nothing of the hung calls is left in it,
+    // the eight retry at their rungs (the first success lifts the pause the failures set) and the
+    // ninth follows
+    vi.useRealTimers();
+    const second = fanOutRig({ previous: first, behave: () => "ack" });
+    expect(second.records().map(({ offset }) => offset)).toEqual(range(1, 8).map(first.offsetOf));
+    await second.passAfterEveryRung();
+    await drainDeliveries();
+    expect(second.acked.toSorted((a, b) => a - b)).toEqual(range(1, 9));
+    expect(second.records()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("fan-out: a target whose evaluation never resolves fails at the same 20 s watchdog as a call that never answers — and keeps its slot", async () => {
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date", "setTimeout", "clearTimeout"] });
+  try {
+    const rig = incarnation((printed) =>
+      printed === "itx.sink" ? new Promise<never>(() => {}) : undefined,
+    );
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: {
+            name: "f",
+            target: "itx.sink.deliverEvent",
+            consumes: ["demo/ping"],
+            ordered: false,
+          },
+        },
+        "/",
+      ),
+    );
+    const [ping] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    await drainDeliveries();
+    let passed = false;
+    const pass = rig.pass().then(() => (passed = true));
+    vi.advanceTimersByTime(20_000);
+    await drainDeliveries();
+    await pass; // the alarm's pass waits for the outcome, which the watchdog brings in
+    expect(passed).toBe(true);
+    expect(rig.stream.storage.listSubscriptionDeliveries()).toMatchObject([
+      [
+        "f",
+        {
+          offset: ping.offset,
+          attempt: 1,
+          leased: false,
+          error: expect.stringContaining("no answer in 20s"),
+        },
+      ],
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("fan-out: at most eight calls are out at once; each settled call admits the next", async () => {
+  const rig = fanOutRig({ behave: () => "park" });
+  rig.pings(...range(1, 20));
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: range(1, 8) });
+  rig.settle(3);
+  rig.settle(5);
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: range(1, 10) });
+  expect(rig).toMatchObject({ acked: [3, 5] });
+  // admitted through the tenth; the eight still out each a leased record
+  expect(rig.delivery.cursor("f")).toMatchObject({ confirmedOffset: rig.offsetOf(10) });
+  expect(rig.records().map(({ offset, leased }) => [offset, leased])).toEqual(
+    [1, 2, 4, 6, 7, 8, 9, 10].map((n) => [rig.offsetOf(n), true]),
+  );
+});
+
+test("fan-out: the in-flight budget bounds the events a row holds: 3 MiB events are admitted two at a time within 8 MiB, not eight", async () => {
+  const rig = fanOutRig({ behave: () => "park" });
+  for (const n of range(1, 6))
+    rig.stream.append({ type: "demo/ping", payload: { n, blob: "x".repeat(3 * MiB) } });
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: [1, 2] });
+  rig.settle(1);
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: [1, 2, 3] });
+});
+
+test("fan-out: an eviction mid-call with no later commit — the leases written before the calls wake the next incarnation, which delivers each again as a SUSPECT, one at a time, each charged its own attempt", async () => {
+  const first = fanOutRig({ behave: () => "park" });
+  first.pings(1, 2, 3);
+  await drainDeliveries();
+  // ONE admission: the three leases and the cursor, before any call
+  const leases = first.records();
+  expect(leases.map(({ attempt, leased }) => [attempt, leased])).toEqual([
+    [1, true],
+    [1, true],
+    [1, true],
+  ]);
+  expect(first.delivery.cursor("f")).toMatchObject({ confirmedOffset: first.offsetOf(3) });
+  expect(first).toMatchObject({ alarms: [leases[0].nextAttemptAtMs] });
+  const second = fanOutRig({ previous: first, behave: () => "park" });
+  expect(second.delivery.deadlines()).toHaveLength(3);
+  vi.useFakeTimers({ now: leases[0].nextAttemptAtMs! + 1, toFake: ["Date"] });
+  try {
+    void second.pass();
+    await drainDeliveries();
+    expect(second).toMatchObject({ calls: [1] }); // one suspect at a time
+    expect(second.records()[0]).toMatchObject({ attempt: 2 });
+    second.settle(1);
+    await drainDeliveries();
+    expect(second).toMatchObject({ calls: [1, 2] });
+    second.settle(2);
+    await drainDeliveries();
+    second.settle(3);
+    await drainDeliveries();
+    expect(second).toMatchObject({ acked: [1, 2, 3] });
+    expect(second.records()).toEqual([]);
+    expect(second.delivery.deadlines()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("fan-out: an event that kills its caller mid-call is charged every death and dead-lettered unsent after fifteen; the event beside it, delivered as a suspect of its own, is charged none of them", async () => {
+  let rig = fanOutRig({ behave: () => "park" });
+  rig.pings(1, 2);
+  await drainDeliveries();
+  const calls: number[] = [];
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    for (let incarnations = 0; incarnations < 30; incarnations++) {
+      const [next] = rig.delivery.deadlines();
+      if (!next) break;
+      rig = fanOutRig({ previous: rig, behave: ({ n }) => (n === 1 ? "park" : "ack") });
+      vi.setSystemTime(next.at + 1);
+      void rig.pass(); // event 1's call parks: the next incarnation is its death
+      await drainDeliveries();
+      calls.push(...rig.calls);
+    }
+    expect(calls.filter((n) => n === 1)).toHaveLength(14); // + the first incarnation's: 15
+    expect(calls.filter((n) => n === 2)).toHaveLength(1);
+    expect(rig.deadLetters()).toMatchObject([
+      { payload: { name: "f", offset: rig.offsetOf(1), attempts: 15 } },
+    ]);
+    expect(rig.records()).toEqual([]);
+    expect(rig.delivery.deadlines()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test.for([
+  {
+    name: "a killer's retry, due beside the other retries",
+    killer: 1,
+    setUp: async () => {
+      const rig = fanOutRig({ behave: () => "fail" });
+      rig.pings(1, 2, 3);
+      await drainDeliveries();
+      return rig;
+    },
+  },
+  {
+    name: "a killer's first attempt, beside innocent retries",
+    killer: 3,
+    setUp: async () => {
+      const rig = fanOutRig({ behave: ({ n }) => (n === 3 ? "park" : "fail") });
+      rig.pings(1, 2);
+      await drainDeliveries();
+      vi.setSystemTime(Math.max(...rig.delivery.deadlines().map(({ at }) => at)) + 1);
+      rig.pings(3);
+      await drainDeliveries();
+      return rig;
+    },
+  },
+  {
+    name: "a killer's retry on a busy row, a new event committed as it comes due",
+    killer: 1,
+    busy: true,
+    setUp: async () => {
+      const rig = fanOutRig({ behave: () => "park" });
+      rig.pings(1);
+      await drainDeliveries();
+      return rig;
+    },
+  },
+])(
+  "fan-out: $name — a suspect runs alone, so only the event that kills its caller is dead-lettered, and every call beside a death is charged that death alone",
+  async ({ killer, busy, setUp }) => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+    try {
+      let rig = await setUp();
+      const beside: number[][] = [];
+      for (let death = 0; death < 40 && rig.records().length > 0; death++) {
+        const due = Math.max(Date.now(), ...rig.delivery.deadlines().map(({ at }) => at));
+        rig = fanOutRig({ previous: rig, behave: () => "park" });
+        vi.setSystemTime(due + 1);
+        if (busy) rig.pings(100 + death);
+        void rig.pass();
+        await drainDeliveries();
+        // every call answers but the killer's: the context dies with whatever is out beside it
+        while (!rig.calls.includes(killer)) {
+          const before = rig.calls.length;
+          for (const n of new Set(rig.calls)) rig.settle(n);
+          await drainDeliveries();
+          if (rig.calls.length === before) break;
+        }
+        if (rig.calls.includes(killer))
+          beside.push(
+            [...new Set(rig.calls)].filter((n) => n !== killer && !rig.acked.includes(n)),
+          );
+      }
+      expect(rig.deadLetters()).toMatchObject([{ payload: { offset: rig.offsetOf(killer) } }]);
+      expect(beside.slice(1).flat()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("fan-out: a down receiver pauses its row, is probed with one new event a rung, dead-letters at 15, and its first ack lifts the pause", async () => {
+  let down = true;
+  const rig = fanOutRig({ behave: () => (down ? "fail" : "ack") });
+  for (const n of range(1, 3)) {
+    rig.pings(n);
+    await drainDeliveries();
+  }
+  rig.pings(...range(4, 20));
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: [1, 2, 3] }); // paused: 4…20 wait in the log, not in the table
+  expect(rig.delivery.fanOutView("f")).toEqual({ pending: 3, paused: true });
+  const admitted = () => new Set(rig.calls).size;
+  for (let rung = 1; rung < 15; rung++) {
+    const before = admitted();
+    await rig.passAfterEveryRung(); // the retries, and ONE new event: the probe
+    expect(admitted()).toBe(before + 1);
+  }
+  expect(rig.deadLetters().map((fact) => (fact.payload as { attempts: number }).attempts)).toEqual([
+    15, 15, 15,
+  ]);
+  expect(rig.stream.coreReducedState.subscriptions.f.halted).toBeUndefined();
+  down = false;
+  await rig.passAfterEveryRung();
+  expect(rig.acked.toSorted((a, b) => a - b)).toEqual(range(4, 20));
+  expect(rig.delivery.fanOutView("f")).toEqual({ pending: 0, paused: false });
+});
+
+test.for([1, 2, 3])(
+  "fan-out: %i poison events, failing for good one after another, stall no healthy event past the row's first probe: pinged after them, 4…10 are acked one rung later",
+  async (poisoned) => {
+    const rig = fanOutRig({ behave: ({ n }) => (n <= poisoned ? "fail" : "ack") });
+    for (const n of range(1, poisoned)) {
+      rig.pings(n);
+      await drainDeliveries();
+    }
+    rig.pings(...range(4, 10));
+    await drainDeliveries();
+    await rig.passAfterEveryRung();
+    expect(rig.acked.toSorted((a, b) => a - b)).toEqual(range(4, 10));
+  },
+);
+
+test("fan-out: one event in a hundred poisoned, over 5,000 pings, stalls nothing — every healthy event is acked with no time passing", async () => {
+  const rig = fanOutRig({ behave: ({ n }) => (n % 100 === 0 ? "fail" : "ack") });
+  rig.pings(...range(1, 5_000));
+  for (let turn = 0; turn < 100 && rig.acked.length < 4_950; turn++) await nextMacrotask();
+  expect(rig.acked).toHaveLength(4_950);
+  expect(rig.records()).toHaveLength(50);
+});
+
+test("fan-out: an operator's resume `{ name, offset }` delivers a dead-lettered event again, from attempt 0", async () => {
+  let poisoned = true;
+  const rig = fanOutRig({
+    behave: ({ n }) => (n === 1 && poisoned ? codedError("PERMANENT_FAILURE", "bad") : "ack"),
+  });
+  const [one] = rig.pings(1);
+  await drainDeliveries();
+  expect(rig.deadLetters()).toHaveLength(1);
+  poisoned = false;
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "f", offset: one.offset },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  expect(rig).toMatchObject({ acked: [1] });
+  expect(rig.records()).toEqual([]);
+});
+
+test("fan-out: a pending retry stays on its rung, its attempt unspent, while its target resolves where it did; once a rule re-points the target (the config pointer moved), the row's next evaluation tries every pending delivery at once", async () => {
+  let publication = 1;
+  const rig = fanOutRig({
+    behave: () => (publication === 2 ? "ack" : "fail"),
+    options: { validForMs: 20, routeOf: (printed) => `${printed}@${publication}` },
+  });
+  rig.pings(1);
+  await drainDeliveries();
+  const pending = rig.records();
+  expect(pending[0].nextAttemptAtMs).toBeGreaterThan(Date.now() + 500);
+  // re-evaluated where it resolved before: its rung stands
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  rig.pings(2);
+  await drainDeliveries();
+  expect(rig.records().map(({ offset }) => offset)).toEqual([pending[0].offset, rig.offsetOf(2)]);
+  expect(rig.records()[0]).toEqual(pending[0]);
+  // the pointer moves: the next evaluation, for a new event, resolves elsewhere and retries both
+  publication = 2;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  rig.pings(3);
+  await drainDeliveries();
+  expect(rig.acked.sort()).toEqual([1, 2, 3]);
+  expect(rig.records()).toEqual([]);
+});
+
+test("fan-out: a re-point while the context slept is seen by its next incarnation's first evaluation: every pending delivery is due at once, never on its rung", async () => {
+  let publication = 1;
+  const options = {
+    validForMs: 20,
+    routeOf: (printed: string) => `${printed}@${publication}`,
+  };
+  const first = fanOutRig({ behave: () => "fail", options });
+  first.pings(1);
+  await drainDeliveries();
+  expect(first.records()[0]!.nextAttemptAtMs).toBeGreaterThan(Date.now() + 500);
+  // the context is evicted, and the pointer moves before it wakes
+  publication = 2;
+  const next = fanOutRig({ previous: first, behave: () => "ack", options });
+  next.pings(2);
+  await drainDeliveries();
+  expect(next.acked.sort()).toEqual([1, 2]);
+  expect(next.records()).toEqual([]);
+});
+
+test("fan-out: a webhook row's pending retry stays on its rung when its target resolves elsewhere — a config commit re-points no receiver", async () => {
+  let publication = 1;
+  const rig = incarnation(
+    (printed) =>
+      printed.startsWith("itx.webhooks")
+        ? {
+            deliverEvent: async () => {
+              throw new Error("webhook https://hooks.test/in answered 500");
+            },
+          }
+        : undefined,
+    undefined,
+    { validForMs: 20, routeOf: (printed) => `${printed}@${publication}` },
+  );
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "hook",
+          target: "itx.webhooks.get({ url: 'https://hooks.test/in' }).deliverEvent",
+          ordered: false,
+        },
+      },
+      "/",
+    ),
+  );
+  rig.stream.append({ type: "demo/ping", payload: {} });
+  await drainDeliveries();
+  const pending = rig.stream.storage.listSubscriptionDeliveries();
+  expect(pending).toHaveLength(1);
+  publication = 2;
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  rig.stream.append({ type: "demo/ping", payload: {} });
+  await drainDeliveries();
+  expect(rig.stream.storage.listSubscriptionDeliveries()[0]).toEqual(pending[0]);
+});
+
+test("fan-out: a row whose target resolves to nothing waits — no attempt spent — and the commit that lands its rule delivers what waited", async () => {
+  let provided = false;
+  const rig = fanOutRig({ behave: () => "ack", provided: () => provided });
+  rig.pings(1, 2);
+  await drainDeliveries();
+  expect(rig).toMatchObject({ calls: [] });
+  // both owed, their attempts unspent, no time: they wait for the target
+  expect(rig.records().map(({ attempt, nextAttemptAtMs }) => [attempt, nextAttemptAtMs])).toEqual([
+    [0, null],
+    [0, null],
+  ]);
+  provided = true;
+  rig.stream.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.sink", target: "itx.kv" },
+  });
+  await drainDeliveries();
+  expect(rig.acked.sort()).toEqual([1, 2]);
+  expect(rig.delivery.deadlines()).toEqual([]);
+});
+
+test("fan-out: a dangling row with a backlog is never left waiting for a commit of its own — it probes its target on its own ladder, DELIVERY_MAX_ATTEMPTS (15) times, then waits for a commit", async () => {
+  let provided = false;
+  const rig = fanOutRig({ behave: () => "ack", provided: () => provided });
+  rig.pings(1);
+  await drainDeliveries();
+  const probes: number[] = [];
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    for (;;) {
+      const [probe] = rig.delivery.deadlines();
+      if (!probe) break;
+      probes.push(probe.at);
+      vi.setSystemTime(probe.at + 1);
+      await rig.pass();
+      await drainDeliveries();
+    }
+    expect(probes).toHaveLength(15);
+    // the probes back off: each later than the last by more than the one before
+    expect(probes.at(-1)! - probes.at(-2)!).toBeGreaterThan(probes[1]! - probes[0]!);
+    expect(rig).toMatchObject({ calls: [] });
+    // any commit of its own tries it again
+    provided = true;
+    rig.stream.append({ type: "demo/other" });
+    await drainDeliveries();
+    expect(rig).toMatchObject({ acked: [1] });
+    expect(rig.delivery.deadlines()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("fan-out: a dangling row another context's snapshot refused waits rather than fails: it probes on its ladder, never before that snapshot expires, and past DELIVERY_MAX_ATTEMPTS on its top rung — the pointer landing on the root reaches it at its next probe, with no commit of its own", async () => {
+  let provided = false;
+  const rig = fanOutRig({
+    behave: () => "ack",
+    provided: () => provided,
+    options: { refusedForMs: 5_000 },
+  });
+  rig.pings(1);
+  await drainDeliveries();
+  const probes: number[] = [];
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    // twenty probes in, five past the budget a failing row has, the rule lands on the root
+    for (let n = 1; n <= 20; n++) {
+      const [probe] = rig.delivery.deadlines();
+      probes.push(probe!.at);
+      if (n === 20) provided = true;
+      vi.setSystemTime(probe!.at + 1);
+      await rig.pass();
+      await drainDeliveries();
+    }
+    const gaps = probes.slice(1).map((at, i) => at - probes[i]!);
+    // never before the snapshot that refused it expires, and at most the ladder's top rung (30
+    // minutes, +20% jitter)
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(5_000);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(36 * 60_000 + 1);
+    expect(rig).toMatchObject({ acked: [1] });
+    expect(rig.delivery.deadlines()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("fan-out: a dangling row whose refusal no snapshot bounds (`validUntil` Infinity) probes on its ladder's own time", async () => {
+  const rig = fanOutRig({
+    behave: () => "ack",
+    provided: () => false,
+    options: { refusedForMs: Infinity },
+  });
+  rig.pings(1);
+  await drainDeliveries();
+  const [probe] = rig.delivery.deadlines();
+  expect(Number.isFinite(probe!.at)).toBe(true);
+});
+
+test("fan-out, the loop rule: a `*` row never takes a dead letter, ephemerals or another row's; a row naming the dead letter takes it, and a dead letter it fails for good is dropped, never dead-lettered again", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const everything: string[] = [];
+  const alerts: string[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.everything"
+      ? { deliverEvent: (event: StreamEvent) => void everything.push(event.type) }
+      : printed === "itx.alerts"
+        ? {
+            deliverEvent: (event: StreamEvent) => {
+              alerts.push(event.type);
+              throw codedError("PERMANENT_FAILURE", "the pager is down");
+            },
+          }
+        : printed === "itx.poison"
+          ? { deliverEvent: () => Promise.reject(codedError("PERMANENT_FAILURE", "never")) }
+          : undefined,
+  );
+  for (const [name, consumes] of [
+    ["everything", ["*"]],
+    ["alerts", ["events.iterate.com/itx/subscription-delivery-failed"]],
+    ["poison", ["demo/poison"]],
+  ] as const)
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name, target: `itx.${name}.deliverEvent`, consumes, ordered: false },
+        },
+        "/",
+      ),
+    );
+  rig.stream.append({ type: "demo/poison" });
+  rig.stream.append({ type: "demo/ping", ephemeral: true });
+  await drainDeliveries();
+  const deadLetters = rig.stream
+    .read(0, 500)
+    .events.filter((event) => event.type === "events.iterate.com/itx/subscription-delivery-failed");
+  expect(deadLetters.map((fact) => (fact.payload as { name: string }).name)).toEqual(["poison"]);
+  expect(everything).toEqual([
+    "events.iterate.com/itx/subscription-configured",
+    "events.iterate.com/itx/subscription-configured",
+    "demo/poison",
+  ]);
+  expect(alerts).toEqual(["events.iterate.com/itx/subscription-delivery-failed"]);
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "delivery.fan-out.outcome-dropped", name: "alerts" }),
+  );
+});
+
+// STORAGE WRITES PER DELIVERED EVENT, pinned: each admission turn is ONE transaction — its events'
+// records and the admission cursor — and each ack deletes its record. So an event costs a record
+// insert and delete, plus a cursor write shared by every event its turn admitted; and once in the
+// row's life (and again when a rule re-points it), the cursor keeps where its target resolves.
+test.for([
+  {
+    name: "one commit of 100 events, a receiver answering in order: one turn of 8, then a turn per ack",
+    commits: [range(1, 100)],
+    answer: "in turn",
+    writes: { transactions: 93, cursor: 94, records: 100, deletes: 100 },
+  },
+  {
+    name: "one commit of 8 events answered together: one turn",
+    commits: [range(1, 8)],
+    answer: "together",
+    writes: { transactions: 1, cursor: 2, records: 8, deletes: 8 },
+  },
+  {
+    name: "20 commits of one event each, a receiver that answers at once: a turn each",
+    commits: range(1, 20).map((n) => [n]),
+    answer: "at once",
+    writes: { transactions: 20, cursor: 21, records: 20, deletes: 20 },
+  },
+] as const)("fan-out storage writes: $name", async ({ commits, answer, writes }) => {
+  const rig = fanOutRig({ behave: () => (answer === "at once" ? "ack" : "park") });
+  const transactions = vi.spyOn(rig.stream.storage, "transactionSync");
+  const cursorWrites = vi.spyOn(rig.stream.storage, "writeSubscriptionCursor");
+  const recordWrites = vi.spyOn(rig.stream.storage, "writeSubscriptionDelivery");
+  const recordDeletes = vi.spyOn(rig.stream.storage, "deleteSubscriptionDelivery");
+  // the pings' own commits are the stream's, not the delivery's
+  const commitTransactions = commits.length;
+  for (const commit of commits) {
+    rig.pings(...commit);
+    await drainDeliveries();
+  }
+  const all = commits.flat();
+  if (answer === "together") for (const n of all) rig.settle(n);
+  if (answer === "in turn")
+    for (const n of all) {
+      rig.settle(n);
+      await drainDeliveries();
+    }
+  await drainDeliveries();
+  expect(rig.acked.toSorted((a, b) => a - b)).toEqual(all);
+  expect({
+    transactions: transactions.mock.calls.length - commitTransactions,
+    cursor: cursorWrites.mock.calls.length,
+    records: recordWrites.mock.calls.length,
+    deletes: recordDeletes.mock.calls.length,
+  }).toEqual(writes);
+  expect(rig.delivery.cursor("f")).toMatchObject({ confirmedOffset: rig.head(), attempt: 0 });
+  expect(rig.delivery.deadlines()).toEqual([]);
+});
+
+test.for([
+  { name: "a session's call", wake: { cause: "call", caller: "other" } },
+  { name: "another context's hop", wake: { cause: "call", caller: "context" } },
+  { name: "loaded code's call", wake: { cause: "call", caller: "loaded" } },
+  { name: "a schedule's alarm", wake: { cause: "alarm", due: ["schedule"] } },
+  { name: "a retry's alarm", wake: { cause: "alarm", due: ["retry"] } },
+  { name: "a claim's alarm", wake: { cause: "alarm", due: ["claim"] } },
+] satisfies { name: string; wake: Wake }[])(
+  "fan-out, the wake rule: a wake ($name) reaches a `*` row and a row naming itx/woken, once each",
+  async ({ wake }) => {
+    const told: Record<string, unknown[]> = { everything: [], wakes: [] };
+    const resolve = (printed: string) =>
+      printed === "itx.everything" || printed === "itx.wakes"
+        ? {
+            deliverEvent: (event: StreamEvent) =>
+              void told[printed.slice(4)].push(
+                event.type === "events.iterate.com/itx/woken" && event.payload,
+              ),
+          }
+        : undefined;
+    const first = incarnation(resolve);
+    for (const [name, consumes] of [
+      ["everything", ["*"]],
+      ["wakes", ["events.iterate.com/itx/woken"]],
+    ] as const)
+      first.stream.append(
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: { name, target: `itx.${name}.deliverEvent`, consumes, ordered: false },
+          },
+          "/",
+        ),
+      );
+    await drainDeliveries();
+    told.everything = []; // the rows configured after it
+    incarnation(resolve, first.storage, { wake });
+    await drainDeliveries();
+    expect(told).toEqual({
+      everything: [{ incarnation: 2, ...wake }],
+      wakes: [{ incarnation: 2, ...wake }],
+    });
+  },
+);
+
+test.for([
+  { name: "throws", behave: () => codedError("PERMANENT_FAILURE", "no") },
+  { name: "fails", behave: () => new Error("refused") },
+  { name: "hangs past the watchdog", behave: () => "park" },
+] as const)(
+  "fan-out, the wake rule: a handler that $name on a wake is told of it ONCE — no retry row, no rung, no dead letter, no claim, and the other events flow",
+  async ({ behave }) => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const told: string[] = [];
+      let parked = 0;
+      const resolve = (printed: string) =>
+        printed === "itx.sink"
+          ? {
+              deliverEvent: (event: StreamEvent) => {
+                told.push(event.type);
+                if (event.type !== "events.iterate.com/itx/woken") return;
+                const outcome = behave();
+                if (outcome instanceof Error) throw outcome;
+                parked++;
+                return new Promise<void>(() => {}); // never answers
+              },
+            }
+          : undefined;
+      const first = incarnation(resolve);
+      first.stream.append(
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: { name: "f", target: "itx.sink.deliverEvent", ordered: false },
+          },
+          "/",
+        ),
+      );
+      await drainDeliveries();
+      const second = incarnation(resolve, first.storage, {
+        wake: { cause: "alarm", due: ["retry"] },
+      });
+      second.stream.append({ type: "demo/ping", payload: { n: 1 } });
+      await drainDeliveries();
+      vi.advanceTimersByTime(20_000); // the watchdog, for the call that hangs
+      await drainDeliveries();
+      await second.pass();
+      await drainDeliveries();
+      expect(told.filter((type) => type === "events.iterate.com/itx/woken")).toHaveLength(1);
+      expect(told).toContain("demo/ping");
+      expect(second.stream.storage.listSubscriptionDeliveries()).toEqual([]);
+      expect(
+        second.stream
+          .read(0, 500)
+          .events.filter(
+            (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
+          ),
+      ).toEqual([]);
+      expect(second.delivery.deadlines()).toEqual([]);
+      expect(second.delivery.cursor("f")).toMatchObject({
+        confirmedOffset: second.stream.highestDurableOffset(),
+        attempt: 0,
+      });
+      expect(parked).toBe(behave() === "park" ? 1 : 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("fan-out, the wake rule: a wake a death interrupted mid-call is not delivered again, though the event leased beside it is", async () => {
+  const told: string[] = [];
+  const sink = (answers: boolean) => (printed: string) =>
+    printed === "itx.sink"
+      ? {
+          deliverEvent: (event: StreamEvent) => {
+            told.push(
+              event.type === "events.iterate.com/itx/woken"
+                ? `woken#${(event.payload as { incarnation: number }).incarnation}`
+                : event.type,
+            );
+            // the death comes first, or the call answers
+            return answers ? Promise.resolve() : new Promise<void>(() => {});
+          },
+        }
+      : undefined;
+  const parking = sink(false);
+  const first = incarnation(parking);
+  first.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "f", target: "itx.sink.deliverEvent", ordered: false },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  const second = incarnation(parking, first.storage); // its wake, then a ping, both in flight
+  second.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(told.slice(-2)).toEqual(["woken#2", "demo/ping"]);
+  // the ping has its lease; the wake has none
+  const [[, lease]] = second.stream.storage.listSubscriptionDeliveries();
+  told.length = 0;
+  const third = incarnation(sink(true), second.storage, {
+    wake: { cause: "alarm", due: ["retry"] },
+  });
+  vi.useFakeTimers({ now: lease.nextAttemptAtMs! + 1, toFake: ["Date"] });
+  try {
+    await third.pass();
+    await drainDeliveries();
+  } finally {
+    vi.useRealTimers();
+  }
+  // the third incarnation's own wake, and the ping again — never the second's wake
+  expect(told.toSorted()).toEqual(["demo/ping", "woken#3"]);
+});
+
+test("fan-out, the wake rule: an operator's resume naming a wake's offset delivers nothing — the wake stays told once, in this incarnation and after an eviction", async () => {
+  const told: string[] = [];
+  const sink = (printed: string) =>
+    printed === "itx.sink"
+      ? {
+          deliverEvent: (event: StreamEvent) =>
+            void told.push(
+              event.type === "events.iterate.com/itx/woken"
+                ? `woken#${(event.payload as { incarnation: number }).incarnation}`
+                : event.type,
+            ),
+        }
+      : undefined;
+  const first = incarnation(sink);
+  first.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "f", target: "itx.sink.deliverEvent", ordered: false },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  const second = incarnation(sink, first.storage);
+  await drainDeliveries();
+  const wake = second.stream
+    .read(0, 100)
+    .events.find((event) => event.type === "events.iterate.com/itx/woken" && event.offset > 2)!;
+  second.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "f", offset: wake.offset },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  incarnation(sink, second.storage);
+  await drainDeliveries();
+  expect(told).toEqual(["woken#2", "woken#3"]);
+});
+
+test("birth events: a context born with the platform hook's row (a fan-out row from offset 0) delivers its own birth — created, the first wake, the row itself — and every durable event after, once each", async () => {
+  const told: string[] = [];
+  const rig = incarnation(
+    (printed) =>
+      printed === "itx.builtins.platformHook"
+        ? { deliverEvent: (event: StreamEvent) => void told.push(event.type) }
+        : undefined,
+    undefined,
+    {
+      birthEvents: [
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: {
+              name: "platform",
+              target: "itx.builtins.platformHook.deliverEvent",
+              afterOffset: 0,
+              ordered: false,
+            },
+          },
+          "/",
+        ),
+      ],
+    },
+  );
+  await drainDeliveries();
+  expect(told).toHaveLength(3);
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(told).toEqual([
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
+    "events.iterate.com/itx/subscription-configured",
+    "demo/ping",
+  ]);
+  expect(rig.delivery.cursor("platform")).toMatchObject({
+    confirmedOffset: rig.stream.highestDurableOffset(),
+    attempt: 0,
+  });
+  expect(rig.delivery.deadlines()).toEqual([]);
+});
+
+// ── the wake rule, as a property: random handlers over a simulated project ──
+
+test.for(Array.from({ length: 200 }, (_, i) => ({ name: `world ${i + 1}`, seed: i + 1 })))(
+  "fan-out, the wake rule and the loop guard as a property ($name): handlers that touch, append to and fail on random contexts as they are told of events, with no bound of their own and retries that outlast every incarnation, are told of no wake twice, act no deeper than the limit, and the project goes quiet",
+  async ({ seed }) => {
+    const world = randomHandlerWorld(seed);
+    vi.useFakeTimers({ now: Date.parse("2035-01-01T00:00:00Z"), toFake: ["Date"] });
+    try {
+      await world.run();
+    } finally {
+      vi.useRealTimers();
+    }
+    // told of a wake at most once, and only of one the logs record (a row that could not take a
+    // wake in its own incarnation is not told of it later: subscription-delivery.ts `fanOutAdmits`)
+    expect(new Set(world.toldOf)).toHaveProperty("size", world.toldOf.length);
+    expect(world.toldOf.filter((wake) => !world.wakes().includes(wake))).toEqual([]);
+    // what code appended is never past the limit: only the platform's own facts are
+    expect(world.deepestAct()).toBeLessThanOrEqual(8);
+    expect(world.quiet()).toEqual({ awake: [], alarms: [], retries: [] });
+  },
+);
+
+test("fan-out: an unreadable event is dead-lettered alone — the readable events on its page, before it and after, are delivered", async () => {
+  const told: number[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? { deliverEvent: (event: StreamEvent) => void told.push((event.payload as { n: number }).n) }
+      : undefined,
+  );
+  const [first, corrupt] = rig.stream.append(
+    ...[1, 2, 3].map((n) => ({ type: "demo/ping", payload: { n } })),
+  );
+  rig.storage.sql.exec("UPDATE events SET body = 'not json' WHERE offset = ?", corrupt.offset);
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "f",
+          target: "itx.sink.deliverEvent",
+          consumes: ["demo/ping"],
+          afterOffset: first.offset - 1,
+          ordered: false,
+        },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  expect(told).toEqual([1, 3]);
+  expect(
+    rig.stream
+      .read(corrupt.offset, 500)
+      .events.filter(
+        (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
+      ),
+  ).toMatchObject([{ payload: { name: "f", offset: corrupt.offset, attempts: 0 } }]);
+});
+
+test("fan-out: a dead letter is written once per event, row and resume — a death between the dead letter and its record's removal replays the failure and appends nothing more, and an operator's resume that delivers it again is a window of its own", async () => {
+  let error = "no";
+  const first = fanOutRig({
+    behave: ({ n }) => (n === 2 ? codedError("PERMANENT_FAILURE", error) : "park"),
+  });
+  const [, two] = first.pings(1, 2);
+  await drainDeliveries();
+  expect(first.deadLetters()).toHaveLength(1);
+  // THE DEATH: the record's removal never became durable, and event 1 was still out
+  first.stream.storage.writeSubscriptionDelivery("f", {
+    offset: two.offset,
+    attempt: 1,
+    nextAttemptAtMs: Date.now(),
+    leased: true,
+    error: null,
+  });
+  error = "a different refusal";
+  const second = fanOutRig({
+    previous: first,
+    behave: ({ n }) => (n === 2 ? codedError("PERMANENT_FAILURE", error) : "ack"),
+  });
+  await second.passAfterEveryRung();
+  expect(second.calls.toSorted()).toEqual([1, 2]);
+  expect(second.deadLetters()).toMatchObject([
+    { payload: { name: "f", offset: two.offset, attempts: 1, error: "no" } },
+  ]);
+  expect(second.records()).toEqual([]);
+  // AN OPERATOR'S RESUME delivers it again, a window of its own: refused again, dead-lettered again
+  second.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "f", offset: two.offset },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  expect(second.deadLetters()).toMatchObject([
+    { payload: { offset: two.offset, error: "no" } },
+    { payload: { offset: two.offset, attempts: 1, error: "a different refusal" } },
+  ]);
+});
+
+// The wake rule's open loop (the Codex review of track B), closed by the loop guard (cause.ts):
+// a wake's handler appends ordinary work, the work's handler fails, and every retry alarm wakes the
+// context, whose wake appends more work. An alarm's wake is caused by the deepest retry it came back
+// for, so each lap's work lands one hand-off deeper, and past the limit the wake's handler appends
+// nothing: the context goes quiet.
+test("fan-out, the wake rule: a wake handler that appends work whose handler fails makes no loop — the context goes quiet", async () => {
+  const wakeCalls: number[] = [];
+  let current: ReturnType<typeof incarnation> | undefined;
+  const resolve = (printed: string) =>
+    printed === "itx.sink"
+      ? {
+          deliverEvent: (event: StreamEvent) => {
+            if (event.type === "events.iterate.com/itx/woken") {
+              wakeCalls.push((event.payload as { incarnation: number }).incarnation);
+              current!.stream.append({ type: "test/work" });
+              return;
+            }
+            if (event.type === "test/work") throw new Error("the work fails");
+          },
+        }
+      : undefined;
+  current = incarnation(resolve);
+  current.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "f", target: "itx.sink.deliverEvent", ordered: false },
+      },
+      "/",
+    ),
+  );
+  await drainDeliveries();
+  // ONE organic wake: a call reaches the context, and its wake's handler appends the first work
+  current = incarnation(resolve, current.storage);
+  await drainDeliveries();
+  vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
+  try {
+    for (let recreations = 0; recreations < 2_000; recreations++) {
+      const [next] = current.delivery.deadlines();
+      if (!next) break;
+      vi.setSystemTime(next.at + 1);
+      current = incarnation(resolve, current.storage, { wake: { cause: "alarm", due: ["retry"] } });
+      await drainDeliveries();
+      await current.pass();
+      await drainDeliveries();
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+  // quiet: nothing owed, so no alarm wakes the context again
+  expect(current.delivery.deadlines()).toEqual([]);
+  // each lap's work one hand-off deeper, up to the limit and never past it — ONE fact says where it
+  // stopped. (A retry still owed from a shallower lap can wake the context again once every deeper
+  // one has settled, so a lap may start lower; each one climbs, and ends at the limit.)
+  const log = current.stream.read(0, 1000).events;
+  const depths = log
+    .filter((event) => event.type === "test/work")
+    .map((event) => event.source!.cause!.depth);
+  expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  expect(Math.max(...depths)).toBe(8);
+  expect(depths.length).toBeLessThan(20);
+  expect(log.filter((event) => event.type === "events.iterate.com/itx/loop-limit")).toMatchObject([
+    { payload: { depth: 9 } },
+  ]);
+  expect(wakeCalls.length).toBeLessThan(60);
+});
+
 function nextMacrotask() {
   return new Promise((r) => setImmediate(r));
 }
@@ -1482,10 +2686,30 @@ async function drainDeliveries() {
 function incarnation(
   resolve: (printedExpression: string) => unknown,
   storage: DurableObjectStorageSlice = nodeSqliteDurableObjectStorage(),
+  {
+    validForMs = Infinity,
+    routeOf = (printed) => printed,
+    refusedForMs,
+    wake = { cause: "call", caller: "other" },
+    birthEvents = [],
+  }: {
+    /** How long an evaluation may be reused: the lifetime of the snapshot it was read through. */
+    validForMs?: number;
+    /** Where an expression resolved (the resolver's `routedTo`): what moves when a rule re-points. */
+    routeOf?: (printedExpression: string) => string;
+    /** A refusal came from another context's snapshot, which lasts this long (its `validUntil`). */
+    refusedForMs?: number;
+    /** Why this incarnation woke, as the DO's first handler records it. */
+    wake?: Wake;
+    /** What the context is born with (app-config.ts `contextBirthEvents`). */
+    birthEvents?: StreamEventInput[];
+  } = {},
 ) {
   const alarms: number[] = [];
   const deletes: number[] = [];
   const evaluated: string[] = [];
+  /** Every reset the loop asked for (`abortIncarnation`): a test builds the next incarnation. */
+  const aborts: string[] = [];
   let delivery!: SubscriptionDelivery;
   const coordinator = new AlarmCoordinator({
     setAlarm: async (at) => void alarms.push(at),
@@ -1498,6 +2722,8 @@ function incarnation(
     storage,
     path: "/",
     projectId: "prj_delivery",
+    birthEvents,
+    cause: () => causes.getStore(),
     onCommit: (fresh, after, through) => {
       delivery.onCommit(fresh, after, through);
       coordinator.reconcile();
@@ -1508,13 +2734,16 @@ function incarnation(
     evaluateItxExpression: async (expression: ItxExpression) => {
       const printed = print(expression);
       evaluated.push(printed);
-      const value = resolve(printed);
+      const value = await resolve(printed);
       if (value === undefined)
-        throw codedError(
-          "NO_ITX_EXPRESSION_MATCH",
-          `no rewrite rule matches ${JSON.stringify(printed)} (default-deny)`,
+        throw Object.assign(
+          codedError(
+            "NO_ITX_EXPRESSION_MATCH",
+            `no rewrite rule matches ${JSON.stringify(printed)} (default-deny)`,
+          ),
+          refusedForMs === undefined ? {} : { validUntil: Date.now() + refusedForMs },
         );
-      return value;
+      return { value, validUntil: Date.now() + validForMs, routedTo: routeOf(printed) };
     },
     // The facet host's platform entries (context/facet-host.ts), stood in for by each fake
     // FacetHandle's own walk: what a test's facet records is what the facet host would call.
@@ -1522,9 +2751,16 @@ function incarnation(
       facetHandle.invoke([["processEventBatch", events, range]]),
     catchUpFacetFromLog: async (facetHandle) => facetHandle.invoke([["catchUpFromLog"]]),
     reconcileAlarm: () => coordinator.reconcile(),
+    // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
+    runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
+    abortIncarnation: (reason) => void aborts.push(reason),
   });
-  stream.appendBirthRecord(); // created + woken on a fresh store…
-  stream.appendWakeRecord("request"); // …the wake alone on one with rows, as the DO's first handler records it
+  // created + woken on a fresh store, the wake alone on one with rows, as the DO's first handler
+  // records it — an alarm's caused by the deepest delivery it came back for
+  stream.appendWakeRecord(
+    wake,
+    wake.cause === "alarm" ? delivery.owedCause(Date.now()) : causes.getStore(),
+  );
   return {
     storage,
     stream,
@@ -1533,6 +2769,7 @@ function incarnation(
     alarms,
     deletes,
     evaluated,
+    aborts,
     /** An alarm pass, as the DO runs it: the stream-kept cursors under the coordinator's hold. */
     pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
   };
@@ -1682,4 +2919,279 @@ function parkedSinkRig(previous?: { storage: DurableObjectStorageSlice }) {
     await drainDeliveries();
   };
   return { ...rig, pushes, release };
+}
+
+/** A FAN-OUT row `f` on `itx.sink.deliverEvent`, `consumes: ["demo/ping"]`, whose sink does what
+ *  `behave` says for each call (`n` is the ping's): answer, throw, park until `settle(n)`, or throw
+ *  the error it returns. `provided` false makes `itx.sink` resolve to nothing. Pass a previous rig
+ *  to build THE NEXT INCARNATION over its store, the row already configured. */
+function fanOutRig({
+  behave,
+  previous,
+  provided = () => true,
+  options,
+}: {
+  behave: (call: { n: number }) => "ack" | "fail" | "park" | Error;
+  previous?: { storage: DurableObjectStorageSlice };
+  provided?: () => boolean;
+  /** The evaluation's lifetime, where it resolved and what a refusal says (`incarnation`). */
+  options?: Parameters<typeof incarnation>[2];
+}) {
+  /** Every call the sink took, by `n`, in order. */
+  const calls: number[] = [];
+  /** Every call the sink answered, by `n`, in order. */
+  const acked: number[] = [];
+  const parked = new Map<number, (() => void)[]>();
+  const rig = incarnation(
+    (printed) =>
+      printed === "itx.sink" && provided()
+        ? {
+            deliverEvent: (event: StreamEvent) => {
+              const { n } = event.payload as { n: number };
+              calls.push(n);
+              const outcome = behave({ n });
+              if (outcome instanceof Error) throw outcome;
+              if (outcome === "fail") throw new Error(`the sink refused ${n}`);
+              if (outcome === "ack") return void acked.push(n);
+              return new Promise<void>((resolve) =>
+                parked.set(n, [
+                  ...(parked.get(n) ?? []),
+                  () => {
+                    acked.push(n);
+                    resolve();
+                  },
+                ]),
+              );
+            },
+          }
+        : undefined,
+    previous?.storage,
+    options,
+  );
+  if (!previous)
+    rig.stream.append(
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: {
+            name: "f",
+            target: "itx.sink.deliverEvent",
+            consumes: ["demo/ping"],
+            ordered: false,
+          },
+        },
+        "/",
+      ),
+    );
+  const records = () =>
+    rig.stream.storage
+      .listSubscriptionDeliveries()
+      .map(([, retry]) => retry)
+      .sort((a, b) => a.offset - b.offset);
+  const log = () => rig.stream.read(0, 1000).events;
+  return {
+    ...rig,
+    calls,
+    acked,
+    /** One commit of `demo/ping`s, one per `n`. */
+    pings: (...ns: number[]) =>
+      rig.stream.append(...ns.map((n) => ({ type: "demo/ping", payload: { n } }))),
+    /** The oldest parked call of ping `n` answers. */
+    settle: (n: number) => parked.get(n)?.shift()?.(),
+    records,
+    attemptsOf: (n: number) => calls.filter((call) => call === n).length,
+    deadLetters: () =>
+      log().filter((event) => event.type === "events.iterate.com/itx/subscription-delivery-failed"),
+    offsetOf: (n: number) =>
+      log().find((event) => event.type === "demo/ping" && (event.payload as { n: number }).n === n)!
+        .offset,
+    head: () => rig.stream.highestDurableOffset(),
+    /** An alarm pass once every pending retry and the row's own probe are due, and whatever it
+     *  starts drained. */
+    passAfterEveryRung: async () => {
+      const due = Math.max(Date.now(), ...rig.delivery.deadlines().map(({ at }) => at));
+      vi.useFakeTimers({ now: due + 1, toFake: ["Date"] });
+      try {
+        await rig.pass();
+        await drainDeliveries();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  };
+}
+
+/** `from` through `to`, inclusive. */
+function range(from: number, to: number) {
+  return Array.from({ length: to - from + 1 }, (_, i) => from + i);
+}
+
+/** One context of the simulated project: its store, whether it was born, the incarnation running
+ *  (none while evicted), the alarm an evicted one left, and when it last did anything. */
+type SimulatedContext = {
+  storage: DurableObjectStorageSlice;
+  born: boolean;
+  rig?: ReturnType<typeof incarnation>;
+  alarm: number | null;
+  lastActivityAt: number;
+};
+
+/** A SIMULATED PROJECT for the wake rule's and the loop guard's property: five contexts, each with
+ *  a fan-out row (`*`, from the whole log) to a handler the seed draws — as it is told of each event
+ *  it touches random contexts (a call to a sleeping one wakes it) and appends to them, with no bound
+ *  of its own (the loop guard's, cause.ts, is the only one), and fails, now and then for good,
+ *  on any event, a wake included. Six organic calls land in the first minute; a context idle half a
+ *  second is evicted — sooner than the first retry's rung, so every retry outlasts the incarnation
+ *  that owed it — and the alarm it left wakes a fresh one. `toldOf` is every wake a handler was told
+ *  of, `wakes()` every wake the logs record, each as `<path>#<incarnation>`. */
+function randomHandlerWorld(seed: number) {
+  const random = mulberry32(seed);
+  const pick = <T>(items: readonly T[]) => items[Math.floor(random() * items.length)]!;
+  const paths = ["/", "/a", "/b", "/c", "/d"] as const;
+  const contexts = new Map<string, SimulatedContext>(
+    paths.map((path) => [
+      path,
+      { storage: nodeSqliteDurableObjectStorage(), born: false, alarm: null, lastActivityAt: 0 },
+    ]),
+  );
+  const toldOf: string[] = [];
+  /** A call reaching `path`: the running incarnation, or a fresh one it wakes. */
+  const reach = (path: string, wake: Wake) => {
+    const context = contexts.get(path)!;
+    context.lastActivityAt = Date.now();
+    if (context.rig) return context.rig;
+    // a call past the loop limit wakes nothing: it throws, and the context sleeps on
+    context.rig = incarnation(
+      (printed) => (printed === "itx.handler" ? { deliverEvent: handler(path) } : undefined),
+      context.storage,
+      { wake },
+    );
+    if (!context.born) {
+      context.born = true;
+      // what a deployment's birth events append: the row, from the whole log
+      context.rig.stream.append(
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: {
+              name: "config",
+              target: "itx.handler.deliverEvent",
+              afterOffset: 0,
+              ordered: false,
+            },
+          },
+          path,
+        ),
+      );
+    }
+    return context.rig;
+  };
+  const handler = (path: string) => (event: StreamEvent) => {
+    contexts.get(path)!.lastActivityAt = Date.now();
+    if (event.type === "events.iterate.com/itx/woken")
+      toldOf.push(`${path}#${(event.payload as { incarnation: number }).incarnation}`);
+    for (let actions = Math.floor(random() * 3); actions > 0; actions--) {
+      const rig = reach(pick(paths), { cause: "call", caller: "loaded" });
+      if (random() < 0.4) rig.stream.append({ type: "test/echo" });
+    }
+    const failure = random();
+    if (failure < 0.02) throw codedError("PERMANENT_FAILURE", "this handler gives up on it");
+    if (failure < 0.3) throw new Error("this handler failed this time");
+  };
+  const organicCalls = Array.from({ length: 6 }, () => ({
+    at: Date.parse("2035-01-01T00:00:00Z") + Math.floor(random() * 60_000),
+    path: pick(paths),
+    caller: pick(["other", "context"] as const),
+  })).sort((a, b) => a.at - b.at);
+  return {
+    toldOf,
+    /** Every organic call, then whatever follows — deliveries, evictions, alarms — in time order,
+     *  until nothing is left to happen. */
+    async run() {
+      for (let step = 0; step < 10_000; step++) {
+        await drainDeliveries();
+        const next = [
+          ...organicCalls
+            .slice(0, 1)
+            .map((call) => ({ at: call.at, kind: "organic" as const, path: call.path })),
+          ...[...contexts].flatMap(([path, context]) => {
+            const alarm = context.rig ? context.rig.coordinator.snapshot().armedAt : context.alarm;
+            return [
+              ...(alarm === null ? [] : [{ at: alarm, kind: "alarm" as const, path }]),
+              ...(context.rig
+                ? [{ at: context.lastActivityAt + 500, kind: "evict" as const, path }]
+                : []),
+            ];
+          }),
+        ].sort((a, b) => a.at - b.at)[0];
+        if (!next) return;
+        vi.setSystemTime(Math.max(Date.now(), next.at));
+        const context = contexts.get(next.path)!;
+        if (next.kind === "organic") {
+          const call = organicCalls.shift()!;
+          reach(call.path, { cause: "call", caller: call.caller }).stream.append({
+            type: "test/organic",
+          });
+        } else if (next.kind === "evict") {
+          context.alarm = context.rig!.coordinator.snapshot().armedAt;
+          context.rig = undefined;
+        } else {
+          context.alarm = null;
+          await reach(next.path, { cause: "alarm", due: ["retry"] }).pass();
+        }
+      }
+      throw new Error(`seed ${seed}: still busy after 10,000 steps`);
+    },
+    /** Every wake the logs record. */
+    wakes: () =>
+      [...contexts].flatMap(([path, context]) =>
+        context.born
+          ? context.storage.sql
+              .exec<{ body: string }>("SELECT body FROM events ORDER BY offset")
+              .toArray()
+              .map((row) => JSON.parse(row.body) as StreamEvent)
+              .filter((event) => event.type === "events.iterate.com/itx/woken")
+              .map((event) => `${path}#${(event.payload as { incarnation: number }).incarnation}`)
+          : [],
+      ),
+    /** The deepest cause of anything code appended — every event but the platform's own facts. */
+    deepestAct: () =>
+      Math.max(
+        0,
+        ...[...contexts].flatMap(([, context]) =>
+          context.born
+            ? context.storage.sql
+                .exec<{ body: string }>("SELECT body FROM events")
+                .toArray()
+                .map((row) => JSON.parse(row.body) as StreamEvent)
+                .filter((event) => event.type.startsWith("test/"))
+                .map((event) => event.source!.cause!.depth)
+            : [],
+        ),
+      ),
+    /** What is left: contexts still awake, alarms stored, retries pending. */
+    quiet: () => ({
+      awake: [...contexts].filter(([, context]) => context.rig).map(([path]) => path),
+      alarms: [...contexts].filter(([, context]) => context.alarm !== null).map(([path]) => path),
+      retries: [...contexts].flatMap(([path, context]) =>
+        context.born
+          ? context.storage.sql
+              .exec<{ offset: number }>("SELECT offset FROM subscription_deliveries")
+              .toArray()
+              .map((row) => `${path}@${row.offset}`)
+          : [],
+      ),
+    }),
+  };
+}
+
+/** A small seeded PRNG (mulberry32): one seed, one sequence, on any machine. */
+function mulberry32(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), state | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
 }

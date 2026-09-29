@@ -10,6 +10,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
     verified: true,
+    direct: true,
   },
   {
     row: "an aligned DKIM signature verifies a domain that publishes no DMARC",
@@ -21,6 +22,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: "none", dkim: "pass", dmarc: "none" },
     verified: true,
+    direct: false,
   },
   {
     row: "an SPF pass for the sender's own envelope domain verifies it",
@@ -32,6 +34,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: "pass", dkim: "none", dmarc: "none" },
     verified: true,
+    direct: true,
   },
   {
     row: "passes for another domain than the From address's prove nothing",
@@ -43,6 +46,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: "pass", dkim: "pass", dmarc: "none" },
     verified: false,
+    direct: false,
   },
   {
     row: "a look-alike domain is not aligned",
@@ -50,6 +54,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: null, dkim: "pass", dmarc: "none" },
     verified: false,
+    direct: false,
   },
   {
     row: "a forged Cloudflare pass below the real failure does not verify",
@@ -60,6 +65,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: "softfail", dkim: "none", dmarc: "none" },
     verified: false,
+    direct: false,
   },
   {
     row: "a record from another server is not Cloudflare's",
@@ -67,6 +73,7 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: null, dkim: null, dmarc: null },
     verified: false,
+    direct: false,
   },
   {
     row: "no Cloudflare record verifies nothing",
@@ -74,9 +81,34 @@ test.for([
     from: "ann@example.com",
     authentication: { spf: null, dkim: null, dmarc: null },
     verified: false,
+    direct: false,
   },
-])("the sender's authentication — $row", ({ headers, from, authentication, verified }) =>
-  expect(authenticationOf(headers, from)).toEqual({ authentication, verified }),
+  {
+    row: "a replayed message: its DKIM signature survives, the replaying server's SPF does not align",
+    headers: [
+      results(
+        "mx.cloudflare.net; dkim=pass header.d=example.com header.s=s1; dmarc=pass header.from=example.com; spf=pass smtp.mailfrom=relay@replayer.test",
+      ),
+    ],
+    from: "ann@example.com",
+    authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
+    verified: true,
+    direct: false,
+  },
+  {
+    row: "a message straight from the sender's provider is direct",
+    headers: [
+      results(
+        "mx.cloudflare.net; dkim=pass header.d=gmail.com header.s=20230601 header.b=Xyz; spf=pass (mx.cloudflare.net: domain of ann@gmail.com designates 209.85.128.41 as permitted sender) smtp.mailfrom=ann@gmail.com; dmarc=pass header.from=gmail.com; arc=none smtp.remote-ip=209.85.128.41",
+      ),
+    ],
+    from: "ann@gmail.com",
+    authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
+    verified: true,
+    direct: true,
+  },
+])("the sender's authentication — $row", ({ headers, from, authentication, verified, direct }) =>
+  expect(authenticationOf(headers, from)).toEqual({ authentication, verified, direct }),
 );
 
 test.for([

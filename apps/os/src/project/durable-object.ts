@@ -10,9 +10,11 @@
 // ordinary bundled worker code, enabled as a row on `/` by `session.projects.create` (session.ts) —
 // and by the first `list()`, which hosts the facet without a row.
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import { runningCause } from "../cause.ts";
 import { downloadPublicGithubTemplate } from "../repo/github-template.ts";
 import { appConfigOf, type AppConfigEnv } from "../app-config.ts";
 import { canBackRepo, projectScopedArtifacts } from "../context/cf-artifacts.ts";
+import { moduleIdentityOf } from "../context/worker-loader.ts";
 import { CONTEXT_DESTROYED, DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
@@ -33,13 +35,13 @@ import {
   type FinishConnectAnswer,
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
-import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
 import { dnsZoneOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
+import type { ProjectPublisher } from "./publication.ts";
 
 export class ProjectDurableObject extends StreamProcessorDurableObject<
   ProjectState,
@@ -61,7 +63,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     "repos",
     "workspaces",
     "confirmIntegrationMove",
-    "connectWaitrose",
     "acceptGithubCallback",
   ];
 
@@ -70,7 +71,43 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     downloadPublicGithubTemplate,
     () => this.#hostnames(),
     () => this.#deletion(),
+    () => this.#publisher(),
   );
+
+  /** THE PUBLICATION's reach, for THIS project (publication.ts `ProjectPublisher`): the config
+   *  repo's `main` and its files at a commit, a module's identity as the loader resolves it, the
+   *  probe loaded as a worker of `/`, and an append on `/` as the platform — the DO's own `invoke`
+   *  of the fixed point `append` under `platform: true`, as every platform fact is written
+   *  (session.ts, integrations/connections.ts `appendPlatformFact`). */
+  #publisher(): ProjectPublisher {
+    const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
+    return {
+      // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
+      head: async () =>
+        (await this.withItx((itx) => itx.repos.get("/repos/config").tip())) as unknown as
+          | string
+          | null,
+      // The repo facet's `modules` answers its files, path → text.
+      files: async (commitOid) =>
+        (await this.withItx((itx) =>
+          itx.repos.get("/repos/config").modules({ commitOid }),
+        )) as unknown as Record<string, string>,
+      identityOf: (files, mainModule) =>
+        moduleIdentityOf(files, mainModule, this.env, `the config repo's ${mainModule}`),
+      probe: (files, mainModule) =>
+        this.withItx((itx) =>
+          itx.invoke(["itx", "workers", ["get", { source: files, mainModule }], ["probe"]]),
+        ),
+      // as the platform, and caused by what the follower reacts to: a publication keeps the
+      // commit's depth, so the init it sets off runs one deeper than the commit (../cause.ts)
+      appendAsPlatform: (...events) =>
+        root.invoke(["itx", "builtins", ["append", ...events]], [], {
+          principal: null,
+          platform: true,
+          cause: runningCause(),
+        }),
+    };
+  }
 
   /** THE DELETION SAGA's reach, for THIS project (processor.ts `ProjectDeletion`): destroying one of
    *  its contexts, deleting the Artifacts repo a context's path backs, and deleting its kv and
@@ -235,14 +272,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
         ...input,
         connection: assertConnectionName(input?.connection),
       }),
-    );
-  }
-
-  /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
-   *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/`. */
-  connectWaitrose(input: { connection: string; account: string }): Promise<void> {
-    return this.#onConnection("waitrose", input?.connection, () =>
-      connectWaitrose(this.#integrationScope(), input),
     );
   }
 

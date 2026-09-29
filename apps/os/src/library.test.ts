@@ -12,9 +12,12 @@ import {
   type LibraryItx,
   type LibraryRoots,
   executeScript,
-  runScript,
+  publicationOf,
+  requestScriptRun,
   runScriptModule,
   runSettlementOf,
+  settlementOfScriptRun,
+  type ScriptRunRequested,
 } from "./library.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
@@ -184,10 +187,11 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
   expect(initializes(seen)).toBe(2);
 });
 
-// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and a
-// wait for ITS settlement (`itx.waitForEvent`), the execution being the context's runner's
+// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and the
+// caller's read of ITS settlement in slices of fresh calls (`settlementOfScriptRun`), the execution
+// being the context's runner's
 // (`executeScript`, over `itx.workers.get`): the module the loader would get (the script spliced
-// verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script bakes its own
+// verbatim, the smallest WorkerEntrypoint around it), run with its cause alone (a script bakes its own
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
@@ -199,8 +203,10 @@ test("run: the source: package.json naming worker.js its main, the script splice
     "const script =\nasync (itx) => (await itx.whoami()).path\n;",
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
-  expect(module["worker.js"]).toContain("async run() {");
-  expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
+  expect(module["worker.js"]).toContain("async run(cause) {");
+  expect(module["worker.js"]).toContain(
+    "return await door.run(cause, () => withItx(this.env.ITX, async (itx) => {",
+  );
   expect(module["worker.js"]).toContain("script(itx),");
   expect(module["worker.js"]).not.toContain("ITX.get()");
   expect(module["package.json"]).toBe('{"main":"worker.js"}');
@@ -293,80 +299,135 @@ test("run: the module's run() releases a handle the script awaited, and the call
   expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
-test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with the script's cause alone", async () => {
   const { itx, loaded, runs } = host();
-  await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
+  await expect(
+    executeScript(itx, "async (itx) => 1", { chain: "a request's chain", depth: 3 }),
+  ).resolves.toEqual({ calledWith: [{ chain: "a request's chain", depth: 3 }] });
   expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
   expect(runs()).toBe(1);
 });
 
-test("run: run(script) appends run-requested { code } — the request's offset IS the run — and waits for ITS run-settled after it: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result; it loads nothing itself", async () => {
+test("run: on the context, run(script) appends run-requested { code } — the request's offset IS the run — and answers the request where it landed, never its settlement; it loads nothing itself", async () => {
   const script = "async (itx) => 1";
-  const { itx, loaded, appended, waits, runs } = host([
-    settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
-    "timeout",
-    settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
-  ]);
+  const { itx, loaded, appended, waits, runs } = host();
   await expect(
-    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
-  ).resolves.toEqual({ n: 1 });
+    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/a" }).roots.run(script),
+  ).resolves.toEqual({ $itxScriptRunRequested: { path: "/a", requestOffset: 10 } });
   expect(appended).toEqual([
     { type: "events.iterate.com/itx/run-requested", payload: { code: script } },
   ]);
-  expect(waits.map((w) => [w.type, w.afterOffset])).toEqual([
-    ["events.iterate.com/itx/run-settled", 10], // after the request (offset 10)
-    ["events.iterate.com/itx/run-settled", 11], // the other run's was the last seen
-    ["events.iterate.com/itx/run-settled", 11], // a timeout re-arms from the same place
-  ]);
+  expect(waits).toEqual([]); // the caller's side of the hop reads the settlement
   expect(loaded).toEqual([]); // the execution is the runner's, never the caller's
   expect(runs()).toBe(0);
 });
 
-test("run: the wait is bounded: no settlement a minute past the deadline gives up with WAIT_TIMEOUT, so the caller's call — and the context it holds — is not held open", async () => {
+test("run: the caller reads ITS run-settled after the request, each slice one fresh call on the context the request landed on: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result", async () => {
+  const { waitForEventAt, waits } = contextLog([
+    settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
+    "timeout",
+    settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
+  ]);
+  await expect(settlementOfScriptRun(requestedAt("/a", 10), waitForEventAt)).resolves.toEqual({
+    n: 1,
+  });
+  const slice = { type: "events.iterate.com/itx/run-settled", timeoutMs: 5_000 };
+  expect(waits).toEqual([
+    ["/a", { ...slice, afterOffset: 10 }], // after the request (offset 10)
+    ["/a", { ...slice, afterOffset: 11 }], // the other run's was the last seen
+    ["/a", { ...slice, afterOffset: 11 }], // a timeout re-arms from the same place
+  ]);
+});
+
+test("run: REPLACED UNDER THE WAIT — a slice held on the instance Cloudflare replaced never sees what the new instance writes, and that instance's wake record settles the lost run `interrupted`: the next slice, a fresh call, reads it, so the caller learns within one slice, never at the deadline", async () => {
   vi.useFakeTimers();
-  try {
-    const timeouts: number[] = [];
-    const itx = fakeItx({
-      builtins: {
-        append: async (...events: StreamEventInput[]) =>
-          events.map((event, i) => ({ ...event, offset: 10 + i, createdAt: "t", path: "/" })),
-        // A log where no settlement ever lands: every wait times out, on its own timeout.
-        waitForEvent: (filter: WaitForEventFilter) => {
-          timeouts.push(filter.timeoutMs!);
-          return new Promise((_, reject) =>
-            setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
-          );
-        },
-      },
-    });
-    let outcome: unknown;
-    void runScript(itx, "async () => new Promise(() => {})").catch(
-      (error: unknown) => (outcome = error),
+  onTestFinished(() => void vi.useRealTimers());
+  const interrupted = {
+    status: "failed",
+    error: "the context restarted before the script's result was recorded",
+    failureKind: "interrupted",
+  };
+  let calls = 0;
+  const waitForEventAt = (_path: string, filter: WaitForEventFilter) => {
+    calls += 1;
+    // the first call is held on the replaced instance: it only ever times out, on its own clock
+    if (calls === 1)
+      return new Promise<StreamEvent>((_, reject) =>
+        setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
+      );
+    // a fresh call reaches the instance that replaced it, whose log has the settlement
+    return Promise.resolve(settledAt(12, 10, interrupted));
+  };
+  let outcome: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).catch(
+    (error: unknown) => (outcome = error),
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(outcome).toMatchObject({ message: interrupted.error, failureKind: "interrupted" });
+  expect(calls).toBe(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("run: a slice left with NO answer at all — a call on an instance Cloudflare shut down mid-call — is given up after four slices, its reader told to release the call, and asked again on a fresh call, logged as the platform failure it heals", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const givenUp: AbortSignal[] = [];
+  const waitForEventAt = (_path: string, _filter: WaitForEventFilter, signal: AbortSignal) => {
+    givenUp.push(signal);
+    return givenUp.length === 1
+      ? new Promise<StreamEvent>(() => {})
+      : Promise.resolve(settledAt(11, 10, { status: "succeeded", result: "done" }));
+  };
+  let result: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).then((r) => (result = r));
+  await vi.advanceTimersByTimeAsync(20_000 - 1);
+  expect(result).toBeUndefined();
+  expect(givenUp.map((signal) => signal.aborted)).toEqual([false]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(result).toBe("done");
+  expect(givenUp.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(warn.mock.calls.map(([line]) => line)).toEqual([
+    expect.objectContaining({
+      event: "itx-run.platform-failure-wait-unanswered",
+      kind: "disconnected",
+      path: "/",
+      requestOffset: 10,
+    }),
+  ]);
+});
+
+test("run: the wait is bounded: no settlement a minute past the deadline gives up with WAIT_TIMEOUT, so the caller is let go", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const timeouts: number[] = [];
+  // A log where no settlement ever lands: every slice times out, on its own timeout.
+  const waitForEventAt = (_path: string, filter: WaitForEventFilter) => {
+    timeouts.push(filter.timeoutMs!);
+    return new Promise<StreamEvent>((_, reject) =>
+      setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
     );
-    await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 60_000 - 1);
-    expect(outcome).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(outcome).toMatchObject({
-      code: "WAIT_TIMEOUT",
-      message: "itx.run: no settlement of run 10 within 11 minutes",
-    });
-    // re-armed at the cap, the last wait only for what was left
-    expect(timeouts).toEqual([120_000, 120_000, 120_000, 120_000, 120_000, 60_000]);
-    expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    vi.useRealTimers();
-  }
+  };
+  let outcome: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).catch(
+    (error: unknown) => (outcome = error),
+  );
+  await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 60_000 - 1);
+  expect(outcome).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(outcome).toMatchObject({
+    code: "WAIT_TIMEOUT",
+    message: "itx.run: no settlement of run 10 within 11 minutes",
+  });
+  expect(timeouts).toEqual(Array.from({ length: 132 }, () => 5_000)); // 11 minutes of 5 s slices
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("run: a failed settlement rejects with its error, the failure kind on the rejection", async () => {
-  const { itx } = host([
+  const { waitForEventAt } = contextLog([
     settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
   ]);
-  await expect(
-    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(
-      "async () => 1",
-    ),
-  ).rejects.toMatchObject({
+  await expect(settlementOfScriptRun(requestedAt("/", 10), waitForEventAt)).rejects.toMatchObject({
     message: "boom",
     failureKind: "interrupted",
   });
@@ -375,11 +436,11 @@ test("run: a failed settlement rejects with its error, the failure kind on the r
 test("run: the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any request", async () => {
   expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
   const { itx, loaded, appended } = host();
-  await expect(runScript(itx, "   ")).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", "   ")).rejects.toThrow(/itx\.run\(script/);
   // wire-fed: a non-string (the array-form expression carries no argument validation) is refused
   // with the same usage error, never a TypeError from `.trim`
-  await expect(runScript(itx, 42)).rejects.toThrow(/itx\.run\(script/);
-  await expect(runScript(itx, undefined)).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", 42)).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", undefined)).rejects.toThrow(/itx\.run\(script/);
   expect(loaded).toEqual([]);
   expect(appended).toEqual([]);
 });
@@ -481,6 +542,19 @@ test("the runner's settlement: the loaded run() giving up on its own clock (or a
     failureKind: "deadline",
   });
   expect(await before).toEqual({ status: "failed", error: "gave up", failureKind: "runtime" });
+});
+
+test("the runner's settlement: a run its row sent to another context fails with that run's kind — `interrupted` when that context restarted — never `runtime`", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const elsewhere = Object.assign(new Error("the context restarted"), {
+    failureKind: "interrupted",
+  });
+  expect(await runSettlementOf(Promise.reject(elsewhere))).toEqual({
+    status: "failed",
+    error: "the context restarted",
+    failureKind: "interrupted",
+  });
 });
 
 test("the runner's settlement: a value that lands after the deadline is still released", async () => {
@@ -1082,6 +1156,148 @@ test("entities: the typed append validates by the contract and appends any of it
   ]);
 });
 
+// ── the publication ── `waitForPublication(commitOid)` answers from the project's state on `/`:
+// published, owed (the wait goes on), or not published and why.
+
+const C = "c".repeat(40);
+const D = "d".repeat(40);
+const modules = { "worker.ts": { identity: "i", classes: [] } };
+const unpublished = { configRepoTip: null, publishedThrough: null, published: null, refused: null };
+
+test.for([
+  {
+    name: "the published config is the commit: published, whatever generation published it",
+    state: { ...unpublished, published: { commitOid: C, generation: 5, modules } },
+    at: { status: "published", generation: 5 },
+  },
+  {
+    name: "the commit is main's head, not yet published through its fact: owed, as its generation",
+    state: { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 },
+    at: { status: "owed", generation: 7 },
+  },
+  {
+    name: "its generation was refused: why",
+    state: {
+      ...unpublished,
+      configRepoTip: { commitOid: C, offset: 7 },
+      publishedThrough: 7,
+      refused: { commitOid: C, generation: 7, error: "worker.ts is no IterateConfigEntrypoint" },
+    },
+    at: { status: "not-published", why: "worker.ts is no IterateConfigEntrypoint" },
+  },
+  {
+    name: "its generation published a later head: that head",
+    state: {
+      ...unpublished,
+      configRepoTip: { commitOid: C, offset: 7 },
+      publishedThrough: 7,
+      published: { commitOid: D, generation: 7, modules },
+    },
+    at: { status: "not-published", why: `main moved on to ${D}, which was published in its place` },
+  },
+  {
+    name: "its generation refused a later head: that head and why",
+    state: {
+      ...unpublished,
+      configRepoTip: { commitOid: C, offset: 7 },
+      publishedThrough: 7,
+      refused: { commitOid: D, generation: 7, error: "boom" },
+    },
+    at: {
+      status: "not-published",
+      why: `main moved on to ${D}, whose publication failed: boom`,
+    },
+  },
+  {
+    name: "another commit is main's head: only the head is published",
+    state: { ...unpublished, configRepoTip: { commitOid: D, offset: 9 } },
+    at: {
+      status: "not-published",
+      why: `main's head is ${D}, and only the head is published`,
+    },
+  },
+] as const)("publication: $name", ({ state, at }) => {
+  expect(publicationOf(state, C)).toEqual(at);
+});
+
+test("publication: waitForPublication reads the project's state through the head as it is, then through each publication fact until the commit is published", async () => {
+  const { handle, steps } = publicationRoot(
+    [
+      { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 },
+      { ...unpublished, published: { commitOid: C, generation: 7, modules } },
+    ],
+    [{ offset: 12, payload: { commitOid: C, generation: 7 } }],
+  );
+  await expect(handle.waitForPublication(C)).resolves.toEqual({ commitOid: C, generation: 7 });
+  expect(steps).toEqual([
+    [["readEvents", Number.MAX_SAFE_INTEGER, 1]],
+    ["facets", ["get", "project"], ["waitUntilProcessed", expect.objectContaining({ offset: 10 })]],
+    ["facets", ["get", "project"], ["snapshot"]],
+    [["waitForEvent", expect.objectContaining({ afterOffset: 10 })]],
+    ["facets", ["get", "project"], ["waitUntilProcessed", expect.objectContaining({ offset: 12 })]],
+    ["facets", ["get", "project"], ["snapshot"]],
+  ]);
+});
+
+test("publication: waitForPublication throws why a commit is not published — a refusal, or the platform giving up on its generation for now — and waits on no repo but the config repo", async () => {
+  const refused = publicationRoot([
+    {
+      ...unpublished,
+      configRepoTip: { commitOid: C, offset: 7 },
+      publishedThrough: 7,
+      refused: { commitOid: C, generation: 7, error: "worker.ts is no IterateConfigEntrypoint" },
+    },
+  ]);
+  await expect(refused.handle.waitForPublication(C)).rejects.toThrow(
+    `commit ${C} of /repos/config is not published: worker.ts is no IterateConfigEntrypoint`,
+  );
+  const owed = { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 };
+  const gaveUp = publicationRoot(
+    [owed],
+    [
+      {
+        offset: 11,
+        type: "events.iterate.com/project/worker-update-failed",
+        payload: { commitOid: C, generation: 7, error: "esm.sh", unavailable: true },
+      },
+    ],
+  );
+  await expect(gaveUp.handle.waitForPublication(C)).rejects.toThrow(
+    /could not finish its publication for now \(esm\.sh\), and publishes it later/,
+  );
+  await expect(
+    publicationRoot([owed], [], "/repos/other").handle.waitForPublication(C),
+  ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+});
+
+/** `repos.get(path)` over a fake root at head 10 whose project facet answers `states` in order, and
+ *  whose `waitForEvent` answers `facts` in order (a `worker-updated` unless typed); `steps` is every
+ *  call it took. */
+function publicationRoot(
+  states: object[],
+  facts: { offset: number; type?: string; payload: object }[] = [],
+  path = "/repos/config",
+) {
+  const steps: unknown[] = [];
+  const root = {
+    invoke: async (called: unknown[]) => {
+      steps.push(called);
+      const [first, , third] = called as [unknown, unknown, unknown[]?];
+      if (Array.isArray(first) && first[0] === "readEvents") return { scannedThroughOffset: 10 };
+      if (Array.isArray(first) && first[0] === "waitForEvent") {
+        const fact = facts.shift();
+        if (!fact) throw new Error("no publication fact");
+        return { type: "events.iterate.com/project/worker-updated", ...fact };
+      }
+      if (third?.[0] === "snapshot") return { offset: 10, state: states.shift() };
+      return undefined; // waitUntilProcessed
+    },
+  };
+  const itx = fakeItx({ builtins: { cd: async () => root } });
+  const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
+  return { handle: roots.repos.get(path), steps };
+}
+
 class RemotesApi extends RpcTarget {
   hello() {
     return "hi";
@@ -1131,9 +1347,9 @@ function remotes(): { itx: LibraryItx; seen: string[] } {
 
 const initializes = (seen: string[]) => seen.filter((m) => m === "initialize").length;
 
-/** A fake itx: `append` lands at offsets from 10, `waitForEvent` answers `settlements` in order
- *  (an event, or "timeout" = a WAIT_TIMEOUT rejection). */
-function host(settlements: (StreamEvent | "timeout")[] = []): {
+/** A fake itx: `append` lands at offsets from 10; `waitForEvent` records a wait the library must
+ *  never make on the context (the run's caller reads the settlement, `contextLog`). */
+function host(): {
   itx: LibraryItx;
   loaded: unknown[];
   appended: StreamEventInput[];
@@ -1153,7 +1369,7 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
       return {
         run: async (...args: unknown[]) => {
           ran += 1;
-          return { calledWith: args.length }; // run() is called with NO arguments
+          return { calledWith: args }; // run() is called with its cause alone
         },
       };
     },
@@ -1170,10 +1386,7 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
   };
   const waitForEvent = async (filter: WaitForEventFilter) => {
     waits.push(filter);
-    const next = settlements.shift();
-    if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
-    if (!next) throw new Error("the test scripted no more settlements");
-    return next;
+    throw new Error("the library waits for nothing on the context");
   };
   const itx = fakeItx({
     fetch: async () => new Response(null),
@@ -1184,6 +1397,25 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
 
 const settledAt = (offset: number, requestOffset: number, settlement: unknown) =>
   committedEvent(offset, "events.iterate.com/itx/run-settled", { requestOffset, settlement });
+
+/** What a context's `run` answers: the request at `requestOffset` on the context at `path`. */
+const requestedAt = (path: string, requestOffset: number): ScriptRunRequested => ({
+  $itxScriptRunRequested: { path, requestOffset },
+});
+
+/** A context's log as the run's caller reads it: each `waitForEventAt` call answers the next of
+ *  `settlements` (an event, or "timeout" = a WAIT_TIMEOUT rejection); `waits` records each call. */
+function contextLog(settlements: (StreamEvent | "timeout")[]) {
+  const waits: [string, WaitForEventFilter][] = [];
+  const waitForEventAt = async (path: string, filter: WaitForEventFilter) => {
+    waits.push([path, filter]);
+    const next = settlements.shift();
+    if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
+    if (!next) throw new Error("the test scripted no more settlements");
+    return next;
+  };
+  return { waitForEventAt, waits };
+}
 
 /** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
  *  for (`WorkerEntrypoint`, which only hands `env` over; `iterate/with-itx`, the real module), so

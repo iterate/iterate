@@ -23,7 +23,6 @@ import {
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
 import type { ConnectionAttempt } from "../integrations/connections.ts";
-import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import type { AccountState } from "./contract.ts";
 import { AccountProcessor } from "./processor.ts";
 
@@ -36,10 +35,6 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
   } & AppConfigEnv,
   ItxEntrypointScope
 > {
-  /** Connect, finish and disconnect are not published: `itx.integrations` (context/built-ins.ts)
-   *  reaches them. */
-  static override publicMethods = [...super.publicMethods, "connectWaitrose"];
-
   processor = new AccountProcessor();
 
   #integrationScope(): IntegrationScope {
@@ -75,12 +70,6 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
   /** The OAuth callback's (context/built-ins.ts `integrations.finishConnect`). */
   async finishIntegrationConnect(input: FinishConnectInput): Promise<FinishConnectAnswer> {
     return finishIntegrationConnect(this.#integrationScope(), await this.#integrations(), input);
-  }
-
-  /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
-   *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/users/<id>`. */
-  async connectWaitrose(input: { connection: string; account: string }): Promise<void> {
-    await connectWaitrose(this.#integrationScope(), input);
   }
 
   async disconnectIntegration(input: {

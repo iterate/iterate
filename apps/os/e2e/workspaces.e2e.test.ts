@@ -20,6 +20,7 @@
 import { expect, test, type TestContext } from "vitest";
 import type { RepoLogEntry } from "iterate/api";
 import {
+  configuredRows,
   freshCtx,
   openItx,
   processorNames,
@@ -132,11 +133,7 @@ test("itx.workspaces.create(path) lands the request and ONE certificate on its p
     events.filter((e) => e.type === "events.iterate.com/workspace/create-requested"),
   ).toHaveLength(1);
   // The processor row `create` enabled, on the path, named after the facet.
-  expect(
-    events
-      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
-      .map((e) => e.payload?.name),
-  ).toEqual(["workspace"]);
+  expect(configuredRows(events).map((e) => e.payload?.name)).toEqual(["workspace"]);
   // The state references the certificate by OFFSET, never by copied payload.
   expect(await itx.cd("/workspaces/four").facets.get("workspace").snapshot()).toMatchObject({
     state: {
@@ -405,9 +402,10 @@ test("the project facet's collection refuses a creation whose creator is not an 
         JSON.stringify(options),
       ),
     ).toMatchObject({ code: "INVALID_INPUT" });
-  const written = (await readAll(itx.cd("/w"))).map((e) => e.type);
+  const log = await readAll(itx.cd("/w"));
+  expect(configuredRows(log)).toEqual([]);
+  const written = log.map((e) => e.type);
   for (const type of [
-    "events.iterate.com/itx/subscription-configured",
     "events.iterate.com/itx/rewrite-rule-configured",
     "events.iterate.com/workspace/create-requested",
   ])

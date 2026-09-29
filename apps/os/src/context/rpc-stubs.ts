@@ -61,6 +61,7 @@ import { codedError, errorCode } from "iterate/lib";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import type { ItxExpression } from "iterate/expression";
+import { causeHeader, ITERATE_CAUSE_HEADER } from "../cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -505,7 +506,7 @@ export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
 
 /** THE CALLER ON A FETCH HOP: every header the context DO's `fetch` trusts as the platform's — the
- *  caller's (principal, grant, originating path, app, platform origin) and the DO's own protocol
+ *  caller's (principal, grant, originating path, app, platform origin, cause) and the DO's own protocol
  *  (the pager attach, which appends past every table, and the fetch-upgrade leg) — replaced on
  *  `headers` by `caller`'s (`null`: none, for a Request leaving the platform). Every hop that
  *  forwards a Request stamps through here, so a Request's own copy of any of them never survives.
@@ -522,9 +523,11 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
+    ITERATE_CAUSE_HEADER,
   ])
     headers.delete(name);
   if (!caller) return;
+  if (caller.cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(caller.cause));
   if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
   if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);

@@ -5,13 +5,13 @@
 // the caller.
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
-import type { OsEnv } from "../../../envs.ts";
+import type { OsDeployableEnv } from "../../../envs.ts";
 import { pageText } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
  *  Cloudflare's failures sent again, a truncated listing refused). */
-export type Cf = EnvContext<OsEnv>["cf"];
+export type Cf = EnvContext<OsDeployableEnv>["cf"];
 
 export type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_at?: string };
 
@@ -21,9 +21,9 @@ const CloudflareErrors = z.array(z.object({ code: z.number() }));
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
  *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos),
  *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace), 409/10306 and
- *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); KV
- *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
- *  preview). */
+ *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); Worker
+ *  Previews 404/10025 (no such preview). A deployment's members' not-found answers are
+ *  preview-delete.ts `GONE`. */
 export const isCloudflareError = (error: unknown, status: number, code: number) =>
   error instanceof CloudflareApiError &&
   error.status === status &&

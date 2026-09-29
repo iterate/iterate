@@ -414,6 +414,61 @@ for (const { vars, becomes, throws, warns } of appConfigRows)
     if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
     else expect(warn).not.toHaveBeenCalled();
   });
+const PLATFORM_HOOK_ROW = {
+  type: "events.iterate.com/itx/subscription-configured",
+  payload: {
+    name: "platform",
+    target: "itx.builtins.platformHook.deliverEvent",
+    afterOffset: 0,
+    ordered: false,
+  },
+};
+
+// THE BIRTH EVENTS, checked at boot and stored as the append boundary stores each; what that
+// boundary checks is core-processor.test.ts's (`normalizeContextBirthEvents`).
+test.for([
+  { name: "unset: none", vars: MINIMAL, becomes: [] },
+  {
+    name: "the platform hook's row, its target parsed as an append stores it",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([PLATFORM_HOOK_ROW]) },
+    becomes: [
+      {
+        ...PLATFORM_HOOK_ROW,
+        payload: {
+          ...PLATFORM_HOOK_ROW.payload,
+          target: ["itx", "builtins", "platformHook", "deliverEvent"],
+        },
+      },
+    ],
+  },
+  {
+    name: "a record only the platform appends is refused, naming its entry",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"events.iterate.com/itx/woken"}]',
+    },
+    throws: /contextBirthEvents\[0\]/,
+  },
+  {
+    name: "an event with no type is refused, naming the field",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"payload":{}}]' },
+    throws: /contextBirthEvents/,
+  },
+  {
+    name: "a key an event does not have is refused",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"x/y","offset":3}]' },
+    throws: /contextBirthEvents/,
+  },
+  {
+    name: "not a list is refused",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '{"type":"x/y"}' },
+    throws: /contextBirthEvents/,
+  },
+])("parseAppConfig contextBirthEvents: $name", ({ vars, becomes, throws }) => {
+  if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+  else expect(parseAppConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
+});
+
 test("parseAppConfig: a secret never prints", () => {
   const { secrets } = parseAppConfig(MINIMAL);
   expect(String(secrets.key)).toBe("REDACTED");

@@ -144,7 +144,7 @@ test("a source EXPRESSION with a cacheKey is produced ONCE per cold isolate — 
   // 1. no key → refused up front; the producer never ran
   await expect(
     itx.invoke(["itx", "workers", ["get", { source: "itx.codeStore.get('greet')" }], ["run", 1]]),
-  ).rejects.toThrow(/needs a cacheKey/);
+  ).rejects.toThrow(/give a source you produce its cacheKey/);
   expect(codeStore).toMatchObject({ produced: [] });
 
   // 2. with a key: the first call produces, the second rides the warm isolate

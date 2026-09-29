@@ -1,10 +1,13 @@
 # Docs
 
 A project's docs: the markdown files in its repos (`/repos/config` first), written in the browser. Served
-like [Notes](../notes/README.md): a project's config worker ([config-worker.ts](config-worker.ts))
-serves the `docs` routing slug, so `docs--<project>.iterate.app` under subdomains and
-`<platform>/projects/<project>/docs/` under paths, and fetches through to this Worker
-(`docsEnvs` in the root `envs.ts`). The page signs in on its host's `/.auth/*` and talks to its
+like [Notes](../notes/README.md): a project routes its `docs` routing slug to this Worker
+(`docsEnvs` in the root `envs.ts`) with a members-only fetch route, so it's
+`docs--<project>.iterate.app` under subdomains and `<platform>/projects/<project>/docs/` under
+paths (a PR preview's `pr<N>` gets that route from its seed, apps/os/scripts/preview-config.ts
+`proxiedAppRoute`). The project installs Docs in its config repo, as it does agents: a `docs.ts`
+re-exporting `@iterate-com/docs`'s processors and a pin in its root `package.json`
+([packages/docs](../../packages/docs/README.md)); the page says so when a project hasn't. The page signs in on its host's `/.auth/*` and talks to its
 host's `/api`, both the platform's; Docs has no OAuth client, no secrets and no state of its own.
 The base path handling is Notes', shared in
 [packages/ui/src/apps/base-path.ts](../../packages/ui/src/apps/base-path.ts).

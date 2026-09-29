@@ -1,11 +1,14 @@
 // caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the digest and
 // the secrets' compare; and `stampCaller`, the attribution an event is stored with.
 import { createHash } from "node:crypto";
+import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { expect, test } from "vitest";
 import {
   secretsEqual,
   sha256Hex,
   signClaims,
+  PLATFORM_FACT_TYPES,
+  refusePlatformFacts,
   refusePlatformIdempotencyKeys,
   stampCaller,
   verifyAdminSecret,
@@ -141,6 +144,41 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
     ...event,
     source: stamped,
   });
+});
+
+// ── the platform's facts — no one else appends or schedules one ──
+test.for<{ name: string; who: keyof typeof writers; refused?: true }>([
+  { name: "a person", who: "a person", refused: true },
+  { name: "loaded code", who: "loaded code", refused: true },
+  { name: "a first-party processor", who: "a first-party processor", refused: true },
+  { name: "the platform", who: "the platform for a person" },
+])("every platform fact, appended or scheduled by $name", ({ who, refused }) => {
+  for (const type of PLATFORM_FACT_TYPES)
+    for (const event of [
+      { type, payload: {} },
+      {
+        type: "events.iterate.com/itx/schedule-set",
+        payload: { key: "k", when: { afterMs: 1 }, events: [{ type: "note" }, { type }] },
+      },
+    ]) {
+      const refuse = () => refusePlatformFacts([event], writers[who]);
+      if (refused) expect(refuse, type).toThrow(/is the platform's own fact/);
+      else expect(refuse, type).not.toThrow();
+    }
+  expect(() => refusePlatformFacts([{ type: "note" }], writers[who])).not.toThrow();
+});
+
+test("the platform's facts are every provider's connection facts and the webhooks a processor trusts, besides the project's own", () => {
+  expect([...PLATFORM_FACT_TYPES]).toEqual(
+    expect.arrayContaining([
+      "events.iterate.com/github/webhook-received",
+      "events.iterate.com/slack/webhook-received",
+      ...INTEGRATION_PROVIDERS.flatMap((provider) => [
+        `events.iterate.com/${provider}/connected`,
+        `events.iterate.com/${provider}/disconnected`,
+      ]),
+    ]),
+  );
 });
 
 // ── the platform's idempotency keys — no other writer takes one first ──

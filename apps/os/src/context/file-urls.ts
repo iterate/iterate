@@ -10,6 +10,7 @@
 import { z } from "zod";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { signClaims, verifyClaims } from "../caller.ts";
+import { FILES_ROUTING_SLUG } from "../fetch-routes.ts";
 
 /** What a signed file URL carries: the project it belongs to, the object key (owner prefix NOT
  *  included — ingress applies it), the one method it permits, and when it stops working. */
@@ -22,10 +23,6 @@ const FileUrlClaims = z.object({
 });
 
 const DEFAULT_FILE_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
-/** The reserved routing slug a signed file URL hangs under: `files--<project>.<base>` — served by
- *  the edge before any config worker (worker.ts). */
-export const FILES_ROUTING_SLUG = "files";
-
 /** Mint a signed URL for `key` in `project`'s slice of the bucket: the claim names the project by
  *  id, the URL is the `files` routing slug's in the project (project-ingress.ts `projectUrlOf` — `host` the
  *  project's slug, the label the edge admits a project by). Refused on a deployment with no project

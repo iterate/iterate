@@ -73,6 +73,20 @@ there before capture. The current repository API supports regular UTF-8 files;
 capture refuses binary files, executable modes, symlinks and submodules it could
 not restore exactly.
 
+### A config repo for a newer platform
+
+`apply` restores a config tree byte for byte, so a tree written for an older platform must be
+migrated in a checkout before capture, with `--config-repo` naming it. For a platform whose SDK has
+`IterateConfigEntrypoint` (configs/default is the reference):
+
+- `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, not `ConfigWorker`, and types
+  `processEvent`'s argument as `IterateConfigProcessEventArgs`;
+- its `processEvent` has the init case: `installAgents(itx)` on the platform's
+  `events.iterate.com/project/worker-updated` on `/`;
+- `agents.ts` re-exports `AgentCollectionDurableObject` and `AgentDurableObject` from
+  `@iterate-com/agents`, which the root `package.json` lists in `dependencies` at a commit;
+- the `agents/` folder and `iterate.json` are gone.
+
 ## Hostnames
 
 `hostnames` lists every custom hostname the project serves at capture (a Cloudflare

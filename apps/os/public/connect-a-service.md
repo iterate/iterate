@@ -80,10 +80,6 @@ Then go to the first line that fits:
   If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
   them), carry on at step 2.
 
-- **The service is Waitrose.** It's built in too: send
-  https://dash.iterate.com/projects/<projectSlug>/integrations and ask them to press **Connect**
-  next to Waitrose. `projectSlug` is in what step 1 returned. Don't make up another link.
-
 - **A secret for the service is already listed:** go to step 5.
 - **Otherwise:** go to step 2.
 

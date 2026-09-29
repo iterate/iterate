@@ -452,10 +452,15 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const callsInFlight: ((value: unknown) => void)[] = [];
     delivery = new SubscriptionDelivery({
       stream,
-      evaluateItxExpression: async () =>
-        new FacetHandle(() => new Promise((resolve) => callsInFlight.push(resolve))),
+      evaluateItxExpression: async () => ({
+        value: new FacetHandle(() => new Promise((resolve) => callsInFlight.push(resolve))),
+        validUntil: Infinity,
+        routedTo: "the facet",
+      }),
       ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
+      runAsDelivery: (_event, call) => call(),
+      abortIncarnation: () => {},
     });
     stream.append(
       normalizeControlEvent(
@@ -502,13 +507,18 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const callsInFlight: ((value: unknown) => void)[] = [];
     delivery = new SubscriptionDelivery({
       stream,
-      evaluateItxExpression: async () =>
-        new FacetHandle(() => {
+      evaluateItxExpression: async () => ({
+        value: new FacetHandle(() => {
           callsStarted++;
           return new Promise((resolve) => callsInFlight.push(resolve));
         }),
+        validUntil: Infinity,
+        routedTo: "the facet",
+      }),
       ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
+      runAsDelivery: (_event, call) => call(),
+      abortIncarnation: () => {},
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
     stream.append(
@@ -580,21 +590,27 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const calleeCopies: unknown[] = [];
     delivery = new SubscriptionDelivery({
       stream,
-      evaluateItxExpression: async () => (events: StreamEvent[], range: unknown) => {
-        callsStarted++;
-        callsInFlightNow++;
-        maxCallsInFlight = Math.max(maxCallsInFlight, callsInFlightNow);
-        if (args.calleeCopy) calleeCopies.push(deserialize(serialize([events, range])));
-        notePeakHeap();
-        return new Promise((resolve) =>
-          setTimeout(() => {
-            callsInFlightNow--;
-            resolve(undefined);
-          }, args.callMs ?? 250),
-        );
-      },
+      evaluateItxExpression: async () => ({
+        value: (events: StreamEvent[], range: unknown) => {
+          callsStarted++;
+          callsInFlightNow++;
+          maxCallsInFlight = Math.max(maxCallsInFlight, callsInFlightNow);
+          if (args.calleeCopy) calleeCopies.push(deserialize(serialize([events, range])));
+          notePeakHeap();
+          return new Promise((resolve) =>
+            setTimeout(() => {
+              callsInFlightNow--;
+              resolve(undefined);
+            }, args.callMs ?? 250),
+          );
+        },
+        validUntil: Infinity,
+        routedTo: "the facet",
+      }),
       ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
+      runAsDelivery: (_event, call) => call(),
+      abortIncarnation: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
     // Every row gets its first call — how many at once is the ledger's decision, measured.
@@ -623,12 +639,18 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     const callsInFlight: ((value: unknown) => void)[] = [];
     delivery = new SubscriptionDelivery({
       stream,
-      evaluateItxExpression: async () => () => {
-        callsStarted++;
-        return new Promise((resolve) => callsInFlight.push(resolve));
-      },
+      evaluateItxExpression: async () => ({
+        value: () => {
+          callsStarted++;
+          return new Promise((resolve) => callsInFlight.push(resolve));
+        },
+        validUntil: Infinity,
+        routedTo: "the facet",
+      }),
       ...facetHostPlatformEntries,
       reconcileAlarm: () => {},
+      runAsDelivery: (_event, call) => call(),
+      abortIncarnation: () => {},
     });
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>

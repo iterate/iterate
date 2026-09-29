@@ -9,7 +9,6 @@
  *   generate-route-tree        regenerate src/routeTree.gen.ts outside `vite dev`/`vite build`; `--check`
  *                              fails (and restores the file) when the checked-in tree is stale
  */
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +21,7 @@ import {
   agentsEnvs,
   dashEnvs,
   docsEnvs,
+  getEnv,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -30,21 +30,14 @@ import {
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
-import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
+import { resolveEnvContext } from "./env-context.ts";
 import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
-/** The commit an app is built from, as vite.config.ts defines it for the client
- *  (`import.meta.env.VITE_SOURCE_COMMIT`): a preview's PR head (the deploy step's PREVIEW_HEAD_SHA,
- *  since a preview builds the PR merged into main), else the checkout's. An app that installs this
- *  repository's packages into a project pins that commit's pkg.pr.new build when there is one. */
-export function sourceCommit(): string {
-  if (process.env.PREVIEW_HEAD_SHA) return process.env.PREVIEW_HEAD_SHA;
-  const result = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() : "";
-}
-
-/** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
-export interface StartAppEnv extends DeployableEnv {
+/** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
+ *  project named for the app), the worker and its origin. */
+export interface StartAppEnv {
+  cloudflareAccountId: string;
+  dopplerConfig: string;
   workerName: string;
   baseUrl: string;
   /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
@@ -215,25 +208,17 @@ function workerFirstRoutes(app: StartApp) {
 }
 
 async function deploy(app: StartApp, options: { env: string }) {
-  await deployApp({
+  await deployApp(getEnv(options.env, app.envs), {
+    dopplerProject: app.dopplerProject,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
-    envs: app.envs,
-    dopplerProject: app.dopplerProject,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    smokes: (env) => [
-      { url: `${env.baseUrl}/healthz`, ok: (response) => response.status === 200, label: "health" },
-    ],
+    smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
   });
 }
 
 async function ensureResources(app: StartApp, options: { env: string }) {
-  const ctx = await resolveEnvContext({
-    envs: app.envs,
+  const ctx = await resolveEnvContext(getEnv(options.env, app.envs), {
     dopplerProject: app.dopplerProject,
-    env: options.env,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,

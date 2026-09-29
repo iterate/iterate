@@ -1,25 +1,15 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { useMemo } from "react";
 import type { IterateContextApi } from "iterate/api";
-import { ensureDoc } from "@iterate-com/docs/install";
-import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
+import { docsModule, ensureDoc } from "@iterate-com/docs/install";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";
 import { repoPath } from "../../lib/docs-repo.ts";
 
-/** The @iterate-com/docs build a doc's processors run: this app's own commit's, else main's now
- *  (`publishedCommit`), resolved in the app's Worker because a page cannot read pkg.pr.new's commit
- *  header. */
-const publishedDocs = createServerFn().handler(async () =>
-  pkgPrNewVersion(
-    "@iterate-com/docs",
-    await publishedCommit("@iterate-com/docs", import.meta.env.VITE_SOURCE_COMMIT),
-  ),
-);
-
 /** One doc: `/projects/<slug>/<repo name>/<path in the repo>`, read at the repo's tip for the
- *  first paint; the editor goes live on the doc's processor (doc-session.ts). */
+ *  first paint; the editor goes live on the doc's processor (doc-session.ts), which runs the
+ *  @iterate-com/docs build the project's config installs (`docs.ts`, @iterate-com/docs/install). */
 export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
   loader: async ({ context, params }) => {
     const path = params._splat || "";
@@ -29,7 +19,10 @@ export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
     const text = tip ? await repo.readFile(path, { commitOid: tip }) : null;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty doc is "" and a real doc; a missing one is null
     if (!tip || text === null) throw notFound();
-    return { repo: params.repo, path, text };
+    // the processors' code is the project's own, from its config
+    using config = itx.repos.get("/repos/config");
+    const installed = Boolean(await config.readFile(docsModule.path));
+    return { repo: params.repo, path, text, installed };
   },
   component: DocPage,
 });
@@ -53,11 +46,10 @@ function DocPage() {
           try {
             // The SDK models the public API as promises; capnweb's stub has the same runtime
             // methods, and disposes
-            const context = await ensureDoc(
-              itx as unknown as IterateContextApi,
-              { repo: repoPath(docRepo), path },
-              await publishedDocs(),
-            );
+            const context = await ensureDoc(itx as unknown as IterateContextApi, {
+              repo: repoPath(docRepo),
+              path,
+            });
             return {
               context,
               dispose: () => {
@@ -73,6 +65,7 @@ function DocPage() {
       }),
     [docRepo, path, text, userName, api, project.id],
   );
+  if (!data.installed) return <NotInstalled />;
   return (
     <DocEditor
       key={`${docRepo}/${path}`}
@@ -84,5 +77,21 @@ function DocPage() {
         </Link>
       }
     />
+  );
+}
+
+/** A project whose config doesn't install Docs: its processors have no code to run. */
+function NotInstalled() {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle>Docs is not installed in this project</EmptyTitle>
+        <EmptyDescription>
+          Its config repo installs it, as it does agents: a <code>{docsModule.path}</code> that says{" "}
+          <code>{docsModule.content.trim()}</code>, and <code>@iterate-com/docs</code> in the root{" "}
+          <code>package.json</code>&apos;s dependencies.
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }

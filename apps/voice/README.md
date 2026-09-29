@@ -21,17 +21,15 @@ Node), with the browser's microphone and speaker on either end and the relay's l
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
-A project without a voice agent gets **Install voice** in place of Call: an OpenAI key field if the
-project has no `/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, the
-installer Kit's Prepare runs too): the config repo gets `agents/` and `voice/` folders pinning the
-`@iterate-com/agents` and `@iterate-com/voice` builds of the commit this app was built from (else
-the commit main's builds are at, which the app's Worker asks pkg.pr.new for), and both are
-installed from them. It works against any platform the app
-connects to, a self-hosted one included.
+The project's config repo installs voice, as configs/default does. A project whose voice cannot
+take a call yet gets **Set up voice** in place of Call: an OpenAI key field if the project has no
+`/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, what Kit's Prepare runs
+too), which stores the key, waits for `itx.voice` and refuses a project whose config installs no
+voice. It works against any platform the app connects to, a self-hosted one included.
 
-Under Call, **Voice build** shows the build the project's voice runs and, when main has published a
-newer one, **Upgrade to the newest**: `upgradeVoice` (`@iterate-com/voice/install`) commits that
-build's `voice/` folder and installs it. The agents app keeps its build; the Agents app upgrades it.
+Under Call, **Voice build** shows the build the project's config pins and, when main has published
+a newer one, **Upgrade to the newest**: `upgradeVoice` (`@iterate-com/voice/install`) commits that
+pin and waits for its publication. The agents app keeps its build; the Agents app upgrades it.
 
 ## Run
 

@@ -10,7 +10,7 @@ test("pins a branch without downloading its tree and leaves exact commits alone"
     owner: "iterate",
     repo: "iterate",
     ref: "main",
-    path: "configs/with-agents",
+    path: "configs/minimal",
   };
   const githubFetch = vi
     .fn()

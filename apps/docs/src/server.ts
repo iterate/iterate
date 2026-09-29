@@ -40,8 +40,8 @@ const docs = appServerEntry(
   { proxied: true },
 );
 
-/** Docs is served through a project's config worker (config-worker.ts), under the base path the
- *  edge says (@iterate-com/ui/apps/base-path). */
+/** Docs is served on a project's `docs` routing slug (a members-only fetch route to this Worker),
+ *  under the base path the edge says (@iterate-com/ui/apps/base-path). */
 export default createServerEntry({
   fetch: (incoming) => docs.fetch(withoutBuildBasePath(incoming)),
 });

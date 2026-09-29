@@ -66,15 +66,7 @@ export class AgentCollectionDurableObject
   implements AgentsApi
 {
   /** The processor's reads, and `itx.agents`: the collection's verbs and `at(base)` (collection.ts). */
-  static override publicMethods = [
-    ...super.publicMethods,
-    "list",
-    "get",
-    "create",
-    "delete",
-    "upgrade",
-    "at",
-  ];
+  static override publicMethods = [...super.publicMethods, "list", "get", "create", "delete", "at"];
 
   processor = new AgentCatalogProcessor();
   at(base: string) {
@@ -88,23 +80,10 @@ export class AgentCollectionDurableObject
         await this.catchUpFromLog();
         return (await this.snapshot()).state;
       },
-      async () => {
-        const runtime = await this.withItx((itx) => itx.kv.get("agents/runtime"));
-        if (!runtime) throw new Error("The agents runtime has not been installed");
-        // Written by install.ts: the runtime's files and its content hash.
-        const { cacheKey, source } = JSON.parse(runtime) as {
-          cacheKey: string;
-          source: Record<string, string>;
-        };
-        return { cacheKey, source, className: "AgentDurableObject" };
-      },
       base,
     );
   }
   #collection = this.at("/");
-  upgrade() {
-    return this.#collection.upgrade();
-  }
   list() {
     return this.#collection.list();
   }

@@ -187,8 +187,8 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
  *  challenge, anything else is this worker's 404. */
 const SRC_FETCH_ROUTER = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { ConfigWorker } from "iterate/sdk";
-export default class Router extends ConfigWorker {
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class Router extends IterateConfigEntrypoint {
   async fetch(request) {
     const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
     if (route?.authRequirement && !request.headers.has("x-itx-principal"))

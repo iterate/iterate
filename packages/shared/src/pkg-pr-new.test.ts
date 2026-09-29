@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { buildStanding, pinPkgPrNewVersion, publishedCommit } from "./pkg-pr-new.ts";
+import { buildStanding, pinPkgPrNewVersion } from "./pkg-pr-new.ts";
 
 const commit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
 
@@ -77,34 +77,6 @@ test("a HEAD pkg.pr.new never answers fails at its 10 s deadline, and is not sen
   );
   expect(Date.now() - started).toBe(10_000);
   expect(head).toHaveBeenCalledOnce();
-});
-
-test.for([
-  {
-    name: "the app's own commit, when pkg.pr.new has published it",
-    own: commit,
-    answers: { [agentsAt(commit)]: served(`iterate:iterate:${commit}`) },
-    at: commit,
-  },
-  {
-    name: "main's commit now, when the app's own is not published",
-    own: "a".repeat(40),
-    answers: {
-      [agentsAt("a".repeat(40))]: served(`iterate:iterate:${"a".repeat(40)}`, 404),
-      [agentsAt("main")]: served(`iterate:iterate:${commit}`),
-    },
-    at: commit,
-  },
-  {
-    name: "main's commit now, for an app built from no commit",
-    own: "",
-    answers: { [agentsAt("main")]: served(`iterate:iterate:${commit}`) },
-    at: commit,
-  },
-])("an app installs at one commit: $name", async ({ own, answers, at }) => {
-  const head = vi.fn(async (url: string | URL | Request) => answers[String(url)]!);
-  expect(await publishedCommit("@iterate-com/agents", own, head)).toBe(at);
-  expect(head.mock.calls.map(([url]) => url)).toEqual(Object.keys(answers));
 });
 
 const older = "1".repeat(40);

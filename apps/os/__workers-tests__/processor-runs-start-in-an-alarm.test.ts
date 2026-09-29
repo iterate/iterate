@@ -76,7 +76,7 @@ test("a run the context died owing its alarm is settled `interrupted` by the inc
   });
   expect(log.find((event) => event.offset === settled!.offset - 1)).toMatchObject({
     type: "events.iterate.com/itx/woken",
-    payload: { reason: "alarm" },
+    payload: { cause: "alarm" },
   });
 });
 

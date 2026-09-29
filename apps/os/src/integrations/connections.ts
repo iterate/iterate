@@ -10,7 +10,7 @@ import { INTEGRATION_PROVIDER_NAMES, type StreamPage } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
-import { bytesFromBase64url, signClaims } from "../caller.ts";
+import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -55,8 +55,9 @@ export type ConnectionAttempt = {
 /** The providers whose accounts iterate's app routes to one connection each (control-plane/catalog.ts
  *  `integration_routes`): the ones an account is moved between projects of. `as const` keeps the
  *  two literals, which `RoutedProvider` and the offer's `z.enum` are read off; `satisfies` checks
- *  each is a provider. */
-export const ROUTED_PROVIDERS = ["slack", "github"] as const satisfies IntegrationProvider[];
+ *  each is a provider. X is routed but never moved: a second connection of its account is refused
+ *  (integrations/x.ts). */
+export const ROUTED_PROVIDERS = ["slack", "github", "x"] as const satisfies IntegrationProvider[];
 export type RoutedProvider = (typeof ROUTED_PROVIDERS)[number];
 
 /** THE MOVE OF AN ACCOUNT ANOTHER PROJECT HOLDS (verbs.ts `confirmIntegrationMove`): the human
@@ -197,7 +198,7 @@ export async function appendPlatformFact(
   env: IntegrationEnv,
   projectId: string,
   path: string,
-  event: StreamEventInput,
+  event: StreamEventInput & { type: PlatformFactType },
 ): Promise<void> {
   await env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path })).invoke(
     ["itx", "builtins", ["append", event]],

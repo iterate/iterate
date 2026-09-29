@@ -2,8 +2,7 @@
 // project's `/` (project/durable-object.ts) and the account facet on a person's `/users/<id>`
 // (account/durable-object.ts) each run these over their own scope and their own `state.integrations`.
 // A person connects Google, Cloudflare or X here (GitHub also comes from signing in); a project
-// can additionally connect Slack. Waitrose has no consent: either owner connects it with a username and password
-// (`connectWaitrose`). A PERSON'S ACCOUNT used by a project (a row with `ownerUserId`) is connected
+// can additionally connect Slack. A PERSON'S ACCOUNT used by a project (a row with `ownerUserId`) is connected
 // by `itx.integrations.connect(provider, { account })` on the project (context/built-ins.ts), or here
 // when the consent it needed finishes (the attempt's `connectToProject`); disconnecting it from the
 // project leaves the person's own connection standing. The facets publish none of connect, finish
@@ -108,14 +107,6 @@ const PROVIDERS: Record<
   google: { connect: connectGoogle, finish: finishGoogleConnect, revoke: revokeGoogle },
   cloudflare: { connect: connectCloudflare, finish: finishCloudflareConnect },
   github: { connect: connectGithub },
-  waitrose: {
-    connect: async () => {
-      throw codedError(
-        "INVALID_INPUT",
-        "integrations: Waitrose has no consent to send a human to — set /secrets/waitrose-<connection> to { username, password } and call connectWaitrose",
-      );
-    },
-  },
 };
 
 /** CONNECT: where to send a human to consent. Again for a connection that exists asks for more on

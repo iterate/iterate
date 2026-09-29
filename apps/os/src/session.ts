@@ -19,6 +19,7 @@ import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { pinPublicGithubTemplate } from "./repo/github-template.ts";
 import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
+import type { Cause } from "./cause.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
@@ -42,7 +43,7 @@ import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
 import { contextStub } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
-import { IterateAppProvider } from "./integrations/contract.ts";
+import { IntegrationProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
@@ -74,6 +75,9 @@ export interface SessionInput {
    *  every context it vends composes public URLs with (a DO isolate cannot know it: the caller
    *  carries it). */
   platformOrigin: string;
+  /** The chain THIS request resumes, when it carries our mark (cause.ts): our own code calling the
+   *  platform back. Absent, each call begins a chain of its own. */
+  cause?: Cause;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify the token `authenticate` presents and bind the transport
@@ -521,7 +525,7 @@ export class SessionRpcTarget extends RpcTarget {
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.appConfig.urls.ingressRouting,
       mcpOrigin: this.#input.appConfig.urls.mcp,
-      iterateAppProviders: IterateAppProvider.options.filter((provider) =>
+      iterateAppProviders: IntegrationProvider.options.filter((provider) =>
         Boolean(this.#input.appConfig.integrations[provider]),
       ),
       iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
@@ -559,6 +563,7 @@ export class SessionRpcTarget extends RpcTarget {
       principal,
       grant,
       platformOrigin: this.#input.platformOrigin,
+      cause: this.#input.cause,
       ...(grant && scopes?.includes("account") && !principal.impersonatedBy && { account: true }),
     };
   }

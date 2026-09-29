@@ -479,6 +479,39 @@ test("verifyHmac checks a webhook's HMAC-SHA256 inside the secret's facet: true 
   expect(await itx.secrets.verifyHmac("/secrets/hook", { payload, signature })).toBe(false); // deleted: no key
 });
 
+// The verdicts (a field, a prefix, empty strings) are secrets.test.ts's `verifySecretEquals` table.
+test("verifyEquals compares a presented string with the secret inside its facet: true for the same string, false for another, a secret never set or deleted; loaded code verifies through its creator's link; no fact and no value leaves the facet", async () => {
+  const itx = openItx(freshCtx("secrets-equals"));
+  await itx.secrets.set("/secrets/bearer", "pebble-bearer-token", {
+    urls: ["https://example.test"],
+  });
+  expect(await itx.secrets.verifyEquals("/secrets/bearer", { value: "pebble-bearer-token" })).toBe(
+    true,
+  );
+  expect(await itx.secrets.verifyEquals("/secrets/bearer", { value: "pebble-bearer-tokeX" })).toBe(
+    false,
+  );
+  expect(
+    await itx.secrets.verifyEquals("/secrets/never-set", { value: "pebble-bearer-token" }),
+  ).toBe(false);
+  const child = itx.cd("/agents/hook");
+  await child.provide("itx", "itx.builtins.cd('/')");
+  expect(
+    await child.run(
+      `async (itx) => itx.secrets.verifyEquals("/secrets/bearer", { value: "pebble-bearer-token" })`,
+    ),
+  ).toBe(true);
+  const events = await readAll(itx.cd("/secrets/bearer"));
+  expect(
+    events.filter((e) => e.type.startsWith("events.iterate.com/secret/")).map((e) => e.type),
+  ).toEqual(["events.iterate.com/secret/set"]);
+  expect(JSON.stringify(events)).not.toContain("pebble-bearer-token");
+  await itx.secrets.delete("/secrets/bearer");
+  expect(await itx.secrets.verifyEquals("/secrets/bearer", { value: "pebble-bearer-token" })).toBe(
+    false,
+  );
+});
+
 test("loaded code may write a secret: a script run in a child context (through its creator's link) sets, lists and deletes one — the platform's hops to the secret's context are its own, never the script's spelling; the fact speaks for the project (no principal)", async () => {
   const itx = openItx(freshCtx("secrets-script"));
   const child = itx.cd("/agents/writer");

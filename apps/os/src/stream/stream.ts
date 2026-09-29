@@ -31,7 +31,9 @@ import {
   ReduceCheckpointTable,
   type SqlStorageHandle,
 } from "iterate/stream/processor";
+import { newChain, recordRefusal, refuseActPastLimit, storedCause, type Cause } from "../cause.ts";
 import type { Caller } from "../caller.ts";
+import type { InboundCallKind } from "../context/residency.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,
@@ -81,7 +83,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
  *  awake for the wait's duration, and a reset (`ctx.abort`, a storage reset) fails the call. An
  *  instance the PLATFORM replaces under the call is the exception: the call stays on the old
  *  instance, whose waiters never see the new one's appends and time out — a caller that must not
- *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS). */
+ *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS,
+ *  library.ts SCRIPT_RUN_WAIT_SLICE_MS). */
 type WaitForEventWaiter = {
   /** The types that resolve it; empty = any. */
   types: string[];
@@ -91,6 +94,16 @@ type WaitForEventWaiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+/** WHY AN INCARNATION WOKE, as its wake record (`itx/woken`) says — a context wakes for two reasons
+ *  only. A caller reached it: `caller` is the kind of that first call, as the DO's census counts it
+ *  (context/residency.ts `InboundCallKind`; absent at a birth, whose caller the constructor cannot
+ *  see). Or its alarm fired: `due` names the durable obligations it came back for — a schedule, a
+ *  subscription's retry or claim, a hosted processor's claim, a run. A fan-out row is told of every
+ *  wake, at most once (subscription-delivery.ts, THE WAKE RULE). */
+export type Wake =
+  | { cause: "call"; caller?: InboundCallKind }
+  | { cause: "alarm"; due: ("schedule" | "retry" | "claim" | "run")[] };
+
 /** Everything the stream needs from its host. */
 interface StreamDeps {
   /** The DO's whole `ctx.storage` — sync SQLite and the sync transaction. */
@@ -99,6 +112,10 @@ interface StreamDeps {
   path: string;
   /** The birth certificate's payload. */
   projectId: string;
+  /** What the birth appends after the certificate and the wake record, in the same batch, unread:
+   *  the deployment's birth events for a project context (app-config.ts `contextBirthEvents`), none
+   *  for a global one. Absent: none. */
+  birthEvents?: readonly StreamEventInput[];
   /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
    *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
   onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
@@ -109,6 +126,9 @@ interface StreamDeps {
    *  the facets the last incarnation ran: until then the birth writes nothing (FacetHost
    *  `startFacetsTheLastIncarnationRan`). Absent: counted as the stream is constructed. */
   incarnationCountedByHost?: boolean;
+  /** The cause the running append runs under (the DO: its caller's), stamped on every event that
+   *  names none (cause.ts). Absent or none: a chain of this context's own. */
+  cause?: () => Cause | undefined;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
@@ -120,8 +140,10 @@ export class Stream {
   readonly storage: StreamStorage;
   readonly #path: string;
   readonly #projectId: string;
+  readonly #birthEvents: readonly StreamEventInput[];
   readonly #onCommit: StreamDeps["onCommit"];
   readonly #wakeRecordDetail: StreamDeps["wakeRecordDetail"];
+  readonly #ambientCause: StreamDeps["cause"];
   /** The highest offset assigned THIS INCARNATION, ephemerals included; an ephemeral-only batch
    *  advances this alone. */
   #highestAssignedOffset: number;
@@ -147,8 +169,10 @@ export class Stream {
     if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
     this.#path = deps.path;
     this.#projectId = deps.projectId;
+    this.#birthEvents = deps.birthEvents || [];
     this.#onCommit = deps.onCommit;
     this.#wakeRecordDetail = deps.wakeRecordDetail;
+    this.#ambientCause = deps.cause;
     // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
     // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
     // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
@@ -207,47 +231,61 @@ export class Stream {
 
   #wakeRecorded = false;
 
-  /** THE BIRTH RECORD — the DO constructor calls this before any handler runs, so a probe on a
-   *  never-seen context materializes it (what is worth reaching is worth recording): a FRESH store
-   *  gets `itx/created { projectId, path }` at offset 1 and the first incarnation's wake record
-   *  in the same batch (a birth is always a request's — nothing has an alarm before it exists). A
-   *  store with rows gets nothing here: its wake is recorded by the first handler that runs (an
-   *  RPC, a fetch, the alarm: `appendWakeRecord`), because only that handler knows WHY it woke —
-   *  workerd hides a firing alarm from `getAlarm()` for the whole run, the constructor included.
-   *  Both events are exempt from pause: a paused stream still records its wake. */
-  appendBirthRecord(): void {
+  /** THE BIRTH RECORD — the first handler that reaches a never-seen context records it
+   *  (`appendWakeRecord`, what is worth reaching is worth recording): a FRESH store gets
+   *  `itx/created { projectId, path }` at offset 1, the first incarnation's wake record and the birth
+   *  events (`birthEvents`) in the same batch, all caused by the call that bore it (a birth is always
+   *  a call's — nothing has an alarm before it exists). A store with rows gets nothing here. Both
+   *  events are exempt from pause: a paused stream still records its wake. */
+  appendBirthRecord(cause?: Cause): void {
     if (this.#highestDurableOffset !== 0) return;
+    const source = cause && { cause };
     this.append(
       {
         type: "events.iterate.com/itx/created",
         payload: { projectId: this.#projectId, path: this.#path },
+        source,
       },
       {
         type: "events.iterate.com/itx/woken",
-        payload: { incarnation: this.storage.incarnation, reason: "request" },
+        payload: { incarnation: this.storage.incarnation, cause: "call" },
+        source,
       },
+      ...this.#birthEvents.map((event) => ({ ...event, source })),
     );
     this.#wakeRecorded = true;
   }
 
-  /** THE WAKE RECORD, once per incarnation: `itx/woken { incarnation, reason }` — `"alarm"` from
-   *  the alarm handler, `"request"` from every other handler (an RPC, a fetch, a message on a
-   *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
+  /** THE WAKE RECORD, once per incarnation: `itx/woken { incarnation, ...wake }` — WHY it woke
+   *  (`Wake`: a caller reached it, and which kind, or its alarm fired, and for what), caused by what
+   *  woke it: the call, or the deepest obligation the alarm came back for. The first arrival appends
+   *  it, before its own work — on a never-seen store, the birth record (`appendBirthRecord`); the
+   *  ones after find it done. A call past the loop limit (cause.ts) wakes nothing and bears nothing:
+   *  refused LOOP_LIMIT, it may read an awake context and no other.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
    *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
-   *  incarnation (for a processor's request still owed to the alarm, the pass that would have
-   *  started it), and whoever asked reads the settlement, not a second attempt. */
-  appendWakeRecord(reason: "alarm" | "request"): void {
+   *  incarnation, or runs on in an instance Cloudflare replaced, which can no longer write (for a
+   *  processor's request still owed to the alarm, the pass that would have started it), and
+   *  whoever asked reads the settlement, not a second attempt. */
+  appendWakeRecord(wake: Wake, cause?: Cause): void {
     if (this.#wakeRecorded) return;
-    const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
-      (requestOffset): StreamEventInput => ({
+    if (wake.cause === "call")
+      refuseActPastLimit(
+        cause,
+        this.#highestDurableOffset === 0 ? `a birth of ${this.#path}` : `waking ${this.#path}`,
+      );
+    if (this.#highestDurableOffset === 0) return this.appendBirthRecord(cause);
+    const interrupted = Object.entries(this.#coreReducedState.scriptRuns).map(
+      ([requestOffset, run]): StreamEventInput => ({
         type: "events.iterate.com/itx/run-settled",
         idempotencyKey: `itx/run-settled:${requestOffset}`,
+        source: run.cause && { cause: run.cause },
         payload: {
           requestOffset: Number(requestOffset),
           settlement: {
             status: "failed",
-            error: "the context restarted before the script finished; it is not run again",
+            error:
+              "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
             failureKind: "interrupted",
           },
         },
@@ -256,11 +294,37 @@ export class Stream {
     this.append(
       {
         type: "events.iterate.com/itx/woken",
-        payload: { incarnation: this.storage.incarnation, reason, ...this.#wakeRecordDetail?.() },
+        payload: { incarnation: this.storage.incarnation, ...wake, ...this.#wakeRecordDetail?.() },
+        source: cause && { cause },
       },
       ...interrupted,
     );
     this.#wakeRecorded = true;
+  }
+
+  /** Refuse an act past the loop limit (cause.ts), recording the chain's one fact here first. */
+  #refusePastLoopLimit(cause: Cause, act: string): void {
+    try {
+      refuseActPastLimit(cause, act);
+    } catch (error) {
+      recordRefusal(error, (refused, message) => this.recordLoopLimit(refused, message));
+      throw error;
+    }
+  }
+
+  /** THE ONE VISIBLE FACT of a chain refused past the loop limit in this context:
+   *  `itx/loop-limit { chain, depth, error }`, once per chain — whatever refused it, an append here
+   *  or an act the context's delivery made (subscription-delivery.ts). A receipt at the refused
+   *  depth: delivered, but nothing can act on it. */
+  recordLoopLimit(cause: Cause, error: string): void {
+    const idempotencyKey = `itx/loop-limit:${cause.chain}`;
+    if (this.storage.readEventByIdempotencyKey(idempotencyKey)) return;
+    this.append({
+      type: "events.iterate.com/itx/loop-limit",
+      idempotencyKey,
+      payload: { chain: cause.chain, depth: cause.depth, error: error.slice(0, 1024) },
+      source: { cause: storedCause(cause) },
+    });
   }
 
   /** Whether this incarnation's wake record is on the log yet. Until it is, every open run is one
@@ -348,13 +412,24 @@ export class Stream {
     const freshDurables: { event: StreamEvent; serializedBody: string }[] = []; // the rows to insert, in offset order
     const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
     let throughOffset = afterOffset;
+    let ambientCause: Cause | undefined;
     for (const event of events) {
       const { offset: expectedOffset, ...input } = event;
-      // WHERE IT CAME FROM, on every event: a writer's is the platform's stamp (caller.ts
-      // `stampCaller`), and one without — the platform's own records — came from this context.
-      const eventInput = input.source?.origin
-        ? input
-        : { ...input, source: { ...input.source, origin: this.#path } };
+      // WHERE IT CAME FROM AND WHY, on every event: a writer's origin is the platform's stamp
+      // (caller.ts `stampCaller`), and one without — the platform's own records — came from this
+      // context; its cause is the one it names (the platform's own records name theirs) or the one
+      // the append runs under (`StreamDeps.cause`), else a chain of this context's own.
+      const cause =
+        input.source?.cause ||
+        (ambientCause ||= this.#ambientCause?.() || newChain("a context's own work"));
+      const eventInput = {
+        ...input,
+        source: {
+          ...input.source,
+          origin: input.source?.origin || this.#path,
+          cause: storedCause(cause),
+        },
+      };
       // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
       // consumes no offset; a different body under the same key refuses the whole batch.
       let existingEvent = eventInput.idempotencyKey
@@ -383,6 +458,10 @@ export class Stream {
       }
       if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
+      // THE LOOP GUARD (cause.ts): past the limit, code's own events are refused — the platform's
+      // records (a receipt, this very fact) still land.
+      if (!PLATFORM_ONLY_EVENT_TYPES.has(eventInput.type))
+        this.#refusePastLoopLimit(cause, `an append of ${eventInput.type} to ${this.#path}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked".
       const offset = throughOffset + 1;
@@ -624,6 +703,8 @@ export class Stream {
 //                         never empty JSON); reads and the idempotency lookup reassemble it
 //   stream_meta           key · value                       the incarnation counter
 //   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
+//   subscription_deliveries name · offset · attempt ·       a fan-out row's admitted events, each
+//                         next_attempt_at_ms · leased · error until it is acked or dead-lettered
 //   reduce_checkpoints    ReduceCheckpointTable (processor.ts) the core reduce's checkpoint (a facet host
 //                                                           keeps its own, in its own storage)
 
@@ -641,12 +722,33 @@ export const EVENT_CHUNK_SIZE = 512 * 1024;
 
 /** THE cursor of a subscription the stream delivers at-least-once (subscription-delivery.ts): the
  *  offset an acked call confirmed, the ladder attempt, when the next attempt is due, and the
- *  offset of the delivery-resumed fact already applied (so a resume applies exactly once). */
+ *  offset of the delivery-resumed fact already applied (so a resume applies exactly once). A
+ *  FAN-OUT row's `confirmedOffset` is its admission cursor, `nextAttemptAtMs` its next probe while
+ *  it is parked, `parkedProbes` how many it has had since its last success, and `failingOffsets`
+ *  the last distinct events that failed with no success since (its pause). */
 export type SubscriptionCursor = {
   confirmedOffset: number;
   attempt: number;
   nextAttemptAtMs?: number;
   resumeAppliedAtOffset?: number;
+  failingOffsets?: number[];
+  parkedProbes?: number;
+  /** A fan-out row's: a digest of where its target last resolved (subscription-delivery.ts
+   *  `#evaluateTargetHeadForRow`), kept across incarnations so a re-point while the context slept
+   *  is seen by the next one. */
+  route?: string;
+};
+
+/** One event a fan-out row admitted and still owes (subscription-delivery.ts): the attempts made,
+ *  when it is due — its lease's end while `leased` (a call under this attempt began and has not
+ *  reported), its next rung after a failure, null while the row's target resolves to nothing — and
+ *  the last error. */
+export type FanOutDeliveryRecord = {
+  offset: number;
+  attempt: number;
+  nextAttemptAtMs: number | null;
+  leased: boolean;
+  error: string | null;
 };
 
 /** One durable row as stored: its offset and its serialized body, reassembled. */
@@ -691,6 +793,17 @@ class StreamStorage {
       );
       this.#sql.exec(
         "CREATE TABLE IF NOT EXISTS subscription_cursors (name TEXT PRIMARY KEY, cursor TEXT NOT NULL)",
+      );
+      this.#sql.exec(
+        `CREATE TABLE IF NOT EXISTS subscription_deliveries (
+           name TEXT NOT NULL,
+           offset INTEGER NOT NULL,
+           attempt INTEGER NOT NULL,
+           next_attempt_at_ms INTEGER,
+           leased INTEGER NOT NULL,
+           error TEXT,
+           PRIMARY KEY (name, offset)
+         )`,
       );
       ReduceCheckpointTable.createTable(this.#sql);
     }
@@ -817,6 +930,58 @@ class StreamStorage {
     this.#sql.exec("DELETE FROM subscription_cursors WHERE name = ?", name);
   }
 
+  /** Every fan-out delivery record, every row: the delivery loop reads them once, as it starts. */
+  listSubscriptionDeliveries(): [name: string, record: FanOutDeliveryRecord][] {
+    return this.#sql
+      .exec<{
+        name: string;
+        offset: number;
+        attempt: number;
+        next_attempt_at_ms: number | null;
+        leased: number;
+        error: string | null;
+      }>(
+        "SELECT name, offset, attempt, next_attempt_at_ms, leased, error FROM subscription_deliveries",
+      )
+      .toArray()
+      .map((row) => [
+        String(row.name),
+        {
+          offset: Number(row.offset),
+          attempt: Number(row.attempt),
+          nextAttemptAtMs: row.next_attempt_at_ms === null ? null : Number(row.next_attempt_at_ms),
+          leased: Number(row.leased) === 1,
+          error: row.error || null,
+        },
+      ]);
+  }
+
+  writeSubscriptionDelivery(name: string, record: FanOutDeliveryRecord): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO subscription_deliveries (name, offset, attempt, next_attempt_at_ms, leased, error) VALUES (?, ?, ?, ?, ?, ?)",
+      name,
+      record.offset,
+      record.attempt,
+      record.nextAttemptAtMs,
+      record.leased ? 1 : 0,
+      record.error,
+    );
+  }
+
+  /** One delivery settled: acked or dead-lettered. */
+  deleteSubscriptionDelivery(name: string, offset: number): void {
+    this.#sql.exec(
+      "DELETE FROM subscription_deliveries WHERE name = ? AND offset = ?",
+      name,
+      offset,
+    );
+  }
+
+  /** Every delivery record of a row that was removed or replaced. */
+  deleteSubscriptionDeliveries(name: string): void {
+    this.#sql.exec("DELETE FROM subscription_deliveries WHERE name = ?", name);
+  }
+
   /** An EMPTY cell is the chunked marker (a real body is never empty JSON); otherwise the cell IS the body. */
   #reassembleBody(offset: number, cell: string): string {
     if (cell !== "") return cell;
@@ -842,7 +1007,14 @@ export interface ReachableContext {
     afterOffset?: number,
     limit?: number,
     options?: { includeEphemeral?: boolean },
+    /** Why it is read: what a wake it makes is caused by (cause.ts). */
+    cause?: Cause,
   ): Promise<StreamPage>;
+  /** A delivery's write reserved at most once (integrations/email.ts): the event already recorded
+   *  under `key`, or whether this attempt reserved it now. */
+  reserveSend(key: string): Promise<{ recorded?: StreamEvent; reserved: boolean }>;
+  /** A reservation's release: what it was for did not happen. */
+  releaseSend(key: string): Promise<void>;
   /** THE dispatch entry point. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
    *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
    *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */

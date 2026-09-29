@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  BIRTH_ROW_NAMES,
   collector,
   durableCountsByType,
   freshCtx,
@@ -48,8 +49,10 @@ localSequential(
       const s: any = await tallySnapshot(itx);
       return s.offset >= head && s;
     });
-    // Only the explicitly enabled tally is subscribed.
-    expect(snap.state.counts["events.iterate.com/itx/subscription-configured"]).toBe(1);
+    // The context's birth rows, and the explicitly enabled tally.
+    expect(snap.state.counts["events.iterate.com/itx/subscription-configured"]).toBe(
+      BIRTH_ROW_NAMES.size + 1,
+    );
     await sleep(400);
     expect(deliveryErrors(worker) - before).toBe(0);
   },

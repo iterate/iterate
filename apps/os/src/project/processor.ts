@@ -2,25 +2,25 @@
 // and of the certificates cross-posted to `/` (the catalog: first certificate wins — a repo, a
 // workspace is born once; a secret's latest `set` is its
 // row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
-// the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
-// (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
-// `main` is unborn (the homepage worker and an AGENTS.md, below), that commit published, then the
-// certificate. THE CONFIG WORKER FOLLOWING THE CONFIG REPO: every `repo/commit-completed` from
-// `/repos/config` publishes that commit — the ingress (`itx/ingress-configured`, the core's) and
-// the config worker's subscription (`itx/subscription-configured`) both re-pointed at it in one
-// append — so publishing a config-repo website or processEvent needs a commit, nothing by hand.
-// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
-// an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
-// a born `main` refuses the seed, every publication is keyed (the saga's by its commit, every
-// later one by the commit's fact), the certificate is keyed. The host's `withItx` and the template download are its constructor
-// arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
-// hands it a fake download (templates.test.ts); the effects are proven on
-// the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
-// e2e/website-publication.e2e.test.ts: a commit publishes; e2e/config-worker.e2e.test.ts: a commit
-// moves processEvent with fetch).
+// the project follows), and its EFFECTS, each run from state at head. THE CREATION SAGA: the config
+// repo (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed
+// when `main` is unborn (the default template, below), the project's ingress pointed at its
+// published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
+// certificate, once the seed's publication has landed. THE PUBLICATION OF THE CONFIG REPO: every
+// `repo/commit-completed` from `/repos/config` is published (publication.ts) as the generation of
+// its fact's offset — `main`'s head: the pointer `itx.config` moved to it, then
+// `project/worker-updated`, or `project/worker-update-failed` — so a commit changes the project's
+// code everywhere. Subscribed to `/` (the row `session.projects.create` enables), it runs again
+// after every eviction: an attempt lost with an incarnation is simply run again by the next — the
+// repo tolerates existing, a born `main` refuses the seed, a publication is keyed by its generation,
+// the ingress and the certificate are keyed. Its reach is its constructor's arguments; a
+// unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or hands it a fake
+// download (templates.test.ts); the effects are proven on the worker (e2e/session.e2e.test.ts: the
+// catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
 
-import { z } from "zod";
-import { jsonEqual, resolveContextPath } from "iterate/lib";
+import { errorCode, resolveContextPath } from "iterate/lib";
+import type { WorkerManifest } from "iterate/api";
+import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
@@ -30,88 +30,38 @@ import {
   type EmittedEventInput,
   type ProcessEventArgs,
   type ReduceArgs,
+  type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
+import { runningUnder } from "../cause.ts";
 import { defaultFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
+import { unavailableError } from "../unavailable.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
+import { configPointer, manifestOf, type ProjectPublisher } from "./publication.ts";
 
-/** Where the apex points for the config repo at `commitOid`: the repo's whole tree at that exact
- *  commit as the worker's modules (package.json's `main` the main module, every `.js` file under
- *  its own path, so relative imports resolve as in the tree — the repo facet's `modules`), cached
- *  under the commit. The saga writes it for the seed and the follower for every later commit — the same
- *  target under the same key, so the two appends land one event. */
-function configRepoIngressTarget(commitOid: string) {
-  return [
-    "itx",
-    "workers",
-    [
-      "get",
-      {
-        source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
-        cacheKey: commitOid,
-      },
-    ],
-  ];
-}
+/** How long one publication may take before the platform gives up on it for now: a publication
+ *  resolves its npm dependencies from esm.sh, and a commit whose publication the platform could
+ *  not finish stays owed to the project's next incarnation. */
+const PUBLICATION_BUDGET_MS = 60_000;
 
-/** The shape `configRepoIngressTarget` writes, read back: the commit is its cache key. */
-const ConfigRepoIngressTarget = z.tuple([
-  z.literal("itx"),
-  z.literal("workers"),
-  z.tuple([z.literal("get"), z.object({ source: z.unknown(), cacheKey: z.string().min(1) })]),
-]);
+/** The waits before each attempt of one publication: at once, then after a platform failure 5 s
+ *  and 30 s later, within PUBLICATION_BUDGET_MS. */
+const PUBLICATION_ATTEMPT_WAITS_MS = [0, 5_000, 30_000] as const;
 
-/** The commit an ingress target publishes: the one `configRepoIngressTarget` names, when the target
- *  is exactly what it writes for it; null for any other target, a worker set by hand or none. */
-function configRepoCommitOf(target: unknown): string | null {
-  const commitOid = ConfigRepoIngressTarget.safeParse(target).data?.[2][1].cacheKey;
-  return commitOid && jsonEqual(target, configRepoIngressTarget(commitOid)) ? commitOid : null;
-}
-
-/** What a config repo's `iterate.json` declares: the events its worker's `processEventBatch` is
- *  handed. */
-const ConfigRepoManifest = z.object({ events: z.array(z.string().min(1)).default([]) });
-
-/** THE PUBLICATION of the config repo at `commitOid`, one append: the apex points at the worker at
- *  that commit, and the `config-worker` subscription hands that same worker the `events` its
- *  `iterate.json` names (a commit that names none removes the row), so fetch and processEvent run
- *  one version of the config worker at a time. Keyed by `key`, so a publication run again lands
- *  nothing twice. A replaced row's cursor starts again (stream/subscription-delivery.ts): at
- *  `afterOffset` when given, else at the publication (the append boundary drops an undefined one). */
-function configRepoPublication(
-  commitOid: string,
-  events: string[],
-  { key, afterOffset }: { key: string; afterOffset?: number },
-) {
-  const target = configRepoIngressTarget(commitOid);
-  return [
-    {
-      type: "events.iterate.com/itx/ingress-configured" as const,
-      idempotencyKey: `itx/ingress-configured:${key}`,
-      payload: { target },
-    },
-    {
-      type: "events.iterate.com/itx/subscription-configured" as const,
-      idempotencyKey: `project/config-worker:${key}`,
-      payload: events.length
-        ? {
-            name: "config-worker",
-            consumes: events,
-            target: [...target, "processEventBatch"],
-            afterOffset,
-          }
-        : { name: "config-worker", target: null },
-    },
-  ];
-}
+/** One attempt of a publication (`ProjectProcessor#attemptPublication`): the head is already the
+ *  published config, or its manifest was admitted, or refused and why. */
+type PublicationAttempt =
+  | { kind: "unchanged" }
+  | { kind: "admitted"; commitOid: string; manifest: WorkerManifest }
+  | { kind: "refused"; commitOid: string; error: string };
 
 /** The files of a config-repo template, which seed a project created from one: the host passes
  *  `downloadPublicGithubTemplate` (repo/github-template.ts). */
@@ -168,18 +118,21 @@ export class ProjectProcessor extends StreamProcessor<
   private readonly downloadTemplate: TemplateDownload;
   private readonly hostnames: () => ProjectHostnames | null;
   private readonly deletion: () => ProjectDeletion | null;
+  private readonly publisher: () => ProjectPublisher | null;
 
   constructor(
     withItx: WithItx<ItxEntrypointScope>,
     downloadTemplate: TemplateDownload,
     hostnames: () => ProjectHostnames | null = () => null,
     deletion: () => ProjectDeletion | null = () => null,
+    publisher: () => ProjectPublisher | null = () => null,
   ) {
     super();
     this.withItx = withItx;
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
     this.deletion = deletion;
+    this.publisher = publisher;
   }
 
   /** This incarnation's deletion attempt, so one at-head pass does not start a second; the durable
@@ -201,18 +154,22 @@ export class ProjectProcessor extends StreamProcessor<
   /** This incarnation's creation attempt, so one at-head pass does not start a second; the durable
    *  ground is `state.creation`. */
   #creating = false;
-  /** The apex following the config repo: the newest tip any delivery has shown this incarnation,
-   *  and the offset it has published. The durable ground is the keyed ingress event itself, reduced
-   *  into `state.publishedCommitOid` and `publishedAt`: a delivery whose state holds the tip's
-   *  publication, after the tip's fact, marks it
-   *  published, so a fresh incarnation owes nothing for a commit an earlier one published. The
-   *  state learns of this incarnation's own append a delivery later, so the mark is kept here too.
-   *  One attempt runs at a time and DRAINS: a tip that arrives while an append is in flight is
-   *  published by the same attempt once that append settles, without waiting for another delivery
-   *  (an idempotent hit lands no fresh event to be delivered). */
-  #newestTip: { commitOid: string; offset: number } | null = null;
-  #published: number | null = null;
+  /** The publication of the config repo: the newest tip any delivery has shown this incarnation,
+   *  the generation through which it is published (the durable ground is `state.publishedThrough`,
+   *  from the outcome facts, which the state learns of a delivery later), the tip this incarnation
+   *  gave up on (the platform failed it for its whole budget; the next incarnation tries again), and
+   *  the last config it published. One publication runs at a time and DRAINS: a tip that arrives
+   *  while one is in flight is published by the same loop once it settles, without waiting for
+   *  another delivery. */
+  #newestTip: ProjectState["configRepoTip"] = null;
+  #publishedThrough = 0;
+  #gaveUpOn: number | null = null;
   #publishing = false;
+  #lastPublished: {
+    commitOid: string;
+    generation: number;
+    modules: WorkerManifest["modules"];
+  } | null = null;
 
   override reduce({
     event,
@@ -356,30 +313,48 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/google/connected":
       case "events.iterate.com/cloudflare/connected":
       case "events.iterate.com/github/connected":
-      case "events.iterate.com/waitrose/connected":
       case "events.iterate.com/slack/disconnected":
       case "events.iterate.com/google/disconnected":
       case "events.iterate.com/cloudflare/disconnected":
       case "events.iterate.com/github/disconnected":
-      case "events.iterate.com/waitrose/disconnected":
       case "events.iterate.com/x/connected":
       case "events.iterate.com/x/disconnected": {
         const integrations = reduceIntegrations(state.integrations, event);
         return integrations && { ...state, integrations };
       }
       case "events.iterate.com/repo/commit-completed":
-        // Only the config repo moves the apex; another repo's commit is a fact for its own log.
+        // Only the config repo is published; another repo's commit is a fact for its own log.
         if (event.payload.path !== "/repos/config") return undefined;
         return {
           ...state,
-          configRepoTip: { commitOid: event.payload.commitOid, offset: event.offset },
+          configRepoTip: {
+            commitOid: event.payload.commitOid,
+            offset: event.offset,
+            ...(event.source?.cause && { cause: event.source.cause }),
+          },
         };
-      case "events.iterate.com/itx/ingress-configured": {
-        // A target set by hand publishes no commit and moves nothing. Every publication is recorded
-        // with its offset: a pull can return main to a commit published before, which is owed again.
-        const commitOid = configRepoCommitOf(event.payload.target);
-        if (!commitOid) return undefined;
-        return { ...state, publishedCommitOid: commitOid, publishedAt: event.offset };
+      case "events.iterate.com/project/worker-updated": {
+        const { commitOid, generation, modules } = event.payload;
+        return {
+          ...state,
+          publishedThrough: Math.max(state.publishedThrough ?? 0, generation),
+          lastPublicationFactOffset: event.offset,
+          published:
+            generation > (state.published?.generation ?? 0)
+              ? { commitOid, generation, modules }
+              : state.published,
+        };
+      }
+      case "events.iterate.com/project/worker-update-failed": {
+        // The platform's give-up (`unavailable`) leaves the tip owed, and refuses nothing.
+        const { commitOid, generation, error, unavailable } = event.payload;
+        if (unavailable) return { ...state, lastPublicationFactOffset: event.offset };
+        return {
+          ...state,
+          publishedThrough: Math.max(state.publishedThrough ?? 0, generation),
+          lastPublicationFactOffset: event.offset,
+          refused: { commitOid, generation, error },
+        };
       }
       default:
         return undefined;
@@ -488,47 +463,28 @@ export class ProjectProcessor extends StreamProcessor<
         }
       });
     }
-    // THE CONFIG WORKER FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the
-    // latest commit of `/repos/config` (its fact cross-posted here by the repo facet) is published
-    // (`configRepoPublication`), keyed by that fact, so an attempt lost with an incarnation is run
-    // again by the next and lands nothing twice, and a return to a commit published before is a new
-    // fact, published again. The worker at the commit is handed its own commit's fact onwards: the
-    // previous version may have been handed it too (every delivery is at least once), never neither.
-    // While the project is being created its saga publishes, the certificate in the same append;
-    // a commit that lands meanwhile is published here once it has. A tip the state holds published
-    // AFTER its fact is owed nothing: no append, and no background work to claim the context's
-    // alarm for.
-    if (state.configRepoTip) {
-      this.#newestTip = state.configRepoTip;
-      if (
-        state.configRepoTip.commitOid === state.publishedCommitOid &&
-        (state.publishedAt || 0) > state.configRepoTip.offset
-      )
-        this.#published = state.configRepoTip.offset;
-    }
-    if (
-      state.creation?.status !== "requested" &&
-      this.#newestTip &&
-      this.#published !== this.#newestTip.offset &&
-      !this.#publishing
-    ) {
+    // THE PUBLICATION OF THE CONFIG REPO — state-derived, at head, in the background: the latest
+    // commit fact of `/repos/config` (cross-posted here by the repo facet) is published as the
+    // generation of its offset (`#publish`), so a return to a commit published before (B, C, then B
+    // again) is a publication of its own, and a tip is owed until an outcome of ITS generation
+    // landed — never settled by another tip's. An attempt lost with an incarnation is run again by
+    // the next. A tip published through is owed nothing: no append, and no background work to claim
+    // the context's alarm for.
+    if (state.configRepoTip) this.#newestTip = state.configRepoTip;
+    this.#publishedThrough = Math.max(this.#publishedThrough, state.publishedThrough ?? 0);
+    const publisher = this.publisher();
+    if (publisher && this.#owed(this.#newestTip) && !this.#publishing) {
       this.#publishing = true;
       runInBackground(async () => {
         try {
-          // Drain: the newest tip as of each pass — one that landed during the append is next.
-          for (
-            let tip = this.#newestTip;
-            tip && this.#published !== tip.offset;
-            tip = this.#newestTip
-          ) {
-            await append(
-              ...configRepoPublication(
-                tip.commitOid,
-                await this.#configWorkerEventsAt(tip.commitOid),
-                { key: `${tip.commitOid}@${tip.offset}`, afterOffset: tip.offset - 1 },
-              ),
-            );
-            this.#published = tip.offset;
+          // Drain: the newest tip as of each pass — one that landed during an attempt is next.
+          for (let tip = this.#newestTip; this.#owed(tip); tip = this.#newestTip) {
+            // under the commit's own cause, not one deeper as a processor's other effects run: a
+            // publication keeps the commit's depth, and init runs one deeper (src/cause.ts)
+            const owed = tip;
+            if (await runningUnder(tip.cause, () => this.#publish(owed, publisher)))
+              this.#publishedThrough = Math.max(this.#publishedThrough, tip.offset);
+            else this.#gaveUpOn = tip.offset;
           }
         } finally {
           this.#publishing = false;
@@ -539,71 +495,34 @@ export class ProjectProcessor extends StreamProcessor<
     // later delivery over the same state runs it again, so an attempt lost to an eviction costs
     // nothing (the engine revives the host while an attempt is in flight). Every step is idempotent
     // on its own: the config repo's create answers at once for a created repo, the seed is committed
-    // only onto an unborn `main`, the publication is keyed by the commit it publishes, the
-    // certificate is keyed. The certificate rides the publication's append: the config worker is
-    // subscribed, and the apex answers, before `project/created`.
+    // only onto an unborn `main`, the ingress append is keyed by the commit it points at, the
+    // certificate is keyed.
     if (state.creation?.status !== "requested" || this.#creating) return;
+    // Seeded, its publication not landed yet: the publication fact's own delivery goes on.
+    if (publisher && state.configRepoTip && state.lastPublicationFactOffset === null) return;
     this.#creating = true;
     runInBackground(async () => {
       try {
-        await this.withItx((itx) => itx.repos.create("/repos/config"));
-        const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
-        // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
-        // of the tip first — one Artifacts round trip less on every creation, and the one that hung
-        // 22.8 s (2026-09-24, the latency guard). A born `main` refuses it: an attempt of this saga
-        // lost with an incarnation seeded it, or another commit got there first — `create` answers
-        // before this certificate, so the config repo may be written meanwhile (a voice delegation's
-        // website edit was, 2026-09-24, and the seed put the seed homepage back over it). Either
-        // way `main`'s tip is the project's config and what the ingress names; a failure that left
-        // `main` unborn — the template's download included — is the saga's own failure.
-        let commitOid: string | null;
-        const reference = state.creation?.configRepoTemplate;
-        try {
-          // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
-          // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
-          // that cannot be pinned fails the creation, like a download that fails.
-          const changes = await pinPkgPrNewDependencies(
-            reference
-              ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
-              : defaultFiles,
-          );
-          // The seed checks the template's entry with the loader's own rule (`readPackage`).
-          readPackage(
-            Object.fromEntries(changes.map((file) => [file.path, file.content])),
-            "The config template",
-          );
-          const seeded = (await this.withItx((itx) =>
-            config(itx).commitFiles({
-              message: reference ? `seed: ${reference}` : "seed: minimal project config",
-              changes,
-              parent: null,
-            }),
-          )) as unknown as { commitOid: string | null };
-          commitOid = seeded.commitOid;
-        } catch (error) {
-          // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-          commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
-          if (!commitOid) throw error;
-          console.info({
-            event: "project.seed-on-born-main",
-            namespace: "project",
-            message:
-              "the seed threw with main born — an earlier attempt seeded it, or a commit got there first (the seed refused itself), or the seed landed without its answer: main's tip is the project's config",
-            commitOid,
-            error: error instanceof Error ? error.message : String(error),
-          });
+        if (!state.configRepoTip) {
+          await this.#seed(state);
+          // Its commit's fact reaches `/`, the follower publishes it, and the publication's fact
+          // lands the certificate.
+          if (publisher) return;
         }
-        if (!commitOid) throw new Error("the config repo's seed left main unborn");
-        await append(
-          ...configRepoPublication(commitOid, await this.#configWorkerEventsAt(commitOid), {
-            key: commitOid,
-          }),
-          {
-            type: "events.iterate.com/project/created",
-            payload: {},
-            idempotencyKey: "project/created",
-          },
-        );
+        // A CREATED PROJECT ANSWERS ON ITS HOSTS: its first publication has landed, then the
+        // ingress is pointed at its published config, whichever commit that is, once — a routing
+        // change, which answers only once no host can be served from a snapshot older than it — and
+        // then the certificate.
+        await append({
+          type: "events.iterate.com/itx/ingress-configured",
+          idempotencyKey: "itx/ingress-configured",
+          payload: { target: ["itx", "config"] },
+        });
+        await append({
+          type: "events.iterate.com/project/created",
+          payload: {},
+          idempotencyKey: "project/created",
+        });
       } catch (error) {
         await append({
           type: "events.iterate.com/project/create-failed",
@@ -615,31 +534,175 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  /** The events the config repo's `iterate.json` names at `commitOid`: none without one. A manifest
-   *  that is not `{ "events": [string] }` names none either, and the log says why: its commit is
-   *  published all the same, its worker handed nothing, never the previous commit's worker. */
-  async #configWorkerEventsAt(commitOid: string): Promise<string[]> {
-    const text = await this.withItx((itx) =>
-      itx.repos.get("/repos/config").readFile("iterate.json", { commitOid }),
-    );
-    let manifest: unknown = {};
-    let error: unknown = null;
+  /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
+   *  is, born by an earlier attempt or another commit. */
+  async #seed(state: ProjectState): Promise<void> {
+    await this.withItx((itx) => itx.repos.create("/repos/config"));
+    const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
+    // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
+    // of the tip first — one Artifacts round trip less on every creation, and the one that hung
+    // 22.8 s (2026-09-24, the latency guard). A born `main` refuses it: an attempt of this saga
+    // lost with an incarnation seeded it, or another commit got there first — `create` answers
+    // before this certificate, so the config repo may be written meanwhile (a voice delegation's
+    // website edit was, 2026-09-24, and the seed put the seed homepage back over it). Either
+    // way `main`'s tip is the project's config and what the ingress names; a failure that left
+    // `main` unborn — the template's download included — is the saga's own failure.
+    let commitOid: string | null;
+    const reference = state.creation?.configRepoTemplate;
     try {
-      if (text) manifest = JSON.parse(text);
-    } catch (caught) {
-      error = caught;
+      // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
+      // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
+      // that cannot be pinned fails the creation, like a download that fails.
+      const changes = await pinPkgPrNewDependencies(
+        reference
+          ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
+          : defaultFiles,
+      );
+      // The seed checks the template's entry with the loader's own rule (`readPackage`).
+      readPackage(
+        Object.fromEntries(changes.map((file) => [file.path, file.content])),
+        "The config template",
+      );
+      const seeded = (await this.withItx((itx) =>
+        config(itx).commitFiles({
+          message: reference ? `seed: ${reference}` : "seed: minimal project config",
+          changes,
+          parent: null,
+        }),
+      )) as unknown as { commitOid: string | null };
+      commitOid = seeded.commitOid;
+    } catch (error) {
+      // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
+      commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+      if (!commitOid) throw error;
+      console.info({
+        event: "project.seed-on-born-main",
+        namespace: "project",
+        message:
+          "the seed threw with main born — an earlier attempt seeded it, or a commit got there first (the seed refused itself), or the seed landed without its answer: main's tip is the project's config",
+        commitOid,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
-    const parsed = ConfigRepoManifest.safeParse(manifest);
-    if (!error && parsed.success) return parsed.data.events;
-    console.info({
-      event: "project.config-manifest-invalid",
-      namespace: "project",
-      message:
-        "the config repo's iterate.json is not { events: [string] }: its commit's config worker is handed no events",
-      commitOid,
-      error: String(error ?? parsed.error),
+    if (!commitOid) throw new Error("the config repo's seed left main unborn");
+  }
+
+  /** Is `tip` owed a publication: past what is published through, and not given up on by this
+   *  incarnation? */
+  #owed(tip: ProjectState["configRepoTip"]): tip is NonNullable<ProjectState["configRepoTip"]> {
+    return !!tip && tip.offset > this.#publishedThrough && tip.offset !== this.#gaveUpOn;
+  }
+
+  /** The config published last, this incarnation's or the state's, whichever is newer. */
+  #newestPublished(): { commitOid: string; modules: WorkerManifest["modules"] } | null {
+    const published = this.#newestState?.published ?? null;
+    return this.#lastPublished && this.#lastPublished.generation > (published?.generation ?? 0)
+      ? this.#lastPublished
+      : published;
+  }
+
+  /** ONE PUBLICATION for the commit fact `tip`, as generation `tip.offset` (publication.ts): of
+   *  `main`'s head, since the fact only wakes it (anyone may append one), and nothing when that head
+   *  is the published config already. Admitted: the pointer, as the platform — its write answers
+   *  once every context resolves through it — then `project/worker-updated`. Refused:
+   *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
+   *  nothing more. A platform failure is met again after 5 s and 30 s, within
+   *  PUBLICATION_BUDGET_MS; then the platform gives up for now: `project/worker-update-failed` with
+   *  `unavailable`, and false — the tip still owed. True once the tip is settled. */
+  async #publish(
+    tip: { commitOid: string; offset: number },
+    publisher: ProjectPublisher,
+  ): Promise<boolean> {
+    const generation = tip.offset;
+    const giveUpAt = Date.now() + PUBLICATION_BUDGET_MS;
+    let lastFailure: unknown;
+    for (const waitMs of PUBLICATION_ATTEMPT_WAITS_MS) {
+      if (Date.now() + waitMs >= giveUpAt) break;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      let attempt: PublicationAttempt;
+      // the budget's timer, cleared with the attempt: a pending timer keeps the context resident
+      let budget: ReturnType<typeof setTimeout> | undefined;
+      try {
+        attempt = await Promise.race([
+          this.#attemptPublication(generation, publisher),
+          new Promise<never>((_, reject) => {
+            budget = setTimeout(
+              () =>
+                reject(
+                  unavailableError(
+                    "overloaded",
+                    `publication ${generation} did not finish within ${PUBLICATION_BUDGET_MS} ms`,
+                  ),
+                ),
+              giveUpAt - Date.now(),
+            );
+          }),
+        ]);
+      } catch (error) {
+        if (!isPlatformFailureKind(failureKind(error))) throw error;
+        lastFailure = error;
+        continue;
+      } finally {
+        clearTimeout(budget);
+      }
+      if (attempt.kind === "unchanged") return true;
+      if (attempt.kind === "refused") {
+        await landOnce(publisher, {
+          type: "events.iterate.com/project/worker-update-failed",
+          idempotencyKey: `project/publication:${generation}`,
+          payload: { commitOid: attempt.commitOid, generation, error: attempt.error },
+        });
+        return true;
+      }
+      const { commitOid, manifest } = attempt;
+      await landOnce(publisher, configPointer(commitOid, manifest));
+      await landOnce(publisher, {
+        type: "events.iterate.com/project/worker-updated",
+        idempotencyKey: `project/publication:${generation}`,
+        payload: { commitOid, generation, modules: manifest.modules },
+      });
+      this.#lastPublished = { commitOid, generation, modules: manifest.modules };
+      return true;
+    }
+    await publisher.appendAsPlatform({
+      type: "events.iterate.com/project/worker-update-failed",
+      payload: {
+        commitOid: tip.commitOid,
+        generation,
+        error: lastFailure instanceof Error ? lastFailure.message : String(lastFailure),
+        unavailable: true,
+      },
     });
-    return [];
+    return false;
+  }
+
+  /** One attempt: `main`'s head, and its manifest admitted or refused — a platform failure
+   *  throws. */
+  async #attemptPublication(
+    generation: number,
+    publisher: ProjectPublisher,
+  ): Promise<PublicationAttempt> {
+    const commitOid = await publisher.head();
+    if (!commitOid)
+      return { kind: "refused", commitOid: "unborn", error: "the config repo's main is unborn" };
+    const published = this.#newestPublished();
+    if (commitOid === published?.commitOid) return { kind: "unchanged" };
+    try {
+      const manifest = await manifestOf(
+        commitOid,
+        generation,
+        published?.modules || null,
+        publisher,
+      );
+      return { kind: "admitted", commitOid, manifest };
+    } catch (error) {
+      if (isPlatformFailureKind(failureKind(error))) throw error;
+      return {
+        kind: "refused",
+        commitOid,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
@@ -736,5 +799,15 @@ export class ProjectProcessor extends StreamProcessor<
       type: "events.iterate.com/project/hostname-removed" as const,
       payload: { hostname, requestOffset: offset },
     };
+  }
+}
+
+/** A keyed platform fact landed once: an IDEMPOTENCY_CONFLICT is the same key an earlier attempt of
+ *  this generation already landed. */
+async function landOnce(publisher: ProjectPublisher, event: StreamEventInput): Promise<void> {
+  try {
+    await publisher.appendAsPlatform(event);
+  } catch (error) {
+    if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
   }
 }

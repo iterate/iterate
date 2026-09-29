@@ -7,8 +7,9 @@
 //   • a WebSocket asking for a subprotocol (Vite's HMR asks for `vite-hmr`) opens: the provider's
 //     choice rides back to the eyeball's 101, or a spec-following client refuses the handshake
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
-//   • the lend recalled: its rule and the route to it go with it, the config worker's own answer;
-//     a route deleted by hand, likewise
+//   • the lend recalled: its rule and the route to it go with it, the config worker's own answer
+//     once the edge's snapshot of the route expires; a route deleted by hand at once (its `set`
+//     answers once no host can be served from the table before it)
 //   • `set` refuses a malformed route and appends nothing for a route that stands
 // The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
@@ -68,7 +69,16 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
       (routes) => routes.length === 0,
     ),
   ).toEqual([]);
-  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 404, text: "no route\n" });
+  // The recall has no writer to hold until the edge's snapshot of the old route expires
+  // (worker.ts `serveProjectHost`, context/rule-snapshots.ts): the host is the config worker's
+  // again within that snapshot's life.
+  expect(
+    await untilValue(
+      "the recalled tunnel's host is the config worker's",
+      () => fetchProjectUrl(blog),
+      (answer) => answer.text === "no route\n",
+    ),
+  ).toMatchObject({ status: 404, text: "no route\n" });
 
   // a route deleted by hand, with the lend still up
   using _again = await itx.provide("itx.tunnels.blog", new LocalSite());
@@ -113,8 +123,8 @@ test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it ap
 /** The template's router (configs/default/worker.ts) with a 404 of its own. */
 const SRC_FETCH_ROUTER = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { ConfigWorker } from "iterate/sdk";
-export default class Router extends ConfigWorker {
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class Router extends IterateConfigEntrypoint {
   async fetch(request) {
     const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
     if (route?.authRequirement && !request.headers.has("x-itx-principal"))

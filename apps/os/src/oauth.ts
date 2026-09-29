@@ -111,8 +111,11 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  Durable Object would otherwise fail their token request.
  *
  *  A read still pending after five seconds logs `oauth.step-slow` naming the person while it waits
- *  (sign-in-watch.ts). A person's account is often brand new at the first request after their
- *  first sign-in, and Cloudflare can take many seconds to start a new Durable Object. */
+ *  (sign-in-watch.ts). At a first sign-in the account is a brand-new Durable Object: Cloudflare
+ *  takes about half a second to reach a new one, and in bursts holds it 1.5 to 15 s more before
+ *  its constructor runs (a preview, 2026-09-29). So the sign-in reads it first, in the background
+ *  (issuer-session.ts `startAccount`), and the consent page says the account is still being set up
+ *  while its own read waits (consent-page.server.ts `describeConsent`). */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
   // `invoke` answers `unknown` across the DO hop; the facet is the platform's own
   // AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.

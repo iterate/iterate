@@ -1,6 +1,6 @@
 // e2e/support/petshop.ts — the deployed dummy-petshop (apps/dummy-petshop), the fake third party the
 // secret-cell proofs connect to over plain HTTP: an OAuth 2.0 provider with refresh, a GraphQL
-// session-login endpoint speaking the Waitrose wire shape, a Tesco-shaped two-step login (a CSRF
+// session-login endpoint (a `NewSession` mutation), a Tesco-shaped two-step login (a CSRF
 // token and its cookie, then the form), one bearer-protected pets API, GitHub-App style signed
 // webhooks, and the `/__test-controls` a test uses to force expiry, fail the token endpoint and fire
 // webhooks. The worker under test fetches it directly (the local worker over the real network, the
@@ -83,6 +83,27 @@ export async function exchange(material, fetch) {
   if (!response.ok) throw new Error("the login answered " + response.status);
   const { access_token } = await response.json();
   return { ...material, accessToken: access_token };
+}
+`;
+
+/** The GraphQL session login as a secret's own exchange code (`refresh: { kind: "worker", source }`):
+ *  a `NewSession` mutation with the material's `username` and `password` → the material with a fresh
+ *  `accessToken`. A bad password is a 200 with a `failures` array, so the body is read, not the status. */
+export const petshopGraphqlExchangeSource = (): string => `
+export async function exchange(material, fetch) {
+  const response = await fetch("${petshopBaseUrl()}/graphql", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      query: "mutation NewSession($input: SessionInput) { generateSession(session: $input) { accessToken failures { type } } }",
+      variables: { input: { username: material.username, password: material.password } },
+    }),
+  });
+  if (!response.ok) throw new Error("the login answered " + response.status);
+  const { data } = await response.json();
+  const session = data && data.generateSession;
+  if (!session || !session.accessToken) throw new Error("the login was refused");
+  return { ...material, accessToken: session.accessToken };
 }
 `;
 

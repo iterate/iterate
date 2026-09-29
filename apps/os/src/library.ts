@@ -17,10 +17,24 @@ import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
 import type { EventInput, ProcessorContract, StreamEvent } from "iterate/stream/processor";
-import { RUN_DEADLINE_MS, type RunSettled, type RunSettlement } from "iterate/stream/run";
-import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
+import {
+  RUN_DEADLINE_MS,
+  RunFailure,
+  type RunSettled,
+  type RunSettlement,
+} from "iterate/stream/run";
+import type {
+  EntityCollectionApi,
+  FileHandle,
+  FileRecord,
+  IterateContextApi,
+  RepoHandle,
+  WaitForEventFilter,
+} from "iterate/api";
+import type { Cause } from "./cause.ts";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
+import type { ProjectState } from "./project/contract.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
@@ -42,12 +56,14 @@ export interface LibraryRoots {
   /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
    *  `run` appends `itx/run-requested { code }` (attributed to the caller), the context's
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
-   *  whose `run` hands the script the scope of one `withItx` round trip), and `run` resolves with
-   *  the `run-settled` event's result — or rejects with its error. So every script that ever ran is
-   *  a pair of events on the context it ran against, and a run the context's restart interrupted —
-   *  or that was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such,
-   *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
-   *  (an alternative to a tool call), so `run` takes no arguments. */
+   *  whose `run` hands the script the scope of one `withItx` round trip), and the caller gets
+   *  the `run-settled` event's result — or its error. So every script that ever ran is a pair of
+   *  events on the context it ran against, and a run the context's restart interrupted — or that
+   *  was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such, never
+   *  re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole (an
+   *  alternative to a tool call), so `run` takes no arguments. HERE, on the context, `run` answers
+   *  the request (`ScriptRunRequested`); the caller's side of the hop reads the settlement
+   *  (`settlementOfScriptRun`), so no call is held on the context for the run's length. */
   run: IterateContextApi["run"];
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
@@ -60,10 +76,12 @@ export interface LibraryRoots {
    *  trip per step. */
   connectToCapnweb: IterateContextApi["connectToCapnweb"];
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
-   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
-   *  and `create(path)` are the collection's on the `project` facet at `/`. */
+   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events, and the
+   *  config repo's `waitForPublication` (below); `list()` and `create(path)` are the collection's
+   *  on the `project` facet at `/`. */
   repos: EntityRoot<
-    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract>
+    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract> &
+      Pick<RepoHandle, "waitForPublication">
   >;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
@@ -137,7 +155,7 @@ export function buildLibrary(
   };
   return {
     roots: {
-      run: (script) => runScript(itx, script),
+      run: (script) => requestScriptRun(itx, deps.path, script),
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -187,9 +205,13 @@ export function buildLibrary(
   };
 }
 
-// ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
-// `itx/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
-// context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
+// ── run ── `itx.run(script)`: a request on the log, its settlement read back by the caller.
+// `requestScriptRun` appends `itx/run-requested` and answers where it landed; the caller's side of
+// the hop where the call began — the edge, /mcp and loaded code's `env.ITX` (context-stub.ts
+// `contextStub`), a runner whose row sends its scripts elsewhere — reads the `run-settled` naming
+// that request's offset (`settlementOfScriptRun`); a context sending on the call it was made
+// answers the request up as it came. The EXECUTION is
+// the context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
 // `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
 // so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
 // runs exactly as `itx.run` does, and both leave the same pair of events. The script is the text of
@@ -197,9 +219,10 @@ export function buildLibrary(
 // caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
 // one function expression fails at load, in the loader's words. It takes no arguments: a script is
 // an agent's whole output (an alternative to a tool call), its values baked in. The template is the
-// smallest WorkerEntrypoint that hosts it: `run()` hands it the scope of ONE `withItx` round trip,
-// as the SDK's ConfigWorker does, so the scope and every call the script made through it are
-// released when it settles — its unawaited ones and its deadline's included.
+// smallest WorkerEntrypoint that hosts it: `run(cause)` hands it the scope of ONE `withItx` round
+// trip, as the SDK's IterateConfigEntrypoint does, so the scope and every call the script made
+// through it are released when it settles — its unawaited ones and its deadline's included — all
+// of it under the cause its run was handed (cause.ts).
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -223,11 +246,13 @@ export function runScriptModule(script: string) {
       // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
+      // the SDK's door, which `iterate/with-itx` shares by name (cause.ts runningCause)
+      'const door = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
-      "  async run() {",
+      "  async run(cause) {",
       "    let deadline;",
       "    try {",
-      "      return await withItx(this.env.ITX, async (itx) => {",
+      "      return await door.run(cause, () => withItx(this.env.ITX, async (itx) => {",
       "        const value = await Promise.race([",
       "          script(itx),",
       "          new Promise((_, reject) => {",
@@ -236,7 +261,7 @@ export function runScriptModule(script: string) {
       "        ]);",
       "        const json = JSON.stringify(value);",
       "        return json === undefined ? undefined : JSON.parse(json);",
-      "      });",
+      "      }));",
       "    } finally {",
       "      clearTimeout(deadline);",
       "    }",
@@ -249,21 +274,22 @@ export function runScriptModule(script: string) {
 
 /** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
  *  with a requested run. Same text, same module: the loader's content hash reuses the warm isolate. */
-export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
+export async function executeScript(itx: LibraryItx, code: string, cause: Cause): Promise<unknown> {
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
   const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
-    run(): Promise<unknown>;
+    run(cause: Cause): Promise<unknown>;
   };
-  return worker.run();
+  return worker.run(cause);
 }
 
 /** THE RUNNER'S SETTLEMENT of one execution (iterate-context-durable-object.ts `#executeRun`): the
  *  value through THE JSON BOUNDARY — a round trip keeps what the log carries (undefined and functions
  *  drop; a bigint or a cycle throws, a runtime failure like any other) — or how it failed: `deadline`
  *  once RUN_DEADLINE_MS has passed, whichever side gave up first (this wait, the loaded `run()`, or a
- *  redirect's own runner), else `runtime`. The value is RELEASED once serialized, whenever it lands:
+ *  redirect's own runner), else the kind a redirected run failed with (`RunFailure`: its context
+ *  restarted, `interrupted`), else `runtime`. The value is RELEASED once serialized, whenever it lands:
  *  a Workers-RPC result holds its callee open until disposed, and a returned live value (a function,
  *  a handle) holds this context with it. The value only, never also its promise: they share one
  *  disposer, and a second call throws. */
@@ -298,56 +324,121 @@ export async function runSettlementOf(execution: Promise<unknown>): Promise<RunS
         error: `itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes; it may have partly run, and it is not run again`,
         failureKind: "deadline",
       };
+    const redirected = RunFailure.safeParse(error);
     return {
       status: "failed",
       error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
-      failureKind: "runtime",
+      failureKind: redirected.success ? redirected.data.failureKind : "runtime",
     };
   }
 }
 
+/** How long ONE read of a run's settlement is held on its context before it is asked again on a
+ *  fresh stub. Cloudflare replaces a Durable Object's instance under the calls running on it (a
+ *  runtime update, a move to another host;
+ *  https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior):
+ *  a wait held there never sees what the instance that replaced it commits, and the run that
+ *  instance was executing can no longer be settled there. A fresh call reaches the new instance,
+ *  whose wake record settles that run `interrupted` (stream.ts `appendWakeRecord`), so a replaced
+ *  instance costs a waiter one slice, as it costs the entity collection's (project/collection.ts). */
+const SCRIPT_RUN_WAIT_SLICE_MS = 5_000;
+/** How long a slice may go unanswered before it is given up and asked again: a call whose instance
+ *  Cloudflare shut down mid-call can be left with no answer at all. A healthy slice answers within
+ *  its own wait, a cold context's wake and the one repeat its stub makes (context-stub.ts), well
+ *  inside four slices. */
+const SCRIPT_RUN_SLICE_ANSWER_MS = 4 * SCRIPT_RUN_WAIT_SLICE_MS;
+
+/** WHAT A CONTEXT'S `run` ANSWERS: the request, by the context it landed on (a path of the caller's
+ *  project; a row may send `run` to another context, `itx.run ⇒ itx.cd(sandbox).run`) and its
+ *  offset, the run's identity. Plain data under one key, so it crosses every hop as it is
+ *  (context/dispatch.ts copies an answer a hop below gave). */
+export const ScriptRunRequested = z.object({
+  $itxScriptRunRequested: z.object({
+    path: z.string().startsWith("/"),
+    requestOffset: z.number().int().positive(),
+  }),
+});
+export type ScriptRunRequested = z.infer<typeof ScriptRunRequested>;
+
 /** `script` is wire-fed (`itx.run` over capnweb; the array-form expression carries no argument
  *  validation), so it is typed `unknown` here and the runtime check IS the contract — `LibraryRoots.run`
- *  keeps the `string` signature callers see. */
-export async function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
+ *  keeps the `string` signature callers see. `path` is this context's. */
+export async function requestScriptRun(
+  itx: LibraryItx,
+  path: string,
+  script: unknown,
+): Promise<ScriptRunRequested> {
   if (typeof script !== "string" || !script.trim())
     throw new Error("itx.run(script): script is the text of a function, `async (itx) => { … }`");
-  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a context's
-  // rows say what its code may spell, never whether the runner may write its request (a jail's bare
-  // null must not wall the platform's own plumbing).
+  // The request is the KERNEL's own log traffic, spelled at the fixed point: a context's rows say
+  // what its code may spell, never whether the runner may write its request (a jail's bare null
+  // must not wall the platform's own plumbing).
   const [requested] = await itx.builtins.append({
     type: "events.iterate.com/itx/run-requested",
     payload: { code: script },
   });
-  const requestOffset = requested!.offset; // the run's identity: its settlement names it
-  // The runner started at that commit and settles by the deadline. Wait for ITS settlement: each
-  // wait is capped (stream.ts), so re-arm on timeout from the last event seen — a settlement of
-  // another run in between is skipped, not lost — until a minute past the deadline, time for the
-  // settlement's own append. None by then means the runner could not record one (it reports why):
-  // give up rather than hold the caller's call, and this context with it, open.
+  return { $itxScriptRunRequested: { path, requestOffset: requested!.offset } };
+}
+
+/** THE SETTLEMENT OF A REQUESTED RUN, read where the request landed: the result, or its error with
+ *  the failure kind on it. `waitForEventAt(path, filter, givenUp)` is one `waitForEvent` on a FRESH
+ *  stub of the context at `path`, which reaches the instance Cloudflare runs now; `givenUp` aborts
+ *  when this wait stops waiting for its answer, and the reader then releases the call it left
+ *  pending. The wait is sliced (SCRIPT_RUN_WAIT_SLICE_MS says why) and re-armed from the last
+ *  settlement seen — another run's is skipped, not lost — until a minute past the run's deadline,
+ *  time for the settlement's own append. None by then means the runner could not record one (it
+ *  reports why): the caller is let go. */
+export async function settlementOfScriptRun(
+  requested: ScriptRunRequested,
+  waitForEventAt: (
+    path: string,
+    filter: WaitForEventFilter,
+    givenUp: AbortSignal,
+  ) => Promise<StreamEvent>,
+): Promise<unknown> {
+  const { path, requestOffset } = requested.$itxScriptRunRequested;
   const waitUntil = Date.now() + RUN_DEADLINE_MS + 60_000;
   let afterOffset = requestOffset;
   for (;;) {
-    let settled;
+    const remainingMs = waitUntil - Date.now();
+    if (remainingMs <= 0)
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
+      );
+    let settled: StreamEvent;
+    const sliceGivenUp = new AbortController();
     try {
-      settled = await itx.builtins.waitForEvent({
-        type: "events.iterate.com/itx/run-settled",
-        afterOffset,
-        timeoutMs: Math.min(120_000, Math.max(0, waitUntil - Date.now())),
-      });
+      settled = await withTimeout(
+        waitForEventAt(
+          path,
+          {
+            type: "events.iterate.com/itx/run-settled",
+            afterOffset,
+            timeoutMs: Math.min(SCRIPT_RUN_WAIT_SLICE_MS, remainingMs),
+          },
+          sliceGivenUp.signal,
+        ),
+        SCRIPT_RUN_SLICE_ANSWER_MS,
+        `itx.run: the wait for run ${requestOffset} on ${path}`,
+      );
     } catch (error) {
-      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
-      if (Date.now() >= waitUntil)
-        throw codedError(
-          "WAIT_TIMEOUT",
-          `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
-        );
+      if (errorCode(error) === "WAIT_TIMEOUT") continue;
+      if (errorCode(error) !== "TIMEOUT") throw error;
+      sliceGivenUp.abort();
+      console.warn({
+        event: "itx-run.platform-failure-wait-unanswered",
+        kind: "disconnected",
+        message: "a wait for a run's settlement got no answer: asked again on a fresh stub",
+        name: "waitForEvent",
+        path,
+        requestOffset,
+      });
       continue;
     }
     afterOffset = settled.offset;
-    // Validated at the append boundary against CoreContract's schema (core-processor.ts), so the
-    // payload IS a RunSettled: read as such, never re-parsed — the library takes only itx, and the
-    // contract's TYPE is free to import where its runtime is not (the library rule, above).
+    // Validated at the append boundary against CoreContract's schema (core-processor.ts), and read
+    // back as the log's own data: the payload IS a RunSettled.
     const { requestOffset: settledOffset, settlement } = settled.payload as RunSettled;
     if (settledOffset !== requestOffset) continue;
     if (settlement.status === "succeeded") return settlement.result;
@@ -505,6 +596,8 @@ function entityHandle(
             );
       return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
     }
+    if (name === "repo" && Array.isArray(first) && first[0] === "waitForPublication")
+      return waitForPublication(itx, entityPath, first[1]);
     const context = await itx.builtins.cd(entityPath);
     // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
     // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
@@ -520,6 +613,132 @@ function entityHandle(
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
+}
+
+// ── the publication ── `itx.repos.get("/repos/config").waitForPublication(commitOid)`: the project
+// processor publishes each commit of the config repo in the background (project/processor.ts), and
+// this waits for a commit's publication to land. It reads the processor's own state on `/`, never
+// the website, and answers what that state says: published, or not published and why. A
+// publication's `project/worker-updated` lands only once every context resolves through its
+// pointer, so the website and every context run the commit by the time this answers.
+
+/** How long `waitForPublication` waits: longer than the processor spends on one publication before
+ *  it gives up for now (project/processor.ts `PUBLICATION_BUDGET_MS`). */
+const PUBLICATION_WAIT_MS = 120_000;
+/** How long ONE wait for a publication fact is held on `/` before it is asked again on a fresh
+ *  call, so an instance Cloudflare replaces under the wait costs one slice
+ *  (SCRIPT_RUN_WAIT_SLICE_MS says why). */
+const PUBLICATION_WAIT_SLICE_MS = 5_000;
+
+/** The project state the wait reads (project/contract.ts). */
+type PublicationState = Pick<
+  ProjectState,
+  "configRepoTip" | "publishedThrough" | "published" | "refused"
+>;
+
+/** Where the publication of `commitOid` stands in `state`, reduced through that commit's fact at
+ *  least: published, with its generation; owed, as the generation of its fact; or not published,
+ *  and why: its publication was refused, or main moved past it (only main's head is published).
+ *  Exported for the unit pin. */
+export function publicationOf(
+  state: PublicationState,
+  commitOid: string,
+):
+  | { status: "published"; generation: number }
+  | { status: "owed"; generation: number }
+  | { status: "not-published"; why: string } {
+  const { configRepoTip: tip, published, refused } = state;
+  if (published?.commitOid === commitOid)
+    return { status: "published", generation: published.generation };
+  if (tip?.commitOid !== commitOid)
+    return {
+      status: "not-published",
+      why: `main's head is ${tip ? tip.commitOid : "no commit"}, and only the head is published`,
+    };
+  if ((state.publishedThrough ?? 0) < tip.offset) return { status: "owed", generation: tip.offset };
+  if (refused?.generation === tip.offset)
+    return {
+      status: "not-published",
+      why:
+        refused.commitOid === commitOid
+          ? refused.error
+          : `main moved on to ${refused.commitOid}, whose publication failed: ${refused.error}`,
+    };
+  return {
+    status: "not-published",
+    why: `main moved on to ${published?.commitOid}, which was published in its place`,
+  };
+}
+
+/** THE WAIT for the publication of `commitOid` of the config repo at `path`: its generation once
+ *  it is the project's published config, or a throw with why it is not — the reason a refused
+ *  publication gives, or the platform's failure when it gave up for now. */
+async function waitForPublication(
+  itx: LibraryItx,
+  path: string,
+  commitOid: unknown,
+): Promise<{ commitOid: string; generation: number }> {
+  if (path !== "/repos/config")
+    throw codedError(
+      "INVALID_INPUT",
+      `repos.get(${JSON.stringify(path)}).waitForPublication: only /repos/config is published`,
+    );
+  const oid = z
+    .string()
+    .regex(/^[0-9a-f]{40}$/, "a commit's oid")
+    .parse(commitOid);
+  const deadline = Date.now() + PUBLICATION_WAIT_MS;
+  const left = () => Math.max(0, deadline - Date.now());
+  const root = await itx.builtins.cd("/");
+  const project = (...steps: ItxExpression) =>
+    root.invoke(["facets", ["get", "project"], ...steps]) as Promise<unknown>;
+  // The commit's fact reached `/` before the commit answered (repo/durable-object.ts
+  // `#commitFact`), so the state reduced through the head as it is now has seen it.
+  const head = (await root.invoke([["readEvents", Number.MAX_SAFE_INTEGER, 1]])) as {
+    scannedThroughOffset: number;
+  };
+  for (let through = head.scannedThroughOffset; ;) {
+    await project(["waitUntilProcessed", { offset: through, timeoutMs: left() }]);
+    const { offset, state } = (await project(["snapshot"])) as {
+      offset: number;
+      state: PublicationState;
+    };
+    const at = publicationOf(state, oid);
+    if (at.status === "published") return { commitOid: oid, generation: at.generation };
+    if (at.status === "not-published")
+      throw new Error(`commit ${oid} of /repos/config is not published: ${at.why}`);
+    // owed: the next publication fact, and the state through it
+    let next: StreamEvent;
+    try {
+      next = (await root.invoke([
+        [
+          "waitForEvent",
+          {
+            type: [
+              "events.iterate.com/project/worker-updated",
+              "events.iterate.com/project/worker-update-failed",
+            ],
+            afterOffset: offset,
+            timeoutMs: Math.min(PUBLICATION_WAIT_SLICE_MS, left()),
+          },
+        ],
+      ])) as StreamEvent;
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      if (left() > 0) continue;
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `commit ${oid} of /repos/config: its publication did not land within ${PUBLICATION_WAIT_MS / 1000} s`,
+      );
+    }
+    const payload = next.payload as { generation: number; error?: string; unavailable?: true };
+    // the platform gave up for now: the commit is still owed, and published by a later attempt
+    if (payload.unavailable && payload.generation === at.generation)
+      throw new Error(
+        `commit ${oid} of /repos/config is not published yet: the platform could not finish its publication for now (${payload.error}), and publishes it later`,
+      );
+    through = next.offset;
+  }
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),

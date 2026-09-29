@@ -3,7 +3,7 @@
 //   FacetDurableObject           — the `DurableObject` shell a context hosts as a facet: its class lists
 //                                  the methods a caller reaches by itx expression (`publicMethods`)
 //   StreamProcessorDurableObject — the facet shell that hosts ONE `StreamProcessor`
-//   ConfigWorker                 — the stateless `WorkerEntrypoint` a project's one event handler extends
+//   IterateConfigEntrypoint      — the stateless `WorkerEntrypoint` a project's config repo exports
 // and capnweb's constructors (below), which loaded code has no other platform path to.
 //
 // Everything else has one path of its own: a processor's surface (`StreamProcessor`,
@@ -15,8 +15,13 @@
 //   import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
 //   import { z } from "zod";
 
-import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import type { IterateContextApi, StreamPage } from "../api.ts";
+import { DurableObject, RpcStub, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import type {
+  InstalledAppRoots,
+  IterateContextApi,
+  IterateContextApiWith,
+  StreamPage,
+} from "../api.ts";
 import {
   ProcessorEngine,
   type ScannedRange,
@@ -25,6 +30,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../stream/processor.ts";
+// The hosts' doors run what they call under the cause the platform hands them (../cause.ts).
+import { causeOfRequest, runCausedBy } from "../cause.ts";
+import { codedError } from "../lib.ts";
 import { auth } from "./auth.ts";
 // The hosts' `this.withItx(fn)` is this function (with-itx.ts says why a scope is never kept).
 import { withItx } from "./with-itx.ts";
@@ -77,6 +85,9 @@ export type FacetProps = {
    *  head a catch-up read until the next push (stream/processor.ts, the read verbs). Absent, only a
    *  push is proof, so a processor no row pushes reads its log on every read. */
   fedByPushes?: true;
+  /** The code it was started on, as the parent names it (its loaded identity, or the deploy): work
+   *  in flight that died with a restart onto other code is no death of that work (stream/processor.ts). */
+  generation?: string;
 };
 
 /** THE FACET SHELL: a `DurableObject` a context hosts as a facet — `itx.facets.get(name, { source,
@@ -92,6 +103,36 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
    *  `static override publicMethods = [...super.publicMethods, "send"]`. */
   static publicMethods: readonly string[] = ["fetch"];
 
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // THE REQUEST DOOR (../cause.ts): a Request the facet serves runs under the cause it carries.
+    const serve = (this as { fetch?: (request: Request) => unknown }).fetch;
+    if (serve)
+      this.fetch = (request: Request) =>
+        runCausedBy(causeOfRequest(request), () => serve.call(this, request)) as Promise<Response>;
+  }
+
+  /** THE FACET DOOR (../cause.ts): the platform's way to walk `steps` on this facet — a caller's
+   *  `itx.facets.get(name).<steps>`, the alarm's revive — under the cause of the call that made
+   *  it. On no list: only the platform calls it (apps/os context/facet-host.ts). */
+  async callWithCause(
+    cause: unknown,
+    steps: (string | [string, ...unknown[]])[],
+  ): Promise<unknown> {
+    return runCausedBy(cause, async () => {
+      let value: unknown = this;
+      for (const step of steps) {
+        const [name, ...args] = typeof step === "string" ? [step] : step;
+        const member = memberRpcReaches(value, name);
+        value =
+          typeof step === "string"
+            ? await member
+            : await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
+      }
+      return value;
+    });
+  }
+
   /** This class's `publicMethods`, for the context that loaded it — a static does not cross the
    *  isolate. On no list: only the context asks it. */
   listPublicMethods(): readonly string[] {
@@ -99,6 +140,25 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
     // `Function`, which has no `publicMethods`.
     return (this.constructor as typeof FacetDurableObject).publicMethods;
   }
+}
+
+/** A step of the facet door's walk, which reaches no further than Workers RPC would: on this facet
+ *  or an RpcTarget, a member its class declares (never a field of its own); anything on a stub; on
+ *  plain data, its own members (never a method of data the facet holds live). */
+function memberRpcReaches(value: unknown, name: string): unknown {
+  // (RpcStub's own type is generic past what TypeScript will narrow)
+  if (value instanceof (RpcStub as unknown as new () => object))
+    return (value as Record<string, unknown>)[name];
+  const prototype = typeof value === "object" && value ? Object.getPrototypeOf(value) : undefined;
+  const reaches =
+    value instanceof RpcTarget ||
+    value instanceof DurableObject ||
+    value instanceof WorkerEntrypoint
+      ? name in value && !Object.hasOwn(value, name) && !(name in Object.prototype)
+      : (prototype === Object.prototype || prototype === Array.prototype || prototype === null) &&
+        Object.hasOwn(value as object, name);
+  if (!reaches) throw codedError("NOT_A_METHOD", `${name} is no method Workers RPC would reach`);
+  return (value as Record<string, unknown>)[name];
 }
 
 /** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
@@ -231,6 +291,8 @@ export abstract class StreamProcessorDurableObject<
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
       fedByPushes: this.ctx.props.fedByPushes === true,
+      kv: this.ctx.storage.kv,
+      generation: this.ctx.props.generation,
     }));
   }
 
@@ -250,11 +312,16 @@ export abstract class StreamProcessorDurableObject<
   }
 }
 
-// ConfigWorker is a stateless event handler loaded with an explicit workers.get spec.
-// Subscribe its processEventBatch method explicitly; fetch routing is configured separately.
-export type ConfigEventArgs = { event: StreamEvent; range: ScannedRange; itx: IterateContextApi };
+/** What `processEvent` is handed: one event, and the project's root, typed with the installed apps
+ *  the config repo's init case gives it (`IterateConfigProcessEventArgs<"agents">`). */
+export type IterateConfigProcessEventArgs<App extends keyof InstalledAppRoots = never> = {
+  event: StreamEvent;
+  itx: IterateContextApiWith<App>;
+};
 
-export abstract class ConfigWorker<
+/** Stateless config entrypoint, the default export of a project's config repo; its init handles
+ *  `events.iterate.com/project/worker-updated` (configs/default/worker.ts). */
+export abstract class IterateConfigEntrypoint<
   Env extends { ITX: ItxEntrypointService } = { ITX: ItxEntrypointService },
 > extends WorkerEntrypoint<Env> {
   /** At fetch entry: `const denied = this.auth.require(request); if (denied) return denied;`
@@ -267,30 +334,54 @@ export abstract class ConfigWorker<
    *    return new Response("Sign in\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
    *  ``` */
   protected readonly auth = auth;
-  /** Process an explicitly subscribed batch with this worker's context scope. */
-  async processEventBatch(events: StreamEvent[], range: ScannedRange): Promise<void> {
-    await this.withItx(async (itx) => {
-      for (const event of events) {
-        await this.processEvent({ event, range, itx });
-      }
-    });
+
+  constructor(ctx: ExecutionContext, env: Env) {
+    super(ctx, env);
+    // THE REQUEST DOOR (../cause.ts): the author's `fetch` runs under the cause its Request carries.
+    const serve = this.fetch;
+    this.fetch = (request: Request) =>
+      runCausedBy(causeOfRequest(request), () => serve.call(this, request));
+  }
+
+  /** The platform's delivery of one event (the dispatch boundary refuses any other caller):
+   *  `processEvent` inside ONE `withItx` round trip, released when it settles. */
+  async deliverEvent(event: StreamEvent): Promise<void> {
+    // THE DELIVERY DOOR (../cause.ts): the platform hands the delivery's cause beside the event, a
+    // second argument on no signature, and `processEvent` runs under it.
+    const cause: unknown = arguments[1];
+    await runCausedBy(cause, () => this.withItx((itx) => this.processEvent({ event, itx })));
+  }
+
+  /** THE DOOR FOR ANY OTHER METHOD (../cause.ts): the platform's way to call `method` — one this
+   *  class declares, as Workers RPC reaches it — under the cause of the call that makes it. On no
+   *  list: only the platform calls it (apps/os context/built-ins.ts `workers`). */
+  async callWithCause(cause: unknown, method: string, ...args: unknown[]): Promise<unknown> {
+    const member = method === "callWithCause" ? undefined : memberRpcReaches(this, method);
+    if (typeof member !== "function")
+      throw codedError("NOT_A_METHOD", `${method} is no method Workers RPC would reach`);
+    return runCausedBy(cause, () =>
+      Reflect.apply(member as (...a: unknown[]) => unknown, this, args),
+    );
   }
 
   /** ONE round trip on the itx scope, then release the scope and every call made through it
-   *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). */
-  protected withItx<T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> {
-    return withItx(this.env.ITX, call);
-  }
+   *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). A
+   *  field, not a method: Workers RPC reaches an entrypoint's methods, and a caller's callback must
+   *  never get the scope (__workers-tests__/config-entrypoint.test.ts). */
+  protected readonly withItx = <T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> =>
+    withItx(this.env.ITX, call);
 
-  /** THE AUTHOR HOOK — one event at a time, in offset order. Append reactions through the itx scope;
-   *  make them idempotent (a redelivery must be a no-op). Default: ignore the event. */
-  processEvent(_args: ConfigEventArgs): void | Promise<void> {}
+  /** THE AUTHOR HOOK: every durable event of every context of the project, one per call, unordered
+   *  and at least once; a throw fails that event alone, which the platform retries. `itx` is the
+   *  project's root, `itx.cd(event.path)` the event's own context. Make each reaction idempotent (an
+   *  append keyed by `event.path` and `event.offset`) and keep no state here. Default: ignore it. */
+  processEvent(_args: IterateConfigProcessEventArgs): void | Promise<void> {}
 
-  /** THE WEB ROOT — every Request on a host of the project (the project's configured ingress
-   *  target). The host's routing slug is in `x-iterate-routing-slug` (`notes` for
-   *  `notes--<project>.<hostname>`; absent on the apex), written only by the platform: route on it
-   *  in plain code, answering here (reaching the context through `this.withItx`) or forwarding the
-   *  Request. Default: not found. */
+  /** THE WEB ROOT — every Request on a host of the project that no fetch route takes (the platform
+   *  serves those first: `itx.fetchRoutes`). The host's routing slug is in `x-iterate-routing-slug`
+   *  (`notes` for `notes--<project>.<hostname>`; absent on the apex), written only by the platform:
+   *  route on it in plain code, answering here (reaching the project through `this.withItx`) or
+   *  forwarding the Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });
   }

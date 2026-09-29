@@ -1,28 +1,53 @@
-// What every Docs spec does first: serve Docs from the fixture's project, the way a project's own
-// config worker would (apps/docs/config-worker.ts), and consent for its host where it is one.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+// What every Docs spec does first: have the fixture's project serve Docs the way a project does,
+// a members-only fetch route from its `docs` routing slug to the Docs Worker under test (the route
+// a PR preview's `pr<N>` gets, apps/os/scripts/preview-config.ts `proxiedAppRoute`), and install
+// Docs in its config (`docs.ts` and a pin, @iterate-com/docs/install) at this commit's build. Then
+// consent for its host where it is one.
+import { execFileSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
-import { transformSync } from "esbuild";
+import { docsModule } from "@iterate-com/docs/install";
+import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { proxiedAppRoute } from "../../apps/os/scripts/preview-config.ts";
 
-/** The repository's actual config-worker source, pointed at the Docs Worker under test (its host
- *  and protocol: the source names production's, over https), written where the project's config
- *  worker lives: every host of the project reaches it, the `docs` routing slug fetches through. */
-export async function publishDocsConfigWorker(itx: any, docsWorker: URL) {
-  const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../apps/docs/config-worker.ts"), "utf8"),
-    { loader: "ts", format: "esm" },
-  )
-    .code.replace('"docs.iterate.workers.dev"', JSON.stringify(docsWorker.host))
-    .replace('url.protocol = "https:"', `url.protocol = ${JSON.stringify(docsWorker.protocol)}`);
-  expect(source).toContain(`url.host = ${JSON.stringify(docsWorker.host)}`);
+export async function serveDocs(itx: any, docsWorker: URL) {
   // after the project's own saga has published its seed, which would otherwise land after and win
   await itx.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
     afterOffset: 0,
     timeoutMs: 60_000,
   });
-  await itx.repos.get("/repos/config").writeFile("worker.ts", source);
+  await itx.fetchRoutes.set("docs", proxiedAppRoute("docs", docsWorker.href));
+  const version = await docsBuild();
+  const config = itx.repos.get("/repos/config");
+  const tip = await config.tip();
+  const manifest = JSON.parse(await config.readFile("package.json", { commitOid: tip }));
+  const { commitOid } = await config.commitFiles({
+    message: "Install Docs",
+    parent: tip,
+    changes: [
+      docsModule,
+      {
+        path: "package.json",
+        content: `${JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "@iterate-com/docs": version } }, null, 2)}\n`,
+      },
+    ],
+  });
+  await config.waitForPublication(commitOid);
+}
+
+/** @iterate-com/docs as this commit published it: CI's head, else the checkout's (pushed). */
+async function docsBuild() {
+  const head =
+    process.env.TEST_TELEMETRY_HEAD_SHA?.trim() ||
+    execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const version = pkgPrNewVersion("@iterate-com/docs", head);
+  await expect
+    .poll(async () => (await fetch(version, { method: "HEAD" })).status, {
+      // timeout: fixture setup before any page, so the spinner-waiter has nothing to extend by; pkg.pr.new publishes a push's build beside its preview deploy, in about a minute
+      timeout: 120_000,
+    })
+    .toBe(200);
+  return version;
 }
 
 /** Consent for the proxied host, a client of its own under subdomains: review, then Authorize,

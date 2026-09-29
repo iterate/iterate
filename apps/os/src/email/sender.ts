@@ -9,9 +9,11 @@
 type Header = { key: string; value: string };
 
 /** Cloudflare's SPF, DKIM and DMARC verdicts (`pass`, `fail`, `none`, …, null where it gave none)
- *  from its topmost record (an MTA prepends its own), and whether every Cloudflare record proves
- *  `from`: an aligned DMARC pass, an aligned DKIM signature, or an SPF pass for an aligned envelope
- *  domain — DMARC's alignment, parent and child domains aligning. */
+ *  from its topmost record (an MTA prepends its own); whether every Cloudflare record proves
+ *  `from` (`verified`): an aligned DMARC pass, an aligned DKIM signature, or an SPF pass for an
+ *  aligned envelope domain — DMARC's alignment, parent and child domains aligning; and whether
+ *  every record has that SPF pass (`direct`): a DKIM signature survives anyone re-sending the
+ *  message, and only SPF says the server that handed it over is the From domain's own. */
 export function authenticationOf(headers: Header[], from: string) {
   const fromDomain = from.slice(from.lastIndexOf("@") + 1).toLowerCase();
   const records = headers
@@ -33,13 +35,15 @@ export function authenticationOf(headers: Header[], from: string) {
     (domain === fromDomain ||
       domain.endsWith(`.${fromDomain}`) ||
       fromDomain.endsWith(`.${domain}`));
+  const alignedSpfPass = ({ method, value, properties }: (typeof records)[number][number]) =>
+    method === "spf" && value === "pass" && aligned(properties["smtp.mailfrom"]?.split("@").pop());
   const proves = (record: (typeof records)[number]) =>
     record.some(
-      ({ method, value, properties }) =>
-        value === "pass" &&
-        ((method === "dmarc" && aligned(properties["header.from"] || fromDomain)) ||
-          (method === "dkim" && aligned(properties["header.d"])) ||
-          (method === "spf" && aligned(properties["smtp.mailfrom"]?.split("@").pop()))),
+      (result) =>
+        alignedSpfPass(result) ||
+        (result.value === "pass" &&
+          ((result.method === "dmarc" && aligned(result.properties["header.from"] || fromDomain)) ||
+            (result.method === "dkim" && aligned(result.properties["header.d"])))),
     );
   const verdictOf = (method: string) => {
     const verdicts = (records[0] ?? []).filter((result) => result.method === method);
@@ -50,6 +54,7 @@ export function authenticationOf(headers: Header[], from: string) {
   return {
     authentication: { spf: verdictOf("spf"), dkim: verdictOf("dkim"), dmarc: verdictOf("dmarc") },
     verified: !!fromDomain && records.length > 0 && records.every(proves),
+    direct: !!fromDomain && records.length > 0 && records.every((r) => r.some(alignedSpfPass)),
   };
 }
 

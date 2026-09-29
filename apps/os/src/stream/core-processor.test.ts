@@ -9,7 +9,7 @@
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
-import type { StreamEvent } from "iterate/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
@@ -17,6 +17,7 @@ import {
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
+  normalizeContextBirthEvents,
   normalizeControlEvent,
 } from "./core-processor.ts";
 import { Stream } from "./stream.ts";
@@ -29,17 +30,17 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
   expect(CoreContract.initialState()).toEqual({
     paused: null,
     itxExpressionRewriteRules: {},
+    snapshotVersion: 0,
     subscriptions: {},
     ingressTarget: null,
     fetchRoutes: {},
     schedules: {},
     scriptRuns: {},
   });
-  // the events it OWNS beyond its control events: the apex target, the subscription row and a
-  // child's announcement (core-events.ts, which the Project contract depends on) and the run pair
+  // the events it OWNS beyond its control events: the apex target and a child's announcement
+  // (core-events.ts, which the Project contract depends on) and the run pair
   expect(Object.keys(CoreContract.events)).toEqual([
     "events.iterate.com/itx/ingress-configured",
-    "events.iterate.com/itx/subscription-configured",
     "events.iterate.com/itx/child-created",
     "events.iterate.com/itx/run-requested",
     "events.iterate.com/itx/run-settled",
@@ -108,6 +109,11 @@ test.for([
     "events.iterate.com/itx/subscription-delivery-halted",
     { name: "someone-elses", afterOffset: 1, attempts: 1 },
   ],
+  // the delivery loop's dead letter: a forged one would report a delivery that never failed
+  [
+    "events.iterate.com/itx/subscription-delivery-failed",
+    { name: "someone-elses", offset: 3, attempts: 15, error: "down" },
+  ],
   ["events.iterate.com/itx/alarm-trace", {}],
   [
     // the runner's alone: a forged one would answer `itx.run`, and an agent would read it as its own
@@ -118,6 +124,61 @@ test.for([
   "%s is the platform's own record: the append boundary refuses it",
   ([type, payload]) => {
     expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
+  },
+);
+
+test.for([
+  {
+    name: "the platform hook's row: its target stored parsed, as an append stores it",
+    events: [
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "platform",
+          target: "itx.builtins.platformHook.deliverEvent",
+          afterOffset: 0,
+          ordered: false,
+        },
+      },
+    ],
+    becomes: [
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: {
+          name: "platform",
+          target: ["itx", "builtins", "platformHook", "deliverEvent"],
+          afterOffset: 0,
+          ordered: false,
+        },
+      },
+    ],
+  },
+  {
+    name: "an ordinary event of the project's own, as it is",
+    events: [{ type: "events.garple.com/shop/opened", payload: {} }],
+    becomes: [{ type: "events.garple.com/shop/opened", payload: {} }],
+  },
+  {
+    name: "a platform-only record is refused, naming its entry",
+    events: [{ type: "test/fine" }, { type: "events.iterate.com/itx/woken" }],
+    throws:
+      /^APP_CONFIG contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
+  },
+  {
+    name: "a subscription whose target does not parse is refused, naming its entry",
+    events: [
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "config", target: "itx.config(" },
+      },
+    ],
+    throws: /^APP_CONFIG contextBirthEvents\[0\]:/,
+  },
+] satisfies { name: string; events: StreamEventInput[]; becomes?: unknown; throws?: RegExp }[])(
+  "normalizeContextBirthEvents: $name",
+  ({ events, becomes, throws }) => {
+    if (throws) expect(() => normalizeContextBirthEvents(events)).toThrow(throws);
+    else expect(normalizeContextBirthEvents(events)).toEqual(becomes);
   },
 );
 
@@ -157,10 +218,26 @@ test("an operator's pause, resume and delivery resume are parsed at the append b
     type: "events.iterate.com/itx/subscription-delivery-resumed",
     payload: { name: "s", afterOffset: 0 },
   });
+  // a fan-out row's redelivery of one event (a dead letter's offset)
+  expect(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "s", offset: 4 },
+      },
+      "/",
+    ),
+  ).toEqual({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "s", offset: 4 },
+  });
   // a non-numeric seek would have become a NaN cursor in the delivery loop; a prototype key would
-  // have read `Object.prototype` as a row, and `core` is never a subscription
+  // have read `Object.prototype` as a row, and `core` is never a subscription; a resume seeks or
+  // redelivers one event, never both
   for (const payload of [
     {},
+    { name: "s", offset: 0 },
+    { name: "s", offset: 4, afterOffset: 2 },
     { name: 1 },
     { name: "s", afterOffset: "3" },
     { name: "s", afterOffset: -1 },
@@ -554,6 +631,31 @@ test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only wh
   expect(reduceCoreEvent({ event: remove(3, null), state: rewritten })).toBeUndefined();
 });
 
+test("rewrite rules: `snapshotVersion` is the offset of the last commit that CHANGED the table — the same row again, a double delete or a mask repeated leaves it, and the state, as they were", () => {
+  const set = reduceAll([rule(3, "itx.tool", "itx.kv"), rule(4, "itx.other", "itx.kv")]);
+  expect(set).toMatchObject({ snapshotVersion: 4 });
+  // the same target, description and flag again: no change, so no new version for any snapshot
+  expect(reduceCoreEvent({ event: rule(5, "itx.tool", "itx.kv"), state: set })).toBeUndefined();
+  const repointed = reduceAll([rule(6, "itx.tool", "itx.r2")], set);
+  expect(repointed).toMatchObject({ snapshotVersion: 6 });
+  const described = reduceAll(
+    [
+      at(7, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.tool",
+        target: "itx.r2",
+        description: "the object store",
+      }),
+    ],
+    repointed,
+  );
+  expect(described).toMatchObject({ snapshotVersion: 7 });
+  const deleted = reduceAll([rule(8, "itx.tool", null)], described);
+  expect(deleted).toMatchObject({ snapshotVersion: 8 });
+  expect(reduceCoreEvent({ event: rule(9, "itx.tool", null), state: deleted })).toBeUndefined();
+  // a fact of another table moves no rule version
+  expect(reduceAll([configured(10, "tab")], deleted)).toMatchObject({ snapshotVersion: 8 });
+});
+
 // ── the subscriptions table — by name ──
 
 test("subscriptions table: configured: a row is `{ target (parsed), consumes?, configuredAtOffset }` — the event's own offset is its identity", () => {
@@ -589,6 +691,36 @@ test("subscriptions table: configured with `afterOffset` stores it on the row (w
   ]);
   expect(s.subscriptions.history).toMatchObject({ configuredAtOffset: 4, afterOffset: 0 });
   expect(s.subscriptions.now).not.toHaveProperty("afterOffset");
+});
+
+test("subscriptions table: `ordered: false` is stored on the row (fan-out delivery); `ordered: true` is the default and stores no key; anything else is refused at the append boundary", () => {
+  const configured = (name: string, ordered: unknown) =>
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name, target: "itx.hook.deliverEvent", ordered },
+      },
+      "/",
+    ).payload as Record<string, unknown>;
+  const s = reduceAll([
+    at(1, "events.iterate.com/itx/subscription-configured", configured("fanOut", false)),
+    at(2, "events.iterate.com/itx/subscription-configured", configured("queue", true)),
+  ]);
+  expect(s.subscriptions.fanOut).toMatchObject({ ordered: false });
+  expect(s.subscriptions.queue).not.toHaveProperty("ordered");
+  expect(() => configured("bad", "no")).toThrow(/ordered/);
+});
+
+test("subscriptions table: a resume `{ offset }` is recorded on the row for the fan-out loop to apply once", () => {
+  const s = reduceAll([
+    at(1, "events.iterate.com/itx/subscription-configured", {
+      name: "hook",
+      target: "itx.hook.deliverEvent",
+      ordered: false,
+    }),
+    at(2, "events.iterate.com/itx/subscription-delivery-resumed", { name: "hook", offset: 1 }),
+  ]);
+  expect(s.subscriptions.hook).toMatchObject({ resumed: { offset: 1, atOffset: 2 } });
 });
 
 test("subscriptions table: configured without `consumes` stores no `consumes` key at all (absent = every durable event)", () => {
@@ -979,6 +1111,21 @@ test("builtins root: HOSTING is decided on the RESOLVED target: the platform's s
   expect(s.subscriptions.address).not.toHaveProperty("hostedFacet");
   for (const row of Object.values(s.subscriptions))
     expect(JSON.stringify(row)).not.toContain("worker.js");
+});
+
+test("builtins root: a facet named by a worker is marked with its class and main module, and the name stays in the target, which carries no source", () => {
+  const named = {
+    className: "AgentDurableObject",
+    mainModule: "agents.ts",
+    source: "itx.cd('/').config",
+  };
+  const s = reduceAll([
+    configured(1, "agent", `itx.facets.get('agent', ${JSON.stringify(named)}).processEventBatch`),
+  ]);
+  expect(s.subscriptions.agent).toMatchObject({
+    hostedFacet: { name: "agent", className: "AgentDurableObject", mainModule: "agents.ts" },
+  });
+  expect(print(s.subscriptions.agent.target)).toBe("itx.facets.get('agent').processEventBatch");
 });
 
 test("builtins root: a hosting target that cannot resolve yet (its rule comes later, or a mask sits on `itx.facets`) is stored as given and hosts nothing", () => {

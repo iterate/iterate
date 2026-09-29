@@ -1,7 +1,13 @@
 // registers `itx.agents` on InstalledAppRoots
 import type {} from "@iterate-com/agents";
 import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
-import { createFileRoute, useNavigate, useRouter, useRouterState } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  getRouteApi,
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
@@ -27,14 +33,8 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
-import {
-  agentsApp,
-  ensureAgents,
-  installAgents,
-  installedVersion,
-  upgradeApp,
-} from "@iterate-com/agents/install";
-import { buildStanding, pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
+import { agentsVersion, upgradeAgents } from "@iterate-com/agents/install";
+import { buildStanding } from "@iterate-com/shared/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
@@ -64,7 +64,7 @@ type Context = Awaited<ReturnType<Project["cd"]>>;
 /** The project with its `itx.agents` root typed (@iterate-com/agents api.ts). The root is there
  *  only by the project's rewrite rule, so the session's project stub cannot name it; the page calls
  *  it only where the rule is known to be there: the loader after reading it, the sidebar's create
- *  after its install branch, the composer only beside an agent. */
+ *  only when the loader found it, the composer only beside an agent. */
 const withAgents = (itx: Project) =>
   itx as Project & Pick<IterateContextApiWith<"agents">, "agents">;
 
@@ -72,16 +72,6 @@ const withAgents = (itx: Project) =>
  *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
  *  into the answer being written. */
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-frame"];
-
-/** The agents build Install agents commits: this app's own commit's, else main's now, at a commit
- *  (`publishedCommit`), resolved in the app's Worker because a page cannot read pkg.pr.new's
- *  commit header. */
-const publishedAgents = createServerFn().handler(async () =>
-  pkgPrNewVersion(
-    "@iterate-com/agents",
-    await publishedCommit("@iterate-com/agents", import.meta.env.VITE_SOURCE_COMMIT),
-  ),
-);
 
 /** Where the project's agents build stands against main's newest (`buildStanding`), asked in the
  *  app's Worker: a page cannot read pkg.pr.new's headers. */
@@ -116,11 +106,8 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
         installed: false,
         build: undefined,
       };
-    // the build the project's agents run (the source its install keeps), for the sidebar's upgrade
-    const [agents, build] = await Promise.all([
-      withAgents(itx).agents.list(),
-      installedVersion(itx, agentsApp),
-    ]);
+    // the agents build the project's config pins, for the sidebar's upgrade
+    const [agents, build] = await Promise.all([withAgents(itx).agents.list(), agentsVersion(itx)]);
     return {
       projects,
       project,
@@ -162,13 +149,6 @@ function AgentsPage() {
               // An agent is its path; a new one is born at this moment's path.
               const path = newWebAgentPath(new Date());
               using itx = await api.projects.get(project);
-              if (!data.installed) {
-                // The SDK models the public API as promises; capnweb's stub has the
-                // same runtime methods with additional pipelining types.
-                await ensureAgents(itx as unknown as IterateContextApi, await publishedAgents());
-                await router.invalidate({ sync: true });
-                return;
-              }
               await withAgents(itx).agents.create(path);
               await router.invalidate();
               await navigate({
@@ -189,11 +169,9 @@ function AgentsPage() {
                   check={(installed) => agentsBuild({ data: installed })}
                   upgrade={async (version) => {
                     using itx = await api.projects.get(project);
-                    // as for ensureAgents above: the stub has the SDK's methods
-                    const root = itx as unknown as IterateContextApi;
-                    await upgradeApp(root, agentsApp, version, (source) =>
-                      installAgents(root, source),
-                    );
+                    // The SDK models the public API as promises; capnweb's stub has the same
+                    // runtime methods with additional pipelining types.
+                    await upgradeAgents(itx as unknown as IterateContextApi, version);
                     await router.invalidate({ sync: true });
                   }}
                 />
@@ -220,19 +198,45 @@ function AgentsPage() {
     >
       {data.agent ? (
         <AgentConversation key={`${project}${data.agent}`} project={project} path={data.agent} />
-      ) : (
+      ) : data.installed ? (
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>{data.installed ? "No agents yet" : "Agents are not installed"}</EmptyTitle>
-            <EmptyDescription>
-              {data.installed
-                ? "Create one in the sidebar, then talk to it here."
-                : "Choose Install agents in the sidebar to add them to this project."}
-            </EmptyDescription>
+            <EmptyTitle>No agents yet</EmptyTitle>
+            <EmptyDescription>Create one in the sidebar, then talk to it here.</EmptyDescription>
           </EmptyHeader>
         </Empty>
+      ) : (
+        <NotInstalled slug={data.project.slug} platformOrigin={info.platformOrigin} />
       )}
     </AppShell>
+  );
+}
+
+const root = getRouteApi("__root__");
+
+/** A project without `itx.agents`: its config repo installs agents (`installAgents(itx)` in its
+ *  init case, as the default template does), so the page says so and links to that repo in the
+ *  Dash, when this deployment names one. */
+function NotInstalled({ slug, platformOrigin }: { slug: string; platformOrigin: string }) {
+  const { dashOrigin } = root.useLoaderData();
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle>Agents are not installed</EmptyTitle>
+        <EmptyDescription>
+          A project&apos;s config repo installs its agents: <code>installAgents(itx)</code> in its
+          init case, as the default template does.{" "}
+          {dashOrigin ? (
+            <a
+              href={`${dashOrigin}/.auth/connect?${new URLSearchParams({ issuer: platformOrigin, next: `/projects/${slug}` })}`}
+              className="underline underline-offset-2"
+            >
+              Open the config repo
+            </a>
+          ) : null}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 

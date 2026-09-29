@@ -1,11 +1,10 @@
 // __workers-tests__/secret-exchange-code.test.ts — A SECRET REFRESHED BY ITS OWN EXCHANGE CODE
 // (`refresh: { kind: "worker", source }`, src/secret/exchange-jail.ts): the secret's facet loads the
 // source through Worker Loader and runs `exchange(material, fetch)` on first use and on a 401, its
-// egress the pin alone — on a project's own secret, and on the deployment's lent to a project. And
-// Waitrose, the platform's bundled exchange code, as a person's account connected to their project. The shop is in-process: a Tesco-shaped two-step login (a CSRF token and the cookie that
-// binds it, then the form), Waitrose's GraphQL `NewSession` and a bearer-protected `/api/me`,
-// answered for `SHOP` by `serveShop` below — the jail's `PinnedOutbound` and the facet's dispatch
-// both use this isolate's global `fetch`.
+// egress the pin alone — on a project's own secret, and on the deployment's lent to a project. The
+// shop is in-process: a Tesco-shaped two-step login (a CSRF token and the cookie that binds it, then
+// the form) and a bearer-protected `/api/me`, answered for `SHOP` by `serveShop` below — the jail's
+// `PinnedOutbound` and the facet's dispatch both use this isolate's global `fetch`.
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
@@ -112,49 +111,6 @@ test("the deployment's exchange-code secret lent to a project: the project's fir
   ]);
 });
 
-test("a person connects Waitrose on their own account with a username and password, then to their project: the project's first use logs in at their connection", async () => {
-  const lender = await projectWithMember("waitrose-lend");
-  const shop = serveShop();
-  const account = lender.session.user.facets.get("account");
-  await expect(
-    account.connectWaitrose({ connection: "mum", account: "mum@example.com" }),
-  ).rejects.toThrow(/Set \/secrets\/waitrose-mum to \{ username, password \}/);
-  await lender.session.user.secrets.set(
-    "/secrets/waitrose-mum",
-    { username: "mum@example.com", password: PASSWORD },
-    { urls: [SHOP], refresh: { kind: "waitrose-session", graphqlUrl: `${SHOP}/graphql` } },
-  );
-  await account.connectWaitrose({ connection: "mum", account: "mum@example.com" });
-  expect((await account.snapshot()).state.integrations).toMatchObject({
-    "/integrations/waitrose/mum": {
-      provider: "waitrose",
-      connection: "mum",
-      account: "mum@example.com",
-    },
-  });
-
-  // no consent to ask for, nor scopes to add (an agent's ask names some): connected at once
-  expect(
-    await lender.itx.integrations.connect("waitrose", {
-      account: "mum@example.com",
-      scopes: ["orders:read"],
-    }),
-  ).toEqual({ connection: "mum" });
-  expect(await lender.itx.secrets.list()).toContainEqual(
-    expect.objectContaining({
-      path: "/secrets/waitrose-mum",
-      borrowed: expect.objectContaining({
-        integration: expect.objectContaining({ provider: "waitrose", account: "mum@example.com" }),
-      }),
-    }),
-  );
-  expect(await me(lender.projectId, "/secrets/waitrose-mum")).toMatchObject({
-    status: 200,
-    body: { sub: "mum@example.com" },
-  });
-  expect(shop).toMatchObject({ logins: 1 });
-});
-
 /** The Tesco-shaped login as exchange code: the form's CSRF token and its cookie, then the form. */
 const TESCO_EXCHANGE = `
 export async function exchange(material, fetch) {
@@ -253,20 +209,6 @@ function serveShop() {
     if (origin !== SHOP && origin !== ELSEWHERE) return network(request);
     requests.push(request.url);
     if (origin === ELSEWHERE) return new Response("collected");
-    if (pathname === "/graphql") {
-      // the NewSession login (src/integrations/waitrose.ts) with the fixture password
-      const { variables } = (await request.json()) as {
-        variables: { input: { username: string; password: string } };
-      };
-      if (variables.input.password !== PASSWORD)
-        return Response.json({
-          data: { generateSession: { failures: [{ type: "AUTHENTICATION_FAILED" }] } },
-        });
-      const token = crypto.randomUUID();
-      tokens.set(token, variables.input.username);
-      state.logins += 1;
-      return Response.json({ data: { generateSession: { accessToken: token, failures: null } } });
-    }
     if (pathname === "/api/tesco/login" && request.method === "GET")
       return Response.json(
         { csrf: "csrf-1" },

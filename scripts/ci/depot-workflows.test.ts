@@ -200,10 +200,9 @@ test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
 );
 
 test.each(["kit", "voice"])(
-  "deploy-%s.yml redeploys when the agents or voice package changes: its installer ships in the app",
+  "deploy-%s.yml redeploys when the voice package changes: its voice check ships in the app",
   (app) => {
     const paths = loadWorkflow(`.depot/workflows/deploy-${app}.yml`).on?.push?.paths ?? [];
-    expect(triggers(paths, "packages/agents/src/install.ts")).toBe(true);
     expect(triggers(paths, "packages/voice/src/install.ts")).toBe(true);
   },
 );
@@ -491,7 +490,7 @@ test.each([
   },
   {
     file: ".depot/workflows/preview-delete.yml",
-    permissions: { contents: "read" },
+    permissions: { contents: "read", "pull-requests": "write" },
   },
   {
     file: ".depot/workflows/preview-parents.yml",
