@@ -26,6 +26,11 @@ export type SidebarNavItem = Omit<PaletteEntry, "id"> & {
   href: string | undefined;
 };
 
+/** A row an app hands the palette itself (`AppShell`'s `paletteEntries`): what its sidebar shows
+ *  in a way the palette can't read, such as a file tree drawn in its own shadow DOM. Choosing it
+ *  runs `onSelect`, which navigates the app's own way. */
+export type AppPaletteEntry = Omit<PaletteEntry, "id"> & { onSelect: () => void };
+
 /** Rows under a heading the sidebar gives none (an app's top group of pages). */
 export const UNLABELLED_NAV_GROUP = "Pages";
 

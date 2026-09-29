@@ -12,6 +12,7 @@ import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
+import { docs } from "../../docs/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
 import { notes } from "../../notes/scripts/app.ts";
 import { admin } from "../../admin/scripts/app.ts";
@@ -31,7 +32,7 @@ export const MAIN_ON_DEV = osEnvs.preview!;
 export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
 /** The apps on top, each deployed beside apps/os as `<deployment>-<app>`. */
-export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
+export const APPS: StartApp[] = [dash, agents, notes, docs, voice, kit, admin];
 
 /** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names
  *  (main on dev is `os` and `<app>`). The sweep deletes the Worker Previews still hanging

@@ -41,14 +41,14 @@ test("two cleanups that supersede one deployment both succeed: each member the o
     { failures: [], stuckNamespaces: [] },
   ]);
   expect(account.holds("main-aaaaaaa")).toEqual([]);
-  expect(account.holds("main-bbbbbbb")).toHaveLength(12);
-  expect(account.holds("main-ccccccc")).toHaveLength(12);
+  expect(account.holds("main-bbbbbbb")).toHaveLength(13);
+  expect(account.holds("main-ccccccc")).toHaveLength(13);
   // the race happened: the loser of each object's two deletes was answered NoSuchKey
   expect(account.answers.filter((answer) => /objects\/.*: 200\/10007$/.test(answer))).toHaveLength(
     OBJECTS.length,
   );
   expect(
-    logs.filter((line) => line === "deleted deployment main-aaaaaaa (12 members)"),
+    logs.filter((line) => line === "deleted deployment main-aaaaaaa (13 members)"),
   ).toHaveLength(2);
 });
 
@@ -93,7 +93,7 @@ test("a deployment deleted over a listing another run has since emptied: every m
     ...SUFFIXES.kv.map((suffix) => `KV namespace main-aaaaaaa-${suffix} was already gone`),
     "R2 bucket main-aaaaaaa-os-files was already gone",
     "D1 main-aaaaaaa-os-db was already gone",
-    "deleted deployment main-aaaaaaa (12 members)",
+    "deleted deployment main-aaaaaaa (13 members)",
   ]);
   expect(warns).toEqual(["Artifacts namespace main-aaaaaaa-os-repos did not exist; continuing."]);
   // each kind's not-found (preview-delete.ts `GONE`)

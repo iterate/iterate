@@ -11,13 +11,13 @@ export default defineConfig({
     notes,
     { cloudflare, tanstackStart, viteReact, tailwindcss },
     // The router's paths never carry Vite's `base`: Notes routes under the page's base path itself
-    // (src/base-path.ts), and a dev server's `--base` (README) moves only its module URLs and its
+    // (packages/ui/src/apps/base-path.ts), and a dev server's `--base` (README) moves only its module URLs and its
     // HMR socket.
     { basepath: "" },
   ),
   experimental: {
     // A chunk's preloaded dependencies resolve beside it, not at the origin's root: a proxied Notes
-    // serves its chunks under a base path (src/base-path.ts). Only the browser's scripts: a `?url`
+    // serves its chunks under a base path (packages/ui/src/apps/base-path.ts). Only the browser's scripts: a `?url`
     // stays a root path that the page prefixes itself, the same in the server render and the browser.
     renderBuiltUrl: (filename, { hostType, ssr }) =>
       !ssr && hostType === "js" && filename.endsWith(".js") ? { relative: true } : undefined,

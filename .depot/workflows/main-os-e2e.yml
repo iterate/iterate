@@ -40,6 +40,7 @@ on:
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
@@ -50,6 +51,7 @@ on:
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
+      - apps/docs/**
       - apps/admin/**
       - apps/voice/**
       - apps/kit/**
@@ -61,6 +63,7 @@ on:
       - packages/iterate/**
       - packages/agents/**
       - packages/voice/**
+      - packages/docs/**
       - packages/shared/**
       - packages/ui/**
       - package.json
@@ -255,13 +258,13 @@ jobs:
   # The specs in shards, as a PR preview runs them (preview-os.yml SHARDS), and Browser specs, their
   # verdict, as a PR preview's (preview-os.yml BROWSER SPECS).
   specs-shard:
-    name: Browser specs ${{ matrix.shard }}/10
+    name: Browser specs ${{ matrix.shard }}/11
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -270,7 +273,7 @@ jobs:
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
       SPECS_SHARD: ${{ matrix.shard }}
-      SPECS_SHARDS: "10"
+      SPECS_SHARDS: "11"
     steps: *suite-steps
 
   specs:

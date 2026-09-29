@@ -220,7 +220,7 @@ the page keeps its data, and no pending component shows. An action that navigate
 No provider. The client is module state; the signed-in layout route is
 `ssr: false` (the session dials a WebSocket and never runs on the server), and
 its `beforeLoad` is the one place `authenticate` is called. The frame is the
-shared `AppShell` from `@iterate-com/ui` (the same frame dash, agents, notes and
+shared `AppShell` from `@iterate-com/ui` (the same frame dash, agents, notes, docs and
 voice use), filled with the `_auth` loader's projects.
 
 ```tsx
@@ -273,6 +273,13 @@ memory (`history: "all"`), deduped by offset, reduced for the chat by `lib/agent
 Don't build new UI on a second client-side store; use
 `useLiveState`/`useIterateContext` and a server-owned projection.
 
+## Linking to a context's stream
+
+A page that is one context's events (a doc, an agent) links to that context in the dash's Contexts
+page, where its log, processors and live state are: `StreamLink`
+(`@iterate-com/ui/components/stream-link`), a quiet `Stream ↗` beside the page's path. The dash's
+origin is `APP_CONFIG urls.dash`; without one the link isn't drawn.
+
 ## Where the boundary is
 
 Reads/mutations of **product** state travel the capnweb tree. The app Worker
@@ -280,8 +287,9 @@ itself does only request-native work before TanStack Start sees the request:
 `appAuth` (the OAuth client, its `/.auth/*` pages and the authenticated `/api`
 proxy), a health check, and a signed-in redirect off the landing page
 (`appServerEntry`, `packages/ui/src/apps/server.ts`, every app's Start server entry). Each app's
-root route has one `createServerFn`, which reads the PostHog key from the Worker's `APP_CONFIG`;
-there are no others.
+root route has one `createServerFn`, which reads the PostHog key (and, for an app that links to
+it, the dash's origin) from the Worker's `APP_CONFIG`. The only others ask pkg.pr.new which build
+to install or upgrade a package to, since a page can't read its headers (Agents', Voice' and Docs').
 Don't add a second data path; if a component needs project data, read it in the
 route `loader` or subscribe with `useLiveState`/`useIterateContext` at the leaf.
 

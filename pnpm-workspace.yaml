@@ -3,6 +3,7 @@ packages:
   - apps/dash
   - apps/agents
   - apps/notes
+  - apps/docs
   - apps/admin
   - apps/voice
   - apps/kit
@@ -14,6 +15,7 @@ packages:
   - packages/ai-linter
   - packages/cli
   - packages/github-sync
+  - packages/docs
   - packages/iterate
   - packages/petshop-sdk
   - packages/voice

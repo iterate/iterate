@@ -33,6 +33,7 @@ on:
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
@@ -42,6 +43,7 @@ on:
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
+      - apps/docs/**
       - apps/admin/**
       - apps/voice/**
       - apps/kit/**
@@ -52,6 +54,7 @@ on:
       - packages/iterate/**
       - packages/agents/**
       - packages/voice/**
+      - packages/docs/**
       - packages/shared/**
       - packages/ui/**
       - package.json

@@ -153,8 +153,8 @@ read secrets.
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
   bounce costs the sender's reputation; sign in as them with the deployment's
   password.
-- PR sign-in links: every hosted client (Dash, Agents, Notes, Admin, Voice,
-  Kit) is deployed next to the platform in each per-commit deployment and wired
+- PR sign-in links: every hosted client (Dash, Agents, Notes, Docs, Admin,
+  Voice, Kit) is deployed next to the platform in each per-commit deployment and wired
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
   (apps/os's into the Dash's project), and with the Dash one per `configs`
   template ("New project from template"), which lands in the Dash's New project
@@ -404,8 +404,8 @@ A deployment is a complete, isolated set of plain Workers on the dev/preview
 Cloudflare account, named `<prefix>-<sha7>`: `pr<n>` and the first 7 digits of
 the commit CI tests (the PR merged into main). apps/os is
 `https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev`, with Durable
-Objects, a D1, KV, R2 and an Artifacts namespace of its own. The six hosted
-clients (Dash, Agents, Notes, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
+Objects, a D1, KV, R2 and an Artifacts namespace of its own. The seven hosted
+clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
 signs in against that apps/os, and every link between them names the same
 deployment's apps. The name decides everything (`previewDeployment` in
 `envs.ts`), and the build and deploy are prd's (`apps/os/scripts/deploy.ts`,
@@ -509,7 +509,7 @@ worker (next story).
 Every push to a PR runs the **Preview OS** workflow. When the PR touches
 preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
 [Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** deploys
-the tested commit's apps/os and all six clients. It folds the PR body's
+the tested commit's apps/os and all seven clients. It folds the PR body's
 managed section into a `<details>` first, so the links there read as the
 previous commit's, and writes the new deployment's section once it lands: a
 row per worker with its `Sign in ↗` and Cloudflare dashboard links,

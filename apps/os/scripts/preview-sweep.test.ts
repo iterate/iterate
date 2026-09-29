@@ -19,9 +19,9 @@ import {
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
 
-test("a deployment's members: its seven workers, then apps/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
+test("a deployment's members: its eight workers, then apps/os's KV (wrangler's names for the template's bindings), R2 bucket, D1 and Artifacts namespace", () => {
   expect(previewMemberSuffixes(kvBindings())).toEqual({
-    worker: ["os", "dash", "agents", "notes", "admin", "voice", "kit"],
+    worker: ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"],
     kv: ["os-itx-kv", "os-oauth-kv"],
     r2: ["os-files"],
     d1: ["os-db"],
@@ -44,7 +44,7 @@ test("members group into deployments by name; nothing of another shape on the ac
       { kind: "kv", name: "os-pr3144-itx-kv", id: "k2" },
       { kind: "artifacts", name: "os-dev-repos", id: "os-dev-repos" },
       // a worker of the right shape but not a member's suffix
-      worker("pr3144-a1b2c3d-docs", 2),
+      worker("pr3144-a1b2c3d-wiki", 2),
     ],
     suffixes(),
   );
@@ -326,6 +326,7 @@ test("the sweep deletes on the dev/preview account, and envs.ts's workers there 
     "agents",
     "ci-reports",
     "dash",
+    "docs",
     "iterate-spa-preview",
     "kit",
     "notes",

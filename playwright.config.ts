@@ -17,6 +17,9 @@ const videoArtifactsEnabled = videoMode || !process.env.CI;
  *  fetches through to: the notes project's baseURL. Its session spec also signs in to the Dash
  *  (DASH_BASE_URL). Locally, unset skips it; in CI, unset fails it. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
+/** The Docs Worker deployed against that OS, which the docs project's config worker fetches
+ *  through to, as Notes'. Locally, unset skips its specs; in CI, unset fails them. */
+const docsBaseUrl = process.env.DOCS_BASE_URL?.replace(/\/+$/, "");
 /** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
  *  specs; in CI, unset fails them. */
 const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
@@ -103,6 +106,11 @@ export default defineConfig({
       name: "notes",
       testDir: "specs/notes",
       use: recordedAtViewport({ ...desktopWebUse, baseURL: notesBaseUrl }),
+    },
+    {
+      name: "docs",
+      testDir: "specs/docs",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: docsBaseUrl }),
     },
     {
       name: "voice",

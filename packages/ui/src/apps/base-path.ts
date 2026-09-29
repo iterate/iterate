@@ -1,10 +1,10 @@
-// base-path.ts — THE PATH NOTES IS SERVED UNDER in the browser. A project's config worker
-// (config-worker.ts) proxies Notes: on a host of its own under subdomains ingress
+// base-path.ts — THE PATH A PROXIED APP IS SERVED UNDER in the browser (apps/notes, apps/docs). A
+// project's config worker (the app's config-worker.ts) proxies it: on a host of its own under subdomains ingress
 // (`notes--<project>.<base>`) the base path is "", and under paths ingress it is
-// `/projects/<project>/<routingSlug>`. There the platform's edge strips that prefix from the URL Notes sees and
+// `/projects/<project>/<routingSlug>`. There the platform's edge strips that prefix from the URL the app sees and
 // says it in `x-iterate-base-path` (iterate/project-ingress), while the browser's URLs keep it. So
-// every path the page names carries it — its links, its assets (server.ts `transformAssets`), its
-// server functions (start.ts) — and the router drops it on the way in (`basePathRewrite`). The
+// every path the page names carries it — its links, its assets (the app's server.ts `transformAssets`), its
+// server functions (the app's start.ts) — and the router drops it on the way in (`basePathRewrite`). The
 // browser adapter's `/.auth/*` and `/api` stay root paths: the host's, which the platform answers
 // (apps/os/src/worker.ts); under paths they are its own, on the origin the page shares with it.
 //
@@ -20,14 +20,14 @@ import { ITERATE_BASE_PATH_HEADER } from "iterate/project-ingress";
 export const buildBasePath = import.meta.env.BASE_URL.replace(/\/$/, "");
 
 /** The base path a request says, else the build's — plain path segments only: the header reaches
- *  the Notes Worker from anyone who fetches it, and what it says is written into the page's links. */
+ *  the app's Worker from anyone who fetches it, and what it says is written into the page's links. */
 export function basePathOf(headers: Headers) {
   const value = headers.get(ITERATE_BASE_PATH_HEADER) || "";
   return /^(?:\/[a-z0-9-]+)+$/.test(value) ? value : buildBasePath;
 }
 
 /** The base path in the browser: the server render writes it on `<html data-base-path>`
- *  (routes/__root.tsx), before any script runs. */
+ *  (the app's routes/__root.tsx), before any script runs. */
 export function documentBasePath() {
   return document.documentElement.dataset.basePath || "";
 }
@@ -40,7 +40,7 @@ export function underBasePath(basePath: string, url: string) {
     : url;
 }
 
-/** The request as the edge hands a proxied Notes over, its base path stripped: a dev server under
+/** The request as the edge hands a proxied app over, its base path stripped: a dev server under
  *  a tunnel's base path is handed the URL the browser addressed (the tunnel puts it back). */
 export function withoutBuildBasePath(request: Request) {
   if (!buildBasePath) return request;
@@ -51,7 +51,7 @@ export function withoutBuildBasePath(request: Request) {
 
 /** The router's side of the base path: the browser's URL without it on the way in, with it on the
  *  way out. A rewrite, not TanStack's `basepath`, which Start sets from its `router.basepath`
- *  (vite.config.ts) on every request (start-server-core `createStartHandler`, start-client-core
+ *  (the app's vite.config.ts) on every request (start-server-core `createStartHandler`, start-client-core
  *  `hydrateStart`). */
 export function basePathRewrite(basePath: string): LocationRewrite | undefined {
   if (!basePath) return undefined;

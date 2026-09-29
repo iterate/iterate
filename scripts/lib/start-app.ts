@@ -1,5 +1,5 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. An app
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, voice and kit. An app
  * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
  * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
@@ -21,6 +21,7 @@ import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
+  docsEnvs,
   getEnv,
   kitEnvs,
   notesEnvs,
@@ -47,8 +48,11 @@ export interface StartAppEnv {
 
 /** What apps/<app>/scripts/app.ts declares; everything in this module is the same program over it. */
 export interface StartApp {
-  /** "dash": the directory under apps/, the Doppler project and the local-dev worker all carry this name. */
+  /** "dash": the directory under apps/ and the local-dev worker carry this name. */
   name: string;
+  /** The Doppler project whose `preview`/`prd` configs deploy it: the app's own ("dash"), or
+   *  "_shared" for an app with no secrets of its own. */
+  dopplerProject: string;
   /** The app's directory — `new URL("..", import.meta.url)` from scripts/app.ts. */
   root: URL;
   /** The app's map in envs.ts. */
@@ -64,6 +68,7 @@ const FIRST_PARTY_APPS: Record<
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
+  docs: docsEnvs,
   admin: adminEnvs,
   voice: voiceEnvs,
   kit: kitEnvs,
@@ -107,7 +112,7 @@ export function ownZones(): string[] {
  *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
 export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
-  const { env, platform, appOrigins } = linkedEnvironment(app, envName);
+  const { env, platform, appOrigins, pkgPrNewRef } = linkedEnvironment(app, envName);
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -118,6 +123,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     },
     denyZones: ownZones(),
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
+    pkgPrNewRef,
   } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName || app.name,
@@ -159,13 +165,20 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,
-): { env: StartAppEnv | undefined; platform: { baseUrl: string }; appOrigins: string[][] } {
+): {
+  env: StartAppEnv | undefined;
+  platform: { baseUrl: string };
+  appOrigins: string[][];
+  pkgPrNewRef: string;
+} {
   const preview = envName ? previewDeployment(envName) : undefined;
   if (preview)
     return {
       env: preview.apps[app.name],
       platform: preview.os,
       appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
+      // a PR's preview (`pr<N>-<sha7>`) goes with the PR's build, any other run's with main's
+      pkgPrNewRef: /^pr(\d+)$/.exec(preview.prefix)?.[1] || "main",
     };
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
@@ -182,7 +195,7 @@ function linkedEnvironment(
       throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
     return [name, other.baseUrl];
   });
-  return { env, platform, appOrigins };
+  return { env, platform, appOrigins, pkgPrNewRef: "main" };
 }
 
 /** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the
@@ -205,7 +218,7 @@ function workerFirstRoutes(app: StartApp) {
 
 async function deploy(app: StartApp, options: { env: string }) {
   await deployApp(getEnv(options.env, app.envs), {
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
     smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
@@ -214,7 +227,7 @@ async function deploy(app: StartApp, options: { env: string }) {
 
 async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext(getEnv(options.env, app.envs), {
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
