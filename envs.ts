@@ -204,10 +204,10 @@ export const notesEnvs = {
   },
 };
 
-/** apps/docs — Notes' shape: served only under a project's hosts, where its config worker
- *  (apps/docs/config-worker.ts) fetches through to this Worker, whose own URL no one signs in on.
- *  docs.iterate.com is the iterate project's to route (its config worker), so the Worker keeps a
- *  workers.dev origin. */
+/** apps/docs — served only under a project's hosts: a members-only fetch route on the project
+ *  fetches through to this Worker, whose own URL no one signs in on (apps/os/scripts/preview-config.ts
+ *  `proxiedAppRoute` is the route a preview seeds). The prd iterate project routes its `docs` slug
+ *  and docs.iterate.com here, so the Worker keeps a workers.dev origin. */
 export const docsEnvs = {
   // DOCS AT MAIN on the dev/preview account, redeployed in place with the platform
   // (preview-parents.yml). A PR's docs is its own worker (`previewDeployment`).
