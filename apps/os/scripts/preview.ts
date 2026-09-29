@@ -46,6 +46,10 @@ import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts"
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
+import {
+  githubPullRequestBody,
+  writePullRequestBody,
+} from "../../../scripts/ci/pull-request-body.ts";
 import { getSlackClient, keepPage, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
@@ -83,8 +87,6 @@ import {
   PREVIEW_SECTION,
   resolvePreviewPrefix,
   templateQuickLaunches,
-  writePullRequestBody,
-  type PullRequestBody,
 } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
@@ -151,21 +153,9 @@ async function listAll<T>(cf: Cf, route: string) {
 /** The pull request `number` of this repository (GITHUB_REPOSITORY), as Octokit's parameters. */
 const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: Number(number) });
 
-/** The PR's body on GitHub, read and replaced (preview-config.ts `writePullRequestBody`). */
-function pullRequestBody(prNumber: string): PullRequestBody {
-  const github = getOctokit();
-  return {
-    number: prNumber,
-    read: async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "",
-    replace: async (body) => {
-      await github.rest.pulls.update({
-        ...pullRequest(prNumber),
-        body,
-        request: { askOnce: true },
-      });
-    },
-  };
-}
+/** The PR's body on GitHub, written by scripts/ci/pull-request-body.ts `writePullRequestBody`. */
+const pullRequestBody = (prNumber: string) =>
+  githubPullRequestBody(getOctokit(), getRepo(), Number(prNumber));
 
 /** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
 function checkedOutCommit() {

@@ -31,15 +31,18 @@ export function createOctokit(auth: string | undefined) {
  * repeat after a write that did land is harmless. A POST creates (a release, a comment), and a
  * repeat after a 5xx that had landed would create a second one, so a POST's failure is thrown at
  * once, except a commit status: GitHub reports the latest status per context, so a second copy
- * changes nothing (a 503 on the CI trace's status failed Main OS e2e's trace job, 2026-09-24).
+ * changes nothing (a 503 on the CI trace's status failed Main OS e2e's trace job, 2026-09-24),
+ * and a GraphQL query, which is a POST that only reads; a GraphQL mutation is not asked again.
  * A 4xx is an answer about the request and is never asked again. A caller whose write must go out
  * once (a PR body PATCHed from a read seconds earlier) passes `request: { askOnce: true }`.
  */
 export function retryGithubPlatformFailures(octokit: Octokit) {
   octokit.hook.wrap("request", (request, options) => {
     const route = `${options.method} ${options.url}`;
+    const graphqlQuery =
+      route === "POST /graphql" && !/^\s*mutation\b/m.test(String(options.query));
     const repeatable =
-      (idempotentMethods.has(options.method) || repeatableRoutes.has(route)) &&
+      (idempotentMethods.has(options.method) || repeatableRoutes.has(route) || graphqlQuery) &&
       options.request?.askOnce !== true;
     return retryPlatformFailures(async () => request(options), {
       area: "github",
