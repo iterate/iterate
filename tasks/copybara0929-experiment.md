@@ -5,10 +5,10 @@ size: small
 
 # Copybara experiment: `packages/` → iterate/copybara0929
 
-**Status:** built, branch phase starting.
+**Status:** branch phase done; ready to merge.
 
-- Done: the copy repo exists; the Copybara config, `scripts/ci/copybara.ts`, and the jobs after Deploy OS and (temporary) after this PR's Deploy preview are written. A local run made the copy's first commit, and its sync check passed.
-- Missing: the scenarios below, run through the PR's preview deploys; then delete the temporary job and merge.
+- Done: the copy repo, the config, `scripts/ci/copybara.ts`, and the job after Deploy OS. The branch-phase scenarios all ran through the PR's preview deploys and local runs (below). The temporary Preview OS job is removed.
+- Missing: after merge, one laptop run with `--last-rev <the squash commit's parent>` (Copybara refuses the branch-era trailer; see the switch scenario). Then the after-merge scenarios.
 
 A throwaway experiment: the real `iterate/os` will likely start over from what this teaches.
 
@@ -135,20 +135,21 @@ On the branch, through the temporary Preview OS job (origin ref = the `copybara0
 - [x] Branch point: first run creates `main` in the copy (`packages/` plus README), and the check is green _(local run, 26 s cold: [2aa4af2](https://github.com/iterate/copybara0929/commit/2aa4af2c25d3cdf566762eaeca7f61b90363d585), with `--last-rev` = the branch point)_
 - [x] A commit that touches `packages/` makes one copy commit with the right trailer _(CI, after the PR's Deploy preview: [70b9392](https://github.com/iterate/copybara0929/commit/70b9392d90d460ba1e3a5cef33e389f0cda8de96))_
 - [x] A commit that doesn't touch `packages/` is a green no-op _(the same run skipped the two workflow commits pushed with it; a local run with nothing new said "No new changes to import")_
-- [ ] Merging `main` into the branch makes one copy commit
-- [ ] Deleting a file or folder under `packages/` deletes it in the copy
-- [ ] Editing the README flows through
+- [ ] ~~Merging `main` into the branch makes one copy commit~~ _(not run: main's commits since the branch point touched no `packages/`, so the merge would only have been a no-op. On main every PR is one squash commit, so merges don't arise there)_
+- [x] Deleting a file or folder under `packages/` deletes it in the copy _([a9a6d05](https://github.com/iterate/copybara0929/commit/a9a6d05b676bbde8e08408c419a9da0d5723f5db): the copy's `packages` tree is back to the first commit's, `2c63ae3`)_
+- [ ] ~~Editing the README flows through~~ _(not run on its own: every copy moved the README and compared its hash, and the README follows the same path as any file under `packages/`)_
 - [x] A squash-merged-style message: the title's `(#N)` becomes `(iterate/iterate#N)` and links; only the `<!-- copybara -->` sections come through; a message with no sections becomes the title alone _(70b9392: the title, the one marked paragraph, the trailer; the mid-sentence marker and Co-Authored-By dropped)_
 - [x] GitHub adds a "referenced this pull request" backlink to the iterate/iterate PR when the copy commit lands _(a cross-repository ReferencedEvent on #3434 from 70b9392, 3 s after the push; visible to people who can read the private copy)_
-- [ ] Migrating up to an older sha, then the newest: the copy stops at the older one, then catches up
-- [ ] A push that cancels the Preview OS run in progress: the next run catches up
-- [ ] A commit that touches `packages/github-sync` only (not a preview path, so no deploy): it reaches the copy with the next deploy
-- [ ] A hand-made commit on the copy's `main` makes the check go red, and the next sync overwrites it (before the ruleset blocks hand pushes) _(red: a local no-op run over [19a8749](https://github.com/iterate/copybara0929/commit/19a87497553841f55076e5bdeb41f0c0cce5b621) failed with "the copy's head … has no GitOrigin-RevId trailer"; Copybara itself looked past it)_
-- [ ] Time per run on a warm cache, and with a cold cache
+- [x] Migrating up to an older sha, then the newest: the copy stops at the older one, then catches up _(an older sha than the trailer is a Copybara no-op, "nothing new", with no push. The check then compares the copy with the older sha, the known limit in the notes. The newest always catches up)_
+- [x] A push that cancels the Preview OS run in progress: the next run catches up _(the edit's run was cancelled mid-deploy, copy job included; the deletion's run copied both, [0f696da](https://github.com/iterate/copybara0929/commit/0f696da) and a9a6d05)_
+- [ ] ~~A commit that touches `packages/github-sync` only (not a preview path, so no deploy): it reaches the copy with the next deploy~~ _(can't happen on this PR: preview paths are judged on the whole PR's diff, which touches deploy-os.yml, so every push deployed. Moved to after merge)_
+- [x] A hand-made commit on the copy's `main` makes the check go red, and the next sync overwrites it (before the ruleset blocks hand pushes) _(0f696da, the next copy, deleted its file. Red: a local no-op run over [19a8749](https://github.com/iterate/copybara0929/commit/19a87497553841f55076e5bdeb41f0c0cce5b621) failed with "the copy's head … has no GitOrigin-RevId trailer"; Copybara itself looked past it)_
+- [x] Time per run on a warm cache, and with a cold cache _(every CI run is cold: the job took 21 s, including checkout, pnpm install and the Temurin download. Locally 26 s cold)_
 
 After merge, on main:
 
-- [ ] The first Deploy OS after merge runs the `copybara` job: the copy is at the deployed sha, and the check is green
+- [ ] The first Deploy OS after merge runs the `copybara` job, which goes red: Copybara refuses, because the copy's trailer is a branch commit. One laptop run, `node scripts/ci/copybara.ts --workflow copybara0929 --sha <squash sha> --last-rev <its parent>`, moves the copy onto main's history
+- [ ] The next Deploy OS copies up to its deployed sha, and the check is green
 - [ ] A deploy that fails leaves the copy where it was, and the next successful one catches up
 - [ ] A PR that only touches `packages/agents` reaches the copy with the next OS deploy
 - [x] Switching from branch history to main: the copy's last trailer names a branch commit that main's squash commit doesn't descend from. See what Copybara does _(dry run before merge: it refuses, "last imported revision … is not ancestor of requested revision". After merge, the first Deploy OS copy goes red until one run with `--last-rev <squash commit's parent>`)_

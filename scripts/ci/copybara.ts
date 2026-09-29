@@ -1,8 +1,6 @@
 // THE COPYBARA COPY OF packages/ (copybara/copy.bara.sky, tasks/copybara0929-experiment.md): copies
 // iterate/iterate's commits up to a deployed one to iterate/copybara0929's main, then checks that
-// the copy's packages/ and README are that commit's. Deploy OS runs it after a production deploy
-// (workflow `copybara0929`), and the experiment's PR after its Deploy preview
-// (`copybara0929_branch`, which follows the experiment's branch).
+// the copy's packages/ and README are that commit's. Deploy OS runs it after each production deploy.
 //
 //   node scripts/ci/copybara.ts --workflow copybara0929 --sha <deployed sha> [--last-rev <sha>]
 //
@@ -35,7 +33,7 @@ const COMMITTER = {
 
 /** Copies the commits up to `sha` into the copy, then checks the copy is `sha`'s packages/. */
 export default async function copybara(options: {
-  /** The copy.bara.sky workflow: `copybara0929` (main) or `copybara0929_branch`. */
+  /** The copy.bara.sky workflow: `copybara0929`. */
   workflow: string;
   /** The deployed commit to copy up to. */
   sha: string;

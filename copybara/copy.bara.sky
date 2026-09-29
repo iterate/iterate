@@ -2,10 +2,7 @@
 # Copybara copies every commit that touches packages/ or the copy's README to the copy's main, one
 # copy commit per origin commit, each ending in a `GitOrigin-RevId: <origin sha>` trailer. A run
 # copies whatever came after the newest trailer, so a missed run is caught up by the next one.
-# scripts/ci/copybara.ts runs it after a successful deploy.
-#
-# Two workflows, one per origin ref: `copybara0929` follows main (after Deploy OS), and
-# `copybara0929_branch` follows this experiment's branch (after its PR's Deploy preview).
+# scripts/ci/copybara.ts runs it after each successful Deploy OS, up to the deployed commit.
 
 # The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
 # paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
@@ -28,29 +25,25 @@ def copy_message(ctx):
             section.append(line)
     ctx.set_message("\n\n".join([title] + sections) + "\n")
 
-def copy_workflow(name, ref):
-    core.workflow(
-        name = name,
-        origin = git.origin(
-            url = "https://github.com/iterate/iterate",
-            ref = ref,
-            # fetch only what origin_files matches: iterate/iterate is 1.25 GB
-            partial_fetch = True,
-        ),
-        origin_files = glob(["packages/**", "copybara/copybara0929/README.md"]),
-        destination = git.destination(
-            url = "https://github.com/iterate/copybara0929",
-            push = "main",
-            fetch = "main",
-        ),
-        destination_files = glob(["**"]),
-        mode = "ITERATIVE",
-        authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
-        transformations = [
-            core.move("copybara/copybara0929/README.md", "README.md"),
-            copy_message,
-        ],
-    )
-
-copy_workflow(name = "copybara0929", ref = "main")
-copy_workflow(name = "copybara0929_branch", ref = "copybara0929")
+core.workflow(
+    name = "copybara0929",
+    origin = git.origin(
+        url = "https://github.com/iterate/iterate",
+        ref = "main",
+        # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+        partial_fetch = True,
+    ),
+    origin_files = glob(["packages/**", "copybara/copybara0929/README.md"]),
+    destination = git.destination(
+        url = "https://github.com/iterate/copybara0929",
+        push = "main",
+        fetch = "main",
+    ),
+    destination_files = glob(["**"]),
+    mode = "ITERATIVE",
+    authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
+    transformations = [
+        core.move("copybara/copybara0929/README.md", "README.md"),
+        copy_message,
+    ],
+)

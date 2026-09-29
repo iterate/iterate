@@ -67,8 +67,6 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
     specs: "Browser specs",
     [SHARD_JOB]: "Browser specs ${{ matrix.shard }}/11",
     cleanup: "Clean up superseded",
-    // temporary, for PR #3434's branch alone: goes with the job before that PR merges
-    copybara: "Copy packages/ to iterate/copybara0929",
     trace: "CI trace",
   });
   const runs = (job: string) => (preview.jobs[job]?.steps || []).map((step) => step.run);
