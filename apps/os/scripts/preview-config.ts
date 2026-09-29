@@ -168,13 +168,17 @@ export function foldPreviousPreviewSection(body: string) {
 // ── the PR body's sign-in links ───────────────────────────────────────────────────────────────
 
 /** A `Sign in ↗` link (scripts/preview.ts `signInLinks`): the app's own sign-in
- *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — and,
- *  with `loginHint`, naming whom the consent page pre-fills under "Sign in as someone else" for an
- *  admin (src/consent.ts). The admin still confirms it: the link is public, and grants nothing. */
-export function appSignInLink(landing: string, loginHint?: string) {
+ *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — with
+ *  its `hints`: `provider_hint`, the way to sign in the platform's sign-in page leads with (the
+ *  admin issuer, prd, for a reviewer: src/login.server.ts), and `login_hint`, whom the consent page
+ *  pre-fills under "Sign in as someone else" for an admin (src/consent.ts). The admin still confirms
+ *  it: the link is public, and grants nothing. */
+export function appSignInLink(
+  landing: string,
+  hints: { provider_hint: string; login_hint?: string },
+) {
   const url = new URL(landing);
-  const query = new URLSearchParams({ next: `${url.pathname}${url.search}` });
-  if (loginHint) query.set("login_hint", loginHint);
+  const query = new URLSearchParams({ next: `${url.pathname}${url.search}`, ...hints });
   return `${url.origin}/.auth/login?${query}`;
 }
 
@@ -186,21 +190,24 @@ export function appSignInLink(landing: string, loginHint?: string) {
 export const PROXIED_APPS = new Set(["notes", "docs"]);
 
 /** One app's `Sign in ↗` (scripts/preview.ts `signInLinks`), in the PR's test project `project`.
- *  A proxied app's is its page for the project, `<platform>/projects/<project>/<app>/projects/<project>`:
- *  signed out, the edge sends the browser to the platform's sign-in and back (src/worker.ts), where
- *  an admin signs in as themselves, a member of the project (the seed adds them). Its own page for
- *  the project, not its root: the root opens the person's first project, which for an admin may be
- *  another. The Dash's is its own sign-in into the project, naming the test person `email`; the
- *  admin app's names nobody (an admin opens it as themselves); every other app's is its own sign-in
- *  naming the test person (`appSignInLink`). */
+ *  A proxied app's lands on its page for the project,
+ *  `<platform>/projects/<project>/<app>/projects/<project>`, through the platform's sign-in when
+ *  signed out, where an admin signs in as themselves, a member of the project (the seed adds them).
+ *  Its own page for the project, not its root: the root opens the person's first project, which for
+ *  an admin may be another. The Dash's is its own sign-in into the project, naming the test person
+ *  `email`; the admin app's names nobody (an admin opens it as themselves); every other app's is
+ *  its own sign-in naming the test person (`appSignInLink`). Each suggests signing in through
+ *  `providerHint`, the deployment's admin issuer's host. */
 export function signInLinkOf(input: {
   app: { name: string; url: string };
   platform: string;
   ingressRouting: IngressRouting;
   project: string;
   email: string;
+  providerHint: string;
 }) {
   const { app, project, email } = input;
+  const provider_hint = input.providerHint;
   if (PROXIED_APPS.has(app.name)) {
     const page = projectUrlOf(input.ingressRouting, input.platform, {
       project,
@@ -211,11 +218,13 @@ export function signInLinkOf(input: {
       throw new Error(
         `${app.name} in project ${project} is not a path on ${input.platform}: a proxied app's link needs paths ingress, where it runs on the platform's sign-in`,
       );
-    return page.href;
+    // the platform's own sign-in for the app's host, which a signed-in member passes straight on
+    return appSignInLink(page.href, { provider_hint });
   }
-  if (app.name === "dash") return appSignInLink(`${app.url}/projects/${project}`, email);
-  if (app.name === "admin") return appSignInLink(app.url);
-  return appSignInLink(app.url, email);
+  if (app.name === "dash")
+    return appSignInLink(`${app.url}/projects/${project}`, { provider_hint, login_hint: email });
+  if (app.name === "admin") return appSignInLink(app.url, { provider_hint });
+  return appSignInLink(app.url, { provider_hint, login_hint: email });
 }
 
 /** THE FETCH ROUTE the seed sets on the PR's test project for a proxied app the deployment has

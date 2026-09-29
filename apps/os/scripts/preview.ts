@@ -591,6 +591,8 @@ async function deployPreviewSteps(
     ? signInLinks({
         url,
         ingressRouting: osEnv(name)!.ingressRouting || null,
+        // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
+        providerHint: new URL(osEnv(name)!.adminIssuer!).host,
         prNumber,
         apps: deployedApps,
         changedPaths: await changed,
@@ -673,6 +675,8 @@ async function changedPaths(prNumber: string | undefined) {
 function signInLinks(preview: {
   url: string;
   ingressRouting: IngressRouting;
+  /** the admin issuer's host, the way a reviewer signs in */
+  providerHint: string;
   prNumber: string;
   apps: { name: string; url: string }[];
   changedPaths: string[];
@@ -686,6 +690,7 @@ function signInLinks(preview: {
       ingressRouting: preview.ingressRouting,
       project,
       email,
+      providerHint: preview.providerHint,
     });
   const dash = preview.apps.find((app) => app.name === "dash");
   return {
@@ -701,7 +706,7 @@ function signInLinks(preview: {
         }).map(({ name, fromHead, next }) => ({
           name,
           fromHead,
-          link: appSignInLink(next, email),
+          link: appSignInLink(next, { provider_hint: preview.providerHint, login_hint: email }),
         }))
       : [],
     email,

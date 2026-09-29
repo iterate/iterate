@@ -163,8 +163,11 @@ read secrets.
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
-  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
-  (`signInLinkOf` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test&provider_hint=os.iterate.com`
+  (`signInLinkOf` in `apps/os/scripts/preview-config.ts`). `provider_hint`
+  makes the platform's sign-in page lead with **Sign in with os.iterate.com**,
+  the rest one "sign in another way" click away; a hint naming a way the
+  deployment does not offer changes nothing. CI seeds that
   person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
   `seedSignIn`). The PR body is public, so a link grants nothing. The app
   passes `login_hint` on to the issuer, whose consent page opens an admin's
@@ -172,9 +175,9 @@ read secrets.
   own apps. One confirm signs the app in as them for an hour (see
   [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
   the ordinary consent page. Notes and Docs have no sign-in of their own: they
-  run on the platform's, through a project. Their link is the app's page in
-  `pr<N>` (`<platform>/projects/pr<N>/<app>/projects/pr<N>`), which a
-  signed-out browser reaches through the platform's sign-in. The seed gives
+  run on the platform's, through a project. Their link is the platform's own
+  `/.auth/login`, landing on the app's page in `pr<N>`
+  (`/projects/pr<N>/<app>/projects/pr<N>`). The seed gives
   `pr<N>` a fetch route per such app to the deployment's own Worker and makes
   the deployment's admins members of its organization, so a reviewer opens it
   as themselves. A deployment's admins are prd's (`envs.ts`

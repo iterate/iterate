@@ -22,6 +22,15 @@ async function issuerSignIn(request: Request, env: Env) {
   return { ...signedIn, grant: signedIn.grant };
 }
 
+/** Sign in first and come back to this authorization, leading with the way to sign in its
+ *  client's link suggested (`provider_hint`, which iterate/app-server.ts `/.auth/login` passes on). */
+function signInToAuthorize(authorization: string) {
+  return signInHref(
+    `/oauth2/auth${authorization}`,
+    new URLSearchParams(authorization).get("provider_hint"),
+  );
+}
+
 /** What the page shows for this authorization request. A request the provider refuses with a
  *  validated redirect goes back to the client at once. */
 export async function describeConsent(
@@ -31,7 +40,7 @@ export async function describeConsent(
   authorization: string,
 ) {
   const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
+  if (!signedIn) throw redirect({ href: signInToAuthorize(authorization) });
   const addresses = platformAddressesOf(env, request);
   const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
     admittedThisRequest: true,
@@ -60,7 +69,7 @@ export async function createConsentProject(
   input: z.infer<typeof NewConsentProject>,
 ): Promise<{ orgId?: string; error?: string }> {
   const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${input.authorization}`) });
+  if (!signedIn) throw redirect({ href: signInToAuthorize(input.authorization) });
   const teardown = new SessionTeardown();
   const session = new SessionRpcTarget(
     {
@@ -122,7 +131,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
   const form = await request.formData().catch(() => null);
   const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
+  if (!signedIn) return seeOther(signInToAuthorize(authorization));
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),
     scope: form?.getAll("scope"),

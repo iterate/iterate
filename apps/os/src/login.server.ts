@@ -1,6 +1,7 @@
 // The sign-in page's server side: what /login shows for this browser, and what its plain form posts
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
+import { deploymentEnvironment } from "@iterate-com/ui/lib/environment-favicon";
 import { errorCode, sameOriginPath } from "iterate/lib";
 import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
 import { startIssuerSession } from "./issuer-session.ts";
@@ -15,7 +16,7 @@ import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
-import { switchAccountHref, type loginSearchOf } from "./login-search.ts";
+import { signInHref, switchAccountHref, type loginSearchOf } from "./login-search.ts";
 
 /** The sign-in page's data for this request and its search: who is signed in, or which ways to
  *  sign in exist. */
@@ -25,14 +26,19 @@ export async function loginState(
   search: ReturnType<typeof loginSearchOf>,
 ) {
   const config = appConfigOf(env);
-  const next = sameOriginPath(
-    search.next || "/login",
-    platformAddressesOf(env, request).platformOrigin,
-  );
+  const { platformOrigin } = platformAddressesOf(env, request);
+  const next = sameOriginPath(search.next || "/login", platformOrigin);
   const session = await browserAuthorization(env, request);
   return {
+    // which deployment this is (a PR's preview, local dev, production), which the page names
+    environment: deploymentEnvironment(new URL(platformOrigin).hostname),
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
+    // which way to sign in a link suggests (`provider_hint`): signed out, the page leads with it,
+    // when this deployment offers it
+    providerHint: search.provider_hint?.trim().toLowerCase() || null,
+    // this page without the suggestion: every way to sign in
+    everyWay: signInHref(next, null),
     switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
     error: search.error || null,
