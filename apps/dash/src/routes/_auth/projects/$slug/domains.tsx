@@ -321,15 +321,17 @@ function DefaultDomainRow({
   return (
     <li className="flex flex-col gap-2 py-5" data-hostname={url.host}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span aria-hidden className="size-2 shrink-0 rounded-full bg-emerald-500" />
-        <a
-          href={site}
-          target="_blank"
-          rel="noreferrer"
-          className="min-w-0 truncate font-mono text-base hover:underline"
-        >
-          {shown}
-        </a>
+        <span className="flex max-w-full min-w-0 items-center gap-3">
+          <span aria-hidden className="size-2 shrink-0 rounded-full bg-emerald-500" />
+          <a
+            href={site}
+            target="_blank"
+            rel="noreferrer"
+            className="min-w-0 truncate font-mono text-base hover:underline"
+          >
+            {shown}
+          </a>
+        </span>
         <span className="text-sm text-muted-foreground">
           Live · default{primary && " · primary"}
         </span>
@@ -397,19 +399,21 @@ function HostnameRow({
   return (
     <li className="flex flex-col gap-4 py-5" data-hostname={hostname}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
-        {live ? (
-          <a
-            href={`https://${hostname}`}
-            target="_blank"
-            rel="noreferrer"
-            className="min-w-0 truncate font-mono text-base hover:underline"
-          >
-            {hostname}
-          </a>
-        ) : (
-          <span className="min-w-0 truncate font-mono text-base">{hostname}</span>
-        )}
+        <span className="flex max-w-full min-w-0 items-center gap-3">
+          <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
+          {live ? (
+            <a
+              href={`https://${hostname}`}
+              target="_blank"
+              rel="noreferrer"
+              className="min-w-0 truncate font-mono text-base hover:underline"
+            >
+              {hostname}
+            </a>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-base">{hostname}</span>
+          )}
+        </span>
         <span className="text-sm text-muted-foreground">
           {standing.label}
           {primary && " · primary"}
