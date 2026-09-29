@@ -5,11 +5,11 @@ size: small
 
 # Copybara experiment: one-way copies of parts of iterate/iterate
 
-**Status:** round 2 under way. This PR never merges: it's the experiment and the place to bikeshed the real layout.
+**Status:** rounds 1 and 2 done. This PR never merges: it's the experiment and the place to bikeshed the real layout.
 
-- Round 1 (done): `packages/` copied to iterate/copybara0929. Every scenario below ran, and the copy stayed in sync.
-- Round 2 (now): the layout for the real thing (`copybara/`), with two copies, iterate/os0929 and iterate/packages0929.
-- Missing: round 2's first runs and scenarios. iterate/copybara0929 is still to delete: `gh` needs the `delete_repo` scope, which only an interactive login can grant.
+- Round 1: `packages/` copied to iterate/copybara0929. Every scenario below ran, and the copy stayed in sync.
+- Round 2: the layout for the real thing (`copybara/`), with two copies, iterate/os0929 and iterate/packages0929. Each copy got exactly its own commits, and the checks passed.
+- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants). Then the open layout questions: does `iterate/os` build on its own, and which root-only files (LICENSE, issue template) does it get?
 
 ## Why
 
@@ -121,8 +121,9 @@ Commits pushed straight to the experiment branch have no `(#N)`, so their title 
 ### Round 2: iterate/os0929 and iterate/packages0929
 
 - [x] First local run with `--last-rev`: both copies get their first commit, each README lands at its root, and both checks are green _(49 s for both: [os0929 a40ad29](https://github.com/iterate/os0929/commit/a40ad298c42bf48638de253a47a6cd9140da3dd5), [packages0929 b33ddfe](https://github.com/iterate/packages0929/commit/b33ddfe773c5db979dab50e9a26582e63cbe7433). Checked apart from Copybara too: each copied folder's and README's hash equals iterate/iterate's)_
-- [ ] The Preview OS job's run on the same push is a green no-op for both
-- [ ] A commit touching `packages/iterate` lands in os0929 alone; one touching another package lands in packages0929 alone
+- [x] The Preview OS job's run is green for both, and copies nothing that isn't theirs _(the workflow-only commit was skipped by both)_
+- [x] A commit touching `packages/iterate` lands in os0929 alone; one touching another package lands in packages0929 alone _(one CI run, 47 s for both: os0929 got [fa1f53d](https://github.com/iterate/os0929/commit/fa1f53d) (packages/iterate), packages0929 got [741143b](https://github.com/iterate/packages0929/commit/741143b) (packages/agents), both got the delete of both files and one commit for the merge of main. Copybara counted the packages/iterate commit as a candidate for packages0929 and made nothing of it, since the exclude left it empty)_
+- [x] Merging `main` into the branch makes one copy commit per copy it touches _(main brought apps/os and packages/cli changes: [14a7879](https://github.com/iterate/os0929/commit/14a7879), [a94b7df](https://github.com/iterate/packages0929/commit/a94b7df))_
 - [x] Executable files keep their mode (`packages/cli/bin/iterate.js` is `100755`) _(both executables are `100755` in packages0929. The check compares a copy with Copybara's own output, so it wouldn't catch Copybara dropping a mode; the hash comparison against iterate/iterate would)_
 
 ### Round 1: `packages/` → iterate/copybara0929 (repo to delete)
@@ -179,3 +180,4 @@ Through the Preview OS job, with the origin ref being this branch:
 - Round 2 (2026-09-29): Copybara rejects any config file not named `copy.bara.sky` ("Copybara config file filename should be 'copy.bara.sky'"), and has no flag to change that. So per-copy `os.bara.sky` files can't work, and both workflows share `copybara/copy.bara.sky`.
 - Round 2: the iterate App token now covers every copy repo at once. `iterateAppToken` takes `repositories` and finds the App through the org's installation (`/orgs/iterate/installation`), not through one repo.
 - Round 2: `gh repo delete iterate/copybara0929` failed: the `gh` login lacks the `delete_repo` scope, and `gh auth refresh -s delete_repo` needs a browser. Misha to delete it.
+- Round 2: the PR conflicted with main (#3429 changed `resolveEnvContext` to take `getEnv(...)`). A conflicting PR gets no Depot runs, so nothing ran until the merge. The flake dashboard keeps this branch's side, and `iterate-app-token.ts` uses the new signature.
