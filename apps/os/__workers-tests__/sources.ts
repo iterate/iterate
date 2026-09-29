@@ -421,3 +421,19 @@ export default class Site extends WorkerEntrypoint {
 }
 `,
 };
+
+/** A loaded worker whose `deliverEvent(event)` runs `body` with its `itx`. */
+export const deliverEventWorker = (body: string): WorkerSource => ({
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { withItx } from "iterate/with-itx";
+export default class extends WorkerEntrypoint {
+  deliverEvent(event) {
+    return withItx(this.env.ITX, async (itx) => {
+      ${body}
+    });
+  }
+}
+`,
+});
