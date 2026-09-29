@@ -13,6 +13,7 @@ import { reportIssue } from "iterate/lib";
 import { OAuthScope, OAuthScopes } from "iterate/oauth-scopes";
 import type { Principal } from "iterate/principal";
 import { secretsEqual, sha256Hex, verifyAdminSecret } from "./caller.ts";
+import { facetStateOf } from "./context-stub.ts";
 import type { Env } from "./env.ts";
 import type { AccountState, GrantUsed } from "./account/contract.ts";
 import { appendPlatformFacts, ownerContext } from "./session.ts";
@@ -117,17 +118,14 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  (issuer-session.ts `startAccount`), and the consent page says the account is still being set up
  *  while its own read waits (consent-page.server.ts `describeConsent`). */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
-  // `invoke` answers `unknown` across the DO hop; the facet is the platform's own
-  // AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
-  const { state } = (await watchSlowStep(
+  return watchSlowStep(
     { event: "oauth.step-slow", step: "account-state", userId },
-    ownerContext(env.ITERATE_CONTEXT, { account: userId }, "oauth").invoke(
-      ["itx", "facets", ["get", "account"], ["snapshot"]],
-      [],
+    facetStateOf<AccountState>(
+      ownerContext(env.ITERATE_CONTEXT, { account: userId }, "oauth"),
+      "account",
       { principal: null },
     ),
-  )) as { state: AccountState };
-  return state;
+  );
 }
 
 /** Whether `email` is one of the deployment's platform admins (app-config.ts `admins`), as the

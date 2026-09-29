@@ -41,7 +41,7 @@ import {
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
-import { contextStub } from "./context-stub.ts";
+import { contextStub, facetStateOf } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
@@ -234,7 +234,7 @@ export async function appendPlatformFacts(
   const context = ownerContext(contextNamespace, owner, "session");
   const events = Array.isArray(facts) ? facts : [facts];
   const { processor } = ownerAddress(owner);
-  await context.invoke(["itx", "processors", ["enable", processor]], [], caller);
+  await context.invoke(["itx", "builtins", "processors", ["enable", processor]], [], caller);
   const appended = (await context.invoke(["itx", "builtins", ["append", ...events]], [], {
     ...caller,
     platform: true,
@@ -242,7 +242,7 @@ export async function appendPlatformFacts(
   const offset = appended.at(-1)?.offset;
   if (folded && offset !== undefined)
     await context.invoke(
-      ["itx", "facets", ["get", processor], ["waitUntilProcessed", { offset }]],
+      ["itx", "builtins", "facets", ["get", processor], ["waitUntilProcessed", { offset }]],
       [],
       caller,
     );
@@ -284,12 +284,7 @@ async function endLendsOutOfReach(
   userId: string,
 ): Promise<void> {
   const account = ownerContext(input.contextNamespace, { account: userId }, "session");
-  // The platform's own read of the account facet: its contract's state.
-  const { state } = (await account.invoke(
-    ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
-    [],
-    { principal: null },
-  )) as { state: AccountState };
+  const state = await facetStateOf<AccountState>(account, "account", { principal: null });
   const reached = new Set(
     (await input.controlPlane.accessibleTo(userId, true)).projects.map((project) => project.id),
   );
