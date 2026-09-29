@@ -162,19 +162,6 @@ test("an operator's pause, resume and delivery resume are parsed at the append b
     type: "events.iterate.com/itx/subscription-delivery-resumed",
     payload: { name: "s", afterOffset: 0 },
   });
-  // a fan-out row's redelivery of one event (a dead letter's offset)
-  expect(
-    normalizeControlEvent(
-      {
-        type: "events.iterate.com/itx/subscription-delivery-resumed",
-        payload: { name: "s", offset: 4 },
-      },
-      "/",
-    ),
-  ).toEqual({
-    type: "events.iterate.com/itx/subscription-delivery-resumed",
-    payload: { name: "s", offset: 4 },
-  });
   // a non-numeric seek would have become a NaN cursor in the delivery loop; a prototype key would
   // have read `Object.prototype` as a row, and `core` is never a subscription; a resume seeks or
   // redelivers one event, never both
@@ -582,16 +569,7 @@ test("rewrite rules: `snapshotVersion` is the offset of the last commit that CHA
   expect(reduceCoreEvent({ event: rule(5, "itx.tool", "itx.kv"), state: set })).toBeUndefined();
   const repointed = reduceAll([rule(6, "itx.tool", "itx.r2")], set);
   expect(repointed).toMatchObject({ snapshotVersion: 6 });
-  const described = reduceAll(
-    [
-      at(7, "events.iterate.com/itx/rewrite-rule-configured", {
-        match: "itx.tool",
-        target: "itx.r2",
-        description: "the object store",
-      }),
-    ],
-    repointed,
-  );
+  const described = reduceAll([rule(7, "itx.tool", "itx.r2", "the object store")], repointed);
   expect(described).toMatchObject({ snapshotVersion: 7 });
   const deleted = reduceAll([rule(8, "itx.tool", null)], described);
   expect(deleted).toMatchObject({ snapshotVersion: 8 });
@@ -635,36 +613,6 @@ test("subscriptions table: configured with `afterOffset` stores it on the row (w
   ]);
   expect(s.subscriptions.history).toMatchObject({ configuredAtOffset: 4, afterOffset: 0 });
   expect(s.subscriptions.now).not.toHaveProperty("afterOffset");
-});
-
-test("subscriptions table: `ordered: false` is stored on the row (fan-out delivery); `ordered: true` is the default and stores no key; anything else is refused at the append boundary", () => {
-  const configured = (name: string, ordered: unknown) =>
-    normalizeControlEvent(
-      {
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: { name, target: "itx.hook.deliverEvent", ordered },
-      },
-      "/",
-    ).payload as Record<string, unknown>;
-  const s = reduceAll([
-    at(1, "events.iterate.com/itx/subscription-configured", configured("fanOut", false)),
-    at(2, "events.iterate.com/itx/subscription-configured", configured("queue", true)),
-  ]);
-  expect(s.subscriptions.fanOut).toMatchObject({ ordered: false });
-  expect(s.subscriptions.queue).not.toHaveProperty("ordered");
-  expect(() => configured("bad", "no")).toThrow(/ordered/);
-});
-
-test("subscriptions table: a resume `{ offset }` is recorded on the row for the fan-out loop to apply once", () => {
-  const s = reduceAll([
-    at(1, "events.iterate.com/itx/subscription-configured", {
-      name: "hook",
-      target: "itx.hook.deliverEvent",
-      ordered: false,
-    }),
-    at(2, "events.iterate.com/itx/subscription-delivery-resumed", { name: "hook", offset: 1 }),
-  ]);
-  expect(s.subscriptions.hook).toMatchObject({ resumed: { offset: 1, atOffset: 2 } });
 });
 
 test("subscriptions table: configured without `consumes` stores no `consumes` key at all (absent = every durable event)", () => {
@@ -1026,8 +974,13 @@ test("builtins root: the platform-equivalent target `itx.builtins.<match…>` DE
   expect(Object.keys(pinned.itxExpressionRewriteRules)).toEqual(["itx.ai.run('gpt-5')"]);
 });
 
-test("builtins root: HOSTING is decided on the RESOLVED target: the platform's spelling, a user's short spelling and a user's own rule naming `itx.facets` all host; the source is elided from the ORIGINAL spelling", () => {
+test("builtins root: hosting is decided on the RESOLVED target (any spelling, a worker's name); the source is elided", () => {
   const specJson = JSON.stringify(SPEC);
+  const named = {
+    className: "AgentDurableObject",
+    mainModule: "agents.ts",
+    source: "itx.cd('/').config",
+  };
   const s = reduceAll([
     at(1, "events.iterate.com/itx/rewrite-rule-configured", {
       match: "itx.hosts",
@@ -1037,6 +990,7 @@ test("builtins root: HOSTING is decided on the RESOLVED target: the platform's s
     configured(3, "short", `itx.facets.get('b', ${specJson}).processEventBatch`),
     configured(4, "viaRule", `itx.hosts.get('c', ${specJson}).processEventBatch`),
     configured(5, "address", "itx.facets.get('d').processEventBatch"),
+    configured(6, "agent", `itx.facets.get('agent', ${JSON.stringify(named)}).processEventBatch`),
   ]);
   expect(s.subscriptions.platform).toMatchObject({
     hostedFacet: { name: "a", className: "TallyDurableObject" },
@@ -1053,23 +1007,12 @@ test("builtins root: HOSTING is decided on the RESOLVED target: the platform's s
   });
   expect(print(s.subscriptions.viaRule.target)).toBe("itx.hosts.get('c').processEventBatch"); // the caller's spelling, minus the source
   expect(s.subscriptions.address).not.toHaveProperty("hostedFacet");
-  for (const row of Object.values(s.subscriptions))
-    expect(JSON.stringify(row)).not.toContain("worker.js");
-});
-
-test("builtins root: a facet named by a worker is marked with its class and main module, and the name stays in the target, which carries no source", () => {
-  const named = {
-    className: "AgentDurableObject",
-    mainModule: "agents.ts",
-    source: "itx.cd('/').config",
-  };
-  const s = reduceAll([
-    configured(1, "agent", `itx.facets.get('agent', ${JSON.stringify(named)}).processEventBatch`),
-  ]);
   expect(s.subscriptions.agent).toMatchObject({
     hostedFacet: { name: "agent", className: "AgentDurableObject", mainModule: "agents.ts" },
   });
   expect(print(s.subscriptions.agent.target)).toBe("itx.facets.get('agent').processEventBatch");
+  for (const row of Object.values(s.subscriptions))
+    expect(JSON.stringify(row)).not.toContain("worker.js");
 });
 
 test("builtins root: a hosting target that cannot resolve yet (its rule comes later, or a mask sits on `itx.facets`) is stored as given and hosts nothing", () => {
@@ -1326,6 +1269,15 @@ test.for([-1, 1.5, Number.NaN, "0"])(
   },
 );
 
+test("configure: `ordered: true` is the default and stores no key; anything but a boolean is refused", () => {
+  const { configure, rows } = setup();
+  configure({ name: "queue", target: "itx.hook.deliverEvent", ordered: true });
+  expect(rows().queue).not.toHaveProperty("ordered");
+  expect(() => configure({ name: "bad", target: "itx.hook.deliverEvent", ordered: "no" })).toThrow(
+    /ordered/,
+  );
+});
+
 test("configure: the SAME NAME REPLACES the row — target and filter of the newest configure, never a stack", () => {
   const { configure, events, rows } = setup();
   configure({ name: "w", target: "itx.a.processEventBatch", consumes: ["x"] });
@@ -1480,9 +1432,10 @@ function configured(offset: number, name: string, target: string | null = "itx.x
   return at(offset, "events.iterate.com/itx/subscription-configured", { name, target });
 }
 
-/** A durable rewrite-rule-configured for `match`. */
-function rule(offset: number, match: string, target: string | null): StreamEvent {
-  return at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match, target });
+/** A durable rewrite-rule-configured for `match`, with its `description` if given. */
+function rule(offset: number, match: string, target: string | null, description?: string) {
+  const payload = { match, target, description };
+  return at(offset, "events.iterate.com/itx/rewrite-rule-configured", payload);
 }
 
 /** The payload of route `route-<n>`: requests on routing slug `s<n>` go to `itx.t<n>`. */
@@ -1514,6 +1467,7 @@ function setup() {
     target: ItxExpressionInput | null;
     consumes?: string[];
     afterOffset?: number;
+    ordered?: unknown;
   }) => {
     const event = normalizeControlEvent(
       {

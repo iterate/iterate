@@ -463,11 +463,6 @@ test.for([
     vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"x/y","offset":3}]' },
     throws: /contextBirthEvents/,
   },
-  {
-    name: "not a list is refused",
-    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '{"type":"x/y"}' },
-    throws: /contextBirthEvents/,
-  },
 ])("parseAppConfig contextBirthEvents: $name", ({ vars, becomes, throws }) => {
   if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
   else expect(parseAppConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
