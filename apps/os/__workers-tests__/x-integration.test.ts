@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import { DEFAULT_X_SCOPES } from "../src/app-config.ts";
 import {
+  catalog,
   followConsent,
   ORIGIN,
   petshopFakes,
@@ -74,7 +75,7 @@ test("X reconnect refuses a different account before replacing the existing cred
     next: `${ORIGIN}/done`,
   });
   expect(
-    await followConsent(petshop, `${first.authorizationUrl}&user=100`, member.cookie),
+    await followConsent(petshop, `${first.authorizationUrl}&user=110`, member.cookie),
   ).toMatchObject({ status: 303 });
   const second = await member.itx.integrations.connect("x", {
     connection: "bot",
@@ -82,7 +83,7 @@ test("X reconnect refuses a different account before replacing the existing cred
   });
   const refused = await followConsent(
     petshop,
-    `${second.authorizationUrl}&user=200`,
+    `${second.authorizationUrl}&user=210`,
     member.cookie,
   );
   expect({ status: refused.status, body: await refused.text() }).toMatchObject({
@@ -94,7 +95,7 @@ test("X reconnect refuses a different account before replacing the existing cred
       headers: { authorization: 'Bearer getSecret("/secrets/x-bot", { field: "accessToken" })' },
     }),
   );
-  expect(await me.json()).toMatchObject({ data: { id: "100" } });
+  expect(await me.json()).toMatchObject({ data: { id: "110" } });
 });
 
 test("a person's verified X account can be lent to a project and revoked", async () => {
@@ -179,4 +180,60 @@ test.for([
     }),
   );
   expect(await response.json()).toMatchObject({ data: { id: "12345" } });
+});
+
+test("an X account is one connection: a second is refused here and in another project, and free again once disconnected", async () => {
+  const member = await projectWithMember("x-route-here");
+  const other = await projectWithMember("x-route-elsewhere");
+  const petshop = petshopFakes();
+  const connect = async (who: typeof member, connection: string) =>
+    followConsent(
+      petshop,
+      `${(await who.itx.integrations.connect("x", { connection, next: `${ORIGIN}/done` })).authorizationUrl}&user=300&username=jonas`,
+      who.cookie,
+    );
+  const paths = async () =>
+    (await member.itx.secrets.list()).map((secret: { path: string }) => secret.path);
+  expect(await connect(member, "one")).toMatchObject({ status: 303 });
+  const again = await connect(member, "two");
+  expect({ status: again.status, body: await again.text() }).toMatchObject({
+    status: 400,
+    body: expect.stringContaining("already connected at"),
+  });
+  expect(await paths()).toEqual(expect.arrayContaining(["/secrets/x-one"]));
+  expect(await paths()).not.toContain("/secrets/x-two");
+  const elsewhere = await connect(other, "one");
+  expect({ status: elsewhere.status, body: await elsewhere.text() }).toMatchObject({
+    status: 400,
+    body: expect.stringContaining("connected to another project"),
+  });
+  await member.itx.integrations.disconnect("x", "one");
+  expect(await connect(other, "one")).toMatchObject({ status: 303 });
+});
+
+test("a refused reconnect of an X connection that lost its route keeps the connection's token", async () => {
+  const member = await projectWithMember("x-route-lost");
+  const other = await projectWithMember("x-route-took");
+  const petshop = petshopFakes();
+  const consent = async (who: typeof member, scopes?: string[]) =>
+    followConsent(
+      petshop,
+      `${(await who.itx.integrations.connect("x", { connection: "one", scopes, next: `${ORIGIN}/done` })).authorizationUrl}&user=320&username=jonas`,
+      who.cookie,
+    );
+  expect(await consent(member)).toMatchObject({ status: 303 });
+  // a connection made before X was routed holds no route: another project takes the account
+  await catalog().releaseIntegrationRoutes(member.projectId, "/integrations/x/one");
+  expect(await consent(other)).toMatchObject({ status: 303 });
+  const refused = await consent(member, ["tweet.write"]);
+  expect({ status: refused.status, body: await refused.text() }).toMatchObject({
+    status: 400,
+    body: expect.stringContaining("connected to another project"),
+  });
+  const me = await member.itx.fetch(
+    new Request("https://x.test/2/users/me", {
+      headers: { authorization: 'Bearer getSecret("/secrets/x-one", { field: "accessToken" })' },
+    }),
+  );
+  expect(await me.json()).toMatchObject({ data: { id: "320" } });
 });
