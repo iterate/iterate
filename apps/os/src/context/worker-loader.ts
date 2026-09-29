@@ -369,7 +369,6 @@ export async function prepareConfinedWorker(
     enteredThroughPlatform(
       await resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule)),
       PLATFORM_MODULES,
-      where,
     );
   let workerForCode = produce;
   if (state.dead) {

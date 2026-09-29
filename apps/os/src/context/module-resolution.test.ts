@@ -168,48 +168,22 @@ test("iterate/* and zod link this deployment's modules, and only the chunks they
   expectLinked(modules);
 });
 
-test.for([
-  [
-    "a default export and a named class",
-    "export default class extends E {} export class A {}",
-    true,
-  ],
-  ["a class alone", "export class A extends E {}", false],
-  ["a default exported by name", "const a = {}; export { a as default };", true],
-] as const)(
-  "the loader starts a worker from a main that evaluates the platform's module first, then re-exports the worker's main: %s",
-  ([, code, hasDefault]) => {
-    const worker = `import { WorkerEntrypoint as E } from "cloudflare:workers"; ${code}`;
-    const entered = enteredThroughPlatform(
-      { mainModule: "src/worker.js", modules: { "src/worker.js": worker } },
-      platform,
-      "test",
-    );
-    expect(entered).toMatchObject({ mainModule: "node_modules/.platform/main.js" });
-    expect(entered.modules["node_modules/.platform/main.js"]).toBe(
-      `import "./loaded-worker.js";\nexport * from "../../src/worker.js";${hasDefault ? ' export { default } from "../../src/worker.js";' : ""}\n`,
-    );
-    expect(Object.keys(entered.modules).sort()).toEqual([
-      "node_modules/.platform/chunk-a.js",
-      "node_modules/.platform/loaded-worker.js",
-      "node_modules/.platform/main.js",
-      "src/worker.js",
-    ]);
-    expectLinked(entered.modules);
-  },
-);
-
-test("an authored module under the generated main's name is refused", () => {
-  expect(() =>
-    enteredThroughPlatform(
-      {
-        mainModule: "node_modules/.platform/main.js",
-        modules: { "node_modules/.platform/main.js": "" },
-      },
-      platform,
-      "test",
-    ),
-  ).toThrow(/test: node_modules\/\.platform\/main\.js is the platform's/);
+test("the loader starts a worker from its own main module, which imports the platform's module first, on its first line", () => {
+  const worker = `import { WorkerEntrypoint } from "cloudflare:workers";\nexport default class extends WorkerEntrypoint {}`;
+  const entered = enteredThroughPlatform(
+    { mainModule: "src/worker.js", modules: { "src/worker.js": worker } },
+    platform,
+  );
+  expect(entered).toMatchObject({ mainModule: "src/worker.js" });
+  expect(entered.modules["src/worker.js"]).toBe(
+    `import "../node_modules/.platform/loaded-worker.js"; ${worker}`,
+  );
+  expect(Object.keys(entered.modules).sort()).toEqual([
+    "node_modules/.platform/chunk-a.js",
+    "node_modules/.platform/loaded-worker.js",
+    "src/worker.js",
+  ]);
+  expectLinked(entered.modules);
 });
 
 const esmFiles = {

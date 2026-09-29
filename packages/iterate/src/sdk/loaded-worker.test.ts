@@ -28,6 +28,14 @@ test("every WorkerEntrypoint gets callWithCause and getItx, never enumerable: th
     });
 });
 
+test("code outside any call runs under the newest cause its isolate saw, parent and all, never what only a call needs", async () => {
+  const env = { ITX: { get: () => ({ append() {}, [Symbol.dispose]() {} }) } };
+  const entrypoint = Object.assign(new Plain({} as never, env), { env });
+  const cause = { chain: "a test's chain", depth: 2, parent: "/x@4", hops: 3, writeKey: "k" };
+  await entrypoint.callWithCause(cause, [["act"]]);
+  expect(currentCause()).toEqual({ chain: "a test's chain", depth: 2, parent: "/x@4" });
+});
+
 /** A WorkerEntrypoint that is no SDK host: `act` reaches its context through `getItx`. */
 class Plain extends WorkerEntrypoint<{ ITX: object }> {
   // what loaded-worker.ts puts on every WorkerEntrypoint, typed for this test

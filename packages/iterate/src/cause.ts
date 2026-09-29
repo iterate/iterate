@@ -39,8 +39,12 @@ function newCarrier(): Carrier {
   return {
     run(cause, code) {
       // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not kept
-      const { chain, depth } = (cause ?? {}) as { chain?: unknown; depth?: unknown };
-      if (loaded) newest = chain === undefined ? undefined : { chain, depth };
+      const { chain, depth, parent } = (cause ?? {}) as {
+        chain?: unknown;
+        depth?: unknown;
+        parent?: unknown;
+      };
+      if (loaded) newest = chain === undefined ? undefined : { chain, depth, parent };
       return running.run({ cause }, code);
     },
     current,

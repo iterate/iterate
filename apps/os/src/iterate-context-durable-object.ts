@@ -1572,10 +1572,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
     if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
-    this.#stream.appendWakeRecord(
-      { cause: "call", caller: kind, call: verbPathOf(call) },
-      caller.cause,
-    );
+    // the call's name only for the incarnation's first call: every later one skips the formatting
+    if (!this.#stream.wakeRecorded())
+      this.#stream.appendWakeRecord(
+        { cause: "call", caller: kind, call: verbPathOf(call) },
+        caller.cause,
+      );
     this.#residency.inboundCallStarted(kind);
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
       this.#residency.inboundCallEnded(caller.app === true),

@@ -328,26 +328,20 @@ function addPlatformModules(out: ModuleMap, names: string[], platform: PlatformM
 
 /** What every loaded worker evaluates first (iterate src/sdk/loaded-worker.ts), as build.ts names it. */
 const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
-/** The main module the loader starts a worker from, in the platform's own directory. */
-const LOADED_MAIN_MODULE = "node_modules/.platform/main.js";
 
-/** A resolved worker as the loader starts it: from LOADED_MAIN_MODULE, which evaluates the
- *  platform's LOADED_WORKER_MODULE before anything of the worker's, then is the worker's main module
- *  under another name (`aliasModule`: its default export only when it has one). */
+/** A resolved worker as the loader starts it: its main module imports the platform's
+ *  LOADED_WORKER_MODULE before anything of its own — on its first line, so its lines keep their
+ *  numbers — and exports what it always did. */
 export function enteredThroughPlatform(
   resolved: { mainModule: string; modules: ModuleMap },
   platform: PlatformModules,
-  where: string,
 ): { mainModule: string; modules: ModuleMap } {
-  if (Object.hasOwn(resolved.modules, LOADED_MAIN_MODULE))
-    throw new Error(`${where}: ${LOADED_MAIN_MODULE} is the platform's; name the file otherwise`);
   const modules = { ...resolved.modules };
   addPlatformModules(modules, [LOADED_WORKER_MODULE], platform);
-  const platformFirst = JSON.stringify(relativeSpecifier(LOADED_MAIN_MODULE, LOADED_WORKER_MODULE));
   const { mainModule } = resolved;
-  modules[LOADED_MAIN_MODULE] =
-    `import ${platformFirst};\n${aliasModule(LOADED_MAIN_MODULE, mainModule, modules[mainModule]!)}`;
-  return { mainModule: LOADED_MAIN_MODULE, modules };
+  const platformFirst = JSON.stringify(relativeSpecifier(mainModule, LOADED_WORKER_MODULE));
+  modules[mainModule] = `import ${platformFirst}; ${modules[mainModule]}`;
+  return { mainModule, modules };
 }
 
 /** A locked npm graph: every module (each requested specifier's entry under
