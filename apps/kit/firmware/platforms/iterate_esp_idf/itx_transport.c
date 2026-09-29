@@ -742,7 +742,6 @@ static enum iterate_kit_status open_websocket(
 static void network_task(void *context) {
   struct iterate_kit_itx_transport *transport = context;
   struct iterate_kit_retry_gate websocket_retry;
-  struct iterate_kit_retry_gate credential_retry;
   uint32_t wifi_retry_ms = WIFI_RETRY_INITIAL_MS;
   int64_t wifi_retry_at_us = 0;
   bool prior_wifi_connected = false;
@@ -751,10 +750,6 @@ static void network_task(void *context) {
       &websocket_retry,
       WEBSOCKET_RETRY_INITIAL_MS,
       WEBSOCKET_RETRY_MAX_MS);
-  (void)iterate_kit_retry_gate_init(
-      &credential_retry,
-      ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS,
-      ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS);
   atomic_store_u32(&transport->network_task_running, 1U);
   /*
    * Subscribe to the task watchdog so a wedged transport becomes a classified
@@ -793,7 +788,7 @@ static void network_task(void *context) {
        * so repeated pre-mount protocol failures retain exponential backoff.
        */
       iterate_kit_retry_gate_reset(&websocket_retry);
-      iterate_kit_retry_gate_reset(&credential_retry);
+      iterate_kit_itx_credential_retry_mounted(&transport->credential_retry);
     }
 
     if (wifi_connected && !prior_wifi_connected) {
@@ -868,8 +863,8 @@ static void network_task(void *context) {
         !websocket_started &&
         iterate_kit_retry_gate_ready(
             &websocket_retry, now_us) &&
-        iterate_kit_retry_gate_ready(
-            &credential_retry, now_us)) {
+        iterate_kit_itx_credential_retry_ready(
+            &transport->credential_retry, now_us)) {
       enum iterate_kit_status status;
       if (task_stack_headroom_bytes(NULL) <
           ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES) {
@@ -900,7 +895,8 @@ static void network_task(void *context) {
           mark_socket_connected(transport)) {
         websocket_started = true;
         atomic_store_u32(&transport->websocket_started, 1U);
-        atomic_store_u32(&transport->credential_refused, 0U);
+        iterate_kit_itx_credential_retry_upgraded(
+            &transport->credential_retry);
       } else {
         if (status == ITERATE_KIT_OK) {
           remember_platform_error(
@@ -916,14 +912,10 @@ static void network_task(void *context) {
                   : websocket_error(transport));
           iterate_kit_retry_gate_defer(
               &websocket_retry, now_us);
-          if (iterate_kit_itx_refused_credential(
-                  transport->websocket.last_upgrade_status)) {
-            iterate_kit_atomic_saturating_increment_relaxed_u32(
-                &transport->websocket_credential_refusals);
-            atomic_store_u32(&transport->credential_refused, 1U);
-            iterate_kit_retry_gate_defer(
-                &credential_retry, now_us);
-          }
+          (void)iterate_kit_itx_credential_retry_upgrade_failed(
+              &transport->credential_retry,
+              transport->websocket.last_upgrade_status,
+              now_us);
         }
         iterate_kit_websocket_client_close(&transport->websocket);
       }
@@ -1015,7 +1007,9 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
           options->control_outbox) != CAPNWEB_OK ||
       iterate_kit_itx_outbox_sender_init(
           &transport->control_sender,
-          options->control_outbox) != ITERATE_KIT_OK) {
+          options->control_outbox) != ITERATE_KIT_OK ||
+      iterate_kit_itx_credential_retry_init(
+          &transport->credential_retry) != ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   websocket_options = (struct iterate_kit_websocket_client_options){
@@ -1680,10 +1674,11 @@ void iterate_kit_itx_transport_metrics(
   metrics->websocket_errors =
       atomic_load_u32(&transport->websocket_errors);
   metrics->websocket_credential_refusals =
-      atomic_load_u32(
-          &transport->websocket_credential_refusals);
+      iterate_kit_itx_credential_retry_refusals(
+          &transport->credential_retry);
   metrics->credential_refused =
-      atomic_load_u32(&transport->credential_refused) != 0U;
+      iterate_kit_itx_credential_retry_refused(
+          &transport->credential_retry);
   metrics->fatal_failure_latched =
       atomic_load_u32(
           &transport->fatal_failure_latched) != 0U;

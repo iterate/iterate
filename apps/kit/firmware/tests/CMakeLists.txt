@@ -73,6 +73,10 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(
   iterate-kit-conversation-ring-test conversation_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
+# Which upgrade answers refuse the key, and how long a refused key waits, for
+# every platform's transport.
+iterate_kit_add_core_test(
+  iterate-kit-itx-credential-retry-test itx_credential_retry_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(
   iterate-kit-itx-outbox-sender-test itx_outbox_sender_test.c)
@@ -109,13 +113,6 @@ iterate_kit_add_test(
   iterate-kit-esp-tls-stream-test esp_tls_stream_test.c
   ../platforms/iterate_esp_idf/esp_tls_stream.c fakes/esp_tls/fake_esp_tls.c
   INCLUDES fakes/esp_tls ../platforms/iterate_esp_idf/include
-  LINK iterate-kit-core iterate-kit-host-esp-idf)
-
-# Which upgrade answers are a refused key, and how long one waits: the two
-# pure decisions under the ESP network task's credential backoff.
-iterate_kit_add_test(
-  iterate-kit-credential-refusal-test credential_refusal_test.c
-  INCLUDES ../platforms/iterate_esp_idf/include
   LINK iterate-kit-core iterate-kit-host-esp-idf)
 
 # The platform half a loop test needs: a scriptable transport and a
