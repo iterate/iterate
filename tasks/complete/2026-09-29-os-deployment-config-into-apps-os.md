@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -21,7 +21,7 @@ Today apps/os reaches `envs.ts` in two ways:
 Plan ("split the difference"): move (1) into apps/os now and invert (2), so apps/os builds
 self-host and local dev by itself and iterate's deploy tooling hands it every other deployment.
 
-Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Local dev's account: option 1 (below). The build reaches envs.ts no more: the pet shop's origin is the deployment's too.
+Status: done. PR 1 (the moves, iterate/iterate#3447) merged. PR 2 (iterate/iterate#3448): every build gets its deployment from the caller, local dev's account is wrangler's CLOUDFLARE_ACCOUNT_ID, and the build reaches nothing in envs.ts. Every config is unchanged.
 
 ## PR 1: the moves (no behaviour change)
 
@@ -89,9 +89,10 @@ local dev wants their own account. Options:
   `PREVIEW_AND_DEV_ACCOUNT_ID` (generate-wrangler-config.ts) and `UNPROVISIONED` (build.ts →
   scripts/lib/deploy-helpers.ts → env-context.ts). Those are PR 2.
 - PR 1 checks: lint, oxfmt, `pnpm typecheck`, knip, `pnpm --filter os test` (147 files) all pass.
-- PR 2: `OsEnv` as a zod schema rewrites objects in the schema's key order, and `projectWildcard`
-  goes into a var as JSON, so its fields follow envs.ts's order (the diff caught prd's
-  `APP_CONFIG_URLS__PROJECT_WILDCARD` reordering).
+- PR 2: `OsEnv` as a zod schema rewrites objects in the schema's key order. `projectWildcard`'s
+  fields follow envs.ts's order only so the byte-identical check passed (it caught prd's
+  `APP_CONFIG_URLS__PROJECT_WILDCARD` text reordering); the worker parses the var, so key order is
+  cosmetic and needs no comment.
 - PR 2 proof: `viteWranglerConfig` through `deploymentFromEnv` (the JSON round trip `viteBuildOs`
   makes) for all six configs is byte-identical to main's. A real `vite build` of prd, by main's
   `CLOUDFLARE_ENV=prd` and by this branch's `buildOs(getOsEnv("prd"))`, writes the same

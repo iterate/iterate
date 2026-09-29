@@ -39,8 +39,7 @@ export const OsEnv = z.object({
   resourceNamePrefix: z.string(),
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
-   *  specific Worker routes on that zone continue to take precedence. Its keys are in envs.ts's
-   *  order: a parse writes them in the schema's, and the object goes into a var as JSON. */
+   *  specific Worker routes on that zone continue to take precedence. */
   projectWildcard: z
     .object({
       hostname: z.string(),
