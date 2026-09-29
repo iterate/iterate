@@ -43,7 +43,7 @@ test("the apply link names our template, carries domain, host and redirect_uri, 
       host: "iterate",
       project: "prj_1",
       redirectUri:
-        "https://dash.iterate.com/projects/prj_1/hostnames?connected=iterate.templestein.com",
+        "https://dash.iterate.com/projects/prj_1/domains?connected=iterate.templestein.com",
       privateKey,
     }),
   );
@@ -55,7 +55,7 @@ test("the apply link names our template, carries domain, host and redirect_uri, 
     host: "iterate",
     project: "prj_1",
     redirect_uri:
-      "https://dash.iterate.com/projects/prj_1/hostnames?connected=iterate.templestein.com",
+      "https://dash.iterate.com/projects/prj_1/domains?connected=iterate.templestein.com",
     key: "_dck1",
   });
   // Cloudflare requires `sig` last

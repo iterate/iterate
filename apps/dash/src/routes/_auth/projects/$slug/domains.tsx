@@ -1,4 +1,8 @@
-// /projects/<slug>/hostnames — the project's own hostnames: `iterate.example.com` serves the project's
+// /projects/<slug>/domains — where the project is served. First its DEFAULT DOMAIN under the
+// deployment's ingress (`projectHostOf`), which always works and can't be removed: primary until
+// another is made primary, then a page visit on it redirects there (apps/os
+// primary-hostname-redirect.ts), and its apps' addresses show which routing the deployment uses.
+// Then the project's own hostnames: `iterate.example.com` serves the project's
 // site and `<app>.iterate.example.com` its apps. The `project` facet's LIVE STATE on `/` is the list
 // (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
 // and the CNAMEs the owner adds, and which live hostname is primary. Every act appends ONE event to
@@ -29,7 +33,9 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { cn } from "cn";
 import { useContextStub, useFacetLiveState } from "iterate/react";
+import type { IngressRouting } from "iterate/project-ingress";
 import { DNS_PROVIDER_GUIDES, type DnsProviderGuide } from "../../../../lib/dns-provider-guides.ts";
+import { projectHostOf } from "../../../../lib/origins.ts";
 
 const shell = getRouteApi("/_auth");
 
@@ -83,7 +89,7 @@ function standingOf(entry: Hostname) {
   return { label: "Connect your DNS", dot: "bg-amber-500" };
 }
 
-export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
+export const Route = createFileRoute("/_auth/projects/$slug/domains")({
   validateSearch: z.object({
     add: z.literal(1).optional().catch(undefined),
     /** the hostname a Domain Connect provider just wrote the records for */
@@ -92,14 +98,14 @@ export const Route = createFileRoute("/_auth/projects/$slug/hostnames")({
     error: z.string().optional().catch(undefined),
     error_description: z.string().optional().catch(undefined),
   }),
-  staticData: { page: "Hostnames" },
-  head: ({ params }) => ({ meta: [{ title: `Hostnames · ${params.slug} · Dash` }] }),
-  component: ProjectHostnames,
+  staticData: { page: "Domains" },
+  head: ({ params }) => ({ meta: [{ title: `Domains · ${params.slug} · Dash` }] }),
+  component: ProjectDomains,
 });
 
-function ProjectHostnames() {
+function ProjectDomains() {
   const { project } = Route.useRouteContext();
-  const { api } = shell.useRouteContext();
+  const { api, info } = shell.useRouteContext();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const context = useContextStub(() => api.projects.get(project.id), [api, project.id]).stub;
@@ -107,6 +113,7 @@ function ProjectHostnames() {
   const read = live.value ? HostnamesLive.safeParse(live.value) : undefined;
   const hostnames = Object.entries(read?.data?.hostnames || {});
   const primaryHostname = read?.data?.primaryHostname || null;
+  const defaultSite = projectHostOf(info, project.slug);
   const loadError = live.error || (read?.error && z.prettifyError(read.error));
   const [error, setError] = useState<string | null>(null);
   const append = (event: { type: string; payload: { hostname: string | null } }) =>
@@ -198,10 +205,10 @@ function ProjectHostnames() {
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
       <div className="flex flex-col gap-1">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-semibold tracking-tight">Hostnames</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Domains</h1>
           <Button disabled={!context} onClick={() => void navigate({ search: { add: 1 } })}>
             <Plus data-icon="inline-start" />
-            Add hostname
+            Add domain
           </Button>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -214,30 +221,35 @@ function ProjectHostnames() {
           {error}
         </p>
       )}
-      {loadError ? (
+      {loadError && (
         <p role="alert" className="text-sm text-destructive">
-          Couldn't load this project's hostnames: {loadError}
+          Couldn't load this project's domains: {loadError}
         </p>
-      ) : !read ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : hostnames.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No hostnames yet.</p>
-      ) : (
-        <ul className="flex flex-col divide-y" data-testid="hostnames">
-          {hostnames.map(([hostname, entry]) => (
-            <HostnameRow
-              key={hostname}
-              hostname={hostname}
-              entry={entry}
-              primary={hostname === primaryHostname}
-              onCheck={() => void request("add", hostname)}
-              onAdd={(other) => void request("add", other)}
-              onRemove={() => void request("remove", hostname)}
-              onPrimary={(on) => void configurePrimary(on ? hostname : null)}
-            />
-          ))}
-        </ul>
       )}
+      <ul className="flex flex-col divide-y" data-testid="domains">
+        {defaultSite && (
+          <DefaultDomainRow
+            site={defaultSite}
+            routing={info.ingressRouting}
+            primary={Boolean(read?.data) && !primaryHostname}
+            primaryHostname={primaryHostname}
+            onPrimary={() => void configurePrimary(null)}
+          />
+        )}
+        {!read && !loadError && <li className="py-5 text-sm text-muted-foreground">Loading…</li>}
+        {hostnames.map(([hostname, entry]) => (
+          <HostnameRow
+            key={hostname}
+            hostname={hostname}
+            entry={entry}
+            primary={hostname === primaryHostname}
+            onCheck={() => void request("add", hostname)}
+            onAdd={(other) => void request("add", other)}
+            onRemove={() => void request("remove", hostname)}
+            onPrimary={(on) => void configurePrimary(on ? hostname : null)}
+          />
+        ))}
+      </ul>
       <Sheet
         open={search.add === 1}
         onOpenChange={(open) => !open && !pending && void navigate({ search: {}, replace: true })}
@@ -248,7 +260,7 @@ function ProjectHostnames() {
         >
           <form onSubmit={(event) => void add(event)} className="flex h-full flex-col">
             <SheetHeader>
-              <SheetTitle>Add hostname</SheetTitle>
+              <SheetTitle>Add domain</SheetTitle>
               <SheetDescription>
                 A domain or subdomain you control, like <code>example.com</code> or{" "}
                 <code>iterate.example.com</code>. Its apps get one label more:{" "}
@@ -257,7 +269,7 @@ function ProjectHostnames() {
             </SheetHeader>
             <FieldGroup className="flex-1 p-4">
               <Field>
-                <FieldLabel htmlFor="hostname">Hostname</FieldLabel>
+                <FieldLabel htmlFor="hostname">Domain</FieldLabel>
                 <Input
                   id="hostname"
                   name="hostname"
@@ -275,13 +287,85 @@ function ProjectHostnames() {
             <SheetFooter className="border-t sm:flex-row sm:justify-end">
               <SheetClose render={<Button variant="outline" type="button" />}>Cancel</SheetClose>
               <Button type="submit" disabled={pending}>
-                {pending ? "Adding…" : "Add hostname"}
+                {pending ? "Adding…" : "Add domain"}
               </Button>
             </SheetFooter>
           </form>
         </SheetContent>
       </Sheet>
     </div>
+  );
+}
+
+/** The project's default domain under the deployment's ingress: always live, never removable, the
+ *  primary until one of the project's own hostnames is — then a page visit on it redirects there
+ *  (subdomains routing only; paths routing shares the platform's origin and never redirects). Its
+ *  apps' address says which routing the deployment uses. */
+function DefaultDomainRow({
+  site,
+  routing,
+  primary,
+  primaryHostname,
+  onPrimary,
+}: {
+  site: string;
+  routing: IngressRouting;
+  /** the live state has loaded and no hostname of the project's own is primary */
+  primary: boolean;
+  primaryHostname: string | null;
+  onPrimary: () => void;
+}) {
+  const url = new URL(site);
+  const shown = `${url.host}${url.pathname.replace(/\/$/, "")}`;
+  const redirects = Boolean(primaryHostname) && routing?.type === "subdomains";
+  return (
+    <li className="flex flex-col gap-2 py-5" data-hostname={url.host}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="flex max-w-full min-w-0 items-center gap-3">
+          <span aria-hidden className="size-2 shrink-0 rounded-full bg-emerald-500" />
+          <a
+            href={site}
+            target="_blank"
+            rel="noreferrer"
+            className="min-w-0 truncate font-mono text-base hover:underline"
+          >
+            {shown}
+          </a>
+        </span>
+        <span className="text-sm text-muted-foreground">
+          Live · default{primary && " · primary"}
+        </span>
+        {primaryHostname && (
+          <div className="ml-auto flex gap-1">
+            <Button variant="ghost" size="sm" onClick={onPrimary}>
+              Make primary
+            </Button>
+          </div>
+        )}
+      </div>
+      <div className="flex max-w-2xl flex-col gap-1 pl-5 text-sm text-muted-foreground">
+        <p>
+          Always works and can't be removed.
+          {redirects && (
+            <>
+              {" "}
+              Page visits redirect to <code>{primaryHostname}</code>, the primary.
+            </>
+          )}
+        </p>
+        <p>
+          {routing?.type === "subdomains" ? (
+            <>
+              Hostname routing: each app is at <code>&lt;app&gt;--{url.host}</code>.
+            </>
+          ) : (
+            <>
+              Path routing: each app is at <code>{shown}/&lt;app&gt;</code>.
+            </>
+          )}
+        </p>
+      </div>
+    </li>
   );
 }
 
@@ -315,27 +399,29 @@ function HostnameRow({
   return (
     <li className="flex flex-col gap-4 py-5" data-hostname={hostname}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
-        {live ? (
-          <a
-            href={`https://${hostname}`}
-            target="_blank"
-            rel="noreferrer"
-            className="truncate font-mono text-base hover:underline"
-          >
-            {hostname}
-          </a>
-        ) : (
-          <span className="truncate font-mono text-base">{hostname}</span>
-        )}
+        <span className="flex max-w-full min-w-0 items-center gap-3">
+          <span aria-hidden className={cn("size-2 shrink-0 rounded-full", standing.dot)} />
+          {live ? (
+            <a
+              href={`https://${hostname}`}
+              target="_blank"
+              rel="noreferrer"
+              className="min-w-0 truncate font-mono text-base hover:underline"
+            >
+              {hostname}
+            </a>
+          ) : (
+            <span className="min-w-0 truncate font-mono text-base">{hostname}</span>
+          )}
+        </span>
         <span className="text-sm text-muted-foreground">
           {standing.label}
           {primary && " · primary"}
         </span>
         <div className="ml-auto flex gap-1">
-          {live && (
-            <Button variant="ghost" size="sm" onClick={() => onPrimary(!primary)}>
-              {primary ? "Clear primary" : "Make primary"}
+          {live && !primary && (
+            <Button variant="ghost" size="sm" onClick={() => onPrimary(true)}>
+              Make primary
             </Button>
           )}
           {standing.label === "Failed" && (
