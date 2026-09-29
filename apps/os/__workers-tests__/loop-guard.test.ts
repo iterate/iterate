@@ -134,7 +134,12 @@ test("cause-table: a retried delivery runs at its first depth and writes nothing
   );
   const [spoken] = await said(ctx);
   const done = await eventually(ctx, "test/done", 20_000); // the first rung is a second out
-  expect(causeOf(done)).toEqual({ chain: causeOf(spoken!).chain, depth: 1 });
+  // its parent is the event it was delivered for
+  expect(causeOf(done)).toEqual({
+    chain: causeOf(spoken!).chain,
+    depth: 1,
+    parent: `${spoken!.path}@${spoken!.offset}`,
+  });
   const log = await readLog(ctx);
   for (const type of ["test/a", "test/x", "test/b"]) expect(ofType(log, type)).toHaveLength(1);
   expect(ofType(await readLog(at(ctx, "/sink")), "test/sunk")).toHaveLength(1);
@@ -254,9 +259,13 @@ test("agent-turns-one-depth: an agent's turns stay at its trigger's depth; only 
     60_000, // ten scripts, each in an isolate of its own
   );
   const turns = (depth: number) => Array.from({ length: 10 }, () => ({ chain, depth }));
-  expect(ofType(log, "events.iterate.com/itx/run-requested").map(causeOf)).toEqual(turns(0));
-  expect(ofType(log, RUN_SETTLED).map(causeOf)).toEqual(turns(0));
-  expect(ofType(log, "test/effect").map(causeOf)).toEqual(turns(1));
+  // each turn's parent is the event it handled: what was said, then the settlement before it
+  const handled = [spoken!, ...ofType(log, RUN_SETTLED).slice(0, 9)];
+  expect(ofType(log, "events.iterate.com/itx/run-requested").map(causeOf)).toEqual(
+    handled.map((event) => ({ chain, depth: 0, parent: `${event.path}@${event.offset}` })),
+  );
+  expect(ofType(log, RUN_SETTLED).map(causeOf)).toMatchObject(turns(0));
+  expect(ofType(log, "test/effect").map(causeOf)).toMatchObject(turns(1));
 });
 
 test("a read records nothing: a context read for its table, asleep or unborn, is neither woken nor born", async () => {

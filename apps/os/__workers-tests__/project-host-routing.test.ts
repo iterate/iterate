@@ -8,6 +8,7 @@ import {
   catalog,
   fakeCloudflareCustomHostnames,
   ORIGIN,
+  readLog,
   releasePins,
   SRC_ECHO_APP,
   stub,
@@ -299,6 +300,35 @@ test("a project's primary hostname: once a live hostname is made primary, itx.ur
   const onPrimary = await call("https://echo.primary.somedomain.test/", { headers: navigate });
   expect(onPrimary).toMatchObject({ status: 200 });
 });
+
+test("a visit begins a chain that names its host and Cloudflare's ray, so what it causes joins Cloudflare's request log", async () => {
+  using session = await api();
+  const itx = await session.authenticate(ADMIN).projects.create({ project: "ray-chain" });
+  const { projectId } = await itx.whoami();
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_VISIT_SITE }]]);
+  const headers = { "cf-ray": "8f1c2d3e4f5a6b7c-LHR" };
+  const visit = await call("https://ray-chain.projects.test/", { headers });
+  expect(visit, await visit.clone().text()).toMatchObject({ status: 200 });
+  const [visited] = (await readLog(projectId)).filter(({ type }) => type === "test/visited");
+  expect(visited?.source.cause).toMatchObject({
+    chain: expect.stringMatching(
+      / with a request to ray-chain\.projects\.test \(ray 8f1c2d3e4f5a6b7c-LHR\) ~/,
+    ),
+    depth: 0,
+  });
+});
+
+/** A config worker that records each visit on its project's log. */
+const SRC_VISIT_SITE = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
+  async fetch() {
+    await this.withItx((itx) => itx.append({ type: "test/visited" }));
+    return new Response("visited");
+  }
+}`,
+};
 
 /** A config worker that says which host it answered, and the routing slug it saw. */
 const SRC_HOSTNAME_SITE = {

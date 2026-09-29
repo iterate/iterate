@@ -327,7 +327,9 @@ export class ProjectProcessor extends StreamProcessor<
             {
               commitOid: event.payload.commitOid,
               offset: event.offset,
-              ...(event.source?.cause && { cause: event.source.cause }),
+              ...(event.source?.cause && {
+                cause: { ...event.source.cause, parent: `${event.path}@${event.offset}` },
+              }),
             },
           ],
         };

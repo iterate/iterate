@@ -48,12 +48,19 @@ function newCarrier(): Carrier {
       loaded = true;
       const outbound = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
-        const cause = current() as { chain?: unknown; depth?: unknown; hops?: unknown } | undefined;
+        const cause = current() as
+          | { chain?: unknown; depth?: unknown; hops?: unknown; parent?: unknown }
+          | undefined;
         const request = new Request(input, init);
-        // the mark alone, never what only a call needs (the delivery its writes are keyed by)
+        // the mark alone, never what only a call needs (the delivery its writes are keyed by); a
+        // header is bytes, so a parent in other characters than printable ASCII stays behind
         if (cause) {
-          const { chain, depth, hops } = cause;
-          request.headers.set(ITERATE_CAUSE_HEADER, JSON.stringify({ chain, depth, hops }));
+          const { chain, depth, hops, parent } = cause;
+          const ascii = typeof parent === "string" && /^[\x20-\x7e]*$/.test(parent);
+          request.headers.set(
+            ITERATE_CAUSE_HEADER,
+            JSON.stringify({ chain, depth, hops, ...(ascii && { parent }) }),
+          );
         }
         const answer = await outbound(request);
         // a request refused past the loop limit answers 508, marked: it throws as the refusal it is

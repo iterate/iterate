@@ -718,11 +718,13 @@ export class ProcessorEngine<State> {
       return emittedEvents;
     };
     // A PROCESSOR'S EFFECTS (apps/os src/cause.ts), each bound to its event's cause — an eventless
-    // pass, the newest one's: what it appends to its own log keeps that depth, so an agent's own
-    // turns stay flat, and anything else it does is code reacting to code, one hand-off deeper.
-    if (event?.source?.cause) this.#headCause = event.source.cause;
+    // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
+    // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
+    // code, one hand-off deeper.
+    if (event?.source?.cause)
+      this.#headCause = { ...event.source.cause, parent: `${event.path}@${event.offset}` };
     const own = this.#headCause;
-    const beyond = own && { chain: own.chain, depth: own.depth + 1 };
+    const beyond = own && { ...own, depth: own.depth + 1 };
     const under = <T>(cause: EventCause | undefined, work: () => T): T => runCausedBy(cause, work);
     under(beyond, () =>
       this.processor.processEvent({
@@ -778,8 +780,9 @@ export class ProcessorEngine<State> {
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
 // runtime validator (the processor contract section below has the zod half).
 
-/** Why an event happened (`source.cause`). */
-type EventCause = { chain: string; depth: number };
+/** Why an event happened (`source.cause`): its chain, its depth, and the event whose handling wrote
+ *  it (`<path>@<offset>`), if any. */
+type EventCause = { chain: string; depth: number; parent?: string };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
@@ -798,8 +801,9 @@ export type StreamEventInput = {
      *  context's own path. */
     origin?: string;
     /** WHY IT HAPPENED, stamped by the platform (a writer's own is dropped): the chain of reactions
-     *  it belongs to — when and where that began — and how many hand-offs deep in it. Past 8, code
-     *  reacting to code may read but not act, and the `itx/loop-limit` fact says where it stopped. */
+     *  it belongs to — when and where that began — how many hand-offs deep in it, and the event
+     *  whose handling wrote it. Past 8, code reacting to code may read but not act, and the
+     *  `itx/loop-limit` fact says where it stopped. */
     cause?: EventCause;
     /** The durable schedule definition responsible for this occurrence. */
     schedule?: {

@@ -238,6 +238,11 @@ const SNAPSHOT_CLOCK_SLACK_MS = 250;
  *  clock, and the names the commits behind it took away. */
 type RevocationFence = { until: number; takenAway: ItxExpressionPrefix[] };
 
+/** A call as its wake record names it: the names of its steps, never their arguments
+ *  (`itx.repos.get.modules`). */
+const verbPathOf = (call: ItxExpressionInput): string =>
+  normalizedItxExpression(call).map(itxExpressionStepName).join(".").slice(0, 200);
+
 /** The events that write what a rule snapshot carries: a repeat of one waits a pending fence out. */
 const SNAPSHOT_ROW_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/itx/rewrite-rule-configured",
@@ -639,7 +644,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Inbound append: an inbound call and a `call` wake, then the commit and the committed-event
    *  effects. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#inboundRequestInOneTurn(deepestCause(events.map((event) => event.source?.cause)));
+    this.#inboundRequestInOneTurn(
+      "append",
+      deepestCause(events.map((event) => event.source?.cause)),
+    );
     return this.#appendWaitingOutOlderSnapshots(events);
   }
 
@@ -750,11 +758,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
-   *  `call` wake record, of the census's kind, caused by `cause` when the call names one. */
-  #inboundRequestInOneTurn(cause?: Cause): void {
+   *  `call` wake record, of the census's kind, naming the entry point `call`, caused by `cause` when
+   *  the call names one. */
+  #inboundRequestInOneTurn(call: string, cause?: Cause): void {
     if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
-    this.#stream.appendWakeRecord({ cause: "call", caller: "other" }, cause);
+    this.#stream.appendWakeRecord({ cause: "call", caller: "other", call }, cause);
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
@@ -796,7 +805,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     limit = 500,
     options: { includeEphemeral?: boolean } = {},
   ): Promise<StreamPage> {
-    this.#inboundRequestInOneTurn();
+    this.#inboundRequestInOneTurn("read");
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
@@ -1563,7 +1572,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
     if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
-    this.#stream.appendWakeRecord({ cause: "call", caller: kind }, caller.cause);
+    this.#stream.appendWakeRecord(
+      { cause: "call", caller: kind, call: verbPathOf(call) },
+      caller.cause,
+    );
     this.#residency.inboundCallStarted(kind);
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
       this.#residency.inboundCallEnded(caller.app === true),
@@ -1605,7 +1617,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   recordLoopLimit(cause: unknown, message: string): void {
     const refused = parseCause(cause);
     if (!refused || this.#stream.highestDurableOffset() === 0) return;
-    this.#inboundRequestInOneTurn();
+    this.#inboundRequestInOneTurn("recordLoopLimit");
     this.#stream.recordLoopLimit(refused, String(message));
   }
 
@@ -1672,7 +1684,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const fromLoadedCode = request.headers.get(ITX_APP_HEADER) !== null;
     const kind = fromLoadedCode ? "loaded" : "other";
     this.#stream.appendWakeRecord(
-      { cause: "call", caller: kind },
+      { cause: "call", caller: kind, call: "fetch" },
       parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     );
     this.#residency.inboundCallStarted(kind);
@@ -1890,13 +1902,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    this.#inboundRequestInOneTurn();
+    this.#inboundRequestInOneTurn("webSocketMessage");
     // Fetch-upgrade frames only (eyeball ⇄ upgrade leg); a pager socket's inbound payloads carry
     // nothing this DO acts on.
     this.#rpcStubFetch.handleWebSocketMessage(ws, message);
   }
   webSocketClose(ws: WebSocket, code: number, reason: string): void {
-    this.#inboundRequestInOneTurn();
+    this.#inboundRequestInOneTurn("webSocketClose");
     if (this.#rpcStubFetch.handleWebSocketClose(ws, code, reason)) return;
     this.#rpcStubs.rpcStubPagerClosed(ws);
   }
@@ -1911,7 +1923,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  permissively and the directory types it. (The pager has no verb: it is the
    *  `x-itx-rpc-stub-pager` upgrade at `fetch`.) */
   lendRpcStub(input: { rpcStubKey: string; stub: unknown }): void {
-    this.#inboundRequestInOneTurn();
+    this.#inboundRequestInOneTurn("lendRpcStub");
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,
       stub: input.stub as BorrowedRpcStub, // unvalidatable by design (the docstring above)

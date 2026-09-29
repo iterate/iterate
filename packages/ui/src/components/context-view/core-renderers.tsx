@@ -65,13 +65,17 @@ export const coreEventRenderers: EventRenderers = {
   "events.iterate.com/itx/created": () => quiet("The context was born"),
   "events.iterate.com/itx/woken": (e) => {
     const p = record(e.payload);
+    // what began the chain that woke it: `<ISO> with <origin> ~<nonce>` (apps/os/src/cause.ts)
+    const began = e.source?.cause?.chain.match(/ with (.*) ~[a-z0-9]+$/)?.[1];
     // the context's Durable Object started again (an eviction, a deploy): purple, as the old feed
-    // drew it, and nothing more
+    // drew it
     return (
       <span className="text-purple-700">
         Woke · {str(p.cause, "?")}
+        {typeof p.call === "string" ? <> {mono(p.call)}</> : ""}
         {Array.isArray(p.due) && p.due.length > 0 ? ` (${p.due.map(String).join(", ")})` : ""}
         {typeof p.caller === "string" ? ` (${p.caller})` : ""} · incarnation {String(p.incarnation)}
+        {began ? ` · began with ${began}` : ""}
       </span>
     );
   },
