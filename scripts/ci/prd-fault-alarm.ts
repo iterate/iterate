@@ -890,17 +890,13 @@ const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
     ],
   },
   {
-    // The ItxEntrypoint invocation that carried Workers AI's streamed Response from a context
-    // Durable Object to a facet (an agent's `itx.ai.run`), cancelled as hung after the whole body
-    // arrived. The reply completes. The runtime's own line: always a message.
+    // The runtime's own line: always a message. The fault is its pin's.
     message: FALSE_HUNG,
     pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
     pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
   },
   {
-    // A context Durable Object that forwards by native fetch a Request it received over Workers
-    // RPC with a body of known length: `cd`'s terminal fetch of a repo's git request from another
-    // context. The upstream read every byte and answered. The runtime's own line: always a message.
+    // The runtime's own line: always a message. The fault is its pin's.
     message: RPC_BODY_ENDED_EARLY,
     pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
     pages: [

@@ -800,8 +800,8 @@ test.for([
   },
 );
 
-// A facet whose own outbound call gave up (a repo's origin overloaded under a deploy, prd
-// 2026-09-28 08:43) rejects with that hop's UNAVAILABLE, workerd's opaque text for its message.
+// A facet whose own outbound call gave up (an overloaded hop) rejects with that hop's UNAVAILABLE,
+// workerd's opaque text for its message: the facet-start defect's text, coded.
 test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try", async () => {
   const ctx = "prj_facet_coded_internal_error";
   const s = stub(ctx);
