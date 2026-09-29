@@ -56,7 +56,7 @@ import {
 } from "iterate/expression";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { crossingOneMore, newChain } from "../cause.ts";
-import type { Caller } from "../caller.ts";
+import { isConfigPointerMatch, type Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
@@ -197,9 +197,6 @@ export type ItxExpressionRewriteRule = {
   target: ItxExpression | null;
   /** The one line a model reads for `match` here (`normalizeRewriteRuleConfigured`). */
   description?: string;
-  /** Written by the platform (the event's `source.platform`): only such a row vouches for the
-   *  manifest of the worker it names (`ItxExpressionResolver#namedWorker`). */
-  platform?: true;
 };
 
 /** The most a rule's target may be, serialized: a target may carry a worker's whole source as
@@ -748,25 +745,6 @@ export function admitLoadedCodeRow(
   admitLoadedCodeExpression(expression, landsAt);
 }
 
-/** THE PROJECT'S CONFIG POINTER IS THE PLATFORM'S: a row on `itx.config…` — a target, a mask, a
- *  removal — lands only from the platform's publication (project/publication.ts), on any context,
- *  so what every birth row delivers to and every facet named by `itx.cd('/').config` loads is a
- *  published commit. Runs at the append boundary on the normalized batch, beside
- *  `refuseLiftingAJail`. */
-export function refuseConfigPointerRows(events: readonly StreamEventInput[], caller: Caller): void {
-  if (caller.platform) return;
-  for (const event of events) {
-    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
-    // Normalized at the append boundary: the match is the parsed prefix.
-    const { match } = event.payload as { match: ItxExpressionPrefix };
-    if (itxExpressionStepName(match[1]) === "config")
-      throw codedError(
-        "FORBIDDEN",
-        "`itx.config` is the project's published config: only the platform's publication writes it (commit to /repos/config)",
-      );
-  }
-}
-
 /** A JAIL IS LIFTED ONLY BY A PERSON. While a context's table holds its bare `itx ⇒ null`, a row that
  *  re-points or removes it lands only from a member's session (a principal). Never from loaded code,
  *  however it got there: its own `itx.append` granted beside the null, a lend's row (which goes with
@@ -1064,8 +1042,9 @@ export class ItxExpressionResolver {
   /** THE WORKER A NAME PUBLISHES, not loaded: `name` (`admitWorkerName`: it only reads rules)
    *  routed as `invoke` would route it, to a RULE of the context `at` whose target is exactly
    *  `itx.builtins.workers.get(spec)` — the spec, that context (the authority its producer runs
-   *  with), whether the platform wrote that rule (`vouched`: only then does its manifest count) and
-   *  how long the answer stands. A facet whose source is a worker's name loads from it
+   *  with), whether that rule is the config pointer, which the platform alone writes (`vouched`:
+   *  only then does its manifest count, caller.ts `isConfigPointerMatch`) and how long the answer
+   *  stands. A facet whose source is a worker's name loads from it
    *  (context/facet-host.ts). A name that ends anywhere else names no worker:
    *  NO_ITX_EXPRESSION_MATCH. */
   async namedWorker(
@@ -1098,7 +1077,7 @@ export class ItxExpressionResolver {
     return {
       at: route.at,
       spec: getStep[1],
-      vouched: publishing.some((rule) => rule.platform),
+      vouched: publishing.some((rule) => isConfigPointerMatch(rule.match)),
       validUntil,
     };
   }

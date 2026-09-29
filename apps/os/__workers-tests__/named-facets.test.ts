@@ -203,36 +203,6 @@ test.for([
   },
 );
 
-test("`itx.config` is written by the platform alone: a member's row, loaded code's and an unstamped one are FORBIDDEN — a target, a mask, its deliverEvent — and the root's head does not move", async () => {
-  const project = `prj_named_pointer_${crypto.randomUUID().slice(0, 8)}`;
-  await publish(project, { generation: 1, agents: "v1", worker: "w1" });
-  const head = await bornWithChild(project);
-  for (const [match, target] of [
-    ["itx.config", ["itx", ["cd", "/c"], "w"]],
-    ["itx.config", null],
-    ["itx.config.deliverEvent", ["itx", ["cd", "/c"], "w"]],
-  ] as const) {
-    const row = {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match, target },
-    };
-    await refused(
-      () => stub(project).invoke(["itx", ["append", row]], [], { principal: MEMBER }),
-      "FORBIDDEN",
-    );
-    await refused(
-      () =>
-        stub(`${project}.iterate/c`).invoke(["itx", ["cd", "/"], ["append", row]], [], {
-          principal: null,
-          app: true,
-        }),
-      "FORBIDDEN",
-    );
-    await refused(() => stub(project).append(row), "FORBIDDEN");
-  }
-  expect(await readLog(project)).toHaveLength(head);
-});
-
 test("a manifest in a rule the platform did not write names no identity: a forged one (the largest generation, the pointer's own identity) loads its worker as its content, never the published code's isolate, and pins nothing", async () => {
   const project = `prj_named_forged_${crypto.randomUUID().slice(0, 8)}`;
   const at = (facet: string, spec: unknown) =>

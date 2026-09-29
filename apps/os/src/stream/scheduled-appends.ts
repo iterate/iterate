@@ -30,7 +30,7 @@ const delay = z
   .max(365 * 24 * 60 * 60 * 1000);
 // An operator's control belongs to the operator's own transition. In particular a scheduled resume
 // cannot release a paused stream: pause deliberately holds every scheduled append. The platform's
-// own records are refused by `normalizeControlEvent` (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`),
+// own records are refused by `normalizeControlEvent` (core-processor.ts `STREAM_RECORD_TYPES`),
 // which runs over every scheduled event.
 const operatorControlEvents = new Set([
   "events.iterate.com/itx/paused",

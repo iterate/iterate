@@ -48,7 +48,7 @@ import {
   type ProjectAddress,
 } from "iterate/project-ingress";
 import type { OAuthIntegrationProvider } from "iterate/api";
-import { sha256Hex } from "./caller.ts";
+import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
 import { normalizeControlEvent } from "./stream/core-processor.ts";
@@ -412,7 +412,9 @@ export const AppConfig = z.object({
     .transform((events) =>
       events.map((event, index) => {
         try {
-          return normalizeControlEvent(event, "/");
+          const normalized = normalizeControlEvent(event, "/");
+          refuseNonPlatformWrites([normalized], { principal: null });
+          return normalized;
         } catch (error) {
           throw new Error(
             `APP_CONFIG contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,

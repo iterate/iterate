@@ -58,6 +58,7 @@ import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
+  refuseNonPlatformWrites,
   sha256Hex,
   stampCaller,
   type Caller,
@@ -107,7 +108,6 @@ import {
   ItxExpressionResolver,
   describeRewriteRules,
   rowsNamingRpcStub,
-  refuseConfigPointerRows,
   refuseLiftingAJail,
   rpcStubKeysNamed,
   implicitRootsAt,
@@ -791,7 +791,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#stream.coreReducedState.itxExpressionRewriteRules,
       this.#caller,
     );
-    refuseConfigPointerRows(normalized, this.#caller);
+    refuseNonPlatformWrites(normalized, this.#caller);
     const committedEvents = this.#stream.append(...normalized);
     this.#takeRevocationFence(stateBeforeCommit);
     // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
@@ -933,7 +933,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   async #executeRun(requestOffset: number, code: string): Promise<void> {
     // WHY IT RUNS: the request's cause; the script one deeper, its settlement a receipt (cause.ts).
     const cause = this.#stream.coreReducedState.scriptRuns[requestOffset]?.cause;
-    // The platform's own record (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`), straight onto the
+    // The platform's own record (core-processor.ts `STREAM_RECORD_TYPES`), straight onto the
     // stream as the wake record's `interrupted` settlements are: no writer can append one.
     const settle = (settlement: RunSettlement) =>
       this.#stream.append({

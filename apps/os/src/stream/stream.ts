@@ -37,7 +37,7 @@ import type { InboundCallKind } from "../context/residency.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,
-  PLATFORM_ONLY_EVENT_TYPES,
+  STREAM_RECORD_TYPES,
   reduceCoreEventBatch,
   type CoreState,
 } from "./core-processor.ts";
@@ -68,7 +68,7 @@ export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
  *  still closes) and the pause/resume
  *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
-  ...PLATFORM_ONLY_EVENT_TYPES,
+  ...STREAM_RECORD_TYPES,
   "events.iterate.com/itx/paused",
   "events.iterate.com/itx/resumed",
   // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
@@ -460,7 +460,7 @@ export class Stream {
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // THE LOOP GUARD (cause.ts): past the limit, code's own events are refused — the platform's
       // records (a receipt, this very fact) still land.
-      if (!PLATFORM_ONLY_EVENT_TYPES.has(eventInput.type))
+      if (!STREAM_RECORD_TYPES.has(eventInput.type))
         this.#refusePastLoopLimit(cause, `an append of ${eventInput.type} to ${this.#path}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked".

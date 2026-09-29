@@ -39,12 +39,7 @@ import {
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Cause } from "../cause.ts";
-import {
-  refusePlatformFacts,
-  refusePlatformIdempotencyKeys,
-  stampCaller,
-  type Caller,
-} from "../caller.ts";
+import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -654,7 +649,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     // Loaded code's rows are walled as they resolve here; the append boundary validates the rest.
     if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
     refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
-    refusePlatformFacts(events, caller);
     // STABLE RETRY EFFECTS (cause.ts): during a delivery, an event without a key of its own is keyed
     // by the delivery, where it lands and what it is — the same on every attempt
     const writeKey = caller.cause?.writeKey;

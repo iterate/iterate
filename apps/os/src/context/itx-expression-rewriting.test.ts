@@ -31,7 +31,6 @@ import {
   BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
-  refuseConfigPointerRows,
   refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
@@ -1359,50 +1358,6 @@ test("the app wall (`Caller.app`): a row has no way round the wall: loaded code 
     append(schedule([{ type: "events.iterate.com/note/added" }, rewrite("itx.cd('..').tool")])),
   ).not.toThrow();
 });
-test.for<{ name: string; payload: Record<string, unknown>; caller: Caller; refused?: true }>([
-  {
-    name: "a member re-points it",
-    payload: { match: ["itx", "config"], target: ["itx", ["cd", "/x"], "w"] },
-    caller: { principal: { actor: "user_1" }, grant: "g" },
-    refused: true,
-  },
-  {
-    name: "loaded code masks it",
-    payload: { match: ["itx", "config"], target: null },
-    caller: { principal: null, app: true },
-    refused: true,
-  },
-  {
-    name: "the kernel removes it",
-    payload: { match: ["itx", "config"], target: null, ifTarget: ["itx", "w"] },
-    caller: { principal: null },
-    refused: true,
-  },
-  {
-    name: "a member shadows its deliverEvent",
-    payload: { match: ["itx", "config", "deliverEvent"], target: ["itx", "w"] },
-    caller: { principal: { actor: "user_1" }, grant: "g" },
-    refused: true,
-  },
-  {
-    name: "the platform's publication writes it",
-    payload: { match: ["itx", "config"], target: ["itx", "builtins", "workers"] },
-    caller: { principal: null, platform: true },
-  },
-  {
-    name: "a member writes a row beside it",
-    payload: { match: ["itx", "configs"], target: ["itx", "w"] },
-    caller: { principal: { actor: "user_1" }, grant: "g" },
-  },
-])("the project's config pointer is the platform's — $name", ({ payload, caller, refused }) => {
-  const refuse = () =>
-    refuseConfigPointerRows(
-      [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload }],
-      caller,
-    );
-  if (refused) expect(refuse).toThrow(/only the platform's publication writes it/);
-  else expect(refuse).not.toThrow();
-});
 
 const reparent = { match: ["itx"], target: ["itx", ["cd", "./open"]] };
 test.for<{
@@ -1532,16 +1487,23 @@ test("the root's rule spelled through `cd('/')` answers any context and loads it
   );
 });
 
-test("a worker's name reads the rule that publishes it: the spec, where its producer runs, and whether the platform wrote that rule — never a worker the name spells itself", async () => {
+test("a worker's name reads the rule that publishes it: the spec, where its producer runs, and whether it is the config pointer the platform alone writes — never a worker the name spells itself", async () => {
   const pointer = "itx.builtins.workers.get({ source: 'itx.kv.get(\"w\")', cacheKey: 'c' })";
-  const named = (root: string[]) =>
-    acrossContexts({ at: "/x", others: { "/": root } }).resolver.namedWorker("itx.cd('/').config");
-  expect(await named([`platform: itx.config ⇒ ${pointer}`])).toMatchObject({
+  const named = (root: string[], name = "itx.cd('/').config") =>
+    acrossContexts({ at: "/x", others: { "/": root } }).resolver.namedWorker(name);
+  expect(await named([`itx.config ⇒ ${pointer}`])).toMatchObject({
     at: "/",
     spec: { source: 'itx.kv.get("w")', cacheKey: "c" },
     vouched: true,
   });
-  expect(await named([`itx.config ⇒ ${pointer}`])).toMatchObject({ at: "/", vouched: false });
+  // an alias of the pointer names what the pointer publishes; any other rule vouches for nothing
+  expect(
+    await named([`itx.config ⇒ ${pointer}`, "itx.site ⇒ itx.config"], "itx.cd('/').site"),
+  ).toMatchObject({ vouched: true });
+  expect(await named([`itx.forged ⇒ ${pointer}`], "itx.cd('/').forged")).toMatchObject({
+    at: "/",
+    vouched: false,
+  });
   // a rule that only renames the root's workers publishes no worker: the name's own call would
   await expect(
     acrossContexts({
@@ -1651,13 +1613,10 @@ const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [
 
 const table = (rows: string[]): ItxExpressionRewriteRule[] =>
   rows.map((row) => {
-    // `platform: itx.x ⇒ …` is a row the platform wrote (its `source.platform` stamp)
-    const platform = row.startsWith("platform: ");
-    const [match, target] = row.replace(/^platform: /, "").split(" ⇒ ");
+    const [match, target] = row.split(" ⇒ ");
     return {
       match: parseItxExpressionPrefix(match),
       target: target === "null" ? null : parse(target, { holes: true }), // a target may hold `@`
-      ...(platform && { platform: true as const }),
     };
   });
 

@@ -27,7 +27,7 @@
 //
 // ONE VALIDATION BOUNDARY: every append through the DO passes `normalizeControlEvent` (below),
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
-// it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
+// it reads and never re-parses. The stream's own records (`STREAM_RECORD_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
 // validation, and `append` refuses them. The route fold parses what it reads all the same
 // (src/fetch-routes.ts): one route that does not compile must never break every request's `match`.
@@ -562,18 +562,15 @@ export function reduceCoreEvent(
             implicitRoots.has(matchPrefix[1]);
       if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
-      // The platform's own row keeps its stamp: only it vouches for a worker's manifest.
-      const platform = event.source?.platform === true ? ({ platform: true } as const) : {};
       // THE SAME ROW AGAIN is no change: a reinstall that restates its rules moves no version, so
       // no snapshot another context holds is invalidated by it (context/rule-snapshots.ts).
       if (
         existing &&
         jsonEqual(existing.target, target) &&
-        existing.description === description.description &&
-        existing.platform === platform.platform
+        existing.description === description.description
       )
         return undefined;
-      return withRule({ match: matchPrefix, target, ...description, ...platform });
+      return withRule({ match: matchPrefix, target, ...description });
     }
 
     case "events.iterate.com/itx/subscription-configured": {
@@ -710,14 +707,14 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
-/** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
+/** THE STREAM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
  *  loop (the halted fact and a fan-out row's dead letter), the DO's alarm (the trace) and its runner
  *  (a run's settlement) straight through `Stream.append`. `normalizeControlEvent` refuses them, so
  *  no caller rewrites who a context is (`created` feeds `implicitRootsAt`), which incarnation runs
  *  or why it woke, halts a subscription row it does not own, reports a delivery that never failed,
  *  or settles a run it did not run (`itx.run` would answer the forgery, and an agent read it as its
  *  own script's result). Each is a receipt, so it lands past the loop limit too (stream.ts). */
-export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
+export const STREAM_RECORD_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
@@ -734,14 +731,14 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  committing a durable no-op. A stream record (`STREAM_RECORD_TYPES`) is refused. Every
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   // A fixed type list isolates the platform's own records. Who may append anything else is not this
   // boundary's question: every event carries the platform's stamp of where it came from
   // (caller.ts `stampCaller`), and a processor that cares decides whom it trusts from that.
-  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
+  if (STREAM_RECORD_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
   // instead of being dropped, and the event is stored as sent (an idempotent retry compares the

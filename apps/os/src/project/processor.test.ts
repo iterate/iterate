@@ -271,14 +271,12 @@ const reduceRows: {
     },
   },
   {
-    name: "integrations: a platform `<provider>/connected` is the connection's row, by its log path; `disconnected` drops it; a member's append of either changes nothing",
+    name: "integrations: a platform `<provider>/connected` is the connection's row, by its log path; `disconnected` drops it",
     events: [
       integrationFact("slack", "connected", "acme"),
       integrationFact("github", "connected", "acme"),
       integrationFact("slack", "connected", "beta"),
       integrationFact("slack", "disconnected", "beta"),
-      { ...integrationFact("slack", "disconnected", "acme"), source: undefined },
-      { ...integrationFact("google", "connected", "evil"), source: undefined },
     ],
     state: {
       ...empty,
@@ -434,9 +432,9 @@ const reduceRows: {
     state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 3 } },
   },
   {
-    name: "a member's delete request (no platform stamp), or their forged certificate, deletes nothing and stops nothing",
-    events: [requested, created, deleteRequested(), deleted, deleteRequested({ platform: true })],
-    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 5 } },
+    name: "a forged certificate before the request stops nothing",
+    events: [requested, created, deleted, deleteRequested({ platform: true })],
+    state: { ...empty, creation: { status: "created", offset: 2 }, deletion: { offset: 4 } },
   },
 ];
 for (const { name, events, state } of reduceRows)

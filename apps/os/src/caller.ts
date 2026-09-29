@@ -4,11 +4,11 @@
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
 import { INTEGRATION_PROVIDERS } from "iterate/api";
+import { itxExpressionStepName, type ItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { storedCause, type Cause } from "./cause.ts";
-import { ScheduledAppendInput } from "./stream/scheduled-appends.ts";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -118,7 +118,7 @@ export function refusePlatformIdempotencyKeys(
 
 /** THE PLATFORM'S FACTS: the types only the platform appends, each stamped `source.platform` —
  *  whoever reads one trusts it by its type alone (a config repo's `processEvent` switches on it) —
- *  so the append boundary refuses anyone else's (`refusePlatformFacts`), on every context. The
+ *  so the append boundary refuses anyone else's (`refuseNonPlatformWrites`), on every context. The
  *  account's, the organization's and the instance's facts on the global contexts are not here:
  *  their processors fold only the platform's stamp, and a person's own append of one stays on their
  *  log as theirs. */
@@ -146,24 +146,35 @@ export type PlatformFactType = (typeof PLATFORM_FACT_TYPE_LIST)[number];
 
 export const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set(PLATFORM_FACT_TYPE_LIST);
 
-/** A PLATFORM FACT FROM ANYONE BUT THE PLATFORM IS REFUSED (`PLATFORM_FACT_TYPES`), appended or
- *  scheduled: an occurrence fires under its schedule's stamp, so what one may not append it may not
- *  schedule. */
-export function refusePlatformFacts(
-  events: readonly { type: string; payload?: unknown }[],
-  caller: Caller,
-): void {
+/** Whether a rewrite rule's match is on the project's config pointer, `itx.config…`: what every
+ *  birth row delivers to and every facet named by `itx.cd('/').config` loads — the platform's
+ *  publication alone writes it (project/publication.ts), so its manifest is vouched for. */
+export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>
+  itxExpressionStepName(match[1]) === "config";
+
+/** THE PLATFORM'S WRITES FROM ANYONE BUT THE PLATFORM ARE REFUSED, on every context: a platform
+ *  fact (`PLATFORM_FACT_TYPES`) and a row on the config pointer (`isConfigPointerMatch`: a target, a
+ *  mask, a removal), appended or scheduled — an occurrence fires under its schedule's stamp, so what
+ *  one may not append it may not schedule. Runs on the normalized batch at the append boundary
+ *  (iterate-context-durable-object.ts), and on a deployment's birth events (app-config.ts), which
+ *  never pass it. */
+export function refuseNonPlatformWrites(events: readonly StreamEventInput[], caller: Caller): void {
   if (caller.platform) return;
   for (const event of events) {
-    const types =
-      event.type === "events.iterate.com/itx/schedule-set"
-        ? (ScheduledAppendInput.safeParse(event.payload).data?.events.map(({ type }) => type) ?? [])
-        : [event.type];
-    const fact = types.find((type) => PLATFORM_FACT_TYPES.has(type));
-    if (fact)
+    if (event.type === "events.iterate.com/itx/schedule-set")
+      refuseNonPlatformWrites((event.payload as { events: StreamEventInput[] }).events, caller);
+    if (PLATFORM_FACT_TYPES.has(event.type))
       throw codedError(
         "FORBIDDEN",
-        `${fact} is the platform's own fact: no one else appends or schedules it`,
+        `${event.type} is the platform's own fact: no one else appends or schedules it`,
+      );
+    if (
+      event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+      isConfigPointerMatch((event.payload as { match: ItxExpressionPrefix }).match)
+    )
+      throw codedError(
+        "FORBIDDEN",
+        "`itx.config` is the project's published config: only the platform's publication writes it (commit to /repos/config)",
       );
   }
 }
