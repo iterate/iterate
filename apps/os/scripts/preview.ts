@@ -2,7 +2,8 @@
 // apps/os and each app on top, `<prefix>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed by
 // the same build and `wrangler deploy` as prd (scripts/deploy.ts, deployApp). The effects half; the
 // pure halves are scripts/preview-config.ts (naming, the PR body's section) and
-// scripts/preview-sweep.ts (which deployments go). Commands:
+// scripts/preview-sweep.ts (which deployments go), and a deployment's deletes are
+// scripts/preview-delete.ts. Commands:
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
@@ -39,11 +40,7 @@ import {
   runAsync,
   smoke,
 } from "../../../scripts/lib/deploy-helpers.ts";
-import {
-  CloudflareApiError,
-  resolveEnvContext,
-  type EnvContext,
-} from "../../../scripts/lib/env-context.ts";
+import { resolveEnvContext, type EnvContext } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
 import { depotApi, workflowsInProgress } from "../../../scripts/ci/depot.ts";
@@ -71,7 +68,6 @@ import {
   stuckNamespacesStillThere,
   type ArtifactsNamespaceRow,
   type Cf,
-  type StuckArtifactsNamespace,
 } from "./preview-artifacts.ts";
 import {
   accountResourceNames,
@@ -95,6 +91,12 @@ import {
   templateQuickLaunches,
 } from "./preview-config.ts";
 import {
+  deleteD1,
+  deleteKvNamespace,
+  deletePreviewDeployments,
+  deleteR2Bucket,
+} from "./preview-delete.ts";
+import {
   CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
   newestPreviewDeployment,
@@ -107,7 +109,6 @@ import {
   unmappedWorkers,
   workerlessNamespaces,
   WORKERLESS_PAGE_MARKER,
-  type PreviewDeploymentListing,
   type PreviewMember,
   type PullRequestState,
   type SweptNamespace,
@@ -175,62 +176,6 @@ function checkedOutCommit() {
 
 type KvNamespaceRow = { id: string; title: string };
 
-/** One already gone — the sweep racing the close job, a re-run — is deleted. */
-async function deleteKvNamespace(cf: Cf, row: KvNamespaceRow) {
-  await cf(`/storage/kv/namespaces/${row.id}`, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 10013)) throw error;
-  });
-  console.log(`deleted KV namespace ${row.title}`);
-}
-
-/** Delete an R2 bucket: its objects first (the API refuses a bucket that still holds any), then the
- *  bucket. The first thousand-key page is read again until it is empty, twenty deletes in flight —
- *  a preview's e2e run leaves tens, the soak preview's bucket held 1,908 (measured 2026-09-23) — and
- *  a ceiling keeps that bounded. A bucket that does not exist is the expected case. */
-async function deleteR2Bucket(cf: Cf, bucketName: string) {
-  const route = `/r2/buckets/${bucketName}`;
-  let deletedObjects = 0;
-  for (let round = 1; ; round++) {
-    if (round > 50)
-      throw new Error(
-        `R2 bucket ${bucketName} still holds objects after ${deletedObjects} deletes`,
-      );
-    const objects = await cf<{ key: string }[]>(`${route}/objects?per_page=1000`).catch((error) => {
-      if (isCloudflareError(error, 404, 10006)) return undefined;
-      throw error;
-    });
-    if (!objects) return console.warn(`R2 bucket ${bucketName} did not exist; continuing.`);
-    if (objects.length === 0) break;
-    for (let i = 0; i < objects.length; i += 20) {
-      await Promise.all(
-        objects.slice(i, i + 20).map(({ key }) =>
-          // a key's slashes are its path: each segment encoded, the slashes kept
-          cf(`${route}/objects/${key.split("/").map(encodeURIComponent).join("/")}`, {
-            method: "DELETE",
-          }).catch((error) => {
-            // one already gone (a racing delete took it, or the whole bucket) is deleted
-            if (!(error instanceof CloudflareApiError && error.status === 404)) throw error;
-          }),
-        ),
-      );
-    }
-    deletedObjects += objects.length;
-  }
-  await cf(route, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 10006)) throw error;
-  });
-  console.log(`deleted R2 bucket ${bucketName} (${deletedObjects} objects)`);
-}
-
-/** One already gone — a PR's close racing the sweep, a re-run — is deleted: Cloudflare's 404/7404,
- *  the not-found wrangler reads a D1 lookup by. */
-async function deleteD1(cf: Cf, row: { uuid: string; name: string }) {
-  await cf(`/d1/database/${row.uuid}`, { method: "DELETE" }).catch((error) => {
-    if (!isCloudflareError(error, 404, 7404)) throw error;
-  });
-  console.log(`deleted D1 ${row.name}`);
-}
-
 /** A deployment's members' suffixes (preview-sweep.ts `previewMemberSuffixes`), wrangler naming
  *  its KV after the template's bindings. */
 const memberSuffixes = () =>
@@ -289,65 +234,6 @@ async function listAccountMembers(cf: Cf) {
  *  `groupPreviewDeployments`). */
 async function listPreviewDeployments(cf: Cf) {
   return groupPreviewDeployments(await listAccountMembers(cf), memberSuffixes());
-}
-
-/** A deployment's workers first, so nothing writes to what goes next, then its KV, R2 bucket, D1
- *  and Artifacts namespace; each member one at a time settles before any failure is named. One
- *  already gone is the expected case. Resolves to its Artifacts namespace when Cloudflare will not
- *  delete it (StuckArtifactsNamespace): the rest still goes, and the nightly sweep retries and
- *  pages it. */
-async function deletePreviewDeployment(cf: Cf, deployment: PreviewDeploymentListing) {
-  const failures: string[] = [];
-  const stuck: StuckArtifactsNamespace[] = [];
-  const settle = async (
-    members: PreviewMember[],
-    remove: (member: PreviewMember) => Promise<void>,
-  ) => {
-    const results = await Promise.allSettled(members.map(remove));
-    results.forEach((result, index) => {
-      if (result.status === "rejected")
-        failures.push(`${members[index]!.name}: ${describe(result.reason)}`);
-    });
-  };
-  const workers = deployment.members.filter((member) => member.kind === "worker");
-  await settle(workers, async ({ name }) => {
-    // `force`: a worker with Durable Object namespaces is refused without it
-    await cf(`/workers/scripts/${name}?force=true`, { method: "DELETE" }).catch((error) => {
-      if (!isCloudflareError(error, 404, 10007)) throw error;
-    });
-    console.log(`deleted worker ${name}`);
-  });
-  await settle(
-    deployment.members.filter((member) => member.kind !== "worker"),
-    async (member) => {
-      if (member.kind === "kv") return deleteKvNamespace(cf, { id: member.id, title: member.name });
-      if (member.kind === "r2") return deleteR2Bucket(cf, member.name);
-      if (member.kind === "d1") return deleteD1(cf, { uuid: member.id, name: member.name });
-      const refused = await deleteArtifactsNamespace(cf, member.name);
-      if (refused) stuck.push(refused);
-    },
-  );
-  if (failures.length > 0)
-    throw new Error(
-      `${deployment.name}: ${failures.length} member(s) not deleted\n  ${failures.join("\n  ")}`,
-    );
-  console.log(`deleted deployment ${deployment.name} (${deployment.members.length} members)`);
-  return stuck;
-}
-
-/** Delete each of `deployments`, then fail naming the ones that did not go. A namespace Cloudflare
- *  will not delete does not fail it: the caller reports on a commit that did not cause it, and the
- *  nightly sweep retries and pages it. */
-async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentListing[]) {
-  const failures: string[] = [];
-  const stuckNamespaces: StuckArtifactsNamespace[] = [];
-  for (const deployment of deployments) {
-    await deletePreviewDeployment(cf, deployment).then(
-      (stuck) => stuckNamespaces.push(...stuck),
-      (error) => failures.push(describe(error)),
-    );
-  }
-  return { failures, stuckNamespaces };
 }
 
 /** THE PREFIX'S DEPLOYMENTS THIS ONE SUPERSEDES (preview-sweep.ts `planSupersededCleanup`): each

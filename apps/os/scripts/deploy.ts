@@ -99,7 +99,7 @@ export default async function deploy(options: {
  *  (generate-wrangler-config.ts `deploymentWranglerConfig`), each found or created; the KV is
  *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
- *  scripts/preview.ts `deletePreviewDeployment`. */
+ *  scripts/preview-delete.ts `deletePreviewDeployments`. */
 async function createResources(ctx: EnvContext<OsEnv>) {
   const names = osResourceNames(ctx.env.resourceNamePrefix);
   const [database] = await Promise.all([
