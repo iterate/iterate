@@ -617,7 +617,7 @@ Preview OS runs these jobs, each a check named for what it proves:
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/10** to **10/10**, and
+  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/11** to **11/11**, and
   **Browser specs** beside them gives their verdict.
 - **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
   only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
@@ -652,7 +652,7 @@ fails when the count no longer matches, naming what to change: `SPECS_SHARDS` an
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
 fullest shard holds `ceil(specs / shards)`.
 
-- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/10** to **10/10**.
+- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/11** to **11/11**.
   Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
   `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
   blob report in place of the HTML one.
