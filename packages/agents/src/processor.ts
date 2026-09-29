@@ -6,7 +6,7 @@
 // class, lean). The model call LIVES HERE (`#stream`): a `@cf/…` model through `itx.ai` (the
 // Workers AI binding under THIS context's rules, so a test lends a fake there), anything else
 // through the account's AI Gateway as a Workers AI partner model, streamed from the Responses API.
-// The host (durable-object.ts) hands in `withItx`, so a unit test constructs the processor with
+// The host (durable-object.ts) hands in `getItx`, so a unit test constructs the processor with
 // `new` and reduces rows (processor.test.ts, in node); the saga and the loop are proven on the
 // worker (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
@@ -29,8 +29,7 @@ import {
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
-import type { RewriteRuleListEntry } from "iterate/api";
+import type { IterateContextApi, RewriteRuleListEntry } from "iterate/api";
 import type { RunSettlement } from "iterate/stream/run";
 import {
   AgentContract,
@@ -331,7 +330,7 @@ export function renderScriptSettlement(settlement: RunSettlement): string | null
 type AgentProcessorDeps = {
   /** The host's scope accessor: `itx.ai`, `itx.files`, `itx.whoami()` — the effects this loop
    *  reaches through the context, under its rules (a test lends a fake `itx.ai` there). */
-  withItx: WithItx;
+  getItx: () => IterateContextApi & Disposable;
   /** The clock and the wait, injected only so a unit test can make the debounce instant. */
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -368,15 +367,18 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
   #identityRead?: { projectId: string; path: string };
   /** Which context this is — its project and path — read once. */
   async #identity(): Promise<{ projectId: string; path: string }> {
-    return (this.#identityRead ??= await this.deps.withItx((itx) => itx.whoami()));
+    if (this.#identityRead) return this.#identityRead;
+    using itx = this.deps.getItx();
+    return (this.#identityRead = await itx.whoami());
   }
 
   /** A certificate on `/`, where the catalog folds it (catalog.ts): stamped with this agent's path,
    *  which is all the catalog trusts. Unkeyed there: a key on `/` is anyone's to take first, and a
    *  same-body event under it would swallow this one; the catalog's fold is idempotent, so a retry
    *  that lands it twice changes nothing. */
-  #postToTheCatalog({ type, payload }: AgentEmitted): Promise<unknown> {
-    return this.deps.withItx((itx) => itx.cd("/").append({ type, payload }));
+  async #postToTheCatalog({ type, payload }: AgentEmitted): Promise<unknown> {
+    using itx = this.deps.getItx();
+    return await itx.cd("/").append({ type, payload });
   }
 
   /** Every change the facts make is stamped with the event's time: `lastActivityAt` moves exactly
@@ -687,7 +689,11 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       this.#creating = true;
       runInBackground(async () => {
         try {
-          const whoami = await this.deps.withItx((itx) => itx.whoami());
+          let whoami;
+          {
+            using itx = this.deps.getItx();
+            whoami = await itx.whoami();
+          }
           const { path } = whoami;
           const certificate: AgentEmitted = {
             type: "events.iterate.com/agent/created",
@@ -852,14 +858,15 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     );
     try {
       const { path } = await this.#identity();
-      const tree = await this.deps
-        .withItx((itx) => itx.cd(`${path}/sandbox`).rewriteRules.list())
-        .catch((error: unknown) => {
-          // A fully masked sandbox deliberately denies introspection too. Give the model no
-          // advertised tools; prose replies still work. Transport/runtime failures remain errors.
-          if (errorCode(error) === "NO_ITX_EXPRESSION_MATCH") return [];
-          throw error;
-        });
+      let tree: RewriteRuleListEntry[] = [];
+      try {
+        using itx = this.deps.getItx();
+        tree = await itx.cd(`${path}/sandbox`).rewriteRules.list();
+      } catch (error) {
+        // A fully masked sandbox deliberately denies introspection too. Give the model no
+        // advertised tools; prose replies still work. Transport/runtime failures remain errors.
+        if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
+      }
       const items = state.contextItems.filter((item) => item.offset < open.requestedAtOffset);
       // The images the model will see: read now, the freshest bytes at the request; one that is
       // gone (deleted meanwhile) is named instead of shown.
@@ -868,11 +875,10 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         for (const file of item.files || []) {
           if (!file.contentType.startsWith("image/") || images.has(file.path)) continue;
           try {
+            using itx = this.deps.getItx();
             images.set(file.path, {
               contentType: file.contentType,
-              base64: bytesToBase64(
-                await this.deps.withItx((itx) => itx.files.get(file.path).bytes()),
-              ),
+              base64: bytesToBase64(await itx.files.get(file.path).bytes()),
             });
           } catch {
             // named by its hint line instead
@@ -1005,8 +1011,8 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  provider reported. Aborting `signal` stops the stream; the call then rejects.
    *
    *  Two routes by the model's name, both `itx.ai` under THIS context's rules (a test lends a fake
-   *  there), each drained inside its one `withItx`: the call stays open until its body is read. A
-   *  `@cf/…` answer may be streamed or whole JSON.
+   *  there), each drained inside its one `getItx` scope: the call stays open until its body is
+   *  read. A `@cf/…` answer may be streamed or whole JSON.
    *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
    *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
    *  summary streamed. */
@@ -1021,37 +1027,37 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     signal: AbortSignal;
     onDelta(text: string, thinking: string): void;
   }): Promise<{ text: string; usage?: LlmUsage }> {
-    if (model.startsWith("@cf/"))
-      return this.deps.withItx(async (itx) => {
-        // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
-        // configuration here (any name the account can reach), so the call is made through the
-        // binding's runtime shape and the answer is validated below rather than trusted from a type.
-        const ai = itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> };
-        const raw: unknown = await raceAbort(signal, ai.run(model, { messages, stream: true }));
-        if (raw instanceof ReadableStream) {
-          let text = "";
-          let usage: LlmUsage | undefined;
-          await drainSse(raw, signal, (event) => {
-            const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
-            const delta = chunk.success ? chunk.data.response || "" : "";
-            text += delta;
-            onDelta(delta, "");
-            const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
-            if (reported.success && reported.data.usage !== undefined)
-              usage = normalizeUsage(reported.data.usage) ?? usage;
-          });
-          if (text.trim() === "") throw new Error("the model answered with no text");
-          return { text: text.trim(), usage };
-        }
-        // A binding (or a lent fake) that answered whole: the one delta there is.
-        const answer = ChatAnswer.parse(raw);
-        const text = (
-          "response" in answer ? answer.response : answer.choices[0]!.message.content
-        ).trim();
-        if (text === "") throw new Error("the model answered with no text");
-        onDelta(text, "");
-        return { text };
-      });
+    if (model.startsWith("@cf/")) {
+      using itx = this.deps.getItx();
+      // workers-types keys `run`'s inputs and outputs by model-name literal; the model is
+      // configuration here (any name the account can reach), so the call is made through the
+      // binding's runtime shape and the answer is validated below rather than trusted from a type.
+      const ai = itx.ai as unknown as { run(model: string, inputs: unknown): Promise<unknown> };
+      const raw: unknown = await raceAbort(signal, ai.run(model, { messages, stream: true }));
+      if (raw instanceof ReadableStream) {
+        let text = "";
+        let usage: LlmUsage | undefined;
+        await drainSse(raw, signal, (event) => {
+          const chunk = z.looseObject({ response: z.string().optional() }).safeParse(event);
+          const delta = chunk.success ? chunk.data.response || "" : "";
+          text += delta;
+          onDelta(delta, "");
+          const reported = z.looseObject({ usage: z.unknown() }).safeParse(event);
+          if (reported.success && reported.data.usage !== undefined)
+            usage = normalizeUsage(reported.data.usage) ?? usage;
+        });
+        if (text.trim() === "") throw new Error("the model answered with no text");
+        return { text: text.trim(), usage };
+      }
+      // A binding (or a lent fake) that answered whole: the one delta there is.
+      const answer = ChatAnswer.parse(raw);
+      const text = (
+        "response" in answer ? answer.response : answer.choices[0]!.message.content
+      ).trim();
+      if (text === "") throw new Error("the model answered with no text");
+      onDelta(text, "");
+      return { text };
+    }
     // No key of ours rides this request: an `openai/…` model is a Workers AI PARTNER model, billed
     // by Cloudflare through the binding — the Responses API shape, streamed, the raw Response asked
     // for so the SSE body is ours to read. The gateway option routes it through the account's AI
@@ -1059,71 +1065,70 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
     // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
-    return this.deps.withItx(async (itx) => {
-      const raw: unknown = await raceAbort(
-        signal,
-        itx.ai.run(
-          // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
-          // partner model's name (`openai/…`) is not among them though the binding takes any model
-          // the account can reach, and a partner model takes the PROVIDER's request body (here the
-          // Responses API's), which no catalog input type names.
-          `openai/${model}` as Parameters<Ai["run"]>[0],
-          {
-            input: responsesInput(messages),
-            stream: true,
-            store: false,
-            reasoning: { effort: "low", summary: "auto" },
-          } as never,
-          {
-            returnRawResponse: true,
-            gateway: {
-              id: AI_GATEWAY_ID,
-              skipCache: true,
-              metadata: { projectId, streamPath: path, context: "agent-turn" },
-            },
+    using itx = this.deps.getItx();
+    const raw: unknown = await raceAbort(
+      signal,
+      itx.ai.run(
+        // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
+        // partner model's name (`openai/…`) is not among them though the binding takes any model
+        // the account can reach, and a partner model takes the PROVIDER's request body (here the
+        // Responses API's), which no catalog input type names.
+        `openai/${model}` as Parameters<Ai["run"]>[0],
+        {
+          input: responsesInput(messages),
+          stream: true,
+          store: false,
+          reasoning: { effort: "low", summary: "auto" },
+        } as never,
+        {
+          returnRawResponse: true,
+          gateway: {
+            id: AI_GATEWAY_ID,
+            skipCache: true,
+            metadata: { projectId, streamPath: path, context: "agent-turn" },
           },
-        ),
+        },
+      ),
+    );
+    if (!(raw instanceof Response))
+      throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
+    const response = raw;
+    if (!response.ok || !response.body)
+      throw new Error(
+        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
       );
-      if (!(raw instanceof Response))
-        throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
-      const response = raw;
-      if (!response.ok || !response.body)
+    let text = "";
+    let usage: LlmUsage | undefined;
+    await drainSse(response.body, signal, (raw) => {
+      const event = ResponsesEvent.safeParse(raw);
+      if (!event.success) return;
+      const { type } = event.data;
+      if (type === "response.output_text.delta") {
+        const delta = typeof event.data.delta === "string" ? event.data.delta : "";
+        text += delta;
+        onDelta(delta, "");
+      } else if (type === "response.reasoning_summary_text.delta")
+        onDelta("", typeof event.data.delta === "string" ? event.data.delta : "");
+      else if (type === "response.completed" || type === "response.incomplete") {
+        const done = z
+          .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
+          .safeParse(raw);
+        if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
+      } else if (type === "response.failed" || type === "error") {
+        const failure = z
+          .looseObject({
+            error: z.looseObject({ message: z.string() }).optional(),
+            response: z
+              .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
+              .optional(),
+          })
+          .safeParse(raw);
         throw new Error(
-          `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
         );
-      let text = "";
-      let usage: LlmUsage | undefined;
-      await drainSse(response.body, signal, (raw) => {
-        const event = ResponsesEvent.safeParse(raw);
-        if (!event.success) return;
-        const { type } = event.data;
-        if (type === "response.output_text.delta") {
-          const delta = typeof event.data.delta === "string" ? event.data.delta : "";
-          text += delta;
-          onDelta(delta, "");
-        } else if (type === "response.reasoning_summary_text.delta")
-          onDelta("", typeof event.data.delta === "string" ? event.data.delta : "");
-        else if (type === "response.completed" || type === "response.incomplete") {
-          const done = z
-            .looseObject({ response: z.looseObject({ usage: z.unknown() }) })
-            .safeParse(raw);
-          if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
-        } else if (type === "response.failed" || type === "error") {
-          const failure = z
-            .looseObject({
-              error: z.looseObject({ message: z.string() }).optional(),
-              response: z
-                .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
-                .optional(),
-            })
-            .safeParse(raw);
-          throw new Error(
-            `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
-          );
-        }
-      });
-      if (text.trim() === "") throw new Error("the model answered with no text");
-      return { text: text.trim(), usage };
+      }
     });
+    if (text.trim() === "") throw new Error("the model answered with no text");
+    return { text: text.trim(), usage };
   }
 }

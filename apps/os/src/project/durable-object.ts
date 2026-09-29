@@ -67,7 +67,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   ];
 
   processor = new ProjectProcessor(
-    (call) => this.withItx(call),
+    () => this.getItx(),
     downloadPublicGithubTemplate,
     () => this.#hostnames(),
     () => this.#deletion(),
@@ -83,21 +83,29 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
     return {
       // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      head: async () =>
-        (await this.withItx((itx) => itx.repos.get("/repos/config").tip())) as unknown as
-          | string
-          | null,
+      head: async () => {
+        using itx = this.getItx();
+        return (await itx.repos.get("/repos/config").tip()) as unknown as string | null;
+      },
       // The repo facet's `modules` answers its files, path → text.
-      files: async (commitOid) =>
-        (await this.withItx((itx) =>
-          itx.repos.get("/repos/config").modules({ commitOid }),
-        )) as unknown as Record<string, string>,
+      files: async (commitOid) => {
+        using itx = this.getItx();
+        return (await itx.repos.get("/repos/config").modules({ commitOid })) as unknown as Record<
+          string,
+          string
+        >;
+      },
       identityOf: (files, mainModule) =>
         moduleIdentityOf(files, mainModule, this.env, `the config repo's ${mainModule}`),
-      probe: (files, mainModule) =>
-        this.withItx((itx) =>
-          itx.invoke(["itx", "workers", ["get", { source: files, mainModule }], ["probe"]]),
-        ),
+      probe: async (files, mainModule) => {
+        using itx = this.getItx();
+        return await itx.invoke([
+          "itx",
+          "workers",
+          ["get", { source: files, mainModule }],
+          ["probe"],
+        ]);
+      },
       // as the platform, and caused by what the follower reacts to: a publication keeps the
       // commit's depth, so the init it sets off runs one deeper than the commit (../cause.ts)
       appendAsPlatform: (...events) =>
@@ -192,7 +200,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     if (known) return known;
     const collection = new EntityCollectionRpcTarget(
       slug,
-      (call) => this.withItx(call),
+      () => this.getItx(),
       async () => (await this.snapshot()).state,
     );
     this.#collections.set(slug, collection);
@@ -241,7 +249,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       env: this.env,
       projectId: DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).projectId,
       rootPath: "/",
-      withItx: (call) => this.withItx(call),
+      getItx: () => this.getItx(),
       storage: this.ctx.storage,
     };
   }

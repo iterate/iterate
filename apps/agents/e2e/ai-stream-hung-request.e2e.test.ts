@@ -66,17 +66,18 @@ createFailing(realModelOnly, /hung and would never generate a response/, {
 const STREAMER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 export class StreamerDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "stream"];
   async stream() {
-    const response = await withItx(this.env.ITX, (itx) =>
-      itx.ai.run(
+    let response;
+    {
+      using itx = this.getItx();
+      response = await itx.ai.run(
         "openai/gpt-6-astra",
         { input: [{ role: "user", content: "Reply with the single word: pong" }], stream: true, store: false, reasoning: { effort: "low", summary: "auto" } },
         { returnRawResponse: true, gateway: { id: "default", skipCache: true } },
-      ),
-    );
+      );
+    }
     const decoder = new TextDecoder();
     let sse = "";
     const reader = response.body.getReader();

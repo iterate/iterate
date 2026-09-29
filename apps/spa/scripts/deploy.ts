@@ -4,7 +4,7 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { z } from "zod";
 import { OS_DOPPLER_PROJECT, getEnv, spaEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
+import { COMPATIBILITY_DATE } from "../../../packages/shared/src/compatibility-date.ts";
 import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 const assets = new URL("../dist/assets/", import.meta.url);

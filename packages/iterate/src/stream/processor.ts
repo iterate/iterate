@@ -700,7 +700,7 @@ export class ProcessorEngine<State> {
     let blockers: Promise<unknown> = Promise.resolve();
     // Validated against the declared `emits` and stamped with provenance. A certificate an entity
     // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
-    // through the host's `withItx` — the context's own append, no second verb here.
+    // through the host's `getItx` — the context's own append, no second verb here.
     const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
       for (const emitted of emittedEvents) {
         if (!emits.includes(emitted.type))
@@ -718,11 +718,13 @@ export class ProcessorEngine<State> {
       return emittedEvents;
     };
     // A PROCESSOR'S EFFECTS (apps/os src/cause.ts), each bound to its event's cause — an eventless
-    // pass, the newest one's: what it appends to its own log keeps that depth, so an agent's own
-    // turns stay flat, and anything else it does is code reacting to code, one hand-off deeper.
-    if (event?.source?.cause) this.#headCause = event.source.cause;
+    // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
+    // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
+    // code, one hand-off deeper.
+    if (event?.source?.cause)
+      this.#headCause = { ...event.source.cause, parent: `${event.path}@${event.offset}` };
     const own = this.#headCause;
-    const beyond = own && { chain: own.chain, depth: own.depth + 1 };
+    const beyond = own && { ...own, depth: own.depth + 1 };
     const under = <T>(cause: EventCause | undefined, work: () => T): T => runCausedBy(cause, work);
     under(beyond, () =>
       this.processor.processEvent({
@@ -778,8 +780,9 @@ export class ProcessorEngine<State> {
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
 // runtime validator (the processor contract section below has the zod half).
 
-/** Why an event happened (`source.cause`). */
-type EventCause = { chain: string; depth: number };
+/** Why an event happened (`source.cause`): its chain, its depth, and the event whose handling wrote
+ *  it (`<path>@<offset>`), if any. */
+type EventCause = { chain: string; depth: number; parent?: string };
 
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
@@ -798,8 +801,9 @@ export type StreamEventInput = {
      *  context's own path. */
     origin?: string;
     /** WHY IT HAPPENED, stamped by the platform (a writer's own is dropped): the chain of reactions
-     *  it belongs to — when and where that began — and how many hand-offs deep in it. Past 8, code
-     *  reacting to code may read but not act, and the `itx/loop-limit` fact says where it stopped. */
+     *  it belongs to — when and where that began — how many hand-offs deep in it, and the event
+     *  whose handling wrote it. Past 8, code reacting to code may read but not act, and the
+     *  `itx/loop-limit` fact says where it stopped. */
     cause?: EventCause;
     /** The durable schedule definition responsible for this occurrence. */
     schedule?: {
@@ -989,9 +993,9 @@ export class ReduceCheckpointTable {
 const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. A
- *  `ProcessorStream` satisfies it; a facet that is no processor passes one round trip per delta,
- *  `{ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }` (`iterate/with-itx`), never a
- *  scope it holds. A field initializer cannot await, so a facet builds its LiveState that way and
+ *  `ProcessorStream` satisfies it; a facet that is no processor passes one scope per delta,
+ *  `{ append: async (e) => { using itx = this.getItx(); await itx.append(e); } }`, never a scope it
+ *  holds. A field initializer cannot await, so a facet builds its LiveState that way and
  *  serves `snapshot()` as the client's seed read. */
 export type LiveStateSink = {
   append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
@@ -1007,7 +1011,7 @@ export class LiveState<S> {
   #lastSerializedState: S;
   #liveStateRev: number;
   /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
-   *  CROSS-HOP sink: `withItx(env.ITX, (itx) => itx.append(e))` mints a FRESH scope per call, so two deltas
+   *  CROSS-HOP sink: its `getItx()` mints a FRESH scope per call, so two deltas
    *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
    *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
    *  but it costs every watcher the full seed re-read the deltas exist to avoid. Every delta rides

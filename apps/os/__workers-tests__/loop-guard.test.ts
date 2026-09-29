@@ -44,7 +44,7 @@ const MAIL = `await itx.email.send({ to: "ann@example.com", subject: "Hi", text:
 const ACTING = facetSpec(
   "Acting",
   [],
-  `async fetch() { await withItx(this.env.ITX, (itx) => itx.append({ type: "test/acted" })); return new Response("acted"); }`,
+  `async fetch() { using itx = this.getItx(); await itx.append({ type: "test/acted" }); return new Response("acted"); }`,
 );
 
 // ── the accounting ──
@@ -128,13 +128,21 @@ test("cause-table: a retried delivery runs at its first depth and writes nothing
       const sunk = () => itx.cd("./sink").append({ type: "test/sunk" });
       await Promise.all(tries === 1 ? [x(), sunk()] : [sunk(), x()]);
       await itx.append({ type: "test/b" });
-      await this.withItx((again) => again.append({ type: "test/b" }));
+      {
+        using again = this.getItx();
+        await again.append({ type: "test/b" });
+      }
       if (tries === 1) throw new Error("the first try fails after its writes");
       await itx.append({ type: "test/done", payload: { tries } });`,
   );
   const [spoken] = await said(ctx);
   const done = await eventually(ctx, "test/done", 20_000); // the first rung is a second out
-  expect(causeOf(done)).toEqual({ chain: causeOf(spoken!).chain, depth: 1 });
+  // its parent is the event it was delivered for
+  expect(causeOf(done)).toEqual({
+    chain: causeOf(spoken!).chain,
+    depth: 1,
+    parent: `${spoken!.path}@${spoken!.offset}`,
+  });
   const log = await readLog(ctx);
   for (const type of ["test/a", "test/x", "test/b"]) expect(ofType(log, type)).toHaveLength(1);
   expect(ofType(await readLog(at(ctx, "/sink")), "test/sunk")).toHaveLength(1);
@@ -254,9 +262,13 @@ test("agent-turns-one-depth: an agent's turns stay at its trigger's depth; only 
     60_000, // ten scripts, each in an isolate of its own
   );
   const turns = (depth: number) => Array.from({ length: 10 }, () => ({ chain, depth }));
-  expect(ofType(log, "events.iterate.com/itx/run-requested").map(causeOf)).toEqual(turns(0));
-  expect(ofType(log, RUN_SETTLED).map(causeOf)).toEqual(turns(0));
-  expect(ofType(log, "test/effect").map(causeOf)).toEqual(turns(1));
+  // each turn's parent is the event it handled: what was said, then the settlement before it
+  const handled = [spoken!, ...ofType(log, RUN_SETTLED).slice(0, 9)];
+  expect(ofType(log, "events.iterate.com/itx/run-requested").map(causeOf)).toEqual(
+    handled.map((event) => ({ chain, depth: 0, parent: `${event.path}@${event.offset}` })),
+  );
+  expect(ofType(log, RUN_SETTLED).map(causeOf)).toMatchObject(turns(0));
+  expect(ofType(log, "test/effect").map(causeOf)).toMatchObject(turns(1));
 });
 
 test("a read records nothing: a context read for its table, asleep or unborn, is neither woken nor born", async () => {
@@ -274,33 +286,34 @@ test("a read records nothing: a context read for its table, asleep or unborn, is
   expect(await sweep(at(project, "/unborn"))).toEqual([]);
 });
 
-test("code no callWithCause runs acts under the newest cause its isolate saw, never a chain of its own", async () => {
+test("a plain WorkerEntrypoint's method acts under its own call's cause, never the newest its isolate saw, through `using itx = this.getItx()`, which no caller reaches", async () => {
   const ctx = freshProject("prj_loop");
+  // a main module with no default export, importing nothing from iterate
   const source = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { IterateConfigEntrypoint } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
-export default class extends IterateConfigEntrypoint {
-  async touch() {}
-}
 export class NoSdkHost extends WorkerEntrypoint {
+  async touch() {}
   async act() {
-    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/no-sdk-host" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/no-sdk-host" });
   }
 }
 `,
   };
-  await stub(ctx).invoke(["itx", "workers", ["get", { source }], ["touch"]], [], caller(5));
-  await stub(ctx).invoke(
-    ["itx", "workers", ["get", { source, className: "NoSdkHost" }], ["act"]],
-    [],
-    caller(1),
-  );
+  const call = (step: unknown[], depth: number) =>
+    stub(ctx).invoke(
+      ["itx", "workers", ["get", { source, className: "NoSdkHost" }], step],
+      [],
+      caller(depth),
+    );
+  await call(["touch"], 5);
+  await call(["act"], 1);
   expect(ofType(await readLog(ctx), "test/no-sdk-host").map(causeOf)).toEqual([
-    { chain: CHAIN, depth: 5 },
+    { chain: CHAIN, depth: 1 },
   ]);
+  await refused(() => call(["getItx"], 1), "NOT_A_METHOD");
 });
 
 test("a facet's callWithCause walks only as far as Workers RPC would; the shared isolate keeps no cause", async () => {
@@ -591,13 +604,13 @@ export default class extends IterateConfigEntrypoint {
     ${onEvent}
   }
   async fetch(request) {
-    await this.withItx(async (itx) => {
-      ${onRequest}
-    });
+    using itx = this.getItx();
+    ${onRequest}
     return new Response("served");
   }
   async later() {
-    await this.withItx((itx) => itx.append({ type: "test/later" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/later" });
   }
 }
 `,
@@ -622,7 +635,6 @@ function facetSpec(name: string, methods: string[], body: string, preamble = "")
       "package.json": '{"main":"worker.js"}',
       "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 ${preamble}
 export class ${name} extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, ...${JSON.stringify(methods)}];
@@ -641,14 +653,16 @@ const REVIVER = facetSpec(
   ["claimNow", "touch"],
   /* js */ `
   touch() {}
-  claimNow() {
-    return withItx(this.env.ITX, (itx) => itx.processors.claim("reviver", Date.now() + 3_600_000));
+  async claimNow() {
+    using itx = this.getItx();
+    return await itx.processors.claim("reviver", Date.now() + 3_600_000);
   }
   async revive() {
     const tries = (this.ctx.storage.kv.get("tries") ?? 0) + 1;
     this.ctx.storage.kv.put("tries", tries);
     if (tries === 1) throw new Error("the first revive fails");
-    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/revived" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/revived" });
   }`,
 );
 
@@ -658,8 +672,9 @@ const DOOMED = facetSpec(
   "Doomed",
   ["claimNow"],
   /* js */ `
-  claimNow() {
-    return withItx(this.env.ITX, (itx) => itx.processors.claim("doomed", Date.now() + 3_600_000));
+  async claimNow() {
+    using itx = this.getItx();
+    return await itx.processors.claim("doomed", Date.now() + 3_600_000);
   }
   revive() {
     throw Object.assign(new Error("its work in flight died with its host 5 times"), { code: "PERMANENT_FAILURE" });
@@ -684,7 +699,7 @@ class Target extends RpcTarget {
 }`,
 );
 
-/** A loaded processor `slug` on `consumes`, its StreamProcessor's body `body`; `this.withItx` is
+/** A loaded processor `slug` on `consumes`, its StreamProcessor's body `body`; `this.getItx` is
  *  its host's. */
 function processorSpec(slug: string, consumes: string[], body: string, state = "z.object({})") {
   return {
@@ -696,11 +711,11 @@ import { StreamProcessor, defineProcessorContract } from "iterate/stream/process
 import { z } from "zod";
 class Processor extends StreamProcessor {
   contract = defineProcessorContract({ slug: "${slug}", version: "1.0.0", description: "${slug}", stateSchema: ${state}, consumes: ${JSON.stringify(consumes)}, emits: ["events.iterate.com/itx/run-requested"] });
-  constructor(withItx) { super(); this.withItx = withItx; }
+  constructor(getItx) { super(); this.getItx = getItx; }
   ${body}
 }
 export class ProcessorDurableObject extends StreamProcessorDurableObject {
-  processor = new Processor((call) => this.withItx(call));
+  processor = new Processor(() => this.getItx());
 }`,
     },
     className: "ProcessorDurableObject",
@@ -712,7 +727,7 @@ function blocker(code: string) {
   return processorSpec(
     "blocker",
     ["test/said"],
-    `processEvent({ event, blockProcessorWhile }) { if (event) blockProcessorWhile(() => this.withItx(async (itx) => { ${code} })); }`,
+    `processEvent({ event, blockProcessorWhile }) { if (event) blockProcessorWhile(async () => { using itx = this.getItx(); ${code} }); }`,
   );
 }
 

@@ -41,9 +41,9 @@ export interface CodeEditorProps {
  * kept alive — the callbacks reach it as Effect Events, so a parent re-render
  * never tears it down, and external `value` changes (e.g. loading an example)
  * are dispatched as edits rather than remounting the view, the caret at the end.
- * The old platform's composer niceties (apps/os `composer-textarea.client.tsx`):
- * completions styled with the page's tokens, Tab accepts one, 16px text on a
- * phone (iOS zooms into a smaller focused field), the page's selection colour.
+ * Completions are styled with the page's tokens, Tab accepts one, text is 16px
+ * on a phone (iOS zooms into a smaller focused field), and the selection takes
+ * the page's colour.
  */
 export function CodeEditor({
   value,

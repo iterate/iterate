@@ -28,7 +28,6 @@ export default defineConfig([
       "stream/processor": "src/stream/processor.ts",
       "stream/run": "src/stream/run.ts",
       email: "src/email.ts",
-      "with-itx": "src/sdk/with-itx.ts",
       "oauth-scopes": "src/oauth-scopes.ts",
       "project-ingress": "src/project-ingress.ts",
       oauth: "src/client/oauth.ts",

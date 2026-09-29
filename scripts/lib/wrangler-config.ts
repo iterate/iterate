@@ -1,6 +1,4 @@
-/** The workerd compatibility date every Iterate Worker deploys with, apps/os's included: its
- *  readWranglerBase and its Workers suite's vitest.config.ts set it. */
-export const COMPATIBILITY_DATE = "2026-09-01";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 
 /**
  * The one observability posture every Iterate worker deploys with: full

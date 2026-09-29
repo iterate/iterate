@@ -38,9 +38,12 @@ call needs the project's OpenAI key (`/secrets/openai`), which Kit and the Voice
 Voice app's **Upgrade to the newest** commits main's newest build.
 
 `worker.ts` reaches the project through the `itx` that `processEvent` is handed, or through
-`this.withItx((itx) => …)`: one round trip, after which everything the call reached is released.
-Never keep a value from `this.env.ITX.get()`, and answer data, not handles, from `withItx`: a kept
-value keeps the project's context, and any facet holding it, resident after the project goes idle.
+`using itx = this.getItx()`: when the block ends, the scope, every call made through it and every
+handle it awaited are released. Put it in the smallest block that holds its calls, await every
+call inside it, and hand data, not handles, out of it; an object that needs reach takes an
+accessor, `() => this.getItx()`. Never keep a value from `this.env.ITX.get()`, which nothing
+releases: a kept value keeps the project's context, and any facet holding it, resident after the
+project goes idle.
 
 Files may be TypeScript or JavaScript and import each other by relative path. Import packages by
 name: `iterate/*` and `zod` come from the platform; list any other package in `package.json` and

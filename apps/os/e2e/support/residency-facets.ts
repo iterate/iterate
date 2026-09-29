@@ -109,19 +109,22 @@ export const RELEASER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
   // oxlint-disable-next-line iterate/no-raw-itx-get -- the careless keep IS the subject: a claimed facet that keeps its env.ITX answer
   "worker.js": `import { FacetDurableObject } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 export class ReleaserDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "start", "beats"];
   kept = [];
   async start(holdMs) {
     const name = this.ctx.props.name;
-    await withItx(this.env.ITX, (itx) => itx.processors.claim(name, Date.now() + 600_000));
+    {
+      using claimer = this.getItx();
+      await claimer.processors.claim(name, Date.now() + 600_000);
+    }
     const itx = this.env.ITX.get();
     this.kept.push(itx, await itx.whoami());
     const beat = () => { this.ctx.storage.kv.put("lastBeat", Date.now()); setTimeout(beat, 5_000); };
     beat();
     setTimeout(async () => {
-      await withItx(this.env.ITX, (itx) => itx.processors.claim(name, null));
+      using releaser = this.getItx();
+      await releaser.processors.claim(name, null);
       this.ctx.storage.kv.put("releasedAt", Date.now());
     }, holdMs);
     return Date.now();

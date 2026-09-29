@@ -1,7 +1,8 @@
-// with-itx.test.ts — `withItx` disposes what `recordPipelinedSteps` records, so it must record EVERY
-// call a round trip reached and change nothing else about the stub (with-itx.ts says why).
+// itx-scope.test.ts — `itxScope`'s release disposes what `recordPipelinedSteps` records, so it must
+// record EVERY call a scope reached and change nothing else about the stub (itx-scope.ts says why).
 import { expect, test, vi } from "vitest";
-import { recordPipelinedSteps, withItx } from "./with-itx.ts";
+import { runCausedBy } from "../cause.ts";
+import { itxScope, recordPipelinedSteps } from "./itx-scope.ts";
 
 test.for([
   {
@@ -47,16 +48,43 @@ test.for([
   },
 ])("$name", async ({ run, answer, disposed }) => {
   const log: string[] = [];
-  const answered = await withItx({ get: () => fakeStub(log) }, async (itx) => {
-    const value = await run(itx);
+  {
+    using itx = itxScope({ get: () => fakeStub(log) });
+    expect(await run(itx)).toEqual(answer);
     expect(log).toEqual([]); // recording disposes nothing itself
-    return value;
-  });
-  expect(answered).toEqual(answer);
+  }
   expect(log).toEqual(disposed);
 });
 
-test("a release that throws is reported, the rest are still released and the answer stands", async () => {
+test("`using itx = itxScope(…)` gets the scope under the running cause and releases it, and every call made through it, the last first, as the block ends", async () => {
+  const log: string[] = [];
+  const causes: unknown[] = [];
+  const cause = { chain: "a test's chain", depth: 2 };
+  const entrypoint = {
+    get: (asked?: unknown) => {
+      causes.push(asked);
+      return Object.assign(fakeStub(log), { [Symbol.dispose]: () => log.push("dispose root") });
+    },
+  };
+  await runCausedBy(cause, async () => {
+    using itx: any = itxScope(entrypoint);
+    const repo = await itx.open("/r");
+    await repo.whoami();
+    await itx.cd("/a").append({ type: "x" });
+    expect(log).toEqual([]);
+  });
+  expect(causes).toEqual([cause]);
+  expect(log).toEqual([
+    "dispose cd(/a).append",
+    "dispose cd(/a)",
+    "dispose handle(/r).whoami",
+    "dispose handle(/r)",
+    "dispose open(/r)",
+    "dispose root",
+  ]);
+});
+
+test("a release that throws is reported, the rest are still released and the block ends without its throw", async () => {
   const log: string[] = [];
   const stub = fakeStub(log);
   const itx = {
@@ -70,10 +98,10 @@ test("a release that throws is reported, the rest are still released and the ans
       }),
   };
   const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  const answered = await withItx({ get: () => itx }, (scope: any) =>
-    scope.cd("/d").append({ type: "y" }),
-  );
-  expect(answered).toEqual({ appended: [{ type: "y" }] });
+  {
+    using scope: any = itxScope({ get: () => itx });
+    expect(await scope.cd("/d").append({ type: "y" })).toEqual({ appended: [{ type: "y" }] });
+  }
   expect(log).toEqual(["dispose cd(/d).append", "dispose cd(/d)"]);
   expect(reported).toHaveBeenCalled();
 });

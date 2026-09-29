@@ -20,7 +20,7 @@
 //     the real DO SQLite (event_chunks), an idempotent chunked retry dedupes, a mid-batch conflict rolls
 //     the chunk rows back, chunk rows stay invisible to paging, a surrogate pair straddling a chunk
 //     boundary survives (the JSON is sliced by UTF-16 code units)
-//   • `waitForEvent` through a LOADED worker's `withItx(env.ITX, …)` — the scope's method waits on
+//   • `waitForEvent` through a LOADED worker's `this.getItx()` — the scope's method waits on
 //     the DO and returns the committed event (the Workers-RPC path no other suite drives)
 
 import { expect, test } from "vitest";
@@ -460,17 +460,17 @@ test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted meth
   const ctx = freshCtx("waitload");
   const itxA = openItx(ctx);
   const itxB = openItx(ctx);
-  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`withItx(env.ITX, …)`
+  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`this.getItx()`
   // — the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
   // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
   // worker returns the committed event — the Workers-RPC path no other suite drives.
   const SRC_WAITER = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Waiter extends WorkerEntrypoint {
-  run(afterOffset) {
-    return withItx(this.env.ITX, (itx) => itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 }));
+  async run(afterOffset) {
+    using itx = this.getItx();
+    return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
   }
 }`,
   };

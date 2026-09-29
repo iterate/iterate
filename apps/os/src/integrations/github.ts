@@ -124,7 +124,8 @@ export async function connectGithub(
     app = { origin: github.githubOrigin, appSlug: github.appSlug, clientId: github.oauthClientId };
   } else {
     const secretPath = tokenSecretPathOf("github", connection);
-    const secrets = await scope.withItx((itx) => itx.secrets.list());
+    using itx = scope.getItx();
+    const secrets = await itx.secrets.list();
     const pin = secrets.find((secret) => secret.path === secretPath)?.urls[0];
     if (!pin || !input.appSlug || !input.clientId)
       throw codedError(
@@ -330,7 +331,12 @@ export async function connectGithubInstallation(
   // project's own App's secret keeps its material (the App's key) and gains the strategy.
   const secretPath = tokenSecretPathOf("github", connection);
   const path = connectionPathOf("github", connection);
-  const secrets = await scope.withItx((itx) => itx.secrets.list());
+  // its own block: the mints and GitHub's proof below outlast it
+  let secrets;
+  {
+    using itx = scope.getItx();
+    secrets = await itx.secrets.list();
+  }
   // The API, and GitHub itself for git over HTTP (a repo's origin: `repo.pull()` / `repo.push()`).
   const urls = [
     ...new Set([
@@ -341,26 +347,26 @@ export async function connectGithubInstallation(
   ];
   // The material keeps a project App's key, but never the token of the installation it held
   // before (a reconnect, a move): `accessToken: null` is a miss, so the first use mints for `id`.
-  const mintFor = (id: string) =>
-    scope.withItx((itx) =>
-      itx.secrets.set(
-        secretPath,
-        { accessToken: null },
-        {
-          urls,
-          refresh: {
-            kind: "github-app-installation",
-            apiOrigin,
-            installationId: id,
-            client: attempt.client === "iterate" ? { platform: "github" } : { project: "github" },
-          },
-          // iterate's App: the material is only the minted token, so the record is replaced whole
-          // and an older connection's pin gains GitHub itself (a merge keeps the pin). A project's
-          // own App keeps its material (the App's key), pinned to both from the start.
-          merge: attempt.client !== "iterate",
+  const mintFor = async (id: string) => {
+    using itx = scope.getItx();
+    await itx.secrets.set(
+      secretPath,
+      { accessToken: null },
+      {
+        urls,
+        refresh: {
+          kind: "github-app-installation",
+          apiOrigin,
+          installationId: id,
+          client: attempt.client === "iterate" ? { platform: "github" } : { project: "github" },
         },
-      ),
+        // iterate's App: the material is only the minted token, so the record is replaced whole
+        // and an older connection's pin gains GitHub itself (a merge keeps the pin). A project's
+        // own App keeps its material (the App's key), pinned to both from the start.
+        merge: attempt.client !== "iterate",
+      },
     );
+  };
   // A reconnect to another installation that fails to land mints for the one it had again, as
   // `routedWhile` routes it back.
   const before = await connectionRowOf(env, projectId, path);

@@ -453,7 +453,7 @@ export class FacetHost {
    *  `facets.get` lands on that same instance (measured on a deployed preview, 2026-09-23). Work that
    *  must outlive the call that started it runs through the processor's `runInBackground`, whose
    *  claim on this context's alarm (`processors.claim`) keeps the facet running — so a claimed one,
-   *  and a FIRST-PARTY one (the platform's own classes release every round trip, `withItx`; the
+   *  and a FIRST-PARTY one (the platform's own classes release every scope, `using getItx()`; the
    *  `secret` facet pumps a proxied socket with no claim), is started without a reset: the start
    *  lands on the instance if it still runs. A facet no incarnation called since its last start is
    *  not running and holds no write, and is left alone. Returns the names reset. */

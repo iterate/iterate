@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import JSON5 from "json5";
 import { PREVIEW_AND_DEV_ACCOUNT_ID, getOsEnv } from "../../../envs.ts";
-import {
-  COMPATIBILITY_DATE,
-  OBSERVABILITY,
-  registrableDomainOf,
-} from "../../../scripts/lib/wrangler-config.ts";
+import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../src/project/context-birth-events.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { osResourceNames, type OsEnv } from "./os-env.ts";

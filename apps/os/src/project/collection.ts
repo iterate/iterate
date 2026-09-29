@@ -8,7 +8,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
-import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import type { ProjectState } from "./contract.ts";
@@ -33,17 +32,17 @@ const TERMINAL_WAIT_SLICE_MS = 5_000;
 
 export class EntityCollectionRpcTarget extends RpcTarget {
   private readonly slug: "repo" | "workspace";
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly catalog: () => Promise<ProjectState>;
 
   constructor(
     slug: "repo" | "workspace",
-    withItx: WithItx<ItxEntrypointScope>,
+    getItx: () => ItxEntrypointScope & Disposable,
     catalog: () => Promise<ProjectState>,
   ) {
     super();
     this.slug = slug;
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.catalog = catalog;
   }
 
@@ -124,63 +123,57 @@ export class EntityCollectionRpcTarget extends RpcTarget {
    *  request that opened it, so a certificate landing between the read and the wait is seen, not
    *  missed. A deleted entity is not re-creatable: thrown. Data back, never the handle:
    *  `itx.<entity>s.get(path)` addresses it. */
-  create(path: string, options: { creator: string }): Promise<{ path: string }> {
-    return this.withItx(async (itx) => {
-      // The library always names an absolute creator, but a project member at `/` reaches this facet
-      // directly (`itx.facets.get('project')`), and the creator becomes a parent link as written.
-      const parsed = z.object({ creator: z.string().startsWith("/") }).safeParse(options);
-      if (!parsed.success)
-        throw codedError(
-          "INVALID_INPUT",
-          `${this.slug}s.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
-        );
-      const creator = resolveContextPath("/", parsed.data.creator);
-      const context = itx.cd(path);
-      const state = await this.#state(context);
-      if (state.deletion) throw new Error(`${this.slug} ${path}: deleted — not re-creatable`);
-      if (state.creation?.status === "created") return { path };
-      let requestedAtOffset: number;
-      if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
-      else {
-        await context.processors.enable(this.slug);
-        // The link is written HERE, never by the entity's processor from the request: whoever may
-        // append on a path may append a request, so a creator it named would be the appender's
-        // choice (e2e/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
-        // originating context (library.ts `entityRoot`); any other caller reaches this facet only
-        // at `/`, from where it may write the same row itself. It lands with the request, before the
-        // certificate: a born context is never re-pointed, and an owner's later row is the last word.
-        const link = {
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: {
-            match: "itx",
-            target: ["itx", "builtins", ["cd", creator]],
-            description: "everything this context does not claim, its creator answers",
-          },
-          idempotencyKey: `itx@${creator}`,
-        };
-        const request = { type: `events.iterate.com/${this.slug}/create-requested`, payload: {} };
-        // Over the loopback stub an append's answer types as an RPC result, not the array the context
-        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-        const appended = (await context.append(
-          ...(creator === path ? [request] : [link, request]),
-        )) as unknown as StreamEvent[];
-        requestedAtOffset = appended.at(-1)!.offset;
-      }
-      const settled = await this.#terminalFact(
-        context,
-        path,
-        [
-          `events.iterate.com/${this.slug}/created`,
-          `events.iterate.com/${this.slug}/create-failed`,
-        ],
-        requestedAtOffset,
+  async create(path: string, options: { creator: string }): Promise<{ path: string }> {
+    // The library always names an absolute creator, but a project member at `/` reaches this facet
+    // directly (`itx.facets.get('project')`), and the creator becomes a parent link as written.
+    const parsed = z.object({ creator: z.string().startsWith("/") }).safeParse(options);
+    if (!parsed.success)
+      throw codedError(
+        "INVALID_INPUT",
+        `${this.slug}s.create(${JSON.stringify(path)}): the creator must be an absolute context path`,
       );
-      if (settled.type === `events.iterate.com/${this.slug}/create-failed`)
-        throw new Error(
-          `${this.slug} ${path}: creation failed — ${String(settled.payload?.error)}`,
-        );
-      return { path };
-    });
+    const creator = resolveContextPath("/", parsed.data.creator);
+    using itx = this.getItx();
+    const context = itx.cd(path);
+    const state = await this.#state(context);
+    if (state.deletion) throw new Error(`${this.slug} ${path}: deleted — not re-creatable`);
+    if (state.creation?.status === "created") return { path };
+    let requestedAtOffset: number;
+    if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
+    else {
+      await context.processors.enable(this.slug);
+      // The link is written HERE, never by the entity's processor from the request: whoever may
+      // append on a path may append a request, so a creator it named would be the appender's
+      // choice (e2e/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
+      // originating context (library.ts `entityRoot`); any other caller reaches this facet only
+      // at `/`, from where it may write the same row itself. It lands with the request, before the
+      // certificate: a born context is never re-pointed, and an owner's later row is the last word.
+      const link = {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx",
+          target: ["itx", "builtins", ["cd", creator]],
+          description: "everything this context does not claim, its creator answers",
+        },
+        idempotencyKey: `itx@${creator}`,
+      };
+      const request = { type: `events.iterate.com/${this.slug}/create-requested`, payload: {} };
+      // Over the loopback stub an append's answer types as an RPC result, not the array the context
+      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+      const appended = (await context.append(
+        ...(creator === path ? [request] : [link, request]),
+      )) as unknown as StreamEvent[];
+      requestedAtOffset = appended.at(-1)!.offset;
+    }
+    const settled = await this.#terminalFact(
+      context,
+      path,
+      [`events.iterate.com/${this.slug}/created`, `events.iterate.com/${this.slug}/create-failed`],
+      requestedAtOffset,
+    );
+    if (settled.type === `events.iterate.com/${this.slug}/create-failed`)
+      throw new Error(`${this.slug} ${path}: creation failed — ${String(settled.payload?.error)}`);
+    return { path };
   }
 
   /** Take the entity at `path` out of being: `<entity>/delete-requested` on that path, then the
@@ -190,38 +183,38 @@ export class EntityCollectionRpcTarget extends RpcTarget {
    *  ON, never requested again — the certificate is sought after the request that opened it, so one
    *  landing between the read and the wait is seen, not missed. An entity never created has nothing
    *  to delete: thrown. Terminal: a deleted entity is not re-creatable. */
-  delete(path: string): Promise<{ path: string }> {
-    return this.withItx(async (itx) => {
-      const context = itx.cd(path);
-      const state = await this.#state(context);
-      if (state.deletion?.status !== "deleted") {
-        if (state.creation?.status !== "created")
-          throw new Error(`${this.slug} ${path}: not created — nothing to delete`);
-        let requestedAtOffset: number;
-        if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
-        else {
-          // Over the loopback stub an append's answer types as an RPC result, not the array the context
-          // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-          const [requested] = (await context.append({
-            type: `events.iterate.com/${this.slug}/delete-requested`,
-            payload: {},
-          })) as unknown as StreamEvent[];
-          requestedAtOffset = requested!.offset;
-        }
-        await this.#terminalFact(
-          context,
-          path,
-          [`events.iterate.com/${this.slug}/deleted`],
-          requestedAtOffset,
-        );
+  async delete(path: string): Promise<{ path: string }> {
+    using itx = this.getItx();
+    const context = itx.cd(path);
+    const state = await this.#state(context);
+    if (state.deletion?.status !== "deleted") {
+      if (state.creation?.status !== "created")
+        throw new Error(`${this.slug} ${path}: not created — nothing to delete`);
+      let requestedAtOffset: number;
+      if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
+      else {
+        // Over the loopback stub an append's answer types as an RPC result, not the array the context
+        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        const [requested] = (await context.append({
+          type: `events.iterate.com/${this.slug}/delete-requested`,
+          payload: {},
+        })) as unknown as StreamEvent[];
+        requestedAtOffset = requested!.offset;
       }
-      // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
-      // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
-      // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
-      // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
-      const rows = (await context.processors.list()) as unknown as { name: string }[];
-      if (rows.some((row) => row.name === this.slug)) await context.processors.disable(this.slug);
-      return { path };
-    });
+      await this.#terminalFact(
+        context,
+        path,
+        [`events.iterate.com/${this.slug}/deleted`],
+        requestedAtOffset,
+      );
+    }
+    // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
+    // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
+    // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
+    // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
+    // Over the loopback stub the list's answer types as an RPC result; the wire copied it.
+    const rows = (await context.processors.list()) as unknown as { name: string }[];
+    if (rows.some((row) => row.name === this.slug)) await context.processors.disable(this.slug);
+    return { path };
   }
 }

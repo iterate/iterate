@@ -77,10 +77,7 @@ test("a collection link signs the person in, opens without the Dash's shell, sav
   );
 });
 
-test("a collection link that names the Secrets page opens the link's own page, which updates a secret the path already holds", async ({
-  page,
-  helpers,
-}) => {
+test("a collection link updates a secret the path already holds", async ({ page, helpers }) => {
   helpers.appOrigin("dash");
   await using fixture = await helpers.createFixture("collect-secret-update");
   await fixture.itx.secrets.set("/secrets/stripe", "sk_test_old", {
@@ -91,9 +88,7 @@ test("a collection link that names the Secrets page opens the link's own page, w
     egress: { urls: ["https://api.stripe.com"] },
   });
 
-  await page.goto(
-    `/projects/${fixture.project.slug}/secrets?collect=1&${new URL(url).searchParams}`,
-  );
+  await page.goto(url);
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
   await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
   await page

@@ -1,5 +1,5 @@
-// iterate/no-raw-itx-get: code reaches its context through `withItx`, never a raw `ITX.get()`, and a
-// `withItx` callback answers data, never the live value it is about to release.
+// iterate/no-raw-itx-get: code reaches its context with `using itx = this.getItx()`, never a raw
+// `ITX.get()`, and a `getItx()` scope is bound with `using` or handed out whole by an accessor.
 // Why, and what to write instead: ./no-raw-itx-get.md.
 import type { Rule } from "eslint";
 import type { StrictRule } from "../types.ts";
@@ -10,10 +10,7 @@ import { getPropertyName } from "./ast.ts";
 type AstNode = { type: string; parent?: AstNode; [key: string]: any };
 
 const MESSAGE =
-  "Reach the context through withItx: `withItx(this.env.ITX, (itx) => …)` from iterate/with-itx, or `this.withItx(fn)` on an SDK host (IterateConfigEntrypoint, StreamProcessorDurableObject); an object that needs reach takes a `WithItx` accessor. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
-
-const LIVE_ANSWER =
-  "This withItx callback answers a live value (the scope, a property of it, or an `itx.cd(path)` handle), and withItx releases it before the caller gets it. Answer data (`(await itx.cd(path).whoami()).path`); an object that needs reach takes a `WithItx` accessor and makes its own round trips.";
+  "Reach the context with `using itx = this.getItx()`, which every loaded WorkerEntrypoint and SDK host (IterateConfigEntrypoint, FacetDurableObject, StreamProcessorDurableObject) has; an object that needs reach takes an accessor, `() => this.getItx()`. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
 
 /** A raw get in a module handed over as text. */
 const RAW_GET_IN_TEXT = /\bITX\??\.get\(\s*\)/g;
@@ -24,7 +21,7 @@ export const noRawItxGetRule: StrictRule = {
     schema: [],
     docs: {
       description:
-        "Code reaches its context through withItx, which releases the scope and every call made through it; a raw `env.ITX.get()`, in a file or an embedded `*.js` module, releases nothing, and a withItx callback that answers a live value hands its caller a released one.",
+        "Code reaches its context with `using itx = this.getItx()`, which releases the scope and every call made through it when the block ends; a raw `env.ITX.get()`, in a file or an embedded `*.js` module, releases nothing, and neither does a getItx() no `using` binds.",
     },
   },
   create(context) {
@@ -39,10 +36,11 @@ export const noRawItxGetRule: StrictRule = {
       CallExpression(node) {
         const call = node as unknown as AstNode;
         if (isRawItxGet(call)) report(call, MESSAGE);
-        report(liveAnswerOfArrowCallback(call), LIVE_ANSWER);
-      },
-      ReturnStatement(node) {
-        report(liveAnswerOfReturn(node as unknown as AstNode), LIVE_ANSWER);
+        if (isUnboundGetItx(call))
+          report(
+            call,
+            "Bind this getItx() scope with `using` (`using itx = this.getItx()`) in the smallest block that holds its calls, or hand it out whole from an accessor (`() => this.getItx()`): nothing else releases it, and a scope nothing releases keeps its context, and any facet holding it, resident (apps/os/docs/residency.md).",
+          );
       },
       // A module handed over as source text: a `"worker.js": …` (or `.ts`) entry of a source's files
       // (a string, a template, `String.raw`, or a const holding one), or a template marked `/* js */`.
@@ -90,64 +88,25 @@ function isRawItxGet(call: AstNode): boolean {
   );
 }
 
-/** `withItx(binding, (itx) => <live>)` / `this.withItx((itx) => <live>)`: the live answer, if any. */
-function liveAnswerOfArrowCallback(call: AstNode): AstNode | undefined {
-  const callback = withItxCallbackOf(call);
-  if (callback?.type !== "ArrowFunctionExpression" || callback.body.type === "BlockStatement")
-    return undefined;
-  return isLiveAnswer(callback.body, callback.params[0]) ? callback.body : undefined;
-}
-
-/** `return <live>` directly inside a withItx callback's block body: the live answer, if any. */
-function liveAnswerOfReturn(statement: AstNode): AstNode | undefined {
-  if (!statement.argument) return undefined;
-  let callback = statement.parent;
-  while (callback && !isFunction(callback) && callback.type !== "FunctionDeclaration")
-    callback = callback.parent;
-  if (!callback?.parent || withItxCallbackOf(callback.parent) !== callback) return undefined;
-  return isLiveAnswer(statement.argument, callback.params[0]) ? statement.argument : undefined;
-}
-
-/** The callback of a `withItx(…, callback)` or `<x>.withItx(callback)` call. */
-function withItxCallbackOf(call: AstNode): AstNode | undefined {
-  if (call.type !== "CallExpression") return undefined;
+/** A `getItx()` or `<x>.getItx()` call whose scope no `using` declaration binds and no accessor
+ *  (`() => this.getItx()`, an arrow answering it whole) hands out: `const itx = this.getItx()`, a
+ *  call chained on it, an argument. */
+function isUnboundGetItx(call: AstNode): boolean {
   const callee = unwrap(call.callee);
   const named =
-    (callee.type === "Identifier" && callee.name === "withItx") ||
-    (callee.type === "MemberExpression" && memberName(callee) === "withItx");
-  const callback: AstNode | undefined = call.arguments.at(-1);
-  return named && isFunction(callback) ? callback : undefined;
-}
-
-/** The scope parameter itself, a property path of it with no call (`itx.repos`), or an
- *  `itx.cd(path)` handle, awaited or not: live values withItx releases before its caller sees them.
- *  Anything else a call answers may be data, which lint cannot tell from a handle. */
-function isLiveAnswer(answer: AstNode, parameter: AstNode | undefined): boolean {
-  if (parameter?.type !== "Identifier") return false;
-  let node = unwrap(answer);
-  if (node.type === "AwaitExpression") node = unwrap(node.argument);
-  if (node.type !== "CallExpression") return rootName(node, false) === parameter.name;
-  const callee = unwrap(node.callee);
-  return (
-    callee.type === "MemberExpression" &&
-    memberName(callee) === "cd" &&
-    rootName(callee.object, true) === parameter.name
-  );
-}
-
-/** The identifier a member chain starts from: `itx` of `itx.a.b`, and of `itx.a(…).b` when calls
- *  may be crossed. */
-function rootName(node: AstNode, crossCalls: boolean): string | undefined {
-  let current = unwrap(node);
-  for (;;) {
-    if (current.type === "MemberExpression") current = unwrap(current.object);
-    else if (crossCalls && current.type === "CallExpression") current = unwrap(current.callee);
-    else return current.type === "Identifier" ? current.name : undefined;
-  }
-}
-
-function isFunction(node: AstNode | undefined): boolean {
-  return node?.type === "ArrowFunctionExpression" || node?.type === "FunctionExpression";
+    (callee.type === "Identifier" && callee.name === "getItx") ||
+    (callee.type === "MemberExpression" && memberName(callee) === "getItx");
+  if (!named) return false;
+  // out through parentheses and type-only wrappers (`unwrap`'s): `using itx = this.getItx() as Itx`
+  let scope = call;
+  while (scope.parent && unwrap(scope.parent) !== scope.parent) scope = scope.parent;
+  const { parent } = scope;
+  const bound =
+    parent?.type === "VariableDeclarator" &&
+    parent.init === scope &&
+    ["using", "await using"].includes(parent.parent?.kind);
+  const handedOut = parent?.type === "ArrowFunctionExpression" && parent.body === scope;
+  return !bound && !handedOut;
 }
 
 /** A member's static name: `a.name`, `a["name"]`. */
