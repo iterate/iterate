@@ -379,7 +379,7 @@ export async function publicationOf(root: any, commitOid: string): Promise<any> 
 export const olderSnapshotsExpired = () => sleep(SNAPSHOT_TTL_MS);
 
 /** A fresh project root with a config that does nothing published, as a created project's is: its
- *  birth rows deliver there instead of probing the root for a config it lacks. */
+ *  `config` birth row delivers there instead of passing every event over. */
 export async function freshPublishedCtx(prefix: string): Promise<{ ctx: string; itx: any }> {
   const ctx = freshCtx(prefix);
   const itx = openItx(ctx);

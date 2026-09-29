@@ -359,23 +359,24 @@ export class SubscriptionDelivery {
   /** Every cursor row's claim on the alarm, earliest first (the loop's deadline is `[0]?.at`):
    *  EXACTLY the persisted `nextAttemptAtMs` of a row not halted — the claim its loop wrote as it
    *  started, a ladder rung, or the claim a death left, ahead or due alike (a due one keeps the alarm
-   *  armed until its pass runs). A fresh incarnation reports the same claims its predecessor did,
-   *  because nothing in memory is one: a caught-up row, a dangling row and a halted row (whose
-   *  persisted cursor may still carry the time that halted it) carry none the alarm reads, and a
-   *  target that owns its progress has no cursor at all. */
+   *  armed until its pass runs). A fresh incarnation reports the claims its predecessor did,
+   *  because nothing in memory adds one — memory only withdraws a fan-out record's claim while its
+   *  call is out past its time (`fanOutClaim`): a caught-up row, a dangling row and a halted row
+   *  (whose persisted cursor may still carry the time that halted it) carry none the alarm reads,
+   *  and a target that owns its progress has no cursor at all. */
   deadlines(): DeliveryDeadline[] {
     const state = this.#stream.coreReducedState;
+    const now = Date.now();
     const deadlines: DeliveryDeadline[] = [];
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
       if (!row || row.halted) continue;
       const at = record.cursor?.nextAttemptAtMs;
       if (at !== undefined) deadlines.push({ name, at, attempt: record.cursor!.attempt });
-      // A fan-out row's delivery records are claims too, each its own: a lease's end or a rung. One
-      // waiting for its target to resolve (no time) claims nothing.
-      for (const delivery of record.deliveries.values())
-        if (delivery.nextAttemptAtMs !== null)
-          deadlines.push({ name, at: delivery.nextAttemptAtMs, attempt: delivery.attempt });
+      for (const delivery of record.deliveries.values()) {
+        const claim = fanOutClaim(record, delivery, now);
+        if (claim !== undefined) deadlines.push({ name, at: claim, attempt: delivery.attempt });
+      }
     }
     return deadlines.sort((a, b) => a.at - b.at);
   }
@@ -386,6 +387,7 @@ export class SubscriptionDelivery {
    *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another. */
   owedCause(dueBy: number): Cause | undefined {
     const state = this.#stream.coreReducedState;
+    const now = Date.now();
     const owed: StreamEvent[] = [];
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
@@ -401,9 +403,11 @@ export class SubscriptionDelivery {
         } catch {
           // an unreadable batch halts its row when the pass reaches it; it causes nothing here
         }
-      for (const delivery of record.deliveries.values())
-        if (delivery.nextAttemptAtMs !== null && delivery.nextAttemptAtMs <= dueBy)
+      for (const delivery of record.deliveries.values()) {
+        const claim = fanOutClaim(record, delivery, now);
+        if (claim !== undefined && claim <= dueBy)
           owed.push(...this.#readFanOutEvent(delivery.offset));
+      }
     }
     return deepestCause(owed.map((event) => event.source?.cause));
   }
@@ -1306,6 +1310,8 @@ export class SubscriptionDelivery {
   //   refused for good (PERMANENT_FAILURE,     deleted after its dead letter,
   //   EVENT_TOO_LARGE), or its last attempt    `subscription-delivery-failed` (once, keyed)
   //   the target resolves to nothing           attempt n − 1, no time: the row DANGLES
+  //   the project's config is unpublished      deleted: passed over (the config birth row
+  //   (`itx.config`, `unpublishedConfig`)      delivers from the commit that publishes it)
   //   the target cannot be called, or GONE     attempt n − 1, no time: the row HALTS
   //   the context dies with the call out       still leased: at its due time a SUSPECT, retried
   //                                            ALONE, once every call out has settled and with
@@ -1320,10 +1326,9 @@ export class SubscriptionDelivery {
   //                                                                      nothing owed, one new event
   //   dangling                  its target resolves to nothing           a durable commit, the alarm;
   //                                                                      with a backlog, its own probe
-  //                                                                      (≤ DELIVERY_MAX_ATTEMPTS), when
-  //                                                                      another context's snapshot
-  //                                                                      refused it at that snapshot's
-  //                                                                      expiry
+  //                                                                      (≤ DELIVERY_MAX_ATTEMPTS), never
+  //                                                                      before another context's
+  //                                                                      snapshot that refused it expires
   //   wedged                    every slot holds a call past its         the incarnation is ended
   //                             watchdog                                 (`abortIncarnation`)
   //   out of room               the in-flight budget is full             the next release
@@ -1565,12 +1570,14 @@ export class SubscriptionDelivery {
     if (outOfRoom) {
       // The next release runs the pump again; a due record left for room keeps a time a watchdog
       // ahead (every call out has given its room back by then), so the alarm never spins on it.
+      // One with no time claims nothing, and gets none here.
       this.#waitForFanOutRoom(name, fanOut);
       for (const delivery of record.deliveries.values())
         if (
           !fanOut.slots.has(delivery.offset) &&
           !givenUp.has(delivery.offset) &&
-          (delivery.nextAttemptAtMs === null || delivery.nextAttemptAtMs <= now)
+          delivery.nextAttemptAtMs !== null &&
+          delivery.nextAttemptAtMs <= now
         )
           writes.push({ ...delivery, nextAttemptAtMs: now + CURSOR_DELIVERY_CALL_WATCHDOG_MS });
     }
@@ -1684,6 +1691,18 @@ export class SubscriptionDelivery {
     const delivery = record.deliveries.get(event.offset);
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
+    // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`).
+    const { validUntil, unpublishedConfig } = error as {
+      validUntil?: unknown;
+      unpublishedConfig?: unknown;
+    };
+    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig === true) {
+      // nothing is owed to a config that is not published: the row delivers from the commit that
+      // publishes it
+      if (record.deliveries.delete(event.offset))
+        this.#stream.storage.deleteSubscriptionDelivery(name, event.offset);
+      return this.#pumpFanOut(name);
+    }
     if (code && TARGET_FAILURE_CODES.has(code)) {
       this.#writeFanOutDelivery(name, {
         ...delivery,
@@ -1695,7 +1714,6 @@ export class SubscriptionDelivery {
         fanOut.dangling = true;
         // another context's snapshot refused it: a read after it expires may name it (a refusal
         // no snapshot gave stands until something changes, `Infinity`: no time to wait for)
-        const { validUntil } = error as { validUntil?: unknown };
         fanOut.refusedUntil =
           typeof validUntil === "number" && Number.isFinite(validUntil) ? validUntil : undefined;
       } else
@@ -1797,12 +1815,12 @@ export class SubscriptionDelivery {
     if ((fanOut.dangling || fanOutPaused(record.cursor)) && backlog) {
       const standing = record.cursor?.nextAttemptAtMs;
       if (standing !== undefined && standing > now) nextAttemptAtMs = standing;
-      else if (fanOut.dangling && fanOut.refusedUntil) {
-        probes = Math.min(probes + 1, DELIVERY_MAX_ATTEMPTS);
-        nextAttemptAtMs = Math.max(now + durableLadderDelayMs(probes), fanOut.refusedUntil);
-      } else if (probes < DELIVERY_MAX_ATTEMPTS) {
+      else if (probes < DELIVERY_MAX_ATTEMPTS) {
         probes += 1;
-        nextAttemptAtMs = now + durableLadderDelayMs(probes);
+        nextAttemptAtMs = Math.max(
+          now + durableLadderDelayMs(probes),
+          (fanOut.dangling && fanOut.refusedUntil) || 0,
+        );
       }
     }
     const {
@@ -1867,6 +1885,20 @@ export class SubscriptionDelivery {
  *  facet or a lent stub is pushed whatever the row says). */
 function isFanOutRow(state: CoreState, row: Subscription): boolean {
   return row.ordered === false && !targetOwnsProgress(state, row);
+}
+
+/** A fan-out delivery record's claim on the alarm: its time — a lease's end or a rung. None while
+ *  it waits for its target (no time), nor once its time has come with its call still out: that
+ *  call's settle runs the pump, and a fresh incarnation, whose slots are empty, claims it again. A
+ *  lease ahead is claimed with its call out, so a death mid-call is retried. */
+function fanOutClaim(
+  record: SubscriptionDeliveryRecord,
+  delivery: FanOutDeliveryRecord,
+  now: number,
+): number | undefined {
+  const at = delivery.nextAttemptAtMs;
+  if (at === null || (at <= now && record.fanOut?.slots.has(delivery.offset))) return undefined;
+  return at;
 }
 
 /** A fan-out row whose last FAN_OUT_PAUSE_AFTER_DISTINCT_FAILURES distinct events failed with no

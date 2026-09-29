@@ -40,15 +40,17 @@ export const OS_DOPPLER_PROJECT = "os";
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
 /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment (a change reaches the contexts
- *  born after it): two fan-out rows from the context's birth on. `config` delivers every durable
- *  event to the project's published config entrypoint, `itx.config` on `/` (apps/os
- *  src/project/publication.ts); `platform` to the platform's own hook (apps/os src/platform-hook.ts). */
+ *  born after it): two fan-out rows from the context's birth on, both spelled at the fixed point
+ *  (`itx.builtins`) so no rule of the context's own can mask or re-point them. `config` delivers
+ *  every durable event to the project's published config entrypoint, `itx.config` on `/` (apps/os
+ *  src/project/publication.ts), and passes over what is committed while none is published;
+ *  `platform` delivers to the platform's own hook (apps/os src/platform-hook.ts). */
 export const PROJECT_CONTEXT_BIRTH_EVENTS = [
   {
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "config",
-      target: "itx.cd('/').config.deliverEvent",
+      target: "itx.builtins.cd('/').config.deliverEvent",
       afterOffset: 0,
       ordered: false,
     },

@@ -372,10 +372,12 @@ export abstract class IterateConfigEntrypoint<
   protected readonly withItx = <T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> =>
     withItx(this.env.ITX, call);
 
-  /** THE AUTHOR HOOK: every durable event of every context of the project, one per call, unordered
-   *  and at least once; a throw fails that event alone, which the platform retries. `itx` is the
-   *  project's root, `itx.cd(event.path)` the event's own context. Make each reaction idempotent (an
-   *  append keyed by `event.path` and `event.offset`) and keep no state here. Default: ignore it. */
+  /** THE AUTHOR HOOK: every durable event of every context of the project from its first
+   *  publication on (what was committed while no config was published is not delivered), one per
+   *  call, unordered and at least once; a throw fails that event alone, which the platform retries.
+   *  `itx` is the project's root, `itx.cd(event.path)` the event's own context. Make each reaction
+   *  idempotent (an append keyed by `event.path` and `event.offset`) and keep no state here.
+   *  Default: ignore it. */
   processEvent(_args: IterateConfigProcessEventArgs): void | Promise<void> {}
 
   /** THE WEB ROOT — every Request on a host of the project that no fetch route takes (the platform
