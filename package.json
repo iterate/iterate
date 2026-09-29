@@ -7,7 +7,7 @@
     "getin": "pnpm --dir apps/os getin",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs && pnpm typecheck:configs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",
-    "typecheck:configs": "tsc -p configs/default && tsc -p configs/with-agents",
+    "typecheck:configs": "tsc -p configs/default && tsc -p configs/heartbeat && tsc -p configs/minimal",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",

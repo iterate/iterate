@@ -70,7 +70,7 @@ function received(message: MessageInput) {
     payload: {
       ...messageOf(message),
       envelope: { from: "ann@x", to: "acme@iterate.app" },
-      sender: { verified: true, member: false },
+      sender: { verified: true, member: false, direct: true },
       automated: false,
       authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
     },

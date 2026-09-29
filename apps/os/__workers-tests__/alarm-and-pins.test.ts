@@ -337,12 +337,12 @@ test("A '*' FACET WAKE OWES NOTHING: a facet-hosting context owes no alarm after
   expect(await owedAlarmAt(ctx)).toBeNull(); // (a read constructs nothing: the alarm is storage)
   await new Promise((r) => setTimeout(r, 1_500));
   const woken = await wokens(); // this read is a request: at most one more incarnation, by request
-  expect(woken.slice(before).map((event) => (event.payload as { reason: string }).reason)).toEqual(
+  expect(woken.slice(before).map((event) => (event.payload as { cause: string }).cause)).toEqual(
     expect.arrayContaining(["alarm"]),
   );
   expect(woken.length).toBeLessThanOrEqual(before + 2);
   expect(
-    woken.slice(before).filter((e) => (e.payload as { reason: string }).reason === "alarm"),
+    woken.slice(before).filter((e) => (e.payload as { cause: string }).cause === "alarm"),
   ).toHaveLength(1);
   expect(await snapCounter(ctx)).toMatchObject({ state: { n: await durableCount(ctx) } }); // the wake record reached the "*" facet exactly once
 });
@@ -367,7 +367,7 @@ test("A WAKE MAKES NO LOOP: an incarnation the alarm woke ends with no alarm —
   await new Promise((r) => setTimeout(r, 1_500)); // the alarm has fired; nothing else has touched the context
   const woken = await wokens();
   expect(woken).toHaveLength(before + 1);
-  expect(woken.at(-1)!.payload).toMatchObject({ reason: "alarm" });
+  expect(woken.at(-1)!.payload).toMatchObject({ cause: "alarm", due: ["schedule"] });
   // Nothing pinned: no alarm — and none appears.
   await until("no alarm", async () => (await owedAlarmAt(ctx)) === null);
   await new Promise((r) => setTimeout(r, 1_500));

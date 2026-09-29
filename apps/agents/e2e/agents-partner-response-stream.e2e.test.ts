@@ -2,12 +2,11 @@
 // answers a Response or a stream. Whole-JSON fixtures cannot cover incremental delivery or Response
 // metadata.
 import { expect } from "vitest";
-import { installAgents } from "@iterate-com/agents/install";
 import { collector, freshCtx, readAll, sleep, until } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse, sseStream } from "../../os/e2e/support/fake-ai.ts";
 import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
-import { agentsWorkspaceSource } from "./agents-source.ts";
+import { installWorkspaceAgents } from "./agents-source.ts";
 import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
 
 localOnly(
@@ -16,7 +15,7 @@ localOnly(
     const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-partner-stream"));
-      await installAgents(itx, agentsWorkspaceSource);
+      await installWorkspaceAgents(itx);
       const support = itx.cd("/agents/support");
       const secondPart = Promise.withResolvers<void>();
       const partnerAi = new FakeAi([

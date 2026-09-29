@@ -1,8 +1,9 @@
 // context/worker-loader.test.ts — the Worker Loader cacheKey is an AUTHORITY boundary: the
 // isolate's whole world (its env.ITX host stub, its globalOutbound) is baked in at first
 // materialization, so two callers who compose the same key SHARE an isolate. prepareConfinedWorker
-// mints the JSON array `[kind, deploy, platformOrigin, owner, sourceVersion]` (the caller's cacheKey,
-// else the modules' content hash) WITHOUT asking the loader — `load()` is the one call that does (the
+// mints the JSON array `[kind, deploy, platformOrigin, owner, sourceVersion]` (tagged: a published
+// module's `module:` identity, the caller's `key:` cacheKey, else the modules' `content:` hash)
+// WITHOUT asking the loader — `load()` is the one call that does (the
 // last-but-one row). A facet's owner is the pair (context name, class name), and either half may
 // contain ":" (a context path is any string; ES2022 allows `export { X as "y:Tally" }`); as one JSON
 // element of the id, the pair is unambiguous whatever either half contains. The second
@@ -86,7 +87,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
   expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@3f2a1c"]),
   });
   expect(keys.at(-1)).toBe(first.loaderId);
   await vi.waitFor(() => expect(produced).toBe(1)); // getCode's async body runs, its key digested first
@@ -239,12 +240,45 @@ test("literal modules: the key is their content hash unless the caller names a c
     cacheKey: "v7",
   });
   expect(named).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "v7"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:v7"]),
   });
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(loadConfined(env, { source: { "lib.js": "export default 1" } })).rejects.toThrow(
     /no entry/,
   );
+});
+
+test("a main module is one more element of the key, and a module identity names the code in place of the cacheKey: every source that answers it loads the same code for that module", async () => {
+  const { env } = fakeLoaderEnv();
+  const producer = { source: "itx.repos.get('/repos/config').modules()", cacheKey: "commit-1" };
+  const agents = await loadConfined(env, { ...producer, mainModule: "agents.ts" });
+  expect(JSON.parse(agents.loaderId)).toEqual([
+    "worker",
+    "deploy-1",
+    null,
+    "prj_u.iterate/",
+    "key:commit-1",
+    "agents.ts",
+  ]);
+  const identified = (cacheKey: string) =>
+    loadConfined(env, { ...producer, cacheKey, mainModule: "agents.ts", moduleIdentity: "a1" });
+  // two commits whose agents.ts is one identity: one isolate identity
+  expect(await identified("commit-1")).toMatchObject({
+    loaderId: (await identified("commit-2")).loaderId,
+  });
+  expect(JSON.parse((await identified("commit-2")).loaderId)).toEqual([
+    "worker",
+    "deploy-1",
+    null,
+    "prj_u.iterate/",
+    "module:a1",
+    "agents.ts",
+  ]);
+  // a cacheKey spelled as that identity is still a cacheKey: it never takes the module's id
+  const spoofed = await prepareConfinedWorker(
+    workerOptions(env, { ...producer, cacheKey: "a1", mainModule: "agents.ts" }),
+  );
+  expect(JSON.parse(spoofed.loaderId)).toContain("key:a1");
 });
 
 test("WORKAROUND: a producer that threw marks its id dead; the next attempt produces OUTSIDE the loader and loads literally under the id's next generation; a producer that keeps failing mints nothing", async () => {
@@ -261,7 +295,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
   expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"]),
   });
   await expect(warm.get(first.loaderId)).rejects.toThrow(/not landed/);
   expect(produced).toBe(1);
@@ -275,7 +309,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   artifactLanded = true;
   const recovered = await load();
   expect(recovered).toMatchObject({
-    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@dead"])}#1`,
+    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"])}#1`,
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
     modules: { "worker.js": "export default class Built {}" },
@@ -325,7 +359,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       cacheKey: "c0ffee",
       invoke,
     });
-  const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "c0ffee"]);
+  const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:c0ffee"]);
   // the first load's producer loses its connection, and again on its one repeat, inside getCode:
   // the id is dead
   await load();
@@ -402,7 +436,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   outcome = "ok";
   const incarnation2 = {} as Fetcher;
   await expect(load(incarnation2)).resolves.toMatchObject({
-    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "site@1"])}#1`,
+    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "key:site@1"])}#1`,
   });
   expect(produced).toBe(4);
 });
@@ -445,7 +479,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
     "deploy-1",
     null,
     ["prj_u.iterate/", "Counter"],
-    expect.stringMatching(/^[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
+    expect.stringMatching(/^content:[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
   ]);
   prepared.load();
   expect(keys).toEqual([prepared.loaderId]);

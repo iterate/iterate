@@ -273,7 +273,8 @@ export function configTemplateNames(repoRoot: string) {
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
  *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
- *  the custom field prefilled), so the project is born from the unmerged template. */
+ *  the custom field prefilled), so the project is born from the unmerged template. `default` never
+ *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (scripts/build.ts). */
 export function templateQuickLaunches(input: {
   dashUrl: string;
   templates: string[];
@@ -281,7 +282,8 @@ export function templateQuickLaunches(input: {
   headSha: string;
 }) {
   return input.templates.map((name) => {
-    const changed = input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
+    const changed =
+      name !== "default" && input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
     const template = changed
       ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
       : name;

@@ -31,7 +31,7 @@ export async function startCall(input: {
 }): Promise<Call> {
   const { api, projectId, audio, onFact } = input;
   const project = await api.projects.get(projectId);
-  // The page offers Call only once `itx.voice` is configured (it installs voice otherwise), so the
+  // The page offers Call only once `itx.voice` is configured (it sets voice up otherwise), so the
   // project answers `voice`.
   const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
   await installed.voice.health().catch((error: unknown) => {

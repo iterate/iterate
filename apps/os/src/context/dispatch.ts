@@ -99,6 +99,11 @@ export async function walkSteps(
   let { value, receiver } = start;
   for (const [stepIndex, step] of steps.entries()) {
     if (!pipelined(value)) value = await value;
+    // A FACET TAKES THE REST OF THE WALK IN ONE CALL, through its door (cause.ts): a verb of what it
+    // answers (`repos().create(path)`) then runs under the call's cause too.
+    const name = typeof step === "string" ? step : step[0];
+    if (value instanceof FacetHandle && name !== "invoke" && name !== "applyRoot")
+      return { value: await value.invoke(steps.slice(stepIndex)), receiver: undefined };
     if (stepIndex > 0 && holdsRpcSession(value)) rpcSessionsSteppedPast?.push(value);
     if (value == null)
       throw new Error(

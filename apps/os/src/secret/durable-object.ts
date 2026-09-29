@@ -661,7 +661,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
   };
 
   /** A CLIENT SECRET THIS SECRET HOLDS, for another secret's token request to `origin`
-   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`): the value, or the
+   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`) or a webhook's
+   *  signature to it (context/built-ins.ts `webhookSigningKey`): the value, or the
    *  string at `field` of a JSON one, while `origin` is in the pin, which binds this use as it binds
    *  every other. Only material of its own: a borrowed secret is refused. Never in `publicMethods`. */
   async clientSecretFor(input: { origin: string; field?: string }): Promise<string> {

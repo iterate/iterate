@@ -3,11 +3,11 @@
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
+import type { EmailState } from "iterate/email";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
-import type { EmailState } from "../src/email/contract.ts";
 import { receiveEmail } from "../src/integrations/email.ts";
 import type { Env } from "../src/env.ts";
-import { projectWithMember, readLog, snapshot } from "./support.ts";
+import { projectWithMember, readLog, snapshot, stub } from "./support.ts";
 
 test("a message lands once per project address on /integrations/email with its attachment a project file, and a reply threads with it", async () => {
   const member = await projectWithMember("mailbox");
@@ -55,7 +55,7 @@ test("a message lands once per project address on /integrations/email with its a
       references: [],
       attachments: [{ filename: "note.txt", contentType: "text/plain", size: 5 }],
       envelope: { from: "ann@example.com", to: "mailbox@projects.test" },
-      sender: { verified: true, member: false },
+      sender: { verified: true, member: false, direct: true },
       automated: false,
       authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
     },
@@ -79,7 +79,21 @@ test("a message lands once per project address on /integrations/email with its a
       inReplyTo: "a1@example.com",
       references: ["a1@example.com"],
     },
+    source: { origin: "/" },
   });
+  // a child's send names the child, which runs it itself through its link to the root
+  const child = stub(`${member.projectId}.iterate/agents/a`);
+  await child.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx", target: "itx.cd('/')" },
+  });
+  expect(
+    await child.invoke([
+      "itx",
+      "email",
+      ["send", { to: "ann@example.com", subject: "From a child", text: "…" }],
+    ]),
+  ).toMatchObject({ source: { origin: "/agents/a" } });
   // Their answer to the reply names the whole chain; the thread is the first message's.
   await deliver(
     "mailbox+anything@projects.test",
@@ -139,10 +153,14 @@ test("a member's verified message says so, and a forged one claiming to be their
     ),
   );
   expect(mailOf(await readLog(inbox)).map((event) => event.payload)).toMatchObject([
-    { messageId: "real@example.test", sender: { verified: true, member: true } },
+    {
+      messageId: "real@example.test",
+      // a DKIM signature alone: verified, but not direct (anyone could re-send it)
+      sender: { verified: true, member: true, direct: false },
+    },
     {
       messageId: "forged@example.test",
-      sender: { verified: false, member: false },
+      sender: { verified: false, member: false, direct: false },
       authentication: { spf: "softfail", dkim: "none", dmarc: "none" },
     },
   ]);

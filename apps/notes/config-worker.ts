@@ -5,9 +5,9 @@
 // `itx/ingress-configured`); the platform says which host in the `x-iterate-routing-slug` header
 // (absent on the apex) — the platform's header, never a visitor's. The loader links `iterate/sdk`
 // to the platform's own SDK build.
-import { ConfigWorker } from "iterate/sdk";
+import { IterateConfigEntrypoint } from "iterate/sdk";
 
-export default class extends ConfigWorker {
+export default class extends IterateConfigEntrypoint {
   async fetch(request: Request) {
     const denied = this.auth.require(request);
     if (denied) return denied;

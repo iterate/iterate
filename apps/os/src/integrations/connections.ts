@@ -10,7 +10,7 @@ import { INTEGRATION_PROVIDER_NAMES, type StreamPage } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
-import { bytesFromBase64url, signClaims } from "../caller.ts";
+import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -198,7 +198,7 @@ export async function appendPlatformFact(
   env: IntegrationEnv,
   projectId: string,
   path: string,
-  event: StreamEventInput,
+  event: StreamEventInput & { type: PlatformFactType },
 ): Promise<void> {
   await env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path })).invoke(
     ["itx", "builtins", ["append", event]],

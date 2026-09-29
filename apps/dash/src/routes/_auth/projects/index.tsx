@@ -47,7 +47,7 @@ const shell = getRouteApi("/_auth");
 export const Route = createFileRoute("/_auth/projects/")({
   validateSearch: z.object({
     new: z.literal(1).optional().catch(undefined),
-    // a `configs/` template by name (`with-agents`), or a `github:` reference for the custom field
+    // a `configs/` template by name (`minimal`), or a `github:` reference for the custom field
     template: z.string().optional().catch(undefined),
   }),
   loader: async ({ context }) => ({ templateOptions: await context.api.projects.templates() }),
@@ -268,7 +268,7 @@ function NewProjectForm({
             value={template}
             onChange={(event) => setTemplate(event.target.value)}
           >
-            <NativeSelectOption value="">Minimal</NativeSelectOption>
+            <NativeSelectOption value="">Default</NativeSelectOption>
             {templateOptions.map((option) => (
               <NativeSelectOption key={option.reference} value={option.reference}>
                 {option.label}
@@ -358,7 +358,7 @@ function NewProjectForm({
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
  *  a name is the built-in whose path is `configs/<name>` — `default`, and a name that is none,
- *  is Minimal (the default files). */
+ *  is the default template (the default files). */
 function templateFields(
   template: string | undefined,
   options: { reference: string }[],

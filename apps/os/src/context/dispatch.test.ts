@@ -22,11 +22,11 @@ import {
   walkSteps,
 } from "./dispatch.ts";
 import {
-  BUILT_IN_ROOTS,
   ItxExpressionResolver,
   type ItxExpressionRewriteRule,
 } from "./itx-expression-rewriting.ts";
 import { ScopedArtifactRepoRpcTarget, type ArtifactsNamespace } from "./cf-artifacts.ts";
+import { oneContextReach } from "./test-support.ts";
 
 // ───────────────────────────── pipelined RPC promise threading ─────────────────────────────
 // THE CONTRACT (walkSteps): a value carrying a registered pipelinable-promise brand is NEVER
@@ -172,9 +172,9 @@ test("the resolver releases what its walk stepped past once the answer is in; th
   const resolver = new ItxExpressionResolver({
     builtIns: { facets: { get: () => ({ repos: async () => collection }) } },
     rewriteRules: () => [],
-    implicitRoots: new Set(BUILT_IN_ROOTS),
     path: "/",
     caller: () => ({ principal: null }),
+    ...oneContextReach().reach,
   });
   expect(await resolver.invoke("itx.facets.get('project').repos().list()")).toEqual(["/repos/a"]);
   expect(order).toEqual(["answer settled", "collection released"]);
@@ -209,9 +209,9 @@ test("the resolver releases a walk's answer that REJECTS — its caller gets the
   const resolver = new ItxExpressionResolver({
     builtIns: { facets: { get: () => ({ workspaces: async () => collection }) } },
     rewriteRules: () => [],
-    implicitRoots: new Set(BUILT_IN_ROOTS),
     path: "/",
     caller: () => ({ principal: null }),
+    ...oneContextReach().reach,
   });
   await expect(
     resolver.invoke("itx.facets.get('project').workspaces().delete('/never')"),
@@ -402,9 +402,9 @@ const resolverOver = (s: ReturnType<typeof scope>, ...rewriteRules: ItxExpressio
   new ItxExpressionResolver({
     builtIns: s.builtIns,
     rewriteRules: () => rewriteRules,
-    implicitRoots: new Set(BUILT_IN_ROOTS),
     path: "/",
     caller: () => ({ principal: null }),
+    ...oneContextReach().reach,
   });
 
 /** A Workers-RPC stub a hop below answered with — registered as iterate-context.ts registers the

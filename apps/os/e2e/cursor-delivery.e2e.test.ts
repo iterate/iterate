@@ -29,6 +29,7 @@
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import {
+  BIRTH_ROW_NAMES,
   collector,
   freshCtx,
   openItx,
@@ -442,7 +443,11 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
   }
   // and the core snapshot's subscription rows are the same truth, as reduced state
   const snap: any = await itx.invoke("itx.facets.get('core').snapshot()");
-  expect(Object.keys(snap.state.subscriptions).sort()).toEqual(["auto-1", "auto-2", "auto-3"]);
+  expect(
+    Object.keys(snap.state.subscriptions)
+      .filter((name) => !BIRTH_ROW_NAMES.has(name))
+      .sort(),
+  ).toEqual(["auto-1", "auto-2", "auto-3"]);
 });
 
 test("subscribe resolves without probing the receiver; an unusable target fails at its FIRST delivery, never at configure", async () => {

@@ -18,6 +18,21 @@ import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
 import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
 
+/** A publication's modules: each top-level module of the config commit, by path — its identity
+ *  (the hash of what the loader loads with it as the main module) and the classes it exports that a
+ *  loader hosts by name. */
+const PublishedModules = z.record(
+  z.string(),
+  z.object({ identity: z.string().min(1), classes: z.array(z.string()) }),
+);
+
+/** A publication's manifest (iterate/api `WorkerManifest`), as the pointer carries it: read where a
+ *  facet loads from the worker it names (context/facet-host.ts), and only from the platform's rule. */
+export const WorkerManifest = z.object({
+  generation: z.number().int().positive(),
+  modules: PublishedModules,
+});
+
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({
   /** Cloudflare's hostname status: `pending` until the CNAME is seen, then `active`. */
@@ -40,7 +55,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "15",
+  version: "16",
   description:
     "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -69,20 +84,46 @@ export const ProjectContract = defineProcessorContract({
     /** The project secret catalog. */
     secrets: SecretCatalog.default({}),
     /** The config repo's tip as its commits reach `/`: the latest `repo/commit-completed` from
-     *  `/repos/config` — the commit the apex follows — by its oid (what the ingress target names) and
-     *  the OFFSET of the fact (the publication the processor owes for it). Null until the seed. */
+     *  `/repos/config`, by its oid and the OFFSET of the fact — the generation of the publication
+     *  the processor owes for it, of `main`'s head as it then is. Null until the seed. */
     configRepoTip: z
-      .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
+      .object({
+        commitOid: z.string().min(1),
+        offset: z.number().int().positive(),
+        /** The commit fact's cause, which its publication runs under (src/cause.ts). */
+        cause: z.object({ chain: z.string(), depth: z.number() }).optional(),
+      })
       .nullable()
       .default(null),
-    /** The config repo's commit the apex was last pointed at: the latest `itx/ingress-configured`
-     *  whose target is the one the processor writes for a commit (processor.ts
-     *  `configRepoIngressTarget`). The publication the tip owes is done once this is the tip's
-     *  commit. A target set by hand, or none, leaves it as it was. Null until the first. */
-    publishedCommitOid: z.string().min(1).nullable().default(null),
-    /** The offset of the `itx/ingress-configured` that published it: a tip is published only by one
-     *  after its fact, since a pull can return main to a commit published before. */
-    publishedAt: z.number().int().nullable().default(null),
+    /** THROUGH WHICH TIP THE CONFIG REPO IS PUBLISHED (processor.ts, the follower): the newest
+     *  generation — a tip's offset — whose publication landed, `project/worker-updated` or the
+     *  `project/worker-update-failed` of a commit it refused. A tip is owed while its offset is past
+     *  this. Null until the first. */
+    publishedThrough: z.number().int().positive().nullable().default(null),
+    /** The offset of the newest publication fact of either kind, the platform's give-up included:
+     *  the creation saga lands the certificate once there is one. Null until the first. */
+    lastPublicationFactOffset: z.number().int().positive().nullable().default(null),
+    /** THE PUBLISHED CONFIG, the last `project/worker-updated`: its commit, generation and
+     *  modules, whose classes the next publication must still export. Null until the first. */
+    published: z
+      .object({
+        commitOid: z.string().min(1),
+        generation: z.number().int().positive(),
+        modules: PublishedModules,
+      })
+      .nullable()
+      .default(null),
+    /** THE LAST REFUSED PUBLICATION, the last `project/worker-update-failed` that was no give-up:
+     *  the commit, the generation and why — what `waitForPublication` (library.ts) answers a commit
+     *  that is not published. Null until the first. */
+    refused: z
+      .object({
+        commitOid: z.string().min(1),
+        generation: z.number().int().positive(),
+        error: z.string(),
+      })
+      .nullable()
+      .default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
      *  observation (null until provisioned), and the last failure's words. */
@@ -186,11 +227,29 @@ export const ProjectContract = defineProcessorContract({
         "Make `hostname` the project's primary hostname, or clear it with null. Only a live hostname the project holds becomes primary; any other leaves the primary as it was.",
       payloadSchema: z.object({ hostname: z.string().min(1).nullable() }),
     },
+    "events.iterate.com/project/worker-updated": {
+      description:
+        "The platform published commit `commitOid` of `/repos/config` as publication `generation`, the offset on `/` of the commit fact that asked for it: `itx.config` on `/` names its worker, and every context resolves through it, so every context's events reach its `processEvent` and its facets load from it. Its modules passed the probe: every top-level module resolves, the main module's default export is an IterateConfigEntrypoint that constructs, and every class the last publication exported is still exported. The config entrypoint's init case. Only the platform appends it.",
+      payloadSchema: z.object({
+        commitOid: z.string().min(1),
+        generation: z.number().int().positive(),
+        modules: PublishedModules,
+      }),
+    },
+    "events.iterate.com/project/worker-update-failed": {
+      description:
+        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: a module that does not resolve, a main module whose default export is no IterateConfigEntrypoint or does not construct, or a class the last publication exported gone. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
+      payloadSchema: z.object({
+        commitOid: z.string().min(1),
+        generation: z.number().int().positive(),
+        error: z.string(),
+        unavailable: z.literal(true).optional(),
+      }),
+    },
   },
-  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, its
-  // connections' facts (src/integrations/contract.ts, shared with the account), and the
-  // core's apex target (`itx/ingress-configured`), which it both appends and reduces, and the
-  // config worker's subscription row (`itx/subscription-configured`), which it only appends.
+  // THE RELATIONSHIP: the project consumes the entities' certificates without owning them and its
+  // connections' facts (src/integrations/contract.ts, shared with the account), and appends the
+  // core's apex target (`itx/ingress-configured`) once, at creation.
   processorDeps: [
     RepoContract,
     WorkspaceContract,
@@ -219,7 +278,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/secret/borrowed",
     "events.iterate.com/secret/lend-revoked",
     "events.iterate.com/repo/commit-completed",
-    "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/project/worker-updated",
+    "events.iterate.com/project/worker-update-failed",
     "events.iterate.com/itx/child-created",
     "events.iterate.com/slack/connected",
     "events.iterate.com/slack/disconnected",
@@ -240,11 +300,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
-    // the core's: the saga publishes the seeded config repo's commit, and the processor every later
-    // commit of the config repo (a commit IS its publication) — the apex and the config worker's
-    // subscription, both at that commit
+    // the core's: the saga points the project's apex at its published config (`itx.config`), once
     "events.iterate.com/itx/ingress-configured",
-    "events.iterate.com/itx/subscription-configured",
   ],
 });
 

@@ -7,31 +7,40 @@ reaches `project/created` or `project/create-failed`.
 The project processor creates `/repos/config`, then seeds it only when `main` is unborn. A template
 may be a public GitHub repository or subdirectory. Its ref is resolved to a commit before the
 request is recorded, so recovery always uses the same source. A template's `package.json` names
-its main module in `"main"`; the built-in minimal template is used when none is supplied. Built-in choices come from
+its main module in `"main"`; the built-in default template is used when none is supplied. Built-in choices come from
 [configs](../../../configs/README.md).
 
-The processor publishes the seed commit (below) and emits `project/created` in the same append, so
-the config worker is subscribed and the apex answers before the certificate. The optional agents
-template's `iterate.json` subscribes its worker to `project/created`; the platform does not add
-agent lifecycle behavior by itself. Interrupted attempts reuse the repository and seed commit;
-existing repositories and later edits are preserved. A failure emits `project/create-failed`, and a
-later create call can start another attempt.
+Once the seed's publication has landed, admitted or refused (below), the processor points the
+project's ingress at its published config, `itx.config`, once, and emits `project/created`. Interrupted attempts reuse the repository and seed commit; existing repositories
+and later edits are preserved. A failure emits `project/create-failed`, and a later create call can
+start another attempt.
 
 ## Publishing
 
-A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes that
-commit in one append: `itx/ingress-configured` points the apex at the worker at that commit, and
-the `config-worker` subscription hands the same worker's `processEventBatch` the events its
-`iterate.json` lists (`{ "events": [...] }`; a commit that lists none, or whose manifest is not that
-shape, removes the row). One version of the config worker runs at a time: the next commit replaces
-both. `package.json`'s `"main"` names the main module. Files may be TypeScript
-(types are stripped, not checked) and import each other by relative path. `iterate/*` and `zod` come from the
-platform; any other package is listed in `package.json` and fetched from npm through esm.sh, locked
-per dependency set (`src/context/module-resolution.ts`). Probe a candidate with
-`itx.workers.get({ source }).fetch(...)` before committing it.
+A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes it
+(`src/project/publication.ts`); `package.json`'s `"main"` names the main module. Files may be
+TypeScript (types are stripped, not checked) and import each other by relative path. `iterate/*` and
+`zod` come from the platform; any other package is listed in `package.json` and fetched from npm
+through esm.sh, locked per dependency set (`src/context/module-resolution.ts`).
 
-An explicit `itx/ingress-configured`, or a `config-worker` row written by hand, remains in effect
-until the next config commit. Loading a worker alone does not create a route.
+A commit fact only wakes the publication, which publishes `main`'s head as the generation of the
+fact's offset on `/`, so a return to a commit published before is a publication of its own. It
+builds the commit's manifest: each top-level module (a `.ts` or `.js` file at the repo's root) by the
+identity of what the loader loads with it as the main module, and the Durable Object classes it
+exports. Every top-level module must resolve. Its probe loads them in one worker and admits the
+commit when the main module's default export is an `IterateConfigEntrypoint` that constructs and
+every class the last publication exported is still exported; a side script that throws as it is
+imported keeps its identity and exports no class. Then, as the platform, the rule `itx.config` names
+the commit's worker with its manifest — its write answers once no context resolves through an older
+snapshot of `/` — and `project/worker-updated { commitOid, generation, modules }` lands: every
+context's events reach that worker's `processEvent` through their birth subscription, the project's
+hosts serve its `fetch` (so one version of the config worker runs at a time), and a facet named by
+it (`itx.cd('/').config` as its source) restarts on its next call when its own module's identity
+changed. Only the platform writes `itx.config`, and only its rule vouches for a manifest. A commit
+the probe refuses is `project/worker-update-failed` with why, and `itx.config` stays where it was. A platform failure (esm.sh, a module lock, the probe's
+load) is met again after 5 s and 30 s within a minute; then `project/worker-update-failed` with
+`unavailable` leaves the commit owed to the project's next incarnation. Probe a candidate with
+`itx.workers.get({ source }).fetch(...)` before committing it.
 
 ## A config repo on GitHub
 
@@ -65,4 +74,5 @@ keeps the two in step: it pulls on a push webhook and pushes on `repo/commit-com
 `e2e/repos.e2e.test.ts` covers real Artifacts and GitHub.
 
 `src/project/templates.test.ts` covers template copying, ordering, failures, and recovery;
-`e2e/session.e2e.test.ts` covers creation; `e2e/website-publication.e2e.test.ts` covers publishing.
+`src/project/processor.test.ts` the publication; `e2e/session.e2e.test.ts` covers creation;
+`e2e/website-publication.e2e.test.ts` covers publishing.

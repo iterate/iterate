@@ -19,6 +19,7 @@ import type { Principal } from "iterate/principal";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { pinPublicGithubTemplate } from "./repo/github-template.ts";
 import { base64url, sha256Hex, verifyAdminSecret, type Caller } from "./caller.ts";
+import type { Cause } from "./cause.ts";
 import { templates } from "./generated/config-templates.js";
 import type { ConsentRpcTarget } from "./consent.ts";
 import type { GrantsRpcTarget } from "./grants.ts";
@@ -74,6 +75,9 @@ export interface SessionInput {
    *  every context it vends composes public URLs with (a DO isolate cannot know it: the caller
    *  carries it). */
   platformOrigin: string;
+  /** The chain THIS request resumes, when it carries our mark (cause.ts): our own code calling the
+   *  platform back. Absent, each call begins a chain of its own. */
+  cause?: Cause;
   /** A live transport tracks projects whose capabilities it has handed out. */
   onProjectAccess?: (projectId: string) => void;
   /** The in-band bearer (rpc.ts): verify the token `authenticate` presents and bind the transport
@@ -559,6 +563,7 @@ export class SessionRpcTarget extends RpcTarget {
       principal,
       grant,
       platformOrigin: this.#input.platformOrigin,
+      cause: this.#input.cause,
       ...(grant && scopes?.includes("account") && !principal.impersonatedBy && { account: true }),
     };
   }

@@ -20,6 +20,7 @@ import type { RewriteRuleListEntry } from "iterate/api";
 import type { Caller } from "../caller.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { nodeSqliteStream } from "../stream/test-support.ts";
+import { oneContextReach } from "./test-support.ts";
 import {
   ItxExpressionResolver,
   type ItxExpressionRewriteRule,
@@ -30,6 +31,7 @@ import {
   BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
+  refuseConfigPointerRows,
   refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
@@ -565,6 +567,22 @@ for (const { match, target, throws } of appendRefusals)
       ),
     ).toThrow(throws);
   });
+
+test("rewrite-rule-configured — REFUSED: a target over the ceiling, which every snapshot of the table would carry, is coded and points to a producer expression", () => {
+  const source = { "worker.js": "x".repeat(1 << 20) };
+  expect(() =>
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: {
+          match: "itx.voice",
+          target: ["itx", "builtins", "workers", ["get", { source }]],
+        },
+      },
+      "/",
+    ),
+  ).toThrow(expect.objectContaining({ code: "FACET_SOURCE_TOO_LARGE" }));
+});
 
 // …and what the append boundary ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
 const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] = [
@@ -1161,14 +1179,14 @@ test("targets round-trip the codec: rewrite → print → reduce → parse: a ta
 });
 
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: at the root, every project path is a descendant: `cd('/x')` and `cd('./x')` pass, `cd('.')` is self; `itx.builtins` is refused", () => {
-  const resolver = appResolverAt("/", ROOT);
+  const resolver = appResolverAt("/");
   expect(() => resolver.resolve("itx.cd('/x').whoami()")).not.toThrow();
   expect(() => resolver.resolve("itx.cd('./x').cd('y').whoami()")).not.toThrow();
   expect(() => resolver.resolve("itx.cd('.').whoami()")).not.toThrow();
   expect(() => resolver.resolve("itx.builtins.whoami()")).toThrow(/not a loaded worker's word/);
 });
 test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` is refused and `cd` goes down only — from the root too: at a child, `cd` may not leave it: `/`, `..`, a sibling — refused; its own descendants pass; a `cd` that steps down then up past the base is refused", () => {
-  const resolver = appResolverAt("/agents/a", CHILD);
+  const resolver = appResolverAt("/agents/a");
   expect(() => resolver.resolve("itx.cd('./b').whoami()")).not.toThrow();
   expect(() => resolver.resolve("itx.cd('/agents/a/b/c').whoami()")).not.toThrow();
   for (const to of ["/", "..", "/agents/b", "../a2", "/agents/ab"])
@@ -1189,7 +1207,7 @@ test.for<{ call: string; refused?: RegExp }>([
 ])(
   "the app wall, but for an append: loaded code at a child reaches the whole project with exactly `itx.cd(path).append(…)` — $call",
   ({ call, refused }) => {
-    const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+    const resolve = () => appResolverAt("/agents/a").resolve(call);
     if (refused) expect(resolve).toThrow(refused);
     else expect(resolve).not.toThrow();
   },
@@ -1227,6 +1245,33 @@ test("the app wall (`Caller.app`): on the INPUT expression only, `itx.builtins` 
   expect(row("events.iterate.com/itx/rewrite-rule-configured", null)).not.toThrow();
   expect(row("events.iterate.com/note/added", "itx.builtins.cd('/')")).not.toThrow(); // not a row
 });
+const SIGNED_WEBHOOK =
+  "itx.webhooks.get({ url: 'https://hooks.test/in', signingSecret: '/secrets/hook' }).deliverEvent";
+test.for([
+  {
+    name: "called at a child",
+    admit: () => appResolverAt("/agents/a").resolve(SIGNED_WEBHOOK),
+    refused: true,
+  },
+  { name: "a child's row", admit: () => webhookRow("/agents/a"), refused: true },
+  {
+    name: "a child's row appended at the root",
+    admit: () => webhookRow("/agents/a", "/"),
+    refused: true,
+  },
+  {
+    name: "called at the root",
+    admit: () => appResolverAt("/").resolve(SIGNED_WEBHOOK),
+    refused: false,
+  },
+  { name: "the root's row", admit: () => webhookRow("/"), refused: false },
+])(
+  "the app wall: a webhook's signing secret is the project's, named by loaded code at the project's root alone — $name",
+  ({ admit, refused }) => {
+    if (refused) expect(admit).toThrow(/signing secret/);
+    else expect(admit).not.toThrow();
+  },
+);
 // A SOURCE PRODUCER runs at the host as the context itself when the code loads, so it is walled like
 // the call around it, at the context the walk has reached: in a call's spec and in a row's target.
 const PRODUCER_ROWS: { name: string; call: string; refused?: RegExp }[] = [
@@ -1258,9 +1303,37 @@ const PRODUCER_ROWS: { name: string; call: string; refused?: RegExp }[] = [
     call: "itx.cd('./b').workers.get({ source: \"itx.cd('/agents/a').kv.get('src')\", cacheKey: 'k' }).run()",
     refused: /goes down only/,
   },
+  {
+    // a worker's NAME is no producer: it reads rules, and the worker loads with its rule owner's
+    // authority (context/facet-host.ts `#workerOf`) — how the agents app names its classes
+    name: "the root's worker named as a descendant's facet source, with no cacheKey: passes",
+    call: "itx.cd('./b').processors.enable('agent', { source: \"itx.cd('/').config\", className: 'A', mainModule: 'agents.ts' })",
+  },
+  // A NAME only reads rules: a spelling that calls or reaches the fixed point is a producer at the
+  // context it names, and needs its cacheKey — then it is walled as one
+  {
+    name: "a name that calls the root's workers.get itself: refused",
+    call: "itx.facets.get('f', { source: \"itx.cd('/').workers.get({ source: 'itx.append({ type: 1 })', cacheKey: 'k' })\", className: 'F' }).x()",
+    refused: /only reads rules/,
+  },
+  {
+    name: "a name through the fixed point: refused",
+    call: "itx.facets.get('f', { source: \"itx.builtins.cd('/').config\", className: 'F' }).x()",
+    refused: /only reads rules/,
+  },
+  {
+    name: "a name to the root's fixed-point workers: refused",
+    call: "itx.facets.get('f', { source: \"itx.cd('/').builtins.workers\", className: 'F' }).x()",
+    refused: /only reads rules/,
+  },
+  {
+    name: "a name whose call would fill a rule's hole: refused",
+    call: "itx.facets.get('f', { source: \"itx.cd('/').w({ source: 'itx.append(1)', cacheKey: 'k' })\", className: 'F' }).x()",
+    refused: /only reads rules/,
+  },
 ];
 test.for(PRODUCER_ROWS)("the app wall walls a source producer: $name", ({ call, refused }) => {
-  const resolve = () => appResolverAt("/agents/a", CHILD).resolve(call);
+  const resolve = () => appResolverAt("/agents/a").resolve(call);
   if (refused) expect(resolve).toThrow(refused);
   else expect(resolve).not.toThrow();
 });
@@ -1350,6 +1423,93 @@ test.for<{ target: string; landsAt: string; refused?: true }>([
     else expect(admit).not.toThrow();
   },
 );
+test.for<{ name: string; target: unknown; landsAt: string; refused?: true }>([
+  {
+    name: "a worker whose producer would run at the root",
+    target: "itx.workers.get({ source: \"itx.kv.get('w')\", cacheKey: 'k' })",
+    landsAt: "/",
+    refused: true,
+  },
+  {
+    name: "a facet whose source would load at the root",
+    target:
+      "itx.facets.get('f', { source: { 'worker.js': 'x' }, className: 'F' }).processEventBatch",
+    landsAt: "/",
+    refused: true,
+  },
+  { name: "a name the root resolves", target: "itx.cd('/agents/a').tool", landsAt: "/" },
+  {
+    name: "the same worker at the writer's own context",
+    target: "itx.workers.get({ source: \"itx.kv.get('w')\", cacheKey: 'k' })",
+    landsAt: "/agents/a",
+  },
+  {
+    name: "the same worker at the writer's descendant",
+    target: "itx.workers.get({ source: \"itx.kv.get('w')\", cacheKey: 'k' })",
+    landsAt: "/agents/a/sandbox",
+  },
+])(
+  "a row loaded code writes outside its own subtree names no code to load there — $name at $landsAt",
+  ({ target, landsAt, refused }) => {
+    const admit = () =>
+      admitLoadedCodeRow(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx.x", target },
+        },
+        "/agents/a",
+        landsAt,
+      );
+    if (refused) expect(admit).toThrow(/names code to load/);
+    else expect(admit).not.toThrow();
+  },
+);
+
+test.for<{ name: string; payload: Record<string, unknown>; caller: Caller; refused?: true }>([
+  {
+    name: "a member re-points it",
+    payload: { match: ["itx", "config"], target: ["itx", ["cd", "/x"], "w"] },
+    caller: { principal: { actor: "user_1" }, grant: "g" },
+    refused: true,
+  },
+  {
+    name: "loaded code masks it",
+    payload: { match: ["itx", "config"], target: null },
+    caller: { principal: null, app: true },
+    refused: true,
+  },
+  {
+    name: "the kernel removes it",
+    payload: { match: ["itx", "config"], target: null, ifTarget: ["itx", "w"] },
+    caller: { principal: null },
+    refused: true,
+  },
+  {
+    name: "a member shadows its deliverEvent",
+    payload: { match: ["itx", "config", "deliverEvent"], target: ["itx", "w"] },
+    caller: { principal: { actor: "user_1" }, grant: "g" },
+    refused: true,
+  },
+  {
+    name: "the platform's publication writes it",
+    payload: { match: ["itx", "config"], target: ["itx", "builtins", "workers"] },
+    caller: { principal: null, platform: true },
+  },
+  {
+    name: "a member writes a row beside it",
+    payload: { match: ["itx", "configs"], target: ["itx", "w"] },
+    caller: { principal: { actor: "user_1" }, grant: "g" },
+  },
+])("the project's config pointer is the platform's — $name", ({ payload, caller, refused }) => {
+  const refuse = () =>
+    refuseConfigPointerRows(
+      [{ type: "events.iterate.com/itx/rewrite-rule-configured", payload }],
+      caller,
+    );
+  if (refused) expect(refuse).toThrow(/only the platform's publication writes it/);
+  else expect(refuse).not.toThrow();
+});
+
 const reparent = { match: ["itx"], target: ["itx", ["cd", "./open"]] };
 test.for<{
   name: string;
@@ -1410,30 +1570,181 @@ test.for<{
   else expect(refuse).not.toThrow();
 });
 
-test("cd forwards a factory and terminal fetch together, without exporting an intermediate handle over RPC", async () => {
+// ── across contexts (`ItxExpressionResolver#route`): the calling context's table live, every other one a
+// snapshot; where the chain ends decides where the call runs ──
+
+test("a portable root behind the parent link runs in the calling context's own built-ins: the root is not called", async () => {
+  const { resolver, located } = acrossContexts({ own: ["itx ⇒ itx.cd('/')"] });
+  expect(await resolver.invoke("itx.ai.run('m', 'hi')")).toEqual({ model: "m", inputs: "hi" });
+  expect(located).toEqual([]);
+});
+
+test("workers.get reached through another context's rule loads here with that context's authority, the terminal fetch handed straight to it", async () => {
   const request = new Request("https://provider.example/", { headers: { upgrade: "websocket" } });
-  const received: ItxExpression[] = [];
-  const resolver = new ItxExpressionResolver({
-    builtIns: {
-      cd: () =>
-        new InvokeHandle((steps) => {
-          received.push(steps);
-          return new Response("native fetch");
-        }),
-    },
-    rewriteRules: () =>
-      table([
-        "itx.provider ⇒ itx.builtins.cd('/provider').workers.get({source:{'worker.js':'source'}})",
-      ]),
-    implicitRoots: ROOT,
-    path: "/",
-    caller: () => ({ principal: null }),
+  const { resolver, located } = acrossContexts({
+    own: [
+      "itx.provider ⇒ itx.builtins.cd('/provider').workers.get({source:{'worker.js':'source'}})",
+    ],
   });
-  const response = (await resolver.invoke("itx.provider.fetch", request)) as Response;
-  expect(await response.text()).toBe("native fetch");
-  expect(received).toEqual([
-    ["workers", ["get", { source: { "worker.js": "source" } }], ["fetch", request]],
+  expect(await resolver.invoke("itx.provider.fetch", request)).toEqual({
+    workersOf: "/provider",
+    spec: { source: { "worker.js": "source" } },
+    steps: [["fetch", request]],
+  });
+  expect(located).toEqual([]);
+});
+
+test("what lives in another context is one call there, the call as it entered that context, stamped with where it came from; its snapshot is not read", async () => {
+  const { resolver, located, snapshotsRead } = acrossContexts({ at: "/a" });
+  expect(await resolver.invoke("itx.cd('/b').append({ type: 'x' })")).toEqual({ locatedAt: "/b" });
+  expect(located).toMatchObject([
+    {
+      path: "/b",
+      expression: ["itx", ["append", { type: "x" }]],
+      caller: { principal: null, path: "/a" },
+    },
   ]);
+  expect(snapshotsRead).toEqual([]);
+});
+
+test("a lent stub the root's rule names is called at the root, which resolves the call again with its live table", async () => {
+  const { resolver, located } = acrossContexts({
+    own: ["itx ⇒ itx.cd('/')"],
+    others: { "/": ["itx.tool ⇒ itx.builtins.rpcStubs.get('itx.tool')"] },
+  });
+  await resolver.invoke("itx.tool.hello('x')");
+  expect(located).toMatchObject([{ path: "/", expression: ["itx", "tool", ["hello", "x"]] }]);
+});
+
+test("a refusal another context's snapshot gives stands like any answer: the snapshot is read once, never again to refuse", async () => {
+  const { resolver, snapshotsRead } = acrossContexts({ own: ["itx ⇒ itx.cd('/')"] });
+  await expect(resolver.invoke("itx.tool")).rejects.toThrow(/no rewrite rule matches "itx.tool"/);
+  expect(snapshotsRead).toEqual(["/"]);
+});
+
+test("the root's rule spelled through `cd('/')` answers any context and loads its worker there with the root's authority", async () => {
+  const root = {
+    "/": ["itx.config ⇒ itx.builtins.workers.get({ source: 'itx.kv.get(\"w\")', cacheKey: 'c' })"],
+  };
+  const { resolver, located } = acrossContexts({ at: "/x/y", others: root });
+  expect(await resolver.invoke("itx.cd('/').config.deliverEvent(1)")).toMatchObject({
+    workersOf: "/",
+    steps: [["deliverEvent", 1]],
+  });
+  expect(located).toEqual([]);
+  const jailed = acrossContexts({ at: "/x", own: ["itx ⇒ null"], others: root });
+  await expect(jailed.resolver.invoke("itx.cd('/').config.deliverEvent(1)")).rejects.toThrow(
+    /is masked/,
+  );
+});
+
+test("a worker's name reads the rule that publishes it: the spec, where its producer runs, and whether the platform wrote that rule — never a worker the name spells itself", async () => {
+  const pointer = "itx.builtins.workers.get({ source: 'itx.kv.get(\"w\")', cacheKey: 'c' })";
+  const named = (root: string[]) =>
+    acrossContexts({ at: "/x", others: { "/": root } }).resolver.namedWorker("itx.cd('/').config");
+  expect(await named([`platform: itx.config ⇒ ${pointer}`])).toMatchObject({
+    at: "/",
+    spec: { source: 'itx.kv.get("w")', cacheKey: "c" },
+    vouched: true,
+  });
+  expect(await named([`itx.config ⇒ ${pointer}`])).toMatchObject({ at: "/", vouched: false });
+  // a rule that only renames the root's workers publishes no worker: the name's own call would
+  await expect(
+    acrossContexts({
+      at: "/x",
+      others: { "/": ["itx.w ⇒ itx.builtins.workers"] },
+    }).resolver.namedWorker("itx.cd('/').w.get({ source: 'itx.append(1)', cacheKey: 'k' })"),
+  ).rejects.toThrow(/only reads rules/);
+  await expect(named(["itx.config ⇒ itx.builtins.kv"])).rejects.toThrow(/names no worker/);
+});
+
+test("workers.get with a literal source in the root's rule loads here from the snapshot, with the root's authority", async () => {
+  const { resolver, located } = acrossContexts({
+    own: ["itx ⇒ itx.cd('/')"],
+    others: { "/": ["itx.voice ⇒ itx.builtins.workers.get({ source: { 'worker.js': 'v' } })"] },
+  });
+  expect(await resolver.invoke("itx.voice.run()")).toEqual({
+    workersOf: "/",
+    spec: { source: { "worker.js": "v" } },
+    steps: [["run"]],
+  });
+  expect(located).toEqual([]);
+});
+
+test("with no live table, a call naming the context's own root goes to the context as it was made, under the caller as it came, and no snapshot is read", async () => {
+  const { resolver, located, snapshotsRead } = acrossContexts({
+    at: "/a",
+    stateless: true,
+    caller: { principal: null, app: true },
+  });
+  await resolver.invoke("itx.append({ type: 'x' })");
+  expect(located).toEqual([
+    {
+      path: "/a",
+      expression: ["itx", ["append", { type: "x" }]],
+      args: [],
+      caller: { principal: null, app: true },
+    },
+  ]);
+  expect(snapshotsRead).toEqual([]);
+});
+
+test("with no live table, loaded code's cd resolves through its context's snapshot and goes straight to the context it names; what the snapshot refuses, the context decides with its live table", async () => {
+  const loaded = { principal: null, app: true } as const;
+  const open = acrossContexts({ at: "/a", stateless: true, caller: loaded });
+  await open.resolver.invoke("itx.cd('b').append({ type: 'x' })");
+  expect(open.located).toMatchObject([
+    {
+      path: "/a/b",
+      expression: ["itx", ["append", { type: "x" }]],
+      caller: { app: true, path: "/a" },
+    },
+  ]);
+  expect(open).toMatchObject({ snapshotsRead: ["/a"] });
+  const jailed = acrossContexts({
+    at: "/a",
+    stateless: true,
+    caller: loaded,
+    others: { "/a": ["itx ⇒ null"] },
+  });
+  await jailed.resolver.invoke("itx.cd('b').append({ type: 'x' })");
+  // the call as it was made, under the caller as it came: the context admits and resolves it
+  expect(jailed).toMatchObject({
+    located: [
+      {
+        path: "/a",
+        expression: ["itx", ["cd", "b"], ["append", { type: "x" }]],
+        caller: { principal: null, app: true },
+      },
+    ],
+  });
+  expect(jailed.located[0]!.caller).not.toHaveProperty("path");
+  const missing = acrossContexts({ at: "/a", stateless: true, caller: loaded });
+  await missing.resolver.invoke("itx.providedALineAgo()");
+  expect(missing).toMatchObject({ located: [{ path: "/a" }] });
+  // and the app wall stands before anything is read: no cd above the context
+  await expect(open.resolver.invoke("itx.cd('/').kv.get('k')")).rejects.toThrow(
+    /cd goes down only/,
+  );
+});
+
+test("a route whose snapshots expired before it could run is resolved again, and UNAVAILABLE while they keep expiring", async () => {
+  const once = acrossContexts({ own: ["itx ⇒ itx.cd('/')"], expiredReads: 1 });
+  expect(await once.resolver.invoke("itx.kv.get('k')")).toBeNull();
+  expect(once).toMatchObject({ snapshotsRead: ["/", "/"] });
+  const always = acrossContexts({ own: ["itx ⇒ itx.cd('/')"], expiredReads: Infinity });
+  await expect(always.resolver.invoke("itx.kv.get('k')")).rejects.toMatchObject({
+    code: "UNAVAILABLE",
+  });
+});
+
+test("rows that cd into each other are refused after a bounded number of contexts, not followed forever", async () => {
+  const { resolver } = acrossContexts({
+    at: "/a",
+    own: ["itx.loop ⇒ itx.cd('/b').loop"],
+    others: { "/b": ["itx.loop ⇒ itx.cd('/a').loop"] },
+  });
+  await expect(resolver.invoke("itx.loop")).rejects.toThrow(/crossed more than 16 contexts/);
 });
 
 /** The platform-equivalent target of a match: at the owner root, where these tests run, a
@@ -1446,10 +1757,13 @@ const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [
 
 const table = (rows: string[]): ItxExpressionRewriteRule[] =>
   rows.map((row) => {
-    const [match, target] = row.split(" ⇒ ");
+    // `platform: itx.x ⇒ …` is a row the platform wrote (its `source.platform` stamp)
+    const platform = row.startsWith("platform: ");
+    const [match, target] = row.replace(/^platform: /, "").split(" ⇒ ");
     return {
       match: parseItxExpressionPrefix(match),
       target: target === "null" ? null : parse(target, { holes: true }), // a target may hold `@`
+      ...(platform && { platform: true as const }),
     };
   });
 
@@ -1499,6 +1813,40 @@ const listed = (
     depth: options.depth ?? 3,
     inherit: options.inherit || (async () => []),
   });
+
+/** A resolver at `at` (default `/agents/a`) over the fake built-ins: its own rows live, every other
+ *  context's rows the snapshot `others` gives, recording which contexts' snapshots it read. Rows
+ *  are `"match ⇒ target"`. */
+function acrossContexts(options: {
+  at?: string;
+  own?: string[];
+  others?: Record<string, string[]>;
+  /** No live table of its own (the stateless entrypoint's): `others[at]` is its snapshot. */
+  stateless?: true;
+  caller?: Caller;
+  /** How many snapshot reads answer one already expired (the caller waited on it too long). */
+  expiredReads?: number;
+}) {
+  const at = options.at || "/agents/a";
+  const { located, reach } = oneContextReach();
+  const snapshotsRead: string[] = [];
+  const resolver = new ItxExpressionResolver({
+    builtIns: fakeBuiltIns(),
+    rewriteRules: options.stateless ? undefined : () => table(options.own || []),
+    path: at,
+    caller: () => options.caller || { principal: null },
+    ...reach,
+    snapshotOf: async (path) => {
+      snapshotsRead.push(path);
+      const expired = snapshotsRead.length <= (options.expiredReads || 0);
+      return {
+        rules: table(options.others?.[path] || []),
+        expiresAt: expired ? Date.now() - 1 : Infinity,
+      };
+    },
+  });
+  return { resolver, located, snapshotsRead };
+}
 
 /** A tiny fake built-ins record — enough physical layer to rewrite into. */
 const fakeBuiltIns = () => {
@@ -1568,9 +1916,9 @@ const setup = () => {
   const resolver = new ItxExpressionResolver({
     builtIns: { ...builtIns, rpcStubs },
     rewriteRules,
-    implicitRoots: ROOT,
     path: "/",
     caller: () => ({ principal: null }),
+    ...oneContextReach().reach,
   });
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
    *  at the append boundary — nothing is appended. */
@@ -1614,11 +1962,23 @@ const setup = () => {
   };
 };
 
-const appResolverAt = (path: string, implicitRoots: ReadonlySet<string>) =>
+const appResolverAt = (path: string) =>
   new ItxExpressionResolver({
     builtIns: fakeBuiltIns(),
     rewriteRules: () => [],
-    implicitRoots,
     path,
     caller: () => ({ principal: null, app: true }),
+    ...oneContextReach().reach,
   });
+
+/** A fan-out row on SIGNED_WEBHOOK that loaded code at `base` appends, landing at `landsAt`. */
+function webhookRow(base: string, landsAt = base) {
+  admitLoadedCodeRow(
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: { name: "hook", target: SIGNED_WEBHOOK, ordered: false },
+    },
+    base,
+    landsAt,
+  );
+}

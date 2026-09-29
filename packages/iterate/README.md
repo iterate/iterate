@@ -30,15 +30,16 @@ Supabase, tRPC, Hono and Wrangler draw the same line:
 
 ## One path per symbol
 
-Code the platform loads for a project (a config worker, a facet, a worker behind a rewrite rule)
+Code the platform loads for a project (the config entrypoint, a facet, a worker behind a rewrite rule)
 imports each symbol from one path, and the loader links this deployment's own build of it:
 
-| Path                       | What it holds                                                                                                                       |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/sdk`              | The workerd hosts: `ConfigWorker`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors    |
-| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too |
-| `iterate/with-itx`         | `withItx` alone                                                                                                                     |
-| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                    |
+| Path                       | What it holds                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors |
+| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too         |
+| `iterate/with-itx`         | `withItx` alone                                                                                                                             |
+| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                              |
+| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                            |
 
 ```js
 import { StreamProcessorDurableObject } from "iterate/sdk";
@@ -70,12 +71,12 @@ Loaded code reaches its context through `withItx`: one round trip, after which t
 call made through it and every handle it awaited are released.
 
 ```js
-import { ConfigWorker } from "iterate/sdk";
+import { IterateConfigEntrypoint } from "iterate/sdk";
 import { withItx } from "iterate/with-itx";
 
-export default class extends ConfigWorker {
+export default class extends IterateConfigEntrypoint {
   async fetch() {
-    // An SDK host (ConfigWorker, StreamProcessorDurableObject) has it as a method.
+    // An SDK host (IterateConfigEntrypoint, StreamProcessorDurableObject) has it as a method.
     const { projectSlug } = await this.withItx((itx) => itx.whoami());
     return new Response(`Homepage of ${projectSlug}`);
   }
@@ -111,6 +112,13 @@ await itx.cd("/agents/b").append({
 Words from `/` (a member's session, the dash) read as a person's, with no sender. `origin` is the
 context whose code ran, not who asked it to run (apps/os `caller.ts` `stampCaller` says why that
 makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
+
+Every event also says why it happened, `source.cause`: the chain of reactions it belongs to and
+how many hand-offs deep it is, which no user code sets. Past depth 8, code that reacts to code may
+still read, but every act it tries is refused `LOOP_LIMIT`, naming where the chain began, and the
+context records one `itx/loop-limit` fact per chain (apps/os `src/cause.ts` has the rules). A
+message one agent's processor sends another's context is one hand-off deeper, so two agents that
+answer each other exchange eight messages, four round trips, before the next is refused.
 
 The exception is a jail, a context with a bare `itx ⇒ null` row plus the grants beside it. A bare
 jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it
@@ -232,7 +240,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 | `agent`                                                             | `packages/agents/src/contract.ts`                                                                                                                                                                                                                                                                          |
 | `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                        |
 | `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |
-| `email`                                                             | `apps/os/src/email/contract.ts`                                                                                                                                                                                                                                                                            |
+| `email`                                                             | `packages/iterate/src/email.ts`                                                                                                                                                                                                                                                                            |
 | `test`                                                              | tests only                                                                                                                                                                                                                                                                                                 |
 
 `note/added` is only an example in the Agents composer; no contract defines `note`.

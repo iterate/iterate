@@ -6,12 +6,16 @@
 // all pure. The table is part of the root's CORE STATE (stream/core-processor.ts `fetchRoutes`),
 // reduced inline with every commit, so reading it is a memory read. The verbs are the built-in
 // `itx.fetchRoutes` (context/built-ins.ts): `set` validates here and appends the fact, `list` and
-// `match` read the table. The project's config worker asks `match` for every request and forwards
-// a match to its target through its own `env.ITX.fetch` (configs/default/worker.ts).
+// `match` read the table. The edge matches every request on a project's hosts against the root's
+// snapshot of the table (context/rule-snapshots.ts) and serves a match from its target, before the
+// config worker's fetch (worker.ts `serveProjectHost`).
 import { z } from "zod";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import { ITERATE_ROUTING_SLUG_HEADER, ROUTING_SLUG } from "iterate/project-ingress";
-import { FILES_ROUTING_SLUG } from "./context/file-urls.ts";
+
+/** The reserved routing slug a signed file URL hangs under: `files--<project>.<base>` — served by
+ *  the edge before any config worker (worker.ts, context/file-urls.ts); no fetch route may take it. */
+export const FILES_ROUTING_SLUG = "files";
 
 /** A route's name: a DNS label (`tunnel-blog`, `api`), so it reads in a URL, a log line and a header. */
 const FetchRouteName = z
@@ -71,17 +75,17 @@ const FetchRouteRequestMatcher = z.strictObject({
 });
 type FetchRouteRequestMatcher = z.infer<typeof FetchRouteRequestMatcher>;
 
-/** Who may use a route: `project-members` — the config worker answers anyone else the platform's
- *  sign-in challenge. Absent or null: the route is public. */
+/** Who may use a route: `project-members` — the edge answers anyone else the platform's sign-in
+ *  challenge. Absent or null: the route is public. */
 const FetchRouteAuthRequirement = z.strictObject({
   visitors: z.literal("project-members"),
 });
 
-/** The itx expression a route forwards to, as the array half (`itx.tunnels.blog` parsed). The
- *  config worker sends it as JSON in the `x-itx-expression` header of its own `env.ITX.fetch`, so it
- *  runs as the config worker's call, behind the app wall: no `builtins` step (the wall refuses one
- *  at request time), ASCII only (a header value), and a terminal `fetch` takes no args (the Request
- *  is its one). */
+/** The itx expression a route forwards to, as the array half (`itx.tunnels.blog` parsed). The edge
+ *  runs it as the root's loaded code would (worker.ts `serveProjectHost`), behind the app wall: no
+ *  `builtins` step (the wall refuses one at request time), ASCII only (it rides a hop to its context
+ *  in the `x-itx-expression` header), and a terminal `fetch` takes no args (the Request is its
+ *  one). */
 const FetchRouteTarget = z
   .custom<ItxExpression>(
     (value) => {

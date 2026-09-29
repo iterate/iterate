@@ -17,11 +17,14 @@ non-secret counts, hostnames and paths.
 ## Steps
 
 1. Capture each project, then the users, organizations and memberships (a project seed carries only
-   its own organization):
+   its own organization). A config repo written for an older platform must be migrated first,
+   because `apply` restores its tree byte for byte (project-seeds.md, "A config repo for a newer
+   platform"): clone it, migrate it, and capture from the checkout with `--config-repo`:
 
    ```sh
    pnpm --dir apps/os project-seed capture \
-     --env prd --project <slug> --file <absolute-path>.json
+     --env prd --project <slug> --file <absolute-path>.json \
+     [--config-repo <absolute-path-to-migrated-checkout>]
    pnpm --dir apps/os project-seed check \
      --env prd --file <absolute-path>.json
    pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json

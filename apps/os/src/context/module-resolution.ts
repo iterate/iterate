@@ -22,9 +22,15 @@
 //   keeps the platform packages external, so a library's zod is the SDK's.
 
 import { isPkgPrNewCommit, pkgPrNewVersionOf } from "@iterate-com/shared/pkg-pr-new";
+import {
+  failureKind,
+  httpFailureKind,
+  isPlatformFailureKind,
+} from "@iterate-com/shared/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
+import { unavailableError } from "../unavailable.ts";
 
 /** A module map: module name → code. */
 export type ModuleMap = Record<string, string>;
@@ -49,6 +55,11 @@ export type ResolveOptions = {
   fetch: typeof fetch;
   /** Names the load site in errors. */
   where: string;
+  /** The module to load as the entry in place of package.json's `main` — the worker's
+   *  `mainModule`, as Cloudflare's Worker Loader names it: a facet whose class lives in `agents.ts`
+   *  of a source whose `main` is `worker.ts` loads `agents.ts`'s own graph. Its dependencies are
+   *  still package.json's. */
+  mainModule?: string;
 };
 
 /** Where an entry is looked for when package.json names no `main`, in order. The platform, its
@@ -58,6 +69,9 @@ export type ResolveOptions = {
  *  become refusals. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
 const ESM_ORIGIN = "https://esm.sh";
+
+/** How long one esm.sh module may take to arrive before its resolution is the platform's failure. */
+const ESM_FETCH_TIMEOUT_MS = 20_000;
 /** The runtime's own modules, external to esm.sh like the platform packages: its bundler cannot
  *  find them, and a package importing one from its entry is refused (404) unless it is named. */
 const WORKERD_BUILTINS = ["cloudflare:email", "cloudflare:sockets", "cloudflare:workers"];
@@ -226,7 +240,12 @@ export async function resolveModules(
   opts: ResolveOptions,
 ): Promise<{ mainModule: string; modules: ModuleMap }> {
   const { where, platform } = opts;
-  const { entry, dependencies } = readPackage(source, where);
+  const { entry: main, dependencies } = readPackage(source, where);
+  const entry = opts.mainModule ? joinPath("", opts.mainModule) : main;
+  if (!Object.hasOwn(source, entry))
+    throw new Error(
+      `${where}: no module ${JSON.stringify(opts.mainModule)} to load as the main module`,
+    );
   const out: ModuleMap = {};
   const outputName = (path: string) => path.replace(/\.(mts|ts|mjs|js)$/, "") + ".js";
   const findSourceFile = (path: string): string | undefined => {
@@ -306,7 +325,7 @@ export async function resolveModules(
  *  `node_modules/<specifier>.js`), and the platform modules it imports (esm.sh leaves them external). */
 type DependencyGraph = { modules: ModuleMap; platformModules: string[] };
 
-export async function sha256(text: string): Promise<string> {
+async function sha256(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -330,7 +349,7 @@ async function lockedDependencyGraph(
     externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
-  const key = `module-lock-1/${await sha256(JSON.stringify(lockInput))}`;
+  const key = `module-lock-2/${await sha256(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
   const graph = await resolveFromEsm(lockInput, bases, opts);
@@ -364,11 +383,30 @@ function esmPackageBase(name: string, version: string, where: string): string {
   return `${ESM_ORIGIN}/pr/${pkgPrNew.owner}/${pkgPrNew.repo}/${name}@${pkgPrNew.ref}`;
 }
 
-/** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. */
+/** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. esm.sh out of
+ *  reach, too slow (ESM_FETCH_TIMEOUT_MS) or answering 5xx, 429 or 408 is the platform's failure,
+ *  code UNAVAILABLE of its kind (@iterate-com/shared/platform-retry `httpFailureKind`): a
+ *  publication meets it again rather than refusing the commit. Any other answer is the source's. */
 async function fetchModuleText(url: string, fetchFn: typeof fetch): Promise<string> {
-  const response = await fetchFn(url, { headers: { "user-agent": "iterate-os" } });
+  let response: Response;
+  try {
+    response = await fetchFn(url, {
+      headers: { "user-agent": "iterate-os" },
+      signal: AbortSignal.timeout(ESM_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "TimeoutError";
+    throw unavailableError(
+      timedOut ? "overloaded" : "disconnected",
+      `${url}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const text = await response.text();
-  if (response.status !== 200) throw new Error(`${url} answered ${response.status}`);
+  if (response.status !== 200) {
+    const kind = httpFailureKind(response);
+    const message = `${url} answered ${response.status}`;
+    throw isPlatformFailureKind(kind) ? unavailableError(kind, message) : new Error(message);
+  }
   const type = response.headers.get("content-type") ?? "";
   if (!type.includes("javascript")) throw new Error(`${url} is ${type || "untyped"}, not a module`);
   return text;
@@ -395,14 +433,25 @@ async function resolveFromEsm(
   const query = new URLSearchParams({ target: "es2022", external: lock.externals.join(",") });
   const modules: ModuleMap = {};
   const platformModules = new Set<string>();
-  const started = new Set<string>();
+  /** Each module fetched, by URL → the name it loads under. */
+  const started = new Map<string, string>();
+  /** A second name a loaded module is wanted under → the name it loads under. */
+  const aliases = new Map<string, string>();
   const inFlight = new Set<Promise<void>>();
-  const failures: string[] = [];
+  const failures: Error[] = [];
 
-  /** Load `href` once, under `name`. */
+  /** Load `href` once, under `name`. ONE MODULE PER URL: wanted again under another name — a
+   *  requested subpath's entry that the package's own modules import by their name for it too
+   *  (the probe of a config whose `agents.ts` imports `@iterate-com/agents` and whose `worker.ts`
+   *  imports its `/install`) — that name re-exports it (`aliasModule`), never a second copy, whose
+   *  classes would be other classes. */
   const load = (href: string, name: string): void => {
-    if (started.has(href)) return;
-    started.add(href);
+    const loadedAs = started.get(href);
+    if (loadedAs) {
+      if (loadedAs !== name) aliases.set(name, loadedAs);
+      return;
+    }
+    started.set(href, name);
     const url = new URL(href);
     const loading = (async () => {
       const code = await fetchModuleText(href, opts.fetch);
@@ -442,7 +491,7 @@ async function resolveFromEsm(
         }
       }
       modules[name] = rewriteSpecifiers(code, edits);
-    })().catch((error: Error) => void failures.push(error.message));
+    })().catch((error: Error) => void failures.push(error));
     inFlight.add(loading);
     void loading.finally(() => inFlight.delete(loading));
   };
@@ -453,9 +502,21 @@ async function resolveFromEsm(
     load(`${base}${specifier.slice(name.length)}?${query}`, moduleOfSpecifier(specifier));
   }
   while (inFlight.size) await Promise.all(inFlight);
-  if (failures.length)
-    throw new Error(
-      `${where}: resolving ${lock.specifiers.join(", ")} failed: ${failures.join("; ")}`,
-    );
+  if (failures.length) {
+    const message = `${where}: resolving ${lock.specifiers.join(", ")} failed: ${failures.map((failure) => failure.message).join("; ")}`;
+    // one module the platform failed makes the whole resolution the platform's to meet again
+    const platform = failures.map(failureKind).find(isPlatformFailureKind);
+    throw platform ? unavailableError(platform, message) : new Error(message);
+  }
+  for (const [name, loadedAs] of aliases)
+    modules[name] ??= aliasModule(name, loadedAs, modules[loadedAs]!);
   return { modules, platformModules: [...platformModules].sort() };
+}
+
+/** Module `name` as another name of module `loadedAs` (`code`): everything it exports, its default
+ *  export included when it has one (`export *` leaves a default out). */
+function aliasModule(name: string, loadedAs: string, code: string): string {
+  const target = JSON.stringify(relativeSpecifier(name, loadedAs));
+  const hasDefault = parse(code)[1].some((exported) => exported.n === "default");
+  return `export * from ${target};${hasDefault ? ` export { default } from ${target};` : ""}\n`;
 }

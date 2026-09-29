@@ -161,7 +161,7 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   // The incarnation the alarm constructed says so: the stored alarm was the tick's, and due.
   expect(
     afterFirstTick.filter((event) => event.type === "events.iterate.com/itx/woken").at(-1)?.payload,
-  ).toMatchObject({ reason: "alarm" });
+  ).toMatchObject({ cause: "alarm", due: ["schedule"] });
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
     nextAt: new Date(firstAt + 70_000).toISOString(),
   });
@@ -175,7 +175,31 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
   expect(await s.invoke("itx.schedules.list()")).toEqual([]);
 });
 
-test("a failed interval stays parked across later alarms", async () => {
+test("an interval set again as it stands keeps its clock; a changed one, or a deadline, starts anew", async () => {
+  const s = stub("prj_scheduled_interval_again");
+  const set = (input: object) =>
+    s.invoke(["itx", "schedules", ["set", input]]) as Promise<{ scheduledAtOffset: number }>;
+  const heartbeat = {
+    key: "heartbeat",
+    when: { everyMs: 300_000 },
+    events: [{ type: "heartbeat" }],
+  };
+  const first = await set(heartbeat);
+  const armed = (await s.invoke("itx.schedules.get('heartbeat')")) as { nextAt: string };
+  // what an init case does after every commit: the same definition, nothing appended
+  expect(await set(heartbeat)).toEqual(first);
+  expect(await s.invoke("itx.schedules.get('heartbeat')")).toMatchObject({
+    nextAt: armed.nextAt,
+    scheduledAtOffset: first.scheduledAtOffset,
+  });
+  const changed = await set({ ...heartbeat, events: [{ type: "heartbeat", payload: { n: 2 } }] });
+  expect(changed.scheduledAtOffset).toBeGreaterThan(first.scheduledAtOffset);
+  const deadline = { key: "deadline", when: { afterMs: 300_000 }, events: [{ type: "due" }] };
+  const once = await set(deadline);
+  expect((await set(deadline)).scheduledAtOffset).toBeGreaterThan(once.scheduledAtOffset);
+});
+
+test("a failed interval stays parked across later alarms, until it is set again", async () => {
   const ctx = "prj_scheduled_interval_failed";
   const s = stub(ctx);
   await runInDurableObject(s, async (_instance, state) => {
@@ -207,6 +231,16 @@ test("a failed interval stays parked across later alarms", async () => {
   expect(
     (await readLog(ctx)).filter((event) => event.type === "events.iterate.com/itx/schedule-failed"),
   ).toHaveLength(1);
+  // the same definition again revives it
+  const revived = await s.invoke([
+    "itx",
+    "schedules",
+    ["set", { key: "tick", when: { everyMs: 1000 }, events: [{ type: "tick" }] }],
+  ]);
+  expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
+    scheduledAtOffset: (revived as { scheduledAtOffset: number }).scheduledAtOffset,
+  });
+  expect(await s.invoke("itx.schedules.get('tick')")).not.toHaveProperty("failure");
 });
 
 test.for(["once", "interval"])(

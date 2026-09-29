@@ -13,8 +13,7 @@ on:
     paths:
       - .depot/workflows/deploy-voice.yml
       - apps/voice/**
-      # the installer the page runs (@iterate-com/voice/install and @iterate-com/agents/install)
-      - packages/agents/**
+      # the voice check, upgrade and call client the page runs (@iterate-com/voice/install, /call)
       - packages/voice/**
       - envs.ts
       - scripts/lib/**

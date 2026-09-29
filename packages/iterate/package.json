@@ -38,6 +38,7 @@
     "./project-ingress": "./src/project-ingress.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
+    "./email": "./src/email.ts",
     "./with-itx": "./src/sdk/with-itx.ts",
     "./node": "./src/node.ts"
   },
@@ -108,6 +109,11 @@
         "types": "./dist/stream/run.d.mts",
         "import": "./dist/stream/run.mjs",
         "default": "./dist/stream/run.mjs"
+      },
+      "./email": {
+        "types": "./dist/email.d.mts",
+        "import": "./dist/email.mjs",
+        "default": "./dist/email.mjs"
       },
       "./with-itx": {
         "types": "./dist/with-itx.d.mts",

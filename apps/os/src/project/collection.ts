@@ -101,7 +101,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
           waitedMs: Date.now() - started,
           slicesTimedOut: timedOut,
           incarnation: Number(event.payload?.incarnation),
-          reason: String(event.payload?.reason),
+          cause: String(event.payload?.cause),
         });
       after = event.offset;
     }

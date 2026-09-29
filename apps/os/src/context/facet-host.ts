@@ -12,9 +12,21 @@
 // `handle` — what `itx.facets.get` hands out — whose every walk is checked against the methods the
 // facet's class lists (context/facet-public-methods.ts). The platform's own calls take
 // `callFacetAsPlatform`, which no walk can land on, and are checked against nothing.
+//
+// A FACET NAMED BY A WORKER (`#workerOf`): a source expression with no cacheKey names a worker a
+// rule publishes (`itx.cd('/').config`, the project's config pointer), resolved at every
+// materialization, so a publication reaches a running facet on its next call, and loaded by its
+// `mainModule`'s identity in the worker's manifest, so only a change to that module restarts it.
 
 import { z } from "zod";
-import { codedError, errorCode, releaseRpcSessions, reportIssue, withTimeout } from "iterate/lib";
+import {
+  codedError,
+  errorCode,
+  jsonEqual,
+  releaseRpcSessions,
+  reportIssue,
+  withTimeout,
+} from "iterate/lib";
 import { REVIVE_AFTER_MAX_MS, REVIVE_AFTER_MS, type StreamEvent } from "iterate/stream/processor";
 import {
   itxExpressionStepName,
@@ -24,7 +36,9 @@ import {
   type ItxExpressionInput,
 } from "iterate/expression";
 import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
-import type { FacetSpec } from "iterate/api";
+import type { FacetSpec, WorkerSource } from "iterate/api";
+import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
 import {
   CoreContract,
   facetSpecFromHostingTarget,
@@ -47,7 +61,10 @@ import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
   facetSpecOf,
+  isWorkerModules,
+  namedWorkerLoad,
   prepareConfinedWorker,
+  type NamedWorker,
 } from "./worker-loader.ts";
 
 /** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
@@ -96,6 +113,9 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
   watchdogMs: FACET_CALL_WATCHDOG_MS,
   onTimeout: "restart",
 };
+/** How a call enters a facet (`#callOn`): a caller's walk checked against the public methods, and
+ *  the cause the facet door runs it under (cause.ts). */
+type FacetCallDoor = { byItxExpression?: boolean; cause?: Cause };
 /** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
  *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
@@ -145,6 +165,11 @@ type FacetHostDeps = {
   itxEntrypoint: () => Fetcher;
   /** The DO's dispatch: a source expression's producer runs through it (worker-loader.ts). */
   invoke: (call: ItxExpressionInput) => Promise<unknown>;
+  /** THE WORKER A FACET'S SOURCE NAMES — a source expression with no cacheKey (iterate/api
+   *  `FacetSpec`): the `workers.get` spec the rule that names it gives, resolved across contexts as
+   *  a call is (the resolver's `namedWorker`), whether the platform wrote that rule (`vouched`),
+   *  and how its producer runs — with the authority of the context whose rule it is. */
+  namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
   /** The chain of rewrites for an expression (the resolver's `resolve`): how a hosting target is
    *  read for the spec it names. */
   resolveItxExpression: (expression: ItxExpressionInput) => ItxExpression[];
@@ -158,6 +183,8 @@ type FacetHostDeps = {
   /** Settles once the deliveries already queued for the facet `name` have: what a processor's read
    *  waits for first (SubscriptionDelivery `deliveriesQueuedFor`). */
   deliveriesQueuedFor: (name: string) => Promise<unknown>;
+  /** The cause of the call being made (the DO's caller's): what a facet call carries in (cause.ts). */
+  cause: () => Cause | undefined;
 };
 
 /** A processor's reads (iterate/sdk `StreamProcessorDurableObject`): answered from its reduce, after
@@ -166,6 +193,29 @@ const PROCESSOR_READS: ReadonlySet<string> = new Set([
   "snapshot",
   "liveSnapshot",
 ] satisfies (keyof StreamProcessorDurableObject)[]);
+
+/** The worker a named facet last started under (`facet:<name>:named-worker`): the name and entry
+ *  it was asked under (the memo's `source` and `mainModule`: the row speaks for those alone), the
+ *  generation of the platform's publication, and what loads it again. */
+type NamedWorkerStarted = {
+  name: WorkerSource;
+  mainModule?: string;
+  generation: number;
+  source: WorkerSource;
+  cacheKey?: string;
+  moduleIdentity?: string;
+};
+
+/** What a loaded facet loads (`#workerOf`): a source, the key or module identity it loads under, the
+ *  dispatch its producer runs through, and — for a named worker with a manifest — what to record
+ *  once the facet started under it. */
+type FacetWorker = {
+  source: WorkerSource;
+  cacheKey?: string;
+  moduleIdentity?: string;
+  invoke: (call: ItxExpression) => Promise<unknown>;
+  started?: NamedWorkerStarted;
+};
 
 /** What `#materialize` hands `#call`: the container, the retirement of the loaded identity it was
  *  minted under (a loaded facet's; a first-party one has none) and whether the startup callback
@@ -178,6 +228,9 @@ type MaterializedFacet = {
   /** The `facet:<name>:loader-id` row owed once the facet started under a new identity: a platform
    *  start's (`#start`, `#recover`), or a call's whose restart did not start it (`#callFacet`). */
   recordLoadedIdentity?: () => void;
+  /** The loaded identity it was materialized under (a loaded facet's): what its public methods
+   *  are asked of. */
+  loaderId?: string;
 };
 
 export class FacetHost {
@@ -224,9 +277,10 @@ export class FacetHost {
     FacetHandle,
     { name: string; spec: FacetSpec | undefined }
   >();
-  /** A loaded facet's `publicMethods`, by the startup memo it was asked under: the list belongs to
-   *  the code the memo names, and a reconfigure or a removal replaces the memo. */
-  readonly #publicMethodsByLoadedFacetStartupMemo = new WeakMap<FacetSpec, readonly string[]>();
+  /** A loaded facet's `publicMethods`, by the loaded identity that answered them: the list belongs
+   *  to the code that identity loads, and a publication that changes the code changes the identity
+   *  (`#publicMethodsOf`). */
+  readonly #publicMethodsByLoaderId = new Map<string, readonly string[]>();
   /** Each loaded facet's identity as this incarnation last materialized it — ahead of its
    *  `facet:<name>:loader-id` row while a restart under a new identity is starting it. */
   readonly #loaderIdByName = new Map<string, string>();
@@ -285,9 +339,9 @@ export class FacetHost {
 
   /** `processors.claim` (built-ins.ts): the facet's engine is reachable, so its ladder of failed
    *  revives is over; `at` is when a `revive()` is owed by, `null` releases the claim. */
-  claim(name: string, at: number | null): void {
+  claim(name: string, at: number | null, cause?: Cause): void {
     this.#facetRevived(name);
-    this.#claimFacetAlarm(name, at);
+    this.#claimFacetAlarm(name, at, cause);
     // A facet that claims, or releases, is running — unless it is gone: a release can land after
     // the facet's deletion took its memo.
     if (
@@ -305,9 +359,11 @@ export class FacetHost {
   async reviveDueClaims(): Promise<void> {
     for (const [name, at] of [...this.#facetClaims]) {
       if (at > Date.now()) continue;
+      // A revive keeps the cause of the claim it serves (cause.ts: repeating work is no new work).
+      const cause = this.#claimCause(name);
       this.#claimFacetAlarm(name, null);
       try {
-        await this.callFacetAsPlatform(name, [["revive"]]);
+        await this.callFacetAsPlatform(name, [["revive"]], cause);
         this.#facetRevived(name);
       } catch (error) {
         // A revive `itx.facets.abort` cut off (FACET_ABORTED), or a platform restart (a new loaded
@@ -315,7 +371,15 @@ export class FacetHost {
         // — due now, the next pass's, with no backoff and no issue.
         const code = errorCode(error);
         if (code === "FACET_ABORTED" || code === "FACET_RESTARTED") {
-          this.#claimFacetAlarm(name, Date.now());
+          this.#claimFacetAlarm(name, Date.now(), cause);
+          continue;
+        }
+        // Its work died with its host too often: failed, owed no revive, and one fact says so.
+        if (code === "WORK_FAILED") {
+          this.#deps.stream.append({
+            type: "events.iterate.com/itx/work-failed",
+            payload: { facet: name, error: (error as Error).message },
+          });
           continue;
         }
         reportIssue("iterate-context.revive", error, { name });
@@ -327,6 +391,7 @@ export class FacetHost {
         this.#claimFacetAlarm(
           name,
           Date.now() + Math.min(REVIVE_AFTER_MS * 2 ** failures, REVIVE_AFTER_MAX_MS),
+          cause,
         );
       }
     }
@@ -494,6 +559,7 @@ export class FacetHost {
           steps,
           { failedOn: started, error },
           watchdog,
+          {},
           owed,
         ).catch(startedIfRefused);
       }
@@ -535,16 +601,33 @@ export class FacetHost {
     this.#facetReviveFailures.delete(name);
     this.#deps.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
   }
-  #claimFacetAlarm(name: string, at: number | null): void {
+  #claimFacetAlarm(name: string, at: number | null, cause = this.#claimCause(name)): void {
     // null releases a claim; epoch 0 is a valid due alarm
     if (at === null) {
       this.#facetClaims.delete(name);
       this.#deps.ctx.storage.kv.delete(`facet-claim:${name}`);
+      this.#deps.ctx.storage.kv.delete(`facet-claim-cause:${name}`);
     } else {
       this.#facetClaims.set(name, at);
       this.#deps.ctx.storage.kv.put(`facet-claim:${name}`, at);
+      if (cause) this.#deps.ctx.storage.kv.put(`facet-claim-cause:${name}`, cause);
     }
     this.#deps.reconcileAlarm();
+  }
+
+  /** Why a facet's claim was made — the cause of the attempt it covers (cause.ts), kept beside it. */
+  #claimCause(name: string): Cause | undefined {
+    return this.#deps.ctx.storage.kv.get<Cause>(`facet-claim-cause:${name}`);
+  }
+
+  /** The deepest cause among the claims due by `dueBy`: what an alarm that comes back for them is
+   *  caused by. */
+  owedCause(dueBy: number): Cause | undefined {
+    return deepestCause(
+      [...this.#facetClaims]
+        .filter(([, at]) => at <= dueBy)
+        .map(([name]) => this.#claimCause(name)),
+    );
   }
 
   // ── the two committed-event effects the DO runs off a fresh commit ──
@@ -629,7 +712,10 @@ export class FacetHost {
           "FACET_NO_UPGRADE",
           `facet "${name}": a facet answers RPC and plain HTTP, never a WebSocket — a socket terminates at the edge; reach the facet by itx expression`,
         );
-      return this.#callFacet(name, spec, itxExpressionSteps, { byItxExpression: true });
+      return this.#callFacet(name, spec, itxExpressionSteps, {
+        byItxExpression: true,
+        cause: this.#deps.cause(),
+      });
     });
     this.#facetAddressByFacetHandle.set(facetHandle, { name, spec });
     return facetHandle;
@@ -642,27 +728,29 @@ export class FacetHost {
   async callFacetAsPlatform(
     facet: string | FacetHandle,
     itxExpressionSteps: ItxExpression,
+    cause = this.#deps.cause(),
   ): Promise<unknown> {
-    if (typeof facet === "string") return this.#callFacet(facet, undefined, itxExpressionSteps);
+    if (typeof facet === "string")
+      return this.#callFacet(facet, undefined, itxExpressionSteps, { cause });
     const facetAddress = this.#facetAddressByFacetHandle.get(facet);
     if (!facetAddress)
       throw new Error("facet: a FacetHandle this context's facet host never minted");
-    return this.#callFacet(facetAddress.name, facetAddress.spec, itxExpressionSteps);
+    return this.#callFacet(facetAddress.name, facetAddress.spec, itxExpressionSteps, { cause });
   }
 
   /** THE facet call — `itx.facets.get(name).m()` (address a running facet) and
    *  `itx.facets.get(name, { source, className }).m()` (load and host) both land here; facet stubs
    *  are non-transferable, so the walk happens where the stub lives. Top to bottom: the startup memo
-   *  → for a caller's walk, the class's `publicMethods` (context/facet-public-methods.ts) →
-   *  `#materialize` (the loaded identity, resolved not loaded; the racing-delete/reconfigure check;
-   *  the restart marker; the facet, its class minted only when it STARTS) → `#call` (the watchdog,
-   *  copy + dispose the answer) — and on the platform failure at facet start, a restart and the same
-   *  two steps once more. */
+   *  → `#materialize` (the loaded identity, resolved not loaded; the racing-delete/reconfigure check;
+   *  the restart marker; the facet, its class minted only when it STARTS) → `#callOn` (for a
+   *  caller's walk, the `publicMethods` of the class that identity loads —
+   *  context/facet-public-methods.ts — then `#call`: the watchdog, copy + dispose the answer) — and
+   *  on the platform failure at facet start, a restart and the same two steps once more. */
   async #callFacet(
     name: string,
     spec: FacetSpec | undefined,
     itxExpressionSteps: ItxExpression,
-    { byItxExpression } = { byItxExpression: false },
+    { byItxExpression = false, cause }: { byItxExpression?: boolean; cause?: Cause } = {},
   ): Promise<unknown> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- name arrives as a client-authored itx expression argument; the static string type is the API contract, not a runtime guarantee, so a non-string is rejected with a usage error
     if (typeof name !== "string")
@@ -701,19 +789,19 @@ export class FacetHost {
     const facetStartupMemo = firstPartyClassName
       ? undefined
       : this.#facetStartupMemoFor(name, spec);
-    if (byItxExpression)
-      assertFacetMethodIsPublic(
-        name,
-        facetStartupMemo
-          ? await this.#loadedFacetPublicMethods(name, facetStartupMemo)
-          : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
-            FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
-        itxExpressionSteps,
-      );
     // A processor's read holds every commit acknowledged before it: it waits out the pushes this
     // context already owes the facet (SubscriptionDelivery `deliveriesQueuedFor` says why).
     if (PROCESSOR_READS.has(itxExpressionStepName(itxExpressionSteps[0]) ?? ""))
       await this.#deps.deliveriesQueuedFor(name);
+    // THE SDK'S REQUEST DOOR (cause.ts): a `fetch` carries the cause on its Request — the one
+    // channel a socket rides; any other call rides the facet door (`#callOn`).
+    const [first, ...rest] = itxExpressionSteps;
+    if (cause && Array.isArray(first) && first[0] === "fetch" && first[1] instanceof Request)
+      itxExpressionSteps = [
+        ["fetch", requestCausedBy(first[1], cause), ...first.slice(2)],
+        ...rest,
+      ];
+    const door = { byItxExpression, cause };
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -721,11 +809,12 @@ export class FacetHost {
         platformStart: false,
       });
       try {
-        const answer = await this.#call(
+        const answer = await this.#callOn(
           materialized,
           name,
           itxExpressionSteps,
           FACET_CALL_WATCHDOG,
+          door,
         );
         materialized.recordLoadedIdentity?.();
         return answer;
@@ -743,6 +832,7 @@ export class FacetHost {
               itxExpressionSteps,
               { failedOn: materialized, error },
               FACET_CALL_WATCHDOG,
+              door,
               owed,
             ),
           );
@@ -755,23 +845,59 @@ export class FacetHost {
     }
   }
 
-  /** A LOADED facet's `publicMethods`, asked of the facet once per startup memo —
-   *  `listPublicMethods()`, which the SDK's facet shells answer (a static does not cross the
-   *  isolate). A class that extends neither shell has no such method (workerd's TypeError), and
+  /** One call on a materialized facet — for a caller's walk (`byItxExpression`), only of a method
+   *  the class it was materialized under lists as public: a first-party class's table, or what the
+   *  loaded identity itself answers (`#publicMethodsOf`), so a publication that makes a method
+   *  private refuses it on the very call that runs the new code, and one that adds a method admits
+   *  it there. A call with a `cause` other than a `fetch` rides THE SDK'S FACET DOOR (cause.ts) on
+   *  an identity whose class is an SDK shell — every first-party one, and a loaded one that lists
+   *  its public methods — so the walk runs under the call's cause. */
+  async #callOn(
+    materialized: MaterializedFacet,
+    name: string,
+    itxExpressionSteps: ItxExpression,
+    watchdog: FacetCallWatchdog,
+    { byItxExpression = false, cause }: FacetCallDoor,
+  ): Promise<unknown> {
+    if (byItxExpression)
+      assertFacetMethodIsPublic(
+        name,
+        materialized.loaderId
+          ? await this.#publicMethodsOf(materialized, name)
+          : // `name` hosts a first-party class, so it is one of the table's keys; the type system cannot see it.
+            FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
+        itxExpressionSteps,
+      );
+    const throughDoor =
+      cause &&
+      itxExpressionStepName(itxExpressionSteps[0]) !== "fetch" &&
+      (!materialized.loaderId || (await this.#publicMethodsOf(materialized, name)).length > 0);
+    return await this.#call(
+      materialized,
+      name,
+      throughDoor ? [["callWithCause", cause, itxExpressionSteps]] : itxExpressionSteps,
+      watchdog,
+    );
+  }
+
+  /** A LOADED facet's `publicMethods`, asked once per loaded identity of the facet materialized
+   *  under it — `listPublicMethods()`, which the SDK's facet shells answer (a static does not cross
+   *  the isolate). A class that extends neither shell has no such method (workerd's TypeError), and
    *  lists nothing. */
-  async #loadedFacetPublicMethods(name: string, facetStartupMemo: FacetSpec) {
-    let publicMethods = this.#publicMethodsByLoadedFacetStartupMemo.get(facetStartupMemo);
+  async #publicMethodsOf(materialized: MaterializedFacet, name: string) {
+    const loaderId = materialized.loaderId!;
+    let publicMethods = this.#publicMethodsByLoaderId.get(loaderId);
     if (publicMethods) return publicMethods;
     try {
       publicMethods = z
         .array(z.string())
-        .parse(await this.#callFacet(name, undefined, [["listPublicMethods"]]));
+        .parse(await this.#call(materialized, name, [["listPublicMethods"]], FACET_CALL_WATCHDOG));
     } catch (error) {
       if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
         throw error;
       publicMethods = [];
     }
-    this.#publicMethodsByLoadedFacetStartupMemo.set(facetStartupMemo, publicMethods);
+    this.#publicMethodsByLoaderId.set(loaderId, publicMethods);
     return publicMethods;
   }
 
@@ -797,6 +923,7 @@ export class FacetHost {
     itxExpressionSteps: ItxExpression,
     failure: { failedOn: MaterializedFacet; error: unknown },
     watchdog: FacetCallWatchdog,
+    door: FacetCallDoor,
     owed: (() => void)[],
   ): Promise<unknown> {
     let { failedOn, error } = failure;
@@ -840,7 +967,7 @@ export class FacetHost {
         platformStart: true,
       });
       try {
-        return await this.#call(attempt, name, itxExpressionSteps, watchdog);
+        return await this.#callOn(attempt, name, itxExpressionSteps, watchdog, door);
       } catch (attemptError) {
         if (!this.#isRecoverableFacetFailure(name, attemptError, attempt)) throw attemptError;
         failedOn = attempt;
@@ -884,10 +1011,13 @@ export class FacetHost {
     // removal deletes the facet (deleteFacetsWhoseHostingSubscriptionWasRemoved), but a row replaced
     // or re-pointed by a rule leaves it running unpushed, trusting what it last read — as a facet
     // pushed once already trusts its last push, word or no word.
+    // the code it starts on: this deploy's class, or the loaded identity resolved below
+    let generation = this.#deps.deployId;
     const propsAtStart = () =>
       ({
         iterateContextName: this.#deps.iterateContextName,
         name,
+        generation,
         ...(rowsPushingFacet(this.#deps.stream.coreReducedState, name).length > 0 && {
           fedByPushes: true,
         }),
@@ -895,6 +1025,7 @@ export class FacetHost {
     let mintClass: () => DurableObjectClass;
     let retireLoadedIdentity: (() => void) | undefined;
     let recordLoadedIdentity: (() => void) | undefined;
+    let materializedLoaderId: string | undefined;
     if (firstPartyClassName) {
       // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facets.test.ts).
       const exportsOf = this.#deps.ctx.exports as unknown as Record<
@@ -905,8 +1036,20 @@ export class FacetHost {
     } else {
       const memo = facetStartupMemo!;
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
-      // __workers-tests__/facets.test.ts). The one await is a dead id's
-      // recovery (worker-loader.ts).
+      // __workers-tests__/facets.test.ts). The awaits are the named worker's resolution and a dead
+      // id's recovery (worker-loader.ts).
+      let worker: FacetWorker;
+      try {
+        worker = await this.#workerOf(name, memo);
+      } catch (error) {
+        // A LIVE facet outlasts a name it cannot read right now — the platform failed the read,
+        // not the rule: it keeps running under the identity it has until a read succeeds.
+        const liveLoaderId = this.#liveFacetNames.has(name)
+          ? this.#loaderIdByName.get(name)
+          : undefined;
+        if (!liveLoaderId || !isPlatformFailureKind(failureKind(error))) throw error;
+        return this.#liveFacetUnderItsIdentity(name, liveLoaderId, error);
+      }
       const { loaderId, load, retire } = await prepareConfinedWorker({
         env: this.#deps.env(),
         deployId: this.#deps.deployId,
@@ -914,11 +1057,14 @@ export class FacetHost {
         itxEntrypoint: this.#deps.itxEntrypoint(),
         kind: "facet",
         owner: [this.#deps.iterateContextName, memo.className],
-        source: memo.source,
-        cacheKey: memo.cacheKey,
-        invoke: (call) => this.#deps.invoke(call),
+        source: worker.source,
+        cacheKey: worker.cacheKey,
+        mainModule: memo.mainModule,
+        moduleIdentity: worker.moduleIdentity,
+        invoke: worker.invoke,
         where: `facet "${name}"`,
       });
+      generation = loaderId;
       // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
       // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
       // stale call must neither resurrect a deleted facet as an orphan this actor never releases, nor
@@ -945,6 +1091,8 @@ export class FacetHost {
       // stopped, and this call is its start.
       let started = true;
       if (previousLoaderId && previousLoaderId !== loaderId) {
+        // The class the old identity loaded is gone from this facet: its list goes with it.
+        this.#publicMethodsByLoaderId.delete(previousLoaderId);
         // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
         // it first — abort and start with nothing between (`#restart`), the identity recorded there.
         if (platformStart) {
@@ -962,12 +1110,16 @@ export class FacetHost {
         }
       }
       if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
-        recordLoadedIdentity = () =>
+        recordLoadedIdentity = () => {
           this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
+          if (worker.started)
+            this.#deps.ctx.storage.kv.put(`facet:${name}:named-worker`, worker.started);
+        };
       if (!platformStart && started) {
         recordLoadedIdentity?.();
         recordLoadedIdentity = undefined;
       }
+      materializedLoaderId = loaderId;
       mintClass = () => load().getDurableObjectClass(memo.className, { props: propsAtStart() });
       retireLoadedIdentity = retire;
     }
@@ -1002,6 +1154,68 @@ export class FacetHost {
       startupFailed: () => startupFailed,
       generation: this.#facetGenerationByName.get(name) ?? 0,
       recordLoadedIdentity,
+      loaderId: materializedLoaderId,
+    };
+  }
+
+  /** The container of a facet running under `loaderId`, reached without resolving its code again;
+   *  one the runtime dropped meanwhile fails its start with `why`, and starts cold on a later call. */
+  #liveFacetUnderItsIdentity(name: string, loaderId: string, why: unknown): MaterializedFacet {
+    let startupFailed = false;
+    const facet = this.#deps.ctx.facets.get(name, () => {
+      startupFailed = true;
+      throw why;
+    });
+    return {
+      facet,
+      startupFailed: () => startupFailed,
+      generation: this.#facetGenerationByName.get(name) ?? 0,
+      loaderId,
+    };
+  }
+
+  /** WHAT A LOADED FACET LOADS: its memo's own source — its modules, or a producer under its
+   *  cacheKey — or the worker that source NAMES (a source expression with no cacheKey), resolved now.
+   *  Only a manifest the platform VOUCHES for (its publication wrote the rule) counts: the facet
+   *  then loads under its `mainModule`'s identity there, and never under a worker older than the one
+   *  it last started under for this name and entry (`facet:<name>:named-worker`) — a reader's
+   *  snapshot may still name an earlier generation, and a facet only moves forward, so two readers
+   *  a publication apart do not restart it back and forth. A manifest anyone else wrote is ignored:
+   *  its worker loads under its own cacheKey or content, as any source does. */
+  async #workerOf(name: string, memo: FacetSpec): Promise<FacetWorker> {
+    if (memo.cacheKey || isWorkerModules(memo.source))
+      return { source: memo.source, cacheKey: memo.cacheKey, invoke: this.#deps.invoke };
+    const named = await this.#deps.namedWorker(memo.source);
+    const { source, cacheKey, moduleIdentity, generation } = namedWorkerLoad(
+      named,
+      memo.mainModule,
+      `facet "${name}"`,
+    );
+    if (generation === undefined) return { source, cacheKey, invoke: named.invoke };
+    // kv answers `unknown`; `recordLoadedIdentity` is the only writer of the row.
+    const started = this.#deps.ctx.storage.kv.get(`facet:${name}:named-worker`) as
+      | NamedWorkerStarted
+      | undefined;
+    if (
+      started &&
+      jsonEqual(started.name, memo.source) &&
+      started.mainModule === memo.mainModule &&
+      started.generation > generation
+    )
+      return { ...started, invoke: named.invoke };
+    return {
+      source,
+      cacheKey,
+      moduleIdentity,
+      invoke: named.invoke,
+      started: {
+        name: memo.source,
+        mainModule: memo.mainModule,
+        generation,
+        source,
+        cacheKey,
+        moduleIdentity,
+      },
     };
   }
 
@@ -1212,6 +1426,7 @@ export class FacetHost {
     this.#facetRevived(name);
     this.#deps.ctx.storage.kv.delete(`facet:${name}`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:loader-id`);
+    this.#deps.ctx.storage.kv.delete(`facet:${name}:named-worker`);
     this.#deps.ctx.storage.kv.delete(`facet:${name}:restarts`);
     this.#deps.ctx.storage.kv.delete(`facet-ran:${name}`);
     this.#facetStartupMemoByName.delete(name);

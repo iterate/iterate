@@ -21,6 +21,7 @@
 //       github: { appId, appSlug, oauthClientId, oauthClientSecret, privateKey, webhookSecret, githubOrigin },
 //     },
 //     secrets: { key, previousKey, adminBearer },
+//     contextBirthEvents,
 //   }
 //
 // Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
@@ -50,6 +51,7 @@ import type { OAuthIntegrationProvider } from "iterate/api";
 import { sha256Hex } from "./caller.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { normalizeContextBirthEvents } from "./stream/core-processor.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -389,6 +391,25 @@ export const AppConfig = z.object({
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
     .prefault({ key: "" }),
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (stream/stream.ts `appendBirthRecord`): ordinary
+   *  events, appended in the birth's own batch after `itx/created` and `itx/woken` — the platform's
+   *  stack of what every context starts with (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`: the config
+   *  entrypoint's fan-out row and the platform hook's). The context layer appends them without
+   *  reading them. Each is checked here, at boot, and kept as the append boundary stores it
+   *  (stream/core-processor.ts `normalizeContextBirthEvents`), so a malformed one fails the
+   *  deploy, not every project context. A change reaches the contexts born after it. From envs.ts
+   *  `contextBirthEvents`, as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`. Unset ⇒ none. */
+  contextBirthEvents: z
+    .array(
+      z.strictObject({
+        type: z.string().trim().min(1, REQUIRED),
+        payload: z.record(z.string(), z.unknown()).optional(),
+        idempotencyKey: z.string().trim().min(1, REQUIRED).optional(),
+      }),
+      { error: 'expected a JSON array of events, like [{ "type": "…", "payload": {…} }]' },
+    )
+    .default([])
+    .transform(normalizeContextBirthEvents),
 });
 
 /** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing

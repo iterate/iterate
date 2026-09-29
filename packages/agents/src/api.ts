@@ -26,14 +26,12 @@ export interface AgentHandleApi {
 }
 
 /** `itx.agents` — installed by rewrite rule on the project's root and on each agent's context.
- *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable);
- *  `upgrade` rebinds every agent to the installed runtime. */
+ *  `create` and `delete` are sagas on the agent's path (a deleted agent is not re-creatable). */
 export interface AgentsApi {
   list(): Promise<{ path: string; createdAt: string }[]>;
   get(path: string): AgentHandleApi;
   create(path: string): Promise<{ path: string }>;
   delete(path: string): Promise<{ path: string }>;
-  upgrade(): Promise<void>;
 }
 
 declare module "iterate/api" {

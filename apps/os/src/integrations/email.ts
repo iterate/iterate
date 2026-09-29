@@ -11,21 +11,34 @@
 //                  address it reached, so a redelivery lands nothing new and a copy to another of the
 //                  project's addresses is its own. The fact says who sent it as far as the platform
 //                  can tell (email/sender.ts): whether the From address is verified, whether it is a
-//                  member's, and whether the mail is automated; nothing is refused for it, the reader
-//                  decides. Mail for no project is rejected (a bounce the sender sees); a failure of
-//                  ours throws, and the sending server retries.
+//                  member's, whether its domain's own server sent it, and whether the mail is
+//                  automated; nothing is refused for it, the reader decides. Mail for no project is
+//                  rejected (a bounce the sender sees); a failure of ours throws, and the sending
+//                  server retries.
 //   sendEmail    — `itx.email.send` (context/built-ins.ts): from the project's own address, or for
 //                  the project wildcard's project any address on its domain (`hello@iterate.com`),
 //                  with project files attached, then `email/sent` on `/integrations/email`. Given
 //                  `inReplyToOffset`, a message on that log, it answers it in its thread, from the
-//                  address it arrived at when the project may send from that one.
+//                  address it arrived at when the project may send from that one. A send code
+//                  makes while it handles a delivery is reserved first, so a retry answers the
+//                  mail it sent and never sends it twice (cause.ts).
 // Both record their fact through `recordEmail`, as the platform: the `email` facet folds only
 // those (email/processor.ts).
 import PostalMime, { type Address } from "postal-mime";
 import { codedError } from "iterate/lib";
 import type { EmailSendInput } from "iterate/api";
+import { EmailContract } from "iterate/email";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
+import {
+  causeHeader,
+  ITERATE_CAUSE_MAIL_HEADER,
+  LOOP_DEPTH_LIMIT,
+  newChain,
+  parseCause,
+  refuseActPastLimit,
+  type Cause,
+} from "../cause.ts";
 import { appConfigOf } from "../app-config.ts";
 import type { Caller } from "../caller.ts";
 import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
@@ -33,7 +46,7 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
 import { sha256Hex } from "../secrets.ts";
 import type { ReachableContext } from "../stream/stream.ts";
-import { EMAIL_PATH, EmailContract, emailDomainOf } from "../email/contract.ts";
+import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { authenticationOf, isAutomated } from "../email/sender.ts";
 
 /** A body longer than this many characters is cut, so no message outgrows one event. */
@@ -72,14 +85,24 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   );
   const replyTo = addressesOf(email.replyTo)[0];
   const from = addressesOf(email.from && [email.from])[0] ?? message.from;
-  const { authentication, verified } = authenticationOf(email.headers, from);
+  const { authentication, verified, direct } = authenticationOf(email.headers, from);
   const user = verified ? await controlPlane.getUser(from) : null;
   const member = !!user && (await controlPlane.reachesProject({ userId: user.id }, project.id));
+  // Mail we sent resumes the chain it carries (sendEmail's mark); any other begins one. Mail is
+  // always recorded, so one past the loop limit lands at it: what reacts to it can only read.
+  const mark = parseCause(
+    email.headers.find(({ key }) => key === ITERATE_CAUSE_MAIL_HEADER.toLowerCase())?.value,
+  );
   await recordEmail(
     env.ITERATE_CONTEXT.getByName(
       DurableObjectNameCodec.stringify({ projectId: project.id, path: EMAIL_PATH }),
     ),
-    { principal: null },
+    {
+      principal: null,
+      cause: mark
+        ? { chain: mark.chain, depth: Math.min(mark.depth, LOOP_DEPTH_LIMIT) }
+        : newChain("inbound mail"),
+    },
     {
       type: "events.iterate.com/email/received",
       idempotencyKey: `email/received:${messageKey}:${message.to.toLowerCase()}`,
@@ -96,7 +119,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
         references: bareMessageIdsOf(email.references),
         attachments,
         envelope: { from: message.from, to: message.to },
-        sender: { verified, member },
+        sender: { verified, member, direct },
         automated: isAutomated(email.headers, message.from),
         authentication,
       },
@@ -136,16 +159,18 @@ export async function sendEmail(
     address: string;
     name: string;
     ownDomain: string | null;
-    emailContext: Pick<ReachableContext, "invoke" | "read">;
+    emailContext: Pick<ReachableContext, "invoke" | "read" | "reserveSend" | "releaseSend">;
     caller: Caller;
   },
   input: EmailSendInput,
 ) {
+  // A send is an act: past the loop limit, nothing is mailed (cause.ts).
+  refuseActPastLimit(scope.caller.cause, "itx.email.send");
   const parsed = SendInput.safeParse(input);
   if (!parsed.success) throw codedError("INVALID_INPUT", `itx.email.send: ${parsed.error.message}`);
   const request = parsed.data;
   const answered = request.inReplyToOffset
-    ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset)
+    ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset, scope.caller.cause)
     : null;
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
@@ -182,6 +207,24 @@ export async function sendEmail(
       };
     }),
   );
+  // AT MOST ONCE A DELIVERY (cause.ts, stable retry effects): a send code makes while it handles a
+  // delivery is keyed by the delivery and the message, the same on every attempt, and reserved in
+  // `/integrations/email`'s storage before it goes. A retry answers the `email/sent` recorded under
+  // the key; a send the binding refused frees it for the retry; one that may have gone out with
+  // nothing recorded is not sent again: the delivery fails for good, and says so.
+  const writeKey = scope.caller.cause?.writeKey;
+  const key =
+    writeKey &&
+    `${writeKey}:email.send:${(await sha256Hex(JSON.stringify([to, cc, subject, request.text, request.html]))).slice(0, 16)}`;
+  if (key) {
+    const { recorded, reserved } = await scope.emailContext.reserveSend(key);
+    if (recorded) return recorded;
+    if (!reserved)
+      throw codedError(
+        "PERMANENT_FAILURE",
+        "itx.email.send: an earlier attempt of this delivery sent this message or may have, and recorded nothing — it is not sent again",
+      );
+  }
   const references = answered?.references || [];
   const sent = await scope.EMAIL.send({
     from: { email: from, name: scope.name },
@@ -190,12 +233,17 @@ export async function sendEmail(
     subject,
     text: request.text,
     html: request.html,
-    ...(answered?.inReplyTo && {
-      headers: {
+    headers: {
+      // OUR MARK (cause.ts): mail that comes back resumes the chain.
+      "Auto-Submitted": "auto-generated",
+      ...(scope.caller.cause && {
+        [ITERATE_CAUSE_MAIL_HEADER]: causeHeader(scope.caller.cause),
+      }),
+      ...(answered?.inReplyTo && {
         "In-Reply-To": `<${answered.inReplyTo}>`,
         References: referencesHeaderOf(references),
-      },
-    }),
+      }),
+    },
     ...(attachments.length > 0 && {
       attachments: attachments.map(({ filename, contentType, content }) => ({
         disposition: "attachment" as const,
@@ -204,9 +252,13 @@ export async function sendEmail(
         content,
       })),
     }),
+  }).catch(async (error: unknown) => {
+    if (key) await scope.emailContext.releaseSend(key); // refused: nothing went out
+    throw error;
   });
   return recordEmail(scope.emailContext, scope.caller, {
     type: "events.iterate.com/email/sent",
+    idempotencyKey: key || undefined,
     payload: {
       messageId: bareMessageIdsOf(sent.messageId)[0] ?? null,
       from,
@@ -244,8 +296,12 @@ async function recordEmail(
  *  (the author, or where they asked for replies; for our own message, the same people again), the
  *  address it reached us at (for our own message, the one we sent it from), its subject, and the
  *  threading ids. */
-async function answeredMessageOf(emailContext: Pick<ReachableContext, "read">, offset: number) {
-  const [event] = (await emailContext.read(offset - 1, 1)).events;
+async function answeredMessageOf(
+  emailContext: Pick<ReachableContext, "read">,
+  offset: number,
+  cause: Cause | undefined,
+) {
+  const [event] = (await emailContext.read(offset - 1, 1, {}, cause)).events;
   const found = event?.offset === offset ? event : undefined;
   const { events } = EmailContract;
   const received =

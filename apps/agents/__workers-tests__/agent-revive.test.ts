@@ -12,9 +12,10 @@ import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { installAgents } from "@iterate-com/agents/install";
-import { agentsWorkspaceSource } from "../e2e/agents-source.ts";
+import { agentsWorkspaceConfig } from "../e2e/agents-workspace-config.ts";
 import {
   adminCredentials,
+  appendAsPlatform,
   openSession,
   owedAlarmOf,
   releasePins,
@@ -29,7 +30,16 @@ const AGENT = `${PROJECT}.iterate/agents/support`;
 test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model call in flight; its alarm revives the agent, which runs the open request again and settles it", async () => {
   const model = new ParkingModel();
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
-  await installAgents(itx as never, agentsWorkspaceSource);
+  // the app as a project's config installs it: the pointer the platform's publication writes (here
+  // its files literal, no manifest), then the init case's `installAgents`
+  await appendAsPlatform(PROJECT, {
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.config",
+      target: ["itx", "builtins", "workers", ["get", { source: agentsWorkspaceConfig }]],
+    },
+  });
+  await installAgents(itx);
   const support = itx.cd("/agents/support");
   await support.provide("itx.ai", model);
   await itx.invoke(["itx", "agents", ["create", "/agents/support"]]);
@@ -87,7 +97,7 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   const requested = log.find((e) => e.type === "events.iterate.com/agent/llm-request-requested")!;
   const between = log.filter((e) => e.offset > requested.offset && e.offset < settled.offset);
   expect(between.map((e) => e.type)).toEqual(["events.iterate.com/itx/woken"]);
-  expect(between[0]!.payload).toMatchObject({ reason: "alarm" });
+  expect(between[0]!.payload).toMatchObject({ cause: "alarm" });
   // Settled, nothing in flight: the claim is released and the context owes no alarm.
   await until(
     "no claim",
