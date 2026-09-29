@@ -1,6 +1,6 @@
-// Comments on a doc: events on the doc's own context, never text in the file. Misha comments on
-// a typo, Jonas sees it live and replies, an agent fixes the typo in a commit and the comment
-// stays on the corrected word, and Jonas resolves it.
+// Comments on a doc: events on the doc's own context, never text in the file. A comment on a typo
+// reaches another member live, their reply reaches its author, an agent's commit fixing the typo
+// leaves the comment on the corrected word, and any member may resolve it.
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";

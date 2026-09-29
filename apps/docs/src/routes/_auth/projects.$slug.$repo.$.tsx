@@ -85,6 +85,8 @@ function DocPage() {
             return {
               context,
               dispose: () => {
+                // the context capnweb hands back is a stub, which disposes, though the
+                // IterateContextApi type `cd` returns doesn't say so
                 (context as unknown as Disposable)[Symbol.dispose]();
                 itx[Symbol.dispose]();
               },
