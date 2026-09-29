@@ -7,7 +7,7 @@ import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-d
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
 import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
-import { stateArtifacts as healthStates } from "../monitors/health.ts";
+import { AWAIT_OLDER_RUNS, stateArtifacts as healthStates } from "../monitors/health.ts";
 import { latencyReport } from "../monitors/latency.ts";
 import { CHECKS } from "../monitors/ttg.ts";
 import { stepFailureTitles, testEvidenceJobs } from "./test-evidence.ts";
@@ -1035,11 +1035,12 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 });
 
 // Each CI workflow of main that deploys a preview has a prefix of its own
-// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS), its DEPLOYMENT_PREFIX, which its
-// `pnpm preview` steps pass as `--name`: one run at a time, it deploys the commit it tests as
-// `<prefix>-<sha7>` and then deletes only the deployments before it (`cleanup-superseded`), never a
-// whole prefix's (`delete`).
-test("each CI workflow that deploys a preview deploys its own prefix's, one run at a time, and deletes only the ones its deployment supersedes", () => {
+// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS, with the workflow's `name:`, which the
+// cleanup asks Depot for its runs in progress by), its DEPLOYMENT_PREFIX, which its `pnpm preview`
+// steps pass as `--name`: it deploys the commit it tests as `<prefix>-<sha7>` and then deletes only
+// the deployments before it (`cleanup-superseded`), never a whole prefix's (`delete`), and no run
+// cancels another.
+test("each CI workflow that deploys a preview deploys its own prefix's, and deletes only the ones its deployment supersedes", () => {
   const ownPreviews = depotWorkflowFiles.flatMap((file) => {
     const workflow = loadWorkflow(file);
     const preview = workflow.env?.DEPLOYMENT_PREFIX;
@@ -1051,10 +1052,13 @@ test("each CI workflow that deploys a preview deploys its own prefix's, one run 
     "real-model": ".depot/workflows/os-real-model.yml",
   });
   expect(ownPreviews.map(({ preview }) => preview).toSorted()).toEqual(
-    [...CI_WORKFLOW_PREVIEWS].toSorted(),
+    [...CI_WORKFLOW_PREVIEWS.keys()].toSorted(),
   );
-  for (const { file, workflow } of ownPreviews) {
-    expect(workflow.concurrency, file).toMatchObject({ "cancel-in-progress": false });
+  for (const { file, preview, workflow } of ownPreviews) {
+    expect(workflow, file).toMatchObject({
+      name: CI_WORKFLOW_PREVIEWS.get(preview),
+      concurrency: { "cancel-in-progress": false },
+    });
     const steps = Object.values(workflow.jobs).flatMap((job) => job.steps || []);
     const runs = steps.map((step) => step.run || "");
     expect(runs, file).toContainEqual(
@@ -1080,6 +1084,20 @@ test("each CI workflow that deploys a preview deploys its own prefix's, one run 
       file,
     ).toEqual([]);
   }
+});
+
+// Why a group per commit: .depot/workflows/main-os-e2e.yml (ONE GROUP PER COMMIT).
+test("Main OS e2e gives every main commit its own run, and two runs of one commit take turns", () => {
+  const { concurrency } = loadWorkflow(".depot/workflows/main-os-e2e.yml");
+  const group = (event: string, sha: string) =>
+    renderWorkflowString(concurrency!.group, { "github.event_name": event, "github.sha": sha });
+
+  // one group for all of main keeps one pending run, and the next push replaces it: that merge
+  // commit then has no e2e verdict at all
+  expect(group("push", "a1")).not.toBe(group("push", "b2"));
+  // a dispatch of a pushed commit deploys the same `main-<sha7>`, so it waits for the push's run
+  expect(group("workflow_dispatch", "a1")).toBe(group("push", "a1"));
+  expect(concurrency!["cancel-in-progress"]).toBe(false);
 });
 
 test("Main OS e2e runs on every main push a PR preview would run for", () => {
@@ -1125,6 +1143,14 @@ test("Main OS e2e pages from its own alert job once its deploy and every suite j
   });
   const judge = alert.steps?.find((step) => step.run?.includes("health.ts main-e2e"));
   expect(judge?.run).toContain('--ref "${{ github.ref }}"');
+  // the page jobs take turns, oldest run first: this one reads its state only once the older runs'
+  // page jobs have kept theirs, and it can wait for them its whole bound
+  const runs = alert.steps?.map((step) => step.run) || [];
+  expect(runs.indexOf("node scripts/monitors/health.ts await-older-runs")).toBeGreaterThan(-1);
+  expect(runs.indexOf("node scripts/monitors/health.ts await-older-runs")).toBeLessThan(
+    runs.indexOf(judge?.run),
+  );
+  expect(alert["timeout-minutes"]).toBe(AWAIT_OLDER_RUNS.boundMs / 60_000 + 10);
   // the trace covers what it waits for, so it neither waits for the page nor times it
   expect(main.jobs.trace?.needs).not.toContain("alert");
 });

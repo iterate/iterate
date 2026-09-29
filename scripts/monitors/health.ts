@@ -25,6 +25,7 @@
 // to #ci, marked 🧪 TEST RUN and mentioning nobody, keeping no state and sending nothing to PostHog.
 //
 // Every command reads Depot with the organization token (../ci/depot.ts `depotApi`):
+//   node scripts/monitors/health.ts await-older-runs [--workflow-id <id>]
 //   node scripts/monitors/health.ts previous-state [--of main-e2e] --out <state.json>
 //   node scripts/monitors/health.ts run --ref <git ref> [--state <state.json>] \
 //     [--state-out <next.json>] [--test-page] [--dry-run]
@@ -36,7 +37,13 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
-import { depotApi, saveNewestArtifactFile, type DepotApi } from "../ci/depot.ts";
+import { thisWorkflowRun } from "../ci/await-deploy.ts";
+import {
+  depotApi,
+  saveNewestArtifactFile,
+  workflowsInProgress,
+  type DepotApi,
+} from "../ci/depot.ts";
 import { getOctokit } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import {
@@ -251,12 +258,7 @@ export async function mainE2e(options: {
   const judged = await judgeMainE2eRun({
     depot: depotApi(),
     state: readMainE2eState(readStateFile(options.state, 3)),
-    workflowId:
-      options.workflowId ||
-      z
-        .string()
-        .regex(/^[a-z0-9]+$/u)
-        .parse(new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname.split("/").at(-1)),
+    workflowId: options.workflowId || thisWorkflowRun(),
     testRun,
     subject: commitSubjects(),
   });
@@ -303,6 +305,68 @@ export async function judgeMainE2eRun(input: {
   });
   const next: MainE2eState = { schemaVersion: 3, e2e: judged.memory, pages: input.state.pages };
   return { updates: judged.updates, next, failures: judged.failures };
+}
+
+/** How often Main OS e2e's page job asks Depot whether the older runs have ended, and how long it
+ *  waits for them at most: a push run takes about five minutes (p50 4.8 min over 45 runs,
+ *  2026-09-28/29), so an older one still in progress half an hour later is stuck. The page job's
+ *  `timeout-minutes` is this bound and then its own ten (depot-workflows.test.ts). */
+export const AWAIT_OLDER_RUNS = { pollMs: 10_000, boundMs: 30 * 60_000 };
+
+/** Main OS e2e's page job's turn (main-os-e2e.yml `alert`): wait until the push runs of Main OS e2e
+ *  created before this one have ended (`awaitOlderMainE2eRuns`), before `previous-state`. */
+export async function awaitOlderRuns(options: {
+  /** The Depot workflow whose turn it is: DEPOT_JOB_URL's unless given (a past run, locally). */
+  workflowId?: string;
+}) {
+  await awaitOlderMainE2eRuns({
+    depot: depotApi(),
+    workflowId: options.workflowId || thisWorkflowRun(),
+  });
+}
+
+/** THE PAGE JOBS TAKE TURNS, oldest run first. Every main commit gets its own run of Main OS e2e and
+ *  runs overlap (main-os-e2e.yml `concurrency`), so each page job waits here until no push run of
+ *  Main OS e2e created before its own is queued or running, asking Depot every
+ *  AWAIT_OLDER_RUNS.pollMs and logging one line per change of what it waits for. It then reads the
+ *  state the run before it kept and judges after it. After AWAIT_OLDER_RUNS.boundMs it throws: this
+ *  run's page is then the next run's page job's, which judges it after the older ones. Runs created
+ *  in the same second take turns by workflow id. */
+export async function awaitOlderMainE2eRuns(input: {
+  depot: DepotApi;
+  workflowId: string;
+  log?: (line: string) => void;
+}) {
+  const { depot, log = console.log } = input;
+  const current = CurrentWorkflow.parse(
+    await depot("GetWorkflow", { workflowId: input.workflowId }),
+  );
+  const isOlder = (run: { workflowId: string; createdAt: string }) =>
+    run.createdAt === current.workflowCreatedAt
+      ? run.workflowId < current.workflowId
+      : run.createdAt < current.workflowCreatedAt;
+  const started = Date.now();
+  let reported: string | undefined;
+  for (;;) {
+    const older = (await workflowsInProgress(depot, { name: mainE2eRecords.workflow })).filter(
+      (run) => run.trigger === "push" && isOlder(run),
+    );
+    const waiting = older
+      .map((run) => `${run.workflowId} (${run.sha.slice(0, 9)}, ${run.status})`)
+      .join(", ");
+    const waited = `${Math.round((Date.now() - started) / 1000)} s`;
+    if (waiting !== reported)
+      log(
+        `[await-older-runs] ${waited}: ${waiting ? `waiting for ${waiting}` : "no older run in progress"}`,
+      );
+    reported = waiting;
+    if (older.length === 0) return;
+    if (Date.now() - started >= AWAIT_OLDER_RUNS.boundMs)
+      throw new Error(
+        `the older runs ${waiting} are still in progress after ${AWAIT_OLDER_RUNS.boundMs / 60_000} minutes: the next run's page job judges this run after them`,
+      );
+    await new Promise((resolve) => setTimeout(resolve, AWAIT_OLDER_RUNS.pollMs));
+  }
 }
 
 /** What a run may do: only a run on main pages without --test-page (off main it prints instead),
