@@ -126,7 +126,7 @@ const section = renderPullRequestSection({
     },
   ],
   templates: [
-    { name: "default", link: `${DASH}/.auth/login?next=default` },
+    { name: "default", link: `${DASH}/.auth/login?next=default`, fromHead: "bbbbbbbbb0123456" },
     { name: "with-agents", link: `${DASH}/.auth/login?next=with-agents` },
   ],
   seed: { project: "pr123", seeded: true },
@@ -142,7 +142,7 @@ test("the PR body's managed section: the deployment, then one row per worker wit
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
     | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/notes/projects/pr123) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
-    New project from template: [default ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)"
   `);
 });
 
@@ -177,7 +177,7 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
     | [dash](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=dash) | [Cloudflare dashboard](https://dash.cloudflare.com/a/dash) |
     | [notes](https://pr123-ccccccc-notes.iterate-dev-preview.workers.dev) | [Sign in ↗](https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/notes/projects/pr123) | [Cloudflare dashboard](https://dash.cloudflare.com/a/notes) |
 
-    New project from template: [default ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
+    New project from template: [default at this PR's \`bbbbbbbbb\` ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=default) · [with-agents ↗](https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login?next=with-agents)
 
     </details>
     <!-- /os-preview -->
@@ -283,12 +283,49 @@ test("every configs/ directory is a config template", () => {
   );
 });
 
-// A deployment bakes its own configs/ into the Worker, so a preview's template is the PR's already.
-test("template quick-launch: each template by name, into the Dash's New project sheet", () => {
-  expect(templateQuickLaunches({ dashUrl: DASH, templates: ["default", "with-agents"] })).toEqual([
-    { name: "default", next: `${DASH}/projects?new=1&template=default` },
-    { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
-  ]);
+test.for([
+  {
+    name: "a template this PR changes is the PR head's copy, an unchanged one its name",
+    changedPaths: ["configs/default/AGENTS.md", "configs/with-agents-v2/x.md"],
+    expected: [
+      {
+        name: "default",
+        fromHead: "bbbbbbbbb0123456",
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fdefault`,
+      },
+      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
+    ],
+  },
+  {
+    name: "a PR that changes no template links each by name",
+    changedPaths: ["apps/os/src/worker.ts", "configs/README.md"],
+    expected: [
+      { name: "default", next: `${DASH}/projects?new=1&template=default` },
+      { name: "with-agents", next: `${DASH}/projects?new=1&template=with-agents` },
+    ],
+  },
+])("template quick-launch: $name", ({ changedPaths, expected }) => {
+  expect(
+    templateQuickLaunches({
+      dashUrl: DASH,
+      templates: ["default", "with-agents"],
+      changedPaths,
+      headSha: "bbbbbbbbb0123456",
+    }),
+  ).toEqual(expected);
+});
+
+test("template quick-launch: the Dash reads the PR head's reference back out of the link", () => {
+  const [link] = templateQuickLaunches({
+    dashUrl: DASH,
+    templates: ["default"],
+    changedPaths: ["configs/default/AGENTS.md"],
+    headSha: "bbbbbbbbb0123456",
+  });
+  expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
+    new: "1",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/default",
+  });
 });
 
 // ── a deployment's wrangler config: the one prd's goes through (generate-wrangler-config.ts) ──

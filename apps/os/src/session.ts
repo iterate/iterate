@@ -9,7 +9,6 @@ import { RpcTarget } from "capnweb";
 import { z } from "zod";
 import {
   normalizeConfigRepoTemplateReference,
-  parseBuiltinConfigTemplate,
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
@@ -1023,7 +1022,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   /** The built-in config repo templates a creation may name (generated/config-templates.js); naming
    *  none creates the default config (configs/default). */
   async templates() {
-    return templates.map(({ label, reference }) => ({ label, reference }));
+    return templates;
   }
 
   /** Create the project named `project` (slugified into its hostname label; its id is minted —
@@ -1051,14 +1050,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
         project: z.string(),
         orgId: z.string().optional(),
         restoreProjectId: z.string().optional(),
-        configRepoTemplate: z
-          .string()
-          .transform((value) =>
-            parseBuiltinConfigTemplate(value)
-              ? value.trim()
-              : normalizeConfigRepoTemplateReference(value),
-          )
-          .optional(),
+        configRepoTemplate: z.string().transform(normalizeConfigRepoTemplateReference).optional(),
       })
       .parse(input);
     const { reach } = this.#session.authority;
@@ -1070,20 +1062,15 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     const waits = new CreateWaits();
     let project: ProjectRecord | undefined;
     try {
-      // A GitHub template is pinned once, before the durable request: a resumed creation always
-      // reads the same tree. A built-in one is baked into this deployment and needs no pinning.
+      // pinned once, before the durable request: a resumed creation always reads the same tree
       const template = data.configRepoTemplate;
-      const builtin = template ? parseBuiltinConfigTemplate(template) : undefined;
-      if (builtin && !templates.some((baked) => baked.name === builtin.name))
-        throw new Error(`This deployment has no built-in config template named ${builtin.name}.`);
-      const configRepoTemplate =
-        template && !builtin
-          ? formatConfigRepoTemplateReference(
-              await waits.time("template", () =>
-                pinPublicGithubTemplate(parseConfigRepoTemplateReference(template)),
-              ),
-            )
-          : template;
+      const configRepoTemplate = template
+        ? formatConfigRepoTemplateReference(
+            await waits.time("template", () =>
+              pinPublicGithubTemplate(parseConfigRepoTemplateReference(template)),
+            ),
+          )
+        : undefined;
       const { input: sessionInput, caller } = this.#session;
       const created = await waits.time("controlPlaneCreate", () =>
         sessionInput.controlPlane.createProject(caller, {

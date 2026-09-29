@@ -2,7 +2,6 @@ import { expect, test } from "vitest";
 import {
   formatConfigRepoTemplateReference,
   normalizeConfigRepoTemplateReference,
-  parseBuiltinConfigTemplate,
   parseConfigRepoTemplateReference,
 } from "./reference.ts";
 
@@ -69,21 +68,4 @@ test.for([
   "git+https://github.com/iterate/iterate.git?token=nope",
 ])("rejects %s", (input) => {
   expect(() => parseConfigRepoTemplateReference(input)).toThrow();
-});
-
-test("a built-in template names a configs/ folder and the build that baked it; nothing else is one", () => {
-  expect(
-    parseBuiltinConfigTemplate("builtin:with-agents@0cf0e602c0e1b2c3d4e5f60718293a4b5c6d7e8f"),
-  ).toEqual({
-    name: "with-agents",
-    commit: "0cf0e602c0e1b2c3d4e5f60718293a4b5c6d7e8f",
-  });
-  expect(
-    [
-      "github:iterate/iterate#main&path:configs/with-agents",
-      "builtin:with-agents",
-      "builtin:With_Agents@0cf0e60",
-      "builtin:../x@0cf0e60",
-    ].map(parseBuiltinConfigTemplate),
-  ).toEqual([undefined, undefined, undefined, undefined]);
 });

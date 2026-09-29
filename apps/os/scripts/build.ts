@@ -99,34 +99,16 @@ export async function build() {
     cwd: root,
     encoding: "utf8",
   }).trim();
-  // Every template is baked in, as the files a creation writes (git's, so nothing untracked): each
-  // with its source path, its path in the new config repo (`target`) and its content, the fields a
-  // shadcn registry item has. A creation from one records `builtin:<name>@<this commit>`, which
-  // needs no network and no public repo. `default` is not a named template: a creation that names
-  // none gets its files (`defaultFiles`).
-  const templateFiles = (name: string) =>
-    execFileSync("git", ["ls-files", "-z", `configs/${name}`], {
-      cwd: path.resolve(root, "../.."),
-      encoding: "utf8",
-    })
-      .split("\0")
-      .filter(Boolean)
-      .map((file) => ({
-        path: file,
-        target: file.slice(`configs/${name}/`.length),
-        content: readFileSync(path.resolve(root, "../..", file), "utf8"),
-      }));
+  // `default` is not a named template: a creation that names none gets its files (`defaultFiles`).
   const templates = readdirSync(templatesRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name !== "default")
     .map((entry) => ({
-      name: entry.name,
       label: entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
-      reference: `builtin:${entry.name}@${sourceRef}`,
-      files: templateFiles(entry.name),
+      reference: `github:iterate/iterate#${sourceRef}&path:configs/${entry.name}`,
     }));
-  const defaultFiles = templateFiles("default").map(({ target, content }) => ({
-    path: target,
-    content,
+  const defaultFiles = readdirSync(path.join(templatesRoot, "default")).map((file) => ({
+    path: file,
+    content: readFileSync(path.join(templatesRoot, "default", file), "utf8"),
   }));
   writeFileSync(
     path.join(root, "src/generated/config-templates.js"),

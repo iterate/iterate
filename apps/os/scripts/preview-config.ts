@@ -268,13 +268,26 @@ export function configTemplateNames(repoRoot: string) {
 }
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
- *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A deployment bakes its own
- *  `configs/` into the Worker (scripts/build.ts), so a preview's template is already the PR's. */
-export function templateQuickLaunches(input: { dashUrl: string; templates: string[] }) {
-  return input.templates.map((name) => ({
-    name,
-    next: `${input.dashUrl}/projects?${new URLSearchParams({ new: "1", template: name })}`,
-  }));
+ *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
+ *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
+ *  the custom field prefilled), so the project is born from the unmerged template. */
+export function templateQuickLaunches(input: {
+  dashUrl: string;
+  templates: string[];
+  changedPaths: string[];
+  headSha: string;
+}) {
+  return input.templates.map((name) => {
+    const changed = input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
+    const template = changed
+      ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
+      : name;
+    return {
+      name,
+      ...(changed && { fromHead: input.headSha }),
+      next: `${input.dashUrl}/projects?${new URLSearchParams({ new: "1", template })}`,
+    };
+  });
 }
 
 /** THE SECTION: quick links for a reader who already knows how per-commit deployments work
@@ -292,7 +305,7 @@ export function renderPullRequestSection(input: {
   /** the deployment's name, `pr<n>-<sha7>` */
   deployment: string;
   workers: { name: string; url: string; signIn: string; dashboardUrl: string }[];
-  templates: { name: string; link: string }[];
+  templates: { name: string; link: string; fromHead?: string }[];
   seed: { project: string; seeded: boolean };
 }) {
   return [
@@ -308,7 +321,10 @@ export function renderPullRequestSection(input: {
       ? [
           "",
           `New project from template: ${input.templates
-            .map((template) => `[${template.name} ↗](${template.link})`)
+            .map(
+              (template) =>
+                `[${template.name}${template.fromHead ? ` at this PR's \`${template.fromHead.slice(0, 9)}\`` : ""} ↗](${template.link})`,
+            )
             .join(" · ")}`,
         ]
       : []),

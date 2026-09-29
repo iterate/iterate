@@ -10,7 +10,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
-import { parseBuiltinConfigTemplate } from "@iterate-com/shared/config-repo-template/reference";
+import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
@@ -357,15 +357,15 @@ function NewProjectForm({
 }
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
- *  a name is the built-in baked from `configs/<name>` (`builtin:<name>@<commit>`) — `default`, and
- *  a name that is none, is Minimal (the default files). */
+ *  a name is the built-in whose path is `configs/<name>` — `default`, and a name that is none,
+ *  is Minimal (the default files). */
 function templateFields(
   template: string | undefined,
   options: { reference: string }[],
 ): { template: string; customTemplate: string } {
   if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
   const builtIn = options.find(
-    (option) => parseBuiltinConfigTemplate(option.reference)?.name === template,
+    (option) => parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
   );
   return { template: builtIn?.reference || "", customTemplate: "" };
 }
