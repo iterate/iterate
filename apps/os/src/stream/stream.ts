@@ -278,8 +278,8 @@ export class Stream {
         cause,
         this.#highestDurableOffset === 0 ? `a birth of ${this.#path}` : `waking ${this.#path}`,
       );
-    // one log line per wake: Workers Logs stamps it with the ray of the request that woke it, and the
-    // chain names the ray of the request that began the work
+    // one log line per wake. Workers Logs stamps a Durable Object's RPC call with no ray, so the
+    // chain's `(ray …)` is what joins it to the edge request that began the work
     console.log({
       event: "context.woken",
       path: this.#path,
