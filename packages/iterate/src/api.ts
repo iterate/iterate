@@ -933,8 +933,9 @@ export interface IterateContextApi {
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: EntityCollectionApi<RepoHandle>;
   workspaces: EntityCollectionApi<WorkspaceHandle>;
-  /** Workers AI, verbatim, under this context's capability rules. */
-  ai: Ai;
+  /** Workers AI's `run(model, inputs, options?)` and `models()`, under this context's capability
+   *  rules. */
+  ai: Pick<Ai, "run" | "models">;
   /** Cloudflare Browser Run. */
   browser: CfBrowserApi;
   /** Cloudflare Artifacts, project-scoped (`repos` is the friendlier surface). */

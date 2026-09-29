@@ -2,7 +2,7 @@
 //
 // INTERCEPTED, in every run (PR previews, Main OS e2e, local, the soak): the agent's `itx.ai` is
 // shadowed by a fake that plays the provider. The whole deployed runtime runs above it: the turn
-// loop, the attachment turned into a vision input, the byte transport, the chunk windows, the
+// loop, the attachment turned into a vision input, the model call, the chunk windows, the
 // settlement and the context report. The fake asserts what the runtime ASKED for (the model, the
 // Responses API request, the image part, the AI Gateway options), and it costs nothing.
 //
@@ -11,7 +11,7 @@
 // accepts the request and answers the question. About $0.05 a run on the preview account's AI
 // Gateway, whose daily spend cap every run shares.
 import { expect, test } from "vitest";
-import { collector, freshCtx, until } from "../../os/e2e/support/client.ts";
+import { collector, freshCtx, readAll, until } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse } from "../../os/e2e/support/fake-ai.ts";
 import { realModelOnly } from "../../os/e2e/support/project-host.ts";
 import {
@@ -96,6 +96,83 @@ realModelOnly(
   async () => {
     const words = await colourTurn(freshCtx("agent-vision-cf"), { model: WORKERS_AI_MODEL });
     expect(words.join("\n")).toMatch(/red/i);
+  },
+  150_000,
+);
+
+realModelOnly(
+  "REAL: a fake lent to one agent answers that agent's turn and no other's — its sibling in the same project streams from the real model",
+  async () => {
+    const itx = await openAgentItx(freshCtx("agent-fake-one-context"));
+    const faked = itx.cd("/agents/faked");
+    const fake = responsesAi("pong, from the fake.");
+    await faked.provide("itx.ai", fake);
+    for (const path of ["/agents/faked", "/agents/real"]) {
+      await itx.agents.create(path);
+      await itx.agents.get(path).message(PONG);
+    }
+    expect(assistantWords(await answeredLog(faked, "the faked agent's prose"))).toEqual([
+      "pong, from the fake.",
+    ]);
+    expect(fake.calls).toHaveLength(1);
+    const real = assistantWords(
+      await answeredLog(itx.cd("/agents/real"), "the real agent's prose"),
+    );
+    expect(real.join("\n")).toMatch(/pong/i);
+    expect(real.join("\n")).not.toContain("from the fake");
+  },
+  150_000,
+);
+
+realModelOnly(
+  "REAL: the person's interruption cuts a streaming answer from the real model short — settled cancelled with what had streamed, and the next turn answers",
+  async () => {
+    const itx = await openAgentItx(freshCtx("agent-interrupt-real"));
+    const support = itx.cd("/agents/support");
+    const windows = collector();
+    await support.subscribe({
+      name: "chunks",
+      consumes: ["events.iterate.com/agent/llm-response-frame"],
+      target: windows.fn,
+    });
+    await itx.agents.create("/agents/support");
+    await itx.agents
+      .get("/agents/support")
+      .message("Count from 1 to 400, one number per line, and nothing else. No code block.");
+    await until(
+      "the answer's text is streaming",
+      () =>
+        windows.invocations.some((i) => i.events.some((e: any) => e.payload.responseDelta !== ""))
+          ? true
+          : undefined,
+      120_000,
+    );
+    await support.append({
+      type: "events.iterate.com/agent/context-added",
+      payload: {
+        role: "developer",
+        content: "The user interrupted the in-progress response from the web chat.",
+        actor: { type: "user" },
+        llmRequestPolicy: { behaviour: "interrupt-current-request" },
+      },
+    });
+    const settled = await until(
+      "the interruption's settlement, then the next turn's",
+      async () => {
+        const results = (await readAll(support))
+          .filter((e) => e.type === "events.iterate.com/agent/llm-request-settled")
+          .map((e) => e.payload.result);
+        return results.length === 2 ? results : undefined;
+      },
+      120_000,
+    );
+    expect(settled[0]).toMatchObject({
+      status: "cancelled",
+      reason: "interrupted-by-user-input",
+      partialText: expect.stringMatching(/1\s+2\s+3/),
+    });
+    expect(settled[0].partialText).not.toMatch(/\b400\b/);
+    expect(settled[1]).toMatchObject({ status: "succeeded" });
   },
   150_000,
 );

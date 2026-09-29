@@ -1,18 +1,15 @@
-// e2e/ai-stream-hung-request.e2e.test.ts — THE PIN of the Cloudflare fault the agents' AI byte relay
-// works around (packages/agents/src/ai-transport.md).
+// e2e/ai-stream-hung-request.e2e.test.ts — THE PIN of a Cloudflare fault: a stateless invocation that
+// carries Workers AI's raw streamed Response between two Durable Objects is ended, after the whole
+// body arrived, with "The Workers runtime canceled this request because it detected that your
+// Worker's code had hung and would never generate a response". No caller sees a failure; it is a
+// false log line.
 //
-// A Durable Object that reads Workers AI's raw streamed Response, returned over RPC from a second
-// Durable Object, gets the whole body, yet the runtime ends the service invocation in between with
-// "The Workers runtime canceled this request because it detected that your Worker's code had hung
-// and would never generate a response". Here: a loaded facet calls `itx.ai.run` through `env.ITX`
-// (ItxEntrypoint.get), the context Durable Object calls `env.AI.run`, and the facet drains the body
-// itself, with no agents code. No caller sees a failure, so the verdict is the outcome of each
-// ItxEntrypoint invocation that ran `ai.run`, read from Workers Logs (CLOUDFLARE_ACCOUNT_ID and
-// CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so only the real-model suite
-// runs it (os-real-model.yml).
-//
-// When it goes red because it passed, Cloudflare fixed the fault: delete the relay (ai-transport.md
-// names its pieces) and keep this body as a plain row.
+// Here: a loaded facet calls `itx.ai.run` through `env.ITX` (ItxEntrypoint.get), its context
+// Durable Object calls the stateless `ItxAi` (apps/os/src/itx-ai.ts), which calls `env.AI.run`, and
+// the facet drains the body itself, with no agents code. The verdict is the outcome of every
+// stateless invocation on the way, ItxEntrypoint's `ai.run` and ItxAi's, read from Workers Logs
+// (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so
+// only the real-model suite runs it (os-real-model.yml).
 import { expect } from "vitest";
 import { z } from "zod";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
@@ -30,7 +27,7 @@ createFailing(realModelOnly, /hung and would never generate a response/, {
   timeoutMs: 240_000,
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
 })(
-  "REAL: a loaded facet that drains itx.ai's raw streamed Response should leave the ItxEntrypoint invocation that answered it unfaulted",
+  "REAL: a loaded facet that drains itx.ai's raw streamed Response should leave every stateless invocation on the way unfaulted",
   async () => {
     if (!process.env.CLOUDFLARE_ACCOUNT_ID || !process.env.CLOUDFLARE_API_TOKEN)
       throw new Error(
@@ -55,7 +52,7 @@ createFailing(realModelOnly, /hung and would never generate a response/, {
     const faulted = invocations.filter((invocation) => invocation.outcome !== "ok");
     if (faulted.length > 0)
       throw new Error(
-        `${faulted.length} of ${STREAMS} ItxEntrypoint.get invocations faulted: ${faulted.map((invocation) => `${invocation.outcome} (${invocation.errors.join("; ")})`).join(", ")}`,
+        `${faulted.length} of ${invocations.length} invocations faulted: ${faulted.map((invocation) => `${invocation.entrypoint} ${invocation.outcome} (${invocation.errors.join("; ")})`).join(", ")}`,
       );
   },
 );
@@ -110,11 +107,12 @@ const LogEvent = z.object({
 });
 type LogEvent = z.infer<typeof LogEvent>;
 
-/** The STREAMS ItxEntrypoint invocations that ran `ai.run` for the context `contextId`, each with
- *  its outcome and the errors its request logged, once all of them and every faulted one's errors
- *  are in Workers Logs (an invocation's record and its exception arrive separately). They carry no
- *  Durable Object id, so they are found through the traces they share with the context's own
- *  invocations. A query Workers Logs fails (an HTML error page, a timeout) is asked again. */
+/** For each of the STREAMS calls, the ItxEntrypoint invocation that ran `ai.run` and the ItxAi
+ *  invocation that ran `run`, for the context `contextId`: each with its outcome and the errors its
+ *  request logged, once all of them and every faulted one's errors are in Workers Logs (an
+ *  invocation's record and its exception arrive separately). They carry no Durable Object id, so
+ *  they are found through the traces they share with the context's own invocations. A query Workers
+ *  Logs fails (an HTML error page, a timeout) is asked again. */
 async function aiRunInvocations(contextId: string, from: number) {
   const deadline = Date.now() + LOGS_ARRIVE_MS;
   let lastRead = "nothing yet";
@@ -131,10 +129,12 @@ async function aiRunInvocations(contextId: string, from: number) {
       const invocations = events
         .filter(
           (event) =>
-            event.$workers.entrypoint === "ItxEntrypoint" &&
-            event.$workers.event?.rpcMethods?.includes("ai.run"),
+            (event.$workers.entrypoint === "ItxEntrypoint" &&
+              event.$workers.event?.rpcMethods?.includes("ai.run")) ||
+            event.$workers.entrypoint === "ItxAi",
         )
         .map((invocation) => ({
+          entrypoint: invocation.$workers.entrypoint,
           outcome: invocation.$workers.outcome,
           errors: events
             .filter(
@@ -148,14 +148,17 @@ async function aiRunInvocations(contextId: string, from: number) {
       const complete = invocations.every(
         ({ outcome, errors }) => outcome === "ok" || errors.length > 0,
       );
-      if (invocations.length >= STREAMS && complete) return invocations;
-      lastRead = `${invocations.length} of ${STREAMS}: ${JSON.stringify(invocations)}`;
+      const counted = (entrypoint: string) =>
+        invocations.filter((invocation) => invocation.entrypoint === entrypoint).length;
+      if (counted("ItxEntrypoint") >= STREAMS && counted("ItxAi") >= STREAMS && complete)
+        return invocations;
+      lastRead = `${invocations.length} of ${2 * STREAMS}: ${JSON.stringify(invocations)}`;
     } catch (error) {
       lastRead = `Workers Logs failed: ${String(error)}`;
     }
     if (Date.now() > deadline)
       throw new Error(
-        `the ItxEntrypoint invocations that ran ai.run were not all in Workers Logs after ${LOGS_ARRIVE_MS / 1000} s: ${lastRead}`,
+        `the ItxEntrypoint and ItxAi invocations were not all in Workers Logs after ${LOGS_ARRIVE_MS / 1000} s: ${lastRead}`,
       );
     await sleep(5_000);
   }
