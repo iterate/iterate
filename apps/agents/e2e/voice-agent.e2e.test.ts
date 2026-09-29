@@ -38,16 +38,20 @@ deployedOnly(
       /`(await itx\.workers\.get\(\{ source: .*?candidateSource.*?\}\)\.fetch\(new Request\(projectUrl\)\))`/,
     )?.[1];
     expect(candidateProbe).toBeTruthy();
+    // …and the wait for a commit's outcome it is taught, so a refused commit reaches the model
+    const outcomeWait = DEFAULT_AGENT_SYSTEM_PROMPT.match(
+      /`(await itx\.cd\("\/"\)\.waitForEvent\(.*?\))`/,
+    )?.[1];
+    expect(outcomeWait).toBeTruthy();
     const call = await voiceCall(({ websiteUrl }) => {
       const websiteScripts = [
         "return await itx.whoami();",
         'return await itx.repos.get("/repos/config").listFiles();',
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
         `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
-        `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
+        `const { commitOid } = await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)}); const outcome = ${outcomeWait}; if (outcome.payload.error) throw new Error(outcome.payload.error); return commitOid;`,
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
-        // the publication lands a few seconds after the commit: fetch until the site serves it
-        `for (let tries = 1; ; tries++) { const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); const body = await response.text(); if ((response.status === 200 && body.includes("bad stable manners")) || tries === 20) return {status: response.status, body}; await new Promise((resolve) => setTimeout(resolve, 1000)); }`,
+        `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
       ];
       // The agent's model, played: it answers the newest hand-over from the script results after
       // it, one script a turn, with prose beside the first script that must never be spoken.

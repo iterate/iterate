@@ -377,7 +377,7 @@ export async function publishConfig(
 
 /** The outcome of commit `commitOid` of `/repos/config` on `root`, the project's root: every commit
  *  fact gets one (src/project/processor.ts), found by its oid; a failure is thrown with why. */
-export async function publicationOf(root: any, commitOid: string): Promise<any> {
+async function publicationOf(root: any, commitOid: string): Promise<any> {
   const outcome = await root.waitForEvent({
     type: [
       "events.iterate.com/project/worker-updated",

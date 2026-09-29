@@ -65,7 +65,14 @@ localOnly(
           : undefined,
       );
       // One publication per commit on `/`, each as the generation of its commit's fact there, so
-      // each later than the last; the pointer names the last.
+      // each later than the last; the pointer names the last. The site serves a pointer a moment
+      // before its outcome lands: the third's, waited for by its oid.
+      await root.waitForEvent({
+        type: "events.iterate.com/project/worker-updated",
+        payload: { commitOid: third.commitOid },
+        afterOffset: 0,
+        timeoutMs: 20_000,
+      });
       const log = await readAll(root);
       const published = log.filter((e) => e.type === "events.iterate.com/project/worker-updated");
       expect(published.map((e) => e.payload.commitOid)).toEqual([
