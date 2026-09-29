@@ -212,6 +212,15 @@ test.for([
   },
 );
 
+test("the platform's give-up for now (`unavailable`) is no outcome: an upgrade waits past it for the publication the platform still owes", async () => {
+  const root = project();
+  const upgrade = upgradeVoice(root, newer);
+  await vi.waitFor(() => expect(root.commits).toHaveLength(1));
+  root.land(FAILED, { commitOid: "commit-1", error: "esm.sh answered 503", unavailable: true });
+  root.land(UPDATED, { commitOid: "commit-1" });
+  expect(await upgrade).toBe("commit-1");
+});
+
 /** Where every rule and row of voice names its code: `voice.ts` of the project's published config
  *  (it restarts by that module's bundle, not a key). */
 const published = { mainModule: "voice.ts", source: ["itx", ["cd", "/"], "config"] };

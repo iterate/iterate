@@ -66,9 +66,10 @@ export async function agentsVersion(project: {
 /**
  * AN UPGRADE of the project's agents to `version`: the root package.json's pin, committed on the tip
  * it read (refused if main moved meanwhile; a file already so commits nothing, and the tip's outcome
- * answers), then that commit's one outcome on `/`. Published, every agent loads the new build on its next call
- * (`agentsFacetSpec`); refused, main moving on included, it throws why and the person upgrades
- * again. Answers the commit.
+ * answers), then that commit's outcome on `/`, past any give-up for now (`unavailable`), which
+ * leaves it owed. Published, every agent's call from 5 s on loads the new build (`agentsFacetSpec`);
+ * refused, main moving on included, it throws why and the person upgrades again. Answers the
+ * commit.
  */
 export async function upgradeAgents(
   project: Pick<IterateContextApi, "waitForEvent"> & {
@@ -89,16 +90,20 @@ export async function upgradeAgents(
     parent: tip,
     changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
   });
-  const outcome = await project.waitForEvent({
-    type: [
-      "events.iterate.com/project/worker-updated",
-      "events.iterate.com/project/worker-update-failed",
-    ],
-    payload: { commitOid },
-    afterOffset: 0,
-    timeoutMs: 120_000,
-  });
-  if (outcome.type !== "events.iterate.com/project/worker-updated")
-    throw new Error(`The upgrade was not published: ${String(outcome.payload?.error)}`);
-  return commitOid;
+  for (let afterOffset = 0; ;) {
+    const outcome = await project.waitForEvent({
+      type: [
+        "events.iterate.com/project/worker-updated",
+        "events.iterate.com/project/worker-update-failed",
+      ],
+      payload: { commitOid },
+      afterOffset,
+      timeoutMs: 120_000,
+    });
+    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+    if (!outcome.payload?.unavailable)
+      throw new Error(`The upgrade was not published: ${String(outcome.payload?.error)}`);
+    // the platform gave up for now and still owes the commit: its outcome comes after this one
+    afterOffset = outcome.offset;
+  }
 }

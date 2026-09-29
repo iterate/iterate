@@ -96,6 +96,15 @@ test.for([
   },
 );
 
+test("the platform's give-up for now (`unavailable`) is no outcome: an upgrade waits past it for the publication the platform still owes", async () => {
+  const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
+  const upgrade = upgradeAgents(config.project, newer);
+  await vi.waitFor(() => expect(config.commits).toHaveLength(1));
+  config.land(FAILED, "commit-1", { error: "esm.sh answered 503", unavailable: true });
+  config.land(UPDATED, "commit-1");
+  expect(await upgrade).toBe("commit-1");
+});
+
 /** The facet spec every row and rule of the app names: a class of the config repo's `agents.ts`,
  *  in the project's published config (the facet restarts by that module's bundle, not a key). */
 function published(className: string) {

@@ -373,7 +373,7 @@ export abstract class IterateConfigEntrypoint<
     withItx(this.env.ITX, call);
 
   /** THE AUTHOR HOOK: every durable event of every context of the project from its first
-   *  publication on (what was committed while no config was published is not delivered), one per
+   *  publication on (what was committed while no config was published may be passed over), one per
    *  call, unordered and at least once; a throw fails that event alone, which the platform retries.
    *  `itx` is the project's root, `itx.cd(event.path)` the event's own context. Make each reaction
    *  idempotent (an append keyed by `event.path` and `event.offset`) and keep no state here.

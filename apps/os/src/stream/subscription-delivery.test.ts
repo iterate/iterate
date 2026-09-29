@@ -1571,6 +1571,18 @@ test("fan-out: the root's snapshot that refuses `itx.config` passes over only wh
   });
 });
 
+test("fan-out: a call rejected with no reason at all (`undefined`) climbs the ladder like any failure", async () => {
+  const rig = incarnation((printed) =>
+    printed === "itx.sink" ? { deliverEvent: () => Promise.reject(undefined) } : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(rig.stream.storage.listSubscriptionDeliveries()).toMatchObject([
+    ["f", { attempt: 1, leased: false }],
+  ]);
+});
+
 test("fan-out: a call out claims the alarm while its time is ahead — a death mid-call is retried — and nothing once that time passes with the call still out, so it never spins the alarm; its settle tries it again", async () => {
   fakeClock(Date.now(), ["setTimeout", "clearTimeout"]);
   let answered = 0;

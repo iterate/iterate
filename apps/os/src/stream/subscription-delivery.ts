@@ -1693,7 +1693,7 @@ export class SubscriptionDelivery {
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
     // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`).
-    const { validUntil, unpublishedConfig } = error as {
+    const { validUntil, unpublishedConfig } = (error ?? {}) as {
       validUntil?: unknown;
       unpublishedConfig?: unknown;
     };

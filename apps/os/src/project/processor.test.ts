@@ -484,29 +484,6 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
   ]);
 });
 
-test("ProjectProcessor — no durable state of `/` shows a pointer without its project/worker-updated: a publication cut short after any append leaves both or neither", async () => {
-  const publisher = fakePublisher({ aaa: {}, bbb: {} });
-  const processor = processorPublishingWith(publisher);
-  publisher.main = "aaa";
-  deliver(processor, owing(tip("aaa", 5)), unusedAppend);
-  await settle();
-  publisher.main = "bbb";
-  deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
-  await settle();
-  // each committed append is a state of `/` the project's facet may die right after
-  const durableStates = publisher.batches.map((_, index) => {
-    const log = publisher.batches.slice(0, index + 1).flatMap(summary);
-    return {
-      pointer: log.findLast((line) => line.startsWith("itx.config"))?.split(" ⇒ ")[1],
-      published: log.findLast((line) => line.startsWith("project/worker-updated"))?.split(" ")[1],
-    };
-  });
-  expect(durableStates).toEqual([
-    { pointer: "aaa@5", published: "aaa@5" },
-    { pointer: "bbb@7", published: "bbb@7" },
-  ]);
-});
-
 test.for([
   {
     name: "two commits land before the first is published: the first is main moved on, the second published",

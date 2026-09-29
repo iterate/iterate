@@ -181,9 +181,10 @@ export async function voiceVersion(project: {
 /**
  * AN UPGRADE of the project's voice to `version`: the root package.json's pin, committed on the tip
  * it read (refused if main moved meanwhile; a file already so commits nothing, and the tip's outcome
- * answers), then that commit's one outcome on `/`. Published, the next press loads the new build
- * (`voiceAgentFacetSpec`); refused, main moving on included, it throws why and the person upgrades
- * again. The agents app keeps its build: the config pins it too. Answers the commit.
+ * answers), then that commit's outcome on `/`, past any give-up for now (`unavailable`), which
+ * leaves it owed. Published, a press from 5 s on loads the new build (`voiceAgentFacetSpec`);
+ * refused, main moving on included, it throws why and the person upgrades again. The agents app
+ * keeps its build: the config pins it too. Answers the commit.
  */
 export async function upgradeVoice(
   project: Pick<IterateContextApi, "waitForEvent"> & {
@@ -204,16 +205,20 @@ export async function upgradeVoice(
     parent: tip,
     changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
   });
-  const outcome = await project.waitForEvent({
-    type: [
-      "events.iterate.com/project/worker-updated",
-      "events.iterate.com/project/worker-update-failed",
-    ],
-    payload: { commitOid },
-    afterOffset: 0,
-    timeoutMs: 120_000,
-  });
-  if (outcome.type !== "events.iterate.com/project/worker-updated")
-    throw new Error(`The upgrade was not published: ${String(outcome.payload?.error)}`);
-  return commitOid;
+  for (let afterOffset = 0; ;) {
+    const outcome = await project.waitForEvent({
+      type: [
+        "events.iterate.com/project/worker-updated",
+        "events.iterate.com/project/worker-update-failed",
+      ],
+      payload: { commitOid },
+      afterOffset,
+      timeoutMs: 120_000,
+    });
+    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+    if (!outcome.payload?.unavailable)
+      throw new Error(`The upgrade was not published: ${String(outcome.payload?.error)}`);
+    // the platform gave up for now and still owes the commit: its outcome comes after this one
+    afterOffset = outcome.offset;
+  }
 }
