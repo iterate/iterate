@@ -11,7 +11,7 @@ import {
   appSignInLink,
   assertFreshInstall,
   configTemplateNames,
-  foldPreviousPreviewSection,
+  foldPreviewSection,
   MAX_PREVIEW_PREFIX_LENGTH,
   previewDeploymentName,
   previewDeploymentUrls,
@@ -164,7 +164,7 @@ test("the PR body's managed section: says so when CI's seed of the test project 
 
 test("a new deploy folds the previous commit's section, keeping the author's text byte for byte; the next section it writes is unfolded again", () => {
   const body = withSection("What this PR does.\n");
-  const folded = foldPreviousPreviewSection(body);
+  const folded = foldPreviewSection(body, "Previous commit's deployment");
   expect(folded).toMatchInlineSnapshot(`
     "What this PR does.
 
@@ -185,12 +185,22 @@ test("a new deploy folds the previous commit's section, keeping the author's tex
   `);
   expect(folded.startsWith("What this PR does.\n\n")).toBe(true);
   // folding twice (a retried deploy, a second push before the first deploy landed) changes nothing
-  expect(foldPreviousPreviewSection(folded)).toBe(folded);
+  expect(foldPreviewSection(folded, "Previous commit's deployment")).toBe(folded);
   expect(withSection(folded)).toBe(body);
 });
 
 test("a new deploy leaves a body without the section alone", () => {
-  expect(foldPreviousPreviewSection("What this PR does.\n")).toBe("What this PR does.\n");
+  expect(foldPreviewSection("What this PR does.\n", "Previous commit's deployment")).toBe(
+    "What this PR does.\n",
+  );
+});
+
+test("closing the PR folds its section as deleted, with nothing to replace it", () => {
+  const folded = foldPreviewSection(withSection("What this PR does.\n"), "Deleted deployment");
+  expect(folded).toContain(
+    "<!-- os-preview -->\n<details><summary>Deleted deployment: <code>pr123-ccccccc</code></summary>",
+  );
+  expect(withSection(folded)).toBe(withSection("What this PR does.\n"));
 });
 
 // ── template quick-launch links: the Dash's New project sheet, one click ──

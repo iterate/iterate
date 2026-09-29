@@ -523,9 +523,9 @@ deployments beside them. A deploy that did not succeed turns both suites red
 rather than letting them report green. The verdicts live in those checks; the
 section holds links only.
 
-Closing or merging the PR runs `pnpm preview delete`, which deletes every
-deployment of the PR: its workers, D1, Artifacts namespace, KV namespaces and
-R2 bucket.
+Closing or merging the PR runs `pnpm preview delete`, which folds the PR body's
+section (nothing replaces it) and deletes every deployment of the PR: its
+workers, D1, Artifacts namespace, KV namespaces and R2 bucket.
 
 Cleanliness is an **invariant of birth**, not a promise about exits: every
 deployment is created with resources of its own, so no PR or push ever inherits

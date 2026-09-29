@@ -12,7 +12,8 @@
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
-//   delete              every deployment of a prefix: a closed PR's (preview-delete.yml)
+//   delete              every deployment of a prefix: a closed PR's (preview-delete.yml), its PR
+//                       body's section folded
 //   sweep               the stale deployments, the legacy Worker Previews and the former parents
 //                       (preview-sweep.ts), nightly (preview-sweep.yml)
 //   deploy-parents      main on the dev/preview account, redeployed in place (preview-parents.yml)
@@ -83,7 +84,7 @@ import {
   appSignInLink,
   assertFreshInstall,
   configTemplateNames,
-  foldPreviousPreviewSection,
+  foldPreviewSection,
   FORMER_PARENTS,
   MAIN_ON_DEV,
   previewDeploymentName,
@@ -281,18 +282,32 @@ async function deploymentsUnderTest(name: string): Promise<ReadonlySet<string>> 
   return new Set(runs.map((run) => previewDeploymentName(prefix, run.sha)));
 }
 
-/** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. */
-async function deletePrefix(cf: Cf, prefix: string, options: { dryRun: boolean }) {
-  const deployments = (await listPreviewDeployments(cf)).filter(
-    (deployment) => deployment.prefix === prefix,
+/** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. A PR's
+ *  body has its section folded first (preview-config.ts `foldPreviewSection`), since its links are
+ *  about to go dead and no deploy will replace them. A body write that fails is logged, never the
+ *  delete's failure. */
+async function deletePrefix(params: {
+  cf: Cf;
+  prefix: string;
+  prNumber: string | undefined;
+  dryRun: boolean;
+}) {
+  const deployments = (await listPreviewDeployments(params.cf)).filter(
+    (deployment) => deployment.prefix === params.prefix,
   );
   for (const deployment of deployments)
     console.log(
-      `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
+      `  ${params.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
     );
-  console.log(`${deployments.length} deployment(s) of ${prefix}`);
-  if (options.dryRun) return;
-  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, deployments);
+  console.log(`${deployments.length} deployment(s) of ${params.prefix}`);
+  if (params.dryRun) return;
+  if (params.prNumber && process.env.GITHUB_TOKEN)
+    await writePullRequestBody(
+      pullRequestBody(params.prNumber),
+      "the folded deleted section",
+      (body) => foldPreviewSection(body, "Deleted deployment"),
+    ).catch((error: unknown) => console.warn(`could not fold the section: ${describe(error)}`));
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(params.cf, deployments);
   for (const stuck of stuckNamespaces)
     console.warn(
       `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
@@ -379,7 +394,7 @@ async function resetParent(options: { dryRun: boolean }) {
 // ── the deployment ─────────────────────────────────────────────────────────────────────────────
 
 /** The deploy, with the PR body's section folded into a previous commit's beside it
- *  (preview-config.ts `foldPreviousPreviewSection`): a deploy that fails leaves it folded, and one
+ *  (preview-config.ts `foldPreviewSection`): a deploy that fails leaves it folded, and one
  *  that lands writes its own section after the fold has landed. A body write that fails is logged,
  *  never the deploy's failure. */
 async function deployPreview(
@@ -391,10 +406,8 @@ async function deployPreview(
   const folded =
     prNumber && process.env.GITHUB_TOKEN
       ? traceOperation("Fold the previous section", () =>
-          writePullRequestBody(
-            pullRequestBody(prNumber),
-            "the folded previous section",
-            foldPreviousPreviewSection,
+          writePullRequestBody(pullRequestBody(prNumber), "the folded previous section", (body) =>
+            foldPreviewSection(body, "Previous commit's deployment"),
           ),
         ).catch((error: unknown) =>
           console.warn(`could not fold the previous section: ${describe(error)}`),
@@ -1327,7 +1340,8 @@ async function main(command: Command, options: PreviewOptions) {
     return cleanupSuperseded((await accountContext()).cf, current, { dryRun });
   }
   const prefix = resolvePreviewPrefix({ name: options.name, prNumber: pr });
-  if (command === "delete") return deletePrefix((await accountContext()).cf, prefix, { dryRun });
+  if (command === "delete")
+    return deletePrefix({ cf: (await accountContext()).cf, prefix, prNumber: pr, dryRun });
   if (command === "e2e" || command === "specs")
     return runSuite(
       command,

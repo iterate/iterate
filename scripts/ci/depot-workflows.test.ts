@@ -491,7 +491,7 @@ test.each([
   },
   {
     file: ".depot/workflows/preview-delete.yml",
-    permissions: { contents: "read" },
+    permissions: { contents: "read", "pull-requests": "write" },
   },
   {
     file: ".depot/workflows/preview-parents.yml",
