@@ -39,11 +39,11 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // The first user append follows the birth rows. No offset is pinned: a root with no config pointer
-  // keeps a dangling `config` row, whose alarm writes ephemeral traces into the same offset sequence.
+  // The first user append follows the birth rows: a root with no config pointer passes its events
+  // over, so nothing of its `config` row's lands in between.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
-  expect(receipts[0]).toMatchObject({ type: "hello" });
+  expect(receipts[0]).toMatchObject({ offset: 5, type: "hello" });
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");

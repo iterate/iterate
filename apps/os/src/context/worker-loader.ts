@@ -121,16 +121,13 @@ export function namedWorkerLoad(
  *  upstream main, 2026-09-03; the fix belongs there). Until a workerd release carries it: a producer
  *  that threw marks its loader id DEAD; the next attempt runs the producer OUTSIDE the loader (a
  *  failure there mints nothing) and loads the modules LITERALLY under the next GENERATION of the id
- *  (`<id>#<n>`). One extra identity per dead→recovered transition, never per attempt. Memory-only: a
- *  platform-isolate reset costs one replayed failure. Code that fails to START is outside this (same
+ *  (`generationId`). One extra identity per dead→recovered transition, never per attempt.
+ *  Memory-only: a platform-isolate reset costs one replayed failure. Code that fails to START is outside this (same
  *  key ⇒ same code — the author's bug) and is replayed until upstream lands.
  *
  *  ONE RECOVERY AT A TIME: every caller that finds the id dead while a recovery runs waits on that
- *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`. On prd at
- *  14:36 UTC on 2026-09-24 the iterate project's config worker's first load after a deploy failed,
- *  and a scanner sent 4,502 requests in 31 s: each ran its own producer, ~915 concurrent
- *  `repo.modules` calls on one repo facet instead of one, and its host answered 503 for ~70 s. The
- *  recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
+ *  one (`recovery`), as the loader has every caller of a cold id wait on one `getCode`, so a burst of
+ *  callers runs one producer against the repo facet, not one each. The recovery is kept beside the `itxEntrypoint` stub it was started for, which a context mints once
  *  per incarnation: a new incarnation never waits on a promise its dead predecessor left behind. */
 /** A source resolved into what the loader takes (module-resolution.ts). */
 type ResolvedWorker = Awaited<ReturnType<typeof resolveModules>>;
@@ -142,6 +139,21 @@ const loaderIdGenerations = new Map<
     recovery?: { itxEntrypoint: Fetcher; modules: Promise<ResolvedWorker> };
   }
 >();
+
+/** This isolate's salt on a generation past 0 (`generationId`), minted on first use: a Worker may
+ *  not make random values in global scope. */
+let retiredGenerationSalt: string | undefined;
+/** THE LOADER ID OF `base`'s `generation`, as this isolate spells it. Generation 0 is `base`, which
+ *  every isolate shares, so a warm entry serves them all. A later one replaces an entry that failed,
+ *  and the Worker Loader shares an entry by id across the isolates of a machine (workerd#7485):
+ *  so a generation past 0 carries this isolate's salt, and a replay loads fresh code, not a
+ *  sibling's failing entry. The one nonce a loader id may carry: it grows identities with failures,
+ *  one per failure per isolate, never with requests. */
+function generationId(base: string, generation: number): string {
+  if (!generation) return base;
+  retiredGenerationSalt ||= crypto.randomUUID().slice(0, 8);
+  return `${base}#${generation}.${retiredGenerationSalt}`;
+}
 
 /** The content hash of a literal module map, memoized by the map's IDENTITY: the DO hands the SAME
  *  startup-memo object per facet per incarnation, so the per-character hash runs ONCE per source per
@@ -222,13 +234,14 @@ type PrepareConfinedWorkerOptions = {
  * warm call).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
- * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. A per-request random
- * nonce in the key produced ~3.9M identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on
- * every dispatch (~5MB, 1-2s). Key components must be LOW-CARDINALITY: deploy version × owning
+ * `LOADER.get` as a Dynamic Worker at $0.002/worker/day, and a new value is a cold isolate build
+ * (~5MB, 1-2s): a per-request nonce in the key bills a new worker and a cold build on every
+ * dispatch. Key components must be LOW-CARDINALITY: deploy version × owning
  * context × (content hash | the caller's build/commit id) — NEVER a nonce, timestamp, request id, or
- * offset. (The tension the nonce papered over is real — a loaded isolate captures the minting host's
- * `env.ITX`/`globalOutbound`, which can die with the host's incarnation; we accept the rare re-dial
- * failure and re-key on DEPLOY, not per use.) The confinement contract, stated once: a loaded
+ * offset, but for one bounded by failures (`generationId`). (The tension the nonce papered over is
+ * real — a loaded isolate captures the minting host's `env.ITX`/`globalOutbound`, which can die
+ * with the host's incarnation; we accept the rare re-dial failure and re-key on DEPLOY, not per
+ * use.) The confinement contract, stated once: a loaded
  * worker's WHOLE world — `env.ITX` and every global fetch — is its owning context, so sibling calls
  * and egress route through the host's dispatch with no second path.
  */
@@ -374,7 +387,7 @@ export async function prepareConfinedWorker(
     generation += 1;
     workerForCode = async () => resolved;
   }
-  const loaderId = generation ? `${loaderIdBase}#${generation}` : loaderIdBase;
+  const loaderId = generationId(loaderIdBase, generation);
   const load = () =>
     opts.env.LOADER.get(loaderId, async () => {
       let resolved: ResolvedWorker;

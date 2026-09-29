@@ -150,13 +150,13 @@ async function voiceInstalled(
 
 /** The part of a config repo's root package.json an upgrade reads and rewrites; every other field
  *  is carried through untouched. */
-type RootManifest = { dependencies?: Record<string, string> };
+const RootManifest = z.object({ dependencies: z.record(z.string(), z.string()).optional() });
 
 /** The `@iterate-com/voice` a root package.json's `text` lists among its dependencies: undefined for
- *  none, no file, or one that is not JSON. */
+ *  none, no file, or one that is not a package.json. */
 function voicePinIn(text: string | null): string | undefined {
   try {
-    return (JSON.parse(text || "{}") as RootManifest).dependencies?.["@iterate-com/voice"];
+    return RootManifest.parse(JSON.parse(text || "{}")).dependencies?.["@iterate-com/voice"];
   } catch {
     return undefined;
   }
@@ -179,64 +179,46 @@ export async function voiceVersion(project: {
 }
 
 /**
- * AN UPGRADE of the project's voice to `version`, a newer build of `@iterate-com/voice`: the root
- * package.json's pin, in ONE commit on the tip it read (refused if `main` moved meanwhile), or the
- * tip as it stands when it pins `version` already (an upgrade before, refused or still owed). Then
- * that commit's one outcome on `/`, waited for until two minutes from now: published, the platform
- * moved `itx.config` to it and the next press loads the new build (`voiceAgentFacetSpec`); refused
- * (the probe, a module that does not resolve), it throws why, with the pin committed. A commit main
- * moved on from is followed to main's head, which holds the pin too: main is linear. The agents app
- * keeps its build: the config pins it too. Answers the commit the project runs.
+ * Upgrades the project's voice pin to `version` and returns the published commit, following the
+ * commit and publication protocol documented by `upgradeAgents` in packages/agents/src/install.ts.
+ * A press from 5 s after publication loads the new build (`voiceAgentFacetSpec`); the agents app
+ * keeps its separately pinned build.
  */
 export async function upgradeVoice(
-  project: Pick<IterateContextApi, "readEvents" | "waitForEvent"> & {
+  project: Pick<IterateContextApi, "waitForEvent"> & {
     repos: { get(path: string): ConfigRepo & Pick<RepoHandle, "commitFiles"> };
   },
   version: string,
-): Promise<string> {
-  const deadline = Date.now() + 120_000;
+) {
   const repo = project.repos.get("/repos/config");
-  let commitOid = await repo.tip();
-  if (!commitOid) throw new Error("The project's config repo has no commit to upgrade");
-  const text = await repo.readFile("package.json", { commitOid });
-  // a tip that pins the build already: its outcome is in the root's history
-  let afterOffset = 0;
-  if (voicePinIn(text) !== version) {
-    // the head of `/` before the commit: its outcome lands after it
-    ({ scannedThroughOffset: afterOffset } = await project.readEvents(Number.MAX_SAFE_INTEGER, 1));
-    const manifest = JSON.parse(text || "{}") as RootManifest;
-    (manifest.dependencies ||= {})["@iterate-com/voice"] = version;
-    ({ commitOid } = await repo.commitFiles({
-      message: `Upgrade @iterate-com/voice to ${version}`,
-      parent: commitOid,
-      changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
-    }));
-    if (!commitOid) throw new Error("The upgrade's commit left the config repo's main unborn");
-  }
-  while (Date.now() < deadline) {
-    const outcome = await project
-      .waitForEvent({
-        type: [
-          "events.iterate.com/project/worker-updated",
-          "events.iterate.com/project/worker-update-failed",
-        ],
-        payload: { commitOid },
-        afterOffset,
-        timeoutMs: deadline - Date.now(),
-      })
-      .catch((error: unknown) => {
-        if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
-      });
-    if (!outcome) break;
-    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
-    const head = await repo.tip();
-    if (!head || head === commitOid)
-      throw new Error(
-        `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,
-      );
-    commitOid = head;
-  }
-  throw new Error(
-    `The platform has not published config commit ${commitOid.slice(0, 7)}, which pins the new build, within two minutes: the project still runs the old build until it does`,
+  const tip = await repo.tip();
+  const manifest: Record<string, unknown> = JSON.parse(
+    (await repo.readFile("package.json")) || "{}",
   );
+  // the pin set in place: every other field and dependency keeps its value and its order
+  const { dependencies } = RootManifest.parse(manifest);
+  manifest.dependencies = { ...dependencies, "@iterate-com/voice": version };
+  const { commitOid } = await repo.commitFiles({
+    message: `Upgrade @iterate-com/voice to ${version}`,
+    parent: tip,
+    changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
+  });
+  // one deadline for the whole wait: a give-up for now does not restart it
+  const deadline = Date.now() + 120_000;
+  for (let afterOffset = 0; ;) {
+    const outcome = await project.waitForEvent({
+      type: [
+        "events.iterate.com/project/worker-updated",
+        "events.iterate.com/project/worker-update-failed",
+      ],
+      payload: { commitOid },
+      afterOffset,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+    });
+    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+    if (!outcome.payload?.unavailable)
+      throw new Error(`The upgrade was not published: ${String(outcome.payload?.error)}`);
+    // the platform gave up for now and still owes the commit: its outcome comes after this one
+    afterOffset = outcome.offset;
+  }
 }

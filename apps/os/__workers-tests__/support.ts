@@ -37,9 +37,9 @@ export const stub = (ctx: string) =>
 
 /** A context born as a deployment's are: its birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`,
  *  the config entrypoint's fan-out row and the platform hook's) appended as its first commit. This
- *  suite's contexts are born with none: its projects have no published config for a `config` row
- *  to reach, and a row that finds none probes its root for it (subscription-delivery.ts, the
- *  dangling row), which every row that pins an alarm would see. */
+ *  suite's contexts are born with none: each of their calls holds a lease on the alarm while it is
+ *  out (subscription-delivery.ts, the fan-out section), which every row that pins an alarm would
+ *  see. */
 export async function bornWithBirthRows(ctx: string): Promise<void> {
   await stub(ctx).append(...PROJECT_CONTEXT_BIRTH_EVENTS);
 }

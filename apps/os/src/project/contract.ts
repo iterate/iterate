@@ -202,7 +202,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-updated": {
       description:
-        "The platform published commit `commitOid` of `/repos/config` as publication `generation`, the offset on `/` of the commit fact that asked for it: `itx.config` on `/` names its worker, and every context resolves through it, so every context's events reach its `processEvent` and its facets load from it. Its modules passed the probe: every top-level module resolves, and the main module's default export is an IterateConfigEntrypoint that constructs. The config entrypoint's init case. Only the platform appends it.",
+        "The platform published commit `commitOid` of `/repos/config` as publication `generation`, the offset on `/` of the commit fact that asked for it: `itx.config` on `/` names its worker from this fact on, and every context resolves through it within 5 seconds (the rule snapshot TTL), so every context's events reach its `processEvent` and its facets load from it. Its modules passed the probe: every top-level module resolves, and the main module's default export is an IterateConfigEntrypoint that constructs. The config entrypoint's init case. Only the platform appends it.",
       payloadSchema: z.object({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),

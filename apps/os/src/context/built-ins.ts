@@ -85,6 +85,7 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
+import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
 import {
   FacetHandle,
@@ -2466,9 +2467,13 @@ export function workersRoot(deps: {
         // WORKAROUND for the Worker Loader defect `isLoadedWorkerPlatformFailure` names: a cached
         // entry that meets it answers it to every call under that loader id, and `itx.abort()`
         // does not change the id. A call that meets it retires the identity, so the next call
-        // loads fresh under `<id>#<n+1>`; THIS call is replayed on it once only when a replay
-        // cannot do anything twice: a GET or HEAD with no body. A request body may have been read
-        // and an RPC method may have run, so those still fail, and the call after them loads fresh.
+        // loads fresh under the next generation; THIS call is replayed on it once only when a
+        // replay cannot do anything twice: a GET or HEAD with no body. A request body may have
+        // been read and an RPC method may have run, so those are not replayed. A call the defect
+        // failed and nothing replayed, or whose replay it failed too, is the platform's failure:
+        // UNAVAILABLE, `disconnected`, which the edge answers 503 with a Retry-After.
+        const unavailableNow = (failure: Error) =>
+          unavailableError("disconnected", `workers.get(spec).${method}: ${failure.message}`);
         let loaderId: string | undefined;
         const attempt = async () => {
           const prepared = await prepareConfinedWorker({
@@ -2533,8 +2538,10 @@ export function workersRoot(deps: {
             loaderId,
             message: error.message,
           });
-          if (!replayable) throw error;
-          return await attempt();
+          if (!replayable) throw unavailableNow(error);
+          return await attempt().catch((failure: unknown) => {
+            throw isLoadedWorkerPlatformFailure(failure) ? unavailableNow(failure) : failure;
+          });
         }
       }),
   };

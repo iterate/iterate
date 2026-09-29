@@ -793,9 +793,11 @@ test.for([
     // every durable event counted once — no double, no loss
     expect(await snapshot<{ n: number }>(ctx, "flaky")).toMatchObject({ state: { n: durable } });
     // The loaded identity was retired once: a fresh isolate. `loaderIdBefore` may already be the
-    // retry's (`…#1`) when the configure batch was pushed, rejected and retried before `until`'s
-    // first read landed.
-    expect(await kv(ctx, "facet:flaky:loader-id")).toBe(`${loaderIdBefore.replace(/#1$/, "")}#1`);
+    // retry's (`…#1.<salt>`) when the configure batch was pushed, rejected and retried before
+    // `until`'s first read landed.
+    expect(await kv(ctx, "facet:flaky:loader-id")).toEqual(
+      expect.stringContaining(`${loaderIdBefore.replace(/#1\.\w+$/, "")}#1.`),
+    );
     const rows = (await s.invoke("itx.processors.list()")) as {
       hostedFacet: { restarts: number };
     }[];
@@ -888,7 +890,7 @@ export class StartsFlaky extends FacetDurableObject {
   expect({
     loaderId: await kv(ctx, "facet:flaky:loader-id"),
     restarts: await kv(ctx, "facet:flaky:restarts"),
-  }).toEqual({ loaderId: `${loaderIdBefore}#1`, restarts: 1 });
+  }).toEqual({ loaderId: expect.stringContaining(`${loaderIdBefore}#1.`), restarts: 1 });
 });
 
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
@@ -1054,13 +1056,17 @@ test.for([
   {
     name: "a GET is replayed once on a fresh isolate and answers",
     first: { method: "GET" },
-    firstAnswer: { status: 200, text: "GET from a healthy isolate" },
+    firstAnswer: { status: 200, retryAfter: null, text: "GET from a healthy isolate" },
     event: "workers.platform-failure-retry",
   },
   {
-    name: "a POST with a body is not replayed: it fails, and the next request answers from a fresh isolate",
+    name: "a POST with a body is not replayed: a 503 to ask again, and the next request answers from a fresh isolate",
     first: { method: "POST", body: "form=1" },
-    firstAnswer: { status: 500, text: `expression fetch error: ${CLONE_VERSION_TEXT}\n` },
+    firstAnswer: {
+      status: 503,
+      retryAfter: "1",
+      text: `expression fetch error: workers.get(spec).fetch: ${CLONE_VERSION_TEXT}\n`,
+    },
     event: "workers.platform-failure-retire",
   },
 ])(
@@ -1081,12 +1087,17 @@ test.for([
           },
         }),
       );
-      return { status: response.status, text: await response.text() };
+      return {
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+        text: await response.text(),
+      };
     };
 
     expect(await page(first)).toEqual(firstAnswer);
     expect(await page({ method: "GET" })).toEqual({
       status: 200,
+      retryAfter: null,
       text: "GET from a healthy isolate",
     });
     expect(

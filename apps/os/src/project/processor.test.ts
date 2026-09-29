@@ -433,7 +433,7 @@ for (const { name, events, state } of reduceRows)
     expect(reduceProcessor(processorWithoutHostnames(), events)).toEqual(state));
 
 // THE PUBLICATION OF THE CONFIG REPO: `processEvent` driven by hand over a fake publisher.
-test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer then project/worker-updated as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
+test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer and project/worker-updated in one batch as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -450,16 +450,14 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
   release();
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@5"],
-    ["project/worker-updated aaa@5"],
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+    ["itx.config ⇒ aaa@5", "project/worker-updated aaa@5"],
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
   // the pointer reads the commit's modules through `itx.config.modules`, which only the platform writes
   const repo = ["itx", "builtins", ["cd", "/repos/config"], "builtins", "facets", ["get", "repo"]];
   const source = ["itx", "config", ["modules", { commitOid: "bbb" }]];
   const manifest = { generation: 7, modules: modulesOf("bbb") };
-  expect(publisher.batches[2]).toMatchObject([
+  expect(publisher.batches[1]).toMatchObject([
     {
       idempotencyKey: "project/config-modules:7",
       payload: { match: "itx.config.modules", target: [...repo, "modules"] },
@@ -471,19 +469,18 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
         target: ["itx", "builtins", "workers", ["get", { source, cacheKey: "bbb", manifest }]],
       },
     },
+    { idempotencyKey: "project/publication:7" },
   ]);
-  expect(publisher.batches[3]![0]).toMatchObject({ idempotencyKey: "project/publication:7" });
   // delivered again over the same commits, before their outcomes reduced: nothing more
   deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
   await settle();
-  expect(publisher.batches).toHaveLength(4);
+  expect(publisher.batches).toHaveLength(2);
   // a forced pull back to the first commit is a new fact, and a publication of its own
   publisher.main = "aaa";
   deliver(processor, owing(tip("aaa", 9)), unusedAppend);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ aaa@9"],
-    ["project/worker-updated aaa@9"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ aaa@9", "project/worker-updated aaa@9"],
   ]);
 });
 
@@ -493,8 +490,7 @@ test.for([
     owed: [tip("aaa", 5), tip("bbb", 7)],
     outcomes: [
       ["project/worker-update-failed aaa@5"],
-      ["itx.config ⇒ bbb@7"],
-      ["project/worker-updated bbb@7"],
+      ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
     ],
   },
   {
@@ -530,10 +526,9 @@ test("ProjectProcessor — init-at-8: a publication runs under its commit's caus
   );
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@1"],
-    ["project/worker-updated aaa@1"],
+    ["itx.config ⇒ aaa@1", "project/worker-updated aaa@1"],
   ]);
-  expect(publisher.causes).toMatchObject([commit, commit]);
+  expect(publisher.causes).toMatchObject([commit]);
 });
 
 test("ProjectProcessor — a commit the probe refuses is project/worker-update-failed with why, keyed by its generation, and no pointer", async () => {
@@ -564,9 +559,8 @@ test.for<{ name: string; dropped: FakeCommit }>([
     publisher.main = "dropped";
     deliver(processor, owing(tip("good", 2), tip("dropped", 3)), unusedAppend);
     await settle();
-    expect(publisher.batches.map(summary).slice(-2)).toEqual([
-      ["itx.config ⇒ dropped@3"],
-      ["project/worker-updated dropped@3"],
+    expect(publisher.batches.map(summary).slice(-1)).toEqual([
+      ["itx.config ⇒ dropped@3", "project/worker-updated dropped@3"],
     ]);
   },
 );
@@ -583,11 +577,10 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   const tipped = owing(tip("aaa", 1));
   deliver(processorPublishingWith(publisher), tipped, unusedAppend, runInBackground);
   await settle();
-  const [pointer, [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
+  const [publication] = publisher.batches as [StreamEventInput[]];
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
-    ...pointer.map((rule) => normalizeControlEvent(rule, "/")),
-    updated!,
+    ...publication.map((event) => normalizeControlEvent(event, "/")),
   ]);
   expect(state).toEqual({
     ...tipped,
@@ -597,7 +590,7 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();
-  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 2, background: 1 });
+  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 1, background: 1 });
 });
 
 test.for([
@@ -631,9 +624,8 @@ test.for([
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   await run(publisher);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
 });
 
@@ -653,8 +645,7 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   expect(recovering).toMatchObject({ batches: [] });
   await vi.advanceTimersByTimeAsync(30_000);
   expect(recovering.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@4"],
-    ["project/worker-updated aaa@4"],
+    ["itx.config ⇒ aaa@4", "project/worker-updated aaa@4"],
   ]);
   expect(vi.getTimerCount()).toBe(0); // a pending timer would keep the context resident
 

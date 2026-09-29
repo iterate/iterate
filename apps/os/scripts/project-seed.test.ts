@@ -87,7 +87,20 @@ test("hostnames are restored only onto the deployment the seed was captured on",
 test("a recreation with fresh user and organization IDs matches; the empty admin org is a note", () => {
   expect(compareStructure(captured, recreated())).toEqual({
     problems: [],
-    notes: ['empty organization "admin" was not recreated'],
+    notes: ['organization "admin" has no projects and was not recreated'],
+  });
+});
+test("a missing organization with members but no projects is a note: no seed restores it", () => {
+  const withMember: DeploymentStructure = {
+    ...captured,
+    memberships: {
+      ...captured.memberships,
+      org_admin: [{ userId: "user_c", email: "lupa@example.com", role: "owner" }],
+    },
+  };
+  expect(compareStructure(withMember, recreated())).toEqual({
+    problems: [],
+    notes: ['organization "admin" has no projects and was not recreated'],
   });
 });
 test("a missing member, a changed role, a project in another org and a missing org are problems", () => {

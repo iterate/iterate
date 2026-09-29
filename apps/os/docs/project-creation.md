@@ -24,12 +24,14 @@ TypeScript (types are stripped, not checked) and import each other by relative p
 through esm.sh, locked per dependency set (`src/context/module-resolution.ts`).
 
 Every commit fact gets one outcome on `/`, as the generation of the fact's offset
-(`src/project/publication.ts` says how): a commit still `main`'s head is published — the commit's
-manifest, its probe, then the pointer `itx.config`, whose write answers once no context resolves
-through an older snapshot of `/`, and `project/worker-updated { commitOid, generation, modules }` —
-and a commit main moved on from first is `project/worker-update-failed`. A caller waits for its
-commit's outcome by its oid: `waitForEvent({ type: [...], payload: { commitOid }, afterOffset })`.
-From then on every context's events reach that worker's `processEvent` through their birth
+(`src/project/publication.ts` says how): a commit that is `main`'s head as its publication begins
+is published — the commit's manifest, its probe, then the pointer `itx.config` and
+`project/worker-updated { commitOid, generation, modules }` in one batch, so `/` never holds one
+without the other — and a commit main moved on from first is `project/worker-update-failed`. A
+caller waits for its commit's outcome by its oid:
+`waitForEvent({ type: [...], payload: { commitOid }, afterOffset })`. Within the rule snapshot TTL
+of that outcome (5 s, `src/context/rule-snapshots.ts`) every context resolves through the new
+pointer: every context's events reach that worker's `processEvent` through their birth
 subscription, the project's hosts serve its `fetch`, and a facet named by it (`itx.cd('/').config`
 as its source) restarts on its next call when its own module's identity changed; a commit may drop a
 Durable Object class or its whole module, and a facet that names it fails its next call, naming it.

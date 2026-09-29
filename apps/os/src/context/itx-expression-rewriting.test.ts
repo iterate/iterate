@@ -1502,6 +1502,24 @@ test("a refusal another context's snapshot gives stands until that snapshot expi
   expect(own).not.toHaveProperty("validUntil");
 });
 
+test.for([
+  { name: "at the root, its own table", at: "/", own: [] },
+  { name: "from a context whose own rules mask all of itx", at: "/x", own: ["itx ⇒ null"] },
+])(
+  "a refusal of the project's config pointer says the config is unpublished ($name); any other name's does not",
+  async ({ at, own }) => {
+    const refusal = (call: string) =>
+      acrossContexts({ at, own, others: { "/": [] } })
+        .resolver.invoke(call)
+        .catch((error: Error) => error);
+    expect(await refusal("itx.builtins.cd('/').config.deliverEvent")).toMatchObject({
+      message: expect.stringMatching(/no rewrite rule matches "itx.config.deliverEvent"/),
+      unpublishedConfig: true,
+    });
+    expect(await refusal("itx.builtins.cd('/').tool")).not.toHaveProperty("unpublishedConfig");
+  },
+);
+
 test("a worker's name reads the rule that publishes it: the spec, where its producer runs, and whether it is the config pointer the platform alone writes — never a worker the name spells itself", async () => {
   const pointer = "itx.builtins.workers.get({ source: 'itx.kv.get(\"w\")', cacheKey: 'c' })";
   const named = (root: string[], name = "itx.cd('/').config") =>
