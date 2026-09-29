@@ -14,6 +14,7 @@ import { receiveEmail } from "../src/integrations/email.ts";
 import type { Env } from "../src/env.ts";
 import {
   adminCredentials,
+  openSession,
   ORIGIN,
   projectWithMember,
   readLog,
@@ -742,6 +743,24 @@ test.for([
     issues.mockRestore();
   },
 );
+
+test("an edge fetch route's act past the limit is refused 508 and recorded once, at the project's root: a request marked past it, routed to `itx.fetch`", async () => {
+  const slug = "loop-guard-route";
+  const itx = (await openSession())
+    .authenticate(adminCredentials())
+    .projects.create({ project: slug });
+  const { projectId } = await itx.whoami();
+  await itx.fetchRoutes.set("out", { requestMatcher: { routingSlug: "out" }, target: "itx.fetch" });
+  const answer = await exports.default.fetch(`https://out--${slug}.projects.test/`, {
+    headers: { "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }) },
+  });
+  expect(answer).toMatchObject({ status: 508 });
+  await answer.body?.cancel();
+  await until("the fact", async () => ofType(await sweep(projectId), LOOP_LIMIT_FACT)[0]);
+  expect(ofType(await readLog(projectId), LOOP_LIMIT_FACT)).toMatchObject([
+    { payload: { chain: CHAIN, depth: 9 } },
+  ]);
+});
 
 test("a `fetch` loaded code took hold of on its module's first line carries the cause all the same: past the limit it is refused, and nothing leaves", async () => {
   const sent = spyOnElsewhere();

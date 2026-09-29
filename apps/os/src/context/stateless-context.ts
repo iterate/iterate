@@ -72,6 +72,8 @@ export function contextReach(args: {
     projectId,
     contextOf,
     loadedCodeAt,
+    recordLoopLimit: (path: string, cause: Cause, message: string) =>
+      args.ctx.waitUntil(contextOf(path).recordLoopLimit(cause, message)),
     snapshotOf: (path: string) =>
       ruleSnapshots.get(
         nameOf(path),
@@ -216,6 +218,7 @@ export function statelessResolverFor(args: {
           secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
         }),
       caller: () => withOrigin(callerNow),
+      invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
       library,
     });
     return new ItxExpressionResolver({

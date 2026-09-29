@@ -55,7 +55,7 @@ import {
   type ItxExpressionPrefix,
 } from "iterate/expression";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { crossingOneMore, newChain } from "../cause.ts";
+import { crossingOneMore, newChain, recordRefusal, type Cause } from "../cause.ts";
 import { isConfigPointerMatch, type Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { unavailableError } from "../unavailable.ts";
@@ -925,9 +925,11 @@ export async function describeRewriteRules(args: {
  *  project, another context's table as this isolate holds it (context/rule-snapshots.ts), ONE call
  *  to the context at `path` where it lives (built-ins.ts `callContext`), and `itx.workers` with the
  *  authority of the context at `path` (built-ins.ts `workersRoot`), for a call `caller` makes that
- *  crossed `hops` contexts to get there. */
+ *  crossed `hops` contexts to get there; and where an act one of its calls was refused past the loop
+ *  limit is recorded: the chain's one fact at the resolver's own context (cause.ts). */
 export type ResolverReach = {
   projectId: string;
+  recordLoopLimit: (path: string, cause: Cause, message: string) => void;
   snapshotOf: (path: string) => Promise<Pick<RuleSnapshot, "rules" | "expiresAt">>;
   located: (
     path: string,
@@ -1012,7 +1014,14 @@ export class ItxExpressionResolver {
    *  mask refuses exactly as the dotted call would; when it ends in a call they apply to the value
    *  the expression denotes. */
   async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
-    return (await this.#dispatch(call, extraArgs)).value;
+    try {
+      return (await this.#dispatch(call, extraArgs)).value;
+    } catch (error) {
+      recordRefusal(error, (cause, message) =>
+        this.#reach.recordLoopLimit(this.#path, cause, message),
+      );
+      throw error;
+    }
   }
 
   /** The delivery loop's evaluation of a row's target (subscription-delivery.ts): `invoke`, how

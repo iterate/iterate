@@ -40,7 +40,6 @@ import {
   LOOP_LIMIT_HEADER,
   newChain,
   parseCause,
-  recordRefusal,
   type Cause,
 } from "./cause.ts";
 import {
@@ -274,21 +273,12 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  (context/stateless-context.ts), whose own dispatch picks the fetch channel for a terminal
    *  fetch. */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
-    try {
-      const answer = await this.#dispatch(call, args);
-      // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
-      if (answer instanceof Response && answer.headers.has(LOOP_LIMIT_HEADER))
-        throw codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
-      return answer;
-    } catch (error) {
-      recordRefusal(error, this.#recordLoopLimit); // an act refused in this call, statelessly
-      throw error;
-    }
+    const answer = await this.#dispatch(call, args);
+    // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
+    if (answer instanceof Response && answer.headers.has(LOOP_LIMIT_HEADER))
+      throw codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
+    return answer;
   }
-
-  /** Where a refusal met in this handle's calls is recorded: its context's one fact (cause.ts). */
-  readonly #recordLoopLimit = (cause: Cause, message: string) =>
-    this.#waitUntil(this.#durableObject.recordLoopLimit(cause, message));
 
   async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {
     const resolver = this.#statelessResolverOf?.(this.#durableObjectAddress, this.#caller);
@@ -300,7 +290,6 @@ export class IterateContextRpcTarget extends RpcTarget {
         () => terminalFetch.steps,
         terminalFetch.request,
         encodeFetchExpression(terminalFetch.steps),
-        this.#recordLoopLimit,
       );
     if (resolver) {
       const result = await resolver.invoke(itxExpression, ...args);
@@ -681,11 +670,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
           : parse(expressionHeader),
       request,
       expressionHeader,
-      // an act the loaded code's fetch was refused, recorded at its context (cause.ts)
-      (cause, message) =>
-        this.ctx.waitUntil(
-          this.env.ITERATE_CONTEXT.getByName(address.name).recordLoopLimit(cause, message),
-        ),
     );
   }
 
@@ -716,8 +700,6 @@ export async function statelessExpressionFetch(
   steps: () => ItxExpression,
   request: Request,
   label: string,
-  /** Where an act refused past the loop limit is recorded (cause.ts `recordRefusal`). */
-  recordLoopLimit?: (cause: Cause, message: string) => void,
 ): Promise<Response> {
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, null);
@@ -732,7 +714,6 @@ export async function statelessExpressionFetch(
       ? result
       : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
   } catch (error) {
-    if (recordLoopLimit) recordRefusal(error, recordLoopLimit);
     return expressionFetchErrorAnswer(error, label);
   }
 }

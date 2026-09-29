@@ -594,6 +594,8 @@ export interface BuildBuiltInsDeps {
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
    *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
+  /** `call` through this context's own resolver under `caller` — a `cd` handle's way on. */
+  invokeAs: (caller: Caller, call: ItxExpression) => Promise<unknown>;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
@@ -2201,6 +2203,7 @@ type PortableBuiltInsDeps = Pick<
   | "context"
   | "egress"
   | "caller"
+  | "invokeAs"
   | "library"
 >;
 
@@ -2331,33 +2334,25 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
         );
       },
     },
-    // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
-    // hop, where the ambient store does not reach), so an event appended there is attributed too.
+    // A bare `cd` handle's calls are this context's resolver's, at the fixed point (so a jail's
+    // `itx ⇒ null` masks none of them): the one dispatch path, its hop and where each call runs.
     cd: (contextPath: string) => {
-      // Captured when the handle is MADE: a handle held by loaded code and called later runs as that
-      // code, never as whoever holds the store then. A relative path resolves against the caller's
-      // ORIGINATING context when the call rode a hop here (`repos.get('./x')` answered at the root is
-      // the caller's `./x`); a row's target should spell an absolute path.
-      const caller = deps.caller();
-      const base = caller.path || path;
-      return new InvokeHandle((itxExpressionSteps) => {
-        const siblingPath = resolveContextPath(base, contextPath);
-        // Global contexts are addressed by identity, never navigated through cd.
-        if (projectId === GLOBAL_PROJECT_ID)
-          throw codedError(
-            "FORBIDDEN",
-            "a global context is reached by identity (session.user, session.organizations), never by path",
-          );
-        // The caller crosses with the call — the sibling runs it under the same Caller, so an event
-        // appended there is attributed too — stamped with the context it originated at (once, at the
-        // first hop) so a relative path there still means the caller's.
-        return callContext(
-          () => deps.context(siblingPath),
-          ["itx", ...itxExpressionSteps],
-          [],
-          { ...caller, path: base },
-          siblingPath,
-          () => deps.caller().delivery,
+      // WHO crosses with the call is captured when the handle is MADE: a handle held by loaded code
+      // and called later runs as that code, never as whoever holds the store then — stamped with the
+      // context it originated at, so a relative path means the caller's (`repos.get('./x')`
+      // answered at the root is the caller's `./x`). Its delivery authority and cause are the
+      // call's, read as each call is made (`callContext`).
+      const made = deps.caller();
+      return new InvokeHandle((steps) => {
+        const now = deps.caller();
+        return deps.invokeAs(
+          {
+            ...made,
+            path: made.path || path,
+            delivery: now.delivery,
+            cause: now.cause || made.cause,
+          },
+          ["itx", "builtins", ["cd", contextPath], ...steps],
         );
       });
     },

@@ -373,6 +373,13 @@ test("loaded code's cd reaches the context it names, above it too, which honours
   });
 });
 
+test("a partial jail — its bare `itx ⇒ null` beside the grant `itx.repos ⇒ itx.builtins.repos` — still reads what it was granted: the library's hops to the catalog are addressing, never its table's", async () => {
+  const jail = `${project()}.iterate/jail`;
+  await stub(jail).append(rule("itx", null), rule("itx.repos", "itx.builtins.repos"));
+  expect(await stub(jail).invoke("itx.repos.list()")).toEqual([]);
+  await refused(() => stub(jail).invoke("itx.kv.get('k')"), "NO_ITX_EXPRESSION_MATCH");
+});
+
 test("loaded code reads its own context's table as a snapshot, and a narrowing holds for it once the write answers: a warm worker in a context just jailed is refused its next read and its next cd append", async () => {
   const root = project();
   const a = `${root}.iterate/a`;

@@ -51,7 +51,6 @@ import {
   ITERATE_CAUSE_HEADER,
   newChain,
   parseCause,
-  recordRefusal,
   type Cause,
 } from "./cause.ts";
 import {
@@ -1064,6 +1063,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // this context's origin filled in, so the sibling composes URLs at the origin the people use even
     // when the store did not survive to the step (a pipelined chain resolved outside the run scope).
     caller: () => this.#withPlatformOrigin(this.#caller),
+    invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
     // `.hello()` over every transport (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
     // for the delivery loop.
@@ -1141,7 +1141,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  class field initializes in order. Every built-in closes over this context's identity, so
    *  cross-project access is unspellable. */
   readonly #itxExpressionResolver = new ItxExpressionResolver({
-    reach: this.#reach,
+    // a refusal met here: the chain's one fact on this log (cause.ts)
+    reach: {
+      ...this.#reach,
+      recordLoopLimit: (_path, cause, message) => this.#stream.recordLoopLimit(cause, message),
+    },
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: this.#builtIns,
     path: this.#durableObjectAddress.path,
@@ -1563,12 +1567,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
     this.#stream.appendWakeRecord({ cause: "call", caller: kind }, caller.cause);
     this.#residency.inboundCallStarted(kind);
-    const result = await this.#invokeInProcess(call, args, caller)
-      .catch((error: unknown) => {
-        recordRefusal(error, this.#recordLoopLimitHere); // an act refused in this call (cause.ts)
-        throw error;
-      })
-      .finally(() => this.#residency.inboundCallEnded(caller.app === true));
+    const result = await this.#invokeInProcess(call, args, caller).finally(() =>
+      this.#residency.inboundCallEnded(caller.app === true),
+    );
     // THE CALLER'S SESSION ENDS WITH THE CALL, WHATEVER IT KEEPS (context/dispatch.ts
     // `itxAnswerDetachedFromSession`): every Workers-RPC caller of this actor — the edge (capnweb
     // /api, a loaded worker's or a facet's `env.ITX`), /mcp, a sibling's `cd` — arrives through this
@@ -1599,10 +1600,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   releaseSend(key: string): void {
     this.ctx.storage.kv.delete(`send:${key}`);
   }
-
-  /** A refusal met here: the chain's one fact on this log (cause.ts `recordRefusal`). */
-  readonly #recordLoopLimitHere = (cause: Cause, message: string) =>
-    this.#stream.recordLoopLimit(cause, message);
 
   /** THE ONE REFUSAL HANDLER's reach from where this context's loaded code runs statelessly
    *  (iterate-context.ts `ItxEntrypoint`, cause.ts `recordRefusal`): the chain's one fact here. A
@@ -1793,7 +1790,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ? result
           : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
       } catch (error) {
-        recordRefusal(error, this.#recordLoopLimitHere); // an act refused in this call (cause.ts)
         return expressionFetchErrorAnswer(error, itxExpressionHeader);
       }
     }
