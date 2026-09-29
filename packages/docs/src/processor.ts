@@ -16,9 +16,21 @@
 // save is tried again. The same catch-up runs when a browser joins (`sync`) and when the root's
 // docs processor says a commit changed the doc (`docs/commit-noticed`, root.ts), so a commit an
 // agent made reaches the open editors without a reload.
+//
+// COMMENTS (comments.ts) are reduced into the processor's state, and so into its live state. After
+// each save and each catch-up the processor finds every thread's quote in the new text (anchor.ts)
+// and appends `docs/comment-reanchored` for one that now matches only loosely (the quote refreshed
+// to the text it matches), matches nothing (detached), or matches again after being detached.
 import * as Y from "yjs";
 import type { WithItx } from "iterate/sdk";
-import { StreamProcessor, type ProcessEventArgs } from "iterate/stream/processor";
+import {
+  StreamProcessor,
+  type ProcessEventArgs,
+  type ProcessorState,
+  type ReduceArgs,
+} from "iterate/stream/processor";
+import { findQuote, quoteAt } from "./anchor.ts";
+import { COMMENT_REANCHORED, reduceComments, type CommentThread } from "./comments.ts";
 import { DocContract } from "./contract.ts";
 import {
   COMMIT_NOTICED,
@@ -34,6 +46,8 @@ import {
 } from "./frames.ts";
 import { mergeText, textEdits } from "./merge.ts";
 
+type DocState = ProcessorState<typeof DocContract>;
+
 type DocDeps = {
   sql: SqlStorage;
   /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc). The repos
@@ -45,7 +59,7 @@ type DocDeps = {
   autosave: { idleMs: number; maxMs: number };
 };
 
-export class DocProcessor extends StreamProcessor<Record<string, never>> {
+export class DocProcessor extends StreamProcessor<DocState> {
   contract = DocContract;
   readonly #deps: DocDeps;
   #doc: Y.Doc | null = null;
@@ -60,6 +74,8 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
   #editors = new Set<string>();
   #savedBy: string[] = [];
   #saveError: string | null = null;
+  /** The threads as last reduced, for re-anchoring after a save. */
+  #threads: CommentThread[] = [];
   #firstEditAt = 0;
   #lastEditAt = 0;
   #saveScheduled = false;
@@ -77,20 +93,28 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
     );
   }
 
-  override projectLiveState(): DocLiveState {
+  override reduce({ event, state }: ReduceArgs<DocState>): DocState | undefined {
+    const threads = reduceComments(state.threads, event);
+    if (threads !== state.threads) return { ...state, threads };
+  }
+
+  override projectLiveState(state: DocState): DocLiveState {
     return {
       commitOid: this.#base.oid || null,
       dirty: this.#dirty(),
       savedBy: this.#savedBy,
       saveError: this.#saveError,
+      threads: state.threads,
     };
   }
 
   override processEvent({
     event,
+    state,
     blockProcessorWhile,
     runInBackground,
-  }: ProcessEventArgs<Record<string, never>>): undefined {
+  }: ProcessEventArgs<DocState>): undefined {
+    this.#threads = state.threads;
     // The at-head pass, after a reset or a revive: edits the last incarnation hadn't saved yet.
     if (!event) {
       blockProcessorWhile(async () => {
@@ -285,6 +309,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
       this.#writeMeta();
       this.#deps.publishLiveState();
     }
+    await this.#reanchor(text);
   }
 
   /** Take in the repo's tip when it moved past `base`: ours (the live text) and theirs (the tip's
@@ -320,7 +345,23 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
         }),
       );
     this.#deps.publishLiveState();
+    await this.#reanchor(merged);
     return true;
+  }
+
+  /** Each thread's quote found in `text`: refreshed where only its surroundings matched, detached
+   *  where nothing did, attached again where a detached one matches. An exact match changes nothing. */
+  async #reanchor(text: string) {
+    const events = this.#threads.flatMap((thread) => {
+      if (!thread.quote) return [];
+      const found = findQuote(text, thread.quote);
+      if (found?.exact && !thread.detached) return [];
+      if (!found && thread.detached) return [];
+      // a repeat (two saves before the first's event is reduced) sets the same quote again
+      const quote = found && quoteAt(text, found.from, found.to);
+      return [{ type: COMMENT_REANCHORED, payload: { thread: thread.id, quote } }];
+    });
+    if (events.length > 0) await this.#deps.withItx((itx) => itx.append(...events));
   }
 
   /** Turn the live text from `from` into `to` in one transaction; the update it made, if any. */

@@ -21,6 +21,7 @@
 // vector, both ways) when an update arrives that needs one it never got, when a send fails, and after
 // each save.
 import { z } from "zod";
+import { CommentThread } from "./comments.ts";
 
 export const EDIT_FRAME = "docs/edit-frame";
 export const AWARENESS_FRAME = "docs/awareness-frame";
@@ -55,15 +56,17 @@ export function docOf(contextPath: string): DocRef {
   return { repo: `/repos/${name}`, path };
 }
 
-/** The processor's live state, what the page shows under the editor. `commitOid`: the commit the
+/** The processor's live state, what the page shows around the editor. `commitOid`: the commit the
  *  text was last saved as (or read at); `dirty`: edits since then are waiting to be saved;
  *  `savedBy`: whose edits the last save committed; `saveError`: why the last save failed, when it
- *  did (the text is kept, and the next edit saves again). */
+ *  did (the text is kept, and the next edit saves again); `threads`: the doc's comments
+ *  (comments.ts), in the order they were started. */
 export const DocLiveState = z.object({
   commitOid: z.string().nullable(),
   dirty: z.boolean(),
   savedBy: z.array(z.string()),
   saveError: z.string().nullable(),
+  threads: z.array(CommentThread),
 });
 export type DocLiveState = z.infer<typeof DocLiveState>;
 

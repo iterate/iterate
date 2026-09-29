@@ -6,6 +6,14 @@ import {
   memoryStream,
   nodeSqliteDurableObjectStorage,
 } from "iterate/stream/test-support";
+import { quoteAt } from "./anchor.ts";
+import {
+  COMMENT_ADDED,
+  COMMENT_DELETED,
+  COMMENT_EDITED,
+  COMMENT_REPLIED,
+  COMMENT_RESOLVED,
+} from "./comments.ts";
 import {
   COMMIT_NOTICED,
   DOC_LEFT,
@@ -34,7 +42,7 @@ test("two people's edits land in one autosave commit, the second as a co-author"
       message: "docs: edit plan.md\n\nCo-authored-by: jonas@iterate.com <jonas@iterate.com>",
     }),
   );
-  expect(doc.live()).toMatchObject({ commitOid: doc.repo.latest().oid, dirty: false });
+  expect(await doc.live()).toMatchObject({ commitOid: doc.repo.latest().oid, dirty: false });
 });
 
 test("a commit made elsewhere merges into the live text, and every open editor gets it", async () => {
@@ -88,7 +96,7 @@ test("someone joining gets the live text, unsaved edits included", async () => {
   const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
   const misha = await doc.join("misha@iterate.com");
   misha.type(misha.text().length, "Unsaved.\n");
-  await vi.waitFor(() => expect(doc.live()).toMatchObject({ dirty: true }));
+  await vi.waitFor(async () => expect(await doc.live()).toMatchObject({ dirty: true }));
 
   const jonas = await doc.join("jonas@iterate.com");
   expect(jonas.text()).toBe("# Plan\nUnsaved.\n");
@@ -98,7 +106,7 @@ test("a facet reset loses nothing: the next incarnation has the unsaved text and
   const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
   const misha = await doc.join("misha@iterate.com");
   misha.type(misha.text().length, "Before the reset.\n");
-  await vi.waitFor(() => expect(doc.live()).toMatchObject({ dirty: true }));
+  await vi.waitFor(async () => expect(await doc.live()).toMatchObject({ dirty: true }));
 
   const next = doc.restart({ autosave: { idleMs: 5, maxMs: 20 } });
   await next.engine.revive();
@@ -106,6 +114,78 @@ test("a facet reset loses nothing: the next incarnation has the unsaved text and
     expect(doc.repo.latest()).toMatchObject({
       files: { "plan.md": "# Plan\nBefore the reset.\n" },
       author: { email: "misha@iterate.com" },
+    }),
+  );
+});
+
+test("people comment, reply and resolve; only a comment's author edits or deletes it", async () => {
+  const doc = openDoc({ "plan.md": "# Plan\n\nWe fly in on Tuesday.\n" });
+  const misha = await doc.join("misha@iterate.com");
+  const jonas = await doc.join("jonas@iterate.com");
+  const text = misha.text();
+  const at = text.indexOf("Tuesday");
+
+  misha.append(COMMENT_ADDED, {
+    thread: "t1",
+    quote: quoteAt(text, at, at + "Tuesday".length),
+    body: "Wednesday?",
+  });
+  jonas.append(COMMENT_REPLIED, { thread: "t1", comment: "c2", body: "Flights are cheaper." });
+  // not his comment: ignored
+  jonas.append(COMMENT_EDITED, { thread: "t1", comment: "t1", body: "Thursday?" });
+  misha.append(COMMENT_EDITED, { thread: "t1", comment: "t1", body: "Wednesday, surely?" });
+  jonas.append(COMMENT_RESOLVED, { thread: "t1" });
+  misha.append(COMMENT_ADDED, { thread: "t2", quote: null, body: "Who's booking?" });
+  misha.append(COMMENT_DELETED, { thread: "t2", comment: "t2" });
+
+  await vi.waitFor(async () =>
+    expect(await doc.live()).toMatchObject({
+      threads: [
+        {
+          id: "t1",
+          quote: { exact: "Tuesday" },
+          detached: false,
+          resolved: { by: "jonas@iterate.com" },
+          comments: [
+            { author: "misha@iterate.com", body: "Wednesday, surely?", edited: true },
+            { author: "jonas@iterate.com", body: "Flights are cheaper.", edited: false },
+          ],
+        },
+      ],
+    }),
+  );
+});
+
+test("a typo fixed under a comment keeps the comment, and a deleted sentence detaches it", async () => {
+  const doc = openDoc({
+    "plan.md": "The hotle is booked for three nights near the station.\n\nBring a coat.\n",
+  });
+  const misha = await doc.join("misha@iterate.com");
+  const text = misha.text();
+  const quote = (part: string) =>
+    quoteAt(text, text.indexOf(part), text.indexOf(part) + part.length);
+  misha.append(COMMENT_ADDED, { thread: "typo", quote: quote("hotle"), body: "Which one?" });
+  misha.append(COMMENT_ADDED, {
+    thread: "coat",
+    quote: quote("Bring a coat."),
+    body: "It's July.",
+  });
+  await vi.waitFor(async () => expect(await doc.live()).toMatchObject({ threads: [{}, {}] }));
+
+  misha.fix("hotle", "hotel");
+  misha.fix("Bring a coat.\n", "");
+
+  await vi.waitFor(() =>
+    expect(doc.repo.latest().files["plan.md"]).toBe(
+      "The hotel is booked for three nights near the station.\n\n",
+    ),
+  );
+  await vi.waitFor(async () =>
+    expect(await doc.live()).toMatchObject({
+      threads: [
+        { id: "typo", quote: { exact: "hotel", prefix: "The " }, detached: false },
+        { id: "coat", quote: { exact: "Bring a coat." }, detached: true },
+      ],
     }),
   );
 });
@@ -158,7 +238,6 @@ function openDoc(
   const log = memoryStream("/docs/config/plan.md");
   const repo = fakeRepo(files);
   const storage = nodeSqliteDurableObjectStorage();
-  let liveState: () => unknown = () => null;
   const start = (autosave: { idleMs: number; maxMs: number }) => {
     const processor = new DocProcessor({
       sql: storage.sql as unknown as SqlStorage,
@@ -174,12 +253,11 @@ function openDoc(
             append: log.stream.append,
           } as any),
         ),
-      publishLiveState: () => {},
+      publishLiveState: () => engine.publishLiveState(),
       autosave,
     });
     const engine = new ProcessorEngine(processor, { stream: log.stream, storage: memoryStorage() });
     log.engines.splice(0, log.engines.length, engine);
-    liveState = () => processor.projectLiveState();
     return { processor, engine };
   };
   let current = start(options.autosave);
@@ -200,7 +278,7 @@ function openDoc(
   };
   return {
     repo,
-    live: () => liveState(),
+    live: async () => (await current.engine.liveSnapshot()).state,
     restart: (next: { autosave: { idleMs: number; maxMs: number } }) =>
       (current = start(next.autosave)),
     get engine() {
@@ -226,9 +304,21 @@ function openDoc(
           source: { principal: { actor: email, email } },
         });
       });
+      const text = () => browser.getText("file").toString();
       return {
-        text: () => browser.getText("file").toString(),
-        type: (at: number, text: string) => browser.getText("file").insert(at, text),
+        text,
+        type: (at: number, insert: string) => browser.getText("file").insert(at, insert),
+        /** Replace the first `from` with `to`, as someone selecting it and typing would. */
+        fix: (from: string, to: string) => {
+          const at = text().indexOf(from);
+          browser.transact(() => {
+            browser.getText("file").delete(at, from.length);
+            browser.getText("file").insert(at, to);
+          });
+        },
+        /** A durable event from this person, as the Docs app appends a comment. */
+        append: (type: string, payload: Record<string, unknown>) =>
+          log.stream.append({ type, payload, source: { principal: { actor: email, email } } }),
         leave: () =>
           log.stream.append({
             type: DOC_LEFT,

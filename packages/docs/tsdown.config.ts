@@ -5,7 +5,13 @@ import { defineConfig } from "tsdown";
 // npm dependencies, which the loader fetches from esm.sh. node-diff3 is bundled: esm.sh builds it
 // from its `browser` export, an IIFE, whose only export is `default` (no `diff3Merge`).
 export default defineConfig({
-  entry: { index: "src/index.ts", install: "src/install.ts", frames: "src/frames.ts" },
+  entry: {
+    index: "src/index.ts",
+    install: "src/install.ts",
+    frames: "src/frames.ts",
+    comments: "src/comments.ts",
+    anchor: "src/anchor.ts",
+  },
   format: "esm",
   fixedExtension: true,
   platform: "neutral",

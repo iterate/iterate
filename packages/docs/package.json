@@ -1,7 +1,7 @@
 {
   "name": "@iterate-com/docs",
   "version": "0.1.0",
-  "description": "Live co-editing for a project's docs: one processor per open doc holds its text as Yjs and autosaves it to /repos/docs",
+  "description": "Live co-editing for a project's docs: one processor per open doc holds its text as Yjs, autosaves it to its repo, and keeps its comments",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -12,7 +12,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./install": "./src/install.ts",
-    "./frames": "./src/frames.ts"
+    "./frames": "./src/frames.ts",
+    "./comments": "./src/comments.ts",
+    "./anchor": "./src/anchor.ts"
   },
   "files": [
     "dist"
@@ -31,6 +33,14 @@
       "./frames": {
         "types": "./dist/frames.d.mts",
         "import": "./dist/frames.mjs"
+      },
+      "./comments": {
+        "types": "./dist/comments.d.mts",
+        "import": "./dist/comments.mjs"
+      },
+      "./anchor": {
+        "types": "./dist/anchor.d.mts",
+        "import": "./dist/anchor.mjs"
       }
     }
   },

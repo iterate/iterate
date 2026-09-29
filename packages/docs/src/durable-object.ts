@@ -3,11 +3,13 @@
 // and the root's docs processor (root.ts).
 import { StreamProcessorDurableObject } from "iterate/sdk";
 import type { ProcessorState } from "iterate/stream/processor";
-import type { DocsContract } from "./contract.ts";
+import type { DocContract, DocsContract } from "./contract.ts";
 import { DocProcessor } from "./processor.ts";
 import { DocsProcessor } from "./root.ts";
 
-export class DocDurableObject extends StreamProcessorDurableObject<Record<string, never>> {
+export class DocDurableObject extends StreamProcessorDurableObject<
+  ProcessorState<typeof DocContract>
+> {
   static override publicMethods = [...super.publicMethods, "sync"];
 
   processor = new DocProcessor({
