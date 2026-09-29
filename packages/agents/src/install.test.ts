@@ -1,13 +1,6 @@
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
-import { agentsFacetSpec, agentsVersion, installAgents, upgradeAgents } from "./install.ts";
-
-test.for(["AgentCollectionDurableObject", "AgentDurableObject"] as const)(
-  "%s is named in agents.ts of the published config, with no cache key",
-  (className) => {
-    expect(agentsFacetSpec(className)).toStrictEqual(published(className));
-  },
-);
+import { agentsVersion, installAgents, upgradeAgents } from "./install.ts";
 
 test("installAgents enables the catalog processor on the root, then writes the itx.agents rule to it", async () => {
   const root = fakeRoot();
@@ -40,6 +33,8 @@ test("installAgents enables the catalog processor on the root, then writes the i
 const name = "@iterate-com/agents";
 const older = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@abc1234";
 const newer = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@def5678";
+const UPDATED = "events.iterate.com/project/worker-updated";
+const FAILED = "events.iterate.com/project/worker-update-failed";
 
 test.for([
   [
@@ -55,6 +50,20 @@ test.for([
   expect(await agentsVersion(project)).toBe(version);
 });
 
+test("the agents version is the build the project runs: the published commit's pin, never one the tip pins while its publication is owed or after it was refused", async () => {
+  const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
+  const upgrade = upgradeAgents(config.project, newer);
+  await vi.waitFor(() => expect(config.commits).toHaveLength(1));
+  expect(await agentsVersion(config.project)).toBe(older);
+  config.land(FAILED, "commit-1", { error: "refused" });
+  await expect(upgrade).rejects.toThrow("refused");
+  expect(await agentsVersion(config.project)).toBe(older);
+  config.land(UPDATED, "commit-1");
+  expect(await agentsVersion(config.project)).toBe(newer);
+  const unpublished = configProject({}, null);
+  expect(await agentsVersion(unpublished.project)).toBeUndefined();
+});
+
 test("an upgrade commits the new pin on the tip it read, keeps the rest of package.json, and answers once its commit is published", async () => {
   const config = configProject({
     "package.json": manifest({ private: true, dependencies: { [name]: older, hono: "^4" } }),
@@ -62,25 +71,30 @@ test("an upgrade commits the new pin on the tip it read, keeps the rest of packa
   const upgrade = upgradeAgents(config.project, newer);
   await vi.waitFor(() => expect(config.commits).toHaveLength(1));
   // another commit's publication lands first: not this one's
-  config.publish("events.iterate.com/project/worker-updated", "elsewhere");
-  config.publish("events.iterate.com/project/worker-updated", "commit-1");
+  config.land(UPDATED, "elsewhere");
+  config.land(UPDATED, "commit-1");
   expect(await upgrade).toBe("commit-1");
   expect(config).toMatchObject({
     commits: [{ message: `Upgrade ${name} to ${newer}`, parent: "seed" }],
-    files: {
-      "package.json": manifest({ private: true, dependencies: { [name]: newer, hono: "^4" } }),
+    trees: {
+      "commit-1": {
+        "package.json": manifest({ private: true, dependencies: { [name]: newer, hono: "^4" } }),
+      },
     },
   });
-  // it waited from the head it read before committing
-  expect(config.project.waitForEvent.mock.calls[0]![0]).toMatchObject({ afterOffset: 7 });
+  // it waited for its own commit's outcome, from the head it read before committing
+  expect(config.project.waitForEvent.mock.calls[0]![0]).toMatchObject({
+    afterOffset: 7,
+    payload: { commitOid: "commit-1" },
+  });
 });
 
-test("an upgrade waits for its publication in 5 s slices, each a fresh call: a slice that times out is asked again from where it waited", async () => {
+test("an upgrade waits for its outcome in 5 s slices, each a fresh call: a slice that times out is asked again from where it waited", async () => {
   const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
   config.project.waitForEvent.mockRejectedValueOnce(codedError("WAIT_TIMEOUT", "no event yet"));
   const upgrade = upgradeAgents(config.project, newer);
   await vi.waitFor(() => expect(config.project.waitForEvent).toHaveBeenCalledTimes(2));
-  config.publish("events.iterate.com/project/worker-updated", "commit-1");
+  config.land(UPDATED, "commit-1");
   expect(await upgrade).toBe("commit-1");
   expect(config.project.waitForEvent.mock.calls.map(([filter]) => filter)).toEqual([
     expect.objectContaining({ afterOffset: 7, timeoutMs: 5_000 }),
@@ -88,12 +102,64 @@ test("an upgrade waits for its publication in 5 s slices, each a fresh call: a s
   ]);
 });
 
-test("a config already at the build commits nothing and waits for no publication", async () => {
-  const config = configProject({ "package.json": manifest({ dependencies: { [name]: newer } }) });
-  expect(await upgradeAgents(config.project, newer)).toBe("seed");
-  expect(config).toMatchObject({ commits: [] });
-  expect(config.project.waitForEvent).not.toHaveBeenCalled();
+test.for([
+  { name: "is published", outcome: UPDATED, answer: "commit-2" },
+  { name: "is refused, saying why", outcome: FAILED, answer: undefined },
+])(
+  "an upgrade whose commit main moved on from waits for main's head, which holds its pin: one that $name",
+  async ({ outcome, answer }) => {
+    const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
+    const upgrade = upgradeAgents(config.project, newer);
+    await vi.waitFor(() => expect(config.commits).toHaveLength(1));
+    await config.commitWebsite();
+    config.land(FAILED, "commit-1", {
+      error: "main moved on to commit-2 before this commit was published",
+    });
+    config.land(outcome, "commit-2", { error: "worker.ts does not construct" });
+    if (answer) expect(await upgrade).toBe(answer);
+    else await expect(upgrade).rejects.toThrow("worker.ts does not construct");
+  },
+);
+
+test("an upgrade has one deadline: a main that keeps moving on ends it in two minutes, saying the old build still runs", async () => {
+  const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  config.project.waitForEvent.mockImplementation(async ({ payload, afterOffset = 0 }) => {
+    vi.setSystemTime(Date.now() + 30_000);
+    await config.commitWebsite();
+    return { type: FAILED, offset: afterOffset + 1, payload: { ...payload, error: "moved on" } };
+  });
+  await expect(upgradeAgents(config.project, newer)).rejects.toThrow(
+    "within two minutes: the project still runs the old build",
+  );
+  expect(config.project.waitForEvent).toHaveBeenCalledTimes(4);
 });
+
+test.for([
+  { name: "published answers it at once", land: UPDATED, answer: "seed" },
+  { name: "refused says why again", land: FAILED, answer: undefined },
+  { name: "still owed waits for its outcome", land: undefined, answer: "seed" },
+])(
+  "an upgrade to the build the tip already pins commits nothing, and a tip that is $name",
+  async ({ land, answer }) => {
+    const config = configProject({ "package.json": manifest({ dependencies: { [name]: newer } }) });
+    if (land) config.land(land, "seed", { error: "agents.ts does not resolve" });
+    const upgrade = upgradeAgents(config.project, newer);
+    if (!land) {
+      await vi.waitFor(() => expect(config.project.waitForEvent).toHaveBeenCalledOnce());
+      config.land(UPDATED, "seed");
+    }
+    if (answer) expect(await upgrade).toBe(answer);
+    else await expect(upgrade).rejects.toThrow("agents.ts does not resolve");
+    expect(config).toMatchObject({ commits: [] });
+    // its outcome is found in the root's history
+    expect(config.project.waitForEvent.mock.calls[0]![0]).toMatchObject({
+      afterOffset: 0,
+      payload: { commitOid: "seed" },
+    });
+  },
+);
 
 test("main moving after the read refuses the commit, and nothing is waited for", async () => {
   const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
@@ -108,13 +174,13 @@ test("a publication the platform refuses says the new build is pinned and why it
   const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
   const upgrade = upgradeAgents(config.project, newer);
   await vi.waitFor(() => expect(config.commits).toHaveLength(1));
-  config.publish("events.iterate.com/project/worker-update-failed", "commit-1", {
-    error: "agents.ts no longer exports AgentDurableObject",
+  config.land(FAILED, "commit-1", {
+    error: "worker.ts's default export is not an IterateConfigEntrypoint",
   });
   await expect(upgrade).rejects.toThrow(
-    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: agents.ts no longer exports AgentDurableObject",
+    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: worker.ts's default export is not an IterateConfigEntrypoint",
   );
-  expect(config.files["package.json"]).toContain(newer);
+  expect(config.trees["commit-1"]!["package.json"]).toContain(newer);
 });
 
 /** The facet spec every row and rule of the app names: a class of the config repo's `agents.ts`,
@@ -141,10 +207,12 @@ function fakeRoot() {
   };
 }
 
-/** A project root over an in-memory config repo whose commits land as the platform's do (`parent`
- *  must be the tip), and a `/` whose publications a row lands by hand (`publish`), after a head at 7. */
-function configProject(initial: Record<string, string>) {
-  const files = { ...initial };
+/** A project root over an in-memory config repo whose `seed` holds `initial` and which runs
+ *  `publishedCommit`; its commits land as the platform's do (`parent` must be the tip). A
+ *  publication outcome on `/` lands by hand (`land`), after a head at 7, as the stream's filter
+ *  answers it, and a published one moves the commit the project runs, as the project's reduce does. */
+function configProject(initial: Record<string, string>, publishedCommit: string | null = "seed") {
+  const trees: Record<string, Record<string, string>> = { seed: { ...initial } };
   const commits: { message: string; parent?: string | null }[] = [];
   const log: { type: string; offset: number; payload: Record<string, unknown> }[] = [];
   const waiters: (() => void)[] = [];
@@ -156,7 +224,8 @@ function configProject(initial: Record<string, string>) {
       if (movedAfterRead) tip = "elsewhere";
       return read;
     },
-    readFile: async (path: string) => files[path] ?? null,
+    readFile: async (path: string, options?: { commitOid?: string }) =>
+      trees[options?.commitOid || tip]?.[path] ?? null,
     commitFiles: async (input: {
       message: string;
       changes: { path: string; content?: string }[];
@@ -166,33 +235,61 @@ function configProject(initial: Record<string, string>) {
         throw new Error(
           `repo /repos/config: the commit was refused: main is at ${tip}, not at the parent it names (${input.parent})`,
         );
+      const files = { ...trees[tip] };
       for (const change of input.changes) files[change.path] = change.content!;
       commits.push({ message: input.message, parent: input.parent });
       tip = `commit-${commits.length}`;
+      trees[tip] = files;
       return { commitOid: tip, changedPaths: input.changes.map((change) => change.path) };
     },
   };
   const project = {
     repos: { get: () => repo },
+    facets: { get: () => ({ snapshot: async () => ({ state: { publishedCommit } }) }) },
     readEvents: vi.fn(async () => ({ events: [], scannedThroughOffset: 7, atHead: true })),
-    waitForEvent: vi.fn(async ({ afterOffset = 0 }: { afterOffset?: number }) => {
-      for (;;) {
-        const next = log.find((event) => event.offset > afterOffset);
-        if (next) return next;
-        await new Promise<void>((resolve) => waiters.push(resolve));
-      }
-    }),
+    // the stream's filter: one of the types, after the offset, carrying each payload field it names
+    waitForEvent: vi.fn(
+      async (filter: {
+        type?: string | string[];
+        afterOffset?: number;
+        payload?: Record<string, unknown>;
+      }) => {
+        for (;;) {
+          const next = log.find(
+            (event) =>
+              [filter.type].flat().includes(event.type) &&
+              event.offset > (filter.afterOffset ?? 0) &&
+              Object.entries(filter.payload || {}).every(
+                ([field, value]) => event.payload[field] === value,
+              ),
+          );
+          if (next) return next;
+          await new Promise<void>((resolve) => waiters.push(resolve));
+        }
+      },
+    ),
   };
   return {
-    files,
+    trees,
     commits,
     moveMainAfterRead: () => void (movedAfterRead = true),
-    publish: (type: string, commitOid: string, payload: Record<string, unknown> = {}) => {
+    /** Someone else's commit on main's head: the website changes. */
+    commitWebsite: () =>
+      repo.commitFiles({
+        message: "website",
+        parent: tip,
+        changes: [{ path: "worker.ts", content: `// ${commits.length}` }],
+      }),
+    land: (type: string, commitOid: string, payload: Record<string, unknown> = {}) => {
       log.push({ type, offset: 8 + log.length, payload: { commitOid, ...payload } });
+      if (type === UPDATED) publishedCommit = commitOid;
       for (const wake of waiters.splice(0)) wake();
     },
-    // The fake implements only the calls an upgrade makes; typed once as what upgradeAgents takes.
-    project: project as typeof project & Parameters<typeof upgradeAgents>[0],
+    // The fake implements only the calls an upgrade and the version make; typed once as what they
+    // take.
+    project: project as typeof project &
+      Parameters<typeof upgradeAgents>[0] &
+      Parameters<typeof agentsVersion>[0],
   };
 }
 

@@ -12,35 +12,22 @@ const event = {
   createdAt: "2026-09-28T00:00:00.000Z",
 } as StreamEvent;
 
-test("deliverEvent hands processEvent the event and the root, and releases every call the handler made once it settles", async () => {
+test("deliverEvent hands processEvent the event and the root in one round trip, releasing every call the handler made once it settles, even when it throws", async () => {
   const log: string[] = [];
   const handled: string[] = [];
   const entrypoint = configEntrypoint(log, async ({ event, itx }) => {
     handled.push(`${event.path}@${event.offset}`);
     await itx.cd(event.path).append({ type: "events.iterate.com/test/pong-sent" });
     expect(log).toEqual(["get", `cd(${event.path}).append`]); // nothing released mid-handler
+    throw new Error("the handler failed");
   });
-  await entrypoint.deliverEvent(event);
+  await expect(entrypoint.deliverEvent(event)).rejects.toThrow("the handler failed");
   expect(handled).toEqual(["/child@7"]);
   expect(log).toEqual([
     "get",
     "cd(/child).append",
     "dispose cd(/child).append",
     "dispose cd(/child)",
-    "dispose root",
-  ]);
-});
-
-test("a handler that throws fails its delivery, and what it reached is still released", async () => {
-  const log: string[] = [];
-  const entrypoint = configEntrypoint(log, async ({ itx }) => {
-    await itx.cd("/elsewhere").append({ type: "events.iterate.com/test/pong-sent" });
-    throw new Error("the handler failed");
-  });
-  await expect(entrypoint.deliverEvent(event)).rejects.toThrow("the handler failed");
-  expect(log.slice(-3)).toEqual([
-    "dispose cd(/elsewhere).append",
-    "dispose cd(/elsewhere)",
     "dispose root",
   ]);
 });

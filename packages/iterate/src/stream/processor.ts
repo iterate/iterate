@@ -94,12 +94,13 @@ export type ProcessorStream = {
 export const REVIVE_AFTER_MS = 20_000;
 export const REVIVE_AFTER_MAX_MS = 30 * 60_000;
 /** How many times work in flight may die with its host before a revive no longer starts it again. */
-export const MAX_DEATHS = 5;
+const MAX_DEATHS = 5;
 /** The started marker's key and value (rule 3): work is in flight, how often it died so far, and
  *  on what code. */
 const STARTED = "processor-work-started";
-type Started = { deaths: number; generation?: string };
-/** What the engine keeps of its own beside the checkpoint: a Durable Object's `ctx.storage.kv`. */
+type Started = { deaths: number; codeId?: string };
+/** What the engine keeps of its own beside the checkpoint: a Durable Object's `ctx.storage.kv`
+ *  (spelled here: the CLI compiles the engine without Cloudflare's types). */
 export type EngineKv = {
   get<T>(key: string): T | undefined;
   put(key: string, value: unknown): void;
@@ -247,7 +248,7 @@ export class ProcessorEngine<State> {
    *  reads to know if its catch-up already ran one. */
   #lastBatchAtHead = false;
   readonly #kv: EngineKv | undefined;
-  readonly #generation: string | undefined;
+  readonly #codeId: string | undefined;
   /** The cause of the newest event this engine processed: what an eventless at-head pass runs under. */
   #headCause: EventCause | undefined;
 
@@ -265,7 +266,7 @@ export class ProcessorEngine<State> {
       kv?: EngineKv;
       /** The code the host runs, as its parent names it (iterate/sdk FacetProps): work that died
        *  with a host restarted onto other code died of no fault of its own, and is no death. */
-      generation?: string;
+      codeId?: string;
     },
   ) {
     this.processor = processor;
@@ -274,7 +275,7 @@ export class ProcessorEngine<State> {
     this.#storage = deps.storage;
     this.#fedByPushes = deps.fedByPushes === true;
     this.#kv = deps.kv;
-    this.#generation = deps.generation;
+    this.#codeId = deps.codeId;
     // ONE row, so cursor and state never disagree; one written under another contract version is
     // kept as #staleCheckpoint for the chain's first work.
     const { slug, version } = this.#contract;
@@ -568,7 +569,7 @@ export class ProcessorEngine<State> {
       // THE STARTED MARKER: what tells a revive that this host died with work in flight.
       this.#kv?.put(STARTED, {
         deaths: this.#kv.get<Started>(STARTED)?.deaths ?? 0,
-        generation: this.#generation,
+        codeId: this.#codeId,
       });
       this.#claim(REVIVE_AFTER_MS);
     }
@@ -599,15 +600,15 @@ export class ProcessorEngine<State> {
   async revive(): Promise<void> {
     // A revive that finds nothing in flight where work was started is a DEATH, counted across
     // restarts — but not one onto other code (the host's own commit, a deploy), which starts the
-    // count over. At MAX_DEATHS the work is failed: the revive throws WORK_FAILED, the host records
-    // it, and only what the processor next receives starts the work again.
+    // count over. At MAX_DEATHS the work is failed: the revive throws PERMANENT_FAILURE, the host
+    // records it, and only what the processor next receives starts the work again.
     const started = this.#kv?.get<Started>(STARTED);
     if (started && this.#backgroundWorkInFlight === 0) {
-      const deaths = started.generation === this.#generation ? started.deaths + 1 : 0;
-      this.#kv!.put(STARTED, { deaths, generation: this.#generation });
+      const deaths = started.codeId === this.#codeId ? started.deaths + 1 : 0;
+      this.#kv!.put(STARTED, { deaths, codeId: this.#codeId });
       if (deaths >= MAX_DEATHS)
         throw codedError(
-          "WORK_FAILED",
+          "PERMANENT_FAILURE",
           `processor "${this.#contract.slug}": its work in flight died with its host ${deaths} times, so it is not started again until the processor receives an event`,
         );
     }

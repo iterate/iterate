@@ -1,7 +1,7 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { z } from "zod";
-import { codedError, errorCode } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { platformAddressesOf } from "./app-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
@@ -9,7 +9,7 @@ import { contextStub } from "./context-stub.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
-import { ITERATE_CAUSE_HEADER, parseCause, type Cause } from "./cause.ts";
+import { parseCause, type Cause } from "./cause.ts";
 
 // MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
 // grant or personal access token limits which projects can be selected; each run is attributed to
@@ -58,7 +58,7 @@ const runInstructionsOf = (platformOrigin: string) =>
     "One tool, `run({ project?, script })`: evaluate a JavaScript function, `async (itx) => { ... }`, with the selected project's root `itx` handle at `/`. Pass a project slug or id when your token reaches several projects.",
     'Start by inspecting identity and capabilities:\n```json\n{"script":"async (itx) => ({ identity: await itx.whoami(), capabilities: await itx.rewriteRules.list() })"}\n```',
     'Use `itx.cd("/path")` to address another context in this project. Each call runs the complete script in a worker, for at most ten minutes; await operations and return JSON-serializable results. Carry state between calls in returned results or stored data. Requests and settlements are logged at `/`, attributed to your principal and grant; project rewrite rules apply.',
-    'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. `commitFiles({ message, changes, parent? })` takes the whole new content of each changed file (`{ path, content }`, or `{ path, delete: true }`); there is no patch operation. To edit a file, change its text inside your script with any JavaScript (`replace`, a regular expression, split and join) and commit the result, passing the tip you read as `parent` so the commit is refused if main moved meanwhile; the file never has to pass through your context. File paths are repo-relative. A config-repo commit publishes the project worker in the background, a few seconds after it lands: `await repo.waitForPublication(commitOid)` returns once the website and every context run it, and throws why when the commit is not published.',
+    'The config repo is `itx.repos.get("/repos/config")`. Use `listFiles()` and `readFile(path)` to inspect existing files, including `AGENTS.md` when present. `commitFiles({ message, changes, parent? })` takes the whole new content of each changed file (`{ path, content }`, or `{ path, delete: true }`); there is no patch operation. To edit a file, change its text inside your script with any JavaScript (`replace`, a regular expression, split and join) and commit the result, passing the tip you read as `parent` so the commit is refused if main moved meanwhile; the file never has to pass through your context. File paths are repo-relative. A config-repo commit publishes the project worker a few seconds after it lands, and every commit gets one outcome event on the root: `const outcome = await itx.waitForEvent({ type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"], payload: { commitOid }, afterOffset: 0, timeoutMs: 120000 })`, then `outcome.payload.error` says why a `worker-update-failed` commit is not live.',
     `Read the current worker:
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').readFile('worker.ts')"}
@@ -71,7 +71,7 @@ const runInstructionsOf = (platformOrigin: string) =>
 \`\`\`json
 {"script":"async (itx) => itx.repos.get('/repos/config').commitFiles({ message: 'Add a note', changes: [{ path: 'notes.txt', content: 'Hello from MCP' }] })"}
 \`\`\``,
-    'Website source is the config repo: `package.json` names its main module in `"main"` (`worker.ts`). Files may be TypeScript (types are stripped, not checked) or JavaScript and import each other by relative path. Import packages by name: `iterate/*` and `zod` come from the platform, any other package is listed in `package.json` `dependencies` and fetched from npm through esm.sh (packages that need Node.js builtins are refused). The default export of the main module is a class that extends `IterateConfigEntrypoint` from `iterate/sdk`; publication refuses any other. Preview a candidate with `itx.workers.get({ source: { ...(await itx.repos.get("/repos/config").modules()), "worker.ts": candidateSource } }).fetch(new Request(projectUrl))`: the repo\'s files under their repo paths, your edits over them. Once `waitForPublication` returns, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
+    'Website source is the config repo: `package.json` names its main module in `"main"` (`worker.ts`). Files may be TypeScript (types are stripped, not checked) or JavaScript and import each other by relative path. Import packages by name: `iterate/*` and `zod` come from the platform, any other package is listed in `package.json` `dependencies` and fetched from npm through esm.sh (packages that need Node.js builtins are refused). The default export of the main module is a class that extends `IterateConfigEntrypoint` from `iterate/sdk`; publication refuses any other. Preview a candidate with `itx.workers.get({ source: { ...(await itx.repos.get("/repos/config").modules()), "worker.ts": candidateSource } }).fetch(new Request(projectUrl))`: the repo\'s files under their repo paths, your edits over them. Once its outcome is `worker-updated`, fetch the `projectUrl` returned by `itx.whoami()` and verify the expected response before reporting publication success.',
     "Working examples: https://raw.githubusercontent.com/iterate/iterate/main/apps/os/e2e/mcp-project-root.e2e.test.ts — use the `async (itx) => ...` scripts and repo commit examples. The surrounding OAuth setup, project creation and assertions are the integration-test harness; your MCP connection supplies authentication and the project handle. Discover the live capabilities with `itx.rewriteRules.list()`.",
     `To connect a service to the project (an API key, an OAuth app, a hosted MCP server, an OpenAPI API), first read the whole guide at ${platformOrigin}/connect-a-service.md through this tool, \`async (itx) => (await itx.fetch(new Request("${platformOrigin}/connect-a-service.md"))).text()\`, then follow it step by step.`,
   ].join("\n\n");

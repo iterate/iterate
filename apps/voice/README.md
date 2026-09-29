@@ -27,7 +27,7 @@ take a call yet gets **Set up voice** in place of Call: an OpenAI key field if t
 too), which stores the key, waits for `itx.voice` and refuses a project whose config installs no
 voice. It works against any platform the app connects to, a self-hosted one included.
 
-Under Call, **Voice build** shows the build the project's config pins and, when main has published
+Under Call, **Voice build** shows the build the project runs and, when main has published
 a newer one, **Upgrade to the newest**: `upgradeVoice` (`@iterate-com/voice/install`) commits that
 pin and waits for its publication. The agents app keeps its build; the Agents app upgrades it.
 

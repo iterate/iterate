@@ -27,7 +27,7 @@
 //
 // ONE VALIDATION BOUNDARY: every append through the DO passes `normalizeControlEvent` (below),
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
-// it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
+// it reads and never re-parses. The stream's own records (`STREAM_RECORD_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
 // validation, and `append` refuses them. The route fold parses what it reads all the same
 // (src/fetch-routes.ts): one route that does not compile must never break every request's `match`.
@@ -43,7 +43,7 @@ import {
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
-import type { RewriteRuleConfigured } from "iterate/api";
+import type { FacetSpec, RewriteRuleConfigured } from "iterate/api";
 import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import type { Cause } from "../cause.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -58,6 +58,7 @@ import {
   implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
+  namesAWorker,
   refuseSelfLoopRow,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -96,27 +97,23 @@ export function facetSpecFromHostingTarget(
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
     return { name: getStep[1], className: firstPartyClassName };
-  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null) {
+  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null)
     // The spec is caller-authored and only its object-ness is checked here: a malformed one is
     // copied as it is and fails where the facet host loads it (FacetHost `#facetStartupMemoFor`).
-    const spec = getStep[2] as {
-      source: unknown;
-      className: string;
-      cacheKey?: string;
-      mainModule?: string;
-    };
-    return {
-      name: getStep[1],
-      source: spec.source,
-      className: spec.className,
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical facet spec: cacheKey feeds the loader's identity-keyed memo (facetSpecOf); an absent cacheKey must stay absent, not `cacheKey: undefined`
-      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical spec
-      ...(spec.mainModule !== undefined && { mainModule: spec.mainModule }),
-    };
-  }
+    return { name: getStep[1], ...facetSpecOf(getStep[2] as FacetSpec) };
   return undefined;
 }
+
+/** The same spec with an absent `cacheKey` or `mainModule` left OUT (never `cacheKey: undefined`)
+ *  — the one shape a memo, an event or a compare sees. */
+export const facetSpecOf = ({ source, cacheKey, className, mainModule }: FacetSpec): FacetSpec => ({
+  source,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- the canonical shape deliberately OMITS an absent cacheKey (never `cacheKey: undefined`, per the docstring): it is the one shape the kv-stored memo, the hosting event and the JSON.stringify compares all see, so a present-but-undefined key must never enter it
+  ...(cacheKey !== undefined && { cacheKey }),
+  className,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical shape
+  ...(mainModule !== undefined && { mainModule }),
+});
 
 /** THE MARKER a hosting row keeps (`Subscription["hostedFacet"]`): the spec less its source — a
  *  100 KB processor must not ride the checkpoint — but for a worker's NAME (a source expression
@@ -126,8 +123,7 @@ export function hostedFacetMarkerOf(
   spec: HostingFacetSpec,
 ): NonNullable<Subscription["hostedFacet"]> {
   const { source, ...marker } = spec;
-  const named = !marker.cacheKey && (typeof source === "string" || Array.isArray(source));
-  return named ? { ...marker, source } : marker;
+  return namesAWorker(spec) ? { ...marker, source } : marker;
 }
 
 /** Resolve a target through THIS state's rules to the fixed point — or undefined when it cannot be
@@ -562,18 +558,15 @@ export function reduceCoreEvent(
             implicitRoots.has(matchPrefix[1]);
       if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
-      // The platform's own row keeps its stamp: only it vouches for a worker's manifest.
-      const platform = event.source?.platform === true ? ({ platform: true } as const) : {};
       // THE SAME ROW AGAIN is no change: a reinstall that restates its rules moves no version, so
       // no snapshot another context holds is invalidated by it (context/rule-snapshots.ts).
       if (
         existing &&
         jsonEqual(existing.target, target) &&
-        existing.description === description.description &&
-        existing.platform === platform.platform
+        existing.description === description.description
       )
         return undefined;
-      return withRule({ match: matchPrefix, target, ...description, ...platform });
+      return withRule({ match: matchPrefix, target, ...description });
     }
 
     case "events.iterate.com/itx/subscription-configured": {
@@ -710,14 +703,14 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
-/** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
+/** THE STREAM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
  *  loop (the halted fact and a fan-out row's dead letter), the DO's alarm (the trace) and its runner
  *  (a run's settlement) straight through `Stream.append`. `normalizeControlEvent` refuses them, so
  *  no caller rewrites who a context is (`created` feeds `implicitRootsAt`), which incarnation runs
  *  or why it woke, halts a subscription row it does not own, reports a delivery that never failed,
  *  or settles a run it did not run (`itx.run` would answer the forgery, and an agent read it as its
  *  own script's result). Each is a receipt, so it lands past the loop limit too (stream.ts). */
-export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
+export const STREAM_RECORD_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
@@ -730,35 +723,18 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/itx/work-failed",
 ]);
 
-/** A deployment's BIRTH EVENTS (app-config.ts `contextBirthEvents`), each as the append boundary
- *  stores it — checked at `/`: a birth event is the same at every path, and a rule that loops only
- *  at `/` is refused there too. Throws naming the entry. */
-export function normalizeContextBirthEvents(
-  events: readonly StreamEventInput[],
-): StreamEventInput[] {
-  return events.map((event, index) => {
-    try {
-      return normalizeControlEvent(event, "/");
-    } catch (error) {
-      throw new Error(
-        `APP_CONFIG contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  });
-}
-
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  committing a durable no-op. A stream record (`STREAM_RECORD_TYPES`) is refused. Every
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   // A fixed type list isolates the platform's own records. Who may append anything else is not this
   // boundary's question: every event carries the platform's stamp of where it came from
   // (caller.ts `stampCaller`), and a processor that cares decides whom it trusts from that.
-  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
+  if (STREAM_RECORD_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
   // instead of being dropped, and the event is stored as sent (an idempotent retry compares the

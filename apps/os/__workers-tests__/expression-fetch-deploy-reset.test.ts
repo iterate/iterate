@@ -1,8 +1,6 @@
 // __workers-tests__/expression-fetch-deploy-reset.test.ts — a deploy resets every context, and an
 // expression fetch that dialed another context meets the reset as "Durable Object reset because its
-// code was updated.". prd os-prd, 2026-09-25 14:45:21Z (the deploy of #3155): the first requests to
-// two tunnels' hosts found the config worker's loader cold, its producer's read of `/repos/config`
-// met that context's reset, and each answered an uncoded 500 the prd fault alarm paged on. The
+// code was updated." — a cold config worker's producer reading `/repos/config` among them. The
 // expected outcome: the read the cacheKey names is read again (context/worker-loader.ts); a
 // terminal fetch to what lives in another context is sent again when it cannot do anything twice,
 // a GET or HEAD with no body (context/built-ins.ts `callContext`); anything else is a 503 with

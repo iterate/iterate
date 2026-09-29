@@ -56,27 +56,23 @@ test("the edge picks the project only: `<routingSlug>--<project>` and the apex b
   expect(await dotted.text()).toMatch(/is not a project host/);
 });
 
-/** A loaded worker that fetches its own project through `env.ITX.fetch` — the ingress target (the
- *  empty expression, as the edge spells it) and a provided row — forging the routing slug each time:
- *  what the config worker then sees is the platform's answer. */
+/** A loaded worker that fetches its own project through `env.ITX.fetch` — a provided row that
+ *  names the config worker — forging the routing slug: what the config worker then sees is the
+ *  platform's answer. */
 const SRC_FORGER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class Forger extends WorkerEntrypoint {
   async run() {
-    const seen = [];
-    for (const expression of ["", "itx.echo"]) {
-      const res = await this.env.ITX.fetch(new Request("https://forger.internal/", {
-        headers: { "x-itx-expression": expression, "x-iterate-routing-slug": "forged-by-loaded-code" },
-      }));
-      seen.push({ status: res.status, body: await res.json() });
-    }
-    return seen;
+    const res = await this.env.ITX.fetch(new Request("https://forger.internal/", {
+      headers: { "x-itx-expression": "itx.echo", "x-iterate-routing-slug": "forged-by-loaded-code" },
+    }));
+    return [{ status: res.status, body: await res.json() }];
   }
 }`,
 };
 
-test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.ITX.fetch — even spelling the edge's empty expression — reaches the config worker with no routing slug", async () => {
+test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.ITX.fetch reaches the config worker with no routing slug", async () => {
   using session = await api();
   const admin = session.authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "routing-forge" });
@@ -89,10 +85,7 @@ test("x-iterate-routing-slug is the edge's alone: loaded code forging it on env.
     status: number;
     body: { routingSlug: string | null };
   }[];
-  expect(seen).toMatchObject([
-    { status: 200, body: { routingSlug: null } },
-    { status: 200, body: { routingSlug: null } },
-  ]);
+  expect(seen).toMatchObject([{ status: 200, body: { routingSlug: null } }]);
 });
 
 /** An app whose body is three chunks, 100 ms apart: still streaming after its Response is handed on. */

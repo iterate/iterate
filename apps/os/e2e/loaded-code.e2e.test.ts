@@ -27,28 +27,21 @@ export default class extends WorkerEntrypoint {
 }`,
 };
 
-test("loaded code may not spell itx.builtins, and its cd goes down only; the same from a session is fine; provide/subscribe are refused; itx.append of a row is not", async () => {
+test("loaded code may not spell itx.builtins, and its cd goes anywhere in the project; provide/subscribe are refused; itx.append of a row is not", async () => {
   const ctx = freshCtx("app-wall");
   const root = openItx(ctx);
   const x = root.cd("/x");
   const worker = () => x.workers.get({ source: PROBE });
   expect(await worker().cdWhoami("./y")).toEqual({ ok: { projectId: ctx, path: "/x/y" } });
-  expect(await worker().cdWhoami("/")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
-  });
-  expect(await worker().cdWhoami("..")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
-  });
-  expect(await worker().say("itx.cd('/').whoami()")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
-  });
+  expect(await worker().cdWhoami("/")).toEqual({ ok: { projectId: ctx, path: "/" } });
+  expect(await worker().cdWhoami("..")).toEqual({ ok: { projectId: ctx, path: "/" } });
+  expect(await worker().say("itx.cd('/').whoami()")).toEqual({ ok: { projectId: ctx, path: "/" } });
   expect(await worker().say("itx.builtins.whoami()")).toMatchObject({
     error: expect.stringMatching(/not a loaded worker's word/),
   });
   expect(await worker().say("itx.whoami()")).toEqual({ ok: { projectId: ctx, path: "/x" } });
-  // a session says all of it
+  // a session says all of it, the fixed point too
   expect(await x.builtins.whoami()).toEqual({ projectId: ctx, path: "/x" });
-  expect(await x.cd("/").whoami()).toEqual({ projectId: ctx, path: "/" });
   // a ROW is itx.append's business; a live stub of the worker's own is lendable and dies with the call
   expect(await worker().lend()).toMatchObject({
     error: expect.stringMatching(/lends a live stub only/),
@@ -60,8 +53,8 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
   // …while a row is one append away, and it took effect
   expect(await worker().writeRow("itx.me", "itx.whoami")).toMatchObject({ ok: expect.anything() });
   expect(await worker().say("itx.me()")).toEqual({ ok: { projectId: ctx, path: "/x" } });
-  // A ROW'S TARGET meets the same wall as a call: no re-parenting past the creator, no project root
-  // granted to itself, no subscription that would run as the kernel above it; a mask passes.
+  // A ROW'S TARGET meets the same wall as a call: never the fixed point, so no subscription that
+  // would run as the kernel; a cd anywhere and a mask pass.
   expect(await worker().writeRow("itx", "itx.builtins.cd('/')")).toMatchObject({
     error: expect.stringMatching(/not a loaded worker's word/),
   });
@@ -69,7 +62,7 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
     error: expect.stringMatching(/not a loaded worker's word/),
   });
   expect(await worker().writeRow("itx.up", "itx.cd('/').whoami")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
+    ok: expect.anything(),
   });
   expect(
     await worker().appendEvent({
@@ -85,7 +78,7 @@ test("loaded code may not spell itx.builtins, and its cd goes down only; the sam
   });
 });
 
-test("anyone appends anywhere: loaded code's cd(path).append reaches the root and a sibling, stamped with its own context whatever it claims; a jail's bare null closes append both ways for code", async () => {
+test("anyone reaches anywhere: loaded code's cd(path) reads and appends at the root and a sibling, stamped with its own context whatever it claims; a jail's bare null closes reads and appends both ways for code", async () => {
   const ctx = freshCtx("open-append");
   const root = openItx(ctx);
   const worker = (at: string) => root.cd(at).workers.get({ source: PROBE });
@@ -98,15 +91,25 @@ test("anyone appends anywhere: loaded code's cd(path).append reaches the root an
   // the forged principal and platform are gone; loaded code with no SDK begins its own chain
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: nothing forged is left on the source
   expect(landed.source).toEqual({ origin: "/x", cause: expect.objectContaining({ depth: 0 }) });
+  // …and reads there: the root's log, a sibling's identity
+  expect(await worker("/x").say("itx.cd('/').readEvents(0, 1)")).toMatchObject({
+    ok: { events: [expect.objectContaining({ path: "/" })] },
+  });
+  expect(await worker("/x").cdWhoami("/y")).toEqual({ ok: { projectId: ctx, path: "/y" } });
   // A JAIL: a bare `itx ⇒ null`. Its code appends nowhere, and no code appends into it: the hop
   // resolves `append` through the jail's own table. A member's session still writes the fixed point.
   await root.cd("/jail").provide("itx", null);
   const jailed = root.cd("/jail").builtins.workers.get({ source: PROBE });
-  for (const to of ["/", "/jail/down"])
+  for (const to of ["/", "/jail/down"]) {
     expect(await jailed.cdAppend(to, { type: "note" })).toMatchObject({
       error: expect.stringMatching(/is masked/),
     });
+    expect(await jailed.cdWhoami(to)).toMatchObject({ error: expect.stringMatching(/is masked/) });
+  }
   expect(await worker("/").cdAppend("/jail", { type: "note" })).toMatchObject({
+    error: expect.stringMatching(/is masked/),
+  });
+  expect(await worker("/").cdWhoami("/jail")).toMatchObject({
     error: expect.stringMatching(/is masked/),
   });
   expect(await root.cd("/jail").builtins.append({ type: "note" })).toMatchObject([
@@ -114,7 +117,7 @@ test("anyone appends anywhere: loaded code's cd(path).append reaches the root an
   ]);
 });
 
-test("open append keeps the platform's own: loaded code forges no run's settlement, takes none of the platform's keys, sets no ingress from below; a jail granted `itx.append` is lifted by neither its code nor a schedule, and every context can append into it", async () => {
+test("open append keeps the platform's own: loaded code forges no run's settlement and takes none of the platform's keys; a jail granted `itx.append` is lifted by neither its code nor a schedule, and every context can append into it", async () => {
   const root = openItx(freshCtx("open-append-refusals"));
   const worker = root.cd("/x").workers.get({ source: PROBE });
   for (const [event, refused] of [
@@ -127,10 +130,6 @@ test("open append keeps the platform's own: loaded code forges no run's settleme
     ],
     [{ type: "note", idempotencyKey: "itx/run-settled:9" }, /is the platform's/],
     [{ type: "note", idempotencyKey: "project/delete-requested" }, /is the platform's/],
-    [
-      { type: "events.iterate.com/itx/ingress-configured", payload: { target: "itx.builtins.kv" } },
-      /set only from the project's root/,
-    ],
   ] as const)
     expect(await worker.cdAppend("/", event)).toMatchObject({
       error: expect.stringMatching(refused),
@@ -190,7 +189,7 @@ test("the platform's own facets stamp where they write from: the config repo's b
   expect(certificate).toMatchObject({ path: "/", source: { origin: "/repos/config" } });
 });
 
-test("a spec's source expression is walled like the call around it: loaded code plants no row above it through the code it loads", async () => {
+test("a spec's source expression is walled like the call around it: loaded code spells no fixed point through the code it loads", async () => {
   // A string `source` is a producer the host evaluates as the context itself when the code loads, so
   // unwalled it would spell `itx.builtins.cd('/')` for its writer.
   const root = openItx(freshCtx("app-wall-producer"));
@@ -204,12 +203,8 @@ test("a spec's source expression is walled like the call around it: loaded code 
       /not a loaded worker's word/,
     ],
     [
-      `itx.facets.get('f', { source: ${plant("itx.cd('/')")}, className: 'F', cacheKey: 'planted' }).x()`,
-      /goes down only/,
-    ],
-    [
-      `itx.processors.enable('planter', { source: ${plant("itx.cd('..')")}, className: 'P', cacheKey: 'planted' })`,
-      /goes down only/,
+      `itx.facets.get('f', { source: ${plant("itx.cd('/').builtins")}, className: 'F', cacheKey: 'planted' }).x()`,
+      /not a loaded worker's word/,
     ],
   ] as const)
     expect(await root.cd("/x").workers.get({ source: PROBE }).say(call)).toMatchObject({
@@ -257,9 +252,6 @@ test("owner-written physical redirects survive a loaded-code hop, while fresh ca
   expect(await worker().say("itx.builtins.whoami()")).toMatchObject({
     error: expect.stringMatching(/not a loaded worker's word/),
   });
-  expect(await worker().say("itx.cd('/').whoami()")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
-  });
   expect(
     await worker().say("itx.write", {
       type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -303,9 +295,9 @@ for (const kind of ["repo", "workspace"] as const)
 
 // A SCRIPT BENEATH A MASK — `/masked`, a workspace linked to the root with the root's `itx.tool`
 // masked there, as an agent's sandbox is linked to its agent — meets each verb's own refusal:
-// loaded code removes no row, a batch it schedules meets the wall as it is scheduled, it sets no
-// project fetch route (the config worker serves those at the root), and it creates and deletes only
-// beneath itself. A mask is not a boundary; a jail is ("anyone appends anywhere", above).
+// loaded code removes no row, a batch it schedules meets the wall as it is scheduled, and it creates
+// and deletes only beneath itself. A mask is not a boundary; a jail is ("anyone reaches anywhere",
+// above).
 test("loaded code removes no row (`ifTarget`): a script beneath a mask appends no removal of the mask", async () => {
   const { masked } = await beneathAMask("lift-mask");
   const { removal, tool } = await masked.builtins.run(`async (itx) => {
@@ -324,15 +316,6 @@ test("`schedules.set` walls a scheduled batch when it is scheduled: a row it car
   }`);
   expect(scheduled).toMatch(/not a loaded worker's word/);
   expect(tool, "the tool should stay masked").toMatch(/is masked/);
-});
-
-test("`fetchRoutes.set` refuses loaded code below the root: a script beneath a mask sets no route through it, which the config worker would serve at the root", async () => {
-  const { root, masked } = await beneathAMask("route-from-below");
-  const set = await masked.builtins.run(
-    "async (itx) => itx.fetchRoutes.set('leak', { requestMatcher: { routingSlug: 'leak' }, target: 'itx.tool' }).then(() => 'set', (e) => String(e.message))",
-  );
-  expect(set).toMatch(/fetch routes and ingress are set only from the project's root/);
-  expect(await root.fetchRoutes.list()).toEqual([]);
 });
 
 test("a script beneath a mask still asks the project's fetch routes: `itx.fetchRoutes.match` answers from below, as the agents' candidate probe needs", async () => {

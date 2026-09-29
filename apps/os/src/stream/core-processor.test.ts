@@ -9,7 +9,7 @@
 // (context/itx-expression-rewriting.test.ts, the subscriptions section below).
 import { expect, test } from "vitest";
 import { parse, print, type ItxExpression, type ItxExpressionInput } from "iterate/expression";
-import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import type { StreamEvent } from "iterate/stream/processor";
 import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
   CoreContract,
@@ -17,7 +17,6 @@ import {
   reduceCoreEvent,
   reduceCoreEventBatch,
   type CoreState,
-  normalizeContextBirthEvents,
   normalizeControlEvent,
 } from "./core-processor.ts";
 import { Stream } from "./stream.ts";
@@ -124,61 +123,6 @@ test.for([
   "%s is the platform's own record: the append boundary refuses it",
   ([type, payload]) => {
     expect(() => normalizeControlEvent({ type, payload }, "/")).toThrow(/platform's own record/);
-  },
-);
-
-test.for([
-  {
-    name: "the platform hook's row: its target stored parsed, as an append stores it",
-    events: [
-      {
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: {
-          name: "platform",
-          target: "itx.builtins.platformHook.deliverEvent",
-          afterOffset: 0,
-          ordered: false,
-        },
-      },
-    ],
-    becomes: [
-      {
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: {
-          name: "platform",
-          target: ["itx", "builtins", "platformHook", "deliverEvent"],
-          afterOffset: 0,
-          ordered: false,
-        },
-      },
-    ],
-  },
-  {
-    name: "an ordinary event of the project's own, as it is",
-    events: [{ type: "events.garple.com/shop/opened", payload: {} }],
-    becomes: [{ type: "events.garple.com/shop/opened", payload: {} }],
-  },
-  {
-    name: "a platform-only record is refused, naming its entry",
-    events: [{ type: "test/fine" }, { type: "events.iterate.com/itx/woken" }],
-    throws:
-      /^APP_CONFIG contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
-  },
-  {
-    name: "a subscription whose target does not parse is refused, naming its entry",
-    events: [
-      {
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: { name: "config", target: "itx.config(" },
-      },
-    ],
-    throws: /^APP_CONFIG contextBirthEvents\[0\]:/,
-  },
-] satisfies { name: string; events: StreamEventInput[]; becomes?: unknown; throws?: RegExp }[])(
-  "normalizeContextBirthEvents: $name",
-  ({ events, becomes, throws }) => {
-    if (throws) expect(() => normalizeContextBirthEvents(events)).toThrow(throws);
-    else expect(normalizeContextBirthEvents(events)).toEqual(becomes);
   },
 );
 

@@ -1795,6 +1795,28 @@ test("fan-out: an eviction mid-call with no later commit — the leases written 
   }
 });
 
+test("fan-out: a restart onto another deploy mid-call is no death: the leases another deploy left are plain retries, sent together when due, none a suspect", async () => {
+  const first = fanOutRig({ behave: () => "park" });
+  first.pings(1, 2, 3);
+  await drainDeliveries();
+  const [lease] = first.records();
+  const second = fanOutRig({
+    previous: first,
+    behave: () => "ack",
+    options: { deployId: "the next deploy" },
+  });
+  expect(second.records().map(({ leased }) => leased)).toEqual([false, false, false]);
+  vi.useFakeTimers({ now: lease!.nextAttemptAtMs! + 1, toFake: ["Date"] });
+  try {
+    void second.pass();
+    await drainDeliveries();
+    expect(second).toMatchObject({ calls: [1, 2, 3], acked: [1, 2, 3] });
+    expect(second.records()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("fan-out: an event that kills its caller mid-call is charged every death and dead-lettered unsent after fifteen; the event beside it, delivered as a suspect of its own, is charged none of them", async () => {
   let rig = fanOutRig({ behave: () => "park" });
   rig.pings(1, 2);
@@ -2009,44 +2031,6 @@ test("fan-out: a re-point while the context slept is seen by its next incarnatio
   expect(next.records()).toEqual([]);
 });
 
-test("fan-out: a webhook row's pending retry stays on its rung when its target resolves elsewhere — a config commit re-points no receiver", async () => {
-  let publication = 1;
-  const rig = incarnation(
-    (printed) =>
-      printed.startsWith("itx.webhooks")
-        ? {
-            deliverEvent: async () => {
-              throw new Error("webhook https://hooks.test/in answered 500");
-            },
-          }
-        : undefined,
-    undefined,
-    { validForMs: 20, routeOf: (printed) => `${printed}@${publication}` },
-  );
-  rig.stream.append(
-    normalizeControlEvent(
-      {
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: {
-          name: "hook",
-          target: "itx.webhooks.get({ url: 'https://hooks.test/in' }).deliverEvent",
-          ordered: false,
-        },
-      },
-      "/",
-    ),
-  );
-  rig.stream.append({ type: "demo/ping", payload: {} });
-  await drainDeliveries();
-  const pending = rig.stream.storage.listSubscriptionDeliveries();
-  expect(pending).toHaveLength(1);
-  publication = 2;
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  rig.stream.append({ type: "demo/ping", payload: {} });
-  await drainDeliveries();
-  expect(rig.stream.storage.listSubscriptionDeliveries()[0]).toEqual(pending[0]);
-});
-
 test("fan-out: a row whose target resolves to nothing waits — no attempt spent — and the commit that lands its rule delivers what waited", async () => {
   let provided = false;
   const rig = fanOutRig({ behave: () => "ack", provided: () => provided });
@@ -2144,8 +2128,7 @@ test("fan-out: a dangling row whose refusal no snapshot bounds (`validUntil` Inf
   expect(Number.isFinite(probe!.at)).toBe(true);
 });
 
-test("fan-out, the loop rule: a `*` row never takes a dead letter, ephemerals or another row's; a row naming the dead letter takes it, and a dead letter it fails for good is dropped, never dead-lettered again", async () => {
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+test("fan-out, the loop rule: a fan-out row never takes a dead letter or an ephemeral — through `*` or naming it — and a resume of a dead letter delivers nothing", async () => {
   const everything: string[] = [];
   const alerts: string[] = [];
   const rig = incarnation((printed) =>
@@ -2188,10 +2171,19 @@ test("fan-out, the loop rule: a `*` row never takes a dead letter, ephemerals or
     "events.iterate.com/itx/subscription-configured",
     "demo/poison",
   ]);
-  expect(alerts).toEqual(["events.iterate.com/itx/subscription-delivery-failed"]);
-  expect(warn).toHaveBeenCalledWith(
-    expect.objectContaining({ event: "delivery.fan-out.outcome-dropped", name: "alerts" }),
+  expect(alerts).toEqual([]);
+  // an operator's resume naming the dead letter itself delivers nothing
+  rig.stream.append(
+    normalizeControlEvent(
+      {
+        type: "events.iterate.com/itx/subscription-delivery-resumed",
+        payload: { name: "alerts", offset: deadLetters[0]!.offset },
+      },
+      "/",
+    ),
   );
+  await drainDeliveries();
+  expect(alerts).toEqual([]);
 });
 
 // STORAGE WRITES PER DELIVERED EVENT, pinned: each admission turn is ONE transaction — its events'
@@ -2692,6 +2684,7 @@ function incarnation(
     refusedForMs,
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
+    deployId,
   }: {
     /** How long an evaluation may be reused: the lifetime of the snapshot it was read through. */
     validForMs?: number;
@@ -2703,6 +2696,8 @@ function incarnation(
     wake?: Wake;
     /** What the context is born with (app-config.ts `contextBirthEvents`). */
     birthEvents?: StreamEventInput[];
+    /** The deploy this incarnation runs as (a lease names it). */
+    deployId?: string;
   } = {},
 ) {
   const alarms: number[] = [];
@@ -2723,6 +2718,7 @@ function incarnation(
     path: "/",
     projectId: "prj_delivery",
     birthEvents,
+    deployId,
     cause: () => causes.getStore(),
     onCommit: (fresh, after, through) => {
       delivery.onCommit(fresh, after, through);

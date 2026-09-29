@@ -12,7 +12,6 @@ import {
   type LibraryItx,
   type LibraryRoots,
   executeScript,
-  publicationOf,
   requestScriptRun,
   runScriptModule,
   runSettlementOf,
@@ -195,7 +194,7 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone, with a callWithCause of its own", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
@@ -203,10 +202,11 @@ test("run: the source: package.json naming worker.js its main, the script splice
     "const script =\nasync (itx) => (await itx.whoami()).path\n;",
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
-  expect(module["worker.js"]).toContain("async run(cause) {");
   expect(module["worker.js"]).toContain(
-    "return await door.run(cause, () => withItx(this.env.ITX, async (itx) => {",
+    "callWithCause(cause) {\n    return carrier.run(cause, () => this.run());\n  }",
   );
+  expect(module["worker.js"]).toContain("async run() {");
+  expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
   expect(module["worker.js"]).toContain("script(itx),");
   expect(module["worker.js"]).not.toContain("ITX.get()");
   expect(module["package.json"]).toBe('{"main":"worker.js"}');
@@ -299,11 +299,16 @@ test("run: the module's run() releases a handle the script awaited, and the call
   expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
-test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with the script's cause alone", async () => {
+test("run: the module's callWithCause runs the script under the cause it is handed: its one withItx round trip names it", async () => {
+  const { callWithCause, causes } = await loadedRun("async () => 1");
+  const cause = { chain: "a request's chain", depth: 3 };
+  expect(await callWithCause(cause)).toBe(1);
+  expect(causes).toEqual([cause]);
+});
+
+test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with nothing: the cause is the call's", async () => {
   const { itx, loaded, runs } = host();
-  await expect(
-    executeScript(itx, "async (itx) => 1", { chain: "a request's chain", depth: 3 }),
-  ).resolves.toEqual({ calledWith: [{ chain: "a request's chain", depth: 3 }] });
+  await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: [] });
   expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
   expect(runs()).toBe(1);
 });
@@ -1156,148 +1161,6 @@ test("entities: the typed append validates by the contract and appends any of it
   ]);
 });
 
-// ── the publication ── `waitForPublication(commitOid)` answers from the project's state on `/`:
-// published, owed (the wait goes on), or not published and why.
-
-const C = "c".repeat(40);
-const D = "d".repeat(40);
-const modules = { "worker.ts": { identity: "i", classes: [] } };
-const unpublished = { configRepoTip: null, publishedThrough: null, published: null, refused: null };
-
-test.for([
-  {
-    name: "the published config is the commit: published, whatever generation published it",
-    state: { ...unpublished, published: { commitOid: C, generation: 5, modules } },
-    at: { status: "published", generation: 5 },
-  },
-  {
-    name: "the commit is main's head, not yet published through its fact: owed, as its generation",
-    state: { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 },
-    at: { status: "owed", generation: 7 },
-  },
-  {
-    name: "its generation was refused: why",
-    state: {
-      ...unpublished,
-      configRepoTip: { commitOid: C, offset: 7 },
-      publishedThrough: 7,
-      refused: { commitOid: C, generation: 7, error: "worker.ts is no IterateConfigEntrypoint" },
-    },
-    at: { status: "not-published", why: "worker.ts is no IterateConfigEntrypoint" },
-  },
-  {
-    name: "its generation published a later head: that head",
-    state: {
-      ...unpublished,
-      configRepoTip: { commitOid: C, offset: 7 },
-      publishedThrough: 7,
-      published: { commitOid: D, generation: 7, modules },
-    },
-    at: { status: "not-published", why: `main moved on to ${D}, which was published in its place` },
-  },
-  {
-    name: "its generation refused a later head: that head and why",
-    state: {
-      ...unpublished,
-      configRepoTip: { commitOid: C, offset: 7 },
-      publishedThrough: 7,
-      refused: { commitOid: D, generation: 7, error: "boom" },
-    },
-    at: {
-      status: "not-published",
-      why: `main moved on to ${D}, whose publication failed: boom`,
-    },
-  },
-  {
-    name: "another commit is main's head: only the head is published",
-    state: { ...unpublished, configRepoTip: { commitOid: D, offset: 9 } },
-    at: {
-      status: "not-published",
-      why: `main's head is ${D}, and only the head is published`,
-    },
-  },
-] as const)("publication: $name", ({ state, at }) => {
-  expect(publicationOf(state, C)).toEqual(at);
-});
-
-test("publication: waitForPublication reads the project's state through the head as it is, then through each publication fact until the commit is published", async () => {
-  const { handle, steps } = publicationRoot(
-    [
-      { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 },
-      { ...unpublished, published: { commitOid: C, generation: 7, modules } },
-    ],
-    [{ offset: 12, payload: { commitOid: C, generation: 7 } }],
-  );
-  await expect(handle.waitForPublication(C)).resolves.toEqual({ commitOid: C, generation: 7 });
-  expect(steps).toEqual([
-    [["readEvents", Number.MAX_SAFE_INTEGER, 1]],
-    ["facets", ["get", "project"], ["waitUntilProcessed", expect.objectContaining({ offset: 10 })]],
-    ["facets", ["get", "project"], ["snapshot"]],
-    [["waitForEvent", expect.objectContaining({ afterOffset: 10 })]],
-    ["facets", ["get", "project"], ["waitUntilProcessed", expect.objectContaining({ offset: 12 })]],
-    ["facets", ["get", "project"], ["snapshot"]],
-  ]);
-});
-
-test("publication: waitForPublication throws why a commit is not published — a refusal, or the platform giving up on its generation for now — and waits on no repo but the config repo", async () => {
-  const refused = publicationRoot([
-    {
-      ...unpublished,
-      configRepoTip: { commitOid: C, offset: 7 },
-      publishedThrough: 7,
-      refused: { commitOid: C, generation: 7, error: "worker.ts is no IterateConfigEntrypoint" },
-    },
-  ]);
-  await expect(refused.handle.waitForPublication(C)).rejects.toThrow(
-    `commit ${C} of /repos/config is not published: worker.ts is no IterateConfigEntrypoint`,
-  );
-  const owed = { ...unpublished, configRepoTip: { commitOid: C, offset: 7 }, publishedThrough: 5 };
-  const gaveUp = publicationRoot(
-    [owed],
-    [
-      {
-        offset: 11,
-        type: "events.iterate.com/project/worker-update-failed",
-        payload: { commitOid: C, generation: 7, error: "esm.sh", unavailable: true },
-      },
-    ],
-  );
-  await expect(gaveUp.handle.waitForPublication(C)).rejects.toThrow(
-    /could not finish its publication for now \(esm\.sh\), and publishes it later/,
-  );
-  await expect(
-    publicationRoot([owed], [], "/repos/other").handle.waitForPublication(C),
-  ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-});
-
-/** `repos.get(path)` over a fake root at head 10 whose project facet answers `states` in order, and
- *  whose `waitForEvent` answers `facts` in order (a `worker-updated` unless typed); `steps` is every
- *  call it took. */
-function publicationRoot(
-  states: object[],
-  facts: { offset: number; type?: string; payload: object }[] = [],
-  path = "/repos/config",
-) {
-  const steps: unknown[] = [];
-  const root = {
-    invoke: async (called: unknown[]) => {
-      steps.push(called);
-      const [first, , third] = called as [unknown, unknown, unknown[]?];
-      if (Array.isArray(first) && first[0] === "readEvents") return { scannedThroughOffset: 10 };
-      if (Array.isArray(first) && first[0] === "waitForEvent") {
-        const fact = facts.shift();
-        if (!fact) throw new Error("no publication fact");
-        return { type: "events.iterate.com/project/worker-updated", ...fact };
-      }
-      if (third?.[0] === "snapshot") return { offset: 10, state: states.shift() };
-      return undefined; // waitUntilProcessed
-    },
-  };
-  const itx = fakeItx({ builtins: { cd: async () => root } });
-  const { roots } = buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" });
-  return { handle: roots.repos.get(path), steps };
-}
-
 class RemotesApi extends RpcTarget {
   hello() {
     return "hi";
@@ -1369,7 +1232,7 @@ function host(): {
       return {
         run: async (...args: unknown[]) => {
           ran += 1;
-          return { calledWith: args }; // run() is called with its cause alone
+          return { calledWith: args };
         },
       };
     },
@@ -1424,7 +1287,12 @@ function contextLog(settlements: (StreamEvent | "timeout")[]) {
 async function loadedRun(
   script: string,
   itx: object = {},
-): Promise<{ run: () => Promise<unknown>; disposals: () => number }> {
+): Promise<{
+  run: () => Promise<unknown>;
+  callWithCause: (cause: unknown) => Promise<unknown>;
+  causes: unknown[];
+  disposals: () => number;
+}> {
   let disposals = 0;
   const module = runScriptModule(script);
   (globalThis as { withItxForLoadedRun?: unknown }).withItxForLoadedRun =
@@ -1448,8 +1316,18 @@ async function loadedRun(
       disposeScope?.();
     },
   });
-  const entrypoint = new Entrypoint({}, { ITX: { get: () => scope } });
-  return { run: () => entrypoint.run(), disposals: () => disposals };
+  const causes: unknown[] = [];
+  const get = (cause: unknown) => {
+    causes.push(cause);
+    return scope;
+  };
+  const entrypoint = new Entrypoint({}, { ITX: { get } });
+  return {
+    run: () => entrypoint.run(),
+    callWithCause: (cause) => entrypoint.callWithCause(cause, [["run"]]),
+    causes,
+    disposals: () => disposals,
+  };
 }
 
 /** A value carrying a disposer, as a Workers-RPC result or stub does; `releases()` counts calls. */

@@ -110,10 +110,9 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
         contexts: {},
         secrets: {},
         configRepoTip: null,
-        publishedThrough: null,
+        unpublishedCommits: [],
         lastPublicationFactOffset: null,
-        published: null,
-        refused: null,
+        publishedCommit: null,
         hostnames: {},
         integrations: {},
         primaryHostname: null,
@@ -722,14 +721,14 @@ test("a claim on the ladder of failed revives keeps its backoff across a birth",
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   // A claim put back after a revive threw once (FacetHost `reviveDueClaims`), as its rows stand.
   await runInDurableObject(stub(ctx), (_instance, state) => {
-    state.storage.kv.put("facet-claim:repo", at);
+    state.storage.kv.put("facet-claim:repo", { at });
     state.storage.kv.put("facet-claim-failures:repo", 1);
   });
   await evictDurableObject(stub(ctx));
 
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   await runDurableObjectAlarm(stub(ctx)); // whatever the birth armed: the claim is not due
-  expect(await kv(ctx, "facet-claim:repo")).toBe(at);
+  expect(await kv(ctx, "facet-claim:repo")).toEqual({ at });
 });
 
 test("a loaded facet's claim keeps its time across a birth: its author's revive-by, never sooner", async () => {
@@ -743,7 +742,7 @@ test("a loaded facet's claim keeps its time across a birth: its author's revive-
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   await runDurableObjectAlarm(stub(ctx));
   expect(await probe(ctx)).toMatchObject({ revives: [] });
-  expect(await kv(ctx, "facet-claim:counter")).toBe(at);
+  expect(await kv(ctx, "facet-claim:counter")).toMatchObject({ at });
 });
 
 // ── the platform's facet-start defect ──

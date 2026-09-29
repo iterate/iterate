@@ -21,7 +21,7 @@
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
 import { z } from "zod";
-import { codedError, resolveContextPath } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER, loopLimitOf, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
@@ -30,19 +30,10 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
-  parse,
 } from "iterate/expression";
 import type { FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
-import {
-  ITERATE_CAUSE_HEADER,
-  LOOP_LIMIT_HEADER,
-  newChain,
-  parseCause,
-  recordRefusal,
-  type Cause,
-} from "./cause.ts";
+import { newChain, parseCause, type Cause } from "./cause.ts";
 import {
   itxAnswerDetachedFromSession,
   materializeItxHandleReference,
@@ -54,6 +45,7 @@ import type { IterateContextDurableObject, Env } from "./iterate-context-durable
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
+  parseFetchExpression,
   itxExpressionEndingInFetch,
   stampCallerHeaders,
   terminalFetchOf,
@@ -157,7 +149,6 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #statelessResolverOf:
     | ((address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver)
     | undefined;
-  #statelessResolver: ItxExpressionResolver | undefined;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -176,15 +167,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#waitUntil = waitUntil;
     this.#caller = caller;
     this.#statelessResolverOf = statelessResolverOf;
-  }
-
-  /** This handle's stateless resolver, built on first use (`#statelessResolverOf`). */
-  get #resolver(): ItxExpressionResolver | undefined {
-    if (!this.#statelessResolverOf) return undefined;
-    return (this.#statelessResolver ||= this.#statelessResolverOf(
-      this.#durableObjectAddress,
-      this.#caller,
-    ));
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -284,24 +266,15 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  (context/stateless-context.ts), whose own dispatch picks the fetch channel for a terminal
    *  fetch. */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
-    try {
-      const answer = await this.#dispatch(call, args);
-      // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
-      if (answer instanceof Response && answer.headers.has(LOOP_LIMIT_HEADER))
-        throw codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
-      return answer;
-    } catch (error) {
-      recordRefusal(error, this.#recordLoopLimit); // an act refused in this call, statelessly
-      throw error;
-    }
+    const answer = await this.#dispatch(call, args);
+    // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
+    const refused = answer instanceof Response ? await loopLimitOf(answer) : undefined;
+    if (refused) throw refused;
+    return answer;
   }
 
-  /** Where a refusal met in this handle's calls is recorded: its context's one fact (cause.ts). */
-  readonly #recordLoopLimit = (cause: Cause, message: string) =>
-    this.#waitUntil(this.#durableObject.recordLoopLimit(cause, message));
-
   async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {
-    const resolver = this.#resolver;
+    const resolver = this.#statelessResolverOf?.(this.#durableObjectAddress, this.#caller);
     const itxExpression = normalizedItxExpression(call);
     const terminalFetch = terminalFetchOf(itxExpression, args);
     if (resolver && terminalFetch)
@@ -310,7 +283,6 @@ export class IterateContextRpcTarget extends RpcTarget {
         () => terminalFetch.steps,
         terminalFetch.request,
         encodeFetchExpression(terminalFetch.steps),
-        this.#recordLoopLimit,
       );
     if (resolver) {
       const result = await resolver.invoke(itxExpression, ...args);
@@ -635,54 +607,42 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       (p) => this.ctx.waitUntil(p),
       this.#caller(address, parseCause(cause)),
       false,
-      (at, caller) => this.#statelessResolverOf(at, caller),
+      (at, caller) =>
+        statelessResolverFor({
+          env: this.env,
+          namespace: this.env.ITERATE_CONTEXT,
+          address: at,
+          caller,
+          ctx: this.ctx,
+        }),
     );
   }
 
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a
    *  fetch it addressed itself with `x-itx-expression` — is one terminal-fetch call through the
    *  stateless resolver, run as the context's own expression fetch would run it: the headers it
-   *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). What
-   *  names no expression — the platform's bare egress (a first-party facet's raw `fetch(url)`) —
-   *  or the project's ingress (`""`) is the context's own `fetch`. */
+   *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). */
   override async fetch(request: Request): Promise<Response> {
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     // why, as the loaded code's `fetch` said it (cause.ts)
     const caller = this.#caller(address, parseCause(request.headers.get(ITERATE_CAUSE_HEADER)));
-    // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
-    // table (no `itx.fetch` row below the owner root, no egress).
-    const expressionHeader =
-      request.headers.get(ITX_EXPRESSION_FETCH_HEADER) ?? (caller.app ? "itx.fetch" : null);
-    if (!expressionHeader) {
-      // A loaded worker speaks for the project, never for a person: every caller stamp is the
-      // edge's (worker.ts, iterate-context.ts), stripped so loaded code cannot forge one, and the
-      // routing slug is the edge's alone.
-      const headers = new Headers(request.headers);
-      headers.delete(ITERATE_ROUTING_SLUG_HEADER);
-      stampCallerHeaders(headers, {
-        principal: null,
-        cause: caller.cause,
-        ...(caller.app && { app: true as const }),
-      });
-      return this.env.ITERATE_CONTEXT.getByName(address.name).fetch(
-        new Request(request, { headers }),
-      );
-    }
+    // A raw `fetch(url)` IS `itx.fetch(request)` at its context: loaded code's through the table (no
+    // `itx.fetch` row below the owner root, no egress), the platform's (a first-party facet's) its
+    // own egress.
+    const expression =
+      request.headers.get(ITX_EXPRESSION_FETCH_HEADER) ??
+      (caller.app ? "itx.fetch" : "itx.builtins.fetch");
     return statelessExpressionFetch(
-      this.#statelessResolverOf(address, caller),
-      () =>
-        expressionHeader.trimStart().startsWith("[")
-          ? // Untrusted: the resolver's `normalizedItxExpression` shape-checks it, and the app
-            // wall admits it, before anything runs (as the context's own expression fetch).
-            (JSON.parse(expressionHeader) as ItxExpression)
-          : parse(expressionHeader),
+      statelessResolverFor({
+        env: this.env,
+        namespace: this.env.ITERATE_CONTEXT,
+        address,
+        caller,
+        ctx: this.ctx,
+      }),
+      () => parseFetchExpression(expression),
       request,
-      expressionHeader,
-      // an act the loaded code's fetch was refused, recorded at its context (cause.ts)
-      (cause, message) =>
-        this.ctx.waitUntil(
-          this.env.ITERATE_CONTEXT.getByName(address.name).recordLoopLimit(cause, message),
-        ),
+      expression,
     );
   }
 
@@ -697,17 +657,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       cause: cause || newChain("loaded code"),
       ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
     };
-  }
-
-  /** The stateless resolver of the context at `address` for `caller` (context/stateless-context.ts). */
-  #statelessResolverOf(address: DurableObjectAddress, caller: Caller) {
-    return statelessResolverFor({
-      env: this.env,
-      namespace: this.env.ITERATE_CONTEXT,
-      address,
-      caller,
-      ctx: this.ctx,
-    });
   }
 }
 
@@ -724,13 +673,9 @@ export async function statelessExpressionFetch(
   steps: () => ItxExpression,
   request: Request,
   label: string,
-  /** Where an act refused past the loop limit is recorded (cause.ts `recordRefusal`). */
-  recordLoopLimit?: (cause: Cause, message: string) => void,
 ): Promise<Response> {
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, null);
-  headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-  headers.delete(ITERATE_ROUTING_SLUG_HEADER);
   try {
     const result = await resolver.invoke(
       itxExpressionEndingInFetch(steps()),
@@ -740,7 +685,6 @@ export async function statelessExpressionFetch(
       ? result
       : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
   } catch (error) {
-    if (recordLoopLimit) recordRefusal(error, recordLoopLimit);
     return expressionFetchErrorAnswer(error, label);
   }
 }

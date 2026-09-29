@@ -61,7 +61,11 @@ test("KILLED MID-CALL, THE REQUEST CONTINUES: the context dies with the model ca
   // claim — a kv row — and the alarm derived from it. No schedule, no event: nothing in the log.
   expect(await s.invoke("itx.schedules.list()")).toEqual([]);
   expect(
-    await runInDurableObject(s, (_i, state) => state.storage.kv.get("facet-claim:agent")),
+    (
+      await runInDurableObject(s, (_i, state) =>
+        state.storage.kv.get<{ at: number }>("facet-claim:agent"),
+      )
+    )?.at,
   ).toBeGreaterThan(Date.now());
   expect(await owedAlarmOf(s)).not.toBeNull();
 

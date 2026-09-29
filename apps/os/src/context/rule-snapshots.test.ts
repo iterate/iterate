@@ -11,7 +11,12 @@ import {
   rulesChangeNeedsCommitWait,
   type ItxExpressionRewriteRule,
 } from "./itx-expression-rewriting.ts";
-import { RuleSnapshotCache, SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./rule-snapshots.ts";
+import {
+  MAX_HELD_SNAPSHOTS,
+  RuleSnapshotCache,
+  SNAPSHOT_TTL_MS,
+  type RulesSnapshotAnswer,
+} from "./rule-snapshots.ts";
 
 test("a snapshot is read once and used until SNAPSHOT_TTL_MS after its read was sent; then re-read conditionally, an unchanged table answering its version alone", async () => {
   const { cache, clock, owner } = setup();
@@ -77,12 +82,11 @@ test("an owner whose snapshots keep arriving expired is UNAVAILABLE after three 
 });
 
 test("the cache keeps at most its cap of contexts, the oldest read out first: an evicted context is read again, unconditionally", async () => {
-  const { clock, owner } = setup();
-  const cache = new RuleSnapshotCache({ now: () => clock.now, maxEntries: 2 });
-  for (const name of ["/a", "/b", "/c"]) await cache.get(name, owner.read);
-  await cache.get("/b", owner.read); // still held
-  await cache.get("/a", owner.read); // evicted by /c
-  expect(owner).toMatchObject({ reads: [undefined, undefined, undefined, undefined] });
+  const { cache, owner } = setup();
+  for (let n = 0; n <= MAX_HELD_SNAPSHOTS; n++) await cache.get(`/${n}`, owner.read);
+  await cache.get("/1", owner.read); // still held
+  await cache.get("/0", owner.read); // evicted by the last
+  expect(owner).toMatchObject({ reads: Array(MAX_HELD_SNAPSHOTS + 2).fill(undefined) });
 });
 
 test("a read that fails is not kept: the next resolution reads again", async () => {

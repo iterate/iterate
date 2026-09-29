@@ -16,12 +16,9 @@
 // failure that stands marks the id dead.
 import type { ItxExpression } from "iterate/expression";
 import { expect, test, vi } from "vitest";
+import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./paths.ts";
-import {
-  assertFacetSourceWithinCeiling,
-  FACET_SOURCE_MAX_CHARS,
-  prepareConfinedWorker,
-} from "./worker-loader.ts";
+import { assertFacetSourceWithinCeiling, prepareConfinedWorker } from "./worker-loader.ts";
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
@@ -491,7 +488,7 @@ test("prepare resolves the identity without asking the loader; load() is the one
 test("a facet's literal source over the ceiling is refused, coded; a producer expression is never measured", () => {
   const big = {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": "x".repeat(FACET_SOURCE_MAX_CHARS + 1),
+    "worker.js": "x".repeat(SOURCE_MAX_CHARS + 1),
   };
   expect(() =>
     assertFacetSourceWithinCeiling({ source: big, className: "W" }, 'facet "w"'),

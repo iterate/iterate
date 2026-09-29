@@ -39,13 +39,10 @@ import {
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Cause } from "../cause.ts";
-import {
-  refusePlatformFacts,
-  refusePlatformIdempotencyKeys,
-  stampCaller,
-  type Caller,
-} from "../caller.ts";
+import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { Kept } from "../kept.ts";
+import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -88,9 +85,15 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
-import { hostedFacetMarkerOf } from "../stream/core-processor.ts";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
+import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
+import {
+  FacetHandle,
+  isMissingRpcMethod,
+  RpcStubHandle,
+  materializeItxHandleReference,
+} from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
+import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -98,12 +101,11 @@ import {
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
-import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
-  facetSpecOf,
   isWorkerModules,
   namedWorkerLoad,
   prepareConfinedWorker,
@@ -419,12 +421,12 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE PLATFORM HOOK (platform-hook.ts): the platform's own subscriber, that a deployment's birth
    *  events point a fan-out row at (`itx.builtins.platformHook.deliverEvent`). `deliverEvent`
    *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to the platform's
-   *  code with the bindings every built-in holds. */
-  platformHook: IterateContextApi["platformHook"];
+   *  code with the bindings every built-in holds. Not in the published API: no one else calls it. */
+  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
    *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
-   *  The signing key is read from the secret's context at most once per WEBHOOK_SIGNING_KEY_TTL_MS
-   *  per spec, never once per event. A context root: a row delivers from where its events happen. */
+   *  The signing key is read from the secret's context at most once per SNAPSHOT_TTL_MS per spec,
+   *  never once per event. A context root: a row delivers from where its events happen. */
   webhooks: IterateContextApi["webhooks"];
 }
 
@@ -439,13 +441,14 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-// THE PUBLISHED LIST: every built-in root is a root of iterate/api's `IterateContextApi`, and every
-// root declared there is a built-in but the edge's own verbs (iterate-context.ts `invoke`,
-// `subscribe`, `provide`) — a root published and never implemented, or implemented and never
-// published, fails to typecheck right here.
+// THE PUBLISHED LIST: every built-in root but the platform's own hook is a root of iterate/api's
+// `IterateContextApi`, and every root declared there is a built-in but the edge's own verbs
+// (iterate-context.ts `invoke`, `subscribe`, `provide`) — a root published and never implemented, or
+// implemented and never published, fails to typecheck right here.
 type EdgeOnlyRoot = "invoke" | "subscribe" | "provide";
-type RootsArePublished = [BuiltInRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
-  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [BuiltInRoot]
+type PublishedRoot = Exclude<BuiltInRoot, "platformHook">;
+type RootsArePublished = [PublishedRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
+  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [PublishedRoot]
     ? true
     : never
   : never;
@@ -515,9 +518,6 @@ const WebhookSpec = z.strictObject({
   signingSecret: z.string().transform(assertSecretPath).optional(),
 });
 
-/** How long a webhook's signing key is kept before it is read from its secret again: a key rotated
- *  there signs within this long, and the secret's context sees one read per window per spec. */
-const WEBHOOK_SIGNING_KEY_TTL_MS = 5_000;
 /** How long one webhook POST may take: under the delivery watchdog (20 s), so the request is
  *  cancelled — and its delivery settles — before the watchdog gives up on it. */
 const WEBHOOK_TIMEOUT_MS = 15_000;
@@ -598,6 +598,8 @@ export interface BuildBuiltInsDeps {
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
    *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
+  /** `call` through this context's own resolver under `caller` — a `cd` handle's way on. */
+  invokeAs: (caller: Caller, call: ItxExpression) => Promise<unknown>;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
@@ -650,12 +652,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  at, and the session's verified principal, or none. */
   const append = async (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // Loaded code can delegate its scope to descendants through durable rows; child code
-    // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app)
-      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
+    // Loaded code's rows are walled as they resolve here; the append boundary validates the rest.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
     refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
-    refusePlatformFacts(events, caller);
     // STABLE RETRY EFFECTS (cause.ts): during a delivery, an event without a key of its own is keyed
     // by the delivery, where it lands and what it is — the same on every attempt
     const writeKey = caller.cause?.writeKey;
@@ -867,20 +866,21 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** The platform's verbs (a lend's other side): no caller of theirs ever reaches them. */
   /** A webhook's SIGNING KEY, by secret and origin, read from the secret's own context — the
    *  platform's `clientSecretFor`, which answers only for an origin the secret is pinned to — and
-   *  kept WEBHOOK_SIGNING_KEY_TTL_MS: a row delivering 1,000 events a second reads it once per
-   *  window, not once per event. The read in flight is shared; a failed one is not kept. */
-  const webhookSigningKeys = new Map<string, { key: Promise<string>; readAt: number }>();
+   *  kept as long as a rule snapshot is (SNAPSHOT_TTL_MS, how long an isolate may act on a revoked
+   *  grant): a row delivering 1,000 events a second reads it once per window, not once per event.
+   *  The read in flight is what is kept, so it is shared; a failed one is not kept. */
+  const webhookSigningKeys = new Kept<Promise<string>>(SNAPSHOT_TTL_MS);
   const webhookSigningKey = (secretPath: string, origin: string): Promise<string> => {
     const cacheKey = `${secretPath} ${origin}`;
     const kept = webhookSigningKeys.get(cacheKey);
-    if (kept && Date.now() - kept.readAt < WEBHOOK_SIGNING_KEY_TTL_MS) return kept.key;
+    if (kept) return kept;
     const key = deps
       .context(resolveContextPath(owner.rootPath, `.${secretPath}`))
       .invoke(["itx", "builtins", "secrets", ["clientSecretFor", secretPath, { origin }]], [], {
         principal: null,
         platform: true,
       }) as Promise<string>; // the secret facet's own `clientSecretFor` answers the value, a string
-    webhookSigningKeys.set(cacheKey, { key, readAt: Date.now() });
+    webhookSigningKeys.set(cacheKey, key);
     key.catch(() => webhookSigningKeys.delete(cacheKey));
     return key;
   };
@@ -2068,6 +2068,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             throw new Error(
               `webhooks.get(spec).${print(methodSteps)}: a webhook answers deliverEvent(event) alone`,
             );
+          // Only the delivery loop's call passes `assertDeliveryCaller` below, and it hands the
+          // committed event it delivers.
           const [, event] = call as [string, StreamEvent];
           const body = JSON.stringify(event);
           await assertDeliveryCaller(
@@ -2101,6 +2103,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             redirect: "manual",
             signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
           });
+          // `itx.fetch` answers a Response (BuiltInScope `fetch`); `invoke` types every answer
+          // unknown.
           const response = (await ownContext().invoke(
             ["itx", "fetch"],
             [request],
@@ -2208,6 +2212,7 @@ type PortableBuiltInsDeps = Pick<
   | "context"
   | "egress"
   | "caller"
+  | "invokeAs"
   | "library"
 >;
 
@@ -2338,33 +2343,25 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
         );
       },
     },
-    // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
-    // hop, where the ambient store does not reach), so an event appended there is attributed too.
+    // A bare `cd` handle's calls are this context's resolver's, at the fixed point (so a jail's
+    // `itx ⇒ null` masks none of them): the one dispatch path, its hop and where each call runs.
     cd: (contextPath: string) => {
-      // Captured when the handle is MADE: a handle held by loaded code and called later runs as that
-      // code, never as whoever holds the store then. A relative path resolves against the caller's
-      // ORIGINATING context when the call rode a hop here (`repos.get('./x')` answered at the root is
-      // the caller's `./x`); a row's target should spell an absolute path.
-      const caller = deps.caller();
-      const base = caller.path || path;
-      return new InvokeHandle((itxExpressionSteps) => {
-        const siblingPath = resolveContextPath(base, contextPath);
-        // Global contexts are addressed by identity, never navigated through cd.
-        if (projectId === GLOBAL_PROJECT_ID)
-          throw codedError(
-            "FORBIDDEN",
-            "a global context is reached by identity (session.user, session.organizations), never by path",
-          );
-        // The caller crosses with the call — the sibling runs it under the same Caller, so an event
-        // appended there is attributed too — stamped with the context it originated at (once, at the
-        // first hop) so a relative path there still means the caller's.
-        return callContext(
-          () => deps.context(siblingPath),
-          ["itx", ...itxExpressionSteps],
-          [],
-          { ...caller, path: base },
-          siblingPath,
-          () => deps.caller().delivery,
+      // WHO crosses with the call is captured when the handle is MADE: a handle held by loaded code
+      // and called later runs as that code, never as whoever holds the store then — stamped with the
+      // context it originated at, so a relative path means the caller's (`repos.get('./x')`
+      // answered at the root is the caller's `./x`). Its delivery authority and cause are the
+      // call's, read as each call is made (`callContext`).
+      const made = deps.caller();
+      return new InvokeHandle((steps) => {
+        const now = deps.caller();
+        return deps.invokeAs(
+          {
+            ...made,
+            path: made.path || path,
+            delivery: now.delivery,
+            cause: now.cause || made.cause,
+          },
+          ["itx", "builtins", ["cd", contextPath], ...steps],
         );
       });
     },
@@ -2376,18 +2373,18 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   >;
 }
 
-/** A loaded worker's `method` called through the SDK's door (cause.ts), under `cause` — or, on an
- *  entrypoint that is no SDK host and so has no door, as it is. */
-async function callThroughDoor(
+/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
+ *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
+async function callWithItsCause(
   entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
   cause: Cause,
   method: string,
   args: unknown[],
 ): Promise<unknown> {
   try {
-    return await entrypoint.callWithCause!(cause, method, ...args);
+    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
   } catch (error) {
-    if (!String(error).includes('does not implement the method "callWithCause"')) throw error;
+    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
     return await entrypoint[method]!(...args);
   }
 }
@@ -2418,7 +2415,7 @@ export function workersRoot(deps: {
   /** The delivery authority of the call being made (caller.ts `Caller.delivery`), read as it is
    *  made: a context's Durable Object's ambient caller's; the stateless entrypoint has none. */
   delivery: () => string | undefined;
-  /** The cause of the call being made, which rides into the worker's doors (cause.ts). */
+  /** The cause of the call being made, which the worker's code runs under (cause.ts). */
   cause: () => Cause | undefined;
   /** The worker a source expression with no cacheKey NAMES, resolved from the context `workers`
    *  speaks for, as a facet's is (facet-host.ts `FacetHostDeps.namedWorker`). */
@@ -2435,15 +2432,18 @@ export function workersRoot(deps: {
           );
         const [method, ...callArgs] = call;
         if (method === "callWithCause")
-          throw codedError("NOT_A_METHOD", "workers.get(spec).callWithCause: the platform's door");
-        // The cause rides into the SDK's doors (cause.ts): on the Request, beside the event, or
-        // through the door any other method rides. A loaded worker's `fetch` reads who is asking
-        // off its Request (iterate/principal): the call's own caller, stamped here — never what the
-        // Request says, which `fetch(url, { headers })` would let the code that called it write.
+          throw codedError(
+            "NOT_A_METHOD",
+            "workers.get(spec).callWithCause: only the platform calls it",
+          );
+        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // which every other method is called through. A loaded worker's `fetch` reads who is
+        // asking off its Request (iterate/principal): the call's own caller, stamped here — never
+        // what the Request says, which `fetch(url, { headers })` would let the code that called it
+        // write.
         const cause = deps.cause();
         const args =
           method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
-        if (method === "deliverEvent") args[1] = cause;
         // A handler's one-event hooks are the delivery loop's to call, as a subscriber's
         // `deliverEvent` is (an IterateConfigEntrypoint's `processEvent` among them).
         if (method === "deliverEvent" || method === "processEvent")
@@ -2458,21 +2458,17 @@ export function workersRoot(deps: {
         // A source expression with no cacheKey NAMES a worker (iterate/api `workers.get`): the code
         // that rule's spec loads, `mainModule` under its published identity — resolved as the call
         // is, so the call after a publication runs the new code.
-        const named =
-          spec.cacheKey || isWorkerModules(spec.source)
-            ? undefined
-            : await deps.namedWorker(spec.source);
+        const named = namesAWorker(spec) ? await deps.namedWorker(spec.source) : undefined;
         const worker = named
           ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };
         // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
         // names: a cached entry that answers V8's clone-version text answers it to every call
-        // under that loader id, and `itx.abort()` does not change the id (prd, garple.com,
-        // 2026-09-24 20:47Z: every page 500 until a redeploy). A call that meets it retires the
-        // identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is replayed on it
-        // once only when a replay cannot do anything twice: a GET or HEAD with no body. A request
-        // body may have been read and an RPC method may have run, so those still fail, and the
-        // next call heals.
+        // under that loader id, and `itx.abort()` does not change the id. A call that meets it
+        // retires the identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is
+        // replayed on it once only when a replay cannot do anything twice: a GET or HEAD with no
+        // body. A request body may have been read and an RPC method may have run, so those still
+        // fail, and the call after them loads fresh.
         const isCloneVersionFailure = (error: unknown): error is Error =>
           error instanceof Error && error.message.includes("Unable to deserialize cloned data");
         const attempt = async () => {
@@ -2499,25 +2495,20 @@ export function workersRoot(deps: {
             const fn = entrypoint[method];
             if (typeof fn !== "function")
               throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-            if (method !== "deliverEvent" && method !== "fetch" && cause)
-              return await callThroughDoor(entrypoint, cause, method, args);
-            if (method !== "deliverEvent") return await Reflect.apply(fn, entrypoint, args);
+            const called =
+              method === "fetch" || !cause
+                ? Reflect.apply(fn, entrypoint, args)
+                : callWithItsCause(entrypoint, cause, method, args);
+            if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the
             // row's, which those codes dangle or halt (subscription-delivery.ts `#fanOutFailed`).
-            return await (Reflect.apply(fn, entrypoint, args) as Promise<unknown>).catch(
-              (error: unknown) => {
-                const code = errorCode(error);
-                if (
-                  code === "NO_ITX_EXPRESSION_MATCH" ||
-                  code === "NOT_A_METHOD" ||
-                  code === "FORBIDDEN" ||
-                  code === "GONE"
-                )
-                  throw new Error((error as Error).message);
-                throw error;
-              },
-            );
+            return await called.catch((error: unknown) => {
+              const code = errorCode(error);
+              if (code && TARGET_FAILURE_CODES.has(code))
+                throw new Error(error instanceof Error ? error.message : String(error));
+              throw error;
+            });
           } catch (error) {
             if (isCloneVersionFailure(error)) retire();
             throw error;
@@ -2548,7 +2539,7 @@ export function workersRoot(deps: {
 }
 
 /** `fetch`'s arguments — a Request, or a URL and its init — as one Request whose caller stamps are
- *  `caller`'s identity alone and the call's `cause`, our mark for the SDK's request door
+ *  `caller`'s identity alone and the call's `cause`, our mark, which the SDK runs its `fetch` under
  *  (rpc-stubs.ts `stampCallerHeaders`), with no expression, and — for loaded code, never the edge —
  *  no routing slug: the host a request arrived on is the edge's word (worker.ts). */
 function callerStampedRequest(
@@ -2560,7 +2551,6 @@ function callerStampedRequest(
   const request = new Request(input as RequestInfo, init as RequestInit | undefined);
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, { principal: caller.principal, grant: caller.grant, cause });
-  headers.delete(ITX_EXPRESSION_FETCH_HEADER);
   if (caller.app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
   return new Request(request, { headers });
 }
@@ -2569,8 +2559,7 @@ function callerStampedRequest(
  *  `caller`, which resolves it with its live table. Its delivery authority (caller.ts
  *  `Caller.delivery`) is the CALL's, read from `delivery` as each call is made — this one and each
  *  on a handle it answers — never the one `caller` carried: the delivery loop evaluates a target
- *  without it and reuses the handle it answered, and only the call that delivers the log's event
- *  carries it. No `delivery` (the stateless entrypoint's hops, loaded code's): none. A call whose terminal step is `fetch(request)`
+ *  without it and reuses the handle. A call whose terminal step is `fetch(request)`
  *  rides the context's native fetch with the expression in `x-itx-expression` — a socket-bearing
  *  Response crosses a native fetch, never Workers RPC (context/rpc-stubs.ts doctrine, point 4). A
  *  Request that cannot do anything twice — a GET or HEAD with no body, never an upgrade — that a

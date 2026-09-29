@@ -1,27 +1,37 @@
-// __workers-tests__/platform-facts.test.ts — ONLY THE PLATFORM APPENDS ITS FACTS (caller.ts
-// `PLATFORM_FACT_TYPES`): a person's append of one, loaded code's, or a schedule set to append one
-// is FORBIDDEN at the append boundary, so a reader — a config repo's `processEvent` — trusts such
-// an event by its type alone. The platform's own lands, stamped `source.platform`.
+// __workers-tests__/platform-facts.test.ts — ONLY THE PLATFORM WRITES ITS OWN (caller.ts
+// `refuseNonPlatformWrites`, whose unit table owns the list): a platform fact and a row on the config
+// pointer — a member's append of one, loaded code's, an unstamped raw append, or a schedule set to
+// append one — are FORBIDDEN at the append boundary, so a reader trusts it by its type alone. The
+// platform's own lands, stamped `source.platform`.
 import { expect, test } from "vitest";
-import { PLATFORM_FACT_TYPES } from "../src/caller.ts";
 import { readLog, refused, stub } from "./support.ts";
 
 /** A member signed in at the edge: what a session's call carries. */
 const MEMBER = { actor: "usr_platform_facts", email: "member@example.test" };
 
-test("a member's append of each platform fact, loaded code's, and a schedule set to append one are FORBIDDEN; the platform's own lands stamped as the platform's", async () => {
-  const ctx = `prj_platform_facts_${crypto.randomUUID().slice(0, 8)}`;
-  for (const type of PLATFORM_FACT_TYPES) {
-    const event = { type, payload: {} };
+test.for([
+  { name: "a platform fact", event: { type: "events.iterate.com/email/received", payload: {} } },
+  { name: "the config pointer", event: pointer("itx.config", ["itx", ["cd", "/c"], "w"]) },
+  { name: "a mask on the config pointer", event: pointer("itx.config", null) },
+  {
+    name: "the config pointer's deliverEvent",
+    event: pointer("itx.config.deliverEvent", ["itx", ["cd", "/c"], "w"]),
+  },
+])(
+  "$name from anyone but the platform is FORBIDDEN: a member's, loaded code's, a raw append's and a schedule's; the log does not move",
+  async ({ event }) => {
+    const ctx = `prj_platform_writes_${crypto.randomUUID().slice(0, 8)}`;
+    const head = (await readLog(ctx)).length;
     await refused(
       () => stub(ctx).invoke(["itx", ["append", event]], [], { principal: MEMBER }),
       "FORBIDDEN",
-      /is the platform's own fact/,
+      /is the platform's own fact|only the platform's publication writes it/,
     );
     await refused(
       () => stub(ctx).invoke(["itx", ["append", event]], [], { principal: null, app: true }),
       "FORBIDDEN",
     );
+    await refused(() => stub(ctx).append(event), "FORBIDDEN");
     await refused(
       () =>
         stub(ctx).invoke(
@@ -35,8 +45,12 @@ test("a member's append of each platform fact, loaded code's, and a schedule set
         ),
       "FORBIDDEN",
     );
-  }
-  expect((await readLog(ctx)).filter(({ type }) => PLATFORM_FACT_TYPES.has(type))).toEqual([]);
+    expect(await readLog(ctx)).toHaveLength(head);
+  },
+);
+
+test("the platform's own fact lands, stamped as the platform's", async () => {
+  const ctx = `prj_platform_facts_${crypto.randomUUID().slice(0, 8)}`;
   await stub(ctx).invoke(
     [
       "itx",
@@ -57,3 +71,7 @@ test("a member's append of each platform fact, loaded code's, and a schedule set
     source: { platform: true },
   });
 });
+
+function pointer(match: string, target: unknown) {
+  return { type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } };
+}

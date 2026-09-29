@@ -1,4 +1,3 @@
-import type {} from "@iterate-com/agents"; // types `itx.agents`
 import { installAgents } from "@iterate-com/agents/install";
 import { installVoice } from "@iterate-com/voice/install";
 import { EmailContract, type EmailState } from "iterate/email";
@@ -73,9 +72,7 @@ export default class extends IterateConfigEntrypoint {
     }
   }
 
-  // Every host of the project reaches this fetch, but for what a fetch route takes (`iterate
-  // tunnel` sets one). The platform names the host's routing slug in `x-iterate-routing-slug`
-  // (`blog` for `blog--<project>.<base>`; absent on the apex): route on it.
+  // Every host of the project, routed on `x-iterate-routing-slug`: AGENTS.md.
   async fetch(request: Request) {
     const routingSlug = request.headers.get("x-iterate-routing-slug");
     if (!routingSlug) {

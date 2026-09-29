@@ -57,30 +57,17 @@ test.for([
 );
 
 test.for([
-  {
-    name: "a stranger's mail",
-    source: { origin: "/", platform: true as const },
-    path: "/integrations/email",
-    sender: false,
-  },
+  { name: "a stranger's mail", sender: false },
   {
     name: "a member's mail that did not come straight from their domain (a replay or a forward)",
-    source: { origin: "/integrations/email", platform: true as const },
-    path: "/integrations/email",
     sender: true,
     direct: false,
   },
-  {
-    name: "automated mail",
-    source: { origin: "/", platform: true as const },
-    path: "/integrations/email",
-    sender: true,
-    automated: true,
-  },
-])("$name reaches no agent", async ({ source, path, sender, direct, automated }) => {
+  { name: "automated mail", sender: true, automated: true },
+])("$name reaches no agent", async ({ sender, direct, automated }) => {
   const project = fakeProject();
   const email = project.receiveEmail({ messageId: "a@x", member: sender, direct, automated });
-  await project.deliver({ ...email, source, path });
+  await project.deliver(email);
   const { agents, appended } = project;
   expect({ agents, appended }).toEqual({ agents: [], appended: {} });
 });
