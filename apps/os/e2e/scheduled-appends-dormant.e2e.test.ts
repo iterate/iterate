@@ -4,14 +4,7 @@
 // stubs and the library's own connections), so the actor is idle the moment the sessions close.
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { expect, test } from "vitest";
-import {
-  disposeSessions,
-  freshCtx,
-  openItx,
-  readAll,
-  sleep,
-  withPublishedConfig,
-} from "./support/client.ts";
+import { disposeSessions, freshPublishedCtx, openItx, readAll, sleep } from "./support/client.ts";
 import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts";
 
 // Crosses the real idle eviction without a client or waitForEvent keeping the actor active. Measured on
@@ -40,8 +33,7 @@ const platformHeldTheAlarm = createFlake(
 platformHeldTheAlarm(
   "a disconnected userspace facet's deadline fires after the pins' release without another request",
   async () => {
-    const ctx = freshCtx("schedule_dormant");
-    const itx = await withPublishedConfig(openItx(ctx));
+    const { ctx, itx } = await freshPublishedCtx("schedule_dormant");
     await itx.processors.enable("deadlines", {
       source: scheduledAppendFacetSource,
       className: "DeadlinesDurableObject",
