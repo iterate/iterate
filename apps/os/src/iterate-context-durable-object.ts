@@ -133,10 +133,10 @@ function iterateContextAddressOf(ctx: DurableObjectState) {
     !born.payload?.projectId ||
     !born.payload.path
   ) {
-    console.info({ event: "context.unborn-by-id", id: ctx.id.toString() });
-    throw new Error(
-      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
-    );
+    const message =
+      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.";
+    console.info({ event: "context.unborn-by-id", message });
+    throw new Error(message);
   }
   return DurableObjectNameCodec.address({
     projectId: born.payload.projectId,
@@ -455,11 +455,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** A RESET THIS CONTEXT ASKS FOR, an expected outcome: `ctx.abort`, whose `message` the runtime
-   *  logs as an error line in this invocation that nothing can catch, and ends the invocation in an
-   *  exception (https://developers.cloudflare.com/durable-objects/api/state/#abort). So the outcome
-   *  is logged first, at info, in the same invocation: `event`. The prd fault alarm
-   *  (scripts/ci/prd-fault-alarm.ts `ANNOUNCED`) reads the error lines of an invocation that logged
-   *  one as that outcome, and pages none of them. */
+   *  logs as an error line nothing can catch, in this invocation and in every other call in flight
+   *  here, which it rejects (https://developers.cloudflare.com/durable-objects/api/state/#abort). So
+   *  the outcome is logged first, at info, with that `message`: `event`. The prd fault alarm
+   *  (scripts/ci/prd-fault-alarm.ts `ANNOUNCED`) reads an error line with a message this Durable
+   *  Object announced as that outcome, and pages none of them. */
   #abort(
     event: "context.destroyed" | "context.aborted" | "context.root-restored",
     message: string,
