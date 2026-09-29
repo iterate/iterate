@@ -39,6 +39,7 @@ export function AgentsNav({
   project: string;
   /** the project's slug — its URL (`/projects/<slug>`) */
   slug: string;
+  /** whether the project has `itx.agents`: without it there is nothing to create an agent with */
   installed: boolean;
   agents: { path: string; createdAt: string }[];
   /** each agent's live summary by path; absent while its subscription connects */
@@ -83,31 +84,25 @@ export function AgentsNav({
   );
   return (
     <>
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                type="button"
-                onClick={() => void create()}
-                disabled={creating}
-                tooltip={installed ? "New agent" : "Install agents"}
-              >
-                <SquarePenIcon />
-                <span>
-                  {creating
-                    ? installed
-                      ? "Creating…"
-                      : "Installing…"
-                    : installed
-                      ? "New agent"
-                      : "Install agents"}
-                </span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
+      {installed ? (
+        <SidebarGroup>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  onClick={() => void create()}
+                  disabled={creating}
+                  tooltip="New agent"
+                >
+                  <SquarePenIcon />
+                  <span>{creating ? "Creating…" : "New agent"}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      ) : null}
       {ordered.pinned.length > 0 ? (
         <SidebarGroup>
           <SidebarGroupLabel>Pinned</SidebarGroupLabel>

@@ -81,6 +81,7 @@ export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
  * that changes one runs the slow rows, as does one that turns them on (apps/os/scripts/slow-rows.ts).
  */
 export const SLOW_ROW_PATHS = [
+  "apps/agents/e2e/install.e2e.test.ts",
   "apps/os/e2e/context-residency.e2e.test.ts",
   "apps/os/e2e/facet-abort-storage-reset.e2e.test.ts",
 ];
@@ -113,6 +114,8 @@ export const UNIT_ROW_WARN_EXEMPTIONS: Record<string, string> = {
     "a heap-capped child process; its cursor watchdogs keep it alive after its report",
   "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once":
     "a heap-capped child process",
+  "a revocation answers the very next call from another context: a mask on a warm child's parent, a provide withdrawn, a route made private":
+    "waits out two revocation fences, each the real 5 s rule-snapshot lifetime",
 };
 
 /**

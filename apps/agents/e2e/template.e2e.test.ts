@@ -1,102 +1,67 @@
-// THE AGENTS APP INSTALLED AS A PACKAGE: a project whose config repo is the with-agents template —
-// package.json files that pin @iterate-com/agents (this checkout's pkg.pr.new build) and one
-// index.ts that re-exports it, no runtime source — gets working agents from its own config worker:
-// `project/created` installs them from `agents/`, the loader resolves the package through esm.sh,
-// and a commit that changes `agents/` installs them again from that commit.
-import { readFile } from "node:fs/promises";
+// THE AGENTS AND VOICE APPS INSTALLED AS PACKAGES: a project created with no template gets the
+// default one (configs/default), which the deployment embeds with `@iterate-com/agents` and
+// `@iterate-com/voice` pinned to this checkout's pkg.pr.new build and installs from its own init
+// case; the loader resolves the packages through esm.sh.
 import { expect, test } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
 import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 import { publishedPackage } from "./support.ts";
 
-const TEMPLATE_FILES = [
-  "worker.ts",
-  "iterate.json",
-  "package.json",
-  "AGENTS.md",
-  "agents/package.json",
-  "agents/index.ts",
-];
+test("a project created with no template pins the agents and voice packages at this checkout's published build", async () => {
+  const agents = await publishedPackage("@iterate-com/agents");
+  const voice = await publishedPackage("@iterate-com/voice");
+  const root = await createDefaultProject("agents-template-pin");
+  const manifest = await root.repos.get("/repos/config").readFile("package.json");
+  expect(JSON.parse(manifest)).toMatchObject({
+    dependencies: { "@iterate-com/agents": agents, "@iterate-com/voice": voice },
+  });
+});
 
 test(
-  "the with-agents template installs the published agents package on project/created, answers a message, and reinstalls from a commit that changes agents/",
+  "the default template installs the published agents and voice packages from its init case, and an agent answers a message",
   { timeout: 90_000 },
   async () => {
-    const root = openItx(freshCtx("agents-template"));
-    await expect(root.invoke("itx.agents.list()")).rejects.toMatchObject({
-      code: "NO_ITX_EXPRESSION_MATCH",
-    });
-    const version = await publishedPackage("@iterate-com/agents");
-    const template = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main";
-    const changes = await Promise.all(
-      TEMPLATE_FILES.map(async (path) => {
-        const content = await readFile(
-          new URL(`../../../configs/with-agents/${path}`, import.meta.url).pathname,
-          "utf8",
-        );
-        if (path.endsWith("package.json")) expect(content).toContain(template);
-        return { path, content: content.replaceAll(template, version) };
-      }),
-    );
-    await root.repos.create("/repos/config");
-    const config = root.repos.get("/repos/config");
-    await config.commitFiles({ message: "Copy agents template", changes });
-    await root.processors.enable("project");
-    await root.append({
-      type: "events.iterate.com/project/create-requested",
-      payload: { slug: "agents-template", orgId: "test" },
-    });
+    await publishedPackage("@iterate-com/agents");
+    await publishedPackage("@iterate-com/voice");
+    const root = await createDefaultProject("agents-template");
     // The first load of a new build resolves it through esm.sh; every later one reads the lock.
-    const installed = await until(
-      "template installed agents",
-      async () => {
-        const rule = await root.rewriteRules.get("itx.agents");
-        return rule?.target ? rule : undefined;
-      },
+    await until(
+      "the init case installed agents and voice",
+      async () =>
+        (await root.rewriteRules.get("itx.agents"))?.target &&
+        (await root.rewriteRules.get("itx.voice"))?.target,
       60_000,
-    ).catch(async (error) => {
-      console.log(
-        JSON.stringify({
-          events: await readAll(root),
-          subscriptions: await root.subscriptions.list(),
-        }),
-      );
-      throw error;
-    });
-    // The installed source is the folder's two files, nothing else.
-    const runtime = JSON.parse(await root.kv.get("agents/runtime"));
-    expect(Object.keys(runtime.source).sort()).toEqual(["index.ts", "package.json"]);
-    expect(runtime.source["package.json"]).toContain(version);
-
+    );
+    expect(await root.voice.health()).toMatchObject({ ok: true });
+    // the default sets no schedule: an idle project sleeps (configs/heartbeat sets one)
+    expect(await root.schedules.list()).toEqual([]);
     const path = "/agents/first";
     const agent = root.cd(path);
     await agent.provide("itx.ai", new FakeAi(["Hello from the published package."]));
     await root.agents.create(path);
-    expect(await root.agents.list()).toEqual([{ path, createdAt: expect.any(String) }]);
     await configureModel(agent);
     await root.agents.get(path).message("Say hello.");
     await until("the agent's reply", async () =>
       assistantWords(await readAll(agent)).includes("Hello from the published package."),
     );
-
-    // A commit that changes agents/ is an upgrade: the config worker installs that commit's folder.
-    const index = changes.find((change) => change.path === "agents/index.ts")!.content;
-    await config.commitFiles({
-      message: "Touch the agents folder",
-      changes: [{ path: "agents/index.ts", content: `${index}// upgraded\n` }],
-    });
-    await until("reinstalled from the commit", async () => {
-      const rule = await root.rewriteRules.get("itx.agents");
-      return JSON.stringify(rule.target) !== JSON.stringify(installed.target);
-    });
-    expect(JSON.parse(await root.kv.get("agents/runtime")).source["index.ts"]).toContain(
-      "// upgraded",
-    );
-    const events = await readAll(root);
-    expect(events.filter((event) => /failed$/.test(event.type))).toEqual([]);
-    expect(
-      (await root.subscriptions.list()).filter((row: { halted?: unknown }) => row.halted),
-    ).toEqual([]);
+    expect((await readAll(root)).filter((event) => /failed$/.test(event.type))).toEqual([]);
   },
 );
+
+/** A root created the way `projects.create` creates one, with no template: the default, seeded. */
+async function createDefaultProject(name: string) {
+  const root = openItx(freshCtx(name));
+  await root.processors.enable("project");
+  await root.append({
+    type: "events.iterate.com/project/create-requested",
+    payload: { slug: name, orgId: "test" },
+  });
+  const created = await root.waitForEvent({
+    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  expect(created).toMatchObject({ type: "events.iterate.com/project/created" });
+  return root;
+}

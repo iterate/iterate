@@ -1,60 +1,46 @@
-// VOICE INSTALLED AS A PACKAGE, the way Kit's Prepare and the voice app install it: through the
-// project's OAuth session, `ensureVoiceAgent` commits `agents/` and `voice/` folders that pin this
-// checkout's pkg.pr.new builds of @iterate-com/agents and @iterate-com/voice and re-export them,
-// installs both from those folders, and `itx.voice.health()` answers — the loader resolved the
-// packages through esm.sh. The project's own data is left as it was.
+// VOICE SET UP the way Kit's Prepare and the voice app set it up: through the project's OAuth
+// session, a project created from the default template gets agents and voice from its config repo's
+// init case, both this checkout's pkg.pr.new builds that the loader resolves through esm.sh, and
+// `ensureVoiceAgent` asks for the OpenAI key, stores it, and `itx.voice.health()` answers; the
+// project's own data is left as it was. A config that installs no voice is refused at once.
 import type {} from "@iterate-com/voice";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import type { IterateContextApiWith } from "iterate/api";
-import { expect } from "vitest";
-import { runId } from "../../os/e2e/support/client.ts";
+import { expect, test } from "vitest";
+import { freshCtx, openItx, publishConfig, runId } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
+import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 import { publishedPackage } from "./support.ts";
 
+// This checkout's pkg.pr.new builds, published once its commit is pushed: the PR preview's e2e.
 deployedOnly(
-  "voice installs as a package through project OAuth, preserves project data and is kept on a second install",
-  { timeout: 90_000 },
+  "a new project's config installs voice; setting it up through project OAuth stores the key once, preserves project data, and the service answers",
+  { timeout: 120_000 },
   async () => {
+    const version = await publishedPackage("@iterate-com/voice");
+    await publishedPackage("@iterate-com/agents");
     const user = { email: `kit-install-${runId()}@example.com` };
     const projectId = await registerProject(freshDnsSafeProjectSlug("kit-voice"), user);
     const { api } = await oauthSession(projectId, user);
     const project = await api.projects.get(projectId);
-    const versions = {
-      agents: await publishedPackage("@iterate-com/agents"),
-      voice: await publishedPackage("@iterate-com/voice"),
-    };
     await project.kv.put("worker.js", "my existing data");
-    const rulesBefore = await project.rewriteRules.list();
-    expect(await ensureVoiceAgent(project, versions)).toBe("needs-openai-key");
-    expect(await project.rewriteRules.get("itx.voice")).toBeNull();
+    const config = project.repos.get("/repos/config");
+    expect(JSON.parse((await config.readFile("package.json"))!)).toMatchObject({
+      dependencies: { "@iterate-com/voice": version },
+    });
+    expect(await config.readFile("voice.ts")).toContain("VoiceAgentDurableObject");
+    expect(await ensureVoiceAgent(project)).toBe("needs-openai-key");
 
-    expect(await ensureVoiceAgent(project, versions, "kit-install-test-placeholder")).toBe("ready");
+    // The first load of a new build resolves it through esm.sh; every later one reads the lock.
+    expect(await ensureVoiceAgent(project, "kit-install-test-placeholder")).toBe("ready");
     const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
     expect(await installed.voice.health()).toMatchObject({ ok: true, projectId });
-    const config = project.repos.get("/repos/config");
-    expect(JSON.parse((await config.readFile("agents/package.json"))!)).toEqual({
-      main: "index.ts",
-      dependencies: { "@iterate-com/agents": versions.agents },
-    });
-    expect(JSON.parse((await config.readFile("voice/package.json"))!)).toEqual({
-      main: "worker.ts",
-      dependencies: { "@iterate-com/voice": versions.voice },
-    });
-    // the root lists both packages too, so `tsc` over the repo resolves the folders' imports
-    expect(JSON.parse((await config.readFile("package.json"))!)).toMatchObject({
-      devDependencies: {
-        "@iterate-com/agents": versions.agents,
-        "@iterate-com/voice": versions.voice,
-      },
-    });
     expect(await project.kv.get("worker.js")).toBe("my existing data");
-    for (const before of rulesBefore)
-      expect(await project.rewriteRules.get(before.match)).toEqual(before);
     expect(await project.secrets.list()).toContainEqual(
       expect.objectContaining({ path: "/secrets/openai", urls: ["https://api.openai.com"] }),
     );
@@ -62,10 +48,19 @@ deployedOnly(
     // A second device: the installed service and the stored key are kept.
     const installedRule = await project.rewriteRules.get("itx.voice");
     const secretsBefore = await project.secrets.list();
-    expect(await ensureVoiceAgent(project, versions, "must-not-replace-existing-key")).toBe(
-      "ready",
-    );
+    expect(await ensureVoiceAgent(project, "must-not-replace-existing-key")).toBe("ready");
     expect(await project.rewriteRules.get("itx.voice")).toEqual(installedRule);
     expect(await project.secrets.list()).toEqual(secretsBefore);
   },
 );
+
+test("a project whose config installs no voice is refused at once, and no key is stored", async () => {
+  const root = openItx(freshCtx("voice-not-installed"));
+  await publishConfig(root, agentsWorkspaceConfig);
+  await expect(ensureVoiceAgent(root, "a key")).rejects.toThrow(
+    "This project's config repo does not install voice",
+  );
+  expect(await root.secrets.list()).not.toContainEqual(
+    expect.objectContaining({ path: "/secrets/openai" }),
+  );
+});

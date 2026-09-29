@@ -1,8 +1,7 @@
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { expect, test } from "vitest";
-import { installVoice } from "@iterate-com/voice/install";
-import { freshCtx, rejection } from "../../os/e2e/support/client.ts";
-import { openAgentItx, voiceWorkspaceSource } from "./support.ts";
+import { freshCtx, rejection, until, untilValue } from "../../os/e2e/support/client.ts";
+import { installWorkspaceVoice, openAgentItx } from "./support.ts";
 
 test("THE CHAIN: a subagent two levels down resolves a capability provided at the root through parent links, lists it with its description and origin, and births its own children relative to itself", async () => {
   const ctx = freshCtx("chain");
@@ -23,13 +22,22 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
   expect(await root.cd(sub).builtins.rewriteRules.get("itx")).toMatchObject({
     target: "itx.cd('/agents/a/sandbox')",
   });
-  // three hops down, the root's stub answers, and the list says where it came from
-  expect(await root.cd(sub).run("async (itx) => itx.tool()")).toBe("hello-from-root");
-  const rows = (await root.cd(sub).rewriteRules.list()) as {
-    match: string;
-    context: string;
-    description?: string;
-  }[];
+  // three hops down, the root's stub answers, and the list says where it came from — a name the
+  // root grants reaches its other contexts within a rule snapshot's lifetime
+  // (apps/os/src/context/rule-snapshots.ts)
+  expect(
+    await until("the root's grant reaches the subagent", () =>
+      root.cd(sub).run("async (itx) => itx.tool()"),
+    ),
+  ).toBe("hello-from-root");
+  const rows = await untilValue(
+    "the subagent lists the root's grant",
+    () =>
+      root.cd(sub).rewriteRules.list() as Promise<
+        { match: string; context: string; description?: string }[]
+      >,
+    (listed) => listed.some((row) => row.match === "itx.tool"),
+  );
   expect(rows.find((row) => row.match === "itx.tool")).toMatchObject({
     context: "/",
     description: "says hello",
@@ -101,7 +109,8 @@ const linkedToTheRoot = async (name: string) => {
   return { root, child: root.cd("/child") };
 };
 
-createFailing(test, /parent link should be the context that created it/)(
+// Each row publishes the agents' config first (agents-source.ts): 60 s, as the voice row has.
+createFailing(test, /parent link should be the context that created it/, { timeoutMs: 60_000 })(
   "an agent a context linked to the root creates with the root's `itx.agents` links to that context",
   async () => {
     const { child } = await linkedToTheRoot("agent-root-linked");
@@ -114,7 +123,7 @@ createFailing(test, /parent link should be the context that created it/)(
   },
 );
 
-createFailing(test, /should land beneath the context that asked/)(
+createFailing(test, /should land beneath the context that asked/, { timeoutMs: 60_000 })(
   "a context linked to the root that creates `./a` with the root's `itx.agents` gets its own `./a`",
   async () => {
     const { child } = await linkedToTheRoot("agent-root-linked-relative");
@@ -136,11 +145,15 @@ createFailing(test, /voice agent's parent link should be the context that asked/
     await root.secrets.set("/secrets/openai", "placeholder-openai-key", {
       urls: ["https://api.openai.com"],
     });
-    await installVoice(root, await voiceWorkspaceSource());
+    await installWorkspaceVoice(root);
     // The voice worker is loaded code at `/` whose `env.ITX` is its own, so it creates every agent
-    // through the root's `itx.agents`, at whatever absolute `streamPath` the caller names.
-    const links = (await child.builtins.run(
-      "async (itx) => { await itx.voice.setupVoiceAgent({ streamPath: '/child/v', activation: 'pin' }); return (await itx.cd('./v').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/child/v').map((r) => r.target); }",
+    // through the root's `itx.agents`, at whatever absolute `streamPath` the caller names. The
+    // root's `itx.voice` reaches `/child` within a rule snapshot's lifetime
+    // (apps/os/src/context/rule-snapshots.ts).
+    const links = (await until("the root's `itx.voice` reaches /child", () =>
+      child.builtins.run(
+        "async (itx) => { await itx.voice.setupVoiceAgent({ streamPath: '/child/v', activation: 'pin' }); return (await itx.cd('./v').rewriteRules.list()).filter((r) => r.match === 'itx' && r.context === '/child/v').map((r) => r.target); }",
+      ),
     )) as string[];
     expect(links, "the voice agent's parent link should be the context that asked").toEqual([
       "itx.cd('/child')",

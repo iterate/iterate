@@ -30,6 +30,7 @@
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import {
+  BIRTH_ROW_NAMES,
   durableCountsByType,
   freshCtx,
   openItx,
@@ -53,10 +54,12 @@ test("facet spine: cold catch-up + driven reduces + the subscriptions table list
 
   await enableFixtureProcessor(itx, "tally");
   const s1 = await itx.invoke("itx.facets.get('tally').snapshot()");
-  // Cold catch-up counts the pre-enable rule and tally's own enablement.
-  // Both are subscriptions, NOT rewrite rules (an enablement is a subscription).
+  // Cold catch-up counts the pre-enable rule, the context's birth rows and tally's own enablement.
+  // The last are subscriptions, NOT rewrite rules (an enablement is a subscription).
   expect(s1.state?.counts?.["events.iterate.com/itx/rewrite-rule-configured"]).toBe(1);
-  expect(s1.state?.counts?.["events.iterate.com/itx/subscription-configured"]).toBe(1);
+  expect(s1.state?.counts?.["events.iterate.com/itx/subscription-configured"]).toBe(
+    BIRTH_ROW_NAMES.size + 1,
+  );
 
   // two more rules + one un-set AFTER enabling — the push path
   await itx.provide("itx.a", "itx.kv");
@@ -240,7 +243,9 @@ test("processors.enable('tally') from two sessions concurrently: one effective l
   for (let i = 0; i < 3; i++) await itxA.append({ type: "seen", payload: { i } });
   const head = await readHead(itxA);
   const expected = durableCountsByType(await readAll(itxA));
-  expect([1, 2]).toContain(expected["events.iterate.com/itx/subscription-configured"]);
+  expect([1, 2].map((enables) => BIRTH_ROW_NAMES.size + enables)).toContain(
+    expected["events.iterate.com/itx/subscription-configured"],
+  );
   const snap = await until("tally reduced the whole log exactly once", async () => {
     const s: any = await tallySnapshot(itxA);
     return s.offset >= head && s;

@@ -3,13 +3,14 @@
 // only the last. Code imports it from "iterate/with-itx" (`withItx(this.env.ITX, (itx) => …)`),
 // this module alone, so code that must not load the SDK's hosts (a script's isolate, the agents' AI
 // transport) never does. The SDK's hosts (`StreamProcessorDurableObject.withItx`,
-// `ConfigWorker.withItx`) delegate to it. No workerd import, so the unit tests run it in node
+// `IterateConfigEntrypoint.withItx`) delegate to it. No workerd import, so the unit tests run it in node
 // (with-itx.test.ts) and the platform bundles it alone for a script's isolate (apps/os
 // `runScriptModule`); on native RpcPromises it is proven by every apps/os e2e row that reaches a
 // facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …": a facet
 // that kept one value from its context stayed running, billed). Lint refuses the raw
 // `env.ITX.get()` (iterate/no-raw-itx-get).
 
+import { currentCause } from "../cause.ts";
 import { releaseRpcSessions } from "../lib.ts";
 
 /** ONE round trip on `entrypoint.get()`, then RELEASE EVERYTHING IT REACHED: the scope and every call
@@ -24,7 +25,8 @@ export async function withItx<Scope, T>(
   call: (itx: Scope) => T,
 ): Promise<Awaited<T>> {
   const steps: unknown[] = [];
-  const itx = entrypoint.get();
+  // …and hands the platform why the code runs (../cause.ts): a word on no signature
+  const itx = (entrypoint as { get(cause: unknown): Scope }).get(currentCause());
   try {
     return await call(recordPipelinedSteps(itx, steps));
   } finally {

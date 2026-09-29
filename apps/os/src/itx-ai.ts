@@ -17,10 +17,14 @@ export class ItxAi extends WorkerEntrypoint<Env, { projectId: string }> {
   }
 }
 
-/** Mint `ItxAi` for one project — `ctx.exports.ItxAi({ props })` on the DO's own state. The cast:
- *  `Cloudflare.Exports` is `{}` without a generated `GlobalProps` (as for `itxEntrypointFor`), and
- *  the stub answers the two methods the published `itx.ai` names. */
-export function itxAiFor(ctx: DurableObjectState, projectId: string): IterateContextApi["ai"] {
+/** Mint `ItxAi` for one project — `ctx.exports.ItxAi({ props })` on a context's Durable Object's
+ *  state, or on the stateless entrypoint's execution context (context/stateless-context.ts). The
+ *  cast: `Cloudflare.Exports` is `{}` without a generated `GlobalProps` (as for `itxEntrypointFor`),
+ *  and the stub answers the two methods the published `itx.ai` names. */
+export function itxAiFor(
+  ctx: DurableObjectState | ExecutionContext,
+  projectId: string,
+): IterateContextApi["ai"] {
   const { exports } = ctx as unknown as {
     exports: { ItxAi(opts: { props: { projectId: string } }): IterateContextApi["ai"] };
   };

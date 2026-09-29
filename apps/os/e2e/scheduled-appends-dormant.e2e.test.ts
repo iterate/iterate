@@ -4,7 +4,14 @@
 // stubs and the library's own connections), so the actor is idle the moment the sessions close.
 import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { expect, test } from "vitest";
-import { disposeSessions, freshCtx, openItx, readAll, sleep } from "./support/client.ts";
+import {
+  disposeSessions,
+  freshCtx,
+  openItx,
+  readAll,
+  sleep,
+  withPublishedConfig,
+} from "./support/client.ts";
 import { scheduledAppendFacetSource } from "./support/scheduled-append-facet.ts";
 
 // Crosses the real idle eviction without a client or waitForEvent keeping the actor active. Measured on
@@ -34,7 +41,7 @@ platformHeldTheAlarm(
   "a disconnected userspace facet's deadline fires after the pins' release without another request",
   async () => {
     const ctx = freshCtx("schedule_dormant");
-    const itx = openItx(ctx);
+    const itx = await withPublishedConfig(openItx(ctx));
     await itx.processors.enable("deadlines", {
       source: scheduledAppendFacetSource,
       className: "DeadlinesDurableObject",
@@ -81,8 +88,8 @@ platformHeldTheAlarm(
       .filter(
         (event) => event.type === "events.iterate.com/itx/woken" && event.offset < due[0].offset,
       )
-      .map((event) => event.payload.reason);
-    expect(wakesBeforeDue).toEqual(["request", "alarm"]);
+      .map((event) => event.payload.cause);
+    expect(wakesBeforeDue).toEqual(["call", "alarm"]);
     expect(await reconnected.schedules.list()).toEqual([]);
     await reconnected.facets.get("deadlines").waitUntilProcessed({ offset: due[0].offset });
     expect(await reconnected.facets.get("deadlines").snapshot()).toMatchObject({

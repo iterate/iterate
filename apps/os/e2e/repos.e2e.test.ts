@@ -24,6 +24,7 @@
 import { expect, test } from "vitest";
 import type { RepoLogEntry } from "iterate/api";
 import {
+  configuredRows,
   freshCtx,
   openItx,
   processorNames,
@@ -59,11 +60,7 @@ test("itx.repos.create(path) lands the request and the certificate on the repo's
   const own = await readAll(itx.cd("/repos/config"));
   expect(repoFactTypes(own)).toEqual(["repo/create-requested", "repo/created"]);
   // The processor row `create` enabled, on the path, named after the facet.
-  expect(
-    own
-      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
-      .map((e) => e.payload?.name),
-  ).toEqual(["repo"]);
+  expect(configuredRows(own).map((e) => e.payload?.name)).toEqual(["repo"]);
   expect(
     own.filter((e) => e.type === "events.iterate.com/repo/created").map((e) => e.payload),
   ).toEqual([{ path: "/repos/config" }]);
@@ -514,11 +511,7 @@ localOnly(
     // The row went with the deletion — `processors.disable`, one `{ target: null }` fact after the
     // certificate — and the facet's storage with it.
     expect(await processorNames(itx.cd("/repos/gone"))).toEqual([]);
-    expect(
-      own
-        .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
-        .map((e) => [e.payload?.name, e.payload?.target === null]),
-    ).toEqual([
+    expect(configuredRows(own).map((e) => [e.payload?.name, e.payload?.target === null])).toEqual([
       ["repo", false],
       ["repo", true],
     ]);

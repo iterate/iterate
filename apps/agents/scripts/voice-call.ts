@@ -101,9 +101,9 @@ export default async function voiceCall(
   // ONE warm authenticated session and the project root — what a connected device holds.
   const warm0 = now();
   using connection = await connect();
-  // The project installed voice beside the agents app (https://k.iterate.com prepares both), so its
-  // root has `voice` and `agents`: the assertion iterate/api's `IterateContextApiWith` documents for
-  // a root that knows its apps are there.
+  // The project's config installs voice beside the agents app (https://k.iterate.com prepares
+  // both), so its root has `voice` and `agents`: the assertion iterate/api's `IterateContextApiWith`
+  // documents for a root that knows its apps are there.
   const root = connection.session.projects.get(PROJECT) as RpcPromise<
     IterateContextApiWith<"voice" | "agents">
   >;

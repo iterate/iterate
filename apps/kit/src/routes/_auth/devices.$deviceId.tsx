@@ -1,7 +1,6 @@
 import type { ComponentProps } from "react";
 import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, getRouteApi } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -27,7 +26,6 @@ import {
   SelectValue,
 } from "@iterate-com/ui/components/select";
 import { EyeIcon, EyeOffIcon, LogOutIcon, UsbIcon } from "lucide-react";
-import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import { SetupWizard, type SetupInput } from "../../components/setup-wizard.tsx";
 import { isStatusVoice, statusVoices } from "../../firmware/config-image.ts";
@@ -37,16 +35,6 @@ import {
   firmwareReleaseTag,
 } from "../../firmware/catalog.ts";
 import { newestFirmware } from "../../firmware/releases.ts";
-
-/** The agents and voice builds an install commits, at one commit (@iterate-com/shared/pkg-pr-new
- *  `publishedCommit`, which says why the app's Worker resolves it). */
-const publishedApps = createServerFn().handler(async () => {
-  const commit = await publishedCommit("@iterate-com/voice", import.meta.env.VITE_SOURCE_COMMIT);
-  return {
-    agents: pkgPrNewVersion("@iterate-com/agents", commit),
-    voice: pkgPrNewVersion("@iterate-com/voice", commit),
-  };
-});
 
 export const Route = createFileRoute("/_auth/devices/$deviceId")({
   // the project's slug, so the OpenAI key check below follows the picker (and a link keeps it)
@@ -110,7 +98,7 @@ function KitPage() {
     mutationFn: async (input: SetupInput) => {
       try {
         using itx = await api.projects.get(input.project.id);
-        const voice = await ensureVoiceAgent(itx, await publishedApps(), input.openaiKey);
+        const voice = await ensureVoiceAgent(itx, input.openaiKey);
         if (voice === "needs-openai-key")
           throw new Error(`${input.project.slug} needs an OpenAI API key. Close this and add one.`);
         const { token } = await api.grants.mint({
@@ -140,8 +128,8 @@ function KitPage() {
         throw error;
       }
     },
-    // Once, for a dropped connection (what the dogfood's first try hit): the voice install is safe
-    // to repeat, and a repeated mint at worst lists one unused token in the sessions list.
+    // Once, for a dropped connection (what the dogfood's first try hit): preparing voice is safe to
+    // repeat, and a repeated mint at worst lists one unused token in the sessions list.
     retry: (failures, error) => failures < 1 && error instanceof ConnectionDropped,
     onSuccess: (_configuration, input) =>
       queryClient.invalidateQueries({ queryKey: ["kit", "has-openai-key", input.project.id] }),
@@ -169,9 +157,10 @@ function KitPage() {
             cable.
           </p>
           <p>
-            Flash device installs a voice agent in your project if it needs one, creates an access
-            token for the device, then writes the firmware, your Wi-Fi and the token to it. You can
-            revoke the token any time from your sessions list in OS.
+            Flash device checks your project&apos;s voice agent, saves your OpenAI API key to the
+            project if it has none, creates an access token for the device, then writes the
+            firmware, your Wi-Fi and the token to it. You can revoke the token any time from your
+            sessions list in OS.
           </p>
           <p>
             The browser can remember your Wi-Fi for next time, in its password manager. The token

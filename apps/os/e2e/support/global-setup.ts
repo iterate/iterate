@@ -8,8 +8,10 @@
 // The URL is handed to tests via vitest `provide`/`inject` (see support/setup.ts + support/client.ts).
 
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
+import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
 import { deployedTarget } from "./deployed-target.ts";
 import {
   E2E_ADMIN_BEARER,
@@ -43,11 +45,22 @@ declare module "vitest" {
     /** The run's id, folded into every identifier a test mints (client.ts `freshCtx`): E2E_RUN_ID
      *  when the run pins one (CI: the workflow run and attempt), else minted here once per run. */
     runId: string;
+    /** The commit whose pkg.pr.new builds this checkout's packages are, by the rule the build
+     *  stamps the default template with (scripts/published-package-commit.ts): worked out once
+     *  here, so parallel files never race on the checkout's git fetch. */
+    publishedPackageCommit: string;
   }
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
+  project.provide(
+    "publishedPackageCommit",
+    checkoutPublishedPackageCommit(
+      path.resolve(PACKAGE_DIR, "../.."),
+      process.env.PREVIEW_HEAD_SHA,
+    ),
+  );
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate.com pnpm e2e`
   // runs the SAME suite against the deployed worker, no local boot. Its credentials and routing come
   // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry

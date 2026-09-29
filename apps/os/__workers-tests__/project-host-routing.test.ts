@@ -118,8 +118,8 @@ export default class Slow extends WorkerEntrypoint {
  *  once the app's Response is in, while its body still streams. */
 const SRC_WITH_ITX_ROUTER = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { ConfigWorker } from "iterate/sdk";
-export default class extends ConfigWorker {
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
   fetch(request) {
     return this.withItx((itx) => itx.slow.fetch(request));
   }
@@ -310,8 +310,8 @@ test("a project's primary hostname: once a live hostname is made primary, itx.ur
 /** A config worker that says which host it answered, and the routing slug it saw. */
 const SRC_HOSTNAME_SITE = {
   "package.json": '{"main":"worker.js"}',
-  "worker.js": `import { ConfigWorker } from "iterate/sdk";
-export default class extends ConfigWorker {
+  "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
   fetch(request) {
     return Response.json({
       host: new URL(request.url).hostname,

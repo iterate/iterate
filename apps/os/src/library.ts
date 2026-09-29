@@ -28,10 +28,13 @@ import type {
   FileHandle,
   FileRecord,
   IterateContextApi,
+  RepoHandle,
   WaitForEventFilter,
 } from "iterate/api";
+import type { Cause } from "./cause.ts";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
+import type { ProjectState } from "./project/contract.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
@@ -73,10 +76,12 @@ export interface LibraryRoots {
    *  trip per step. */
   connectToCapnweb: IterateContextApi["connectToCapnweb"];
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
-   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
-   *  and `create(path)` are the collection's on the `project` facet at `/`. */
+   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events, and the
+   *  config repo's `waitForPublication` (below); `list()` and `create(path)` are the collection's
+   *  on the `project` facet at `/`. */
   repos: EntityRoot<
-    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract>
+    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract> &
+      Pick<RepoHandle, "waitForPublication">
   >;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
@@ -202,8 +207,10 @@ export function buildLibrary(
 
 // ── run ── `itx.run(script)`: a request on the log, its settlement read back by the caller.
 // `requestScriptRun` appends `itx/run-requested` and answers where it landed; the caller's side of
-// the hop — the edge (iterate-context.ts), /mcp, a runner whose row sends its scripts elsewhere —
-// reads the `run-settled` naming that request's offset (`settlementOfScriptRun`). The EXECUTION is
+// the hop where the call began — the edge, /mcp and loaded code's `env.ITX` (context-stub.ts
+// `contextStub`), a runner whose row sends its scripts elsewhere — reads the `run-settled` naming
+// that request's offset (`settlementOfScriptRun`); a context sending on the call it was made
+// answers the request up as it came. The EXECUTION is
 // the context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
 // `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
 // so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
@@ -212,9 +219,10 @@ export function buildLibrary(
 // caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
 // one function expression fails at load, in the loader's words. It takes no arguments: a script is
 // an agent's whole output (an alternative to a tool call), its values baked in. The template is the
-// smallest WorkerEntrypoint that hosts it: `run()` hands it the scope of ONE `withItx` round trip,
-// as the SDK's ConfigWorker does, so the scope and every call the script made through it are
-// released when it settles — its unawaited ones and its deadline's included.
+// smallest WorkerEntrypoint that hosts it: `run(cause)` hands it the scope of ONE `withItx` round
+// trip, as the SDK's IterateConfigEntrypoint does, so the scope and every call the script made
+// through it are released when it settles — its unawaited ones and its deadline's included — all
+// of it under the cause its run was handed (cause.ts).
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -238,11 +246,13 @@ export function runScriptModule(script: string) {
       // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
+      // the SDK's door, which `iterate/with-itx` shares by name (cause.ts runningCause)
+      'const door = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
-      "  async run() {",
+      "  async run(cause) {",
       "    let deadline;",
       "    try {",
-      "      return await withItx(this.env.ITX, async (itx) => {",
+      "      return await door.run(cause, () => withItx(this.env.ITX, async (itx) => {",
       "        const value = await Promise.race([",
       "          script(itx),",
       "          new Promise((_, reject) => {",
@@ -251,7 +261,7 @@ export function runScriptModule(script: string) {
       "        ]);",
       "        const json = JSON.stringify(value);",
       "        return json === undefined ? undefined : JSON.parse(json);",
-      "      });",
+      "      }));",
       "    } finally {",
       "      clearTimeout(deadline);",
       "    }",
@@ -264,14 +274,14 @@ export function runScriptModule(script: string) {
 
 /** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
  *  with a requested run. Same text, same module: the loader's content hash reuses the warm isolate. */
-export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
+export async function executeScript(itx: LibraryItx, code: string, cause: Cause): Promise<unknown> {
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
   const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
-    run(): Promise<unknown>;
+    run(cause: Cause): Promise<unknown>;
   };
-  return worker.run();
+  return worker.run(cause);
 }
 
 /** THE RUNNER'S SETTLEMENT of one execution (iterate-context-durable-object.ts `#executeRun`): the
@@ -586,6 +596,8 @@ function entityHandle(
             );
       return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
     }
+    if (name === "repo" && Array.isArray(first) && first[0] === "waitForPublication")
+      return waitForPublication(itx, entityPath, first[1]);
     const context = await itx.builtins.cd(entityPath);
     // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
     // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
@@ -601,6 +613,132 @@ function entityHandle(
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
+}
+
+// ── the publication ── `itx.repos.get("/repos/config").waitForPublication(commitOid)`: the project
+// processor publishes each commit of the config repo in the background (project/processor.ts), and
+// this waits for a commit's publication to land. It reads the processor's own state on `/`, never
+// the website, and answers what that state says: published, or not published and why. A
+// publication's `project/worker-updated` lands only once every context resolves through its
+// pointer, so the website and every context run the commit by the time this answers.
+
+/** How long `waitForPublication` waits: longer than the processor spends on one publication before
+ *  it gives up for now (project/processor.ts `PUBLICATION_BUDGET_MS`). */
+const PUBLICATION_WAIT_MS = 120_000;
+/** How long ONE wait for a publication fact is held on `/` before it is asked again on a fresh
+ *  call, so an instance Cloudflare replaces under the wait costs one slice
+ *  (SCRIPT_RUN_WAIT_SLICE_MS says why). */
+const PUBLICATION_WAIT_SLICE_MS = 5_000;
+
+/** The project state the wait reads (project/contract.ts). */
+type PublicationState = Pick<
+  ProjectState,
+  "configRepoTip" | "publishedThrough" | "published" | "refused"
+>;
+
+/** Where the publication of `commitOid` stands in `state`, reduced through that commit's fact at
+ *  least: published, with its generation; owed, as the generation of its fact; or not published,
+ *  and why: its publication was refused, or main moved past it (only main's head is published).
+ *  Exported for the unit pin. */
+export function publicationOf(
+  state: PublicationState,
+  commitOid: string,
+):
+  | { status: "published"; generation: number }
+  | { status: "owed"; generation: number }
+  | { status: "not-published"; why: string } {
+  const { configRepoTip: tip, published, refused } = state;
+  if (published?.commitOid === commitOid)
+    return { status: "published", generation: published.generation };
+  if (tip?.commitOid !== commitOid)
+    return {
+      status: "not-published",
+      why: `main's head is ${tip ? tip.commitOid : "no commit"}, and only the head is published`,
+    };
+  if ((state.publishedThrough ?? 0) < tip.offset) return { status: "owed", generation: tip.offset };
+  if (refused?.generation === tip.offset)
+    return {
+      status: "not-published",
+      why:
+        refused.commitOid === commitOid
+          ? refused.error
+          : `main moved on to ${refused.commitOid}, whose publication failed: ${refused.error}`,
+    };
+  return {
+    status: "not-published",
+    why: `main moved on to ${published?.commitOid}, which was published in its place`,
+  };
+}
+
+/** THE WAIT for the publication of `commitOid` of the config repo at `path`: its generation once
+ *  it is the project's published config, or a throw with why it is not — the reason a refused
+ *  publication gives, or the platform's failure when it gave up for now. */
+async function waitForPublication(
+  itx: LibraryItx,
+  path: string,
+  commitOid: unknown,
+): Promise<{ commitOid: string; generation: number }> {
+  if (path !== "/repos/config")
+    throw codedError(
+      "INVALID_INPUT",
+      `repos.get(${JSON.stringify(path)}).waitForPublication: only /repos/config is published`,
+    );
+  const oid = z
+    .string()
+    .regex(/^[0-9a-f]{40}$/, "a commit's oid")
+    .parse(commitOid);
+  const deadline = Date.now() + PUBLICATION_WAIT_MS;
+  const left = () => Math.max(0, deadline - Date.now());
+  const root = await itx.builtins.cd("/");
+  const project = (...steps: ItxExpression) =>
+    root.invoke(["facets", ["get", "project"], ...steps]) as Promise<unknown>;
+  // The commit's fact reached `/` before the commit answered (repo/durable-object.ts
+  // `#commitFact`), so the state reduced through the head as it is now has seen it.
+  const head = (await root.invoke([["readEvents", Number.MAX_SAFE_INTEGER, 1]])) as {
+    scannedThroughOffset: number;
+  };
+  for (let through = head.scannedThroughOffset; ;) {
+    await project(["waitUntilProcessed", { offset: through, timeoutMs: left() }]);
+    const { offset, state } = (await project(["snapshot"])) as {
+      offset: number;
+      state: PublicationState;
+    };
+    const at = publicationOf(state, oid);
+    if (at.status === "published") return { commitOid: oid, generation: at.generation };
+    if (at.status === "not-published")
+      throw new Error(`commit ${oid} of /repos/config is not published: ${at.why}`);
+    // owed: the next publication fact, and the state through it
+    let next: StreamEvent;
+    try {
+      next = (await root.invoke([
+        [
+          "waitForEvent",
+          {
+            type: [
+              "events.iterate.com/project/worker-updated",
+              "events.iterate.com/project/worker-update-failed",
+            ],
+            afterOffset: offset,
+            timeoutMs: Math.min(PUBLICATION_WAIT_SLICE_MS, left()),
+          },
+        ],
+      ])) as StreamEvent;
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      if (left() > 0) continue;
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `commit ${oid} of /repos/config: its publication did not land within ${PUBLICATION_WAIT_MS / 1000} s`,
+      );
+    }
+    const payload = next.payload as { generation: number; error?: string; unavailable?: true };
+    // the platform gave up for now: the commit is still owed, and published by a later attempt
+    if (payload.unavailable && payload.generation === at.generation)
+      throw new Error(
+        `commit ${oid} of /repos/config is not published yet: the platform could not finish its publication for now (${payload.error}), and publishes it later`,
+      );
+    through = next.offset;
+  }
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),

@@ -3,9 +3,12 @@
 // stored with), and the token crypto, WebCrypto only: the signed-claims codec, `sha256Hex` and
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
+import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
+import { storedCause, type Cause } from "./cause.ts";
+import { ScheduledAppendInput } from "./stream/scheduled-appends.ts";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -41,6 +44,18 @@ export type Caller = {
    *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
    *  under it. */
   platform?: true;
+  /** Set ONLY by the delivery loop, on the call a fan-out row makes to deliver one event (the
+   *  context DO's `runAsDelivery`, stream/subscription-delivery.ts): the SHA-256 of that event's
+   *  JSON. A target's `deliverEvent` — a loaded worker's (context/built-ins.ts `workers.get`), a
+   *  webhook's, the platform hook's — answers only the event it names, so nothing the call reaches
+   *  (a rule, a bound argument) can hand a subscriber an event its log never held. It rides the
+   *  delivery's own hops — a `cd`, a call the resolver sends to another context — each read as the
+   *  call is made (context/built-ins.ts `callContext`), and nothing else: loaded code's calls mint
+   *  a fresh caller, and the stateless entrypoint's hops carry none. */
+  delivery?: string;
+  /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
+   *  a chain: the context it reaches begins one. */
+  cause?: Cause;
   /** THE PERSON THEMSELVES, managing their own account: the principal's own OAuth grant holds the
    *  `account` scope and nobody acts as them (session.ts `#caller`). Absent for a grant bound to
    *  projects or without `account`, an admin's sign-in as someone, the admin secret (with or without
@@ -59,7 +74,7 @@ export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
 /** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
  *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
- *  runs); `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
+ *  runs); `cause`, `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
  *  dropped, all but `processor`, the SDK engine's label for which processor wrote it: the writer's
  *  word, filed under the stamped `origin`. `origin` names the context whose code ran, not who asked
  *  it to run: a `run-requested` anyone appends runs at the context it lands on, and what that script
@@ -70,6 +85,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   here: string,
 ): E & { source: NonNullable<StreamEventInput["source"]> } {
   const source: NonNullable<StreamEventInput["source"]> = { origin: caller.path || here };
+  if (caller.cause) source.cause = storedCause(caller.cause);
   if (event.source?.processor) source.processor = event.source.processor;
   if (caller.principal) source.principal = caller.principal;
   if (caller.principal && caller.grant) source.grant = caller.grant;
@@ -100,6 +116,59 @@ export function refusePlatformIdempotencyKeys(
         `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
       );
 }
+
+/** THE PLATFORM'S FACTS: the types only the platform appends, each stamped `source.platform` —
+ *  whoever reads one trusts it by its type alone (a config repo's `processEvent` switches on it) —
+ *  so the append boundary refuses anyone else's (`refusePlatformFacts`), on every context. The
+ *  account's, the organization's and the instance's facts on the global contexts are not here:
+ *  their processors fold only the platform's stamp, and a person's own append of one stays on their
+ *  log as theirs. */
+const PLATFORM_FACT_TYPE_LIST = [
+  "events.iterate.com/project/worker-updated",
+  "events.iterate.com/project/worker-update-failed",
+  "events.iterate.com/project/delete-requested",
+  "events.iterate.com/email/received",
+  "events.iterate.com/email/sent",
+  "events.iterate.com/github/webhook-received",
+  "events.iterate.com/slack/webhook-received",
+  // every provider's connection facts, typed from the provider by the one mechanism that lands them
+  // (integrations/connections.ts `appendConnected`, verbs.ts `disconnectIntegration`)
+  ...INTEGRATION_PROVIDERS.flatMap(
+    (provider) =>
+      [
+        `events.iterate.com/${provider}/connected`,
+        `events.iterate.com/${provider}/disconnected`,
+      ] as const,
+  ),
+] as const;
+
+/** A platform fact's type: what integrations/connections.ts `appendPlatformFact` appends. */
+export type PlatformFactType = (typeof PLATFORM_FACT_TYPE_LIST)[number];
+
+export const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set(PLATFORM_FACT_TYPE_LIST);
+
+/** A PLATFORM FACT FROM ANYONE BUT THE PLATFORM IS REFUSED (`PLATFORM_FACT_TYPES`), appended or
+ *  scheduled: an occurrence fires under its schedule's stamp, so what one may not append it may not
+ *  schedule. */
+export function refusePlatformFacts(
+  events: readonly { type: string; payload?: unknown }[],
+  caller: Caller,
+): void {
+  if (caller.platform) return;
+  for (const event of events) {
+    const types =
+      event.type === "events.iterate.com/itx/schedule-set"
+        ? (ScheduledAppendInput.safeParse(event.payload).data?.events.map(({ type }) => type) ?? [])
+        : [event.type];
+    const fact = types.find((type) => PLATFORM_FACT_TYPES.has(type));
+    if (fact)
+      throw codedError(
+        "FORBIDDEN",
+        `${fact} is the platform's own fact: no one else appends or schedules it`,
+      );
+  }
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 /** Bytes as base64url, unpadded. */

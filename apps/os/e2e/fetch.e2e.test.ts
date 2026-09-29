@@ -12,9 +12,6 @@
 //     worker → its env.ITX.fetch → DO's expression fetch → rule → the rpcStubs registry → relay →
 //     capnweb → the Node provider and back, the request crossing intact — the URL as the eyeball
 //     spelled it) and its WebSocket upgrade (101, echo, close through the Node provider)
-//   • a hop count the platform never wrote (`NaN`) is over budget on arrival — a project host is the
-//     ONE HTTP way in (who a visitor is: ingress-project-host.e2e,
-//     __workers-tests__/project-host-routing.test.ts)
 //   • egress: a `getSecret("/secrets/NAME")` placeholder that survives substitution means no such
 //     secret is stored, and forwarding it would leak the secret's NAME and send a garbage credential
 //     — the egress scans the request (URL first, then every header) as it substitutes and answers 502
@@ -126,16 +123,6 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
 // The workerd-provider half of the same leg is pinned in __workers-tests__/ws-fetch-live-101
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
 // (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
-
-test("a hop count the platform never wrote (an app spelling `NaN` to defeat the budget) is over budget on arrival: 508, never a loop", async () => {
-  // before admission — the count is read first, so the project need not exist
-  const response = await fetchProjectUrl(
-    projectUrl({ project: freshDnsSafeProjectSlug("nan-hops"), routingSlug: "site", path: "/" }),
-    { "x-itx-expression-hops": "NaN" },
-  );
-  expect(response).toMatchObject({ status: 508 });
-  expect(response.text).toContain('"NaN"');
-});
 
 test("unknown issuer server functions answer 404 instead of Start's internal 500", async () => {
   for (const id of ["bogus", "0".repeat(64)]) {

@@ -8,7 +8,7 @@
 // processor-rules.test.ts.
 import { expect, test, vi } from "vitest";
 import { z } from "zod";
-import { applyPatch, type PatchOp } from "../lib.ts";
+import { applyPatch, errorCode, type PatchOp } from "../lib.ts";
 import {
   defineProcessorContract,
   type StreamEvent,
@@ -1309,6 +1309,64 @@ test("rule 3 claim: A REVIVE catches up and runs the at-head pass; an attempt st
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("five-deaths-then-failed: work in flight that dies with its host is started again by each revive, its deaths counted across hosts; the fifth revive is refused WORK_FAILED, a restart onto other code is no death, and an attempt that settles starts the count over", async () => {
+  const mem = memoryStream();
+  const storage = memoryStorage();
+  const stored = new Map<string, unknown>();
+  const kv = {
+    get: <T>(key: string) => stored.get(key) as T | undefined,
+    put: (key: string, value: unknown) => void stored.set(key, value),
+    delete: (key: string) => stored.delete(key),
+  };
+  let settles = false;
+  /** One host of the processor: its at-head pass starts the work its state owes (here: always). */
+  const host = (generation = "g1") => {
+    const work = new (class extends StreamProcessor<object> {
+      readonly contract = AttemptsContract;
+      started = 0;
+      override processEvent(args: ProcessEventArgs<object>): undefined {
+        if (!args.delivery.caughtUp) return;
+        this.started += 1;
+        args.runInBackground(() => (settles ? Promise.resolve() : new Promise(() => {})));
+      }
+    })();
+    return {
+      work,
+      engine: new ProcessorEngine(work, { stream: mem.stream, storage, kv, generation }),
+    };
+  };
+  commit(mem, { type: "e" });
+  const first = host();
+  await first.engine.catchUpFromLog();
+  expect(first.work).toMatchObject({ started: 1 });
+  // each death: the host is gone, a fresh one is revived for the claim it left
+  const restarted: (number | string | undefined)[] = [];
+  for (let death = 1; death <= 6; death++) {
+    const next = host();
+    restarted.push(
+      await next.engine.revive().then(
+        () => next.work.started,
+        (error: unknown) => errorCode(error),
+      ),
+    );
+  }
+  expect(restarted).toEqual([1, 1, 1, 1, "WORK_FAILED", "WORK_FAILED"]);
+  expect(stored.get("processor-work-started")).toEqual({ deaths: 6, generation: "g1" });
+  // a host restarted onto other code (its own commit, a deploy) is no death: the count starts over
+  const moved = host("g2");
+  await moved.engine.revive();
+  expect(moved.work).toMatchObject({ started: 1 });
+  expect(stored.get("processor-work-started")).toEqual({ deaths: 0, generation: "g2" });
+  // what it receives next starts it again, and an attempt that settles starts the count over
+  settles = true;
+  const later = host();
+  commit(mem, { type: "e" });
+  await later.engine.catchUpFromLog();
+  await settle();
+  expect(later.work).toMatchObject({ started: 1 });
+  expect(stored.has("processor-work-started")).toBe(false);
 });
 
 test("rule 3 claim: A RELEASE NEVER OVERTAKES THE NEXT CLAIM: claims are sent one after another, so a slow release lands before the claim of the attempt that followed it", async () => {

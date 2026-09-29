@@ -1,8 +1,8 @@
 // context-stub.ts — A CONTEXT DURABLE OBJECT AS THE PLATFORM'S OWN CODE CALLS IT, under the one
 // failure model (docs/engineering-invariants.md#failures-and-retries), so a call gets the same policy
 // whichever hop makes it: the edge (iterate-context.ts), /mcp, the owner contexts the session and
-// the token endpoint read and append to (session.ts `ownerContext`), and a runner whose row sends
-// its scripts to another context (iterate-context-durable-object.ts `#scriptExecution`).
+// the token endpoint read and append to (session.ts `ownerContext`), and every call a context or
+// loaded code sends to the context it lives in (context/stateless-context.ts `contextReach`).
 import { z } from "zod";
 import type { WaitForEventFilter } from "iterate/api";
 import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
@@ -27,11 +27,15 @@ import type { workspaceVerbs } from "./workspace/durable-object.ts";
  *  as UNAVAILABLE, its message kept. A context answers `itx.run` with the request
  *  (library.ts `ScriptRunRequested`), and the call answers with the run's settlement, read here in
  *  slices of fresh calls (`settlementOfScriptRun`): no call is held on one instance for a run's
- *  length. */
+ *  length. `readsRunSettlements: false` is a context's Durable Object sending on the call it was
+ *  made (context/stateless-context.ts `contextReach`): it answers the request as it came, and its
+ *  own caller's side reads the settlement, so no context between the two is held for the run
+ *  either. */
 export function contextStub(
-  namespace: IterateContextNamespace,
+  namespace: Pick<IterateContextNamespace, "getByName">,
   address: DurableObjectAddress,
   area: string,
+  { readsRunSettlements = true }: { readsRunSettlements?: boolean } = {},
 ) {
   return {
     /** `givenUp`: the caller stopped waiting for this call's answer, so the call left pending is
@@ -79,6 +83,7 @@ export function contextStub(
       } catch (error) {
         throw unavailable(error);
       }
+      if (!readsRunSettlements) return answer;
       const requested = ScriptRunRequested.safeParse(answer);
       if (!requested.success) return answer;
       releaseRpcSessions([answer]); // parsed into a copy of its own
@@ -93,7 +98,10 @@ export function contextStub(
 /** `settlementOfScriptRun`'s reads: one `waitForEvent` on a fresh stub of the context at `path` in
  *  `projectId`, spelled at the fixed point with no principal — the platform's own read of its own
  *  record, whoever asked for the run — its lines named `itx-run.…`. */
-export function waitForEventOnContext(namespace: IterateContextNamespace, projectId: string) {
+export function waitForEventOnContext(
+  namespace: Pick<IterateContextNamespace, "getByName">,
+  projectId: string,
+) {
   return async (
     path: string,
     filter: WaitForEventFilter,

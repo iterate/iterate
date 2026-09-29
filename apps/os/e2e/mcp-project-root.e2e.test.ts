@@ -110,26 +110,24 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     {
       path: "worker.ts",
       content:
-        'import { WorkerEntrypoint } from "cloudflare:workers"; import { html } from "./app/page.js"; export default class extends WorkerEntrypoint { fetch() { return new Response(html, { headers: { "content-type": "text/html" } }); } }',
+        'import { IterateConfigEntrypoint } from "iterate/sdk"; import { html } from "./app/page.js"; export default class extends IterateConfigEntrypoint { fetch() { return new Response(html, { headers: { "content-type": "text/html" } }); } }',
     },
   ];
+  // the commit, and its publication awaited as the instructions teach: once it answers, the site
+  // serves the commit
   const commit = await success(
-    `async (itx) => itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })})`,
+    `async (itx) => { const repo = itx.repos.get("/repos/config"); const { commitOid } = await repo.commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); return repo.waitForPublication(commitOid); }`,
   );
-  expect(commit).toMatchObject({ commitOid: expect.any(String) });
-  const published = await until("MCP commit serves the site", async () => {
-    const result = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
-    return result.status === 200 && result.text === "<h1>MCP config repo publication</h1>"
-      ? result
-      : undefined;
-  });
+  expect(commit).toMatchObject({ commitOid: expect.any(String), generation: expect.any(Number) });
+  const published = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
+  expect(published).toMatchObject({ status: 200, text: "<h1>MCP config repo publication</h1>" });
   expect(published.headers["content-type"]).toContain("text/html");
   const events = await readAll(root);
   expect(
     events.find(
       (e) =>
-        e.type === "events.iterate.com/itx/ingress-configured" &&
-        e.payload.target[2][1].cacheKey === commit.commitOid,
+        e.type === "events.iterate.com/project/worker-updated" &&
+        e.payload.commitOid === commit.commitOid,
     ),
   ).toBeDefined();
   const requested = events.filter((e) => e.type === "events.iterate.com/itx/run-requested");
@@ -166,7 +164,12 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   const secondGrantId = second.id;
   expect(
     afterSecond.filter((e) => e.type === "events.iterate.com/itx/run-requested").at(-1)?.source,
-  ).toEqual({ origin: "/", principal, grant: secondGrantId });
+  ).toEqual({
+    origin: "/",
+    cause: expect.objectContaining({ depth: 0 }),
+    principal,
+    grant: secondGrantId,
+  });
 
   const otherEvents = await readAll(openItx(other));
   const denied = await run(

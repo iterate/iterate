@@ -10,25 +10,35 @@ a project installs this package; the platform ships none of it.
 
 ## Install
 
-A project installs voice from a folder of its config repo, beside the agents app's `agents/`:
+A project's config repo depends on the package, re-exports its service and relay class from
+`voice.ts`, and installs voice from its init case beside the agents app, which every call runs on
+(configs/default does all of it):
 
 ```text
-voice/package.json   { "main": "worker.ts", "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" } }
-voice/worker.ts      export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
+package.json   "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" }
+voice.ts       export { default, VoiceAgentDurableObject } from "@iterate-com/voice";
 ```
 
-`installVoice(itx, await itx.repos.get("/repos/config").modules({ dir: "voice" }))`
-(`@iterate-com/voice/install`) mounts that source at `itx.voice`, keeps it in project KV
-(`voice/runtime`) for the press's relay facet, and stores the screen font. `ensureVoiceAgent`,
-which Kit's Prepare and voice.iterate.com run, also stores the OpenAI key (the live model's) and
-commits both folders, in one commit (`commitAppFolders` in `@iterate-com/agents/install`), when the
-project has none, then loads both apps at once. To upgrade, write both files as `voiceFolder` has
-them for the newer build and install again, as `upgradeVoice` does (the Voice app's **Upgrade to
-the newest**, which then asks the new build for `health()`): worker.ts re-exports the build's
-classes by name, so a new pin under an old worker.ts can fail to load. A worker.ts that re-exports
-`VoiceDelegateDurableObject` is one: the relay facet is the only class now, so it becomes
-`export { default, VoiceAgentDurableObject } from "@iterate-com/voice";`. A device's press is the
-same call either way, so no Kit board needs a reflash for an upgrade.
+```ts
+import { installAgents } from "@iterate-com/agents/install";
+import { installVoice } from "@iterate-com/voice/install";
+
+// in processEvent, the init case
+case "events.iterate.com/project/worker-updated":
+  await installAgents(itx);
+  await installVoice(itx);
+```
+
+`installVoice` stores the screen font and writes the `itx.voice` rule to `voice.ts`'s default
+export (`{ mainModule: "voice.ts", source: itx.cd('/').config }`), and each press's relay facet is
+that module's class (`voiceAgentFacetSpec`), so nothing is copied into the project: a commit that
+changes what `voice.ts` bundles, such as a new pin, is the next press's code, and one that only
+changes the website leaves the relay running. The OpenAI key (the live model's) is needed only once
+a call starts: `ensureVoiceAgent`, which Kit's Prepare and voice.iterate.com run, stores it when the
+project has none, waits for `itx.voice` and asks it for `health()`, and refuses a project whose
+config installs no voice. An upgrade commits a newer pin (the Voice app's **Upgrade to the newest**,
+`upgradeVoice`) and waits for that commit's publication; `voiceVersion` reads the pin. A device's
+press is the same call either way, so no Kit board needs a reflash for an upgrade.
 
 The backend is the project's normal agent: its system prompt, capability tree and codemode loop.
 The press adds [voice-context.md](src/voice-context.md), the instructions for spoken answers, as
@@ -58,8 +68,8 @@ elements. The agent's rendering instructions live in [screen-context.md](src/scr
 | File                                 | What                                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/voice-agent.ts`                 | `VoiceAgentDurableObject`: the GPT-Live relay and the call fold. Dials `wss://api.openai.com/v1/live/sessions` through egress with `getSecret("/secrets/openai")`, forwards `mic-frame`s, appends `speaker-frame`s and transcripts, hands the live model's delegations to the agent on the context, and forwards the agent's replies to the live model to speak. |
-| `src/worker.ts`                      | The voice service mounted at `itx.voice`. `setupVoiceAgent({ streamPath, activation })` creates the agent, then ONE append on the fresh context: the relay's subscription row (the installed source, read from project KV), `call-started`, so the relay dials at boot, and the agent's instructions.                                                            |
-| `src/install.ts`                     | `voiceFolder`, `installVoice` and `ensureVoiceAgent`: the folder a project installs from, its mount, and the flow Kit and voice.iterate.com run in the browser, preserving existing services and secrets.                                                                                                                                                        |
+| `src/worker.ts`                      | The voice service at `itx.voice`. `setupVoiceAgent({ streamPath, activation })` creates the agent, then ONE append on the fresh context: the relay's subscription row (`voice.ts`'s class of the published config), `call-started`, so the relay dials at boot, and the agent's instructions.                                                                    |
+| `src/install.ts`                     | `installVoice`, the init case's; `ensureVoiceAgent`, the key and the wait Kit and voice.iterate.com run in the browser, preserving existing services and secrets; `voiceVersion` and `upgradeVoice`, the pin and its upgrade.                                                                                                                                    |
 | `src/screen-font.ts`                 | The screen font's CSS with its font embedded (`assets/`), stored at `voice/screen-font.css`.                                                                                                                                                                                                                                                                     |
 | `src/call-client.ts`                 | `startVoiceCall(project, { client, onSpeakerFrame, onFact })` (`@iterate-com/voice/call`): one call as a client makes it — the activation, the path `/agents/voice/<client>/<UTC yyyymmddHHMMSS>-<activation>`, the press, the subscription, `mic-frame` appends, the keepalive and `call-ended`. voice.iterate.com and `voice-call.ts` run it.                  |
 | `apps/agents/scripts/voice-call.ts`  | One conversation from Node through the call client: a WAV in, the answer's WAV out, the press timeline printed.                                                                                                                                                                                                                                                  |
@@ -108,7 +118,7 @@ ESP32's 16 KiB inbox slot.
 
 ## Install, run, prove
 
-Run these commands from `apps/agents`. The installer also installs the agents app.
+Run these commands from `apps/agents`. The project's config installs both apps.
 
 ```bash
 export WORKER_BASE_URL=https://os.iterate.com
