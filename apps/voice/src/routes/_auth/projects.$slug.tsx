@@ -43,8 +43,9 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     const [rule, secrets, build] = await Promise.all([
       itx.rewriteRules.get("itx.voice"),
       itx.secrets.list(),
-      // the build of voice the project's config pins, for the upgrade
-      voiceVersion(itx),
+      // the build of voice the project's config pins, for the upgrade: none shown while a project
+      // created a moment ago has no config repo yet
+      voiceVersion(itx).catch(() => undefined),
     ]);
     const voice = {
       installed: Boolean(rule?.target),

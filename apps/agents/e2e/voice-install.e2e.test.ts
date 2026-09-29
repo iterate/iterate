@@ -20,7 +20,7 @@ import { publishedPackage } from "./support.ts";
 // This checkout's pkg.pr.new builds, published once its commit is pushed: the PR preview's e2e.
 deployedOnly(
   "a new project's config installs voice; setting it up through project OAuth stores the key once, preserves project data, and the service answers",
-  { timeout: 120_000 },
+  { tags: ["slow"], timeout: 120_000 },
   async () => {
     const version = await publishedPackage("@iterate-com/voice");
     await publishedPackage("@iterate-com/agents");

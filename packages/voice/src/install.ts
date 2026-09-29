@@ -60,7 +60,14 @@ export async function ensureVoiceAgent(
     project.secrets.list(),
     project.rewriteRules.get("itx.voice"),
   ]);
-  if (!rule?.target && !(await voiceVersion(project)))
+  // A project created a moment ago may not have its config repo yet: wait for voice as below.
+  const pinned = rule?.target
+    ? undefined
+    : await voiceVersion(project).catch((error: unknown) => {
+        if (/: not created —/.test(String(error))) return "pending";
+        throw error;
+      });
+  if (!rule?.target && !pinned)
     throw new Error(
       `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/default does`,
     );
@@ -102,7 +109,10 @@ async function voiceInstalled(project: Pick<IterateContextApi, "waitForEvent">) 
       throw new Error(
         `The project's creation failed, so its config repo installs no voice: ${String(event.payload?.error)}`,
       );
-    if (event.payload?.match === "itx.voice" && event.payload.target) return;
+    // the root stores a rule's match normalized, as its steps (["itx", "voice"])
+    const match = event.payload?.match;
+    if ((Array.isArray(match) ? match.join(".") : match) === "itx.voice" && event.payload?.target)
+      return;
     afterOffset = event.offset;
   }
 }

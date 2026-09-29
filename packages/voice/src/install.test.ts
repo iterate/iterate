@@ -63,12 +63,20 @@ test("a project created a moment ago is waited for until its config repo's init 
   const root = project();
   root.waitForEvent
     .mockResolvedValueOnce(
-      ruleEvent(3, { match: "itx.agents", target: "itx.facets.get('agents')" }),
+      ruleEvent(3, { match: ["itx", "agents"], target: "itx.facets.get('agents')" }),
     )
-    .mockResolvedValueOnce(ruleEvent(5, { match: "itx.voice", target: "itx.workers.get(…)" }));
+    .mockResolvedValueOnce(ruleEvent(5, { match: ["itx", "voice"], target: "itx.workers.get(…)" }));
   expect(await ensureVoiceAgent(root)).toBe("ready");
   expect(root.waitForEvent.mock.calls.map(([filter]) => filter.afterOffset)).toEqual([0, 3]);
   expect(root.voice.health).toHaveBeenCalledOnce();
+});
+
+test("a project whose config repo is not created yet is waited for, not refused", async () => {
+  const root = project({ seeded: false });
+  root.waitForEvent.mockResolvedValueOnce(
+    ruleEvent(4, { match: ["itx", "voice"], target: "itx.workers.get(…)" }),
+  );
+  expect(await ensureVoiceAgent(root)).toBe("ready");
 });
 
 test.for([
@@ -193,7 +201,7 @@ function manifest(json: object) {
  *  land as the platform's do (`parent` must be the tip), with `/secrets/openai` unless `key` is
  *  false and the `itx.voice` rule when `voice`; `/`'s publications land by hand (`publish`), after a
  *  head at 7, and the rules its init case writes as `waitForEvent` answers them. */
-function project({ voice = false, key = true, pin = true } = {}) {
+function project({ voice = false, key = true, pin = true, seeded = true } = {}) {
   const files: Record<string, string> = {
     "package.json": manifest({ dependencies: pin ? { [name]: older } : {} }),
   };
@@ -209,7 +217,13 @@ function project({ voice = false, key = true, pin = true } = {}) {
       if (movedAfterRead) tip = "elsewhere";
       return read;
     },
-    readFile: async (path: string) => files[path] ?? null,
+    readFile: async (path: string) => {
+      if (!seeded)
+        throw new Error(
+          'repo /repos/config: not created — itx.repos.create("/repos/config") first',
+        );
+      return files[path] ?? null;
+    },
     commitFiles: async (input: {
       message: string;
       changes: { path: string; content?: string }[];
@@ -272,6 +286,6 @@ function project({ voice = false, key = true, pin = true } = {}) {
 }
 
 /** A rewrite rule's fact on the root, as `waitForEvent` answers it. */
-function ruleEvent(offset: number, payload: { match: string; target: string }) {
+function ruleEvent(offset: number, payload: { match: string[]; target: string }) {
   return { type: "events.iterate.com/itx/rewrite-rule-configured", offset, payload };
 }

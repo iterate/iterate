@@ -413,7 +413,8 @@ timeout up to `E2E_SLOW_ROW_TIMEOUT_MS`) and its file joins `SLOW_ROW_PATHS`. Th
 `context-residency.e2e.test.ts` that prove a careless facet stops (110–180 s each), the pin in
 `facet-abort-storage-reset.e2e.test.ts` of a Cloudflare fault that resets its context, and the
 agents' row in `apps/agents/e2e/install.e2e.test.ts` that publishes three commits, each waiting out
-the 5 s snapshot TTL. The
+the 5 s snapshot TTL, and voice's row in `apps/agents/e2e/voice-install.e2e.test.ts`, which waits for
+the commit's pkg.pr.new build and then a new project's first publication. The
 claimed-work row in `context-residency.e2e.test.ts` is not `slow`: it waits 30 s and runs on every PR.
 
 `pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`) and prints

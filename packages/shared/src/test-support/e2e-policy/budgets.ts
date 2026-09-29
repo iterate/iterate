@@ -82,6 +82,7 @@ export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
  */
 export const SLOW_ROW_PATHS = [
   "apps/agents/e2e/install.e2e.test.ts",
+  "apps/agents/e2e/voice-install.e2e.test.ts",
   "apps/os/e2e/context-residency.e2e.test.ts",
   "apps/os/e2e/facet-abort-storage-reset.e2e.test.ts",
 ];

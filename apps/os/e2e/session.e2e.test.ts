@@ -181,8 +181,12 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
     );
   // the saga SETTLES on `created` or `create-failed`: a failed birth fails here with its own fact,
   // and a wait that runs out names the facts it had (which step the saga was on)
-  const settled = await untilValue("project/created on /", projectFacts, (facts) =>
-    facts.some((e) => /\/project\/create(d|-failed)$/.test(e.type)),
+  const settled = await untilValue(
+    "project/created on /",
+    projectFacts,
+    (facts) => facts.some((e) => /\/project\/create(d|-failed)$/.test(e.type)),
+    // the seed's first publication resolves the agents and voice builds cold from esm.sh
+    { timeoutMs: 45_000 },
   );
   const created = settled.find((e) => e.type === "events.iterate.com/project/created");
   if (!created)
@@ -256,7 +260,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
     state: { creation: { status: "created", offset: created.offset } },
   });
-});
+}, 90_000);
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
   const slug = freshDnsSafeProjectSlug("cd-who");
