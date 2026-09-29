@@ -1,8 +1,9 @@
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, spaEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getDeployTarget, spaEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { smoke } from "../../../scripts/lib/deploy-helpers.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
@@ -12,14 +13,12 @@ const assets = new URL("../dist/assets/", import.meta.url);
  *  them, deployed (scripts/lib/deploy-app.ts); then the deployed oauth.js, client logo and extension
  *  bundle match this checkout. */
 export default async function deploy(options: { env: string }) {
+  const env = getDeployTarget(options.env, spaEnvs);
   await deployApp({
+    env,
+    dopplerProject: OS_DOPPLER_PROJECT,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/spa",
-    envs: spaEnvs,
-    dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
     async build(ctx) {
       await import("./build.ts");
       writeFileSync(
@@ -33,19 +32,23 @@ export default async function deploy(options: { env: string }) {
         }),
       );
     },
-    // A status alone could be the single-page fallback's: each file's bytes are the build's.
-    smokes: (env) => {
+    smokes: [],
+    // The extension zip's name comes from the build, so these probes run after the deploy rather
+    // than as `smokes`. A status alone could be the single-page fallback's: each file's bytes are
+    // the build's.
+    async afterDeploy() {
       const bundle = readdirSync(new URL("downloads/", assets)).find((name) =>
         name.endsWith(".zip"),
       );
       if (!bundle) throw new Error("No packaged extension found");
-      return ["oauth.js", "client-logo.svg", `downloads/${bundle}`].map((path) => ({
-        url: new URL(path, env.baseUrl).href,
-        ok: async (response: Response) =>
-          response.ok &&
-          readFileSync(new URL(path, assets)).equals(Buffer.from(await response.arrayBuffer())),
-        label: `deployed ${path} matches this checkout`,
-      }));
+      for (const path of ["oauth.js", "client-logo.svg", `downloads/${bundle}`])
+        await smoke(
+          new URL(path, env.baseUrl).href,
+          async (response) =>
+            response.ok &&
+            readFileSync(new URL(path, assets)).equals(Buffer.from(await response.arrayBuffer())),
+          `deployed ${path} matches this checkout`,
+        );
     },
   });
 }

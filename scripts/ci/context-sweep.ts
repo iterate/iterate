@@ -49,7 +49,13 @@ import {
   retryPlatformFailures,
   type FailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, backupBucketEnvs, osEnvs, type OsEnv } from "../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  backupBucketEnvs,
+  getDeployTarget,
+  osEnvs,
+  type OsEnv,
+} from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
 import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
@@ -144,9 +150,8 @@ export default async function contextSweep(options: {
   destroy?: boolean;
 }) {
   const ctx = await resolveEnvContext({
-    envs: osEnvs,
+    env: getDeployTarget(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
   });
   // Before anything is read: a backup that cannot be written would leave every orphan standing.
   const backups = options.destroy ? await backupWriter(ctx) : null;
@@ -462,10 +467,10 @@ function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
  *  deployment's own Cloudflare API token: `put` resolves once R2 holds the backup (ci-bucket.ts
  *  `put`). Refused for a deployment without one, and for one whose bucket is on another account. */
 async function backupWriter(ctx: EnvContext<OsEnv>) {
-  const target = backupBucketEnvs[ctx.name];
-  if (!target) throw new Error(`${ctx.name} has no backup bucket: sweep it without --destroy`);
+  const target = backupBucketEnvs[ctx.env.name];
+  if (!target) throw new Error(`${ctx.env.name} has no backup bucket: sweep it without --destroy`);
   if (target.cloudflareAccountId !== ctx.env.cloudflareAccountId)
-    throw new Error(`${target.bucketName} is not on ${ctx.name}'s Cloudflare account`);
+    throw new Error(`${target.bucketName} is not on ${ctx.env.name}'s Cloudflare account`);
   const bucket = await ciBucket({
     accountId: target.cloudflareAccountId,
     bucketName: target.bucketName,

@@ -1,6 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getOsDeployTarget,
+  osResourceNames,
+  type OsEnv,
+} from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
@@ -10,7 +15,7 @@ import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
-/** Deploy apps/os to `--env`, any name envs.ts `osEnv` knows: `prd` (Deploy OS), `preview` (main on
+/** Deploy apps/os to `--env`, any name envs.ts `getOsDeployTarget` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
  *  scripts/preview.ts `deploy`). */
 export default async function deploy(options: {
@@ -19,21 +24,13 @@ export default async function deploy(options: {
    *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
   withoutRoutes?: boolean;
 }) {
-  const env = osEnv(options.env);
-  if (!env)
-    throw new Error(
-      `apps/os: unknown env ${JSON.stringify(options.env)}; known: ${Object.keys(osEnvs).join(", ")}, or a per-commit deployment's <prefix>-<sha7>`,
-    );
+  const env = getOsDeployTarget(options.env);
   await deployApp({
+    env,
+    dopplerProject: OS_DOPPLER_PROJECT,
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/os",
-    envs: { [options.env]: env },
-    dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    resources: (env) => env.resources || {},
     // The private login settings and at-rest key come from Doppler. Public URLs come from envs.ts.
     requiredSecrets: ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"],
     // The configuration is checked first, as the Worker will read it: the generated vars and these
@@ -52,7 +49,7 @@ export default async function deploy(options: {
           privateKey: previewGithubAppPrivateKey(),
         });
       parseAppConfig({
-        ...viteWranglerConfig(ctx.name, { localDev: false, port: "" }).vars,
+        ...viteWranglerConfig(env.name, { localDev: false, port: "" }).vars,
         ...secretValues,
       });
       const [, databaseId] = await Promise.all([
@@ -68,7 +65,7 @@ export default async function deploy(options: {
         },
       });
     },
-    smokes: (env) => [
+    smokes: [
       {
         url: `${env.baseUrl}/version`,
         ok: (response) => response.status === 200,

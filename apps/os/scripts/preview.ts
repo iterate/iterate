@@ -30,7 +30,14 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getDeployTarget,
+  getOsDeployTarget,
+  osEnvs,
+  previewDeployment,
+  type OsEnv,
+} from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -135,7 +142,10 @@ type Command = z.infer<typeof Command>;
  *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
  *  that is not the dev/preview one. */
 const accountContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
+  resolveEnvContext({
+    env: getDeployTarget("preview", osEnvs),
+    dopplerProject: OS_DOPPLER_PROJECT,
+  });
 
 function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -574,7 +584,7 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
+  const versionId = await deployedVersion(ctx, getOsDeployTarget(name).workerName);
   const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
   // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
@@ -590,9 +600,9 @@ async function deployPreviewSteps(
   const signIn = prNumber
     ? signInLinks({
         url,
-        ingressRouting: osEnv(name)!.ingressRouting || null,
+        ingressRouting: getOsDeployTarget(name).ingressRouting || null,
         // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
-        providerHint: new URL(osEnv(name)!.adminIssuer!).host,
+        providerHint: new URL(getOsDeployTarget(name).adminIssuer!).host,
         prNumber,
         apps: deployedApps,
         changedPaths: await changed,
@@ -631,7 +641,7 @@ async function deployPreviewSteps(
   const [seeded] = await Promise.all([
     signIn
       ? traceOperation("Seed sign-in", () =>
-          seedSignIn(config, { url, ...signIn, admins: osEnv(name)!.admins || [] }),
+          seedSignIn(config, { url, ...signIn, admins: getOsDeployTarget(name).admins || [] }),
         )
       : true,
     publish(true),

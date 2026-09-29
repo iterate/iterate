@@ -379,12 +379,30 @@ export function previewDeployment(name: string) {
   return { name, prefix: match.groups.prefix!, sha: match.groups.sha!, os, apps };
 }
 
+/** THE ENTRY OF `envs` A NAME NAMES, with that name on it: what every deploy, provision and seed
+ *  script looks its `--env` up with, and hands to scripts/lib `deployApp` / `resolveEnvContext`.
+ *  Throws for a name `envs` has no entry for. */
+export function getDeployTarget<E>(name: string, envs: Record<string, E>): E & { name: string } {
+  const env = envs[name];
+  if (!env)
+    throw new Error(
+      `Unknown environment ${JSON.stringify(name)}. Known: ${Object.keys(envs).join(", ")}`,
+    );
+  return { ...env, name };
+}
+
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
- *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`); undefined for any
- *  other name. What building and deploying apps/os by name look up (vite.config.ts through
- *  generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to tell the two apart. */
-export function osEnv(name: string): OsEnv | undefined {
-  return osEnvs[name] || previewDeployment(name)?.os;
+ *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
+ *  it; throws for any other name. What building and deploying apps/os by name look up
+ *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
+ *  tell the two apart. */
+export function getOsDeployTarget(name: string): OsEnv & { name: string } {
+  const env = osEnvs[name] || previewDeployment(name)?.os;
+  if (!env)
+    throw new Error(
+      `apps/os: unknown env ${JSON.stringify(name)}; known: ${Object.keys(osEnvs).join(", ")}, or a per-commit deployment's <prefix>-<sha7>`,
+    );
+  return { ...env, name };
 }
 
 /** Static OAuth example and downloadable unpacked Chrome extension. Credentials share the platform's Doppler project. */

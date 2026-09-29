@@ -1,5 +1,5 @@
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, osEnvs, osResourceNames } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getDeployTarget, osEnvs, osResourceNames } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { routedHostnames } from "./generate-wrangler-config.ts";
@@ -8,9 +8,8 @@ import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env: string }) {
   const ctx = await resolveEnvContext({
-    envs: osEnvs,
+    env: getDeployTarget(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
   });
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(
     "/storage/kv/namespaces?per_page=1000",
@@ -59,12 +58,12 @@ export default async function ensureResources(options: { env: string }) {
     resources.itxKvId !== ctx.env.resources?.itxKvId ||
     resources.dbId !== ctx.env.resources?.dbId
   ) {
-    console.log(`\nenvs.ts is out of date for ${ctx.name} — update its resources entry to:\n`);
+    console.log(`\nenvs.ts is out of date for ${ctx.env.name} — update its resources entry to:\n`);
     console.log(`  resources: ${JSON.stringify(resources, null, 2).replaceAll("\n", "\n  ")},\n`);
     console.log("then commit (the Worker config reads it from envs.ts)");
     process.exit(1);
   }
-  console.log(`✅ ${ctx.name} resources all present and match envs.ts`);
+  console.log(`✅ ${ctx.env.name} resources all present and match envs.ts`);
 }
 if (process.argv[1]?.endsWith("ensure-resources.ts"))
   void createCli({ ...import.meta, name: "ensure-resources" }).run();

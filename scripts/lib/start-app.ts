@@ -21,6 +21,7 @@ import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
+  getDeployTarget,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -210,15 +211,13 @@ function workerFirstRoutes(app: StartApp) {
 }
 
 async function deploy(app: StartApp, options: { env: string }) {
+  const env = getDeployTarget(options.env, app.envs);
   await deployApp({
+    env,
+    dopplerProject: app.name,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
-    envs: app.envs,
-    dopplerProject: app.name,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    smokes: (env) => [
+    smokes: [
       { url: `${env.baseUrl}/healthz`, ok: (response) => response.status === 200, label: "health" },
     ],
   });
@@ -226,9 +225,8 @@ async function deploy(app: StartApp, options: { env: string }) {
 
 async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext({
-    envs: app.envs,
+    env: getDeployTarget(options.env, app.envs),
     dopplerProject: app.name,
-    env: options.env,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,

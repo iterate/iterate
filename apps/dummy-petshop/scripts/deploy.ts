@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { dummyPetshopEnvs } from "../../../envs.ts";
+import { dummyPetshopEnvs, getDeployTarget } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy → the shop's index and its state answer (scripts/lib/deploy-app.ts).
@@ -8,15 +8,13 @@ import { deployApp } from "../../../scripts/lib/deploy-app.ts";
  *  deploy rather than the next suite that calls the shop. No secrets ship: PETSHOP_SEAL_KEY is
  *  already a worker secret, and a deploy keeps it. */
 export default async function deploy(options: { env: string }) {
+  const env = getDeployTarget(options.env, dummyPetshopEnvs);
   await deployApp({
+    env,
+    dopplerProject: "dummy-petshop",
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/dummy-petshop",
-    envs: dummyPetshopEnvs,
-    dopplerProject: "dummy-petshop",
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    smokes: (env) => [
+    smokes: [
       { url: `${env.baseUrl}/`, ok: (response) => response.status === 200, label: "shop index" },
       {
         url: `${env.baseUrl}/cloudflare/.well-known/jwks.json`,

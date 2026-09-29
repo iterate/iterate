@@ -10,7 +10,13 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getDeployTarget,
+  osEnvs,
+  osResourceNames,
+  type OsEnv,
+} from "../../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import {
   CloudflareApiError,
@@ -69,16 +75,15 @@ async function eraseDataWith(
   if (options.env === "prd" && !options.yesIMeanPrd)
     throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
   const context = await services.resolveEnvContext({
-    envs: osEnvs,
+    env: getDeployTarget(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
   });
   const { env, cf } = context;
   if (!env.resources)
-    throw new Error(`${context.name} records no resource ids in envs.ts: nothing to erase them by`);
+    throw new Error(`${env.name} records no resource ids in envs.ts: nothing to erase them by`);
   const resourceNames = osResourceNames(env.resourceNamePrefix);
   console.log(
-    `${options.dryRun ? "Inventory" : "Erase"}: ${context.name}, worker ${env.workerName}, D1 ${resourceNames.db}, R2 ${resourceNames.files}, Artifacts ${resourceNames.repos}`,
+    `${options.dryRun ? "Inventory" : "Erase"}: ${env.name}, worker ${env.workerName}, D1 ${resourceNames.db}, R2 ${resourceNames.files}, Artifacts ${resourceNames.repos}`,
   );
   const namespaces = await services.getWorkerDoNamespaces(context, env.workerName);
   console.log(
@@ -196,7 +201,7 @@ async function eraseDataWith(
     );
   console.log(`Other workers sharing data: ${consumers.sort().join(", ") || "none"}`);
   if (options.dryRun) {
-    console.log(`Dry run: nothing changed in ${context.name}.`);
+    console.log(`Dry run: nothing changed in ${env.name}.`);
     return;
   }
   if (consumers.length)
@@ -284,7 +289,7 @@ async function eraseDataWith(
     console.log(`${store.label} after: empty`);
   }
   console.log(
-    `✅ ${context.name}: all Durable Objects retired; the D1's schema and migration history dropped; both KV namespaces, R2 and Artifacts verified empty. Deploy to migrate the D1 from nothing and restore service.`,
+    `✅ ${env.name}: all Durable Objects retired; the D1's schema and migration history dropped; both KV namespaces, R2 and Artifacts verified empty. Deploy to migrate the D1 from nothing and restore service.`,
   );
 }
 
