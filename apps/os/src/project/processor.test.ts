@@ -34,6 +34,7 @@ const empty: ProjectState = {
   configRepoTip: null,
   unpublishedCommits: [],
   lastPublicationFactOffset: null,
+  publishedCommit: null,
   hostnames: {},
   integrations: {},
   primaryHostname: null,
@@ -88,7 +89,7 @@ const reduceRows: {
     },
   },
   {
-    name: "a publication's outcome settles the commit of its generation, a refusal too; the platform's give-up settles nothing; each is the last publication fact",
+    name: "a publication's outcome settles the commit of its generation, a refusal too; the platform's give-up settles nothing; each is the last publication fact, and the published one is the commit the project runs",
     events: [
       committed("/repos/config", "aaa"),
       committed("/repos/config", "bbb"),
@@ -101,7 +102,7 @@ const reduceRows: {
       },
       { type: "events.iterate.com/itx/ingress-configured", payload: { target: ["itx", "config"] } },
     ],
-    state: { ...owing(tip("ccc", 3)), lastPublicationFactOffset: 6 },
+    state: { ...owing(tip("ccc", 3)), lastPublicationFactOffset: 6, publishedCommit: "aaa" },
   },
   {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
@@ -116,6 +117,7 @@ const reduceRows: {
       configRepoTip: null,
       unpublishedCommits: [],
       lastPublicationFactOffset: null,
+      publishedCommit: null,
       hostnames: {},
       integrations: {},
       primaryHostname: null,
@@ -665,6 +667,7 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
     ...tipped,
     unpublishedCommits: [],
     lastPublicationFactOffset: 4,
+    publishedCommit: "aaa",
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();

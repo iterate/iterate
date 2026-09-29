@@ -331,13 +331,14 @@ export class ProjectProcessor extends StreamProcessor<
           ],
         };
       case "events.iterate.com/project/worker-updated": {
-        const { generation } = event.payload;
+        const { commitOid, generation } = event.payload;
         return {
           ...state,
           unpublishedCommits: state.unpublishedCommits.filter(
             ({ offset }) => offset !== generation,
           ),
           lastPublicationFactOffset: event.offset,
+          publishedCommit: commitOid,
         };
       }
       case "events.iterate.com/project/worker-update-failed": {
