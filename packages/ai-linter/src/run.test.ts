@@ -178,6 +178,21 @@ test("GitHub lists a changed file without its name: the others are linted, and t
   );
 });
 
+test("a file GitHub lists without its name counts toward the 1,000 files read", async () => {
+  const github = fakeGithub({
+    alsoListed: [
+      { sha: "c88986395d0cf995a15705159d1ed16459a6ef00" },
+      ...Array.from({ length: 998 }, (_, index) => ({
+        filename: `data/${index}.json`,
+        status: "modified",
+      })),
+      { filename: "src/listed-1001st.ts", status: "modified" },
+    ],
+  });
+  await lintHead(job, config, io({ github }).lintIo);
+  expect(checkRunOf(github.posted).output.summary).not.toMatch(/listed-1001st/);
+});
+
 test("an LLM rule that selects comments reads only the comments' excerpts, and a pull request with none asks the LLM nothing", async () => {
   const far = Array.from({ length: 40 }, (_, index) => `export const far${index} = ${index};`);
   const source = [

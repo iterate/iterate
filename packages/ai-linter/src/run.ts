@@ -203,7 +203,7 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
   const changed: z.infer<typeof ChangedFile>[] = [];
   // GitHub can list a changed file without its filename and status: it is counted, not linted.
   let unnamed = 0;
-  for (let page = 1; changed.length < MAX_FILES; page++) {
+  for (let page = 1; changed.length + unnamed < MAX_FILES; page++) {
     const batch = z
       .array(ChangedFile.nullable().catch(null))
       .parse(await github("GET", `${repo}/pulls/${job.number}/files?per_page=100&page=${page}`));
