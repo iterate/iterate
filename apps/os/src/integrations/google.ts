@@ -69,7 +69,8 @@ async function googleClientOf(
     return { origin: google.googleOrigin || null, scopes: google.scopes };
   }
   const secretPath = tokenSecretPathOf("google", connection);
-  const secrets = await scope.withItx((itx) => itx.secrets.list());
+  using itx = scope.getItx();
+  const secrets = await itx.secrets.list();
   const pin = secrets.find((secret) => secret.path === secretPath)?.urls[0];
   if (!pin)
     throw codedError(
@@ -98,8 +99,10 @@ export async function connectGoogle(
   const { origin, scopes } = await googleClientOf(scope, client, connection);
   const endpoints = googleEndpointsOf(origin);
   const asked = [...new Set([...scopes, ...(input.scopes || [])])];
-  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
-    itx.secrets.beginOAuth(tokenSecretPathOf("google", connection), {
+  using itx = scope.getItx();
+  const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(
+    tokenSecretPathOf("google", connection),
+    {
       authorizationEndpoint: endpoints.authorizationEndpoint,
       tokenEndpoint: endpoints.tokenEndpoint,
       client: client === "iterate" ? { platform: "google" } : { project: "google" },
@@ -113,7 +116,7 @@ export async function connectGoogle(
       },
       next: input.next,
       expectAccount: existing?.externalId,
-    }),
+    },
   );
   const attempt: ConnectionAttempt = {
     client,

@@ -62,8 +62,10 @@ export async function connectCloudflare(
     );
   const endpoints = cloudflareEndpointsOf(cloudflare.cloudflareOrigin);
   const asked = [...new Set([...cloudflare.scopes, ...(input.scopes || [])])];
-  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
-    itx.secrets.beginOAuth(tokenSecretPathOf("cloudflare", input.connection), {
+  using itx = scope.getItx();
+  const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(
+    tokenSecretPathOf("cloudflare", input.connection),
+    {
       authorizationEndpoint: endpoints.authorizationEndpoint,
       tokenEndpoint: endpoints.tokenEndpoint,
       client: { platform: "cloudflare" },
@@ -72,7 +74,7 @@ export async function connectCloudflare(
       urls: endpoints.urls,
       next: input.next,
       expectAccount: input.existing?.externalId,
-    }),
+    },
   );
   const attempt: ConnectionAttempt = {
     client: "iterate",

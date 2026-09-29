@@ -254,11 +254,12 @@ async function routeRequest(
   const url = new URL(request.url);
   // OUR MARK (cause.ts): a request our own code sent resumes its chain, one context further.
   const mark = parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
+  const ray = request.headers.get("cf-ray");
   let cause: Cause;
   try {
     cause = mark
       ? crossingOneMore(mark, `a request to ${url.host}`)
-      : newChain(`a request to ${url.host}`);
+      : newChain(`a request to ${url.host}${ray ? ` (ray ${ray})` : ""}`);
   } catch (error) {
     return new Response(`508: ${error instanceof Error ? error.message : String(error)}\n`, {
       status: 508,

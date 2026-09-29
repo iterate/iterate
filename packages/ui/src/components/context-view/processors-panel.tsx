@@ -1,5 +1,5 @@
 // The processors panel — everything live about one context, in one right-edge sheet, read top to
-// bottom (the old platform's stream-state panel, on today's data):
+// bottom:
 // - VITALS: the head, the append rate, the context's age and incarnation, the pause; a sparkline of
 //   appends per minute over the last hour (from the loaded log's timestamps: no metric of its own).
 // - WHO IS HERE: every principal that acted, newest first, with when (a click narrows the feed to

@@ -19,21 +19,29 @@
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
-// no client-side wrapper. Loaded code reaches it through the SDK's `withItx(env.ITX, (itx) => …)`,
-// which releases the scope and every call made through it (lint: iterate/no-raw-itx-get). A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
-// `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
-// author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
+// no client-side wrapper. Loaded code reaches it with `using itx = this.getItx()`, which releases
+// the scope and every call made through it (lint: iterate/no-raw-itx-get). A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
+// `DurableObject` class), and no bare-lambda entry point: the code the author wrote IS what runs, and
+// it always enters through an EXPORTED entrypoint. The one module the platform adds is evaluated
+// first (module-resolution.ts `enteredThroughPlatform`): it carries the cause on `fetch` and gives
+// every `WorkerEntrypoint` `callWithCause` and `getItx` (iterate src/sdk/loaded-worker.ts).
 
 import { codedError, errorCode } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { sha256Hex } from "../caller.ts";
 import { WorkerManifest } from "./worker-manifest.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
-import { readPackage, resolveModules, type ResolveOptions } from "./module-resolution.ts";
+import {
+  enteredThroughPlatform,
+  readPackage,
+  resolveModules,
+  type ResolveOptions,
+} from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
@@ -358,7 +366,10 @@ export async function prepareConfinedWorker(
   // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
   // failure that persists mints no billed identity per retry.
   const produce = async (): Promise<ResolvedWorker> =>
-    resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule));
+    enteredThroughPlatform(
+      await resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule)),
+      PLATFORM_MODULES,
+    );
   let workerForCode = produce;
   if (state.dead) {
     // Outside the loader, so a throw here poisons nothing; one run for every caller while it lasts.
@@ -400,13 +411,14 @@ export async function prepareConfinedWorker(
         throw error;
       }
       return {
-        // PURE-PLAY: no node:* but `nodejs_als`, which the SDK carries a call's cause in (cause.ts),
-        // so userspace code stays portable across workerd builds.
+        // The Node.js compatibility this date turns on stays off: it adds ~0.7 ms to every cold load
+        // (measured 2026-09-29), and the SDK needs only `nodejs_als`, which carries a call's cause
+        // (cause.ts).
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
         // 10 distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         compatibilityFlags: [
           "no_nodejs_compat",
           "no_nodejs_compat_v2",

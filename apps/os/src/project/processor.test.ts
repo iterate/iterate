@@ -669,7 +669,9 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
   const written: (string | null)[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -704,7 +706,9 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
 test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: ["iterate.app"],
@@ -783,7 +787,9 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
   let finish!: () => void;
   const held = new Promise<void>((resolve) => (finish = resolve));
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -833,7 +839,9 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   const held = new Promise<void>((resolve) => (finish = resolve));
   let provisions = 0;
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
@@ -883,8 +891,8 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
-      calls.push("withItx (another saga ran)");
-      return Promise.reject(new Error("unused"));
+      calls.push("getItx (another saga ran)");
+      throw new Error("unused");
     },
     () => Promise.reject(new Error("unused")),
     () => ({
@@ -973,7 +981,9 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => null,
     () => ({
@@ -1021,7 +1031,9 @@ test("ProjectProcessor — the deletion: a pass that keeps failing runs again af
   const reported: unknown[] = [];
   const incarnation = () =>
     new ProjectProcessor(
-      () => Promise.reject(new Error("unused")),
+      () => {
+        throw new Error("unused");
+      },
       () => Promise.reject(new Error("unused")),
       () => null,
       () => ({
@@ -1084,7 +1096,9 @@ test("template provenance survives replay of the project creation request", () =
 /** The reduce never reaches the context or a template; the saga is the e2e's. */
 function processorWithoutHostnames() {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the reduce reaches no itx")),
+    () => {
+      throw new Error("the reduce reaches no itx");
+    },
     () => Promise.reject(new Error("the reduce downloads no template")),
   );
 }
@@ -1198,7 +1212,9 @@ function modulesOf(commitOid: string) {
 
 function processorPublishingWith(publisher: ReturnType<typeof fakePublisher>) {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the publication reaches no itx")),
+    () => {
+      throw new Error("the publication reaches no itx");
+    },
     () => Promise.reject(new Error("the publication downloads no template")),
     () => null,
     () => null,

@@ -430,8 +430,8 @@ claimed-work row in `context-residency.e2e.test.ts` is not `slow`: it waits 30 s
 its alarms, its claims or what its birth resets: the facet host, residency, RPC stubs and built-ins
 (`apps/os/src/context/`), the context Durable Object, the alarm coordinator, the processors,
 `apps/os/wrangler.base.jsonc` or the compatibility date (`COMPATIBILITY_DATE` in
-`scripts/lib/wrangler-config.ts`). Add the label before the push (the e2e job reads it when it
-starts):
+`packages/shared/src/compatibility-date.ts`). Add the label before the push (the e2e job reads it
+when it starts):
 
 ```bash
 gh api -X POST repos/iterate/iterate/issues/<n>/labels -f 'labels[]=slow-e2e'

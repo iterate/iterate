@@ -38,10 +38,7 @@ test("a head delivered again after its outcome is queued again, and its outcome 
   // What an earlier run of this head remembered, and another head's.
   values.set(`remembered/${KEY}/llm/abc`, "an answer");
   values.set("remembered/ai-linter/v2:acme/app#9@x/llm/abc", "another head's");
-  const processor = new AiLinterProcessor(
-    (call) => Promise.resolve(call(pullRequestClosed)),
-    storage,
-  );
+  const processor = new AiLinterProcessor(() => pullRequestClosed, storage);
   const state = fold(processor, [
     installed(),
     pullRequest("opened", HEAD),
@@ -132,6 +129,7 @@ const pullRequestClosed = {
     new Response(JSON.stringify({ state: "closed", draft: false, head: { sha: HEAD } }), {
       status: 200,
     }),
+  [Symbol.dispose]: () => {},
 } as never; // the lint's first call is the only one this itx answers
 
 function unusedItx(): never {

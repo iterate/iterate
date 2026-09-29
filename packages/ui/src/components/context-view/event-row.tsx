@@ -29,7 +29,7 @@ export function formatClockTime(ms: number): string {
   });
 }
 
-/** `+950ms`, `+3.2s`, `+1m40s`, `+2h5m` — the old feed's compact gap. */
+/** `+950ms`, `+3.2s`, `+1m40s`, `+2h5m` — the compact gap between two rows. */
 export function formatDelta(ms: number): string {
   if (ms < 1_000) return `+${String(ms)}ms`;
   if (ms < 60_000) return `+${(Math.floor(ms / 100) / 10).toFixed(1).replace(/\.0$/, "")}s`;

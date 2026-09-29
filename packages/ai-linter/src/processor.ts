@@ -14,7 +14,6 @@ import {
   type ReduceArgs,
 } from "iterate/stream/processor";
 import type { IterateContextApi } from "iterate/api";
-import type { WithItx } from "iterate/sdk";
 import { AiLinterContract, type AiLinterJob } from "./contract.ts";
 import { PROMPT_VERSION } from "./lint.ts";
 import { DEFAULT_MODEL, lintHead, type Gateway } from "./run.ts";
@@ -51,11 +50,11 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
   contract = AiLinterContract;
   /** Jobs this incarnation is running; state's queue is the truth, this only stops a second start. */
   readonly #running = new Set<string>();
-  readonly #withItx: WithItx;
+  readonly #getItx: () => IterateContextApi & Disposable;
   readonly #storage: LintStorage;
-  constructor(withItx: WithItx, storage: LintStorage) {
+  constructor(getItx: () => IterateContextApi & Disposable, storage: LintStorage) {
     super();
-    this.#withItx = withItx;
+    this.#getItx = getItx;
     this.#storage = storage;
   }
 
@@ -108,7 +107,7 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
     const job = state.queue[0];
     if (!job || this.#running.has(job.key)) return;
     this.#running.add(job.key);
-    const withItx = this.#withItx;
+    const getItx = this.#getItx;
     const storage = this.#storage;
     // What this head's lint remembered (run.ts `LintIo.remember`), until its outcome is on the log.
     const remembered = `remembered/${job.key}/`;
@@ -116,13 +115,15 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
       try {
         const config = { rules: state.rules || "rules", model: state.model || DEFAULT_MODEL };
         const outcome = await lintHead(job, config, {
-          fetch: (request) =>
-            withItx(async (itx) => {
-              const response = await itx.fetch(request);
-              return { status: response.status, text: await response.text() };
-            }),
-          model: (model, input, options) =>
-            withItx((itx) => runModel(itx, model, input, options.gateway)),
+          fetch: async (request) => {
+            using itx = getItx();
+            const response = await itx.fetch(request);
+            return { status: response.status, text: await response.text() };
+          },
+          model: async (model, input, options) => {
+            using itx = getItx();
+            return await runModel(itx, model, input, options.gateway);
+          },
           async remember<T>(key: string, compute: () => Promise<T>) {
             const kept = await storage.get<T>(`${remembered}${key}`);
             if (kept !== undefined) return kept;
@@ -130,7 +131,10 @@ export class AiLinterProcessor extends StreamProcessor<AiLinterState> {
             await storage.put(`${remembered}${key}`, value);
             return value;
           },
-          projectId: async () => (await withItx((itx) => itx.whoami())).projectId,
+          projectId: async () => {
+            using itx = getItx();
+            return (await itx.whoami()).projectId;
+          },
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
         });
         await append({

@@ -86,7 +86,9 @@ export const ProjectContract = defineProcessorContract({
         z.object({
           commitOid: z.string().min(1),
           offset: z.number().int().positive(),
-          cause: z.object({ chain: z.string(), depth: z.number() }).optional(),
+          cause: z
+            .object({ chain: z.string(), depth: z.number(), parent: z.string().optional() })
+            .optional(),
         }),
       )
       .default([]),

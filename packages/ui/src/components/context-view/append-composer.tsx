@@ -1,5 +1,4 @@
-// The context view's raw composer, the old platform's (apps/os `stream-view-composer.tsx` raw mode
-// and `example-events-panel.tsx`, removed in #2837): YAML (or JSON) for one event or a list of
+// The context view's raw composer: YAML (or JSON) for one event or a list of
 // them, sent through the caller's `onAppend` with ⌘/Ctrl+Enter or the button. Closed it is one
 // "Append event" button under the feed, in the rows' body column, so it never eats the log; open,
 // in the same column under one rule, the editor is capped (12rem) and the feed keeps the rest. Typing completes the event's fields and, after `type:`, the types

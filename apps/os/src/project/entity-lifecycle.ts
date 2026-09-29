@@ -16,7 +16,6 @@ import {
   type ReduceArgs,
   StreamProcessor,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 
 /** What the reduce keeps between events: where creation stands, as the offset of the event that
@@ -111,14 +110,14 @@ export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: S
  *  `itx.<entity>s.create(path)` enables), it runs again after every eviction: an attempt lost with an
  *  incarnation is simply run again by the next, the certificates are keyed, and each effect
  *  tolerates its own earlier success (a repo that already exists, one already gone). Pure: the host's
- *  `withItx` and the effects are its constructor arguments, so a unit test constructs it with `new`
+ *  `getItx` and the effects are its constructor arguments, so a unit test constructs it with `new`
  *  and reduces rows (entity-lifecycle.test.ts, in node); the sagas are proven on the worker
  *  (e2e/repos.e2e.test.ts, e2e/workspaces.e2e.test.ts). */
 export class EntityLifecycleProcessor<
   State extends EntityCreationAndDeletionState = EntityCreationAndDeletionState,
 > extends StreamProcessor<State> {
   readonly contract: ProcessorContract<State>;
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly getItx: () => ItxEntrypointScope & Disposable;
   /** The path of the context this processor's facet is hosted on — the entity's one name, which the
    *  host reads off its own props (the context's name), never off `itx.whoami()`: that also reads the
    *  project's row from the control plane, whose bound fails a creation on a cold wake of it. */
@@ -131,13 +130,13 @@ export class EntityLifecycleProcessor<
 
   constructor(
     contract: ProcessorContract<State>,
-    withItx: WithItx<ItxEntrypointScope>,
+    getItx: () => ItxEntrypointScope & Disposable,
     path: () => string,
     effects: EntityLifecycleProcessor["effects"] = {},
   ) {
     super();
     this.contract = contract;
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.path = path;
     this.effects = effects;
   }
@@ -198,7 +197,8 @@ export class EntityLifecycleProcessor<
         payload: { path },
         idempotencyKey: `${slug}/${fact}:${path}`,
       };
-      await this.withItx((itx) => itx.cd("/").append(certificate));
+      using itx = this.getItx();
+      await itx.cd("/").append(certificate);
       await append(certificate);
     };
     if (state.creation?.status === "requested" && !this.#creating) {

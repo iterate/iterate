@@ -120,7 +120,7 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 /** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `readEvents`, `waitForEvent`, `kv`, `rpcStubs`,
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
- *  whole surface, and `withItx(env.ITX, (itx) => itx.append(…))` typechecks in loaded code. `cd` is
+ *  whole surface, and `itx.append(…)` on a `getItx()` scope typechecks in loaded code. `cd` is
  *  the edge's own (below) — it returns an EDGE context, not the built-in's handle — and `facets` is
  *  the published one, whose `get<Facet>` lets a caller type the facet it names (the record's own
  *  `get` answers the physical host's brand, which a caller never sees). */

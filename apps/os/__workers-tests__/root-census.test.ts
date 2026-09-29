@@ -105,7 +105,8 @@ const WHOAMI_HOMEPAGE = {
 import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class extends IterateConfigEntrypoint {
   async fetch() {
-    const { projectSlug } = await this.withItx((itx) => itx.whoami());
+    using itx = this.getItx();
+    const { projectSlug } = await itx.whoami();
     return new Response("Homepage of project " + projectSlug + "\\n");
   }
 }

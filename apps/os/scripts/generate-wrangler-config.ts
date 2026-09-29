@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import JSON5 from "json5";
 import {
   osEnvs,
@@ -8,11 +9,7 @@ import {
   osResourceNames,
   type OsEnv,
 } from "../../../envs.ts";
-import {
-  COMPATIBILITY_DATE,
-  OBSERVABILITY,
-  registrableDomainOf,
-} from "../../../scripts/lib/wrangler-config.ts";
+import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";

@@ -12,6 +12,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";
@@ -59,7 +60,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props: how a 
     async (_instance, state) => {
       // A fixed key: low-cardinality by construction (the loader cacheKey rule), tests only.
       const worker = env.LOADER.get("probe:facet-props:v1", () => ({
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         mainModule: "probe.js",
         modules: { "probe.js": IDENTITY_PROBE },
       }));
@@ -92,7 +93,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
       return {
         entryKind: Object.getPrototypeOf(entry)?.constructor?.name,
         classKind: Object.getPrototypeOf(klass)?.constructor?.name,
-        // `snapshot()` catches up from the context's log through `withItx` — the loopback the class
+        // `snapshot()` catches up from the context's log through `getItx` — the loopback the class
         // minted from its props — so a fresh context answers the processor's empty view.
         snapshot: await facet.snapshot(),
       };
@@ -597,7 +598,13 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
-      { incarnation: incarnation + 1, cause: "call", caller: "other", facetsReset: ["plain"] },
+      {
+        incarnation: incarnation + 1,
+        cause: "call",
+        caller: "other",
+        call: "itx.readEvents",
+        facetsReset: ["plain"],
+      },
     ],
   ]);
 });
@@ -1426,7 +1433,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "loaded processor", method: "revive", byExpression: "FORBIDDEN" },
   // Nor is what a class has but never listed: the SDK's own plumbing.
   { facet: "account", method: "listPublicMethods", byExpression: "FORBIDDEN" },
-  { facet: "account", method: "withItx", byExpression: "FORBIDDEN" },
+  { facet: "account", method: "getItx", byExpression: "FORBIDDEN" },
   { facet: "loaded processor", method: "publishLiveState", byExpression: "FORBIDDEN" },
   // The `secret` facet lists its reads alone.
   { facet: "secret", method: "write", byExpression: "FORBIDDEN" },

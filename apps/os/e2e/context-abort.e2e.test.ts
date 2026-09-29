@@ -25,10 +25,9 @@ import { freshDnsSafeProjectSlug, registerProject } from "./support/project-host
 const SAY = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class extends WorkerEntrypoint {
   async say(call) {
-    try { return { ok: await withItx(this.env.ITX, (itx) => itx.invoke(call)) }; }
+    try { using itx = this.getItx(); return { ok: await itx.invoke(call) }; }
     catch (e) { return { error: String((e && e.message) || e) }; }
   }
 }`,

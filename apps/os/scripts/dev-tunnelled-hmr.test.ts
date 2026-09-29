@@ -13,12 +13,12 @@ import { writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { createServer } from "vite";
 import { expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 
 createFailing(test, /left the vite-hmr upgrade unanswered/)(
   "@cloudflare/vite-plugin: vite dev hands the Worker a vite-hmr WebSocket outside Vite's own HMR base",

@@ -4,9 +4,8 @@
 // "Load older events", or a spinner while a page is read; once the whole log is loaded there is no
 // such row — `#1` says it is the start.
 //
-// The scheme is the old platform's feed's (apps/os `stream-feed-view.tsx`, removed in #2837; its
-// failure modes in #1847/#1848): the stick (stick-to-bottom.ts) owns the tail in DOM truth, so
-// followOnAppend is off; `anchorTo: "end"` keeps the row at the top of the view where it is when rows
+// The scheme: the stick (stick-to-bottom.ts) owns the tail in DOM
+// truth, so followOnAppend is off; `anchorTo: "end"` keeps the row at the top of the view where it is when rows
 // arrive above it (an older page) or below it (a reader in history is never yanked); rows are keyed
 // by offset, never by index, which is what lets that anchor find its row again after a prepend.
 // Nearing the top of what is loaded (the reader scrolled there, or the log is shorter than the

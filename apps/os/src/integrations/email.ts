@@ -36,6 +36,7 @@ import {
   newChain,
   parseCause,
   refuseActPastLimit,
+  storedCause,
 } from "../cause.ts";
 import { appConfigOf } from "../app-config.ts";
 import type { Caller } from "../caller.ts";
@@ -98,7 +99,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
     {
       principal: null,
       cause: mark
-        ? { chain: mark.chain, depth: Math.min(mark.depth, LOOP_DEPTH_LIMIT) }
+        ? { ...storedCause(mark), depth: Math.min(mark.depth, LOOP_DEPTH_LIMIT) }
         : newChain("inbound mail"),
     },
     {

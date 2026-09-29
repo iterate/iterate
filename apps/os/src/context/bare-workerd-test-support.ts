@@ -9,6 +9,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { build } from "esbuild";
 import { expect, vi } from "vitest";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 /** `fixture` (a module whose imports resolve from `resolveDir`) served by a bare workerd on a free
@@ -38,7 +39,7 @@ export async function bareWorkerd(options: {
 const config :Workerd.Config = (
   services = [ (name = "main", worker = (
     modules = [ (name = "worker.js", esModule = embed "worker.js") ],
-    compatibilityDate = "2026-09-01",
+    compatibilityDate = "${COMPATIBILITY_DATE}",
     ${options.worker || ""}
   )) ],
   sockets = [ (name = "http", address = "127.0.0.1:${port}", http = (), service = "main") ],
