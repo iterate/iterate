@@ -1,10 +1,6 @@
-// A PR body's Notes `Sign in ↗` (apps/os/scripts/preview.ts `signInLinks`): Notes in the PR's test
-// project, on the platform. Notes has no sign-in of its own: under paths ingress it runs on the
-// platform's, so a signed-out browser goes through the platform's sign-in and back. The link
-// suggests signing in through prd (`provider_hint`), which the page leads with, since a reviewer is
-// one of the deployment's admins, whom CI's seed made members of the project. No spec can hold a
-// prd session, so this one takes "sign in another way" and signs in as the preview's test admin with
-// the password (as specs/dash/sign-in-link.spec.ts does).
+// A PR body's Notes `Sign in ↗` (where it goes and why: apps/os/scripts/preview-config.ts
+// `signInLinkOf`). No spec can hold a prd session, so once the page leads with os.iterate.com this
+// one signs in another way: the preview's test admin, with the password.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { proxiedAppRoute, signInLinkOf } from "../../apps/os/scripts/preview-config.ts";
