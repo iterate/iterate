@@ -431,8 +431,8 @@ export async function prepareConfinedWorker(
  *  caller unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`), while an error the
  *  loaded code threw itself, the same text rethrown included, arrives with `remote` set and is the
  *  code's own. Retiring on that would mint a new billed identity for every request. An overload is
- *  its own kind of platform failure (platform-retry.ts `failureKind`), answered 503, and never a bad
- *  isolate. */
+ *  its own kind of platform failure (platform-retry.ts `failureKind`), answered 503, and never a
+ *  bad isolate. */
 export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
   if (!(error instanceof Error) || errorCode(error) !== undefined) return false;
   if (error.message.includes("Unable to deserialize cloned data")) return true;
