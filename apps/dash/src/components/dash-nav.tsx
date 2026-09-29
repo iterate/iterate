@@ -39,7 +39,7 @@ const PROJECT_PAGES = [
   { to: "/projects/$slug/mcp", label: "MCP", icon: Plug },
   { to: "/projects/$slug/secrets", label: "Secrets", icon: LockKeyhole },
   { to: "/projects/$slug/integrations", label: "Integrations", icon: Blocks },
-  { to: "/projects/$slug/hostnames", label: "Hostnames", icon: Globe },
+  { to: "/projects/$slug/domains", label: "Domains", icon: Globe },
 ] as const;
 
 const ACCOUNT_PAGES = [
