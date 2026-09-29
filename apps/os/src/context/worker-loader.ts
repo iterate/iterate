@@ -234,9 +234,9 @@ type PrepareConfinedWorkerOptions = {
  * warm call).
  *
  * ⚠️  THE cacheKey IS A DOLLAR AMOUNT. Cloudflare bills EVERY DISTINCT value ever passed to
- * `LOADER.get` as a Dynamic Worker at $0.002/worker/day. A per-request random
- * nonce in the key produced ~3.9M identities ≈ $7.8k in ~3 weeks, plus a cold isolate build on
- * every dispatch (~5MB, 1-2s). Key components must be LOW-CARDINALITY: deploy version × owning
+ * `LOADER.get` as a Dynamic Worker at $0.002/worker/day, and a new value is a cold isolate build
+ * (~5MB, 1-2s): a per-request nonce in the key bills a new worker and a cold build on every
+ * dispatch. Key components must be LOW-CARDINALITY: deploy version × owning
  * context × (content hash | the caller's build/commit id) — NEVER a nonce, timestamp, request id, or
  * offset, but for one bounded by failures (`generationId`). (The tension the nonce papered over is
  * real — a loaded isolate captures the minting host's `env.ITX`/`globalOutbound`, which can die

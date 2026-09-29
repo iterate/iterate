@@ -170,6 +170,7 @@ function configProject(initial: Record<string, string>, publishedCommit: string 
       async (filter: {
         type?: string | string[];
         afterOffset?: number;
+        timeoutMs?: number;
         payload?: Record<string, unknown>;
       }) => {
         for (;;) {
