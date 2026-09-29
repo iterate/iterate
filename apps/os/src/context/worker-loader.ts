@@ -102,22 +102,28 @@ export type NamedWorker = {
  *  (iterate/api `FacetSpec`, `workers.get`), resolved to the spec of the rule it names (the
  *  resolver's `namedWorker`): that spec's source under its cacheKey, and — only when the platform
  *  wrote the rule (`vouched`: its publication) — under `mainModule`'s identity in its manifest, with
- *  the manifest's generation. A manifest anyone else wrote is ignored: its worker loads under its own
- *  cacheKey or content, as any source does. */
+ *  the manifest's generation. A publication may have dropped the module, or the Durable Object class
+ *  a facet names (`className`): refused, naming it. A manifest anyone else wrote is ignored: its
+ *  worker loads under its own cacheKey or content, as any source does. */
 export function namedWorkerLoad(
   named: { spec: unknown; vouched: boolean },
   mainModule: string | undefined,
   where: string,
+  className?: string,
 ): { source: WorkerSource; cacheKey?: string; moduleIdentity?: string; generation?: number } {
   const { source, cacheKey, manifest: given } = NamedWorkerSpec.parse(named.spec);
   const manifest = named.vouched && given !== undefined ? WorkerManifest.parse(given) : undefined;
-  if (!manifest) return { source, cacheKey };
-  const moduleIdentity = mainModule ? manifest.modules[mainModule]?.identity : undefined;
-  if (mainModule && !moduleIdentity)
+  if (!manifest || !mainModule) return { source, cacheKey, generation: manifest?.generation };
+  const published = manifest.modules[mainModule];
+  if (!published)
     throw new Error(
       `${where}: the worker its source names publishes no module ${JSON.stringify(mainModule)}`,
     );
-  return { source, cacheKey, moduleIdentity, generation: manifest.generation };
+  if (className && !published.classes.includes(className))
+    throw new Error(
+      `${where}: the worker its source names publishes no Durable Object class ${JSON.stringify(className)} in ${JSON.stringify(mainModule)}`,
+    );
+  return { source, cacheKey, moduleIdentity: published.identity, generation: manifest.generation };
 }
 
 /** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw) in its

@@ -34,7 +34,6 @@ const empty: ProjectState = {
   configRepoTip: null,
   unpublishedCommits: [],
   lastPublicationFactOffset: null,
-  published: null,
   hostnames: {},
   integrations: {},
   primaryHostname: null,
@@ -89,7 +88,7 @@ const reduceRows: {
     },
   },
   {
-    name: "a publication's outcome settles the commit of its generation; a refusal keeps the config last published, whose modules the next must still export; the platform's give-up settles nothing; each is the last publication fact",
+    name: "a publication's outcome settles the commit of its generation, a refusal too; the platform's give-up settles nothing; each is the last publication fact",
     events: [
       committed("/repos/config", "aaa"),
       committed("/repos/config", "bbb"),
@@ -102,11 +101,7 @@ const reduceRows: {
       },
       { type: "events.iterate.com/itx/ingress-configured", payload: { target: ["itx", "config"] } },
     ],
-    state: {
-      ...owing(tip("ccc", 3)),
-      lastPublicationFactOffset: 6,
-      published: { commitOid: "aaa", generation: 1, modules: modulesOf("aaa") },
-    },
+    state: { ...owing(tip("ccc", 3)), lastPublicationFactOffset: 6 },
   },
   {
     name: "a repo's and a workspace's certificates each add one entry, by path, stamped with the event's time — the project's own creation untouched",
@@ -121,7 +116,6 @@ const reduceRows: {
       configRepoTip: null,
       unpublishedCommits: [],
       lastPublicationFactOffset: null,
-      published: null,
       hostnames: {},
       integrations: {},
       primaryHostname: null,
@@ -581,16 +575,6 @@ test.for<{ name: string; commit: FakeCommit; error: RegExp }>([
     error: /worker\.ts's default export does not construct: boom in a field initializer/,
   },
   {
-    name: "a class the last publication exported, gone",
-    commit: { classes: { "agents.ts": ["AgentCollectionDurableObject"] } },
-    error: /agents\.ts no longer exports AgentDurableObject, which the last publication did/,
-  },
-  {
-    name: "a class the last publication exported, in a module that now throws as it is imported",
-    commit: { classes: {}, unloadable: { "agents.ts": "top-level await failed" } },
-    error: /agents\.ts no longer exports .*\(it throws as it is imported: top-level await failed\)/,
-  },
-  {
     name: "a top-level module that does not resolve",
     commit: { unresolved: "agents.ts" },
     error: /agents\.ts imports @iterate-com\/agents; list @iterate-com\/agents/,
@@ -598,17 +582,9 @@ test.for<{ name: string; commit: FakeCommit; error: RegExp }>([
 ])(
   "ProjectProcessor — the publication of $name is project/worker-update-failed with why, keyed by its generation, and no pointer",
   async ({ commit, error }) => {
-    const publisher = fakePublisher({ good: {}, bad: commit });
+    const publisher = fakePublisher({ bad: commit });
     publisher.main = "bad";
-    const processor = processorPublishingWith(publisher);
-    deliver(
-      processor,
-      {
-        ...owing(tip("bad", 3)),
-        published: { commitOid: "good", generation: 2, modules: modulesOf("good") },
-      },
-      unusedAppend,
-    );
+    deliver(processorPublishingWith(publisher), owing(tip("bad", 3)), unusedAppend);
     await settle();
     expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed bad@3"]]);
     expect(publisher.batches[0]![0]).toMatchObject({
@@ -626,17 +602,26 @@ test("ProjectProcessor — a first publication whose side module does not resolv
   expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed first@2"]]);
 });
 
-test("ProjectProcessor — a side module that throws as it is imported keeps its identity in the manifest and exports no class", async () => {
-  const publisher = fakePublisher({
-    first: { extra: "seed.ts", unloadable: { "seed.ts": "boom" } },
-  });
-  publisher.main = "first";
-  deliver(processorPublishingWith(publisher), owing(tip("first", 2)), unusedAppend);
-  await settle();
-  expect(publisher.batches[1]![0]).toMatchObject({
-    payload: { modules: { "seed.ts": { identity: "first:seed.ts", classes: [] } } },
-  });
-});
+test.for<{ name: string; dropped: FakeCommit }>([
+  { name: "a Durable Object class", dropped: { classes: { "agents.ts": ["AgentDurableObject"] } } },
+  { name: "its whole module", dropped: { without: "agents.ts", classes: { "worker.ts": [] } } },
+])(
+  "ProjectProcessor — a commit that drops $name the last publication exported publishes: a facet that names it fails its next call, saying so (worker-loader.ts `namedWorkerLoad`)",
+  async ({ dropped }) => {
+    const publisher = fakePublisher({ good: {}, dropped });
+    const processor = processorPublishingWith(publisher);
+    publisher.main = "good";
+    deliver(processor, owing(tip("good", 2)), unusedAppend);
+    await settle();
+    publisher.main = "dropped";
+    deliver(processor, owing(tip("good", 2), tip("dropped", 3)), unusedAppend);
+    await settle();
+    expect(publisher.batches.map(summary).slice(-2)).toEqual([
+      ["itx.config ⇒ dropped@3"],
+      ["project/worker-updated dropped@3"],
+    ]);
+  },
+);
 
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
 // facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
@@ -662,7 +647,6 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
     ...tipped,
     unpublishedCommits: [],
     lastPublicationFactOffset: 3,
-    published: { commitOid: "aaa", generation: 1, modules: modulesOf("aaa") },
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();
@@ -1217,8 +1201,9 @@ type FakeCommit = {
   configEntrypoint?: boolean;
   constructError?: string;
   classes?: Record<string, string[]>;
-  unloadable?: Record<string, string>;
   extra?: string;
+  /** A module of the default template's the commit deletes. */
+  without?: string;
   unresolved?: string;
 };
 
@@ -1248,7 +1233,7 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
         readFailures -= 1;
         throw readFailure();
       }
-      return {
+      const files: Record<string, string> = {
         "package.json": '{"main":"worker.ts"}',
         "worker.ts": `// ${commitOid}`,
         "agents.ts": `// ${commitOid}`,
@@ -1256,6 +1241,8 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
         "AGENTS.md": "not a module",
         "lib/helper.ts": "not top-level",
       };
+      delete files[commits[commitOid]?.without ?? ""];
+      return files;
     },
     identityOf: async (files: Record<string, string>, module: string) => {
       const commitOid = files["worker.ts"]!.slice(3);
@@ -1271,7 +1258,6 @@ function fakePublisher(commits: Record<string, FakeCommit>) {
         configEntrypoint: commit.configEntrypoint ?? true,
         constructError: commit.constructError || null,
         classes: commit.classes || defaultClasses(),
-        unloadable: commit.unloadable || {},
       };
     },
     appendAsPlatform: async (...events: StreamEventInput[]) => {

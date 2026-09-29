@@ -112,7 +112,6 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
         configRepoTip: null,
         unpublishedCommits: [],
         lastPublicationFactOffset: null,
-        published: null,
         hostnames: {},
         integrations: {},
         primaryHostname: null,

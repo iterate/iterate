@@ -112,10 +112,10 @@ test("a publication the platform refuses says the new build is pinned and why it
   const upgrade = upgradeAgents(config.project, newer);
   await vi.waitFor(() => expect(config.commits).toHaveLength(1));
   config.publish("events.iterate.com/project/worker-update-failed", "commit-1", {
-    error: "agents.ts no longer exports AgentDurableObject",
+    error: "worker.ts's default export is not an IterateConfigEntrypoint",
   });
   await expect(upgrade).rejects.toThrow(
-    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: agents.ts no longer exports AgentDurableObject",
+    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: worker.ts's default export is not an IterateConfigEntrypoint",
   );
   expect(config.files["package.json"]).toContain(newer);
 });

@@ -23,14 +23,17 @@ TypeScript (types are stripped, not checked) and import each other by relative p
 `zod` come from the platform; any other package is listed in `package.json` and fetched from npm
 through esm.sh, locked per dependency set (`src/context/module-resolution.ts`).
 
-A commit fact only wakes the publication, which publishes `main`'s head as the generation of the
-fact's offset on `/`, so a return to a commit published before is a publication of its own. It
+Every commit fact gets one outcome on `/`, as the generation of the fact's offset, so a return to a
+commit published before is a publication of its own: its commit is published while it is still
+`main`'s head, and a commit main moved on from first is `project/worker-update-failed`. A caller
+waits for its commit's outcome by its oid: `waitForEvent({ type: [...], payload: { commitOid },
+afterOffset })`. The publication
 builds the commit's manifest: each top-level module (a `.ts` or `.js` file at the repo's root) by the
 identity of what the loader loads with it as the main module, and the Durable Object classes it
 exports. Every top-level module must resolve. Its probe loads them in one worker and admits the
-commit when the main module's default export is an `IterateConfigEntrypoint` that constructs and
-every class the last publication exported is still exported; a side script that throws as it is
-imported keeps its identity and exports no class. Then, as the platform, the rule `itx.config` names
+commit when the main module's default export is an `IterateConfigEntrypoint` that constructs; a
+side script that throws as it is imported keeps its identity and exports no class. A commit may drop
+a Durable Object class or its whole module: a facet that names it fails its next call, naming it. Then, as the platform, the rule `itx.config` names
 the commit's worker with its manifest — its write answers once no context resolves through an older
 snapshot of `/` — and `project/worker-updated { commitOid, generation, modules }` lands: every
 context's events reach that worker's `processEvent` through their birth subscription, the project's

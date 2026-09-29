@@ -183,10 +183,10 @@ test("a publication the platform refuses says the new build is pinned and why it
   const upgrade = upgradeVoice(root, newer);
   await vi.waitFor(() => expect(root.commits).toHaveLength(1));
   root.publish("events.iterate.com/project/worker-update-failed", "commit-1", {
-    error: "voice.ts no longer exports VoiceAgentDurableObject",
+    error: "worker.ts's default export is not an IterateConfigEntrypoint",
   });
   await expect(upgrade).rejects.toThrow(
-    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: voice.ts no longer exports VoiceAgentDurableObject",
+    "package.json pins the new build (config commit commit-), but its publication failed, so the project still runs the old one: worker.ts's default export is not an IterateConfigEntrypoint",
   );
   expect(root.files["package.json"]).toContain(newer);
 });

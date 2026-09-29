@@ -1190,6 +1190,7 @@ export class FacetHost {
       named,
       memo.mainModule,
       `facet "${name}"`,
+      memo.className,
     );
     if (generation === undefined) return { source, cacheKey, invoke: named.invoke };
     // kv answers `unknown`; `recordLoadedIdentity` is the only writer of the row.

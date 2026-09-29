@@ -156,18 +156,13 @@ export class ProjectProcessor extends StreamProcessor<
   #creating = false;
   /** The publication of the config repo: the commits owed one as the newest delivery showed them
    *  (the durable ground is `state.unpublishedCommits`, which learns of an outcome a delivery
-   *  later), the newest fact this incarnation answered or gave up on (the platform failed it for
-   *  its whole budget; the next incarnation tries again), and the last config it published. One
+   *  later), and the newest fact this incarnation answered or gave up on (the platform failed it
+   *  for its whole budget; the next incarnation tries again). One
    *  publication runs at a time and DRAINS, oldest first: a commit that lands while one is in
    *  flight is next, without waiting for another delivery. */
   #unpublished: ProjectState["unpublishedCommits"] = [];
   #handledThrough = 0;
   #publishing = false;
-  #lastPublished: {
-    commitOid: string;
-    generation: number;
-    modules: WorkerManifest["modules"];
-  } | null = null;
 
   override reduce({
     event,
@@ -336,17 +331,13 @@ export class ProjectProcessor extends StreamProcessor<
           ],
         };
       case "events.iterate.com/project/worker-updated": {
-        const { commitOid, generation, modules } = event.payload;
+        const { generation } = event.payload;
         return {
           ...state,
           unpublishedCommits: state.unpublishedCommits.filter(
             ({ offset }) => offset !== generation,
           ),
           lastPublicationFactOffset: event.offset,
-          published:
-            generation > (state.published?.generation ?? 0)
-              ? { commitOid, generation, modules }
-              : state.published,
         };
       }
       case "events.iterate.com/project/worker-update-failed": {
@@ -592,14 +583,6 @@ export class ProjectProcessor extends StreamProcessor<
     return this.#unpublished.find(({ offset }) => offset > this.#handledThrough);
   }
 
-  /** The config published last, this incarnation's or the state's, whichever is newer. */
-  #newestPublished(): { commitOid: string; modules: WorkerManifest["modules"] } | null {
-    const published = this.#newestState?.published ?? null;
-    return this.#lastPublished && this.#lastPublished.generation > (published?.generation ?? 0)
-      ? this.#lastPublished
-      : published;
-  }
-
   /** ONE OUTCOME for the commit fact `commit`, as generation `commit.offset` (publication.ts). A
    *  commit that is still `main`'s head is admitted: the pointer, as the platform — its write
    *  answers once every context resolves through it — then `project/worker-updated`. A commit the
@@ -658,7 +641,6 @@ export class ProjectProcessor extends StreamProcessor<
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
       });
-      this.#lastPublished = { commitOid, generation, modules: manifest.modules };
       return;
     }
     await publisher.appendAsPlatform({
@@ -685,15 +667,8 @@ export class ProjectProcessor extends StreamProcessor<
         kind: "refused",
         error: `main moved on to ${head || "no commit (unborn)"} before this commit was published`,
       };
-    const published = this.#newestPublished();
     try {
-      const manifest = await manifestOf(
-        commitOid,
-        generation,
-        published?.modules || null,
-        publisher,
-      );
-      return { kind: "admitted", manifest };
+      return { kind: "admitted", manifest: await manifestOf(commitOid, generation, publisher) };
     } catch (error) {
       if (isPlatformFailureKind(failureKind(error))) throw error;
       return { kind: "refused", error: error instanceof Error ? error.message : String(error) };

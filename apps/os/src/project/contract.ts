@@ -104,16 +104,6 @@ export const ProjectContract = defineProcessorContract({
     /** The offset of the newest publication fact of either kind, the platform's give-up included:
      *  the creation saga lands the certificate once there is one. Null until the first. */
     lastPublicationFactOffset: z.number().int().positive().nullable().default(null),
-    /** THE PUBLISHED CONFIG, the last `project/worker-updated`: its commit, generation and
-     *  modules, whose classes the next publication must still export. Null until the first. */
-    published: z
-      .object({
-        commitOid: z.string().min(1),
-        generation: z.number().int().positive(),
-        modules: PublishedModules,
-      })
-      .nullable()
-      .default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last
      *  observation (null until provisioned), and the last failure's words. */
@@ -219,7 +209,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-updated": {
       description:
-        "The platform published commit `commitOid` of `/repos/config` as publication `generation`, the offset on `/` of the commit fact that asked for it: `itx.config` on `/` names its worker, and every context resolves through it, so every context's events reach its `processEvent` and its facets load from it. Its modules passed the probe: every top-level module resolves, the main module's default export is an IterateConfigEntrypoint that constructs, and every class the last publication exported is still exported. The config entrypoint's init case. Only the platform appends it.",
+        "The platform published commit `commitOid` of `/repos/config` as publication `generation`, the offset on `/` of the commit fact that asked for it: `itx.config` on `/` names its worker, and every context resolves through it, so every context's events reach its `processEvent` and its facets load from it. Its modules passed the probe: every top-level module resolves, and the main module's default export is an IterateConfigEntrypoint that constructs. The config entrypoint's init case. Only the platform appends it.",
       payloadSchema: z.object({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),
@@ -228,7 +218,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-update-failed": {
       description:
-        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: `main` moved on before it was published, a module that does not resolve, a main module whose default export is no IterateConfigEntrypoint or does not construct, or a class the last publication exported gone. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
+        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: `main` moved on before it was published, a module that does not resolve, or a main module whose default export is no IterateConfigEntrypoint or does not construct. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
       payloadSchema: z.object({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),

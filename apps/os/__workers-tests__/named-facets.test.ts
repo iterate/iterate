@@ -81,6 +81,31 @@ test("a worker named for a module its publication does not have is refused, nami
   });
 });
 
+test.for([
+  {
+    drop: "module" as const,
+    message: 'facet "tally": the worker its source names publishes no module "agents.ts"',
+  },
+  {
+    drop: "class" as const,
+    message:
+      'facet "tally": the worker its source names publishes no Durable Object class "Tally" in "agents.ts"',
+  },
+])(
+  "a publication may drop a facet's $drop: the facet's next call fails naming what it names, and the next publication that has it back serves it again",
+  async ({ drop, message }) => {
+    const project = `prj_named_dropped_${drop}_${crypto.randomUUID().slice(0, 8)}`;
+    const boot = () =>
+      stub(`${project}.iterate/x`).invoke(["itx", "facets", ["get", "tally", TALLY], ["boot"]]);
+    await publish(project, { generation: 1, agents: "v1", worker: "w1" });
+    expect(await boot()).toMatchObject({ version: "v1" });
+    await publish(project, { generation: 2, agents: "v2", worker: "w1", drop });
+    await expect(boot()).rejects.toMatchObject({ message });
+    await publish(project, { generation: 3, agents: "v3", worker: "w1" });
+    expect(await boot()).toMatchObject({ version: "v3" });
+  },
+);
+
 /** A member of the project, as a session's call carries one. */
 const MEMBER = { actor: "usr_named_facets", email: "member@example.test" };
 
@@ -214,8 +239,9 @@ const serviceRule = (match: string, mainModule: string) => ({
 });
 
 /** `itx.config` on the project's root, as a publication writes it: the worker's files — agents.ts
- *  at `agents`, the rest at `worker` — and a manifest naming each module by its version. A re-point
- *  answers once every snapshot of the old pointer has expired (context/rule-snapshots.ts). */
+ *  at `agents`, the rest at `worker` — and a manifest naming each module by its version; `drop`
+ *  leaves agents.ts out, or its Tally. A re-point answers once every snapshot of the old pointer has
+ *  expired (context/rule-snapshots.ts). */
 async function publish(
   project: string,
   {
@@ -223,26 +249,32 @@ async function publish(
     agents,
     worker,
     methods,
-  }: { generation: number; agents: string; worker: string; methods?: string[] },
+    drop,
+  }: {
+    generation: number;
+    agents: string;
+    worker: string;
+    methods?: string[];
+    drop?: "module" | "class";
+  },
 ) {
-  const manifest = {
-    generation,
-    modules: {
-      "agents.ts": { identity: `agents-${agents}`, classes: ["Tally"] },
-      "service.ts": { identity: `service-${agents}`, classes: [] },
-      "worker.js": { identity: `worker-${worker}`, classes: ["default"] },
-    },
+  const files: Record<string, string> = configFiles({ agents, worker, methods });
+  const modules: Record<string, { identity: string; classes: string[] }> = {
+    "agents.ts": { identity: `agents-${agents}`, classes: drop === "class" ? [] : ["Tally"] },
+    "service.ts": { identity: `service-${agents}`, classes: [] },
+    "worker.js": { identity: `worker-${worker}`, classes: ["default"] },
   };
+  if (drop === "class") files["agents.ts"] = files["agents.ts"]!.replace("export class", "class");
+  if (drop === "module") {
+    delete files["agents.ts"];
+    delete modules["agents.ts"];
+  }
+  const manifest = { generation, modules };
   await appendAsPlatform(project, {
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: {
       match: "itx.config",
-      target: [
-        "itx",
-        "builtins",
-        "workers",
-        ["get", { source: configFiles({ agents, worker, methods }), manifest }],
-      ],
+      target: ["itx", "builtins", "workers", ["get", { source: files, manifest }]],
     },
   });
 }

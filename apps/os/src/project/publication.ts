@@ -1,13 +1,13 @@
 // src/project/publication.ts — ONE PUBLICATION OF THE CONFIG REPO: commit C of `/repos/config`
 // becomes the project's code. Its MANIFEST (iterate/api `WorkerManifest`) names each top-level module
 // by its identity — the hash of what the loader loads with it as the main module
-// (context/worker-loader.ts `moduleIdentityOf`) — and the Durable Object classes it exports. Every
-// top-level module must resolve. The PROBE loads them in one worker and admits the commit: the main
-// module's default export is an `IterateConfigEntrypoint` that constructs (its constructor and field
-// initializers run, never a hook), and every class the last publication exported is still exported
-// (a facet names its class, so a commit that dropped one would pass and break every facet of it). A
-// module other than the main one that throws as it is imported (a script beside the worker) keeps
-// its identity in the manifest and exports no class. The POINTER is the rule on `/` that names the
+// (context/worker-loader.ts `moduleIdentityOf`) — and the Durable Object classes it exports, which a
+// facet's `className` must name (worker-loader.ts `namedWorkerLoad`). Every top-level module must
+// resolve. The PROBE loads them in one worker and admits the commit: the main module's default
+// export is an `IterateConfigEntrypoint` that constructs (its constructor and field initializers
+// run, never a hook). A commit may drop a class or a whole module: a facet that names it fails its
+// next call, saying so. A module other than the main one that throws as it is imported (a script
+// beside the worker) keeps its identity in the manifest and exports no class. The POINTER is the rule on `/` that names the
 // admitted commit, `itx.config`: every context's birth row delivers to it (envs.ts
 // `contextBirthEvents`) and every facet of the project's config names it (iterate/api `FacetSpec`).
 // The follower (processor.ts) appends the pointer, as the platform, then `project/worker-updated`;
@@ -36,14 +36,12 @@ export type ProjectPublisher = {
   appendAsPlatform(...events: StreamEventInput[]): Promise<unknown>;
 };
 
-/** The manifest of commit `commitOid` as publication `generation`, admitted by the probe against
- *  the last publication's modules (`previous`) — or a throw that says why it is not admitted. A
- *  platform failure on the way (a read of the repo, a module lock, the probe's load) throws as
- *  itself: the follower meets it again. */
+/** The manifest of commit `commitOid` as publication `generation`, admitted by the probe — or a
+ *  throw that says why it is not admitted. A platform failure on the way (a read of the repo, a
+ *  module lock, the probe's load) throws as itself: the follower meets it again. */
 export async function manifestOf(
   commitOid: string,
   generation: number,
-  previous: WorkerManifest["modules"] | null,
   publisher: ProjectPublisher,
 ): Promise<WorkerManifest> {
   const files = await publisher.files(commitOid);
@@ -70,16 +68,6 @@ export async function manifestOf(
       { identity, classes: answer.classes[module] ?? [] },
     ]),
   );
-  for (const [module, { classes }] of Object.entries(previous || {})) {
-    const gone = classes.filter((className) => !manifest[module]?.classes.includes(className));
-    const why = answer.unloadable[module]
-      ? ` (it throws as it is imported: ${answer.unloadable[module]})`
-      : "";
-    if (gone.length > 0)
-      throw new Error(
-        `${module} no longer exports ${gone.join(", ")}, which the last publication did${why}: a facet names its class, so each must stay exported`,
-      );
-  }
   return { generation, modules: manifest };
 }
 
@@ -115,13 +103,12 @@ export function configPointer(commitOid: string, manifest: WorkerManifest): Stre
 const PROBE_MODULE = ".iterate-publication-probe.js";
 
 /** What the probe answers: whether the main module's default export is an IterateConfigEntrypoint
- *  and what constructing it threw (null when it constructs), each module's Durable Object classes,
- *  and why each module that threw as it was imported did. */
+ *  and what constructing it threw (null when it constructs), and each module's Durable Object
+ *  classes. */
 const ProbeAnswer = z.object({
   configEntrypoint: z.boolean(),
   constructError: z.string().nullable(),
   classes: z.record(z.string(), z.array(z.string())),
-  unloadable: z.record(z.string(), z.string()),
 });
 
 /** The files at the repo's root the manifest names: every module a facet's `mainModule` can be. */
@@ -134,13 +121,13 @@ function topLevelModules(files: Record<string, string>): string[] {
 
 /** THE PROBE: a worker entry that imports the main module, constructs its default export with the
  *  probe's own `ctx` and `env` — its constructor and field initializers run, no hook — and imports
- *  every other module guarded, a throw there its own, and answers the Durable Object classes each
- *  exports: what a facet's `className` names (`getDurableObjectClass`). */
+ *  every other module guarded (one that throws exports no class), and answers the Durable Object
+ *  classes each exports: what a facet's `className` names (`getDurableObjectClass`). */
 function probeModule(entry: string, modules: string[]): string {
   const others = modules.filter((module) => module !== entry);
   const guarded = others.map(
     (module) =>
-      `  try { classes[${JSON.stringify(module)}] = classesOf(await import(${JSON.stringify(`./${module}`)})); } catch (error) { unloadable[${JSON.stringify(module)}] = messageOf(error); }`,
+      `  try { classes[${JSON.stringify(module)}] = classesOf(await import(${JSON.stringify(`./${module}`)})); } catch {}`,
   );
   return [
     `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";`,
@@ -155,9 +142,8 @@ function probeModule(entry: string, modules: string[]): string {
     `    let constructError = null;`,
     `    if (configEntrypoint) try { new Entry(this.ctx, this.env); } catch (error) { constructError = messageOf(error); }`,
     `    const classes = { ${JSON.stringify(entry)}: classesOf(main) };`,
-    `    const unloadable = {};`,
     ...guarded,
-    `    return { configEntrypoint, constructError, classes, unloadable };`,
+    `    return { configEntrypoint, constructError, classes };`,
     `  }`,
     `}`,
     ``,

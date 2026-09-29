@@ -11,12 +11,7 @@ import { manifestOf, type ProjectPublisher } from "../src/project/publication.ts
 import { stub } from "./support.ts";
 
 test("a commit's manifest names each top-level module by what the loader loads for it, which a change elsewhere leaves as it was, and the Durable Object classes a facet names", async () => {
-  const first = await manifestOf(
-    "aaa",
-    1,
-    null,
-    publisherOf(commit(configEntrypoint(), agentsModule())),
-  );
+  const first = await manifestOf("aaa", 1, publisherOf(commit(configEntrypoint(), agentsModule())));
   expect(first).toEqual({
     generation: 1,
     modules: {
@@ -26,12 +21,7 @@ test("a commit's manifest names each top-level module by what the loader loads f
   });
   // the website changes, the agents' module does not: its identity stays
   const edited = `${configEntrypoint()}\nexport const homepage = "new";`;
-  const second = await manifestOf(
-    "bbb",
-    2,
-    first.modules,
-    publisherOf(commit(edited, agentsModule())),
-  );
+  const second = await manifestOf("bbb", 2, publisherOf(commit(edited, agentsModule())));
   expect(second.modules["agents.ts"]).toEqual(first.modules["agents.ts"]);
   expect(second.modules["worker.ts"]).not.toMatchObject({
     identity: first.modules["worker.ts"]!.identity,
@@ -70,30 +60,17 @@ export default class extends IterateConfigEntrypoint {
     error: /worker\.ts's default export does not construct/,
   },
   {
-    name: "a class the last publication exported, gone",
-    files: commit(configEntrypoint(), agentsModule().replace("export class Tally", "class Tally")),
-    error: /agents\.ts no longer exports Tally, which the last publication did/,
-  },
-  {
     name: "a module that does not resolve",
     files: commit(configEntrypoint(), `import "./missing.ts";\n${agentsModule()}`),
     error: /agents\.ts imports \.\/missing\.ts, and there is no such file/,
   },
-  {
-    name: "a class the last publication exported, in a module that throws as it is imported",
-    files: commit(configEntrypoint(), `throw new Error("agents.ts is broken");\n${agentsModule()}`),
-    error:
-      /agents\.ts no longer exports Tally.*\(it throws as it is imported: agents\.ts is broken\)/,
-  },
 ])("a commit is refused: $name", async ({ files, error }) => {
-  const published = commit(configEntrypoint(), agentsModule());
-  const previous = (await manifestOf("aaa", 1, null, publisherOf(published))).modules;
-  await expect(manifestOf("bbb", 2, previous, publisherOf(files))).rejects.toThrow(error);
+  await expect(manifestOf("bbb", 2, publisherOf(files))).rejects.toThrow(error);
 });
 
 test("a first publication is refused when a side module does not resolve: every top-level module resolves", async () => {
   const files = { ...commit(configEntrypoint(), agentsModule()), "seed.ts": 'import "left-pad";' };
-  await expect(manifestOf("aaa", 1, null, publisherOf(files))).rejects.toThrow(/left-pad/);
+  await expect(manifestOf("aaa", 1, publisherOf(files))).rejects.toThrow(/left-pad/);
 });
 
 test("a side script that throws as it is imported is published: its identity stays in the manifest, exporting no class", async () => {
@@ -101,22 +78,12 @@ test("a side script that throws as it is imported is published: its identity sta
     ...commit(configEntrypoint(), agentsModule()),
     "seed.ts": 'throw new Error("run me with node, not as a module of the worker");',
   };
-  const manifest = await manifestOf("aaa", 1, null, publisherOf(files));
+  const manifest = await manifestOf("aaa", 1, publisherOf(files));
   expect(manifest.modules["seed.ts"]).toEqual({
     identity: expect.stringMatching(/^[0-9a-f]{64}$/),
     classes: [],
   });
   expect(manifest.modules["agents.ts"]).toMatchObject({ classes: ["Tally"] });
-});
-
-test("moving the entry to another module is admitted: the old entry's default export is no class a facet names", async () => {
-  const published = commit(configEntrypoint(), agentsModule());
-  const previous = (await manifestOf("aaa", 1, null, publisherOf(published))).modules;
-  const { "worker.ts": _moved, ...rest } = published;
-  const moved = { ...rest, "package.json": '{"main":"index.ts"}', "index.ts": configEntrypoint() };
-  expect(await manifestOf("bbb", 2, previous, publisherOf(moved))).toMatchObject({
-    modules: { "index.ts": { classes: [] }, "agents.ts": { classes: ["Tally"] } },
-  });
 });
 
 /** A config commit of the default template's shape: a config entrypoint, and a module of classes. */
