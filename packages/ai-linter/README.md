@@ -16,12 +16,12 @@ lines around each (a pull request with none makes no call). An `engine: jev` rul
 unsure of goes to the LLM in one more, small call. The Check Run says which engine decided each
 finding. `iterate-lint-disable[-line|-next-line] rule -- reason` comments suppress a finding.
 
-A part that fails (the LLM's call, Jev or one of its requests, a rule file, a file it reads, the
-review) takes nothing else with it: what the rest found is published, the Check Run lists what did
-not run at its top, and a head delivered again (readied, reopened) is linted again. The LLM's
-answers are kept in the processor's storage until the head's outcome is on the log, so a lint the
-platform restarts (a deploy) does not pay for them twice. Every model call names the project, so
-the AI Gateway's per-project cap bounds what the linter spends.
+A part that fails (the LLM's call, Jev or one of its requests, a rule file, a file it reads or
+GitHub lists without its name, the review) takes nothing else with it: what the rest found is
+published, the Check Run lists what did not run at its top, and a head delivered again (readied,
+reopened) is linted again. The LLM's answers are kept in the processor's storage until the head's
+outcome is on the log, so a lint the platform restarts (a deploy) does not pay for them twice. Every
+model call names the project, so the AI Gateway's per-project cap bounds what the linter spends.
 
 ## Install
 

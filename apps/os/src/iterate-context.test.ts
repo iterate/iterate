@@ -196,6 +196,19 @@ test.for([
   },
 );
 
+test("a fetch's Response is answered on a stream of this isolate's own, its status, headers and bytes as sent", async () => {
+  const chunks = ['{"total_count":2,', '"repositories":[', '{"name":"a"},', '{"name":"b"}]}'];
+  const upstream = new Response(streamOf(chunks), { status: 201, headers: { "x-upstream": "1" } });
+  const answer = await fetchThrough(
+    { fetch: async () => upstream },
+    new Request("https://api.github.com/installation/repositories"),
+  );
+  // The context's body is never the one answered: this isolate reads it and hands it on.
+  expect(upstream.body).toMatchObject({ locked: true });
+  expect(answer).toMatchObject({ status: 201, headers: new Headers({ "x-upstream": "1" }) });
+  expect(await answer.text()).toBe(chunks.join(""));
+});
+
 type Failure =
   | "storage timeout"
   | "storage internal error"
@@ -251,4 +264,34 @@ function gaveUp(kind: string, name: string, message: string, attempts: number) {
     message: `Error: ${message}`,
     attempts,
   };
+}
+
+/** `request` fetched through an edge context whose Durable Object answers with `stub.fetch`. */
+async function fetchThrough(
+  stub: { fetch: (request: Request) => Promise<Response> },
+  request: Request,
+): Promise<Response> {
+  const context = new IterateContextRpcTarget(
+    // The fake namespace answers the one method a session's terminal fetch calls on it.
+    { getByName: () => stub } as unknown as IterateContextNamespace,
+    DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/" }),
+    new SessionTeardown(),
+    () => {},
+    { principal: null },
+  );
+  // A terminal fetch answers the Response its context answered.
+  return (await context.invoke(["itx", "fetch"], request)) as Response;
+}
+
+/** A body that arrives in `chunks`, one read each. */
+function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const left = [...chunks];
+  return new ReadableStream({
+    pull(controller) {
+      const chunk = left.shift();
+      if (chunk) controller.enqueue(encoder.encode(chunk));
+      else controller.close();
+    },
+  });
 }
