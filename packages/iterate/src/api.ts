@@ -268,7 +268,14 @@ export type SecretEqualsVerification = {
 /** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
  *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
  *  kinds below are read off it. */
-export const INTEGRATION_PROVIDERS = ["slack", "google", "cloudflare", "github", "x"] as const;
+export const INTEGRATION_PROVIDERS = [
+  "slack",
+  "google",
+  "cloudflare",
+  "github",
+  "x",
+  "chatgpt",
+] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
 /** Each provider's name as a person reads it, wherever a page or a message names one. */
@@ -278,6 +285,7 @@ export const INTEGRATION_PROVIDER_NAMES = {
   cloudflare: "Cloudflare",
   github: "GitHub",
   x: "X",
+  chatgpt: "ChatGPT",
 } as const satisfies Record<IntegrationProvider, string>;
 
 /** The providers an integration connects through OAuth (`/api/integrations/<provider>/callback`):
@@ -285,7 +293,7 @@ export const INTEGRATION_PROVIDER_NAMES = {
 export type OAuthIntegrationProvider = Exclude<IntegrationProvider, "github">;
 
 /** The providers a person signs in with, each through iterate's app there. */
-export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x">;
+export type SignInProvider = Exclude<IntegrationProvider, "slack" | "x" | "chatgpt">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -312,6 +320,20 @@ export type SecretOAuthOptions = {
   client?: SecretOAuthClient;
   /** An absolute URL on the platform's origin or the Dash's. */
   next?: string;
+  /** A loopback redirect URI (`http://127.0.0.1:<port>/<path>`, RFC 8252 §7.3) the provider sends
+   *  the person back to instead of the platform's callback, for a public client in the clear whose
+   *  provider admits no other: OpenAI's Sign in with ChatGPT
+   *  (https://developers.openai.com/siwc/token-sharing-open-source/sign-in). The browser lands on
+   *  an address nothing serves; the attempt completes when that address's query reaches the
+   *  platform's callback (`/.secrets/oauth/callback`, an integration's
+   *  `/api/integrations/<provider>/callback`) in the person's signed-in browser: the Dash's
+   *  ChatGPT sheet sends it there from the address they paste. A public client the provider
+   *  registered during the consent, named by the callback's `client_id`, is the client the
+   *  exchange and every refresh use. */
+  redirectUri?: string;
+  /** The resource the tokens are for (RFC 8707), sent on the authorize request and the code
+   *  exchange: OpenAI's Sign in with ChatGPT refuses an exchange without it (`invalid_grant`). */
+  resource?: string;
   /** How the token endpoint wants the client credential. */
   clientAuth?: ClientAuth;
   scope?: string;

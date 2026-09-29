@@ -41,6 +41,7 @@ import {
   type MovableAttempt,
   type MoveOffered,
 } from "./connections.ts";
+import { connectChatgpt, finishChatgptConnect } from "./chatgpt.ts";
 import { connectCloudflare, finishCloudflareConnect } from "./cloudflare.ts";
 import { connectGithub, connectGithubInstallation } from "./github.ts";
 import { connectX, finishXConnect } from "./x.ts";
@@ -93,7 +94,11 @@ const PROVIDERS: Record<
       scope: IntegrationScope,
       connection: string,
       attempt: ConnectionAttempt,
-      consent: { grantedScopes: string[]; held?: HeldToken & { nonce: string } },
+      consent: {
+        grantedScopes: string[];
+        held?: HeldToken & { nonce: string };
+        idTokenClaims?: IdTokenClaims;
+      },
     ): Promise<{ row: IntegrationConnectionRow } | { move: MoveOffered }>;
     revoke?(
       scope: IntegrationScope,
@@ -103,6 +108,7 @@ const PROVIDERS: Record<
   }
 > = {
   x: { connect: connectX, finish: finishXConnect },
+  chatgpt: { connect: connectChatgpt, finish: finishChatgptConnect },
   slack: { connect: connectSlack, finish: finishSlackConnect, revoke: revokeSlack },
   google: { connect: connectGoogle, finish: finishGoogleConnect, revoke: revokeGoogle },
   cloudflare: { connect: connectCloudflare, finish: finishCloudflareConnect },
@@ -149,7 +155,16 @@ export type FinishConnectInput = {
   consentedBy: { person: boolean; email?: string };
   /** The secret held the token aside: another project holds the account (Slack). */
   held?: HeldToken;
+  /** The account the token response's ID token named (rules.ts `idTokenClaimsOf`): ChatGPT's. */
+  idTokenClaims?: IdTokenClaims;
 };
+
+/** The account an ID token names: its OpenID `sub`, and its address when it carries one. */
+type IdTokenClaims = z.infer<typeof IdTokenClaims>;
+const IdTokenClaims = z.object({
+  sub: z.string().min(1),
+  email: z.string().min(1).optional(),
+});
 
 /** What the finish hands the callback: the offer to move the account here, when another project
  *  holds it, for the callback to sign. */
@@ -179,6 +194,7 @@ export async function finishIntegrationConnect(
   const nonce = z.string().min(1).parse(input.nonce);
   const grantedScopes = z.array(z.string()).parse(input.grantedScopes);
   const held = HeldTokenInput.parse(input.held);
+  const idTokenClaims = IdTokenClaims.optional().parse(input.idTokenClaims);
   const provider = z.enum(OAUTH_INTEGRATION_PROVIDERS).parse(input.provider);
   const { finish } = PROVIDERS[provider];
   if (!finish) throw codedError("INVALID_INPUT", `integrations: ${provider} has no consent`);
@@ -202,6 +218,7 @@ export async function finishIntegrationConnect(
   const finished = await finish(scope, connection, attempt, {
     grantedScopes,
     held: held && { ...held, nonce },
+    idTokenClaims,
   }).catch(async (error: unknown) => {
     await scope.storage.put<ConnectionAttempt>(key, attempt); // nothing connected: a refresh retries
     throw error;

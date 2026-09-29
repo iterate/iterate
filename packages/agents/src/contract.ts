@@ -114,7 +114,13 @@ export const AgentContract = defineProcessorContract({
         llm: z
           // OpenAI's astra, read FAST (low reasoning effort, the priority tier — processor.ts); a
           // `@cf/…` name routes to Workers AI instead (`@cf/meta/llama-4-scout-17b-16e-instruct` sees images too).
-          .object({ model: z.string().min(1).default("gpt-6-astra") })
+          .object({
+            model: z.string().min(1).default("gpt-6-astra"),
+            /** The project's ChatGPT connection whose plan pays for an OpenAI model's calls (its
+             *  name: the secret `/secrets/chatgpt-<name>`, apps/os integrations/chatgpt.ts); null
+             *  for Cloudflare's billing through the AI Gateway. */
+            chatgptConnection: z.string().min(1).nullable().default(null),
+          })
           .prefault({}),
         /** Consecutive self-triggered turns (script results, corrections) before the loop pauses. */
         maxAutonomousTurns: z.number().int().positive().default(20),
@@ -165,6 +171,8 @@ export const AgentContract = defineProcessorContract({
         requestedAtOffset: z.number().int().positive(),
         expiresAt: z.number(),
         model: z.string(),
+        /** The ChatGPT connection the request runs on, as it was recorded. */
+        chatgptConnection: z.string().nullable().optional(),
         triggerSource: TriggerSource,
       })
       .nullable()
@@ -210,7 +218,13 @@ export const AgentContract = defineProcessorContract({
         "Merges a partial configuration into the agent's config; omitted keys keep their values.",
       payloadSchema: z.object({
         config: z.object({
-          llm: z.object({ model: z.string().min(1).optional() }).optional(),
+          llm: z
+            .object({
+              model: z.string().min(1).optional(),
+              /** A ChatGPT connection's name; null goes back to Cloudflare's billing. */
+              chatgptConnection: z.string().min(1).nullable().optional(),
+            })
+            .optional(),
           maxAutonomousTurns: z.number().int().positive().optional(),
           llmRequestExpiryMs: z.number().int().positive().optional(),
           llmRequestDebounceMs: z.number().int().nonnegative().optional(),
@@ -273,6 +287,9 @@ export const AgentContract = defineProcessorContract({
         "The loop recorded its intent to run the model for ONE trigger (the offset it names); the event's offset is the request's identity. An intent whose trigger has moved on is a harmless fact.",
       payloadSchema: z.object({
         model: z.string().min(1),
+        /** The ChatGPT connection whose plan pays for it (config `llm.chatgptConnection`); null for
+         *  Cloudflare's billing. Absent on requests recorded before it existed. */
+        chatgptConnection: z.string().min(1).nullable().optional(),
         expiresAt: z.number(),
         triggerOffset: z.number().int().positive(),
       }),

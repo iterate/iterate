@@ -4,5 +4,5 @@ import { IntegrationProvider } from "../integrations/contract.ts";
 
 /** The sign-in providers that prove who someone is (identity.ts, iterate/api `SignInProvider`):
  *  each names a person by a stable subject; a person links at most ONE subject per provider. */
-export const IdentityProvider = IntegrationProvider.exclude(["slack", "x"]);
+export const IdentityProvider = IntegrationProvider.exclude(["slack", "x", "chatgpt"]);
 export type IdentityProvider = z.infer<typeof IdentityProvider>;

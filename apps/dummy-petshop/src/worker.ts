@@ -24,6 +24,7 @@ import {
   type InstallationGrant,
 } from "./github.ts";
 import { handleXRequest } from "./x.ts";
+import { handleChatgptRequest } from "./chatgpt.ts";
 import { handleGoogleRequest } from "./google.ts";
 import { GRAPHQL_SESSION_TTL_SECONDS, handleGraphqlLogin } from "./graphql-login.ts";
 import { handleMcpRequest } from "./mcp.ts";
@@ -86,6 +87,9 @@ const INDEX = dedent`
                             a Google-shaped fake (google.ts), an OpenID provider too: consent at once, &email=<e> (or login_hint) picks the account
   GET  /cloudflare/.well-known/openid-configuration · /cloudflare/oauth2/auth · POST /cloudflare/oauth2/token · GET /client/v4/user
                             a Cloudflare-shaped fake (cloudflare.ts): its OpenID issuer under /cloudflare, &email=<e> picks the account
+  GET  /api/accounts/authorize · POST /api/accounts/oauth/token · POST /v1/responses
+                            a ChatGPT-shaped fake (chatgpt.ts): dynamic_agent_client registers a public oaiapp_… client per consent,
+                            loopback redirect only, &email=<e> picks the account; the Responses API streams "pong"
   GET  /apps/<slug>/installations/new · /login/oauth/authorize · POST /login/oauth/access_token · /app/installations/<id>/access_tokens
   GET  /user | /user/emails | /user/installations | /user/memberships/orgs/<org> | /installation/repositories
   GET  /repos/<o>/<r>/pulls/<n>/files · POST /repos/<o>/<r>/check-runs · GET /repos/<o>/<r>/commits/<sha>/check-runs
@@ -149,6 +153,7 @@ async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promis
     (await handleOauthProviderRequest(request, deps)) ??
     (await handleSlackRequest(request, deps)) ??
     (await handleXRequest(request, deps)) ??
+    (await handleChatgptRequest(request, deps)) ??
     (await handleGoogleRequest(request, deps)) ??
     (await handleCloudflareRequest(request, deps)) ??
     (await handleGithubRequest(request, deps)) ??

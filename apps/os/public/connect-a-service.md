@@ -52,12 +52,13 @@ async (itx) => ({
 
 Then go to the first line that fits:
 
-- **The service is Slack, Google (Gmail, Calendar, Drive; not the Gemini API), Cloudflare, X or
-  GitHub (as a GitHub App installation).** These are built in. Get the link that opens its Connect sheet,
-  with the provider's name in lower case:
+- **The service is Slack, Google (Gmail, Calendar, Drive; not the Gemini API), Cloudflare, X,
+  GitHub (as a GitHub App installation) or ChatGPT (a person's ChatGPT plan paying for OpenAI
+  models).** These are built in. Get the link that opens its Connect sheet, with the provider's
+  name in lower case:
 
   ```js
-  async (itx) => itx.integrations.requestFromUser("<slack|google|cloudflare|github|x>");
+  async (itx) => itx.integrations.requestFromUser("<slack|google|cloudflare|github|x|chatgpt>");
   ```
 
   Send its `url`, then end your turn:
@@ -76,6 +77,10 @@ Then go to the first line that fits:
   `/2/users/<id>/…`); a token only does what the scopes it was granted allow, and the Connect
   sheet's default is read-only. Anything that posts or reads bookmarks or DMs needs
   `requestFromUser("x", { scopes: ["tweet.write"] })` (or `bookmark.read`, `dm.read`).
+  For ChatGPT it is `GET https://api.openai.com/v1/models` (the plan's models are its `models`
+  whose `visibility` is `list`). The plan pays for `POST https://api.openai.com/v1/responses` alone,
+  with `"store": false`, `"stream": true` and `input` a list; an agent uses it once configured with
+  `{ llm: { chatgptConnection: "<connection>" } }` (`events.iterate.com/agent/configured`).
 
   If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
   them), carry on at step 2.

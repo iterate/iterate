@@ -10,12 +10,14 @@ import type { SecretMaterial } from "iterate/api";
 import {
   beginSecretOAuth,
   completeSecretOAuth,
+  exchangeClientIdOf,
   isSecretOAuthState,
   normalizeSecretOAuth,
   SECRET_OAUTH_TTL_MS,
   secretOAuthCallbackPathOf,
 } from "./secret-oauth.ts";
 import { decryptSecretMaterial, encryptSecretMaterial } from "./secret-at-rest.ts";
+import { idTokenClaimsOf } from "./integrations/rules.ts";
 import {
   assertSecretPath,
   EXCHANGE_SOURCE_MAX_CHARS,
@@ -687,6 +689,8 @@ test("normalizeSecretOAuth: the pin defaults to the token endpoint's origin, mus
     extra: { access_type: "offline" },
     next: null,
     expectAccount: null,
+    redirectUri: null,
+    resource: null,
   });
   expect(() =>
     normalizeSecretOAuth({ ...PROVIDER, clientId: "c", urls: ["https://api.example"] }),
@@ -782,6 +786,110 @@ test("completeSecretOAuth: the code exchange (HTTP Basic, PKCE verifier, redirec
   await expect(completeSecretOAuth(pending, "bad", refused.fetchFn)).rejects.toThrow(
     /oauth: the token endpoint answered 400/,
   );
+});
+
+test("a loopback redirect (OpenAI's Sign in with ChatGPT): a public client in the clear sends the person to http://127.0.0.1, and the exchange uses the client the callback names", async () => {
+  const options = normalizeSecretOAuth({
+    ...PROVIDER,
+    clientId: "dynamic_agent_client",
+    clientAuth: "none",
+    redirectUri: "http://127.0.0.1:1455/auth/callback",
+    resource: "https://api.example/v1",
+  });
+  expect(options).toMatchObject({ redirectUri: "http://127.0.0.1:1455/auth/callback" });
+  expect(() => normalizeSecretOAuth({ ...PROVIDER, clientId: "c", resource: "v1" })).toThrow(
+    /RFC 8707/,
+  );
+  for (const redirectUri of [
+    "https://evil.example/cb",
+    "http://evil.example/cb",
+    "http://127.0.0.1.evil.example/cb",
+    "not a url",
+  ])
+    expect(() =>
+      normalizeSecretOAuth({ ...PROVIDER, clientId: "c", clientAuth: "none", redirectUri }),
+    ).toThrow(/loopback/);
+  expect(() =>
+    normalizeSecretOAuth({
+      ...PROVIDER,
+      clientId: "c",
+      clientSecret: "s",
+      redirectUri: "http://localhost:8080/cb",
+    }),
+  ).toThrow(/public client/);
+  expect(() =>
+    normalizeSecretOAuth({
+      ...PROVIDER,
+      client: { platform: "x" },
+      redirectUri: "http://localhost:8080/cb",
+    }),
+  ).toThrow(/public client/);
+
+  // the callback's client_id is the exchange's for a public client in the clear on a loopback
+  // redirect, never another's
+  const publicClient = {
+    clientId: "dynamic_agent_client",
+    clientSecret: "",
+    client: null,
+    redirectUri: "http://127.0.0.1:1455/auth/callback",
+  };
+  expect(exchangeClientIdOf(publicClient, "oaiapp_1")).toBe("oaiapp_1");
+  expect(exchangeClientIdOf(publicClient, undefined)).toBe("dynamic_agent_client");
+  expect(exchangeClientIdOf({ ...publicClient, redirectUri: null }, "oaiapp_1")).toBe(
+    "dynamic_agent_client",
+  );
+  expect(exchangeClientIdOf({ ...publicClient, clientSecret: "s" }, "oaiapp_1")).toBe(
+    "dynamic_agent_client",
+  );
+  expect(
+    exchangeClientIdOf({ ...publicClient, clientId: "app", client: { project: "x" } }, "other"),
+  ).toBe("app");
+
+  const { pending, authorizationUrl } = await beginSecretOAuth(options, {
+    redirectUri: options.redirectUri!,
+    state: "st",
+    nonce: "n",
+  });
+  expect(new URL(authorizationUrl).searchParams.get("redirect_uri")).toBe(
+    "http://127.0.0.1:1455/auth/callback",
+  );
+  expect(new URL(authorizationUrl).searchParams.get("resource")).toBe("https://api.example/v1");
+  const provider = scripted(() => Response.json({ access_token: "AT", refresh_token: "RT" }));
+  const record = await completeSecretOAuth(pending, "the-code", provider.fetchFn, {
+    clientId: "oaiapp_1",
+    clientSecret: "",
+    kept: {},
+  });
+  expect(record).toMatchObject({
+    material: {
+      clientId: "oaiapp_1",
+      clientSecret: "",
+      accessToken: "AT",
+      refreshToken: "RT",
+    },
+  });
+  expect(provider.exchanges[0]!.body).toContain("client_id=oaiapp_1");
+  expect(provider.exchanges[0]!.body).toContain(
+    `resource=${encodeURIComponent("https://api.example/v1")}`,
+  );
+  expect(provider.exchanges[0]!.body).toContain(
+    `redirect_uri=${encodeURIComponent("http://127.0.0.1:1455/auth/callback")}`,
+  );
+});
+
+test("idTokenClaimsOf: an ID token's sub and email, read off a token response; none without a readable one", () => {
+  const idToken = (claims: object) =>
+    `h.${btoa(JSON.stringify(claims)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")}.sig`;
+  expect(idTokenClaimsOf({ id_token: idToken({ sub: "u1", email: "a@b.c", nonce: "n" }) })).toEqual(
+    {
+      sub: "u1",
+      email: "a@b.c",
+    },
+  );
+  expect(idTokenClaimsOf({ id_token: idToken({ sub: "u1", email: 7 }) })).toEqual({ sub: "u1" });
+  expect(idTokenClaimsOf({ id_token: idToken({ email: "a@b.c" }) })).toBeNull();
+  expect(idTokenClaimsOf({ id_token: "junk" })).toBeNull();
+  expect(idTokenClaimsOf({ access_token: "AT" })).toBeNull();
 });
 
 test("client_secret_post puts client_id + client_secret in the form for both grants (GitHub's shape) and sends no Basic header; none (a public client) sends client_id alone", async () => {

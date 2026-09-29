@@ -423,7 +423,14 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         return {
           ...state,
           config: {
-            llm: { model: patch.llm?.model || state.config.llm.model },
+            llm: {
+              model: patch.llm?.model || state.config.llm.model,
+              // null clears it, so only a patch that names it changes it
+              chatgptConnection:
+                patch.llm && Object.hasOwn(patch.llm, "chatgptConnection")
+                  ? patch.llm.chatgptConnection || null
+                  : state.config.llm.chatgptConnection,
+            },
             maxAutonomousTurns: patch.maxAutonomousTurns ?? state.config.maxAutonomousTurns,
             llmRequestExpiryMs: patch.llmRequestExpiryMs ?? state.config.llmRequestExpiryMs,
             llmRequestDebounceMs: patch.llmRequestDebounceMs ?? state.config.llmRequestDebounceMs,
@@ -500,6 +507,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
             requestedAtOffset: event.offset,
             expiresAt: event.payload.expiresAt,
             model: event.payload.model,
+            chatgptConnection: event.payload.chatgptConnection,
             triggerSource: trigger.source,
           },
           autonomousTurnCount:
@@ -798,6 +806,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
         idempotencyKey: this.idempotencyKey(`request/${String(trigger.offset)}`),
         payload: {
           model: llm.model,
+          chatgptConnection: llm.chatgptConnection,
           expiresAt: trigger.atMs + llmRequestExpiryMs,
           triggerOffset: trigger.offset,
         },
@@ -941,6 +950,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       try {
         answer = await this.#stream({
           model: open.model,
+          chatgptConnection: open.chatgptConnection || null,
           messages,
           signal: controller.signal,
           onDelta: (text, thinking) => {
@@ -1013,16 +1023,19 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
    *  Two routes by the model's name, both `itx.ai` under THIS context's rules (a test lends a fake
    *  there), each drained inside its one `getItx` scope: the call stays open until its body is
    *  read. A `@cf/…` answer may be streamed or whole JSON.
-   *  Anything else is OpenAI's Responses API as a Workers AI partner model on Cloudflare's billing
-   *  — no key, ours or a project's — the FAST reading of a reasoning model: low effort, with its
-   *  summary streamed. */
+   *  Anything else is OpenAI's Responses API — the FAST reading of a reasoning model: low effort,
+   *  with its summary streamed — as a Workers AI partner model on Cloudflare's billing, no key,
+   *  ours or a project's; or, with `chatgptConnection`, straight to OpenAI on that connection's
+   *  ChatGPT plan, the same request with the model named in it. */
   async #stream({
     model,
+    chatgptConnection,
     messages,
     signal,
     onDelta,
   }: {
     model: string;
+    chatgptConnection: string | null;
     messages: ChatMessage[];
     signal: AbortSignal;
     onDelta(text: string, thinking: string): void;
@@ -1065,37 +1078,60 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
     // partition on, so a runaway agent hits ITS ceiling. Nothing is trusted from the answer: it is a
     // Response checked for status and parsed event by event below.
     const { projectId, path } = await this.#identity();
+    const request = {
+      input: responsesInput(messages),
+      stream: true,
+      store: false,
+      reasoning: { effort: "low", summary: "auto" },
+    };
     using itx = this.deps.getItx();
-    const raw: unknown = await raceAbort(
-      signal,
-      itx.ai.run(
-        // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
-        // partner model's name (`openai/…`) is not among them though the binding takes any model
-        // the account can reach, and a partner model takes the PROVIDER's request body (here the
-        // Responses API's), which no catalog input type names.
-        `openai/${model}` as Parameters<Ai["run"]>[0],
-        {
-          input: responsesInput(messages),
-          stream: true,
-          store: false,
-          reasoning: { effort: "low", summary: "auto" },
-        } as never,
-        {
-          returnRawResponse: true,
-          gateway: {
-            id: AI_GATEWAY_ID,
-            skipCache: true,
-            metadata: { projectId, streamPath: path, context: "agent-turn" },
-          },
-        },
-      ),
-    );
+    // THE CHATGPT PLAN: the Responses API itself, the connection's token substituted by egress in
+    // its secret's facet, which refreshes it on a 401. `store: false`, `stream: true` and a list
+    // `input` are what the plan requires of a request
+    // (https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+    const raw: unknown = chatgptConnection
+      ? await raceAbort(
+          signal,
+          itx.fetch(
+            new Request("https://api.openai.com/v1/responses", {
+              method: "POST",
+              headers: {
+                authorization: `Bearer getSecret("/secrets/chatgpt-${chatgptConnection}", { field: "accessToken" })`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ model, ...request }),
+              redirect: "manual",
+            }),
+          ),
+        )
+      : await raceAbort(
+          signal,
+          itx.ai.run(
+            // Two casts, both because workers-types spells Workers AI's OWN catalog as literals: a
+            // partner model's name (`openai/…`) is not among them though the binding takes any
+            // model the account can reach, and a partner model takes the PROVIDER's request body
+            // (here the Responses API's), which no catalog input type names.
+            `openai/${model}` as Parameters<Ai["run"]>[0],
+            request as never,
+            {
+              returnRawResponse: true,
+              gateway: {
+                id: AI_GATEWAY_ID,
+                skipCache: true,
+                metadata: { projectId, streamPath: path, context: "agent-turn" },
+              },
+            },
+          ),
+        );
+    const provider = chatgptConnection ? `ChatGPT (${chatgptConnection})` : "openai";
     if (!(raw instanceof Response))
       throw new Error(`model ${model}: Workers AI did not answer with the raw response`);
     const response = raw;
     if (!response.ok || !response.body)
       throw new Error(
-        `openai/${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+        withChatgptUsageLink(
+          `${provider} ${model} ${String(response.status)}: ${(await response.text()).slice(0, 400)}`,
+        ),
       );
     let text = "";
     let usage: LlmUsage | undefined;
@@ -1115,20 +1151,34 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
           .safeParse(raw);
         if (done.success) usage = normalizeUsage(done.data.response.usage) ?? usage;
       } else if (type === "response.failed" || type === "error") {
+        const ProviderError = z.looseObject({ message: z.string(), code: z.unknown() });
         const failure = z
           .looseObject({
-            error: z.looseObject({ message: z.string() }).optional(),
-            response: z
-              .looseObject({ error: z.looseObject({ message: z.string() }).optional() })
-              .optional(),
+            error: ProviderError.optional(),
+            response: z.looseObject({ error: ProviderError.optional() }).optional(),
           })
           .safeParse(raw);
+        const error = failure.success
+          ? failure.data.error || failure.data.response?.error
+          : undefined;
         throw new Error(
-          `openai: ${failure.success ? failure.data.error?.message || failure.data.response?.error?.message || type : type}`,
+          withChatgptUsageLink(`${provider}: ${error?.message || type}`, error?.code),
         );
       }
     });
     if (text.trim() === "") throw new Error("the model answered with no text");
     return { text: text.trim(), usage };
   }
+}
+
+/** A provider's failure, with where to raise the limit when it is the ChatGPT plan's usage limit for
+ *  this app, which only its owner can change
+ *  (https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery). */
+function withChatgptUsageLink(message: string, code?: unknown): string {
+  const limited =
+    code === "subscription_sharing_usage_limit_exceeded" ||
+    message.includes("subscription_sharing_usage_limit_exceeded");
+  return limited
+    ? `${message} — the ChatGPT plan's usage limit for this app: https://chatgpt.com/settings/usage`
+    : message;
 }

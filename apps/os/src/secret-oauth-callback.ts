@@ -117,12 +117,26 @@ export async function secretOAuthCallback(
   // platform's own call, no principal.
   let move: FinishConnectAnswer["move"];
   try {
+    // `client_id`: the client a provider registered during the consent (secret-oauth.ts
+    // `exchangeClientIdOf`); the facet ignores it for any other attempt
+    const clientId = url.searchParams.get("client_id") || undefined;
     // the built-in's own answer (context/built-ins.ts `completeOAuth`)
-    const { scopes, held } = (await env.ITERATE_CONTEXT.getByName(claims.context).invoke(
-      ["itx", "builtins", "secrets", ["completeOAuth", owner.path, { code, nonce: claims.nonce }]],
+    const { scopes, held, idTokenClaims } = (await env.ITERATE_CONTEXT.getByName(
+      claims.context,
+    ).invoke(
+      [
+        "itx",
+        "builtins",
+        "secrets",
+        ["completeOAuth", owner.path, { code, nonce: claims.nonce, clientId }],
+      ],
       [],
       { principal: null },
-    )) as { scopes: string[]; held?: FinishConnectInput["held"] };
+    )) as {
+      scopes: string[];
+      held?: FinishConnectInput["held"];
+      idTokenClaims?: FinishConnectInput["idTokenClaims"];
+    };
     if (provider && owner.kind !== "organizations") {
       // The platform's own call on the owner's root: its facet (a project's `project`, a person's
       // `account`) finishes the attempt this callback completed (integrations/verbs.ts), told what
@@ -135,6 +149,7 @@ export async function secretOAuthCallback(
         nonce: claims.nonce,
         grantedScopes: scopes,
         held,
+        idTokenClaims,
         consentedBy: {
           person:
             owner.kind === "users" &&

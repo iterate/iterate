@@ -272,11 +272,45 @@ test.for<{
     ],
     state: {
       config: {
-        llm: { model: "@cf/x" },
+        llm: { model: "@cf/x", chatgptConnection: null },
         maxAutonomousTurns: 2,
         llmRequestExpiryMs: 600_000,
         llmRequestDebounceMs: 250,
         llmRequestRetryPolicy: { maxAttempts: 3, backoffBaseMs: 10_000, backoffMaxMs: 60_000 },
+      },
+    },
+  },
+  {
+    name: "configured names a ChatGPT connection, the model kept; the request records it, and null goes back to Cloudflare's billing",
+    events: [
+      ...born,
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { chatgptConnection: "plan" } } },
+      },
+      user("hi"),
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: {
+          model: "gpt-6-astra",
+          chatgptConnection: "plan",
+          expiresAt: 999_999,
+          triggerOffset: 4,
+        },
+      },
+      {
+        type: "events.iterate.com/agent/configured",
+        payload: { config: { llm: { chatgptConnection: null } } },
+      },
+    ],
+    state: {
+      config: expect.objectContaining({ llm: { model: "gpt-6-astra", chatgptConnection: null } }),
+      openRequest: {
+        requestedAtOffset: 5,
+        expiresAt: 999_999,
+        model: "gpt-6-astra",
+        chatgptConnection: "plan",
+        triggerSource: "external",
       },
     },
   },

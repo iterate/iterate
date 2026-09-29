@@ -170,20 +170,21 @@ const MINTED_RECORDS_KEPT = 500;
 
 const MINTED_CLIENT_ID_PREFIX = "petshop-client-";
 
+/** A client `createClient` minted: its id is `MINTED_CLIENT_ID_PREFIX`'s, after the provider's own
+ *  prefix when it has one (ChatGPT's `oaiapp_`). */
+const isMintedClientId = (id: string) => id.includes(MINTED_CLIENT_ID_PREFIX);
+
 /** Drops what `MINTED_RECORDS_KEPT` does not keep. A minted client's accounts' revocation epochs
  *  and its scheduled token-endpoint failures go with it; the seeded client stays. */
 function dropOldestMintedRecords(state: PetshopState): void {
-  const mintedClientIds = Object.keys(state.clients).filter((id) =>
-    id.startsWith(MINTED_CLIENT_ID_PREFIX),
-  );
+  const mintedClientIds = Object.keys(state.clients).filter(isMintedClientId);
   for (const clientId of mintedClientIds.slice(0, -MINTED_RECORDS_KEPT))
     delete state.clients[clientId];
   for (const byClient of [state.accessTokenEpochs, state.tokenEndpointFailuresRemainingByClient])
     for (const key of Object.keys(byClient)) {
       // a minted client's id has no colon: a failure's whole key, an epoch key's first part
       const clientId = key.split(":")[0]!;
-      if (clientId.startsWith(MINTED_CLIENT_ID_PREFIX) && !state.clients[clientId])
-        delete byClient[key];
+      if (isMintedClientId(clientId) && !state.clients[clientId]) delete byClient[key];
     }
   for (const key of Object.keys(state.accessTokenEpochs).slice(0, -MINTED_RECORDS_KEPT))
     delete state.accessTokenEpochs[key];
@@ -266,9 +267,11 @@ export class PetshopStore {
   async createClient(input: {
     redirectUris?: string[];
     public?: boolean;
+    /** What the provider's client IDs begin with: ChatGPT's `oaiapp_` (chatgpt.ts). */
+    idPrefix?: string;
   }): Promise<{ clientId: string; clientSecret: string }> {
     const state = await this.#load();
-    const clientId = `${MINTED_CLIENT_ID_PREFIX}${crypto.randomUUID().slice(0, 8)}`;
+    const clientId = `${input.idPrefix || ""}${MINTED_CLIENT_ID_PREFIX}${crypto.randomUUID().slice(0, 8)}`;
     // A public client has no usable secret; a confidential one authenticates with it.
     const clientSecret = input.public ? "" : crypto.randomUUID();
     state.clients[clientId] = {

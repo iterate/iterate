@@ -311,7 +311,9 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/cloudflare/disconnected":
       case "events.iterate.com/github/disconnected":
       case "events.iterate.com/x/connected":
-      case "events.iterate.com/x/disconnected": {
+      case "events.iterate.com/x/disconnected":
+      case "events.iterate.com/chatgpt/connected":
+      case "events.iterate.com/chatgpt/disconnected": {
         const integrations = reduceIntegrations(state.integrations, event);
         return integrations && { ...state, integrations };
       }

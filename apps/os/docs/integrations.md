@@ -1,4 +1,4 @@
-# Integrations: Slack, Google, Cloudflare, GitHub
+# Integrations: Slack, Google, Cloudflare, GitHub, X, ChatGPT
 
 Paths are relative to `apps/os`.
 
@@ -180,6 +180,34 @@ account through iterate's app (`ConnectButton`, `packages/ui`), then "Use your o
 iterate's app only for the providers in `session.info().iterateAppProviders` (APP_CONFIG
 `integrations`); a deployment without them, such as a self-host, connects through "Use your own
 app". GitHub's callback URL is the origin the callback request reached, so it needs no `urls.os`.
+
+## ChatGPT: a person's plan, no app
+
+A ChatGPT connection lets the project's code spend a person's ChatGPT Plus or Pro plan on OpenAI
+models, through OpenAI's Sign in with ChatGPT for open-source tools
+(<https://developers.openai.com/siwc/token-sharing-open-source>, `src/integrations/chatgpt.ts`).
+There is no app to configure: each consent registers a public client for that person and workspace
+(`client_id=dynamic_agent_client` in, the issued `oaiapp_…` back as the callback's `client_id`),
+which the secret keeps beside the tokens and refreshes with, no client secret anywhere. The secret
+is pinned to `auth.openai.com` and `api.openai.com`.
+
+OpenAI sends a public client back only to a loopback address, so the consent ends on
+`http://127.0.0.1:1455/auth/callback?code=…&state=…&client_id=…`, which nothing serves.
+`itx.secrets.beginOAuth` takes that `redirectUri` for a public client in the clear
+(`src/secret-oauth.ts`); the attempt completes when its query reaches
+`/api/integrations/chatgpt/callback` in the person's signed-in browser. The Dash's ChatGPT sheet
+opens the consent in a new tab and sends the address the person pastes there. The callback admits
+them, the secret facet exchanges the code as the issued client, and the ID token's `sub` and email
+name the account (`chatgpt/connected`).
+
+The plan pays for `POST https://api.openai.com/v1/responses` alone, with `store: false`,
+`stream: true` and `input` a list; `temperature`, `max_output_tokens` and a few more are refused
+([preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)).
+GPT-Live, Realtime and transcription refuse the token (Realtime opens a session and fails every
+response), so voice keeps `/secrets/openai`. An agent spends the plan once configured with
+`{ llm: { chatgptConnection: "<connection>" } }`; its usage-limit failure links to
+<https://chatgpt.com/settings/usage>, where the person sets each app's weekly limit. A person's own
+ChatGPT connection, lent to projects, is not offered yet.
 
 ## Instance lends
 

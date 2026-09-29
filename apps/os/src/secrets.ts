@@ -44,8 +44,9 @@ export const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
 
 /** The deployment's apps an `oauth-refresh-token` strategy may name as its client (`{ platform }`):
  *  each refreshes with that app's credentials, attached in the secret's facet. GitHub's is the App's
- *  user-authorization client, which a GitHub sign-in's token refreshes with. */
-const OAUTH_REFRESH_PLATFORMS = IntegrationProvider.options;
+ *  user-authorization client, which a GitHub sign-in's token refreshes with. ChatGPT has none: its
+ *  client is registered during each consent and held in the material (integrations/chatgpt.ts). */
+const OAUTH_REFRESH_PLATFORMS = IntegrationProvider.exclude(["chatgpt"]).options;
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
@@ -553,16 +554,18 @@ async function jsonRecordOf(response: Response): Promise<Record<string, unknown>
 
 /** ONE request to an OAuth token endpoint — the refresh grant here, the authorization-code grant in
  *  secret-oauth.ts — with the client credential the way the endpoint wants it (`ClientAuth`); a
- *  client with no secret is treated as `none` whatever it declared. */
+ *  client with no secret is treated as `none` whatever it declared. An absent parameter is left
+ *  off. */
 export function oauthTokenRequest(input: {
   tokenEndpoint: string;
   clientId: string;
   clientSecret: string;
   clientAuth: ClientAuth;
-  params: Record<string, string>;
+  params: Record<string, string | undefined>;
 }): Request {
   const method = input.clientSecret ? input.clientAuth : "none";
-  const body = new URLSearchParams(input.params);
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(input.params)) if (value) body.set(key, value);
   if (method !== "client_secret_basic") body.set("client_id", input.clientId);
   if (method === "client_secret_post") body.set("client_secret", input.clientSecret);
   return new Request(input.tokenEndpoint, {

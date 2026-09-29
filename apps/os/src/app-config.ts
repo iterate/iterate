@@ -559,6 +559,8 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
 export function iterateAppScopesOf(config: AppConfig) {
   const scopes: Partial<Record<OAuthIntegrationProvider, string[]>> = {};
   for (const provider of OAUTH_INTEGRATION_PROVIDERS) {
+    // ChatGPT's client is registered during each consent, with one fixed scope (integrations/chatgpt.ts)
+    if (provider === "chatgpt") continue;
     const app = config.integrations[provider];
     if (app) scopes[provider] = [...app.scopes];
   }

@@ -24,6 +24,15 @@
 // provider's `/api/integrations/<provider>/callback`, whose handler finishes the connection. `next`
 // is where the callback sends the human once the tokens are stored: the platform's origin or the
 // Dash's, nowhere else (`nextUrlOf`).
+//
+// A LOOPBACK REDIRECT (`redirectUri`, RFC 8252 §7.3) replaces the platform's callback for a public
+// client in the clear whose provider admits no other: OpenAI's Sign in with ChatGPT registers a
+// client for the person during the consent and sends them back to `http://127.0.0.1:…`, which
+// nothing serves (https://developers.openai.com/siwc/token-sharing-open-source/sign-in). The
+// attempt is the same one: its query, carried to the platform's callback in the person's signed-in
+// browser (the Dash's ChatGPT sheet does it from the address they paste), completes it there, and
+// the client the callback names (`client_id`) is the one the exchange and every refresh use
+// (`exchangeClientIdOf`).
 
 import * as oauth from "oauth4webapi";
 import type { ClientAuth, SecretOAuthClient } from "iterate/api";
@@ -60,6 +69,10 @@ export type NormalizedSecretOAuthOptions = {
   extra: Record<string, string>;
   next: string | null;
   expectAccount: string | null;
+  /** A loopback redirect URI in place of the platform's callback; null for the platform's. */
+  redirectUri: string | null;
+  /** The RFC 8707 resource indicator the authorize request and the exchange carry; null for none. */
+  resource: string | null;
 };
 
 /** The pending attempt, kept by the secret's facet between the redirect out and the code
@@ -166,7 +179,62 @@ export function normalizeSecretOAuth(
       typeof options.expectAccount === "string" && options.expectAccount
         ? options.expectAccount
         : null,
+    redirectUri: loopbackRedirectUriOf(options.redirectUri, { client, clientSecret }),
+    resource: resourceOf(options.resource),
   };
+}
+
+/** `resource` checked: absent (null), or an absolute URL (RFC 8707 §2). */
+function resourceOf(resource: unknown): string | null {
+  if (resource === undefined) return null;
+  if (typeof resource !== "string" || !URL.canParse(resource))
+    throw new Error(
+      `secrets.beginOAuth: resource is an absolute URL (RFC 8707), got ${JSON.stringify(resource)}`,
+    );
+  return resource;
+}
+
+/** `redirectUri` checked: absent (null, the platform's callback), or a loopback address (RFC 8252
+ *  §7.3: `http:`, `127.0.0.1`, `[::1]` or `localhost`) for a public client in the clear. Any other
+ *  address would carry the code to a host the platform does not know; a confidential client's app
+ *  is registered with the platform's callback. */
+function loopbackRedirectUriOf(
+  redirectUri: unknown,
+  attempt: { client: SecretOAuthClient | null; clientSecret: string },
+): string | null {
+  if (redirectUri === undefined) return null;
+  const url = URL.canParse(String(redirectUri)) ? new URL(String(redirectUri)) : null;
+  if (
+    !url ||
+    url.protocol !== "http:" ||
+    !["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)
+  )
+    throw new Error(
+      `secrets.beginOAuth: redirectUri is a loopback address (http://127.0.0.1:<port>/<path>), got ${JSON.stringify(redirectUri)}`,
+    );
+  if (attempt.client || attempt.clientSecret)
+    throw new Error(
+      "secrets.beginOAuth: redirectUri is for a public client passed in the clear (clientId alone)",
+    );
+  return url.href;
+}
+
+/** The client ID the code exchange (and every refresh after it) sends: the one the callback named,
+ *  when the attempt is a public client in the clear on a loopback redirect, whose provider registered
+ *  it during the consent (OpenAI's Sign in with ChatGPT begins as `dynamic_agent_client` and answers
+ *  the client it issued, `oaiapp_…`, as the callback's `client_id`); the attempt's own otherwise. A
+ *  code is bound to the client it was issued to, so a callback naming another client gets no
+ *  tokens. */
+export function exchangeClientIdOf(
+  attempt: Pick<NormalizedSecretOAuthOptions, "client" | "redirectUri"> & {
+    clientId: string;
+    clientSecret: string;
+  },
+  callbackClientId: string | undefined,
+): string {
+  if (!callbackClientId || !attempt.redirectUri || attempt.client || attempt.clientSecret)
+    return attempt.clientId;
+  return callbackClientId;
 }
 
 /** `client` checked: absent, or `{ platform }` / `{ project }` naming an OAuth integration's provider. */
@@ -201,6 +269,7 @@ export async function beginSecretOAuth(
     code_challenge: await oauth.calculatePKCECodeChallenge(codeVerifier),
     code_challenge_method: "S256",
     scope: options.scope,
+    resource: options.resource || undefined,
   };
   for (const [key, value] of Object.entries(params)) if (value) url.searchParams.set(key, value);
   return {
@@ -246,6 +315,7 @@ export async function completeSecretOAuth(
         code,
         redirect_uri: pending.redirectUri,
         code_verifier: pending.codeVerifier,
+        resource: options.resource || undefined,
       },
     }),
   );

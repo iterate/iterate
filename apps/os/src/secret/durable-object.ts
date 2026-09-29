@@ -59,7 +59,12 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
-import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
+import {
+  grantedScopesOf,
+  idTokenClaimsOf,
+  lendVerdict,
+  slackTeamOfTokenResponse,
+} from "../integrations/rules.ts";
 import { xEndpointsOf, XUserResponse } from "../integrations/x.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
@@ -73,6 +78,7 @@ import {
 import {
   beginSecretOAuth,
   completeSecretOAuth,
+  exchangeClientIdOf,
   secretOAuthCallbackPathOf,
   SECRET_OAUTH_TTL_MS,
   type NormalizedSecretOAuthOptions,
@@ -121,6 +127,19 @@ type OAuthPlatform = NonNullable<
 type Stored = {
   record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
   revision: number;
+};
+
+/** The account an OpenID token response's ID token names (integrations/rules.ts `idTokenClaimsOf`). */
+type IdTokenClaims = { sub: string; email?: string };
+
+/** THE LAST OAUTH ATTEMPT FINISHED (storage `completed`): its nonce, the revision its exchange (or
+ *  the admit of its held token) wrote, what the provider granted and the ID token's account — what a
+ *  replay of its callback answers while the record is still that revision's. */
+type CompletedOAuth = {
+  nonce: string;
+  revision: number | undefined;
+  scopes: string[];
+  idTokenClaims?: IdTokenClaims;
 };
 
 /** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
@@ -537,7 +556,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     const { pending, authorizationUrl } = await beginSecretOAuth(
       { ...options, clientId },
       {
-        redirectUri: `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
+        redirectUri:
+          options.redirectUri || `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
         state: await signClaims(state, await sessionSigningSecretOf(config)),
         nonce,
       },
@@ -587,6 +607,12 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  provider's OAuth endpoints answer on; refused when the deployment has none. GitHub's is the
    *  App's user-authorization client (a GitHub sign-in's token refreshes with it). */
   #platformOAuthApp(provider: OAuthPlatform) {
+    // ChatGPT's client is registered for the person during the consent (integrations/chatgpt.ts),
+    // never the deployment's
+    if (provider === "chatgpt")
+      throw new Error(
+        "secrets: ChatGPT has no deployment app — its connect registers a public client during the consent",
+      );
     const { slack, google, cloudflare, github, x } = appConfigOf(this.env).integrations;
     const googleEndpoints = googleEndpointsOf(google?.googleOrigin);
     const app =
@@ -716,13 +742,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  which happened: THIS call wrote the record (the caller may undo it if its fact append fails), or
    *  a replay found it. `held` says the record was NOT written: iterate's Slack app's token for a
    *  workspace another project holds waits aside (`HeldExchange`) — the same callback again answers
-   *  it again. */
-  async completeOAuth(input: { code: string; nonce: string }): Promise<{
+   *  it again. `clientId` is the client the callback named: the one the exchange uses for a public
+   *  client the provider registered during the consent (secret-oauth.ts `exchangeClientIdOf`).
+   *  `idTokenClaims` is the account the token response's ID token names, when it has one. */
+  async completeOAuth(input: { code: string; nonce: string; clientId?: string }): Promise<{
     urls: string[];
     refresh?: SecretRefresh["kind"];
     exchanged: boolean;
     scopes: string[];
     held?: HeldToken;
+    idTokenClaims?: IdTokenClaims;
   }> {
     const replayed = await this.#completed(input.nonce);
     if (replayed) return { ...replayed, exchanged: false };
@@ -743,10 +772,25 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       throw new Error("the attempt expired — begin again");
     }
     const started = await this.ctx.storage.get<number>("revision");
-    const credentials = await this.#oauthClientOf(pending.options);
-    // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
+    const oauthClient = await this.#oauthClientOf(pending.options);
+    const credentials = {
+      ...oauthClient,
+      clientId: exchangeClientIdOf(
+        {
+          ...oauthClient,
+          client: pending.options.client,
+          redirectUri: pending.options.redirectUri,
+        },
+        input.clientId,
+      ),
+    };
+    // What the provider says it granted, the Slack workspace and the ID token's account, off the
+    // token response (rules.ts).
     let scopes: string[] = [];
-    const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
+    const answered: {
+      team: ReturnType<typeof slackTeamOfTokenResponse>;
+      idTokenClaims: IdTokenClaims | null;
+    } = { team: null, idTokenClaims: null };
     const { client, expectAccount } = pending.options;
     const xClient = client && ("platform" in client ? client.platform : client.project) === "x";
     const record = await completeSecretOAuth(
@@ -762,6 +806,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
           .catch(() => null);
         scopes = grantedScopesOf(answer, pending.options.scope || "");
         answered.team = slackTeamOfTokenResponse(answer);
+        answered.idTokenClaims = idTokenClaimsOf(answer);
         return response;
       },
       credentials,
@@ -827,23 +872,34 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     }
     await this.write(record);
     const revision = await this.ctx.storage.get<number>("revision");
-    await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
-    return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
+    const idTokenClaims = answered.idTokenClaims || undefined;
+    await this.ctx.storage.put<CompletedOAuth>("completed", {
+      nonce: input.nonce,
+      revision,
+      scopes,
+      idTokenClaims,
+    });
+    return {
+      urls: record.urls,
+      refresh: record.refresh?.kind,
+      exchanged: true,
+      scopes,
+      idTokenClaims,
+    };
   }
 
   /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
    *  answer), or null; one it completed that was written or cleared since is refused. */
-  async #completed(
-    nonce: string,
-  ): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; scopes: string[] } | null> {
-    const completed = await this.ctx.storage.get<{
-      nonce: string;
-      revision: number;
-      scopes: string[];
-    }>("completed");
+  async #completed(nonce: string): Promise<{
+    urls: string[];
+    refresh?: SecretRefresh["kind"];
+    scopes: string[];
+    idTokenClaims?: IdTokenClaims;
+  } | null> {
+    const completed = await this.ctx.storage.get<CompletedOAuth>("completed");
     if (completed?.nonce !== nonce) return null;
     const stored = await this.ctx.storage.get<Stored>("stored");
-    if (stored?.revision !== completed.revision)
+    if (!stored || stored.revision !== completed.revision)
       throw new Error(
         "this attempt completed, but the secret was written or cleared since — begin again",
       );
@@ -851,6 +907,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       urls: stored.record.urls,
       refresh: stored.record.refresh?.kind,
       scopes: completed.scopes,
+      idTokenClaims: completed.idTokenClaims,
     };
   }
 
@@ -891,7 +948,7 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       this.#keys(),
     );
     await this.write({ ...held.record, material });
-    await this.ctx.storage.put("completed", {
+    await this.ctx.storage.put<CompletedOAuth>("completed", {
       nonce: input.nonce,
       revision: await this.ctx.storage.get<number>("revision"),
       scopes: held.scopes,

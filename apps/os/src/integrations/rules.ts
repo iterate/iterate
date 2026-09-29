@@ -111,27 +111,39 @@ export function githubInstallationRefusal(evidence: GithubInstallationEvidence):
 }
 
 /** The account a token endpoint's answer is for: Slack's `team.id`, or the OpenID `sub` of the
- *  `id_token` (Google, Cloudflare). The ID token came straight from the token endpoint over TLS, so
- *  its claims are read without checking its signature (OpenID Connect Core §3.1.3.7). */
+ *  `id_token` (Google, Cloudflare). */
 function tokenResponseAccountOf(data: unknown): string | null {
   if (!isRecord(data)) return null;
   if (isRecord(data.team) && typeof data.team.id === "string") return data.team.id;
-  if (typeof data.id_token !== "string") return null;
+  return idTokenClaimsOf(data)?.sub ?? null;
+}
+
+/** The account an OpenID Connect token response's `id_token` names: its `sub`, and its `email` when
+ *  it has one (ChatGPT's, which its userinfo endpoint does not answer); null for a response with no
+ *  readable ID token. The ID token came straight from the token endpoint over TLS, so its claims are
+ *  read without checking its signature (OpenID Connect Core §3.1.3.7). */
+export function idTokenClaimsOf(data: unknown): { sub: string; email?: string } | null {
+  if (!isRecord(data) || typeof data.id_token !== "string") return null;
   try {
     const payload = data.id_token.split(".")[1] ?? "";
-    const claims: unknown = JSON.parse(
-      atob(
-        payload
-          .replaceAll("-", "+")
-          .replaceAll("_", "/")
-          .padEnd(Math.ceil(payload.length / 4) * 4, "="),
+    const claims = IdTokenClaims.safeParse(
+      JSON.parse(
+        atob(
+          payload
+            .replaceAll("-", "+")
+            .replaceAll("_", "/")
+            .padEnd(Math.ceil(payload.length / 4) * 4, "="),
+        ),
       ),
     );
-    return isRecord(claims) && typeof claims.sub === "string" ? claims.sub : null;
+    return claims.success ? claims.data : null;
   } catch {
     return null;
   }
 }
+const IdTokenClaims = z
+  .object({ sub: z.string().min(1), email: z.string().min(1).optional().catch(undefined) })
+  .transform(({ sub, email }) => (email ? { sub, email } : { sub }));
 
 /** The Slack workspace a token endpoint's answer installed the app into (`oauth.v2.access`'s
  *  `team`), or null for an answer that names none. */

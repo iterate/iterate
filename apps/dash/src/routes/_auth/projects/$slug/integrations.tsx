@@ -2,7 +2,8 @@
 // `/`), each provider's Connect sheet and the forms it leads to. The flows themselves — a person's own
 // account, iterate's app or your own, moving an account another project holds — are in
 // apps/os/docs/integrations.md. The sheet is one URL: `?connect=<provider>` (`&scopes=` from an agent's
-// `requestFromUser`), `?own=<provider>&connection=<name>`, `?move=<offer>`.
+// `requestFromUser`), `?own=<provider>&connection=<name>`, `?move=<offer>`. ChatGPT's sheet ends on
+// an address the person pastes back (`ChatgptConnect`).
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Blocks, CheckIcon, CopyIcon } from "lucide-react";
@@ -409,7 +410,13 @@ function ProjectIntegrations() {
               platformOrigin={httpOriginOf(info.platformOrigin)}
             />
           )}
-          {connecting && !own && !moveOffer && (
+          {connecting?.provider === "chatgpt" && !own && !moveOffer && (
+            <ChatgptConnect
+              platformOrigin={httpOriginOf(info.platformOrigin)}
+              connect={() => connectAnother({ provider: "chatgpt" })}
+            />
+          )}
+          {connecting && connecting.provider !== "chatgpt" && !own && !moveOffer && (
             <div className="flex h-full flex-col">
               <SheetHeader>
                 <SheetTitle className="flex items-center gap-2">
@@ -579,6 +586,134 @@ function ProjectIntegrations() {
           )}
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+/** CHATGPT'S CONNECT (apps/os integrations/chatgpt.ts): OpenAI sends the person back to an address on
+ *  their own computer, `http://127.0.0.1:1455/auth/callback?…`, which nothing serves. The consent
+ *  opens in a tab of its own; the address that tab ends on, pasted here, goes to the platform's
+ *  callback with its query, which finishes the connection and comes back to this page. */
+function ChatgptConnect({
+  platformOrigin,
+  connect,
+}: {
+  /** Where the platform's callback is: null for an origin the issuer reported that is not http(s). */
+  platformOrigin: string | null;
+  connect: () => Promise<{ authorizationUrl: string }>;
+}) {
+  const [consent, setConsent] = useState<{ authorizationUrl: string; opened: boolean } | null>(
+    null,
+  );
+  const [address, setAddress] = useState("");
+  const [pending, setPending] = useState<"consent" | "finish" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const begin = async () => {
+    setError(null);
+    setPending("consent");
+    // opened while the click still counts, so no popup blocker stops it; ChatGPT gets no handle
+    // back to this page
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
+    try {
+      const { authorizationUrl } = await connect();
+      if (tab) tab.location.href = authorizationUrl;
+      setConsent({ authorizationUrl, opened: Boolean(tab) });
+    } catch (caught) {
+      tab?.close();
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+    setPending(null);
+  };
+  const finish = (event: FormEvent) => {
+    event.preventDefault();
+    const pasted = URL.canParse(address.trim()) ? new URL(address.trim()) : null;
+    if (!platformOrigin) {
+      setError("This deployment reports no platform address to finish the connection at.");
+      return;
+    }
+    if (!pasted?.searchParams.get("state")) {
+      setError(
+        "Paste the whole address from ChatGPT's tab: it starts with http://127.0.0.1:1455/auth/callback?",
+      );
+      return;
+    }
+    setPending("finish");
+    window.location.assign(`${platformOrigin}/api/integrations/chatgpt/callback${pasted.search}`);
+  };
+  return (
+    <div className="flex h-full flex-col">
+      <SheetHeader>
+        <SheetTitle className="flex items-center gap-2">
+          <ProviderLogo provider="chatgpt" />
+          Connect ChatGPT
+        </SheetTitle>
+      </SheetHeader>
+      <div className="flex flex-1 flex-col gap-4 px-4 pb-4">
+        <p className="text-sm text-muted-foreground">
+          Your agents use your ChatGPT Plus or Pro plan for OpenAI models, within the limits you set
+          in{" "}
+          <a
+            href="https://chatgpt.com/settings/usage"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-4"
+          >
+            ChatGPT's settings
+          </a>
+          .
+        </p>
+        {error && (
+          <p role="alert" data-type="error" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        {consent ? (
+          <form onSubmit={finish} className="flex flex-col gap-4">
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="chatgpt-address">Address from ChatGPT's tab</FieldLabel>
+                <Input
+                  id="chatgpt-address"
+                  name="address"
+                  placeholder="http://127.0.0.1:1455/auth/callback?code=…"
+                  autoComplete="off"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  required
+                />
+                <FieldDescription>
+                  {consent.opened ? (
+                    "Allow iterate in the tab that opened."
+                  ) : (
+                    <>
+                      <a
+                        href={consent.authorizationUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-4"
+                      >
+                        Open ChatGPT
+                      </a>{" "}
+                      and allow iterate.
+                    </>
+                  )}{" "}
+                  It then shows a page that doesn't load: copy its address from the address bar.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+            <Button type="submit" disabled={Boolean(pending)}>
+              {pending === "finish" ? <Spinner data-icon="inline-start" /> : null}
+              Connect
+            </Button>
+          </form>
+        ) : (
+          <Button disabled={Boolean(pending)} onClick={() => void begin()}>
+            {pending === "consent" ? <Spinner data-icon="inline-start" /> : null}
+            Continue with ChatGPT
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

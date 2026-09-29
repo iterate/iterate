@@ -266,6 +266,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/github/disconnected",
     "events.iterate.com/x/connected",
     "events.iterate.com/x/disconnected",
+    "events.iterate.com/chatgpt/connected",
+    "events.iterate.com/chatgpt/disconnected",
   ],
   emits: [
     "events.iterate.com/project/created",

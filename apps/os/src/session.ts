@@ -525,8 +525,11 @@ export class SessionRpcTarget extends RpcTarget {
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.appConfig.urls.ingressRouting,
       mcpOrigin: this.#input.appConfig.urls.mcp,
-      iterateAppProviders: IntegrationProvider.options.filter((provider) =>
-        Boolean(this.#input.appConfig.integrations[provider]),
+      // ChatGPT's client is registered during each consent (integrations/chatgpt.ts): every
+      // deployment has it
+      iterateAppProviders: IntegrationProvider.options.filter(
+        (provider) =>
+          provider === "chatgpt" || Boolean(this.#input.appConfig.integrations[provider]),
       ),
       iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),
       // as identity.ts `signInClientOf`: the sign-in's block, and the integration's client it uses

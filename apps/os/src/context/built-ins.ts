@@ -135,8 +135,15 @@ type PlatformSecretsVerbs = {
    *  the code and the nonce reach only the callback. */
   completeOAuth(
     path: string,
-    input: { code: string; nonce: string },
-  ): Promise<{ path: string; scopes: string[]; held?: HeldToken }>;
+    /** `clientId`: the callback's `client_id`, the client a provider registered during the consent. */
+    input: { code: string; nonce: string; clientId?: string },
+  ): Promise<{
+    path: string;
+    scopes: string[];
+    held?: HeldToken;
+    /** The account the token response's ID token names (integrations/rules.ts `idTokenClaimsOf`). */
+    idTokenClaims?: { sub: string; email?: string };
+  }>;
   /** The platform's move of a Slack workspace here (integrations/verbs.ts `confirmIntegrationMove`):
    *  the token its consent's exchange held aside (secret/durable-object.ts `admitHeldToken`) stored,
    *  then `secret/set`, like `completeOAuth`. You never call it. */
@@ -1245,12 +1252,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         onSecretContext(secretPath, ["completeOAuth", secretPath, input], async (secret) => {
           // A facet call answers `unknown` over the hop; this is the platform's own
           // SecretDurableObject.completeOAuth's declared answer.
-          const { urls, refresh, scopes, held } = (await secretFacet(["completeOAuth", input])) as {
+          const { urls, refresh, scopes, held, idTokenClaims } = (await secretFacet([
+            "completeOAuth",
+            input,
+          ])) as {
             urls: string[];
             refresh?: SecretRefresh["kind"];
             exchanged: boolean;
             scopes: string[];
             held?: HeldToken;
+            idTokenClaims?: { sub: string; email?: string };
           };
           // held aside, not stored: nothing on the log until a move admits it (`admitHeldToken`)
           if (held) return { path: secretPath, scopes, held };
@@ -1258,8 +1269,9 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             type: "events.iterate.com/secret/set",
             payload: { path: secretPath, urls, refresh },
           });
-          // what the provider granted, for the connection the callback finishes (integrations/verbs.ts)
-          return { path: secretPath, scopes };
+          // what the provider granted and for whom, for the connection the callback finishes
+          // (integrations/verbs.ts)
+          return { path: secretPath, scopes, idTokenClaims };
         }),
       admitHeldToken: (secretPath, input) => {
         assertPlatformCaller("secrets.admitHeldToken");
