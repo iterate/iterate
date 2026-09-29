@@ -132,9 +132,7 @@ test("a file whose dependency is not installed names the folder to install in, b
   expect(empty.stderr()).toContain("nothing.mjs has no default export to provide");
 });
 
-// The lend is the connection's: each new connection calls the file's default export again with its
-// own project and lends what it answers at the same name; when every attempt to reconnect fails,
-// provide ends with an error that says so.
+// The reconnect lifecycle `runProvide` documents (./provide.ts).
 test("runProvide: every connection calls the default export with its own project and lends again; no reconnect left ends it", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const stdout = vi.spyOn(console, "log").mockImplementation(() => {});
