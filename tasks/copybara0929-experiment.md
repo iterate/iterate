@@ -120,10 +120,10 @@ Commits pushed straight to the experiment branch have no `(#N)`, so their title 
 
 ### Round 2: iterate/os0929 and iterate/packages0929
 
-- [ ] First local run with `--last-rev`: both copies get their first commit, each README lands at its root, and both checks are green
+- [x] First local run with `--last-rev`: both copies get their first commit, each README lands at its root, and both checks are green _(49 s for both: [os0929 a40ad29](https://github.com/iterate/os0929/commit/a40ad298c42bf48638de253a47a6cd9140da3dd5), [packages0929 b33ddfe](https://github.com/iterate/packages0929/commit/b33ddfe773c5db979dab50e9a26582e63cbe7433). Checked apart from Copybara too: each copied folder's and README's hash equals iterate/iterate's)_
 - [ ] The Preview OS job's run on the same push is a green no-op for both
 - [ ] A commit touching `packages/iterate` lands in os0929 alone; one touching another package lands in packages0929 alone
-- [ ] Executable files keep their mode (`packages/cli/bin/iterate.js` is `100755`): the tree-hash check fails if not
+- [x] Executable files keep their mode (`packages/cli/bin/iterate.js` is `100755`) _(both executables are `100755` in packages0929. The check compares a copy with Copybara's own output, so it wouldn't catch Copybara dropping a mode; the hash comparison against iterate/iterate would)_
 
 ### Round 1: `packages/` → iterate/copybara0929 (repo to delete)
 
