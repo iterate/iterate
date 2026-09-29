@@ -117,11 +117,7 @@ import {
 } from "./context/itx-expression-rewriting.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { buildBuiltIns, projectConfigDeps } from "./context/built-ins.ts";
-import {
-  contextReach,
-  itxEntrypointFor,
-  statelessResolverFor,
-} from "./context/stateless-context.ts";
+import { contextReach, itxEntrypointFor } from "./context/stateless-context.ts";
 import { FacetHost } from "./context/facet-host.ts";
 import type { NamedWorker } from "./context/worker-loader.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
@@ -300,8 +296,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     projectId: this.#durableObjectAddress.projectId,
     platformOrigin: () => this.#platformOrigin,
     ctx: this.ctx,
-    delivery: () => this.#caller.delivery,
-    cause: () => this.#caller.cause,
+    ambient: () => this.#caller,
     // a run this context sends on is its caller's to read, or its runner's (`#scriptExecution`)
     readsRunSettlements: false,
   });
@@ -676,11 +671,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       await new Promise((resolve) => setTimeout(resolve, wait));
   }
 
-  /** THE REVOCATION FENCE, taken in the commit's own turn — in its write batch, so a reset cannot
-   *  lose it, and by every commit alike, a schedule's too. A commit that removes or changes a name
-   *  (`rulesChangeNeedsCommitWait`, a new row judged against what the pending fence took away as
-   *  well) or changes the routing takes the lease as it finds it — a snapshot served after the
-   *  commit carries the new table — with the names it took away (`namesTakenAway`). */
+  /** THE REVOCATION FENCE (context/rule-snapshots.ts), taken in the commit's own turn by every
+   *  commit alike, a schedule's too: the lease as it finds it, with the names it took away — a new
+   *  row judged against what the pending fence took away as well. */
   #takeRevocationFence(before: CoreState): void {
     const after = this.#stream.coreReducedState;
     const pending = this.#pendingFence();
@@ -696,13 +689,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Does a commit change a snapshot in a way that waits? A rule change that takes a name away
-   *  (`rulesChangeNeedsCommitWait`), ANY change to the routing — the edge serves the project's
-   *  hosts from the root's snapshot (worker.ts `serveProjectHost`), so a route made private,
-   *  removed or re-pointed, and a new route or ingress too, answers its writer only once no host
-   *  can be served from the table before it — and any rule the PLATFORM writes, a new name too: its
-   *  writer's next fact (a publication's `project/worker-updated` after its pointer) is then read
-   *  only where every context resolves through the new table. */
+  /** Does a commit change a snapshot in a way that waits (context/rule-snapshots.ts)? A rule change
+   *  that takes a name away, any routing change, and any rule the platform writes. */
   #snapshotChangeNeedsCommitWait(
     before: CoreState,
     after: CoreState,
@@ -728,11 +716,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return fence && fence.until > Date.now() ? fence : undefined;
   }
 
-  /** THE LEASE on this context's rule snapshots: the latest moment a snapshot it served can still
-   *  be used (served + SNAPSHOT_TTL_MS, on this context's own clock — later than the reader's own
-   *  expiry, which counts from when it sent the read). In memory: none at a birth, and at a wake
-   *  whatever the last incarnation may have served, which ends before the wake — on a clock that
-   *  may differ by SNAPSHOT_CLOCK_SLACK_MS. */
+  /** THE LEASE on this context's rule snapshots (context/rule-snapshots.ts), in memory: none at a
+   *  birth. */
   #snapshotLeaseUntil = 0;
 
   /** THE SNAPSHOT another context resolves through (context/rule-snapshots.ts): this table's
@@ -818,20 +803,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
-  /** THE EFFECTIVE table, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`): this
-   *  context's own rows live, and the table behind a bare link, hop by hop, from its snapshot
+  /** THE EFFECTIVE table at `path`, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`):
+   *  this context's own rows live, and the table behind a bare link, hop by hop, from its snapshot
    *  (context/rule-snapshots.ts) — a list calls no other context. */
-  #rewriteRuleList(depth: number): Promise<RewriteRuleListEntry[]> {
-    return this.#rewriteRuleListAt(this.#durableObjectAddress.path, depth);
-  }
-
-  async #rewriteRuleListAt(path: string, depth: number): Promise<RewriteRuleListEntry[]> {
+  async #rewriteRuleListAt(
+    depth: number,
+    path = this.#durableObjectAddress.path,
+  ): Promise<RewriteRuleListEntry[]> {
     return describeRewriteRules({
       rules: await this.#rulesAt(path),
       implicitRoots: implicitRootsAt(this.#durableObjectAddress.projectId, path),
       path,
       depth,
-      inherit: (there, hopsLeft) => this.#rewriteRuleListAt(there, hopsLeft),
+      inherit: (there, hopsLeft) => this.#rewriteRuleListAt(hopsLeft, there),
     });
   }
 
@@ -1123,7 +1107,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     fetchRoutes: () => this.#stream.coreReducedState.fetchRoutes,
     rewriteRules: {
-      list: (depth = 3) => this.#rewriteRuleList(depth),
+      list: (depth = 3) => this.#rewriteRuleListAt(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
       get: async (match) => {
         let key: string;
@@ -1134,7 +1118,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         // THIS context's table — its own rows and the implicit rows here — never a hop: `get` asks
         // what this context says about a name, `list()` what it can spell.
-        return (await this.#rewriteRuleList(0)).find((row) => row.match === key) ?? null;
+        return (await this.#rewriteRuleListAt(0)).find((row) => row.match === key) ?? null;
       },
       // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
       resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),
@@ -1157,11 +1141,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  class field initializes in order. Every built-in closes over this context's identity, so
    *  cross-project access is unspellable. */
   readonly #itxExpressionResolver = new ItxExpressionResolver({
-    ...this.#reach,
+    reach: this.#reach,
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: this.#builtIns,
     path: this.#durableObjectAddress.path,
-    projectId: this.#durableObjectAddress.projectId,
     caller: () => this.#caller,
   });
 
@@ -1645,23 +1628,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#withPlatformOrigin({ principal: null, cause: this.#caller.cause }),
       () => this.#itxExpressionResolver.namedWorker(source),
     );
-    const asLoadedCode = { principal: null, app: true as const, cause: this.#caller.cause };
+    const { cause } = this.#caller;
     return {
       spec,
       vouched,
       invoke: (call) =>
         at === this.#durableObjectAddress.path
-          ? this.#invokeInProcess(call, [], asLoadedCode)
-          : statelessResolverFor({
-              env: this.env,
-              namespace: this.env.ITERATE_CONTEXT,
-              address: DurableObjectNameCodec.address({
-                projectId: this.#durableObjectAddress.projectId,
-                path: at,
-              }),
-              caller: this.#withPlatformOrigin(asLoadedCode),
-              ctx: this.ctx,
-            }).invoke(call),
+          ? this.#invokeInProcess(call, [], { principal: null, app: true, cause })
+          : this.#reach.loadedCodeAt(at, cause)(call),
     };
   }
 

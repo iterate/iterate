@@ -1688,14 +1688,16 @@ function acrossContexts(options: {
     rewriteRules: options.stateless ? undefined : () => table(options.own || []),
     path: at,
     caller: () => options.caller || { principal: null },
-    ...reach,
-    snapshotOf: async (path) => {
-      snapshotsRead.push(path);
-      const expired = snapshotsRead.length <= (options.expiredReads || 0);
-      return {
-        rules: table(options.others?.[path] || []),
-        expiresAt: expired ? Date.now() - 1 : Infinity,
-      };
+    reach: {
+      ...reach,
+      snapshotOf: async (path) => {
+        snapshotsRead.push(path);
+        const expired = snapshotsRead.length <= (options.expiredReads || 0);
+        return {
+          rules: table(options.others?.[path] || []),
+          expiresAt: expired ? Date.now() - 1 : Infinity,
+        };
+      },
     },
   });
   return { resolver, located, snapshotsRead };
@@ -1771,7 +1773,7 @@ const setup = () => {
     rewriteRules,
     path: "/",
     caller: () => ({ principal: null }),
-    ...oneContextReach().reach,
+    reach: oneContextReach().reach,
   });
   /** The edge's `provide(match, expression | null)`: build the ONE event, append it. A refusal throws
    *  at the append boundary — nothing is appended. */
@@ -1821,7 +1823,7 @@ const appResolverAt = (path: string) =>
     rewriteRules: () => [],
     path,
     caller: () => ({ principal: null, app: true }),
-    ...oneContextReach().reach,
+    reach: oneContextReach().reach,
   });
 
 /** A fan-out row on SIGNED_WEBHOOK that loaded code appends, landing at `landsAt`. */

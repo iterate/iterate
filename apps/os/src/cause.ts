@@ -112,12 +112,12 @@ export function recordRefusal(
  *  `expressionFetchErrorAnswer`), so the SDK's `fetch` and `itx.fetch` throw it as one again. */
 export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 
-/** THE HOP COUNT: the call `cause` rides crosses one more context — a `cd`, a located call, a parent
+/** THE HOP COUNT: the call `cause` rides crosses `contexts` more — a `cd`, a located call, a parent
  *  link, a request re-entering the platform — refused past MAX_CONTEXT_HOPS. A plain failure, not the
  *  loop's end: rules that lead into each other are the owner's to fix, and a delivery through them
  *  is tried again, and lands once they are. */
-export function crossingOneMore(cause: Cause, into: string): Cause {
-  const hops = (cause.hops ?? 0) + 1;
+export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause {
+  const hops = (cause.hops ?? 0) + contexts;
   if (hops > MAX_CONTEXT_HOPS)
     throw new Error(
       `${into} refused: one call crossed more than ${MAX_CONTEXT_HOPS} contexts in the chain that began ${cause.chain} — rules, rows or requests that lead back into each other`,

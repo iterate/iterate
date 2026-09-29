@@ -157,7 +157,6 @@ export class IterateContextRpcTarget extends RpcTarget {
   readonly #statelessResolverOf:
     | ((address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver)
     | undefined;
-  #statelessResolver: ItxExpressionResolver | undefined;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -176,15 +175,6 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#waitUntil = waitUntil;
     this.#caller = caller;
     this.#statelessResolverOf = statelessResolverOf;
-  }
-
-  /** This handle's stateless resolver, built on first use (`#statelessResolverOf`). */
-  get #resolver(): ItxExpressionResolver | undefined {
-    if (!this.#statelessResolverOf) return undefined;
-    return (this.#statelessResolver ||= this.#statelessResolverOf(
-      this.#durableObjectAddress,
-      this.#caller,
-    ));
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -301,7 +291,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#waitUntil(this.#durableObject.recordLoopLimit(cause, message));
 
   async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {
-    const resolver = this.#resolver;
+    const resolver = this.#statelessResolverOf?.(this.#durableObjectAddress, this.#caller);
     const itxExpression = normalizedItxExpression(call);
     const terminalFetch = terminalFetchOf(itxExpression, args);
     if (resolver && terminalFetch)
@@ -635,7 +625,14 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       (p) => this.ctx.waitUntil(p),
       this.#caller(address, parseCause(cause)),
       false,
-      (at, caller) => this.#statelessResolverOf(at, caller),
+      (at, caller) =>
+        statelessResolverFor({
+          env: this.env,
+          namespace: this.env.ITERATE_CONTEXT,
+          address: at,
+          caller,
+          ctx: this.ctx,
+        }),
     );
   }
 
@@ -669,7 +666,13 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       );
     }
     return statelessExpressionFetch(
-      this.#statelessResolverOf(address, caller),
+      statelessResolverFor({
+        env: this.env,
+        namespace: this.env.ITERATE_CONTEXT,
+        address,
+        caller,
+        ctx: this.ctx,
+      }),
       () =>
         expressionHeader.trimStart().startsWith("[")
           ? // Untrusted: the resolver's `normalizedItxExpression` shape-checks it, and the app
@@ -697,17 +700,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       cause: cause || newChain("loaded code"),
       ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
     };
-  }
-
-  /** The stateless resolver of the context at `address` for `caller` (context/stateless-context.ts). */
-  #statelessResolverOf(address: DurableObjectAddress, caller: Caller) {
-    return statelessResolverFor({
-      env: this.env,
-      namespace: this.env.ITERATE_CONTEXT,
-      address,
-      caller,
-      ctx: this.ctx,
-    });
   }
 }
 

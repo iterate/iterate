@@ -32,6 +32,7 @@ import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { sha256Hex } from "../caller.ts";
 import { WorkerManifest } from "../project/contract.ts";
+import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { readPackage, resolveModules, type ResolveOptions } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
@@ -44,20 +45,19 @@ const PRODUCED_MODULES_TTL_SECONDS = 24 * 60 * 60;
 /** The most one KV value may be (Cloudflare's limit). A repo's whole tree can pass it while the
  *  modules the entry reaches do not, so an answer over it is simply not kept. */
 const KV_VALUE_MAX_BYTES = 25 * 1024 * 1024;
-/** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
- *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
- *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
- *  producer EXPRESSION is small by nature and is not measured. */
-export const FACET_SOURCE_MAX_CHARS = 1 << 20;
-/** Refuse a spec whose literal source is over the ceiling — the one check both entry points
- *  (`itx.processors.enable`, the DO's `itx.facets.get`) make, so the refusal is atomic: nothing appended, no memo. */
+/** Refuse a spec whose LITERAL source is over the ceiling (itx-expression-rewriting.ts
+ *  `SOURCE_MAX_CHARS`) — the startup memo is one kv cell in the DO (re-read on every post-eviction
+ *  wake) and the hosting event one log row under the 8 MiB event ceiling, so an oversize source
+ *  fails where it is handed in, coded, not late at materialization; a producer EXPRESSION is small by
+ *  nature and is not measured. The one check both entry points (`itx.processors.enable`, the DO's
+ *  `itx.facets.get`) make, so the refusal is atomic: nothing appended, no memo. */
 export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): void {
   if (typeof spec.source === "string" || Array.isArray(spec.source)) return; // a producer expression
   const chars = JSON.stringify(spec.source).length;
-  if (chars > FACET_SOURCE_MAX_CHARS)
+  if (chars > SOURCE_MAX_CHARS)
     throw codedError(
       "FACET_SOURCE_TOO_LARGE",
-      `${where}: the facet's source is ${chars} chars, over the ${FACET_SOURCE_MAX_CHARS}-char ceiling — build it smaller, or load it from a producer expression with a cacheKey`,
+      `${where}: the facet's source is ${chars} chars, over the ${SOURCE_MAX_CHARS}-char ceiling — build it smaller, or load it from a producer expression with a cacheKey`,
     );
 }
 

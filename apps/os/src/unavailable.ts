@@ -70,7 +70,7 @@ export function expressionFetchErrorAnswer(error: unknown, itxExpression: string
   // A lent stub offline (a tunnel killed or asleep, before its rule is un-set) is the
   // upstream's absence: a 502, logged at info and never reported, its header naming the
   // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
-  // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
+  // not send it again (a request with a body, an upgrade; built-ins.ts `callContext`), is a 503 the
   // visitor retries in a second, logged at info and never reported. The prd fault alarm
   // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays. Any
   // other platform failure is a 503 the alarm counts: a lost connection, an overload.

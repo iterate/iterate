@@ -60,7 +60,7 @@ import { isConfigPointerMatch, type Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
-import type { UsableSnapshot } from "./rule-snapshots.ts";
+import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
 // ── built-in roots ── THE RESERVED ROOT'S KEYS, each with the one line `rewriteRules.list()` says
@@ -199,11 +199,10 @@ export type ItxExpressionRewriteRule = {
   description?: string;
 };
 
-/** The most a rule's target may be, serialized: a target may carry a worker's whole source as
- *  data, and every context that resolves through the table reads it in a snapshot
- *  (context/rule-snapshots.ts). The ceiling of a facet's literal source (worker-loader.ts
- *  `FACET_SOURCE_MAX_CHARS`), spelled again because the reduce may not import the loader. */
-const REWRITE_RULE_TARGET_MAX_CHARS = 1 << 20;
+/** The most a worker's literal source may be, serialized: in a rule's target, which every context
+ *  that resolves through the table reads in a snapshot (context/rule-snapshots.ts), and in a
+ *  facet's spec (worker-loader.ts `assertFacetSourceWithinCeiling`). */
+export const SOURCE_MAX_CHARS = 1 << 20;
 
 /** The proxy's own verbs — a match may not start with one (`normalizeRewriteRuleConfigured`). */
 const PROXY_VERBS: readonly string[] = ["invoke", "provide", "subscribe"];
@@ -385,10 +384,6 @@ export function resolveItxExpression(
  *  never by a call to the context. */
 const IDENTITY_ROOTS: ReadonlySet<string> = new Set(["whoami", "url"]);
 
-/** How many times one call is resolved again when the snapshots it resolved through expired
- *  before it could run (`ItxExpressionResolver#dispatch`). */
-const MAX_ROUTES_PER_CALL = 3;
-
 /** Does a call entering another context name one of that context's own roots — one that is neither
  *  portable nor more addressing (`cd`) nor loaded code with an authority (`workers`) nor who the
  *  context is (`IDENTITY_ROOTS`)? Then it runs there, and that context resolves it. */
@@ -463,10 +458,10 @@ export function normalizeRewriteRuleConfigured(
       `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier`,
     );
   const chars = targetExpression ? JSON.stringify(targetExpression).length : 0;
-  if (chars > REWRITE_RULE_TARGET_MAX_CHARS)
+  if (chars > SOURCE_MAX_CHARS)
     throw codedError(
       "FACET_SOURCE_TOO_LARGE",
-      `a rewrite rule's target is ${chars} chars, over the ${REWRITE_RULE_TARGET_MAX_CHARS}-char ceiling — every context that resolves through this table reads it in a snapshot: load the source from a producer expression with a cacheKey`,
+      `a rewrite rule's target is ${chars} chars, over the ${SOURCE_MAX_CHARS}-char ceiling — every context that resolves through this table reads it in a snapshot: load the source from a producer expression with a cacheKey`,
     );
   // The match is the PARSED prefix, never re-stringified: a target may carry a whole source as data,
   // and a canonical match can itself exceed the string codec's cap even when the input did not — the
@@ -926,6 +921,23 @@ export async function describeRewriteRules(args: {
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──
 
+/** A resolver's reach beyond its own context (context/stateless-context.ts `contextReach`): its
+ *  project, another context's table as this isolate holds it (context/rule-snapshots.ts), ONE call
+ *  to the context at `path` where it lives (built-ins.ts `callContext`), and `itx.workers` with the
+ *  authority of the context at `path` (built-ins.ts `workersRoot`), for a call `caller` makes that
+ *  crossed `hops` contexts to get there. */
+export type ResolverReach = {
+  projectId: string;
+  snapshotOf: (path: string) => Promise<Pick<RuleSnapshot, "rules" | "expiresAt">>;
+  located: (
+    path: string,
+    expression: ItxExpression,
+    args: unknown[],
+    caller: Caller,
+  ) => Promise<unknown>;
+  workersOf: (path: string, caller: Caller, hops: number) => unknown;
+};
+
 export class ItxExpressionResolver {
   /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
    *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through an implicit
@@ -933,49 +945,25 @@ export class ItxExpressionResolver {
   readonly #builtIns: Record<string, unknown>;
   readonly #rewriteRules: (() => readonly ItxExpressionRewriteRule[]) | undefined;
   readonly #path: string;
-  readonly #projectId: string;
   readonly #caller: () => Caller;
-  readonly #snapshotOf: (path: string) => Promise<Pick<UsableSnapshot, "rules" | "expiresAt">>;
-  readonly #workersOf: (path: string, caller: Caller, hops: number) => unknown;
-  readonly #located: (
-    path: string,
-    expression: ItxExpression,
-    args: unknown[],
-    caller: Caller,
-  ) => Promise<unknown>;
+  readonly #reach: ResolverReach;
 
   constructor(args: {
     builtIns: Record<string, unknown>;
-    /** This context's own table, read live — absent where there is none to read live (the
-     *  stateless entrypoint, iterate-context.ts `ItxEntrypoint`): it resolves through a snapshot of
-     *  its context's table too, and what lives in the context runs there, which reads it live. */
+    /** This context's own table, read live — absent for the stateless entrypoint, which resolves
+     *  through its snapshot (context/rule-snapshots.ts). */
     rewriteRules?: () => readonly ItxExpressionRewriteRule[];
     /** This context's canonical path: where loaded code's relative `cd` starts. */
     path: string;
-    projectId: string;
     /** WHO is calling right now — the DO's ambient caller. */
     caller: () => Caller;
-    /** Another context's table, as this isolate holds it (context/rule-snapshots.ts). */
-    snapshotOf: (path: string) => Promise<Pick<UsableSnapshot, "rules" | "expiresAt">>;
-    /** `itx.workers` with the authority of the context at `path` (built-ins.ts `workersRoot`), for
-     *  a call `caller` makes that crossed `hops` contexts to get there. */
-    workersOf: (path: string, caller: Caller, hops: number) => unknown;
-    /** ONE call to the context at `path`, where it lives (built-ins.ts `callContext`). */
-    located: (
-      path: string,
-      expression: ItxExpression,
-      args: unknown[],
-      caller: Caller,
-    ) => Promise<unknown>;
+    reach: ResolverReach;
   }) {
     this.#builtIns = args.builtIns;
     this.#rewriteRules = args.rewriteRules;
     this.#path = args.path;
-    this.#projectId = args.projectId;
     this.#caller = args.caller;
-    this.#snapshotOf = args.snapshotOf;
-    this.#workersOf = args.workersOf;
-    this.#located = args.located;
+    this.#reach = args.reach;
   }
 
   /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and never the
@@ -1003,7 +991,7 @@ export class ItxExpressionResolver {
     return resolveItxExpression(
       this.#rewriteRules,
       expression,
-      implicitRootsAt(this.#projectId, this.#path),
+      implicitRootsAt(this.#reach.projectId, this.#path),
     );
   }
 
@@ -1085,18 +1073,18 @@ export class ItxExpressionResolver {
   /** A route runs only while every snapshot it was assembled from lasts — one may expire while the
    *  next is read: it is resolved again, a bounded number of times, then UNAVAILABLE. */
   async #dispatch(call: ItxExpressionInput, extraArgs: unknown[]) {
-    for (let routes = 0; routes < MAX_ROUTES_PER_CALL; routes++) {
+    for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
       const { route, validUntil } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
       const value =
         route.kind === "located"
-          ? await this.#located(route.at, route.expression, route.extraArgs, route.caller)
+          ? await this.#reach.located(route.at, route.expression, route.extraArgs, route.caller)
           : await this.#walk(route.builtIns, route.fixedPoint, route.extraArgs);
       return { value, validUntil, route };
     }
     throw unavailableError(
       "overloaded",
-      `${JSON.stringify(print(normalizedItxExpression(call)))}: the rule snapshots it resolves through expired ${MAX_ROUTES_PER_CALL} times before it could run`,
+      `${JSON.stringify(print(normalizedItxExpression(call)))}: the rule snapshots it resolves through expired ${SNAPSHOT_REREADS} times before it could run`,
     );
   }
 
@@ -1146,7 +1134,7 @@ export class ItxExpressionResolver {
       if (liveRules || !entersOwnRoot(entered)) {
         if (liveRules) rules = liveRules();
         else if (!isBuiltInsRooted(entered)) {
-          const snapshot = await this.#snapshotOf(at);
+          const snapshot = await this.#reach.snapshotOf(at);
           validUntil = Math.min(validUntil, snapshot.expiresAt);
           rules = snapshot.rules;
         }
@@ -1154,7 +1142,7 @@ export class ItxExpressionResolver {
           fixedPoint = resolveItxExpression(
             () => rules,
             entered,
-            implicitRootsAt(this.#projectId, at),
+            implicitRootsAt(this.#reach.projectId, at),
           ).at(-1)!;
         } catch (error) {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
@@ -1166,7 +1154,7 @@ export class ItxExpressionResolver {
         }
         const cdStep = fixedPoint[2];
         if (fixedPoint.length > 3 && Array.isArray(cdStep) && cdStep[0] === "cd") {
-          if (this.#projectId === GLOBAL_PROJECT_ID)
+          if (this.#reach.projectId === GLOBAL_PROJECT_ID)
             throw codedError(
               "FORBIDDEN",
               "a global context is reached by identity (session.user, session.organizations), never by path",
@@ -1186,7 +1174,7 @@ export class ItxExpressionResolver {
       // A worker runs under the hops the call made to reach it, its own `cd`s back here included.
       const route =
         root === "workers" && !(liveRules && hops === 0)
-          ? walked({ workers: this.#workersOf(at, caller, hops) }, fixedPoint, at)
+          ? walked({ workers: this.#reach.workersOf(at, caller, hops) }, fixedPoint, at)
           : liveRules ||
               (portable && Object.hasOwn(this.#builtIns, root)) ||
               root === "cd" ||
