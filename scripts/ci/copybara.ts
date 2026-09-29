@@ -262,10 +262,19 @@ export async function root(options: {
         `packages:\n${OS_PACKAGES.map((p) => `  - ${p}\n`).join("")}`,
       ),
     );
-    execFileSync("pnpm", ["install", "--lockfile-only", "--ignore-scripts", "--prefer-offline"], {
-      cwd: scratch,
-      stdio: ["ignore", "ignore", "inherit"],
-    });
+    // With an empty metadata cache of its own, pnpm reads each package's manifest from the registry,
+    // where a published version never changes, so every machine writes the same lockfile. A
+    // laptop's cache once gave crossws@0.4.4 another peer range than CI's, and the check went stale.
+    execFileSync(
+      "pnpm",
+      [
+        "install",
+        "--lockfile-only",
+        "--ignore-scripts",
+        `--config.cache-dir=${join(scratch, ".pnpm-cache")}`,
+      ],
+      { cwd: scratch, stdio: ["ignore", "ignore", "inherit"] },
+    );
     const files = {
       "pnpm-workspace.yaml":
         OS_WORKSPACE_HEADER + readFileSync(join(scratch, "pnpm-workspace.yaml"), "utf8"),
@@ -277,10 +286,28 @@ export async function root(options: {
       ([name, content]) =>
         !existsSync(join(out, name)) || readFileSync(join(out, name), "utf8") !== content,
     );
-    if (options.check && stale.length > 0)
+    if (options.check && stale.length > 0) {
+      // what changed, as a diff of the committed file against the one generated here
+      for (const [name, content] of stale) {
+        writeFileSync(join(scratch, `generated-${name}`), content);
+        const diff = spawnSync(
+          "git",
+          [
+            "diff",
+            "--no-index",
+            "--stat",
+            "--patch",
+            join(out, name),
+            join(scratch, `generated-${name}`),
+          ],
+          { encoding: "utf8" },
+        );
+        console.log(diff.stdout.split("\n").slice(0, 120).join("\n"));
+      }
       throw new Error(
         `copybara/os/{${stale.map(([name]) => name).join(",")}} are stale: run \`node scripts/ci/copybara.ts root\` and commit them`,
       );
+    }
     for (const [name, content] of stale) writeFileSync(join(out, name), content);
     console.log(
       `[copybara] copybara/os/: ${stale.length === 0 ? "current" : `wrote ${stale.map(([name]) => name).join(", ")}`}`,
@@ -294,8 +321,9 @@ export async function root(options: {
  * The copy resolves nothing this repo doesn't: every package it locks is locked here at the same
  * version with the same integrity, each copied package asks for the same specifiers and gets the
  * same versions, and its root asks for the versions ours does. Peer contexts and `optional` flags
- * may differ, and do: with the other packages gone, a peer they brought in is missing (crossws is
- * locked without srvx) and a package only an optional dependency reaches is marked optional.
+ * may differ, and do: with the other packages gone, a peer they brought in is missing (trpc-cli is
+ * locked without the `effect` another package brings) and a package only an optional dependency
+ * reaches is marked optional.
  */
 function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": string }) {
   type Dependency = { specifier: string; version: string };
