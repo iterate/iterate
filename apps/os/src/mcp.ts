@@ -5,6 +5,7 @@ import { codedError, errorCode } from "iterate/lib";
 import { platformAddressesOf } from "./app-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
+import { contextStub } from "./context-stub.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
@@ -150,10 +151,13 @@ async function buildServer(
           reach,
           toolArguments.project?.trim() ?? "",
         );
-        // Execute against the authorized root, through its rules, exactly as a project handle does.
-        // The request carries the principal and grant; the root's runner records its settlement.
-        const value = await env.ITERATE_CONTEXT.getByName(
-          DurableObjectNameCodec.stringify({ projectId, path: "/" }),
+        // Execute against the authorized root, through its rules, exactly as a project handle does
+        // (`contextStub`, which reads the run's settlement back). The request carries the principal
+        // and grant; the root's runner records its settlement.
+        const value = await contextStub(
+          env.ITERATE_CONTEXT,
+          DurableObjectNameCodec.address({ projectId, path: "/" }),
+          "mcp",
         ).invoke(["itx", ["run", toolArguments.script]], [], caller);
         // THE JSON BOUNDARY: a round trip drops what JSON cannot carry and throws on what it refuses.
         const json = JSON.stringify(value) ?? "null";
