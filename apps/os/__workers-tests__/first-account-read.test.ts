@@ -1,7 +1,5 @@
-// A new person's first request after their sign-in reads their account (src/oauth.ts
-// `accountStateOf`), which may still be starting: the sign-in starts it in the background
-// (src/issuer-session.ts `startAccount`), and the consent page says it is being set up while its
-// read waits (src/consent-page.server.ts `describeConsent`).
+// A new person's first account read, and what the sign-in and the consent page do about it:
+// src/oauth.ts `accountStateOf`.
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test } from "vitest";
