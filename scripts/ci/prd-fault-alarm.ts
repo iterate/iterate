@@ -3,13 +3,13 @@
 // platform-failure heals, or an error. It reads the logs because the platform's recovery can keep
 // most requests green through a Cloudflare fault, so the heals and errors it logs are the only sign.
 //
-// Each fault is an incident, keyed by its cause: a deploy's reset or version skew, a visitor 5xx's
-// host, a healed facet's name or an error message. The incidents a run opens share one page
-// (slack.ts pageText), which later runs edit in place with each incident's running count and when
-// it was last seen. The page's thread hears only of a change of state, each reply mentioning Jonas
-// and Misha: an incident grown tenfold or back in a burst after an hour's quiet (both broadcast to
-// the channel), and the page's resolution once its last incident has gone a day unseen. An incident
-// seen after it closed opens a new page.
+// Each fault is an incident, keyed by its cause: a deploy's reset or version skew in a Worker, a
+// visitor 5xx's host, a healed facet's name or an error message. The incidents a run opens share
+// one page (slack.ts pageText), which later runs edit in place with each incident's running count
+// and when it was last seen. The page's thread hears only of a change of state, each reply
+// mentioning Jonas and Misha: an incident grown tenfold or back in a burst after an hour's quiet
+// (both broadcast to the channel), and the page's resolution once its last incident has gone a day
+// unseen. An incident seen after it closed opens a new page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
 // open pages with their incidents. Only a run on main posts and keeps it; any other run prints what
@@ -94,9 +94,10 @@ export type FaultReading = Record<
   [string, number][]
 > & { causes: CauseReading[] };
 
-/** The visitor 5xx, by URL, in the rays a deploy's reset or version skew reached. `deploy` names the
- *  deploy as `<worker>@<version>`: the Worker and version that logged the cause. */
-export type CauseReading = { cause: Cause; deploy: string; serverErrors: [string, number][] };
+/** The visitor 5xx, by URL, in the rays a deploy's reset or version skew reached. `worker` is the
+ *  Worker that logged the cause: every deploy of it, and the old and new versions each deploy
+ *  runs side by side, are one incident while it lasts. */
+export type CauseReading = { cause: Cause; worker: string; serverErrors: [string, number][] };
 
 /**
  * WORKAROUNDS PINNED BY PRD TELEMETRY. A workaround for a platform defect stays only while a test
@@ -382,9 +383,9 @@ export function incidentsOf(reading: FaultReading) {
     });
   };
   const host = (url: string) => url.replace(/^https?:\/\/([^/]+).*$/u, "$1");
-  for (const { cause, deploy, serverErrors } of reading.causes)
+  for (const { cause, worker, serverErrors } of reading.causes)
     for (const [url, count] of serverErrors)
-      add({ what: cause, label: deploy, count, hosts: { [host(url)]: count } });
+      add({ what: cause, label: worker, count, hosts: { [host(url)]: count } });
   // prd answers no 5xx on purpose
   for (const [url, count] of reading.serverErrors)
     add({ what: "visitor 5xx", label: host(url), count, hosts: {} });
@@ -809,12 +810,12 @@ const RAY_OUTCOMES: RayOutcome[] = [
 ];
 
 /**
- * Faults a deploy causes, each its own incident per deploy: a Durable Object reset because its code
+ * Faults a deploy causes, each its own incident per Worker: a Durable Object reset because its code
  * was updated, and the version skew of a message cloned between the old and new version. Every row
  * in their rays is the cause's: the errors are its expected outcome and never page, and the visitor
- * 5xx page as the deploy's (CauseReading), never as their hosts'. A ray with no visitor 5xx pages
- * nothing. The one error that still pages there is PAGER_GAVE_UP: the recovery a deploy's reset is
- * meant to go through failed.
+ * 5xx page as the Worker's deploys' (CauseReading), never as their hosts'. A ray with no visitor 5xx
+ * pages nothing. The one error that still pages there is PAGER_GAVE_UP: the recovery a deploy's
+ * reset is meant to go through failed.
  */
 const CAUSE_NAMES = ["deploy reset", "version skew"] as const;
 /** An rpc-stub pager that could not re-dial within its bound (apps/os context/rpc-stub-relay.ts
@@ -827,11 +828,25 @@ const CAUSES: Record<Cause, string> = {
   "version skew": "Unable to deserialize cloned data due to invalid or unsupported version",
 };
 
-/** Error messages that are expected outcomes wherever they are logged. */
-const EXPECTED_ERRORS = [
-  "itx.abort() reset the context", // explicitly requested, recorded in the durable log
-  ...Object.values(CAUSES), // a deploy's own outcomes: its visitor 5xx page as the deploy's
-  "destroyed: its project was deleted", // apps/os context/paths.ts CONTEXT_DESTROYED
+/** Error messages that are expected outcomes wherever they are logged: a deploy's own, which the
+ *  runtime logs (its visitor 5xx page as the deploy's). An expected outcome of the platform's own
+ *  is announced by it instead (ANNOUNCED). */
+const EXPECTED_ERRORS = Object.values(CAUSES);
+
+/**
+ * Outcomes the platform expects and announces at info, in the invocation whose error the runtime
+ * logs for them itself, uncatchably: a reset the context DO asks for (`ctx.abort`: a destroyed
+ * context, `itx.abort()`, a deleted root whose project came back), and the constructor's refusal of
+ * an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
+ * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). An invocation that logged
+ * one ends in it: its error lines are that outcome and page nothing, and its summary folds into its
+ * exception (summarized-exceptions). The same error in an invocation that announced nothing pages.
+ */
+const ANNOUNCED = [
+  "context.destroyed",
+  "context.aborted",
+  "context.root-restored",
+  "context.unborn-by-id",
 ];
 
 // workerd#918: a Durable Object that answers before a request body is read can log
@@ -1000,7 +1015,7 @@ async function readWindow(
       },
     );
   const errorLevel = leaf("$metadata.level", "eq", "error");
-  const [outcomeRays, causeRays, summaryRequests] = await Promise.all([
+  const [outcomeRays, causeRays, summaryRequests, announcedRequests] = await Promise.all([
     Promise.all(
       RAY_OUTCOMES.map((outcome) =>
         evidence(outcome.name, async () =>
@@ -1018,12 +1033,7 @@ async function readWindow(
                 leaf("$metadata.error", "includes", CAUSES[cause]),
               ),
             ],
-            [
-              "$metadata.rayId",
-              "$workers.executionModel",
-              "$metadata.service",
-              "$workers.scriptVersion.id",
-            ],
+            ["$metadata.rayId", "$workers.executionModel", "$metadata.service"],
           ),
         ),
       ),
@@ -1033,7 +1043,27 @@ async function readWindow(
         ([[requestId]]) => requestId!,
       ),
     ),
+    evidence("announced", async () =>
+      (await rows([leaf("event", "in", ANNOUNCED.join(","))], ["$metadata.requestId"])).map(
+        ([[requestId]]) => requestId!,
+      ),
+    ),
   ]);
+  // The message lines' count leaves room for one `not_in` of request IDs beside its rays': past
+  // 500 announced invocations, the rest page, and the log says how many.
+  if (announcedRequests.length > 500)
+    console.warn(
+      JSON.stringify({
+        event: "prd-fault-alarm.announced-capped",
+        unexcluded: announcedRequests.length - 500,
+      }),
+    );
+  const announced: Exclusion = {
+    name: "announced",
+    key: "$metadata.requestId",
+    values: announcedRequests.slice(0, 500),
+    keep: null,
+  };
   // The summary of an invocation that also logged its exception (a `*.jsrpc` call's, an alarm's) is
   // that exception's sighting, counted (or expected) once, as the exception.
   // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
@@ -1086,16 +1116,16 @@ async function readWindow(
       ([a], [b]) => Number(b[1] === "durableObject") - Number(a[1] === "durableObject"),
     );
     const byRay = new Map<string, string>();
-    for (const [[rayId, , service, version]] of found)
-      if (rayId && !answered.has(rayId) && !caused.has(rayId) && !byRay.has(rayId))
-        byRay.set(rayId, `${service}@${version!.slice(0, 8)}`);
+    for (const [[rayId, , service]] of found)
+      if (rayId && service && !answered.has(rayId) && !caused.has(rayId) && !byRay.has(rayId))
+        byRay.set(rayId, service);
     // A ray is one cause's, the first that names it: its 5xx page once.
     for (const rayId of byRay.keys()) caused.add(rayId);
     const rays = new Set(kept(cause, [...byRay.keys()]));
-    const byDeploy = new Map<string, string[]>();
-    for (const [rayId, deploy] of byRay)
-      if (rays.has(rayId)) byDeploy.set(deploy, [...(byDeploy.get(deploy) ?? []), rayId]);
-    return [...byDeploy].map(([deploy, deployRays]) => ({ cause, deploy, rays: deployRays }));
+    const byWorker = new Map<string, string[]>();
+    for (const [rayId, worker] of byRay)
+      if (rays.has(rayId)) byWorker.set(worker, [...(byWorker.get(worker) ?? []), rayId]);
+    return [...byWorker].map(([worker, workerRays]) => ({ cause, worker, rays: workerRays }));
   });
   const exclusionsFor = (rowsOf: "serverErrors" | ErrorRows): Exclusion[] => [
     ...outcomes
@@ -1136,7 +1166,7 @@ async function readWindow(
   };
   const readCauses = () =>
     Promise.all(
-      deploys.map(async ({ cause, deploy, rays }) => {
+      deploys.map(async ({ cause, worker, rays }) => {
         const found = await Promise.all(
           chunks(rays).map((chunk) =>
             count(
@@ -1154,7 +1184,7 @@ async function readWindow(
               new Map<string, number>(),
             ),
         ];
-        return { cause, deploy, serverErrors };
+        return { cause, worker, serverErrors };
       }),
     ).then((causes) => causes.filter((cause) => cause.serverErrors.length));
   // A count of error rows of `rowsOf` by `key`. reportIssue logs an error object without a message,
@@ -1164,7 +1194,13 @@ async function readWindow(
     rowsOf: ErrorRows,
     key: "$metadata.message" | "$metadata.error",
     filters: LogFilter[],
-  ) => count([errorLevel, ...ERROR_ROWS[rowsOf], ...filters], exclusionsFor(rowsOf), key);
+    exclusions: Exclusion[] = [],
+  ) =>
+    count(
+      [errorLevel, ...ERROR_ROWS[rowsOf], ...filters],
+      [...exclusionsFor(rowsOf), ...exclusions],
+      key,
+    );
   const readUnreadBodyOnApi = async () => {
     const [[, n] = ["", 0]] = await count(
       [
@@ -1214,7 +1250,8 @@ async function readWindow(
     readCauses(),
     rows(healed, ["name"]),
     rows(healed, ["event"]),
-    readErrors("lines", "$metadata.message", [leaf("$metadata.message", "neq", "")]),
+    // the runtime's line for an announced outcome has a message, as the runtime logs it
+    readErrors("lines", "$metadata.message", [leaf("$metadata.message", "neq", "")], [announced]),
     readErrors("lines", "$metadata.error", [
       leaf("$metadata.error", "neq", ""),
       anyOf(leaf("$metadata.message", "is_null"), leaf("$metadata.message", "eq", "")),
