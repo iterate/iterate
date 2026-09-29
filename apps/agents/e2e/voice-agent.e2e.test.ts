@@ -173,13 +173,19 @@ deployedOnly(
       let websiteAnswer: (typeof received)[number] | undefined;
       for (let seen = 0; !websiteAnswer;) {
         const left = wholeMs - (Date.now() - websiteAskedAt);
+        // The label names the step the wait began after, so the first line of a failure (all that a
+        // flake record keeps) says where the edit stopped; the steps it reads are the latest ones.
+        const after = JSON.stringify(websiteSteps(received).at(-1) ?? "the request");
         const events = await untilValue(
           left <= stepMs
-            ? `verified website edit — the whole edit within ${wholeMs}ms`
-            : `verified website edit — its next step within ${stepMs}ms (${seen} step events so far)`,
+            ? `verified website edit — the step after ${after}, within the whole edit's ${wholeMs}ms`
+            : `verified website edit — the step after ${after} within ${stepMs}ms`,
           async () => received,
           (events) => events.some(isWebsiteAnswer) || steps(events) > seen,
-          { timeoutMs: Math.min(stepMs, left), describe: websiteSteps },
+          {
+            timeoutMs: Math.min(stepMs, left),
+            describe: (events) => websiteSteps(events).slice(-8),
+          },
         );
         websiteAnswer = events.find(isWebsiteAnswer);
         seen = steps(events);
