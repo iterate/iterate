@@ -41,7 +41,12 @@ non-secret counts, hostnames and paths.
    [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Pause merges").
 3. Inventory the erase with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
    The erase and the deploy after it are separate operations, run only on the user's explicit
-   request; no seed command performs either.
+   request; no seed command performs either. Never roll `os-prd` back until `verify-structure`
+   passes, and never onto a version tagged `erase-parked`: the erase leaves one, and a rollback
+   onto it deletes every Durable Object. The deploy's post-deploy check posts to #ci that the
+   project hosts answer 421 until `apply`; that is expected. The recovery if a rollback lands on it
+   anyway is in [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Never
+   roll `os-prd` back".
 4. Restore every seed, then compare the whole structure with the capture:
 
    ```sh
