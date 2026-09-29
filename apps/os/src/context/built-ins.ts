@@ -1928,8 +1928,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         type: "events.iterate.com/itx/aborted",
         payload: { reason, callerPath, app },
       });
-      // The runtime logs this message as an error line (uncatchable); the prd fault alarm
-      // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
+      // The runtime logs this message as an error line (uncatchable), after the DO logs the
+      // expected outcome at info (iterate-context-durable-object.ts `#abort`).
       deps.abortAfterTheAnswer(
         `itx.abort() reset the context ${path}${reason ? `: ${reason}` : ""}`,
       );
