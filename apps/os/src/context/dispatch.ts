@@ -50,7 +50,8 @@ export function registerRpcSessionBrand(brand: abstract new (...args: never[]) =
 const holdsRpcSession = (v: unknown): boolean => RPC_SESSION_BRANDS.some((b) => v instanceof b);
 
 /** Whether `error` is workerd's refusal of an RPC to `method`, which its receiver does not
- *  implement: a loaded class that is no SDK host has neither door nor list. */
+ *  implement: a loaded class that is no SDK host has neither `callWithCause` nor
+ *  `listPublicMethods`. */
 export const isMissingRpcMethod = (error: unknown, method: string): boolean =>
   String(error).includes(`does not implement the method "${method}"`);
 
@@ -104,8 +105,8 @@ export async function walkSteps(
   let { value, receiver } = start;
   for (const [stepIndex, step] of steps.entries()) {
     if (!pipelined(value)) value = await value;
-    // A FACET TAKES THE REST OF THE WALK IN ONE CALL, through its door (cause.ts): a verb of what it
-    // answers (`repos().create(path)`) then runs under the call's cause too.
+    // A FACET TAKES THE REST OF THE WALK IN ONE CALL, through its `callWithCause` (cause.ts): a
+    // verb of what it answers (`repos().create(path)`) then runs under the call's cause too.
     const name = typeof step === "string" ? step : step[0];
     if (value instanceof FacetHandle && name !== "invoke" && name !== "applyRoot")
       return { value: await value.invoke(steps.slice(stepIndex)), receiver: undefined };

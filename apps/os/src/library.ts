@@ -242,11 +242,11 @@ export function runScriptModule(script: string) {
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
       // the SDK's carrier, which `iterate/with-itx` shares by name (cause.ts runningCause)
-      'const door = globalThis[Symbol.for("iterate.cause")];',
+      'const carrier = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
-      "  // THE DOOR (cause.ts): the platform runs the script under the cause of its request",
+      "  // the platform runs the script under the cause of its request (cause.ts)",
       "  callWithCause(cause) {",
-      "    return door.run(cause, () => this.run());",
+      "    return carrier.run(cause, () => this.run());",
       "  }",
       "  async run() {",
       "    let deadline;",
@@ -272,8 +272,8 @@ export function runScriptModule(script: string) {
 }
 
 /** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
- *  with a requested run, under the cause it runs `itx` with (`run` goes through the door). Same
- *  text, same module: the loader's content hash reuses the warm isolate. */
+ *  with a requested run, under the cause it runs `itx` with (`run` is called through
+ *  `callWithCause`). Same text, same module: the loader's content hash reuses the warm isolate. */
 export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`

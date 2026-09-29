@@ -124,8 +124,8 @@ const FACET_CALL_WATCHDOG: FacetCallWatchdog = {
   onTimeout: "restart",
 };
 /** How a call enters a facet (`#callOn`): a caller's walk checked against the public methods, and
- *  the cause the facet door runs it under (cause.ts). */
-type FacetCallDoor = { byItxExpression?: boolean; cause?: Cause };
+ *  the cause the facet's `callWithCause` runs it under (cause.ts). */
+type FacetCallOptions = { byItxExpression?: boolean; cause?: Cause };
 /** How long a context that materialized a loaded facet must go without activity from OUTSIDE the
  *  project's loaded code — an edge session, HTTP, MCP, a sibling's hop, a claim, an alarm pass that
  *  did work — with no call, facet call, run or pin in flight, before its unclaimed loaded facets are
@@ -397,7 +397,7 @@ export class FacetHost {
         if (code === "PERMANENT_FAILURE") {
           this.#deps.stream.append({
             type: "events.iterate.com/itx/work-failed",
-            payload: { facet: name, error: (error as Error).message },
+            payload: { facet: name, error: error instanceof Error ? error.message : String(error) },
           });
           continue;
         }
@@ -807,15 +807,15 @@ export class FacetHost {
     // context already owes the facet (SubscriptionDelivery `deliveriesQueuedFor` says why).
     if (PROCESSOR_READS.has(itxExpressionStepName(itxExpressionSteps[0]) ?? ""))
       await this.#deps.deliveriesQueuedFor(name);
-    // THE SDK'S REQUEST DOOR (cause.ts): a `fetch` carries the cause on its Request — the one
-    // channel a socket rides; any other call rides the facet door (`#callOn`).
+    // A `fetch` carries the cause on its Request (cause.ts), the one channel a socket rides; any
+    // other call is made through the facet's `callWithCause` (`#callOn`).
     const [first, ...rest] = itxExpressionSteps;
     if (cause && Array.isArray(first) && first[0] === "fetch" && first[1] instanceof Request)
       itxExpressionSteps = [
         ["fetch", requestCausedBy(first[1], cause), ...first.slice(2)],
         ...rest,
       ];
-    const door = { byItxExpression, cause };
+    const callOptions = { byItxExpression, cause };
     this.#markRan(name);
     this.#facetWorkInFlight++;
     try {
@@ -828,7 +828,7 @@ export class FacetHost {
           name,
           itxExpressionSteps,
           FACET_CALL_WATCHDOG,
-          door,
+          callOptions,
         );
         materialized.recordLoadedIdentity?.();
         return answer;
@@ -846,7 +846,7 @@ export class FacetHost {
               itxExpressionSteps,
               { failedOn: materialized, error },
               FACET_CALL_WATCHDOG,
-              door,
+              callOptions,
               owed,
             ),
           );
@@ -863,15 +863,15 @@ export class FacetHost {
    *  the class it was materialized under lists as public: a first-party class's table, or what the
    *  loaded identity itself answers (`#publicMethodsOf`), so a publication that makes a method
    *  private refuses it on the very call that runs the new code, and one that adds a method admits
-   *  it there. A call with a `cause` other than a `fetch` rides THE SDK'S FACET DOOR (cause.ts) on
-   *  an identity whose class is an SDK shell — every first-party one, and a loaded one that lists
-   *  its public methods — so the walk runs under the call's cause. */
+   *  it there. A call with a `cause` other than a `fetch` is made through the SDK shell's
+   *  `callWithCause` (cause.ts) on an identity whose class is one — every first-party one, and a
+   *  loaded one that lists its public methods — so the walk runs under the call's cause. */
   async #callOn(
     materialized: MaterializedFacet,
     name: string,
     itxExpressionSteps: ItxExpression,
     watchdog: FacetCallWatchdog,
-    { byItxExpression = false, cause }: FacetCallDoor,
+    { byItxExpression = false, cause }: FacetCallOptions,
   ): Promise<unknown> {
     if (byItxExpression)
       assertFacetMethodIsPublic(
@@ -882,14 +882,14 @@ export class FacetHost {
             FIRST_PARTY_FACET_PUBLIC_METHODS[name as keyof typeof FIRST_PARTY_FACET_PUBLIC_METHODS],
         itxExpressionSteps,
       );
-    const throughDoor =
+    const withCause =
       cause &&
       itxExpressionStepName(itxExpressionSteps[0]) !== "fetch" &&
       (!materialized.loaderId || (await this.#publicMethodsOf(materialized, name)).length > 0);
     return await this.#call(
       materialized,
       name,
-      throughDoor ? [["callWithCause", cause, itxExpressionSteps]] : itxExpressionSteps,
+      withCause ? [["callWithCause", cause, itxExpressionSteps]] : itxExpressionSteps,
       watchdog,
     );
   }
@@ -936,7 +936,7 @@ export class FacetHost {
     itxExpressionSteps: ItxExpression,
     failure: { failedOn: MaterializedFacet; error: unknown },
     watchdog: FacetCallWatchdog,
-    door: FacetCallDoor,
+    callOptions: FacetCallOptions,
     owed: (() => void)[],
   ): Promise<unknown> {
     let { failedOn, error } = failure;
@@ -980,7 +980,7 @@ export class FacetHost {
         platformStart: true,
       });
       try {
-        return await this.#callOn(attempt, name, itxExpressionSteps, watchdog, door);
+        return await this.#callOn(attempt, name, itxExpressionSteps, watchdog, callOptions);
       } catch (attemptError) {
         if (!this.#isRecoverableFacetFailure(name, attemptError, attempt)) throw attemptError;
         failedOn = attempt;

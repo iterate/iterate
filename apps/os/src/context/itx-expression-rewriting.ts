@@ -637,15 +637,14 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
       for (const arg of step.slice(1)) {
         // A webhook's signing secret is the PROJECT's: a receiver that verifies a signature trusts
         // the event as the whole project's, so only a call at the project's root names one.
-        if (at !== "/" && typeof arg === "object" && arg && "signingSecret" in arg)
+        if (at !== "/" && namesASigningSecret(arg))
           throw codedError(
             "FORBIDDEN",
             `a webhook's signing secret is named only at the project's root, and ${JSON.stringify(at)} is below it`,
           );
-        const spec = typeof arg === "object" && arg ? (arg as WorkerSpecShape) : undefined;
-        if (spec && (typeof spec.source === "string" || Array.isArray(spec.source))) {
-          const sourceExpression = normalizedItxExpression(spec.source as ItxExpressionInput);
-          if (namesAWorker(spec)) admitWorkerName(sourceExpression);
+        if (isSourceSpec(arg)) {
+          const sourceExpression = normalizedItxExpression(arg.source);
+          if (namesAWorker(arg)) admitWorkerName(sourceExpression);
           else admitLoadedCodeExpression(sourceExpression, at);
         }
       }
@@ -656,6 +655,19 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
 
 /** What a `workers.get` or facet spec carries that decides whether it names a worker. */
 type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
+
+/** Whether a call's argument is a webhook's spec naming its signing secret (iterate/api
+ *  `webhooks.get`), which only a call at the project's root may do. */
+const namesASigningSecret = (arg: unknown): boolean =>
+  typeof arg === "object" && !!arg && "signingSecret" in arg;
+
+/** Whether a call's argument is a spec with a source expression — `workers.get`, `facets.get`,
+ *  `processors.enable` — whose source the app wall walks: a worker's name, or a producer. */
+const isSourceSpec = (arg: unknown): arg is WorkerSpecShape & { source: ItxExpressionInput } =>
+  typeof arg === "object" &&
+  !!arg &&
+  "source" in arg &&
+  (typeof arg.source === "string" || Array.isArray(arg.source));
 
 /** Whether a `workers.get` or facet spec NAMES a worker (iterate/api `FacetSpec`): a source
  *  expression with no cacheKey — an empty one is none — which only reads rules (`admitWorkerName`);
@@ -1186,10 +1198,9 @@ export class ItxExpressionResolver {
   /** Walk a fixed point `itx.builtins.<root>…` against `builtIns`. What the walk steps PAST that
    *  holds a Workers-RPC session — the collection stub a facet answered `repos()` with, walked on for
    *  `.list()`; a loaded worker's `make()` walked on for `.ping()` — is this actor's to release once
-   *  the answer is in: kept, it held the facet or the worker, and so this actor, open until the next
-   *  deploy (a project's root after every `repos.create`, 2026-09-23). The answer itself is the
-   *  caller's — unless it REJECTS (that collection refusing a `delete`): then nobody else holds it,
-   *  and it is released here. */
+   *  the answer is in: kept, it would hold the facet or the worker, and so this actor, open until
+   *  the next deploy. The answer itself is the caller's — unless it REJECTS (that collection
+   *  refusing a `delete`): then nobody else holds it, and it is released here. */
   async #walk(
     builtIns: Record<string, unknown>,
     fixedPoint: ItxExpression,

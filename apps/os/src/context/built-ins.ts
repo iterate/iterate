@@ -2068,6 +2068,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             throw new Error(
               `webhooks.get(spec).${print(methodSteps)}: a webhook answers deliverEvent(event) alone`,
             );
+          // Only the delivery loop's call passes `assertDeliveryCaller` below, and it hands the
+          // committed event it delivers.
           const [, event] = call as [string, StreamEvent];
           const body = JSON.stringify(event);
           await assertDeliveryCaller(
@@ -2101,6 +2103,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             redirect: "manual",
             signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
           });
+          // `itx.fetch` answers a Response (BuiltInScope `fetch`); `invoke` types every answer
+          // unknown.
           const response = (await ownContext().invoke(
             ["itx", "fetch"],
             [request],
@@ -2369,9 +2373,9 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   >;
 }
 
-/** A loaded worker's `method` called through the SDK's door (cause.ts), under `cause` — or, on an
- *  entrypoint that is no SDK host and so has no door, as it is. */
-async function callThroughDoor(
+/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
+ *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
+async function callWithItsCause(
   entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
   cause: Cause,
   method: string,
@@ -2411,7 +2415,7 @@ export function workersRoot(deps: {
   /** The delivery authority of the call being made (caller.ts `Caller.delivery`), read as it is
    *  made: a context's Durable Object's ambient caller's; the stateless entrypoint has none. */
   delivery: () => string | undefined;
-  /** The cause of the call being made, which rides into the worker's doors (cause.ts). */
+  /** The cause of the call being made, which the worker's code runs under (cause.ts). */
   cause: () => Cause | undefined;
   /** The worker a source expression with no cacheKey NAMES, resolved from the context `workers`
    *  speaks for, as a facet's is (facet-host.ts `FacetHostDeps.namedWorker`). */
@@ -2428,11 +2432,15 @@ export function workersRoot(deps: {
           );
         const [method, ...callArgs] = call;
         if (method === "callWithCause")
-          throw codedError("NOT_A_METHOD", "workers.get(spec).callWithCause: the platform's door");
-        // The cause rides into the SDK's doors (cause.ts): on the Request, or through the door every
-        // other method rides. A loaded worker's `fetch` reads who is asking off its Request
-        // (iterate/principal): the call's own caller, stamped here — never what the Request says,
-        // which `fetch(url, { headers })` would let the code that called it write.
+          throw codedError(
+            "NOT_A_METHOD",
+            "workers.get(spec).callWithCause: only the platform calls it",
+          );
+        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // which every other method is called through. A loaded worker's `fetch` reads who is
+        // asking off its Request (iterate/principal): the call's own caller, stamped here — never
+        // what the Request says, which `fetch(url, { headers })` would let the code that called it
+        // write.
         const cause = deps.cause();
         const args =
           method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
@@ -2456,12 +2464,11 @@ export function workersRoot(deps: {
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };
         // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
         // names: a cached entry that answers V8's clone-version text answers it to every call
-        // under that loader id, and `itx.abort()` does not change the id (prd, garple.com,
-        // 2026-09-24 20:47Z: every page 500 until a redeploy). A call that meets it retires the
-        // identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is replayed on it
-        // once only when a replay cannot do anything twice: a GET or HEAD with no body. A request
-        // body may have been read and an RPC method may have run, so those still fail, and the
-        // next call heals.
+        // under that loader id, and `itx.abort()` does not change the id. A call that meets it
+        // retires the identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is
+        // replayed on it once only when a replay cannot do anything twice: a GET or HEAD with no
+        // body. A request body may have been read and an RPC method may have run, so those still
+        // fail, and the call after them loads fresh.
         const isCloneVersionFailure = (error: unknown): error is Error =>
           error instanceof Error && error.message.includes("Unable to deserialize cloned data");
         const attempt = async () => {
@@ -2490,15 +2497,16 @@ export function workersRoot(deps: {
               throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
             const called =
               method === "fetch" || !cause
-                ? (Reflect.apply(fn, entrypoint, args) as Promise<unknown>)
-                : callThroughDoor(entrypoint, cause, method, args);
+                ? Reflect.apply(fn, entrypoint, args)
+                : callWithItsCause(entrypoint, cause, method, args);
             if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the
             // row's, which those codes dangle or halt (subscription-delivery.ts `#fanOutFailed`).
             return await called.catch((error: unknown) => {
               const code = errorCode(error);
-              if (code && TARGET_FAILURE_CODES.has(code)) throw new Error((error as Error).message);
+              if (code && TARGET_FAILURE_CODES.has(code))
+                throw new Error(error instanceof Error ? error.message : String(error));
               throw error;
             });
           } catch (error) {
@@ -2531,7 +2539,7 @@ export function workersRoot(deps: {
 }
 
 /** `fetch`'s arguments — a Request, or a URL and its init — as one Request whose caller stamps are
- *  `caller`'s identity alone and the call's `cause`, our mark for the SDK's request door
+ *  `caller`'s identity alone and the call's `cause`, our mark, which the SDK runs its `fetch` under
  *  (rpc-stubs.ts `stampCallerHeaders`), with no expression, and — for loaded code, never the edge —
  *  no routing slug: the host a request arrived on is the edge's word (worker.ts). */
 function callerStampedRequest(

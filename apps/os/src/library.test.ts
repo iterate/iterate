@@ -194,7 +194,7 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone, behind a door of its own", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone, with a callWithCause of its own", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
@@ -203,7 +203,7 @@ test("run: the source: package.json naming worker.js its main, the script splice
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
   expect(module["worker.js"]).toContain(
-    "callWithCause(cause) {\n    return door.run(cause, () => this.run());\n  }",
+    "callWithCause(cause) {\n    return carrier.run(cause, () => this.run());\n  }",
   );
   expect(module["worker.js"]).toContain("async run() {");
   expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
@@ -299,10 +299,10 @@ test("run: the module's run() releases a handle the script awaited, and the call
   expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
-test("run: the module's door runs the script under the cause it is handed: its one withItx round trip names it", async () => {
-  const { door, causes } = await loadedRun("async () => 1");
+test("run: the module's callWithCause runs the script under the cause it is handed: its one withItx round trip names it", async () => {
+  const { callWithCause, causes } = await loadedRun("async () => 1");
   const cause = { chain: "a request's chain", depth: 3 };
-  expect(await door(cause)).toBe(1);
+  expect(await callWithCause(cause)).toBe(1);
   expect(causes).toEqual([cause]);
 });
 
@@ -1289,7 +1289,7 @@ async function loadedRun(
   itx: object = {},
 ): Promise<{
   run: () => Promise<unknown>;
-  door: (cause: unknown) => Promise<unknown>;
+  callWithCause: (cause: unknown) => Promise<unknown>;
   causes: unknown[];
   disposals: () => number;
 }> {
@@ -1324,7 +1324,7 @@ async function loadedRun(
   const entrypoint = new Entrypoint({}, { ITX: { get } });
   return {
     run: () => entrypoint.run(),
-    door: (cause) => entrypoint.callWithCause(cause, [["run"]]),
+    callWithCause: (cause) => entrypoint.callWithCause(cause, [["run"]]),
     causes,
     disposals: () => disposals,
   };

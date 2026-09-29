@@ -1,8 +1,8 @@
 // cause.ts — THE LOOP GUARD, explained here and nowhere else; user code never sees it until it saves
 // it. Every event and every call carries its CAUSE: the chain of reactions it belongs to (when and
 // where that chain began) and how many hand-offs deep in it it is. The platform stamps it on events
-// and calls; the SDK's doors carry it through loaded code unread (iterate src/cause.ts). Three
-// guarantees rest on it:
+// and calls; the SDK carries it through loaded code unread, from a host's `callWithCause` or a
+// Request's mark (iterate src/cause.ts). Three guarantees rest on it:
 //
 // 1. BOUNDED CAUSAL DEPTH. A person's call, an outside request and inbound mail without our mark
 //    begin a chain at depth 0. Depth goes up by one only where code runs BECAUSE of an event or of
@@ -21,6 +21,7 @@
 //    same write twice in one delivery lands once.
 
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { z } from "zod";
 
 /** The chain a piece of work belongs to and how deep in it the work is — as an event stores it
  *  (`source.cause`), and as a call carries it, with what only the call needs. */
@@ -96,10 +97,16 @@ export function recordRefusal(
   error: unknown,
   record: (cause: Cause, message: string) => void,
 ): void {
-  const refusal = (error as { data?: Refusal } | undefined)?.data;
-  // the SDK's refusal (a 508 its fetch met) was recorded where it was met, and carries no chain
-  if (errorCode(error) !== "LOOP_LIMIT" || !refusal?.chain || refusal.recorded) return;
-  record({ chain: refusal.chain, depth: refusal.depth }, (error as Error).message);
+  if (errorCode(error) !== "LOOP_LIMIT") return;
+  // A LOOP_LIMIT carries the Refusal `refuseActPastLimit` put on it, marked here in place, so the
+  // same error met again is recorded no more; the SDK's (a 508 its fetch met) was recorded where it
+  // was met, and carries no chain.
+  const refusal = (error as { data?: Refusal }).data;
+  if (!refusal?.chain || refusal.recorded) return;
+  record(
+    { chain: refusal.chain, depth: refusal.depth },
+    error instanceof Error ? error.message : String(error),
+  );
   refusal.recorded = true;
 }
 
@@ -121,12 +128,26 @@ export function causeHeader(cause: Cause): string {
   return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 });
 }
 
-/** `request` carrying `cause` as our mark: how a Request hands it to the SDK's request door. */
+/** `request` carrying `cause` as our mark: how a Request hands it to the SDK host serving it. */
 export function requestCausedBy(request: Request, cause: Cause): Request {
   const headers = new Headers(request.headers);
   headers.set(ITERATE_CAUSE_HEADER, causeHeader(cause));
   return new Request(request, { headers });
 }
+
+/** A count a cause carries: a safe whole number, never below 0. */
+const CauseCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+/** A cause as anyone may write it (`parseCause`). A chain the platform mints is printable ASCII
+ *  (`newChain`), so any other is forged; a malformed write key is dropped alone. */
+const WrittenCause = z.object({
+  chain: z
+    .string()
+    .max(512)
+    .regex(/^[\x20-\x7e]*$/),
+  depth: CauseCount,
+  hops: CauseCount.nullish(),
+  writeKey: z.string().max(512).optional().catch(undefined),
+});
 
 /** `value` as a cause — loaded code's word for its own over RPC, or a mark's text, the JSON
  *  ITERATE_CAUSE_HEADER carries — or none when it is not one: either is anyone's to write, so a
@@ -140,18 +161,10 @@ export function parseCause(value: unknown): Cause | undefined {
     } catch {
       return undefined;
     }
-  const { chain, depth, hops, writeKey } = (fields ?? {}) as Record<string, unknown>;
-  const count = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
-  const text = (s: unknown): s is string => typeof s === "string" && s.length <= 512;
-  // a chain the platform mints is printable ASCII (`newChain`): anything else is forged
-  if (!text(chain) || !/^[\x20-\x7e]*$/.test(chain) || !count(depth) || !count(hops || 0))
-    return undefined;
-  return {
-    chain,
-    depth,
-    hops: (hops as number | undefined) || 0,
-    ...(!mark && text(writeKey) && { writeKey }),
-  };
+  const written = WrittenCause.safeParse(fields);
+  if (!written.success) return undefined;
+  const { chain, depth, hops, writeKey } = written.data;
+  return { chain, depth, hops: hops || 0, ...(!mark && writeKey && { writeKey }) };
 }
 
 /** The SDK's carrier of the running cause in this isolate (iterate src/cause.ts), by the name it
@@ -160,13 +173,14 @@ const sdkCarrier = () =>
   (globalThis as Record<symbol, SdkCarrier | undefined>)[Symbol.for("iterate.cause")];
 type SdkCarrier = { run<T>(cause: unknown, code: () => T): T; current(): unknown };
 
-/** The cause the SDK's door runs this isolate's current code under: what the platform's own facets —
- *  a repo, a project — act under. */
+/** The cause the SDK's carrier runs this isolate's current code under: what the platform's own
+ *  facets — a repo, a project — act under. */
 export function runningCause(): Cause | undefined {
   return parseCause(sdkCarrier()?.current());
 }
 
-/** Run the platform's own facet code under `cause`, as the SDK's door runs what it is handed. */
+/** Run the platform's own facet code under `cause`, as the SDK's `callWithCause` runs what it is
+ *  handed. */
 export function runningUnder<T>(cause: Cause | undefined, work: () => T): T {
   const carrier = sdkCarrier();
   return carrier ? carrier.run(cause, work) : work();

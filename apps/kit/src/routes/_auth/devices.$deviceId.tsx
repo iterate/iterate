@@ -128,8 +128,8 @@ function KitPage() {
         throw error;
       }
     },
-    // Once, for a dropped connection (what the dogfood's first try hit): preparing voice is safe to
-    // repeat, and a repeated mint at worst lists one unused token in the sessions list.
+    // Once, for a dropped connection: preparing voice is safe to repeat, and a repeated mint at
+    // worst lists one unused token in the sessions list.
     retry: (failures, error) => failures < 1 && error instanceof ConnectionDropped,
     onSuccess: (_configuration, input) =>
       queryClient.invalidateQueries({ queryKey: ["kit", "has-openai-key", input.project.id] }),

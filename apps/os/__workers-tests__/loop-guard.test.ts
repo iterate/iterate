@@ -1,9 +1,9 @@
 // __workers-tests__/loop-guard.test.ts — THE LOOP GUARD on the worker (src/cause.ts): every event
 // carries the cause of the chain of reactions it belongs to, stamped by the platform and carried
-// through loaded code by the SDK's doors — no user code names one. First the accounting, one row
-// per line (`cause-table`); then the normal flows it must leave alone; then the loops it stops, each
-// at the depth limit with one `itx/loop-limit` fact. The delivery loop's own rows, the wake loop
-// among them: src/stream/subscription-delivery.test.ts.
+// through loaded code by the SDK (`callWithCause`, a Request's mark) — no user code names one.
+// First the accounting, one row per line (`cause-table`); then the normal flows it must leave alone;
+// then the loops it stops, each at the depth limit with one `itx/loop-limit` fact. The delivery
+// loop's own rows, the wake loop among them: src/stream/subscription-delivery.test.ts.
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
@@ -926,13 +926,13 @@ test("a read records nothing: a context read for its table while it sleeps — o
   expect(await sweep(at(project, "/unborn"))).toEqual([]);
 });
 
-test("the facet door walks only as far as Workers RPC would — a method an RpcTarget's class declares, an own member of plain data — never a target's own field or a method of data the facet holds live, and a collection's verbs still act under the call's cause", async () => {
+test("a facet's callWithCause walks only as far as Workers RPC would — a method an RpcTarget's class declares, an own member of plain data — never a target's own field or a method of data the facet holds live, and a collection's verbs still act under the call's cause", async () => {
   const ctx = freshProject();
-  // the rest of an expression past a facet is one walk on it, through its door
+  // the rest of an expression past a facet is one walk on it, through its callWithCause
   const walled = (...steps: (string | unknown[])[]) =>
     stub(ctx).invoke(["itx", "facets", ["get", "walled", WALLED], ...steps], [], caller(1));
-  expect(await walled(["door"], ["open"])).toBe("opened");
-  await refused(() => walled(["door"], ["secret"]), "NOT_A_METHOD");
+  expect(await walled(["target"], ["open"])).toBe("opened");
+  await refused(() => walled(["target"], ["secret"]), "NOT_A_METHOD");
   await refused(() => walled(["state"], "list", ["push", "x"]), "NOT_A_METHOD");
   expect(await walled(["count"])).toBe(0);
   const { projectId } = await projectWithMember("loopwalls");
@@ -972,7 +972,7 @@ test("facet-fetch-keeps-depth: a Request a call hands a facet carries the call's
   expect(ofType(log, LOOP_LIMIT_FACT)).toMatchObject([{ payload: { chain: CHAIN, depth: 9 } }]);
 });
 
-test("a row to a worker's own method delivers through the SDK's door, under the delivery's cause, so a method that appends what it is handed climbs one hand-off a lap and stops at the limit: one fact", async () => {
+test("a row to a worker's own method delivers through the SDK's callWithCause, under the delivery's cause, so a method that appends what it is handed climbs one hand-off a lap and stops at the limit: one fact", async () => {
   const ctx = freshProject();
   await stub(ctx).append({
     type: "events.iterate.com/itx/subscription-configured",
@@ -992,7 +992,7 @@ test("a row to a worker's own method delivers through the SDK's door, under the 
   expect(ofType(log, LOOP_LIMIT_FACT)).toHaveLength(1);
 });
 
-test("a loaded isolate's code that no door runs — a class with no door — acts under the newest cause the isolate saw, never a chain of its own, which would escape the limit", async () => {
+test("a loaded isolate's code that no callWithCause runs — a class that is no SDK host — acts under the newest cause the isolate saw, never a chain of its own, which would escape the limit", async () => {
   const ctx = freshProject();
   const source = {
     "package.json": '{"main":"worker.js"}',
@@ -1003,27 +1003,27 @@ import { withItx } from "iterate/with-itx";
 export default class extends IterateConfigEntrypoint {
   async touch() {}
 }
-export class Doorless extends WorkerEntrypoint {
+export class NoSdkHost extends WorkerEntrypoint {
   async act() {
-    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/doorless" }));
+    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/no-sdk-host" }));
   }
 }
 `,
   };
   await stub(ctx).invoke(["itx", "workers", ["get", { source }], ["touch"]], [], caller(5));
   await stub(ctx).invoke(
-    ["itx", "workers", ["get", { source, className: "Doorless" }], ["act"]],
+    ["itx", "workers", ["get", { source, className: "NoSdkHost" }], ["act"]],
     [],
     caller(1),
   );
-  expect(ofType(await readLog(ctx), "test/doorless").map(causeOf)).toEqual([
+  expect(ofType(await readLog(ctx), "test/no-sdk-host").map(causeOf)).toEqual([
     { chain: CHAIN, depth: 5 },
   ]);
 });
 
-test("the platform's own isolate, which every project shares, keeps no cause outside a door: the chain one project's call ran under reaches no code another runs", async () => {
+test("the platform's own isolate, which every project shares, keeps no cause outside callWithCause: the chain one project's call ran under reaches no code another runs", async () => {
   const { projectId } = await projectWithMember("loopshared");
-  // a first-party facet's door runs here, in this isolate, in a chain of project A's
+  // a first-party facet's callWithCause runs here, in this isolate, in a chain of project A's
   await stub(projectId).invoke(["itx", "facets", ["get", "project"], ["repos"], ["list"]], [], {
     principal: null,
     cause: { chain: "project A's chain", depth: 5 },
@@ -1118,7 +1118,7 @@ const SET_ONE_SHOT = (type: string, afterMs: number) => /* js */ `
 
 /** A loaded config entrypoint (iterate/sdk): its `processEvent` runs `onEvent` (with `event` and
  *  `itx`, the context that loaded it), its `fetch` runs `onRequest` (with `request` and `itx`), and
- *  `later()`, a method of its own no door runs, appends `test/later`. */
+ *  `later()`, a method of its own that is no hook, appends `test/later`. */
 function config(onEvent: string, onRequest = "") {
   return {
     "package.json": '{"main":"worker.js"}',
@@ -1227,7 +1227,7 @@ export class Doomed extends FacetDurableObject {
   className: "Doomed",
 };
 
-/** A loaded facet that hands out an RpcTarget with a field of its own (`door()`) and the list it
+/** A loaded facet that hands out an RpcTarget with a field of its own (`target()`) and the list it
  *  keeps, live (`state()`), and counts that list (`count()`). */
 const WALLED = {
   source: {
@@ -1235,14 +1235,14 @@ const WALLED = {
     "worker.js": /* js */ `
 import { RpcTarget } from "cloudflare:workers";
 import { FacetDurableObject } from "iterate/sdk";
-class Door extends RpcTarget {
+class Target extends RpcTarget {
   constructor(secret) { super(); this.secret = secret; }
   open() { return "opened"; }
 }
 export class Walled extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "door", "state", "count"];
+  static publicMethods = [...super.publicMethods, "target", "state", "count"];
   #list = [];
-  door() { return new Door(() => "the facet's own"); }
+  target() { return new Target(() => "the facet's own"); }
   state() { return { list: this.#list }; }
   count() { return this.#list.length; }
 }
@@ -1295,7 +1295,8 @@ export class Reviver extends FacetDurableObject {
   className: "Reviver",
 };
 
-/** Loaded code outside every SDK host: `act()` appends `test/raw` from an isolate no door ran. */
+/** Loaded code outside every SDK host: `act()` appends `test/raw` from an isolate no
+ *  `callWithCause` ran. */
 const RAW_WORKER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `

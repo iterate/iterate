@@ -30,7 +30,8 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../stream/processor.ts";
-// The hosts' doors run what they call under the cause the platform hands them (../cause.ts).
+// The hosts' `callWithCause` and `fetch` run what they call under the cause the platform hands them
+// (../cause.ts).
 import { causeOfRequest, runCausedBy } from "../cause.ts";
 import { codedError } from "../lib.ts";
 import { auth } from "./auth.ts";
@@ -105,15 +106,15 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // THE REQUEST DOOR (../cause.ts): a Request the facet serves runs under the cause it carries.
+    // A Request the facet serves runs under the cause it carries (../cause.ts).
     const serve = (this as { fetch?: (request: Request) => unknown }).fetch;
     if (serve)
       this.fetch = (request: Request) =>
         runCausedBy(causeOfRequest(request), () => serve.call(this, request)) as Promise<Response>;
   }
 
-  /** THE FACET DOOR (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the alarm's
-   *  revive. On no list: only the platform calls it (apps/os context/facet-host.ts). */
+  /** THE CALL UNDER A CAUSE (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the
+   *  alarm's revive. On no list: only the platform calls it (apps/os context/facet-host.ts). */
   callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
     return walkUnderCause(this, cause, steps);
   }
@@ -127,21 +128,22 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
   }
 }
 
-/** A step of the facet door's walk, which reaches no further than Workers RPC would: on this facet
+/** A step of `callWithCause`'s walk, which reaches no further than Workers RPC would: on this facet
  *  or an RpcTarget, a member its class declares (never a field of its own); anything on a stub; on
  *  plain data, its own members (never a method of data the facet holds live). */
 /** An expression's steps past a host: a property, or a method and its arguments. */
 type RpcSteps = (string | [string, ...unknown[]])[];
 
-/** THE DOOR (../cause.ts): the platform's way to walk `steps` on `host` under the cause of the call
- *  that made it — only as far as Workers RPC would reach, and never through the door itself. */
+/** `callWithCause` (../cause.ts): the platform's way to walk `steps` on `host` under the cause of
+ *  the call that made it — only as far as Workers RPC would reach, and never into `callWithCause`
+ *  itself. */
 function walkUnderCause(host: object, cause: unknown, steps: RpcSteps): Promise<unknown> {
   return runCausedBy(cause, async () => {
     let value: unknown = host;
     for (const step of steps) {
       const [name, ...args] = typeof step === "string" ? [step] : step;
       if (name === "callWithCause")
-        throw codedError("NOT_A_METHOD", "callWithCause is the platform's door");
+        throw codedError("NOT_A_METHOD", "callWithCause is the platform's alone");
       const member = memberRpcReaches(value, name);
       value =
         typeof step === "string"
@@ -344,20 +346,21 @@ export abstract class IterateConfigEntrypoint<
 
   constructor(ctx: ExecutionContext, env: Env) {
     super(ctx, env);
-    // THE REQUEST DOOR (../cause.ts): the author's `fetch` runs under the cause its Request carries.
+    // The author's `fetch` runs under the cause its Request carries (../cause.ts).
     const serve = this.fetch;
     this.fetch = (request: Request) =>
       runCausedBy(causeOfRequest(request), () => serve.call(this, request));
   }
 
   /** The platform's delivery of one event (the dispatch boundary refuses any other caller),
-   *  through the door: `processEvent` inside ONE `withItx` round trip, released when it settles. */
+   *  through `callWithCause`: `processEvent` inside ONE `withItx` round trip, released when it
+   *  settles. */
   async deliverEvent(event: StreamEvent): Promise<void> {
     await this.withItx((itx) => this.processEvent({ event, itx }));
   }
 
-  /** THE DOOR (`walkUnderCause`) every method but `fetch` is called through. On no list: only the
-   *  platform calls it (apps/os context/built-ins.ts `workers`). */
+  /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through. On no
+   *  list: only the platform calls it (apps/os context/built-ins.ts `workers`). */
   callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
     return walkUnderCause(this, cause, steps);
   }

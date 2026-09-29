@@ -562,11 +562,11 @@ test("ProjectProcessor — init-at-8: a publication runs under the cause of the 
   };
   const commit = { chain: "an agent's chain", depth: 7 };
   // the engine runs the pass one deeper than its event, as it runs a processor's effects (the
-  // SDK's door, shared by name: cause.ts)
-  const door = (
+  // SDK's carrier, shared by name: cause.ts)
+  const carrier = (
     globalThis as unknown as Record<symbol, { run(cause: unknown, code: () => void): void }>
   )[Symbol.for("iterate.cause")]!;
-  door.run({ ...commit, depth: 8 }, () =>
+  carrier.run({ ...commit, depth: 8 }, () =>
     deliver(
       processorPublishingWith(publisher),
       { ...owing(tip("aaa", 5)), unpublishedCommits: [{ ...tip("aaa", 5), cause: commit }] },

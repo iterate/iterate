@@ -23,10 +23,8 @@
 // WHAT THESE ROWS ASSERT is what the platform code decides: a wake, a reset named on a wake record,
 // and a careless facet no longer running once its quiet minute is up. What CLOUDFLARE decides — how
 // long a facet the context no longer holds keeps running, whether a context stays resident under
-// traffic — each row prints, and the opt-in perf/context-residency.perf.test.ts times alone. Here
-// those numbers sampled the platform: a facet the platform stopped 0 s and 20 s after its call
-// (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
-// the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
+// traffic — varies from run to run: each row prints it, and the opt-in
+// perf/context-residency.perf.test.ts times it alone.
 //
 // Every project context is born with its birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`), and
 // each row's project has its config published, as every created project does
