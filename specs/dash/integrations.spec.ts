@@ -325,6 +325,7 @@ test("a project connects X, lists its verified handle, and disconnects it", asyn
     .getByRole("button", { name: "Connect an X account", exact: true })
     .click({ noWaitAfter: true });
   const account = x.getByRole("listitem").filter({ hasText: "@prototype" });
+  await account.waitFor();
   await account.getByRole("button", { name: "Disconnect", exact: true }).click();
   await page
     .getByRole("alertdialog")
