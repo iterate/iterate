@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { DEFAULT_X_SCOPES } from "../src/app-config.ts";
 import {
   followConsent,
   ORIGIN,
@@ -32,7 +33,7 @@ test.for([
   expect(Object.fromEntries(new URL(authorizationUrl).searchParams)).toMatchObject({
     code_challenge_method: "S256",
     redirect_uri: `${ORIGIN}/api/integrations/x/callback`,
-    scope: "tweet.read users.read offline.access tweet.write",
+    scope: DEFAULT_X_SCOPES.join(" "),
   });
   const back = await followConsent(
     petshop,
@@ -158,10 +159,10 @@ test.for([
   ).toMatchObject({ status: 303 });
   await member.itx.integrations.connect("x", { account: "@jonas" });
   const second = viaProject
-    ? await member.itx.integrations.connect("x", { account: "@jonas", scopes: ["bookmark.read"] })
+    ? await member.itx.integrations.connect("x", { account: "@jonas", scopes: ["mute.read"] })
     : await member.session.user.integrations.connect("x", {
         connection: "me",
-        scopes: ["bookmark.read"],
+        scopes: ["mute.read"],
       });
   const refused = await followConsent(
     petshop,
