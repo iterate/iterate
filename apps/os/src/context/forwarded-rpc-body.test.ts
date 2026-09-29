@@ -12,7 +12,7 @@
 // bookkeeping, so the fetch pump's read at the end finds the stream not ended and throws. The same
 // family: https://github.com/cloudflare/workerd/issues/7277.
 //
-// When it goes red because it passed, Cloudflare fixed the fault: keep this body as a plain row and
+// Once Cloudflare fixes the fault this row passes and goes red: keep its body as a plain row, and
 // delete the line's entry from PINNED_LINES.
 
 import { dirname } from "node:path";

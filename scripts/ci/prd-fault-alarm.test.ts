@@ -1965,8 +1965,8 @@ function deletedSecretFacet(objectId: string) {
   };
 }
 
-/** The secret facet's `endingLends` session in `objectId`, which answered and was cut off by the
- *  deletion before its caller released it, as prd logged it: an exception summary, no line. */
+/** The secret facet's `endingLends` session in `objectId`, answered and then cut off by the
+ *  deletion before its caller released it: an exception summary and no line. */
 function cutOffSecretCall(objectId: string) {
   return invocation({
     hop: "SecretDurableObject",

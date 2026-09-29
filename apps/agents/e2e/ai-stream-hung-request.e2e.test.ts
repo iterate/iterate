@@ -12,7 +12,7 @@
 // only the real-model suite runs it (os-real-model.yml). ItxAi's invocation ends `ok`; the fault
 // lands on ItxEntrypoint's.
 //
-// When it goes red because it passed, Cloudflare fixed the fault: keep this body as a plain row and
+// Once Cloudflare fixes the fault this row passes and goes red: keep its body as a plain row, and
 // delete its entry from PINNED_LINES in the prd fault alarm (scripts/ci/prd-fault-alarm.ts).
 import { expect } from "vitest";
 import { z } from "zod";
