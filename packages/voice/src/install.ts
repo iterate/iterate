@@ -178,20 +178,18 @@ export async function upgradeVoice(
     ],
   });
   if (!commitOid) throw new Error("The upgrade's commit left the config repo's main unborn");
-  for (let afterOffset = scannedThroughOffset; ;) {
-    const outcome = await project.waitForEvent({
-      type: [
-        "events.iterate.com/project/worker-updated",
-        "events.iterate.com/project/worker-update-failed",
-      ],
-      afterOffset,
-      timeoutMs: 120_000,
-    });
-    afterOffset = outcome.offset;
-    if (outcome.payload?.commitOid !== commitOid) continue;
-    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
-    throw new Error(
-      `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,
-    );
-  }
+  // every commit gets one outcome on `/`, found by its oid
+  const outcome = await project.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: scannedThroughOffset,
+    timeoutMs: 120_000,
+  });
+  if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+  throw new Error(
+    `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,
+  );
 }

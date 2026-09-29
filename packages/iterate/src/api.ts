@@ -34,9 +34,13 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+/** `waitForEvent`'s filter: an event type (or one of a list), payload fields the event must carry
+ *  with exactly these values (each a JSON primitive, compared with `===`), a floor, a timeout. With
+ *  an explicit `afterOffset` the log after it is searched first, so a match that already landed
+ *  answers at once. */
 export type WaitForEventFilter = {
   type?: string | string[];
+  payload?: Record<string, string | number | boolean | null>;
   afterOffset?: number;
   timeoutMs?: number;
 };
@@ -593,11 +597,6 @@ export type RepoHandle = InvokeHandle & {
     parent?: string | null;
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
-  /** `/repos/config` only: until commit `commitOid` (a commit's answer) is the project's published
-   *  config, which the website and every context then run — its publication's generation — or a
-   *  throw with why it is not published: its publication was refused, or main moved past it. The
-   *  platform publishes each commit in the background, a few seconds after it lands. */
-  waitForPublication(commitOid: string): Promise<{ commitOid: string; generation: number }>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
   /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
    *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:

@@ -86,8 +86,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
  *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS,
  *  library.ts SCRIPT_RUN_WAIT_SLICE_MS). */
 type WaitForEventWaiter = {
-  /** The types that resolve it; empty = any. */
-  types: string[];
+  /** Whether an event resolves it: its type and payload (`matchesWaitFilter`). */
+  matches: (event: StreamEvent) => boolean;
   afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
@@ -620,27 +620,32 @@ export class Stream {
   }
 
   /** Resolve with the next event matching `filter` (`type`: one exact type or one of a list; absent =
-   *  any) — or the first COMMITTED durable match already in the log after an explicit
-   *  `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
+   *  any; `payload`: fields it carries with exactly these values) — or the first COMMITTED durable
+   *  match already in the log after an explicit `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
    *  codedError("WAIT_TIMEOUT", …). CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero
    *  awaits between the log scan and waiter registration (an await there would lose a racing commit
    *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
     const types = filter.type ? [filter.type].flat() : [];
+    const payload = Object.entries(filter.payload || {});
+    const matches = (event: StreamEvent) =>
+      (types.length === 0 || types.includes(event.type)) &&
+      payload.every(
+        ([field, value]) => (event.payload as Record<string, unknown>)?.[field] === value,
+      );
     const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
       const page = this.read(cursor, 500);
-      for (const event of page.events)
-        if (types.length === 0 || types.includes(event.type)) return Promise.resolve(event);
+      for (const event of page.events) if (matches(event)) return Promise.resolve(event);
       if (page.atHead) break;
       cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
     }
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
-        types,
+        matches,
         afterOffset,
         resolve,
         reject,
@@ -659,7 +664,7 @@ export class Stream {
     });
   }
 
-  /** A waiter matches on `type` AND `offset > afterOffset`. The default afterOffset is the head at
+  /** A waiter matches on its filter AND `offset > afterOffset`. The default afterOffset is the head at
    *  call time, so a default wait settles on the next event; but an explicit afterOffset ahead of
    *  head (a caller waiting for the stream to REACH an offset), or one left behind by an ephemeral
    *  offset rewind after eviction, must not be satisfied by an earlier fresh event — the filter's
@@ -668,8 +673,7 @@ export class Stream {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
-        if (w.types.length > 0 && !w.types.includes(event.type)) continue;
-        if (event.offset <= w.afterOffset) continue;
+        if (!w.matches(event) || event.offset <= w.afterOffset) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
         w.resolve(event);

@@ -32,10 +32,9 @@ const empty: ProjectState = {
   contexts: {},
   secrets: {},
   configRepoTip: null,
-  publishedThrough: null,
+  unpublishedCommits: [],
   lastPublicationFactOffset: null,
   published: null,
-  refused: null,
   hostnames: {},
   integrations: {},
   primaryHostname: null,
@@ -72,25 +71,29 @@ const reduceRows: {
     state: { ...empty, creation: { status: "created", offset: 2 } },
   },
   {
-    name: "the config repo's commits move the tip the project follows — the latest one, by its oid and the fact's offset; another repo's commit is ignored",
+    name: "the config repo's commits move the tip the project follows and each is owed a publication, by its oid and the fact's offset; another repo's commit is ignored",
     events: [
       committed("/repos/config", "aaa"),
       committed("/repos/other", "bbb"),
       committed("/repos/config", "ccc"),
     ],
-    state: { ...empty, configRepoTip: { commitOid: "ccc", offset: 3 } },
+    state: owing(tip("aaa", 1), tip("ccc", 3)),
   },
   {
-    name: "a commit's cause rides the tip it moves: its publication runs under it (src/cause.ts)",
+    name: "a commit's cause rides the commit it owes: its publication runs under it (src/cause.ts)",
     events: [{ ...committed("/repos/config", "aaa"), source: { cause: { chain: "c", depth: 7 } } }],
     state: {
       ...empty,
-      configRepoTip: { commitOid: "aaa", offset: 1, cause: { chain: "c", depth: 7 } },
+      configRepoTip: tip("aaa", 1),
+      unpublishedCommits: [{ ...tip("aaa", 1), cause: { chain: "c", depth: 7 } }],
     },
   },
   {
-    name: "a publication's outcome publishes through its generation; a refusal keeps the config last published, whose modules the next must still export, and says why; the platform's give-up publishes through nothing and refuses nothing; each is the last publication fact",
+    name: "a publication's outcome settles the commit of its generation; a refusal keeps the config last published, whose modules the next must still export; the platform's give-up settles nothing; each is the last publication fact",
     events: [
+      committed("/repos/config", "aaa"),
+      committed("/repos/config", "bbb"),
+      committed("/repos/config", "ccc"),
       workerUpdated("aaa", 1),
       workerUpdateFailed("bbb", 2),
       {
@@ -100,11 +103,9 @@ const reduceRows: {
       { type: "events.iterate.com/itx/ingress-configured", payload: { target: ["itx", "config"] } },
     ],
     state: {
-      ...empty,
-      publishedThrough: 2,
-      lastPublicationFactOffset: 3,
+      ...owing(tip("ccc", 3)),
+      lastPublicationFactOffset: 6,
       published: { commitOid: "aaa", generation: 1, modules: modulesOf("aaa") },
-      refused: { commitOid: "bbb", generation: 2, error: "boom" },
     },
   },
   {
@@ -118,10 +119,9 @@ const reduceRows: {
       contexts: {},
       secrets: {},
       configRepoTip: null,
-      publishedThrough: null,
+      unpublishedCommits: [],
       lastPublicationFactOffset: null,
       published: null,
-      refused: null,
       hostnames: {},
       integrations: {},
       primaryHostname: null,
@@ -451,18 +451,18 @@ for (const { name, events, state } of reduceRows)
 // arguments faked (`runInBackground` runs the work at once) and a fake publisher: `main`'s head,
 // each commit's files, identities that hash a module's text, a probe that answers what the commit's
 // files say, and a platform append that records each call and can be held open or refused.
-test("ProjectProcessor — the publication: a commit fact publishes main's head as the generation of the fact's offset, its pointer then project/worker-updated as the platform; a tip that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
+test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer then project/worker-updated as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   publisher.holdFirstAppend(held);
   const processor = processorPublishingWith(publisher);
   publisher.main = "aaa";
-  deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, unusedAppend);
-  // a second commit lands while the first publication is in flight: kept as the newest tip
+  deliver(processor, owing(tip("aaa", 5)), unusedAppend);
+  // a second commit lands while the first publication is in flight: owed next
   await settle();
   publisher.main = "bbb";
-  deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, unusedAppend);
+  deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
   await settle();
   expect(publisher).toMatchObject({ batches: [] });
   release();
@@ -495,13 +495,13 @@ test("ProjectProcessor — the publication: a commit fact publishes main's head 
     },
   });
   expect(publisher.batches[3]![0]).toMatchObject({ idempotencyKey: "project/publication:7" });
-  // delivered again over the same tip: nothing more
-  deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, unusedAppend);
+  // delivered again over the same commits, before their outcomes reduced: nothing more
+  deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
   await settle();
   expect(publisher.batches).toHaveLength(4);
   // a forced pull back to the first commit is a new fact, and a publication of its own
   publisher.main = "aaa";
-  deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, unusedAppend);
+  deliver(processor, owing(tip("aaa", 9)), unusedAppend);
   await settle();
   expect(publisher.batches.map(summary).slice(-2)).toEqual([
     ["itx.config ⇒ aaa@9"],
@@ -509,30 +509,35 @@ test("ProjectProcessor — the publication: a commit fact publishes main's head 
   ]);
 });
 
-test("ProjectProcessor — a commit fact anyone appends only wakes the publication: it publishes main's head, and nothing when that head is the published config", async () => {
-  const publisher = fakePublisher({ aaa: {}, bbb: {} });
-  publisher.main = "aaa";
-  const published = {
-    ...empty,
-    publishedThrough: 3,
-    published: { commitOid: "aaa", generation: 3, modules: modulesOf("aaa") },
-  };
-  const forged = { ...published, configRepoTip: tip("some-other-commit", 5) };
-  deliver(processorPublishingWith(publisher), forged, unusedAppend);
-  await settle();
-  expect(publisher).toMatchObject({ batches: [] });
-  publisher.main = "bbb";
-  deliver(
-    processorPublishingWith(publisher),
-    { ...forged, configRepoTip: tip("x", 6) },
-    unusedAppend,
-  );
-  await settle();
-  expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ bbb@6"],
-    ["project/worker-updated bbb@6"],
-  ]);
-});
+test.for([
+  {
+    name: "two commits land before the first is published: the first is main moved on, the second published",
+    owed: [tip("aaa", 5), tip("bbb", 7)],
+    outcomes: [
+      ["project/worker-update-failed aaa@5"],
+      ["itx.config ⇒ bbb@7"],
+      ["project/worker-updated bbb@7"],
+    ],
+  },
+  {
+    name: "a fact anyone appends naming a commit main is not at is main moved on, and publishes nothing",
+    owed: [tip("some-other-commit", 5)],
+    outcomes: [["project/worker-update-failed some-other-commit@5"]],
+  },
+])(
+  "ProjectProcessor — every commit fact gets one outcome of its own: $name",
+  async ({ owed, outcomes }) => {
+    const publisher = fakePublisher({ aaa: {}, bbb: {} });
+    publisher.main = "bbb";
+    deliver(processorPublishingWith(publisher), owing(...owed), unusedAppend);
+    await settle();
+    expect(publisher.batches.map(summary)).toEqual(outcomes);
+    expect(publisher.batches[0]![0]).toMatchObject({
+      idempotencyKey: "project/publication:5",
+      payload: { error: "main moved on to bbb before this commit was published" },
+    });
+  },
+);
 
 test("ProjectProcessor — init-at-8: a publication runs under the cause of the commit it follows, not one deeper as a processor's other effects do, so its facts keep the commit's depth (project/durable-object.ts `appendAsPlatform` stamps it) and init runs one deeper than the commit", async () => {
   const publisher = fakePublisher({ aaa: {} });
@@ -552,7 +557,7 @@ test("ProjectProcessor — init-at-8: a publication runs under the cause of the 
   door.run({ ...commit, depth: 8 }, () =>
     deliver(
       processorPublishingWith(publisher),
-      { ...empty, configRepoTip: { ...tip("aaa", 5), cause: commit } },
+      { ...owing(tip("aaa", 5)), unpublishedCommits: [{ ...tip("aaa", 5), cause: commit }] },
       unusedAppend,
     ),
   );
@@ -595,13 +600,15 @@ test.for<{ name: string; commit: FakeCommit; error: RegExp }>([
   async ({ commit, error }) => {
     const publisher = fakePublisher({ good: {}, bad: commit });
     publisher.main = "bad";
-    const published = {
-      ...empty,
-      publishedThrough: 2,
-      published: { commitOid: "good", generation: 2, modules: modulesOf("good") },
-    };
     const processor = processorPublishingWith(publisher);
-    deliver(processor, { ...published, configRepoTip: tip("bad", 3) }, unusedAppend);
+    deliver(
+      processor,
+      {
+        ...owing(tip("bad", 3)),
+        published: { commitOid: "good", generation: 2, modules: modulesOf("good") },
+      },
+      unusedAppend,
+    );
     await settle();
     expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed bad@3"]]);
     expect(publisher.batches[0]![0]).toMatchObject({
@@ -614,11 +621,7 @@ test.for<{ name: string; commit: FakeCommit; error: RegExp }>([
 test("ProjectProcessor — a first publication whose side module does not resolve is refused: every top-level module resolves", async () => {
   const publisher = fakePublisher({ first: { unresolved: "seed.ts", extra: "seed.ts" } });
   publisher.main = "first";
-  deliver(
-    processorPublishingWith(publisher),
-    { ...empty, configRepoTip: tip("first", 2) },
-    unusedAppend,
-  );
+  deliver(processorPublishingWith(publisher), owing(tip("first", 2)), unusedAppend);
   await settle();
   expect(publisher.batches.map(summary)).toEqual([["project/worker-update-failed first@2"]]);
 });
@@ -628,11 +631,7 @@ test("ProjectProcessor — a side module that throws as it is imported keeps its
     first: { extra: "seed.ts", unloadable: { "seed.ts": "boom" } },
   });
   publisher.main = "first";
-  deliver(
-    processorPublishingWith(publisher),
-    { ...empty, configRepoTip: tip("first", 2) },
-    unusedAppend,
-  );
+  deliver(processorPublishingWith(publisher), owing(tip("first", 2)), unusedAppend);
   await settle();
   expect(publisher.batches[1]![0]).toMatchObject({
     payload: { modules: { "seed.ts": { identity: "first:seed.ts", classes: [] } } },
@@ -642,7 +641,7 @@ test("ProjectProcessor — a side module that throws as it is imported keeps its
 // Every wake of the project's root pushes the facet its wake record, and a fresh incarnation of the
 // facet runs the at-head pass over its checkpointed state: the state, not this incarnation's memory,
 // says whether the tip is published — from the outcome of ITS generation.
-test("ProjectProcessor — a tip is owed until an outcome of its own generation landed: a fresh incarnation over the state that reduced it appends nothing and starts no background work, so it claims nothing", async () => {
+test("ProjectProcessor — a commit is owed until an outcome of its own generation landed: a fresh incarnation over the state that reduced it appends nothing and starts no background work, so it claims nothing", async () => {
   const publisher = fakePublisher({ aaa: {} });
   publisher.main = "aaa";
   let background = 0;
@@ -650,7 +649,7 @@ test("ProjectProcessor — a tip is owed until an outcome of its own generation 
     background += 1;
     void work();
   };
-  const tipped = { ...empty, configRepoTip: tip("aaa", 1) };
+  const tipped = owing(tip("aaa", 1));
   deliver(processorPublishingWith(publisher), tipped, unusedAppend, runInBackground);
   await settle();
   const [[pointer], [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
@@ -661,7 +660,7 @@ test("ProjectProcessor — a tip is owed until an outcome of its own generation 
   ]);
   expect(state).toEqual({
     ...tipped,
-    publishedThrough: 1,
+    unpublishedCommits: [],
     lastPublicationFactOffset: 3,
     published: { commitOid: "aaa", generation: 1, modules: modulesOf("aaa") },
   });
@@ -677,9 +676,7 @@ test.for([
       publisher.main = "bbb";
       // A@5 published, then B@7 landed while it ran, then the incarnation ended
       const state = {
-        ...empty,
-        configRepoTip: tip("bbb", 7),
-        publishedThrough: 5,
+        ...owing(tip("bbb", 7)),
         lastPublicationFactOffset: 9,
         published: { commitOid: "aaa", generation: 5, modules: modulesOf("aaa") },
       };
@@ -692,11 +689,11 @@ test.for([
       const processor = processorPublishingWith(publisher);
       publisher.main = "bbb";
       publisher.refuseNextAppend(new Error("the root's append failed"));
-      deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, unusedAppend, (work) => {
+      deliver(processor, owing(tip("bbb", 7)), unusedAppend, (work) => {
         void work().catch(() => undefined);
       });
       await settle();
-      deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, unusedAppend);
+      deliver(processor, owing(tip("bbb", 7)), unusedAppend);
     },
   },
 ])("ProjectProcessor — B lands during A's publication and is published: $name", async ({ run }) => {
@@ -714,11 +711,7 @@ test("ProjectProcessor — a publication that lands leaves no timer behind: a pe
   onTestFinished(() => void vi.useRealTimers());
   const publisher = fakePublisher({ aaa: {} });
   publisher.main = "aaa";
-  deliver(
-    processorPublishingWith(publisher),
-    { ...empty, configRepoTip: tip("aaa", 4) },
-    unusedAppend,
-  );
+  deliver(processorPublishingWith(publisher), owing(tip("aaa", 4)), unusedAppend);
   await vi.advanceTimersByTimeAsync(0);
   expect(publisher.batches).toHaveLength(2);
   expect(vi.getTimerCount()).toBe(0);
@@ -735,11 +728,7 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   const recovering = fakePublisher({ aaa: {} });
   recovering.main = "aaa";
   recovering.failReadsTimes(2, overloaded);
-  deliver(
-    processorPublishingWith(recovering),
-    { ...empty, configRepoTip: tip("aaa", 4) },
-    unusedAppend,
-  );
+  deliver(processorPublishingWith(recovering), owing(tip("aaa", 4)), unusedAppend);
   await vi.advanceTimersByTimeAsync(5_000);
   expect(recovering).toMatchObject({ batches: [] });
   await vi.advanceTimersByTimeAsync(30_000);
@@ -752,7 +741,7 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   down.main = "aaa";
   down.failReadsTimes(Infinity, overloaded);
   const processor = processorPublishingWith(down);
-  deliver(processor, { ...empty, configRepoTip: tip("aaa", 4) }, unusedAppend);
+  deliver(processor, owing(tip("aaa", 4)), unusedAppend);
   await vi.advanceTimersByTimeAsync(60_000);
   expect(down.batches.map(summary)).toEqual([["project/worker-update-failed aaa@4"]]);
   expect(down.batches[0]![0]).toMatchObject({
@@ -760,7 +749,7 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   });
   expect(down.batches[0]![0]).not.toHaveProperty("idempotencyKey");
   // this incarnation gave up on the tip: its own give-up's delivery starts nothing more
-  deliver(processor, { ...empty, configRepoTip: tip("aaa", 4) }, unusedAppend);
+  deliver(processor, owing(tip("aaa", 4)), unusedAppend);
   await vi.advanceTimersByTimeAsync(60_000);
   expect(down.batches).toHaveLength(1);
 });
@@ -1211,7 +1200,15 @@ function secretDeleted(path: string) {
   return { type: "events.iterate.com/secret/deleted", payload: { path } };
 }
 
-const tip = (commitOid: string, offset: number) => ({ commitOid, offset });
+function tip(commitOid: string, offset: number) {
+  return { commitOid, offset };
+}
+
+/** The state after these commit facts landed on `/` and before any outcome: each owed, the last
+ *  the tip. */
+function owing(...commits: ReturnType<typeof tip>[]): ProjectState {
+  return { ...empty, configRepoTip: commits.at(-1)!, unpublishedCommits: commits };
+}
 
 /** A config commit as the fake publisher sees it: what its probe answers, a module beside the
  *  default template's two (`extra`), and a module that does not resolve. The default is the

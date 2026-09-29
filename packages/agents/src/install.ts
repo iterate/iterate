@@ -101,8 +101,9 @@ export async function upgradeAgents(
     ],
   });
   if (!commitOid) throw new Error("The upgrade's commit left the config repo's main unborn");
+  // every commit gets one outcome on `/`, found by its oid
   const started = Date.now();
-  for (let afterOffset = scannedThroughOffset; ;) {
+  for (;;) {
     const remainingMs = started + PUBLICATION_WAIT_MS - Date.now();
     let outcome: Awaited<ReturnType<IterateContextApi["waitForEvent"]>>;
     try {
@@ -111,7 +112,8 @@ export async function upgradeAgents(
           "events.iterate.com/project/worker-updated",
           "events.iterate.com/project/worker-update-failed",
         ],
-        afterOffset,
+        payload: { commitOid },
+        afterOffset: scannedThroughOffset,
         timeoutMs: Math.max(0, Math.min(PUBLICATION_WAIT_SLICE_MS, remainingMs)),
       });
     } catch (error) {
@@ -120,8 +122,6 @@ export async function upgradeAgents(
         throw error;
       continue;
     }
-    afterOffset = outcome.offset;
-    if (outcome.payload?.commitOid !== commitOid) continue;
     if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
     throw new Error(
       `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,

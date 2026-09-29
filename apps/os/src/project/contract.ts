@@ -84,22 +84,23 @@ export const ProjectContract = defineProcessorContract({
     /** The project secret catalog. */
     secrets: SecretCatalog.default({}),
     /** The config repo's tip as its commits reach `/`: the latest `repo/commit-completed` from
-     *  `/repos/config`, by its oid and the OFFSET of the fact — the generation of the publication
-     *  the processor owes for it, of `main`'s head as it then is. Null until the seed. */
+     *  `/repos/config`, by its oid and the OFFSET of the fact. Null until the seed. */
     configRepoTip: z
-      .object({
-        commitOid: z.string().min(1),
-        offset: z.number().int().positive(),
-        /** The commit fact's cause, which its publication runs under (src/cause.ts). */
-        cause: z.object({ chain: z.string(), depth: z.number() }).optional(),
-      })
+      .object({ commitOid: z.string().min(1), offset: z.number().int().positive() })
       .nullable()
       .default(null),
-    /** THROUGH WHICH TIP THE CONFIG REPO IS PUBLISHED (processor.ts, the follower): the newest
-     *  generation — a tip's offset — whose publication landed, `project/worker-updated` or the
-     *  `project/worker-update-failed` of a commit it refused. A tip is owed while its offset is past
-     *  this. Null until the first. */
-    publishedThrough: z.number().int().positive().nullable().default(null),
+    /** THE COMMITS OWED A PUBLICATION (processor.ts, the follower): each `repo/commit-completed`
+     *  from `/repos/config` with no outcome of its generation — its fact's offset — yet, oldest
+     *  first, with the fact's cause, which its publication runs under (src/cause.ts). */
+    unpublishedCommits: z
+      .array(
+        z.object({
+          commitOid: z.string().min(1),
+          offset: z.number().int().positive(),
+          cause: z.object({ chain: z.string(), depth: z.number() }).optional(),
+        }),
+      )
+      .default([]),
     /** The offset of the newest publication fact of either kind, the platform's give-up included:
      *  the creation saga lands the certificate once there is one. Null until the first. */
     lastPublicationFactOffset: z.number().int().positive().nullable().default(null),
@@ -110,17 +111,6 @@ export const ProjectContract = defineProcessorContract({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),
         modules: PublishedModules,
-      })
-      .nullable()
-      .default(null),
-    /** THE LAST REFUSED PUBLICATION, the last `project/worker-update-failed` that was no give-up:
-     *  the commit, the generation and why — what `waitForPublication` (library.ts) answers a commit
-     *  that is not published. Null until the first. */
-    refused: z
-      .object({
-        commitOid: z.string().min(1),
-        generation: z.number().int().positive(),
-        error: z.string(),
       })
       .nullable()
       .default(null),
@@ -238,7 +228,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-update-failed": {
       description:
-        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: a module that does not resolve, a main module whose default export is no IterateConfigEntrypoint or does not construct, or a class the last publication exported gone. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
+        "Commit `commitOid` of `/repos/config` failed its publication as `generation`, and why: `main` moved on before it was published, a module that does not resolve, a main module whose default export is no IterateConfigEntrypoint or does not construct, or a class the last publication exported gone. With `unavailable`, the platform could not finish it for now (esm.sh, a module lock, the probe's load): the commit is still owed, and published by the project's next incarnation. `itx.config` still names the publication before it. Only the platform appends it.",
       payloadSchema: z.object({
         commitOid: z.string().min(1),
         generation: z.number().int().positive(),

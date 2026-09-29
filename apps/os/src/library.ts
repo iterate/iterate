@@ -28,13 +28,11 @@ import type {
   FileHandle,
   FileRecord,
   IterateContextApi,
-  RepoHandle,
   WaitForEventFilter,
 } from "iterate/api";
 import type { Cause } from "./cause.ts";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
-import type { ProjectState } from "./project/contract.ts";
 import { RepoContract } from "./repo/contract.ts";
 import type { RepoDurableObject, repoVerbs } from "./repo/durable-object.ts";
 import { WorkspaceContract } from "./workspace/contract.ts";
@@ -76,12 +74,10 @@ export interface LibraryRoots {
    *  trip per step. */
   connectToCapnweb: IterateContextApi["connectToCapnweb"];
   /** A repo (src/repo/): a stream on any path whose `repo` facet lands the commit facts. `get(path)`
-   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events, and the
-   *  config repo's `waitForPublication` (below); `list()` and `create(path)` are the collection's
-   *  on the `project` facet at `/`. */
+   *  is the handle — the facet's verbs plus the typed `append` of the repo's own events; `list()`
+   *  and `create(path)` are the collection's on the `project` facet at `/`. */
   repos: EntityRoot<
-    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract> &
-      Pick<RepoHandle, "waitForPublication">
+    EntityHandle<RepoDurableObject, (typeof repoVerbs)[number], typeof RepoContract>
   >;
   /** A workspace (src/workspace/): the workspace of any context, at most one per path. `get(path)`
    *  is the handle — the facet's verbs plus the typed `append` of the workspace's own events;
@@ -596,8 +592,6 @@ function entityHandle(
             );
       return (await itx.cd(entityPath)).invoke([["append", ...parsed]]);
     }
-    if (name === "repo" && Array.isArray(first) && first[0] === "waitForPublication")
-      return waitForPublication(itx, entityPath, first[1]);
     const context = await itx.builtins.cd(entityPath);
     // A repo's pull or push reaches its remote through the CALLER's egress, never the repo's (whose
     // parent link leads to its creator's): the caller's own `itx.fetch`, through its own rules, so a
@@ -613,132 +607,6 @@ function entityHandle(
     }
     return context.invoke(["facets", ["get", name], ...itxExpressionSteps]);
   });
-}
-
-// ── the publication ── `itx.repos.get("/repos/config").waitForPublication(commitOid)`: the project
-// processor publishes each commit of the config repo in the background (project/processor.ts), and
-// this waits for a commit's publication to land. It reads the processor's own state on `/`, never
-// the website, and answers what that state says: published, or not published and why. A
-// publication's `project/worker-updated` lands only once every context resolves through its
-// pointer, so the website and every context run the commit by the time this answers.
-
-/** How long `waitForPublication` waits: longer than the processor spends on one publication before
- *  it gives up for now (project/processor.ts `PUBLICATION_BUDGET_MS`). */
-const PUBLICATION_WAIT_MS = 120_000;
-/** How long ONE wait for a publication fact is held on `/` before it is asked again on a fresh
- *  call, so an instance Cloudflare replaces under the wait costs one slice
- *  (SCRIPT_RUN_WAIT_SLICE_MS says why). */
-const PUBLICATION_WAIT_SLICE_MS = 5_000;
-
-/** The project state the wait reads (project/contract.ts). */
-type PublicationState = Pick<
-  ProjectState,
-  "configRepoTip" | "publishedThrough" | "published" | "refused"
->;
-
-/** Where the publication of `commitOid` stands in `state`, reduced through that commit's fact at
- *  least: published, with its generation; owed, as the generation of its fact; or not published,
- *  and why: its publication was refused, or main moved past it (only main's head is published).
- *  Exported for the unit pin. */
-export function publicationOf(
-  state: PublicationState,
-  commitOid: string,
-):
-  | { status: "published"; generation: number }
-  | { status: "owed"; generation: number }
-  | { status: "not-published"; why: string } {
-  const { configRepoTip: tip, published, refused } = state;
-  if (published?.commitOid === commitOid)
-    return { status: "published", generation: published.generation };
-  if (tip?.commitOid !== commitOid)
-    return {
-      status: "not-published",
-      why: `main's head is ${tip ? tip.commitOid : "no commit"}, and only the head is published`,
-    };
-  if ((state.publishedThrough ?? 0) < tip.offset) return { status: "owed", generation: tip.offset };
-  if (refused?.generation === tip.offset)
-    return {
-      status: "not-published",
-      why:
-        refused.commitOid === commitOid
-          ? refused.error
-          : `main moved on to ${refused.commitOid}, whose publication failed: ${refused.error}`,
-    };
-  return {
-    status: "not-published",
-    why: `main moved on to ${published?.commitOid}, which was published in its place`,
-  };
-}
-
-/** THE WAIT for the publication of `commitOid` of the config repo at `path`: its generation once
- *  it is the project's published config, or a throw with why it is not — the reason a refused
- *  publication gives, or the platform's failure when it gave up for now. */
-async function waitForPublication(
-  itx: LibraryItx,
-  path: string,
-  commitOid: unknown,
-): Promise<{ commitOid: string; generation: number }> {
-  if (path !== "/repos/config")
-    throw codedError(
-      "INVALID_INPUT",
-      `repos.get(${JSON.stringify(path)}).waitForPublication: only /repos/config is published`,
-    );
-  const oid = z
-    .string()
-    .regex(/^[0-9a-f]{40}$/, "a commit's oid")
-    .parse(commitOid);
-  const deadline = Date.now() + PUBLICATION_WAIT_MS;
-  const left = () => Math.max(0, deadline - Date.now());
-  const root = await itx.builtins.cd("/");
-  const project = (...steps: ItxExpression) =>
-    root.invoke(["facets", ["get", "project"], ...steps]) as Promise<unknown>;
-  // The commit's fact reached `/` before the commit answered (repo/durable-object.ts
-  // `#commitFact`), so the state reduced through the head as it is now has seen it.
-  const head = (await root.invoke([["readEvents", Number.MAX_SAFE_INTEGER, 1]])) as {
-    scannedThroughOffset: number;
-  };
-  for (let through = head.scannedThroughOffset; ;) {
-    await project(["waitUntilProcessed", { offset: through, timeoutMs: left() }]);
-    const { offset, state } = (await project(["snapshot"])) as {
-      offset: number;
-      state: PublicationState;
-    };
-    const at = publicationOf(state, oid);
-    if (at.status === "published") return { commitOid: oid, generation: at.generation };
-    if (at.status === "not-published")
-      throw new Error(`commit ${oid} of /repos/config is not published: ${at.why}`);
-    // owed: the next publication fact, and the state through it
-    let next: StreamEvent;
-    try {
-      next = (await root.invoke([
-        [
-          "waitForEvent",
-          {
-            type: [
-              "events.iterate.com/project/worker-updated",
-              "events.iterate.com/project/worker-update-failed",
-            ],
-            afterOffset: offset,
-            timeoutMs: Math.min(PUBLICATION_WAIT_SLICE_MS, left()),
-          },
-        ],
-      ])) as StreamEvent;
-    } catch (error) {
-      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
-      if (left() > 0) continue;
-      throw codedError(
-        "WAIT_TIMEOUT",
-        `commit ${oid} of /repos/config: its publication did not land within ${PUBLICATION_WAIT_MS / 1000} s`,
-      );
-    }
-    const payload = next.payload as { generation: number; error?: string; unavailable?: true };
-    // the platform gave up for now: the commit is still owed, and published by a later attempt
-    if (payload.unavailable && payload.generation === at.generation)
-      throw new Error(
-        `commit ${oid} of /repos/config is not published yet: the platform could not finish its publication for now (${payload.error}), and publishes it later`,
-      );
-    through = next.offset;
-  }
 }
 
 // ── the files ── `itx.files.get(path)`: the path's object in `itx.r2` (already the owner's slice),

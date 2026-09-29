@@ -113,10 +113,10 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
         'import { IterateConfigEntrypoint } from "iterate/sdk"; import { html } from "./app/page.js"; export default class extends IterateConfigEntrypoint { fetch() { return new Response(html, { headers: { "content-type": "text/html" } }); } }',
     },
   ];
-  // the commit, and its publication awaited as the instructions teach: once it answers, the site
+  // the commit, and its outcome awaited as the instructions teach: once it is published, the site
   // serves the commit
   const commit = await success(
-    `async (itx) => { const repo = itx.repos.get("/repos/config"); const { commitOid } = await repo.commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); return repo.waitForPublication(commitOid); }`,
+    `async (itx) => { const { commitOid } = await itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); const outcome = await itx.waitForEvent({ type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"], payload: { commitOid }, afterOffset: 0, timeoutMs: 120000 }); if (outcome.type.endsWith("worker-update-failed")) throw new Error(outcome.payload.error); return outcome.payload; }`,
   );
   expect(commit).toMatchObject({ commitOid: expect.any(String), generation: expect.any(Number) });
   const published = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));

@@ -38,19 +38,16 @@ deployedOnly(
       /`(await itx\.workers\.get\(\{ source: .*?candidateSource.*?\}\)\.fetch\(new Request\(projectUrl\)\))`/,
     )?.[1];
     expect(candidateProbe).toBeTruthy();
-    // …and the wait for the commit's publication it is taught, so its check sees the commit live
-    expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-      "return await repo.waitForPublication(commitOid)",
-    );
     const call = await voiceCall(({ websiteUrl }) => {
       const websiteScripts = [
         "return await itx.whoami();",
         'return await itx.repos.get("/repos/config").listFiles();',
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
         `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
-        `const repo = itx.repos.get("/repos/config"); const { commitOid } = await repo.writeFile("worker.ts", ${JSON.stringify(candidateSource)}); return await repo.waitForPublication(commitOid);`,
+        `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
-        `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
+        // the publication lands a few seconds after the commit: fetch until the site serves it
+        `for (let tries = 1; ; tries++) { const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); const body = await response.text(); if ((response.status === 200 && body.includes("bad stable manners")) || tries === 20) return {status: response.status, body}; await new Promise((resolve) => setTimeout(resolve, 1000)); }`,
       ];
       // The agent's model, played: it answers the newest hand-over from the script results after
       // it, one script a turn, with prose beside the first script that must never be spoken.

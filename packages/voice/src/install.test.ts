@@ -154,8 +154,11 @@ test("an upgrade commits the new pin on the tip it read, keeps the rest of packa
       "package.json": manifest({ private: true, dependencies: { [name]: newer, hono: "^4" } }),
     },
   });
-  // it waited from the head it read before committing
-  expect(root.waitForEvent.mock.calls[0]![0]).toMatchObject({ afterOffset: 7 });
+  // it waited for its own commit's outcome, from the head it read before committing
+  expect(root.waitForEvent.mock.calls[0]![0]).toMatchObject({
+    afterOffset: 7,
+    payload: { commitOid: "commit-1" },
+  });
 });
 
 test("a config already at the build commits nothing and waits for no publication", async () => {
@@ -249,13 +252,20 @@ function project({ voice = false, key = true, pin = true, seeded = true } = {}) 
     },
     repos: { get: () => repo },
     readEvents: vi.fn(async () => ({ events: [], scannedThroughOffset: 7, atHead: true })),
-    waitForEvent: vi.fn(async ({ afterOffset = 0 }: { afterOffset?: number }) => {
-      for (;;) {
-        const next = log.find((event) => event.offset > afterOffset);
-        if (next) return next;
-        await new Promise<void>((resolve) => waiters.push(resolve));
-      }
-    }),
+    // the stream's filter: after the offset, and carrying each payload field it names
+    waitForEvent: vi.fn(
+      async ({ afterOffset = 0, payload = {} }: { afterOffset?: number; payload?: object }) => {
+        for (;;) {
+          const next = log.find(
+            (event) =>
+              event.offset > afterOffset &&
+              Object.entries(payload).every(([field, value]) => event.payload[field] === value),
+          );
+          if (next) return next;
+          await new Promise<void>((resolve) => waiters.push(resolve));
+        }
+      },
+    ),
     secrets: {
       list: vi.fn(async () => (key ? [{ path: "/secrets/openai" }] : [])),
       set: vi.fn(),
