@@ -326,7 +326,7 @@ function DefaultDomainRow({
           href={site}
           target="_blank"
           rel="noreferrer"
-          className="truncate font-mono text-base hover:underline"
+          className="min-w-0 truncate font-mono text-base hover:underline"
         >
           {shown}
         </a>
@@ -403,12 +403,12 @@ function HostnameRow({
             href={`https://${hostname}`}
             target="_blank"
             rel="noreferrer"
-            className="truncate font-mono text-base hover:underline"
+            className="min-w-0 truncate font-mono text-base hover:underline"
           >
             {hostname}
           </a>
         ) : (
-          <span className="truncate font-mono text-base">{hostname}</span>
+          <span className="min-w-0 truncate font-mono text-base">{hostname}</span>
         )}
         <span className="text-sm text-muted-foreground">
           {standing.label}
