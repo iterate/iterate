@@ -660,8 +660,8 @@ fullest shard holds `ceil(specs / shards)`.
   attempt's test results, merges them into the one HTML report behind the **Playwright report**
   status, and fails when a shard did not pass (`scripts/ci/specs-shards.ts`). So it is green only
   when every spec passed. With `needs:` it would boot and set up only after the last shard; this
-  way its verdict comes about a second after it. In the CI trace the shards sit under its row, and
-  its collect step shows its wait, nearly all of it, the downloads and the merge.
+  way its verdict comes about a second after it. In the CI trace the shards sit under its row,
+  below its own steps in one **Coordinate shards** row, where its wait for them is nearly all.
 - Cost: every shard waits out the deploy on its own `4x16`, and Browser specs on a `2x8`. More
   workers against one preview have raised retries before (#3258), so compare the retried specs per
   run before and after changing the count.

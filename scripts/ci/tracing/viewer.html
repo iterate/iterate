@@ -354,11 +354,11 @@
                   (b.a["ci.kind"] === "queue") - (a.a["ci.kind"] === "queue") ||
                   emitted.get(a.spanId) - emitted.get(b.spanId)
                 );
-              // a job's nested jobs, the Browser specs shards, first and by their number; the rest
-              // by their start
+              // a job's own rows by their start, then its nested jobs, the Browser specs shards, by
+              // their number
               const nested = (span) => span.a["ci.kind"] === "job";
               return (
-                nested(b) - nested(a) ||
+                nested(a) - nested(b) ||
                 (nested(a)
                   ? a.name.localeCompare(b.name, undefined, { numeric: true })
                   : a.start - b.start)

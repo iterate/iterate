@@ -284,6 +284,31 @@ export function assembleTrace(
         if (time < suite.time) return "setup";
         return suiteEnd === undefined || time < suiteEnd ? "test" : "finish";
       };
+      // A job whose row holds other jobs keeps its own steps in one row above them: Browser specs'
+      // "Coordinate shards", its collect step no row either, that step's wait, downloads and merge
+      // beside its checkout and setup.
+      const coordinatorRow = coordinatorRows.get(key);
+      const collect = coordinatorRow && shells.find((event) => event.step === "collect");
+      const home =
+        coordinatorRow && shells.length
+          ? add(
+              `${attempt.attemptId}/coordinate`,
+              jobSpan,
+              coordinatorRow,
+              Math.min(...shells.map((shell) => shell.time)),
+              Math.max(
+                ...shells.map(
+                  (shell) => shellEnds.get(shell.id)?.time || Math.max(shell.time, end),
+                ),
+              ),
+              {
+                "ci.kind": "group",
+                "ci.status": attempt.status,
+                "ci.evidence": "Its steps' first start to their last exit (measured shell markers)",
+              },
+              attempt.status === "failed",
+            )
+          : jobSpan;
       const stepParents = new Map<string, string>();
       const stepEnds = new Map<string, number>();
       for (const shell of shells) {
@@ -295,10 +320,10 @@ export function assembleTrace(
         stepEnds.set(shell.stepKey, shellEnd);
         // A suite step is no row of its own: what it runs sits under the job with its other steps,
         // its set-up and deploy wait as they are, and its tests in one "Run tests" row (below).
-        if (shell === suite) continue;
+        if (shell === suite || shell === collect) continue;
         const id = add(
           `${attempt.attemptId}/shell/${shell.id}`,
-          jobSpan,
+          home,
           shell.stepName || shell.stepId || shell.command || shell.step,
           shell.time,
           shellEnd,
@@ -337,7 +362,7 @@ export function assembleTrace(
           throw new Error(`Missing parent for CI operation: ${operation.name}`);
         add(
           `${attempt.attemptId}/operation/${operation.id}`,
-          operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || jobSpan,
+          operationIds.get(operation.parentId) || stepParents.get(operation.stepKey) || home,
           operation.name,
           operation.time,
           done?.time || Math.max(operation.time, enclosingEnd),
@@ -411,7 +436,7 @@ export function assembleTrace(
             : "";
         add(
           `${attempt.attemptId}/test/${test.id}`,
-          stepParents.get(test.stepKey) || jobSpan,
+          stepParents.get(test.stepKey) || home,
           `${test.title}${suffix}`,
           test.time,
           done?.time || Math.max(test.time, end),
@@ -658,8 +683,10 @@ const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
 });
 /** Jobs drawn under another job's row, by key: the Browser specs shards, the legs of `specs-shard`,
- *  under `specs`, the job that waits for them and gives their verdict (scripts/ci/specs-shards.ts). */
+ *  under `specs`, the job that waits for them and gives their verdict (scripts/ci/specs-shards.ts).
+ *  That job's own steps sit in one row above them, named here. */
 const nestedJobs = new Map([["specs-shard", "specs"]]);
+const coordinatorRows = new Map([["specs", "Coordinate shards"]]);
 const jobLabels = new Map([
   ["deploy", "Deploy preview"],
   ["e2e", "E2E tests"],

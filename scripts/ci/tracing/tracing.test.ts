@@ -880,8 +880,15 @@ test("the standalone report embeds OTLP without allowing source names to break o
 // --- the Preview OS workflow: Deploy preview → E2E tests and Browser specs, then the trace job ---
 
 test("the preview trace covers the deploy and both test jobs: green at the last one's completion, the trace job excluded", () => {
+  // the specs as one shard, which runs the suite
+  const workflow = osPreviewWorkflow();
+  const shard = {
+    ...workflow.jobs[2]!,
+    jobKey: "preview-os.yml:specs-shard:matrix-0",
+    jobDisplayName: "Browser specs 1/1",
+  };
   const trace = assembleTrace(
-    osPreviewWorkflow(),
+    { ...workflow, jobs: [...workflow.jobs.slice(0, 2), shard, ...workflow.jobs.slice(3)] },
     new Map([
       [
         "e2e-attempt",
@@ -933,7 +940,7 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
         span.attributes.find((attribute) => attribute.key === "ci.phase")?.value.stringValue,
       ]);
   };
-  expect({ e2e: children("E2E tests"), specs: children("Browser specs") }).toEqual({
+  expect({ e2e: children("E2E tests"), specs: children("Browser specs 1/1") }).toEqual({
     e2e: [
       ["install", "setup"],
       ["evidence", "finish"],
@@ -964,7 +971,7 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
   ).toEqual([["greets"], ["signs in"]]);
 });
 
-test("the Browser specs shards sit under the Browser specs job that waits for them, its newest attempt when it was retried", () => {
+test("the Browser specs shards sit under the Browser specs job that waits for them, its newest attempt when it was retried, below its own steps", () => {
   const workflow = osPreviewWorkflow();
   const specs = workflow.jobs[2]!;
   const attempt = specs.attempts[0]!;
@@ -997,6 +1004,16 @@ test("the Browser specs shards sit under the Browser specs job that waits for th
     },
     new Map([
       [
+        "specs-attempt-2",
+        [
+          line("checkout", { kind: "shell-start", id: "checkout", step: "checkout", time: ms(62) }),
+          line("checkout", { kind: "shell-end", id: "checkout", time: ms(63), exitCode: 0 }),
+          line("collect", { kind: "shell-start", id: "collect", step: "collect", time: ms(64) }),
+          ...operation("collect", "Wait for the shards", 64, 128),
+          line("collect", { kind: "shell-end", id: "collect", time: ms(129), exitCode: 1 }),
+        ],
+      ],
+      [
         "shard-1-attempt",
         [
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
@@ -1015,6 +1032,8 @@ test("the Browser specs shards sit under the Browser specs job that waits for th
     workflow: children("Preview OS"),
     firstAttempt: children("Browser specs"),
     newestAttempt: children("Browser specs (attempt 2)"),
+    // its own steps in one row, where its collect step is no row, just what it did
+    coordinator: children("Coordinate shards"),
     // its suite failed without a test: that row, red
     shard: children("Browser specs 2/2"),
   }).toEqual({
@@ -1026,7 +1045,8 @@ test("the Browser specs shards sit under the Browser specs job that waits for th
       "Browser specs (attempt 2)",
     ],
     firstAttempt: [],
-    newestAttempt: ["Browser specs 1/2", "Browser specs 2/2"],
+    newestAttempt: ["Coordinate shards", "Browser specs 1/2", "Browser specs 2/2"],
+    coordinator: ["checkout", "Wait for the shards"],
     shard: ["Run tests"],
   });
   expect(spans.find((span) => span.name === "Browser specs 2/2")).toMatchObject({
