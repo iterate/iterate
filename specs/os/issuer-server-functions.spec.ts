@@ -20,7 +20,7 @@ test("client navigation loads sign-in through its server function and rejects ma
   await signInLink.click();
   const response = await serverFunction;
   expect(response.status()).toBe(200);
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  await page.getByRole("heading", { name: /^Sign in to / }).waitFor();
   // A hidden input is never visible, and the spinner-waiter judges readiness by visibility:
   // Playwright's own wait for it to attach is the right one here.
   const next = await spinnerWaiter.settings.run({ disabled: true }, () =>

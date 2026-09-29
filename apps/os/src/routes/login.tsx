@@ -2,6 +2,10 @@ import { createFileRoute } from "@tanstack/react-router";
 import { FieldSeparator } from "@iterate-com/ui/components/field";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
+  environmentFaviconHref,
+  type DeploymentEnvironment,
+} from "@iterate-com/ui/lib/environment-favicon";
+import {
   ErrorMessage,
   StandaloneCard,
   StandalonePage,
@@ -20,7 +24,11 @@ export const Route = createFileRoute("/login")({
   validateSearch: loginSearchOf,
   loaderDeps: ({ search }) => search,
   loader: ({ deps }) => getLoginState({ data: deps }),
-  head: () => ({ meta: [{ title: "Sign in to iterate" }] }),
+  head: ({ loaderData }) => ({
+    meta: [
+      { title: `Sign in to ${loaderData ? deploymentNameOf(loaderData.environment) : "iterate"}` },
+    ],
+  }),
   server: {
     handlers: {
       POST: ({ request }) => loginFormResponse(request, issuerRequestContext().env),
@@ -35,13 +43,20 @@ function LoginPage() {
     ? "You’re signed in"
     : state.codeSentTo
       ? "Check your inbox"
-      : "Sign in to iterate";
+      : `Sign in to ${deploymentNameOf(state.environment)}`;
   return (
     <StandalonePage className="max-w-100">
       <StandaloneCard>
         <header className="flex items-center gap-3">
-          <IterateLogo alt="" className="size-8" />
-          <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+          <DeploymentIcon environment={state.environment} />
+          <div className="flex min-w-0 flex-col">
+            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
+            {state.environment.kind === "preview" ? (
+              <p className="font-mono text-xs text-muted-foreground">
+                {state.environment.deployment}
+              </p>
+            ) : null}
+          </div>
         </header>
         {state.error ? <ErrorMessage>{state.error}</ErrorMessage> : null}
         {state.signedInAs ? (
@@ -56,6 +71,30 @@ function LoginPage() {
         )}
       </StandaloneCard>
     </StandalonePage>
+  );
+}
+
+/** What the page calls this deployment: production is iterate; a preview and local dev say which,
+ *  since someone signing in to a preview does it with their os.iterate.com account, and the page
+ *  should not read as that. */
+function deploymentNameOf(environment: DeploymentEnvironment) {
+  if (environment.kind === "preview") return `PR ${environment.pr}’s preview`;
+  if (environment.kind === "dev") return "local dev";
+  return "iterate";
+}
+
+/** The deployment's mark: production's logo, else the same purple PR-number or teal dev square the
+ *  tab shows (`/favicon.svg`, issuer-pages.ts). */
+function DeploymentIcon({ environment }: { environment: DeploymentEnvironment }) {
+  if (environment.kind === "production") return <IterateLogo alt="" className="size-8" />;
+  return (
+    <img
+      src={environmentFaviconHref(environment, "/iterate-logo.svg")}
+      alt=""
+      width={32}
+      height={32}
+      className="size-8 shrink-0 rounded-lg"
+    />
   );
 }
 

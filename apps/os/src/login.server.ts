@@ -1,6 +1,7 @@
 // The sign-in page's server side: what /login shows for this browser, and what its plain form posts
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
+import { deploymentEnvironment } from "@iterate-com/ui/lib/environment-favicon";
 import { errorCode, sameOriginPath } from "iterate/lib";
 import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
 import { startIssuerSession } from "./issuer-session.ts";
@@ -25,12 +26,12 @@ export async function loginState(
   search: ReturnType<typeof loginSearchOf>,
 ) {
   const config = appConfigOf(env);
-  const next = sameOriginPath(
-    search.next || "/login",
-    platformAddressesOf(env, request).platformOrigin,
-  );
+  const { platformOrigin } = platformAddressesOf(env, request);
+  const next = sameOriginPath(search.next || "/login", platformOrigin);
   const session = await browserAuthorization(env, request);
   return {
+    // which deployment this is (a PR's preview, local dev, production), which the page names
+    environment: deploymentEnvironment(new URL(platformOrigin).hostname),
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
     // which way to sign in a link suggests (`provider_hint`): signed out, the page leads with it,
