@@ -24,9 +24,8 @@ export async function routeDocs(itx: any, docsWorker: URL) {
   await itx.fetchRoutes.set("docs", proxiedAppRoute("docs", docsWorker.href));
 }
 
-/** @iterate-com/docs as this checkout's packages are published (specs/setup.ts
- *  `PUBLISHED_PACKAGE_COMMIT`): a PR's head when it changes a package, else its merge base with
- *  main, since pkg.pr.new publishes a PR only when it changes one. */
+/** @iterate-com/docs at the commit specs/setup.ts sets as `PUBLISHED_PACKAGE_COMMIT`
+ *  (apps/os/scripts/published-package-commit.ts says which), once pkg.pr.new serves it. */
 export async function docsBuild() {
   const commit = process.env.PUBLISHED_PACKAGE_COMMIT;
   if (!commit)
