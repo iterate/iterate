@@ -174,6 +174,27 @@ test("JavaScript comments and non-JavaScript blank lines retain their Significan
   ]);
 });
 
+test("a regex literal holding `//` or a backtick is code, not a comment or a template", () => {
+  using repo = createGitRepo();
+  const scheme = (method: string) =>
+    [`export const scheme = (url: string) => /^https?:\\/\\//i.${method}(url);`, ""].join("\n");
+  const fence = (comment: string) =>
+    ["export const fence = /```/;", `// ${comment}`, "export const value = 1;", ""].join("\n");
+  const base = repo.commit({
+    "src/fence.js": fence("how fences are found"),
+    "src/scheme.ts": scheme("exec"),
+  });
+  const head = repo.commit({
+    "src/fence.js": fence("where fences are found"),
+    "src/scheme.ts": scheme("test"),
+  });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "src/fence.js", added: 1, removed: 1, significantAdded: 0, significantRemoved: 0 },
+    { path: "src/scheme.ts", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
 test("the PR report explains the TypeScript runtime-line filter", () => {
   expect(renderBodySection(computeReport([]), "1234567890", "abcdef1234")).toContain(
     "TypeScript lines with no runtime output",

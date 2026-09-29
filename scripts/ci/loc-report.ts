@@ -189,7 +189,7 @@ function significantLines(content: string, path: string) {
     if (extension === ".tsx")
       for (const line of jsxTextLines(content, path)) runtimeLines.add(line);
   }
-  const stripped = jsExtensions.has(extension) ? stripJsComments(content) : content;
+  const stripped = jsExtensions.has(extension) ? stripJsComments(path, content) : content;
   return stripped
     .split("\n")
     .filter((line, index) => line.trim() !== "" && (!runtimeLines || runtimeLines.has(index)))
@@ -234,54 +234,15 @@ function slocDiffCounts(before: string, after: string) {
   }
 }
 
-/**
- * Removes line (`//`) and block comments, tracking string/template-literal
- * state so things like "http://..." survive. Known limitation: regex
- * literals aren't tracked, so a regex containing `//` or `/*` will eat the
- * rest of its line (or until a block-comment closer) - rare enough to ignore for now.
- * Newlines inside block comments are preserved so line structure survives.
- */
-function stripJsComments(source: string): string {
-  let result = "";
-  let state: "code" | "single" | "double" | "template" = "code";
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i];
-    const next = source[i + 1];
-    if (state === "code") {
-      if (char === "/" && next === "/") {
-        while (i < source.length && source[i] !== "\n") i++;
-        i--;
-        continue;
-      }
-      if (char === "/" && next === "*") {
-        i += 2;
-        while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-          if (source[i] === "\n") result += "\n";
-          i++;
-        }
-        i++;
-        continue;
-      }
-      if (char === "'") state = "single";
-      else if (char === '"') state = "double";
-      else if (char === "`") state = "template";
-      result += char;
-      continue;
-    }
-    // inside a string/template literal
-    if (char === "\\") {
-      result += char + (next || "");
-      i++;
-      continue;
-    }
-    const closed =
-      (state === "single" && (char === "'" || char === "\n")) ||
-      (state === "double" && (char === '"' || char === "\n")) ||
-      (state === "template" && char === "`");
-    if (closed) state = "code";
-    result += char;
-  }
-  return result;
+/** Blanks every comment oxc finds, keeping its newlines so each line stays where it was. */
+function stripJsComments(path: string, source: string) {
+  let stripped = source;
+  for (const { start, end } of parseSync(path, source).comments.toReversed())
+    stripped =
+      stripped.slice(0, start) +
+      source.slice(start, end).replace(/[^\n]/g, "") +
+      stripped.slice(end);
+  return stripped;
 }
 
 type GroupRow = {
