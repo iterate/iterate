@@ -47,11 +47,14 @@ export function DocEditor({
   session,
   path,
   back,
+  stream,
 }: {
   session: DocSession;
   path: string;
   /** a link back to the doc list */
   back: React.ReactNode;
+  /** the doc's context in the dash (`StreamLink`) */
+  stream: React.ReactNode;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
   const { kind } = session.options;
@@ -104,9 +107,12 @@ export function DocEditor({
               <span aria-hidden>/</span>
               <span>{path}</span>
             </p>
-            {state.others.length > 0 && (
-              <p aria-label="Also here">Also here: {state.others.join(", ")}</p>
-            )}
+            <div className="flex gap-3">
+              {state.others.length > 0 && (
+                <p aria-label="Also here">Also here: {state.others.join(", ")}</p>
+              )}
+              {stream}
+            </div>
           </div>
           {state.mode === "preview" ? (
             <iframe

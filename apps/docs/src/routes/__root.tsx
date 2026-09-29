@@ -5,15 +5,20 @@ import { appHead } from "@iterate-com/ui/apps/head";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { underBasePath } from "@iterate-com/ui/apps/base-path";
 import css from "../styles.css?url";
-/** The worker's PostHog project key (`APP_CONFIG posthogProjectKey`: envs.ts, prd only). */
-const posthogProjectKey = createServerFn().handler(async () => {
+/** What the worker's `APP_CONFIG` says about this deployment: its PostHog project key (envs.ts,
+ *  prd only) and its dash, where a doc's "Stream ↗" goes (`urls.dash`; null when it names none). */
+const deployment = createServerFn().handler(async () => {
   const { env } = await import("cloudflare:workers");
-  return startAppConfigOf(env).posthogProjectKey || null;
+  const config = startAppConfigOf(env);
+  return {
+    posthogProjectKey: config.posthogProjectKey || null,
+    dashOrigin: config.urls.dash || null,
+  };
 });
 
 /** `basePath`: the path this page is served under, "" on a project host of its own (@iterate-com/ui/apps/base-path). */
 export const Route = createRootRouteWithContext<{ basePath: string }>()({
-  loader: () => posthogProjectKey(),
+  loader: () => deployment(),
   staleTime: Infinity,
   head: ({ match }) =>
     appHead({ title: "Docs", stylesheet: underBasePath(match.context.basePath, css) }),
@@ -26,7 +31,7 @@ function Root() {
     <AppDocument
       icon="/client-logo.svg"
       basePath={basePath}
-      posthogProjectKey={Route.useLoaderData()}
+      posthogProjectKey={Route.useLoaderData().posthogProjectKey}
     />
   );
 }

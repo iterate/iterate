@@ -1,8 +1,10 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, getRouteApi, Link, notFound } from "@tanstack/react-router";
 import { useMemo } from "react";
 import type { IterateContextApi } from "iterate/api";
+import { docContextPath } from "@iterate-com/docs/frames";
 import { docsModule, ensureDoc } from "@iterate-com/docs/install";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { StreamLink } from "@iterate-com/ui/components/stream-link";
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";
 import { repoPath } from "../../lib/docs-repo.ts";
@@ -31,8 +33,11 @@ export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
   component: DocPage,
 });
 
+const root = getRouteApi("__root__");
+
 function DocPage() {
   const data = Route.useLoaderData();
+  const { dashOrigin } = root.useLoaderData();
   const { api, project, info } = Route.useRouteContext();
   const { slug, repo } = Route.useParams();
   const { repo: docRepo, path, text, kind } = data;
@@ -82,6 +87,14 @@ function DocPage() {
         <Link to="/projects/$slug/$repo" params={{ slug, repo }} className="hover:text-foreground">
           {repo}
         </Link>
+      }
+      stream={
+        <StreamLink
+          dashOrigin={dashOrigin}
+          platformOrigin={info.platformOrigin}
+          project={slug}
+          path={docContextPath({ repo: repoPath(docRepo), path })}
+        />
       }
     />
   );
