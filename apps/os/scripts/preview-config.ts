@@ -2,11 +2,13 @@
 // name of a run's per-commit deployment (`pr<n>-<sha7>`, or a slug's; envs.ts `previewDeployment`
 // derives every worker, URL and resource from it), the PR body's managed section and its fold into
 // a previous commit's (scripts/ci/pull-request-body.ts writes them), the sign-in and template
-// quick-launch links, what on the account is never a preview's, and whether node_modules was
-// installed from the checkout's lockfile.
+// quick-launch links, the fetch routes the sign-in seed sets for the proxied apps, what on the
+// account is never a preview's, and whether node_modules was installed from the checkout's lockfile.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import type { FetchRouteInput } from "iterate/api";
+import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
 import {
   ciReportsEnvs,
   osEnvs,
@@ -176,6 +178,76 @@ export function appSignInLink(landing: string, loginHint?: string) {
   return `${url.origin}/.auth/login?${query}`;
 }
 
+/** THE APPS SERVED THROUGH A PROJECT (apps/notes, apps/docs): no OAuth client, and no sign-in of
+ *  their own. A project's config worker (the app's `config-worker.ts`), or the fetch route the seed
+ *  sets (`proxiedAppRoute`), fetches the project's routing slug of the app's name through to the
+ *  app's Worker, and the page runs on its host's sign-in: under paths ingress, every deployment's,
+ *  the platform's own. */
+export const PROXIED_APPS = new Set(["notes", "docs"]);
+
+/** One app's `Sign in ↗` (scripts/preview.ts `signInLinks`), in the PR's test project `project`.
+ *  A proxied app's is its page for the project, `<platform>/projects/<project>/<app>/projects/<project>`:
+ *  signed out, the edge sends the browser to the platform's sign-in and back (src/worker.ts), where
+ *  an admin signs in as themselves, a member of the project (the seed adds them). Its own page for
+ *  the project, not its root: the root opens the person's first project, which for an admin may be
+ *  another. The Dash's is its own sign-in into the project, naming the test person `email`; the
+ *  admin app's names nobody (an admin opens it as themselves); every other app's is its own sign-in
+ *  naming the test person (`appSignInLink`). */
+export function signInLinkOf(input: {
+  app: { name: string; url: string };
+  platform: string;
+  ingressRouting: IngressRouting;
+  project: string;
+  email: string;
+}) {
+  const { app, project, email } = input;
+  if (PROXIED_APPS.has(app.name)) {
+    const page = projectUrlOf(input.ingressRouting, input.platform, {
+      project,
+      routingSlug: app.name,
+      path: `/projects/${project}`,
+    });
+    if (page?.origin !== new URL(input.platform).origin)
+      throw new Error(
+        `${app.name} in project ${project} is not a path on ${input.platform}: a proxied app's link needs paths ingress, where it runs on the platform's sign-in`,
+      );
+    return page.href;
+  }
+  if (app.name === "dash") return appSignInLink(`${app.url}/projects/${project}`, email);
+  if (app.name === "admin") return appSignInLink(app.url);
+  return appSignInLink(app.url, email);
+}
+
+/** THE FETCH ROUTE the seed sets on the PR's test project for a proxied app the deployment has
+ *  (scripts/preview.ts `seedSignIn`), so its `Sign in ↗` lands on the app: the routing slug of the
+ *  app's name, members only, to a loaded worker that fetches through to `appUrl`, the deployment's
+ *  own app Worker, as the app's `config-worker.ts` does for prd's. The project's config worker
+ *  (configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
+ *  sign-in challenge. */
+export function proxiedAppRoute(app: string, appUrl: string) {
+  const { protocol, host } = new URL(appUrl);
+  const worker = [
+    "export default {",
+    "  fetch(request) {",
+    "    const url = new URL(request.url);",
+    `    url.protocol = ${JSON.stringify(protocol)};`,
+    `    url.host = ${JSON.stringify(host)};`,
+    '    return fetch(new Request(url, new Request(request, { redirect: "manual" })));',
+    "  },",
+    "};",
+    "",
+  ].join("\n");
+  return {
+    requestMatcher: { routingSlug: app },
+    target: [
+      "itx",
+      "workers",
+      ["get", { source: { "package.json": '{"main":"worker.js"}', "worker.js": worker } }],
+    ],
+    authRequirement: { visitors: "project-members" },
+  } satisfies FetchRouteInput;
+}
+
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
 /** The config templates a project can be born from: the directories of configs/. */
@@ -212,10 +284,11 @@ export function templateQuickLaunches(input: {
 /** THE SECTION: quick links for a reader who already knows how per-commit deployments work
  *  (docs/dev-environments.md). It never explains itself; what needs explaining goes in a comment
  *  here. The CI checks carry the deploy's and the suites' verdicts, so it has no status of its own.
- *  One row per worker, apps/os first: its origin, its `Sign in ↗` (`appSignInLink`: apps/os's into
+ *  One row per worker, apps/os first: its origin, its `Sign in ↗` (`signInLinkOf`: apps/os's into
  *  the Dash's project `pr<N>`, each app's into that app, as the PR's test person, whom a reviewer —
  *  one of prd's admins, signed in through prd (src/admin-sign-in.ts) — confirms signing in as on
- *  the consent page; the admin app's as the reviewer) and its Cloudflare dashboard page. With the
+ *  the consent page; a proxied app's and the admin app's as the reviewer) and its Cloudflare
+ *  dashboard page. With the
  *  Dash, one quick-launch link per config template into its New project sheet
  *  (`templateQuickLaunches`). And, only when CI's seed of the test project failed, that fact: there
  *  is then nobody to sign in as. */
