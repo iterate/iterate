@@ -9,13 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
-import {
-  ciReportsEnvs,
-  osEnvs,
-  osResourceNames,
-  previewDeployment,
-  spaEnvs,
-} from "../../../envs.ts";
+import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
@@ -25,6 +19,7 @@ import { voice } from "../../voice/scripts/app.ts";
 import { markedSection, replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
+import { osResourceNames } from "./os-env.ts";
 
 /** MAIN ON THE DEV/PREVIEW ACCOUNT (envs.ts `osEnvs.preview`): the account every per-commit
  *  deployment lives on, whose Doppler config (`os/preview`) holds its Cloudflare credentials and

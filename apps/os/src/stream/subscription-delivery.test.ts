@@ -2235,7 +2235,7 @@ const WOKEN = "events.iterate.com/itx/woken";
 /** A fan-out row on every durable event, one call each, to `itx.sink.deliverEvent`. */
 const SINK_ROW = { name: "f", target: "itx.sink.deliverEvent", ordered: false };
 
-/** The config birth row's target head (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`), as printed. */
+/** The config birth row's target head (../project/context-birth-events.ts), as printed. */
 const CONFIG_HEAD = "itx.builtins.cd('/').config";
 
 /** A subscription row as the context's append normalizes it. */

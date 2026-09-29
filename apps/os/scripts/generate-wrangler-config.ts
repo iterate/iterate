@@ -1,16 +1,11 @@
 import { readFileSync } from "node:fs";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import JSON5 from "json5";
-import {
-  osEnvs,
-  PREVIEW_AND_DEV_ACCOUNT_ID,
-  getOsEnv,
-  PROJECT_CONTEXT_BIRTH_EVENTS,
-  osResourceNames,
-  type OsEnv,
-} from "../../../envs.ts";
+import { PREVIEW_AND_DEV_ACCOUNT_ID, getOsEnv } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../src/project/context-birth-events.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
+import { osResourceNames, type OsEnv } from "./os-env.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
 import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
@@ -233,7 +228,8 @@ function selfHostWranglerConfig() {
     vars: {
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
-      ...(osEnvs.prd!.dashBaseUrl && { APP_CONFIG_URLS__DASH: osEnvs.prd!.dashBaseUrl }),
+      // iterate's own dash (envs.ts `osEnvs.prd.dashBaseUrl`)
+      APP_CONFIG_URLS__DASH: "https://dash.iterate.com",
     },
   };
 }
