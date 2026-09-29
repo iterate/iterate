@@ -1,5 +1,6 @@
+import { waitUntil } from "cloudflare:workers";
 import { startAppSession } from "iterate/app-server";
-import { reportIssue, sameOriginPath } from "iterate/lib";
+import { errorCode, reportIssue, sameOriginPath } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
 import {
   failureKind,
@@ -10,7 +11,7 @@ import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
-import { oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
+import { accountStateOf, oauthHelpers, parseAuthorization, type GrantProps } from "./oauth.ts";
 import { watchSignInStep } from "./sign-in-watch.ts";
 
 /** What the person reads when the platform failed their sign-in, on the sign-in page. */
@@ -34,7 +35,9 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  *    still waiting on (`oauth.step-slow`, oauth.ts);
  *  - anything else is a defect of ours, reported at error level (`issuer.code-exchange-failed`),
  *    which the prd fault alarm pages on. The person still lands on the sign-in page, not a 1101.
- * The earlier steps' failures throw. */
+ * The earlier steps' failures throw.
+ *
+ * The person's account starts here too, and the sign-in never waits for it (`startAccount`). */
 export async function startIssuerSession(
   env: Env,
   /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
@@ -45,6 +48,7 @@ export async function startIssuerSession(
    *  none), which the grant carries beside them */
   extras: Pick<GrantProps, "picture" | "name"> = {},
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
+  startAccount(env, user.id);
   const addresses = platformAddressesOf(env, request);
   const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope but `admin`: it is the person at the issuer, and the
@@ -117,6 +121,22 @@ export async function startIssuerSession(
   if (!result) return { error: PLATFORM_FAILURE_MESSAGE };
   if (result.error) throw new Error(result.error);
   return { setCookie: flow.setCookie, location: result.next! };
+}
+
+/** THE PERSON'S ACCOUNT, STARTED WHILE THE SIGN-IN FINISHES: one read of it in the background, so
+ *  the first request after the sign-in (the consent page's admission) finds a new person's account
+ *  running instead of waiting for Cloudflare to start it (oauth.ts `accountStateOf`). The read's
+ *  platform failures are logged by `ownerContext` (session.ts), and a defect is reported. */
+function startAccount(env: Env, userId: string): void {
+  waitUntil(
+    accountStateOf(env, userId).then(
+      () => undefined,
+      (error: unknown) => {
+        if (errorCode(error) !== "UNAVAILABLE")
+          reportIssue("issuer.account-start-failed", error, { userId });
+      },
+    ),
+  );
 }
 
 /** Why a code exchange failed on the platform's side, or null when it did not (a defect of ours).
