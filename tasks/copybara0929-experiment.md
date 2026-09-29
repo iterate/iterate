@@ -5,12 +5,13 @@ size: small
 
 # Copybara experiment: one-way copies of parts of iterate/iterate
 
-**Status:** round 3 done: a fresh clone of iterate/os0929 passes the self-host recipe (install, build, dry-run deploy) in CI after every copy. This PR never merges: it's the experiment and the place to bikeshed the real layout.
+**Status:** done. Self-hosting works from the copy: Misha ran the recipe against iterate/os0929 from an empty folder, and it worked. This PR never merges: it's the experiment and the reference for doing it for real.
 
-- Round 1 (done): `packages/` copied to iterate/copybara0929, and every scenario below ran.
-- Round 2 (done): the `copybara/` layout, with two copies, iterate/os0929 and iterate/packages0929. Each got exactly its own commits.
-- Round 3 (done): the build's files, the copy's own slimmed workspace and lockfile (dependencies a subset of the root's), and the recipe run against a fresh clone. main's #3439 already bakes templates; this branch makes its build work from a copy.
-- Missing: nothing for the experiment (iterate/copybara0929 is deleted). The open inputs for `core/` are in "What `iterate/os` contains".
+- Round 1: Copybara keeps a one-way copy in sync (catch-up, drift, deletes, messages, backlinks).
+- Round 2: the `copybara/` layout, two copies, each getting exactly its own commits.
+- Round 3: the copy holds what the self-host build needs, with its own root manifests (dependencies a subset of the root's). CI runs the recipe against a fresh clone after every copy.
+- Round 4: the real recipe change (2 lines), a public copy, and a published package build for every commit a copy can name. Misha's run worked.
+- Open: the inputs for `core/`, `iterate/packages` (left unresolved), and what else changes when iterate/iterate goes private.
 
 ## Why
 
@@ -111,9 +112,9 @@ Make the change that introducing `iterate/os` would really need, with `os0929` i
 - [x] iterate/os0929 is public, with issues on (the call's plan: issues are the feedback channel; pull requests are what's off)
 - [x] pkg.pr.new publishes every push to `copybara0929`, as it does every push to main. A copy's build pins agents and voice at the commit its `GitOrigin-RevId` names, so that commit needs a build. This PR touches no published package, so until now nothing was published for it (`agents@3bf0f600a`: 404). Each push to the branch is one commit, as each squash merge is on main
 - [x] The copy's root `package.json` has `"build": "CLOUDFLARE_ENV=self-host pnpm --filter os build"`
-- [ ] The recipe (`apps/os/public/setup-prompt.md`): the repo link and the clone, `git clone --depth 1 https://github.com/iterate/os0929 iterate`. Cloning into `iterate` keeps every later `iterate/apps/os` path as it is. That's the whole diff
-- [ ] Checked as a stranger would: an unauthenticated clone of os0929, the recipe's plain `pnpm install`, the build. The default template must pin agents and voice at the copy's origin commit, and pkg.pr.new must serve both builds. Then the dry-run deploy and a clean `git status`, and the PR's preview serving the new recipe
-- [ ] Misha runs the recipe from an empty folder
+- [x] The recipe (`apps/os/public/setup-prompt.md`): the repo link and the clone, `git clone --depth 1 https://github.com/iterate/os0929 iterate`. Cloning into `iterate` keeps every later `iterate/apps/os` path as it is. That's the whole diff _(16b686221: 2 lines)_
+- [x] Checked as a stranger would: an unauthenticated clone of os0929, the recipe's plain `pnpm install`, the build. The default template must pin agents and voice at the copy's origin commit, and pkg.pr.new must serve both builds. Then the dry-run deploy and a clean `git status`, and the PR's preview serving the new recipe _(unauthenticated clone at os0929 852884a: install, `pnpm build`, agents and voice pinned at 16b686221 with both builds on pkg.pr.new (200), migrations folder present, dry-run, imports, clean status; the preview `pr3434-8eb276e` served the copy's recipe byte for byte)_
+- [x] Misha runs the recipe from an empty folder _(2026-09-29: Codex (gpt-6-sol, medium, fast) followed `https://pr3434-8eb276e-os.iterate-dev-preview.workers.dev/setup-prompt.md` in an empty `mishnusterate` folder, and it worked)_
 
 Known wrinkle, not blocking: the named templates (`heartbeat`, `minimal`) are identified as `github:iterate/iterate#<copy commit>&path:configs/<name>`. Creation writes their baked files, so nothing downloads them. But in a copy's build the name points at a commit iterate/iterate doesn't have. A copy's build should name its own repo (`github:iterate/os0929#…`).
 
