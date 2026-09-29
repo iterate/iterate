@@ -54,11 +54,15 @@ export function failureKind(error: unknown): FailureKind {
  *  (https://developers.cloudflare.com/d1/observability/debug-d1/#error-list), and a storage reset
  *  is stamped by the type the storage failed with, which may be FAILED (workerd io/actor-cache.c++:
  *  "Pass through exception type"). A storage timeout is OVERLOADED (workerd io/worker.c++
- *  `makeTimeoutPromise`). */
+ *  `makeTimeoutPromise`). A call on a Durable Object instance Cloudflare shut down, to host the
+ *  object elsewhere or to update its runtime, fails with "this Durable Object instance is no longer
+ *  active. Reconnect or retry the request." once it touches storage, and the next call reaches the
+ *  instance that replaced it
+ *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior). */
 const OVERLOADED_MESSAGE =
   /is overloaded|exceeded timeout which caused object to be reset|exceeded its (memory|CPU time) limit and was reset/;
 const DISCONNECTED_MESSAGE =
-  /Network connection lost|storage\b.*\bcaused object to be reset|Replica disconnected|transient issue on remote node|client disconnected/;
+  /Network connection lost|storage\b.*\bcaused object to be reset|this Durable Object instance is no longer active|Replica disconnected|transient issue on remote node|client disconnected/;
 
 /** A failure's message and those of the causes it wraps, one per line: sqlfu wraps a D1 error, whose
  *  cause is the binding's own. */
