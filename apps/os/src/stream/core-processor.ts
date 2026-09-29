@@ -730,23 +730,6 @@ export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
   "events.iterate.com/itx/work-failed",
 ]);
 
-/** A deployment's BIRTH EVENTS (app-config.ts `contextBirthEvents`), each as the append boundary
- *  stores it — checked at `/`: a birth event is the same at every path, and a rule that loops only
- *  at `/` is refused there too. Throws naming the entry. */
-export function normalizeContextBirthEvents(
-  events: readonly StreamEventInput[],
-): StreamEventInput[] {
-  return events.map((event, index) => {
-    try {
-      return normalizeControlEvent(event, "/");
-    } catch (error) {
-      throw new Error(
-        `APP_CONFIG contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  });
-}
-
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse

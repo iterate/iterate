@@ -7,6 +7,8 @@
 
 import { inspect } from "node:util";
 import { expect, test, vi } from "vitest";
+import { parse } from "iterate/expression";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../envs.ts";
 // Routing is under test here: the unit project aliases Start's generated server entry to a stand-in
 // page (src/test/start-server-entry-shim.ts); the real entry is exercised by the built-Worker and
 // browser suites, where its Vite virtual modules exist.
@@ -414,40 +416,42 @@ for (const { vars, becomes, throws, warns } of appConfigRows)
     if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
     else expect(warn).not.toHaveBeenCalled();
   });
-const PLATFORM_HOOK_ROW = {
-  type: "events.iterate.com/itx/subscription-configured",
-  payload: {
-    name: "platform",
-    target: "itx.builtins.platformHook.deliverEvent",
-    afterOffset: 0,
-    ordered: false,
-  },
-};
-
-// THE BIRTH EVENTS, checked at boot and stored as the append boundary stores each; what that
-// boundary checks is core-processor.test.ts's (`normalizeContextBirthEvents`).
+// THE BIRTH EVENTS, checked at boot (the deploy gate) and stored as the append boundary stores each.
 test.for([
   { name: "unset: none", vars: MINIMAL, becomes: [] },
   {
-    name: "the platform hook's row, its target parsed as an append stores it",
-    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([PLATFORM_HOOK_ROW]) },
-    becomes: [
-      {
-        ...PLATFORM_HOOK_ROW,
-        payload: {
-          ...PLATFORM_HOOK_ROW.payload,
-          target: ["itx", "builtins", "platformHook", "deliverEvent"],
-        },
-      },
-    ],
+    name: "every deployment's rows, each target parsed as an append stores it",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
+    },
+    becomes: PROJECT_CONTEXT_BIRTH_EVENTS.map((row) => ({
+      ...row,
+      payload: { ...row.payload, target: parse(row.payload.target) },
+    })),
   },
   {
     name: "a record only the platform appends is refused, naming its entry",
     vars: {
       ...MINIMAL,
-      APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"events.iterate.com/itx/woken"}]',
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS:
+        '[{"type":"test/fine"},{"type":"events.iterate.com/itx/woken"}]',
     },
-    throws: /contextBirthEvents\[0\]/,
+    throws:
+      /^APP_CONFIG contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
+  },
+  {
+    name: "a subscription whose target does not parse is refused, naming its entry",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name: "config", target: "itx.config(" },
+        },
+      ]),
+    },
+    throws: /^APP_CONFIG contextBirthEvents\[0\]:/,
   },
   {
     name: "an event with no type is refused, naming the field",

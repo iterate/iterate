@@ -128,11 +128,6 @@ export interface OsEnv {
    *  generator derive the names from this, never from the worker name. No other Worker may bind
    *  them: erase-data refuses a shared store, and another Worker would read every project's repos. */
   resourceNamePrefix: string;
-  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (apps/os src/app-config.ts `contextBirthEvents`),
-   *  in order, after its birth certificate and first wake record — every deployment's are
-   *  `PROJECT_CONTEXT_BIRTH_EVENTS`. The generator hands them to the worker as
-   *  `APP_CONFIG_CONTEXT_BIRTH_EVENTS`. A change reaches the contexts born after it. Unset ⇒ none. */
-  contextBirthEvents?: readonly { type: string; payload?: Record<string, unknown> }[];
   /** An owned zone served as the named project's config-worker apex: the zone's apex and every
    *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
    *  specific Worker routes on that zone continue to take precedence. */
@@ -195,7 +190,6 @@ export const osEnvs: Record<string, OsEnv> = {
     ingressRouting: { type: "paths" },
     // Not the worker's name: local dev's R2 bucket is `os-files` (wrangler.base.jsonc).
     resourceNamePrefix: "os-parent",
-    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
     resources: {
       oauthKvId: "cc1ea2c05a104790aa2716a87f304b3a",
       itxKvId: "a5b73c18d78f4cafaa4fa5e67d7daadc",
@@ -241,7 +235,6 @@ export const osEnvs: Record<string, OsEnv> = {
       dcvDelegationUuid: "248299803bb79c97",
     },
     resourceNamePrefix: "os-prd",
-    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
     resources: {
       oauthKvId: "5d23b869bff94a32a8f8049edc7de122",
       itxKvId: "c8432f0a49c94ae3984040c4f503b8c2",
@@ -399,7 +392,6 @@ export function previewDeployment(name: string) {
     testEmailDomain: TEST_EMAIL_DOMAIN,
     petshopIntegrations: true,
     resourceNamePrefix: osWorker,
-    contextBirthEvents: PROJECT_CONTEXT_BIRTH_EVENTS,
   };
   const apps = Object.fromEntries(
     PREVIEW_DEPLOYMENT_APPS.map((app) => [
