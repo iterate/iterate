@@ -119,12 +119,13 @@ jobs:
         with:
           # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
-      # Copybara runs on Java 21 or newer, which Depot's stock image lacks: Temurin's, and JAVA_HOME
+      # Copybara's jar is built for Java 25 (class file version 69), which Depot's stock image lacks:
+      # Temurin's, which also sets JAVA_HOME
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       # The script reads the iterate App's key from Doppler os/prd, like the deploy.
       - name: Copy packages/ up to the deployed commit
         env:

@@ -8,8 +8,9 @@
 //
 // --last-rev starts an empty copy (Copybara's --force): its history begins after that commit. A run
 // with nothing new to copy is a pass (Copybara's exit code 4). Copybara runs on $JAVA_HOME's Java,
-// 21 or newer, and pushes as the iterate GitHub App with a token that can only write the copy
-// (./iterate-app-token.ts). A laptop runs it the same way.
+// 25 or newer (its jar's class files are version 69; its README's "21" is out of date). It pushes
+// as the iterate GitHub App, with a token that can only write the copy (./iterate-app-token.ts). A
+// laptop runs it the same way.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -42,7 +43,7 @@ export default async function copybara(options: {
   lastRev?: string;
 }) {
   const javaHome = process.env.JAVA_HOME;
-  if (!javaHome) throw new Error("JAVA_HOME is unset: Copybara needs Java 21 or newer");
+  if (!javaHome) throw new Error("JAVA_HOME is unset: Copybara needs Java 25 or newer");
   const java = join(javaHome, "bin", "java");
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),

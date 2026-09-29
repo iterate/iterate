@@ -496,12 +496,13 @@ jobs:
           ref: ${{ needs.deploy.outputs.head-sha }}
       - name: Setup
         uses: ./.depot/actions/setup
-      # Copybara runs on Java 21 or newer, which Depot's stock image lacks: Temurin's, and JAVA_HOME
+      # Copybara's jar is built for Java 25 (class file version 69), which Depot's stock image lacks:
+      # Temurin's, which also sets JAVA_HOME
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "25"
       - name: Copy packages/ up to the PR head
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
