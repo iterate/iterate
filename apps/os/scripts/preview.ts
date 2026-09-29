@@ -32,6 +32,7 @@ import {
 } from "@iterate-com/shared/test-support/test-evidence";
 import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
 import {
+  appConfigSecretsOf,
   collectSecrets,
   deployWithSecrets,
   findBuiltWranglerConfig,
@@ -575,7 +576,10 @@ async function deployPreviewSteps(
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
   const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
-  const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
+  const config = parseAppConfig({
+    ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
+    ...appConfigSecretsOf(ctx.secrets),
+  });
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
   // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
   await traceOperation("Readiness gate", () =>

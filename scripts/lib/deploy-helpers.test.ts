@@ -2,7 +2,30 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
-import { runCloudflareCommandWith429Retry, runAsync, smoke } from "./deploy-helpers.ts";
+import {
+  appConfigSecretsOf,
+  runCloudflareCommandWith429Retry,
+  runAsync,
+  smoke,
+} from "./deploy-helpers.ts";
+
+// ── appConfigSecretsOf ──
+test("a deploy ships APP_CONFIG and every APP_CONFIG_ var beside it, and nothing else", () => {
+  expect(
+    appConfigSecretsOf({
+      APP_CONFIG: "{}",
+      APP_CONFIG_SECRETS__KEY: "key",
+      APP_CONFIG_INTEGRATIONS__X: '{"oauthClientId":"id"}',
+      APP_CONFIG_BLANK: "",
+      APP_CONFIGURATION: "no",
+      CLOUDFLARE_API_TOKEN: "token",
+    }),
+  ).toEqual({
+    APP_CONFIG: "{}",
+    APP_CONFIG_SECRETS__KEY: "key",
+    APP_CONFIG_INTEGRATIONS__X: '{"oauthClientId":"id"}',
+  });
+});
 
 // ── runAsync ──
 test("resolves only after the child exits successfully", async () => {
