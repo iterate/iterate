@@ -100,54 +100,37 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
 });
 
 test("a producer's modules are read once per commit, not once per cold isolate: a cold isolate under the same key reads ITX_KV and never asks the producer again", async () => {
-  // prd, 2026-09-28: crawlers and scanners hit a project's site minutes apart, each request found
-  // the site's isolate cold and ran `repos.get("/repos/config").modules({ commitOid })` again —
-  // 55 wakes of /repos/config in 17 hours, though a commit's tree never changes.
-  const kv = fakeKv().kv;
-  let produced = 0;
-  const invoke = async () => {
-    produced++;
-    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
-  };
-  const site: ItxExpression = [
-    "itx",
-    "repos",
-    ["get", "/repos/config"],
-    ["modules", { commitOid: "c0ffee" }],
-  ];
+  const { kv } = fakeKv();
+  const producer = fakeProducer();
   const coldIsolate = async () => {
     const { env, warm } = fakeLoaderEnv({ kv }); // the last isolate idled out: nothing warm
-    const { loaderId } = await loadConfined(env, { source: site, cacheKey: "c0ffee", invoke });
+    const { loaderId } = await loadConfined(env, {
+      owner: "prj_kv_cold.iterate/",
+      source: site,
+      cacheKey: "c0ffee",
+      ...producer,
+    });
     return warm.get(loaderId);
   };
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": "export default 1" },
   });
-  expect(produced).toBe(1);
+  expect(producer.produced()).toBe(1);
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": "export default 1" },
   });
-  expect(produced).toBe(1);
+  expect(producer.produced()).toBe(1);
 });
 
-test("what a producer answered is kept for a day, per deploy, owner, key and expression: no other caller reads it, and a KV failure is a miss that is logged", async () => {
+test("what a producer answered is kept for a day under its deploy, owner, key and expression: no other caller reads it", async () => {
   const shared = fakeKv();
-  let produced = 0;
-  const invoke = async () => {
-    produced++;
-    return { "package.json": '{"main":"worker.js"}', "worker.js": `export default ${produced}` };
-  };
-  const site: ItxExpression = [
-    "itx",
-    "repos",
-    ["get", "/repos/config"],
-    ["modules", { commitOid: "c0ffee" }],
-  ];
+  const producer = fakeProducer();
   const load = (overrides: Partial<ConfinedWorkerOptions> = {}) =>
     loadConfined(fakeLoaderEnv({ kv: shared.kv }).env, {
+      owner: "prj_kv_scope.iterate/",
       source: site,
       cacheKey: "c0ffee",
-      invoke,
+      ...producer,
       ...overrides,
     });
   await load();
@@ -157,7 +140,6 @@ test("what a producer answered is kept for a day, per deploy, owner, key and exp
       { key: expect.stringMatching(/^produced-modules-1\//), options: { expirationTtl: 86_400 } },
     ],
   });
-  // each part of the input is its own entry: nothing crosses a project, a deploy, a key or a source
   const others: Partial<ConfinedWorkerOptions>[] = [
     { owner: "prj_other.iterate/" },
     { deployId: "deploy-2" },
@@ -165,35 +147,82 @@ test("what a producer answered is kept for a day, per deploy, owner, key and exp
     { source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "decade" }]] },
   ];
   for (const other of others) {
-    const before = produced;
+    const before = producer.produced();
     await load(other);
-    await vi.waitFor(() => expect(produced).toBe(before + 1));
+    await vi.waitFor(() => expect(producer.produced()).toBe(before + 1));
   }
   expect(new Set(shared.puts.map((put) => put.key))).toMatchObject({ size: 5 });
-  // a KV that cannot be read or written costs the producer's run, never the load
+});
+
+test("a KV that cannot be read or written costs the producer's run and a logged warning, never the load", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const broken = {
     get: () => Promise.reject(new Error("KV GET failed")),
     put: () => Promise.reject(new Error("KV PUT failed")),
   } as unknown as KVNamespace;
   const { env, warm } = fakeLoaderEnv({ kv: broken });
-  const before = produced;
-  const { loaderId } = await loadConfined(env, { source: site, cacheKey: "c0ffee", invoke });
-  await expect(warm.get(loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": expect.any(String) },
+  const producer = fakeProducer();
+  const { loaderId } = await loadConfined(env, {
+    owner: "prj_kv_broken.iterate/",
+    source: site,
+    cacheKey: "c0ffee",
+    ...producer,
   });
-  expect(produced).toBe(before + 1);
-  expect(warn.mock.calls.map(([line]) => line)).toEqual([
-    expect.objectContaining({
-      event: "worker-loader.platform-failure-module-cache",
-      action: "get",
-    }),
-    expect.objectContaining({
-      event: "worker-loader.platform-failure-module-cache",
-      action: "put",
-    }),
+  await expect(warm.get(loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": "export default 1" },
+  });
+  expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
+    { event: "worker-loader.platform-failure-module-cache", action: "get" },
+    { event: "worker-loader.platform-failure-module-cache", action: "put" },
   ]);
-  warn.mockRestore();
+});
+
+test("an answer that cannot load is never kept or believed: the dead-id recovery asks the producer again", async () => {
+  const owner = "prj_kv_unloadable.iterate/";
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  let produced = 0;
+  const invoke = async () =>
+    ++produced === 1
+      ? {} // the build has not landed: no entry
+      : { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
+  const load = () => loadConfined(env, { owner, source: site, cacheKey: "c0ffee", invoke });
+  const first = await load();
+  await expect(warm.get(first.loaderId)).rejects.toThrow(/no entry/);
+  expect(shared).toMatchObject({ puts: [] });
+  const recovered = await load();
+  await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(produced).toBe(2);
+  expect(shared.puts).toHaveLength(1);
+  // a value under the key that is not a loadable module map is a miss, and the producer's answer replaces it
+  for (const key of shared.values.keys()) shared.values.set(key, "{}");
+  const cold = fakeLoaderEnv({ kv: shared.kv });
+  await loadConfined(cold.env, { owner, source: site, cacheKey: "c0ffee", invoke });
+  await vi.waitFor(() => expect(produced).toBe(3));
+});
+
+test("an answer over KV's value limit is not kept, and costs no warning: the worker still loads", async () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const shared = fakeKv();
+  const { env, warm } = fakeLoaderEnv({ kv: shared.kv });
+  const invoke = async () => ({
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": "export default class Site {}",
+    "assets/big.txt": "x".repeat(26 * 1024 * 1024),
+  });
+  const { loaderId } = await loadConfined(env, {
+    owner: "prj_kv_oversize.iterate/",
+    source: site,
+    cacheKey: "c0ffee",
+    invoke,
+  });
+  await expect(warm.get(loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(shared).toMatchObject({ puts: [] });
+  expect(warn).not.toHaveBeenCalled();
 });
 
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
@@ -458,6 +487,26 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   expect(before).not.toMatchObject({ loaderId: after.loaderId });
   expect(again).toMatchObject({ loaderId: after.loaderId });
 });
+
+/** The site ingress's producer expression: the config repo's tree at one commit. */
+const site: ItxExpression = [
+  "itx",
+  "repos",
+  ["get", "/repos/config"],
+  ["modules", { commitOid: "c0ffee" }],
+];
+
+/** A producer that answers valid modules and counts its runs. */
+const fakeProducer = () => {
+  let produced = 0;
+  return {
+    produced: () => produced,
+    invoke: async () => ({
+      "package.json": '{"main":"worker.js"}',
+      "worker.js": `export default ${++produced}`,
+    }),
+  };
+};
 
 /** A fake `env.ITX_KV` that keeps every value and records each `put`'s options. */
 const fakeKv = () => {
