@@ -74,6 +74,15 @@ test("a project created a moment ago is waited for until its config repo's init 
   expect(root.voice.health).toHaveBeenCalledOnce();
 });
 
+test("a project whose config repo is created but not yet seeded is waited for, not refused", async () => {
+  const root = project();
+  root.repos.get("/repos/config").tip = async () => null;
+  const ready = ensureVoiceAgent(root);
+  await vi.waitFor(() => expect(root.waitForEvent).toHaveBeenCalledTimes(1));
+  root.land(RULE, { match: ["itx", "voice"], target: ["itx", "workers", ["get", published]] });
+  expect(await ready).toBe("ready");
+});
+
 test("a voice rule the root no longer holds is not installed: readiness waits for the one init writes again", async () => {
   const root = project();
   root.land(RULE, { match: ["itx", "voice"], target: ["itx", "workers", ["get", published]] });

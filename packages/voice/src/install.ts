@@ -75,11 +75,8 @@ export async function ensureVoiceAgent(
     ),
   ]);
   const tip = config?.tip;
-  if (
-    !rule?.target &&
-    config &&
-    !(tip && voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
-  )
+  // a config repo not created yet, or created but not yet seeded (no tip), is waited for below
+  if (!rule?.target && tip && !voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
     throw new Error(
       `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/default does`,
     );
