@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { LATENCY_METRICS, type LatencyMetricName } from "../../apps/os/perf/latency.ts";
 import {
   baselineWindow,
@@ -8,10 +8,12 @@ import {
   brokenLine,
   brokenProbes,
   brokenReport,
+  checkLatencyDelivery,
   judgeBroken,
   judgeReport,
   judgeRun,
   latencyEvents,
+  latencyEventsHeld,
   readReport,
   rememberRun,
   renderPage,
@@ -747,6 +749,74 @@ test("PostHog gets one event per measured metric and percentile, deduplicated pe
     trigger: "schedule",
     test_run: false,
     distinct_id: "os-latency-guard",
+  });
+});
+
+test.for<{
+  name: string;
+  runs: LatencyMemory["runs"];
+  held: number;
+  expected: { asked: string[]; failure?: string };
+}>([
+  {
+    name: "a run whose every event PostHog holds passes",
+    runs: [stateRun("r1", ["sign-in"]), stateRun("r2", ["sign-in"], ["mcp.call"])],
+    held: 6,
+    expected: { asked: ["r2"] },
+  },
+  {
+    name: "a run PostHog dropped events of fails the health run, naming it and the likely cause",
+    runs: [stateRun("r1", ["sign-in"]), stateRun("r2", ["sign-in"], ["mcp.call"])],
+    held: 0,
+    expected: {
+      asked: ["r2"],
+      failure:
+        "PostHog holds 0 of the 6 `os latency measured` events of OS latency run r2 (2026-09-24T08:00:00.000Z), which an earlier health run sent: PostHog answers 200 to a batch it drops, as it does while the organization is over its billing limit",
+    },
+  },
+  {
+    name: "a first run has sent nothing to check",
+    runs: [],
+    held: 0,
+    expected: { asked: [] },
+  },
+  {
+    name: "a run that measured nothing sent no measurement",
+    runs: [stateRun("r1", [])],
+    held: 0,
+    expected: { asked: [] },
+  },
+])("$name", async ({ runs, held, expected }) => {
+  const asked: string[] = [];
+  const checked = checkLatencyDelivery(runs.at(-1), async (run) => {
+    asked.push(run.run);
+    return held;
+  });
+  if (expected.failure) await expect(checked).rejects.toThrow(expected.failure);
+  else await expect(checked).resolves.toBeUndefined();
+  expect(asked).toEqual(expected.asked);
+});
+
+test("PostHog is asked for the run's events around its creation, each UUID counted once", async () => {
+  const posthog = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(Response.json({ results: [[69]], columns: ["count"] }));
+  vi.stubGlobal("fetch", posthog);
+
+  await expect(
+    latencyEventsHeld({ run: "qz7f3w5jkv", at: "2026-09-29T18:29:34.000Z" }, "phx_read"),
+  ).resolves.toBe(69);
+
+  const [url, init] = posthog.mock.calls[0]!;
+  expect(url).toBe("https://eu.posthog.com/api/projects/115112/query/");
+  expect(init?.headers).toMatchObject({ authorization: "Bearer phx_read" });
+  expect(JSON.parse(String(init?.body))).toEqual({
+    query: {
+      kind: "HogQLQuery",
+      query:
+        "SELECT count(DISTINCT uuid) FROM events WHERE event = 'os latency measured' AND properties.run = {run} AND timestamp >= toDateTime({at}) - INTERVAL 1 DAY AND timestamp <= toDateTime({at}) + INTERVAL 1 DAY",
+      values: { run: "qz7f3w5jkv", at: "2026-09-29T18:29:34.000Z" },
+    },
   });
 });
 

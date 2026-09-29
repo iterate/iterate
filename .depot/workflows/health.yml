@@ -42,8 +42,9 @@ jobs:
         uses: ./.depot/actions/setup
       # The script reads its secrets from Doppler itself: the Depot organization token, which reads
       # the runs, the artifacts and the previous state (scripts/ci/depot.ts `depotApi`), the Slack
-      # bot token (scripts/ci/slack.ts), and each account's Cloudflare API token for the DO probe
-      # (envs.ts `cloudflareAccounts`).
+      # bot token (scripts/ci/slack.ts), each account's Cloudflare API token for the DO probe
+      # (envs.ts `cloudflareAccounts`), and the PostHog key that counts the latency events PostHog
+      # kept (scripts/monitors/latency.ts `checkLatencyDelivery`).
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail

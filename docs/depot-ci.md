@@ -824,7 +824,11 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
   - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
     real model, from its telemetry.
   - **latency**: each new scheduled OS latency report, against the budgets and a
-    rolling baseline; a metric turns red once two runs in a row cross a line.
+    rolling baseline; a metric turns red once two runs in a row cross a line. The job
+    sends every measurement to PostHog, which answers 200 even to a batch it drops, so
+    each run also counts what PostHog kept of the newest report an earlier run sent, and
+    fails when any is missing (`checkLatencyDelivery`, with a `query:read` personal API
+    key from Doppler `_shared/prd` `POSTHOG_QUERY_API_KEY`).
   - **PR time to green** ([below](#pr-time-to-green)).
   - **DO cost**: the Durable Object cost alarm (`scripts/monitors/do-cost.ts`). Its daily
     thread in #ci is a headline, the $/day at the latest hour's rate and today so far, and one

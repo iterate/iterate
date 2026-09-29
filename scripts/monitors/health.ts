@@ -37,6 +37,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
+import { dopplerSecret } from "../lib/env-context.ts";
 import { thisWorkflowRun } from "../ci/await-deploy.ts";
 import {
   depotApi,
@@ -57,7 +58,7 @@ import {
 } from "../ci/slack.ts";
 import { checkDoCost } from "./do-cost.ts";
 import { checkMainE2e, checkRealModel, E2eMemory, mainE2eRecords } from "./e2e.ts";
-import { checkLatency, LatencyMemory } from "./latency.ts";
+import { checkLatency, checkLatencyDelivery, LatencyMemory, latencyEventsHeld } from "./latency.ts";
 import type { PageContent, PageUpdate } from "./page.ts";
 import { checkTtg, TtgMemory } from "./ttg.ts";
 
@@ -203,6 +204,12 @@ export async function run(options: {
   const latency = await attempt("latency", () =>
     checkLatency({ depot, memory: state.latency, testRun, subject }),
   );
+  // A personal API key with the `query:read` scope on the iterate project, and nothing else.
+  await attempt("latency in PostHog", () =>
+    checkLatencyDelivery(state.latency.runs.at(-1), (run) =>
+      latencyEventsHeld(run, dopplerSecret("_shared", "prd", "POSTHOG_QUERY_API_KEY")),
+    ),
+  );
   const ttg = await attempt("PR time to green", () =>
     checkTtg({ depot, memory: state.ttg, now: Date.now(), testRun, runUrl }),
   );
@@ -229,11 +236,15 @@ export async function run(options: {
   const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
-  else
+  else {
     await sendPostHogEvents(events, {
       apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
       host: "https://eu.i.posthog.com",
     });
+    console.log(
+      `[health] sent ${events.length} PostHog events; the next run checks the latency ones`,
+    );
+  }
   if (failures.length > 0) throw new Error(`health: ${failures.join("; ")}`);
 }
 

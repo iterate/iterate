@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { sendPostHogEvents, systemEvent } from "./posthog-events.ts";
+import { queryPostHog, sendPostHogEvents, systemEvent } from "./posthog-events.ts";
 
 test("uses a stable top-level PostHog UUID for retry and replay deduplication", () => {
   const at = "2026-09-24T05:00:00Z";
@@ -66,6 +66,23 @@ test("fails once PostHog has failed one batch four times, and at once on an answ
     "PostHog CI telemetry delivery failed: 401 bad key",
   );
   expect(posthog.fetch).toHaveBeenCalledOnce();
+});
+
+test("a query returns its rows, and fails at once on an answer about the request, such as a key without query:read", async () => {
+  using posthog = stubbedFetch(
+    vi.fn<typeof fetch>().mockResolvedValueOnce(Response.json({ results: [[3, "a"]] })),
+  );
+  const options = { values: { run: "r1" }, apiKey: "phx_read" };
+
+  await expect(queryPostHog("SELECT count(), {run}", options)).resolves.toEqual([[3, "a"]]);
+
+  posthog.fetch.mockResolvedValueOnce(
+    Response.json({ detail: "API key missing required scope 'query:read'" }, { status: 403 }),
+  );
+  await expect(queryPostHog("SELECT 1", options)).rejects.toThrow(
+    `PostHog query failed: 403 {"detail":"API key missing required scope 'query:read'"}`,
+  );
+  expect(posthog.fetch).toHaveBeenCalledTimes(2);
 });
 
 /** `fetch` replaced by `mock`, with fake timers so retry delays pass at once. */

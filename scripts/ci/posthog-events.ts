@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { z } from "zod";
 
 export type PostHogEvent = {
   event: string;
@@ -16,7 +17,8 @@ export type PostHogEvent = {
  * ingestion: per-test data lives in the test evidence in R2 (docs/test-evidence.md).
  *
  * A batch PostHog failed is sent again (fetchRetryingPlatformFailures): PostHog deduplicates a
- * re-sent event by its UUID (systemEvent), so a batch that landed after all counts once.
+ * re-sent event by its UUID (systemEvent), so a batch that landed after all counts once. A batch it
+ * answered 200 may still have been dropped: only `queryPostHog` shows what it kept.
  */
 export async function sendPostHogEvents(
   events: readonly PostHogEvent[],
@@ -42,6 +44,41 @@ export async function sendPostHogEvents(
         `PostHog CI telemetry delivery failed: ${response.status} ${await response.text()}`,
       );
   }
+}
+
+/**
+ * THE READ-BACK: the rows of one HogQL query on the iterate project, "iterate (prd)" (id 115112) in
+ * PostHog EU, the project `sendPostHogEvents` delivers to. A delivery's answer proves nothing:
+ * capture answers 200 `{"status":"Ok"}` to a batch it drops because the organization is over its
+ * billing limit, keeping only the batch's `$exception` events ("Event capture still returns `200`
+ * when your project is over its billing quota", https://posthog.com/docs/api; `BillingLimit` in
+ * https://github.com/PostHog/posthog/blob/master/rust/capture/src/v0_endpoint.rs), so only a query
+ * of what PostHog holds shows what landed. `{name}` placeholders in `query` take `values` (HogQLQuery
+ * in https://github.com/PostHog/posthog/blob/master/frontend/src/queries/schema/schema-general.ts).
+ * `apiKey` is a personal API key with the `query:read` scope (https://posthog.com/docs/api/queries).
+ */
+export async function queryPostHog(
+  query: string,
+  options: { values: Record<string, string>; apiKey: string },
+) {
+  const url = "https://eu.posthog.com/api/projects/115112/query/";
+  const response = await fetchRetryingPlatformFailures(
+    `POST ${url}`,
+    (signal) =>
+      fetch(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${options.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: { kind: "HogQLQuery", query, values: options.values } }),
+        signal,
+      }),
+    { area: "posthog", idempotent: true },
+  );
+  if (!response.ok)
+    throw new Error(`PostHog query failed: ${response.status} ${await response.text()}`);
+  return z.object({ results: z.array(z.array(z.unknown())) }).parse(await response.json()).results;
 }
 
 /**

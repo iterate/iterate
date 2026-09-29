@@ -12,9 +12,10 @@
 //     own spread, and one slow run does not raise the line the next run is judged by. For a rate:
 //     under a third of the median and under the lowest. A regression that lasts moves the median in ~6
 //     runs; the metric then clears, and its green page names the baseline it moved to.
-// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). A
-// metric turns RED when it crossed a line in two runs in a row (one slow run is weather; the next one
-// confirms it — at most 3 hours later), and clears once it stayed under its lines two runs in a row.
+// Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run), and
+// the next health run fails unless PostHog holds them (checkLatencyDelivery). A metric turns RED
+// when it crossed a line in two runs in a row (one slow run is weather; the next one confirms it — at
+// most 3 hours later), and clears once it stayed under its lines two runs in a row.
 // Latency has one page while any metric is red (./page.ts `advance`): opened when the first turns,
 // edited with each run's readings, escalated in its thread when another metric turns, and resolved
 // once none is red. A BROKEN PROBE fails the health run instead: a row
@@ -45,7 +46,7 @@ import {
   PLATFORM_FAILURES as MESSAGE_PLATFORM_FAILURES,
   platformFailureOf,
 } from "../ci/platform-failures.ts";
-import { systemEvent } from "../ci/posthog-events.ts";
+import { queryPostHog, systemEvent } from "../ci/posthog-events.ts";
 import { advance, commitText, sinceText, SignalMemory, type PageUpdate } from "./page.ts";
 
 /** What the check reads: the scheduled runs of this workflow (its `name:`), and this file of the
@@ -487,13 +488,16 @@ export function brokenEvents(broken: BrokenVerdict[], context: EventContext) {
   );
 }
 
-/** One PostHog event per measured metric and percentile (p50, p95, max): low-cardinality — the
+/** The percentiles each measured metric sends PostHog, one event each. */
+const PERCENTILES = ["p50", "p95", "max"] as const;
+
+/** One PostHog event per measured metric and percentile (PERCENTILES): low-cardinality — the
  *  metric names are LATENCY_METRICS' — and deduplicated per run attempt. Pure. */
 export function latencyEvents(readings: Reading[], context: EventContext) {
   return readings
     .filter((reading): reading is Measured => !reading.missing)
     .flatMap((reading) =>
-      (["p50", "p95", "max"] as const).map((percentile) =>
+      PERCENTILES.map((percentile) =>
         systemEvent(
           "os latency measured",
           `os-latency:${context.run}:${reading.metric}:${percentile}`,
@@ -517,6 +521,39 @@ export function latencyEvents(readings: Reading[], context: EventContext) {
         ),
       ),
     );
+}
+
+/** THE DELIVERY CHECK, which fails the health run: throw unless PostHog holds every
+ *  `os latency measured` event of `sent`, one per metric it measured and percentile. `sent` is the
+ *  newest run the state remembers, whose events an earlier health run sent after keeping that state
+ *  (./health.ts `run`); PostHog's answer to the send could not tell whether it kept them
+ *  (../ci/posthog-events.ts `queryPostHog`). `held` counts them (`latencyEventsHeld`). */
+export async function checkLatencyDelivery(
+  sent: LatencyMemory["runs"][number] | undefined,
+  held: (run: LatencyMemory["runs"][number]) => Promise<number>,
+) {
+  if (!sent) return;
+  const expected = Object.keys(sent.judged).length * PERCENTILES.length;
+  if (expected === 0) return;
+  const count = await held(sent);
+  console.log(
+    `PostHog holds ${count} of the ${expected} os latency measured events of ${sent.run}`,
+  );
+  if (count < expected)
+    throw new Error(
+      `PostHog holds ${count} of the ${expected} \`os latency measured\` events of OS latency run ${sent.run} (${sent.at}), which an earlier health run sent: PostHog answers 200 to a batch it drops, as it does while the organization is over its billing limit`,
+    );
+}
+
+/** How many `os latency measured` events of `run` PostHog holds, counting each UUID once: every
+ *  one has the run's creation as its timestamp (`judgeReport`). `apiKey` reads the iterate project
+ *  (`queryPostHog`). */
+export async function latencyEventsHeld(run: { run: string; at: string }, apiKey: string) {
+  const rows = await queryPostHog(
+    "SELECT count(DISTINCT uuid) FROM events WHERE event = 'os latency measured' AND properties.run = {run} AND timestamp >= toDateTime({at}) - INTERVAL 1 DAY AND timestamp <= toDateTime({at}) + INTERVAL 1 DAY",
+    { values: { run: run.run, at: run.at }, apiKey },
+  );
+  return z.number().parse(rows[0]?.[0]);
 }
 
 /** Judge one perf report (undefined when the run kept none) against `memory`: log every metric,
