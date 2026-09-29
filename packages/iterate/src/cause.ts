@@ -1,12 +1,9 @@
 // cause.ts — the SDK's half of the loop guard, INTERNAL: no export names it and no signature takes
-// it (apps/os src/cause.ts explains the guard). A door — a delivery, a request, a facet call, a
-// script — runs its code under the cause the platform handed it, and this carries that cause, unread,
-// to every `withItx` round trip and, in a loaded isolate, every outbound `fetch`. `waitUntil` work
-// and timers keep the cause of the code that started them. Code outside any door runs, in a loaded
-// isolate — one project's code — under the chain and depth of the newest cause its isolate saw, and
-// in the platform's own, shared by every project, under none. It is shared by name (`Symbol.for("iterate.cause")`), as the header
-// is, so every copy of the SDK in an isolate, the platform's own code and a script's module reach
-// the same one.
+// it (apps/os src/cause.ts explains the guard). A door runs its code under the cause the platform
+// handed it, and this carries that cause, unread, to every `withItx` round trip and, in a loaded
+// isolate, every outbound `fetch`. Code outside any door runs, in a loaded isolate, under the newest
+// cause its isolate saw, and in the platform's own, shared by every project, under none. Shared by
+// name (`Symbol.for("iterate.cause")`), so every copy of the SDK in an isolate reaches the same one.
 
 // The SDK is typed against the Cloudflare types, never Node's: workerd hands this module to loaded
 // workers under `nodejs_als` alone (apps/os context/worker-loader.ts), Node to the unit tests.

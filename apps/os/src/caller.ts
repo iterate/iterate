@@ -44,13 +44,9 @@ export type Caller = {
    *  under it. */
   platform?: true;
   /** Set ONLY by the delivery loop, on the call a fan-out row makes to deliver one event (the
-   *  context DO's `runAsDelivery`, stream/subscription-delivery.ts): the SHA-256 of that event's
-   *  JSON. A target's `deliverEvent` — a loaded worker's (context/built-ins.ts `workers.get`), a
-   *  webhook's, the platform hook's — answers only the event it names, so nothing the call reaches
-   *  (a rule, a bound argument) can hand a subscriber an event its log never held. It rides the
-   *  delivery's own hops — a `cd`, a call the resolver sends to another context — each read as the
-   *  call is made (context/built-ins.ts `callContext`), and nothing else: loaded code's calls mint
-   *  a fresh caller, and the stateless entrypoint's hops carry none. */
+   *  context DO's `runAsDelivery`): the SHA-256 of that event's JSON. A target's `deliverEvent`
+   *  answers only the event it names, so nothing the call reaches can hand a subscriber an event its
+   *  log never held. It rides the delivery's own hops alone (context/built-ins.ts `callContext`). */
   delivery?: string;
   /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
    *  a chain: the context it reaches begins one. */

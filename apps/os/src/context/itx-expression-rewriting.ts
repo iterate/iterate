@@ -5,33 +5,16 @@
 // that call is what actually runs (dispatch.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
 // stream/core-processor.ts reduces `itx/rewrite-rule-configured` into `state.itxExpressionRewriteRules`,
 // a MAP by canonical match (set replaces; `null` MASKS a name that has a platform row beneath it and
-// deletes any other). This module is the rules of matching, the ONE event that writes the table, and
-// the resolver that reads it. Every matching rule is one table row in itx-expression-rewriting.test.ts.
-//   built-in roots — `BUILT_IN_ROOT_DESCRIPTIONS`: THE RESERVED ROOT'S KEYS, each described once
+// deletes any other). This module is the rules of matching (each on the code it governs, each one row
+// of the table in itx-expression-rewriting.test.ts), the ONE event that writes the table, the app
+// wall on loaded code's calls and rows, and the resolver that reads the table.
 //
-// THE RULES live on the code they govern — read the docstrings, and the table in
-// itx-expression-rewriting.test.ts: matching and rewriting (`resolveItxExpression`: the most specific
-// row of THIS context's table wins, the fixed point `itx.builtins` ends the chain, a bare `itx` row
-// with a target yields to the implicit rows and a bare `null` denies all), the implicit rows
-// (`implicitRootsAt`), the check every row passes at the append boundary
-// (`normalizeRewriteRuleConfigured`), `@` as the caller's input (expression.ts), the app wall on a
-// loaded worker's calls and rows (`admitLoadedCodeExpression`, `admitLoadedCodeRow`), and un-setting
-// — a `null` kept as a mask only where something beneath would answer, `ifTarget` as a compare-and-set
-// delete (stream/core-processor.ts `CoreState.itxExpressionRewriteRules`).
-//
-// THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins`: every target it writes — a lent stub's
-// rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's row
-// (`itx.builtins.facets.get(name, spec).processEventBatch`), a parent link, the sandbox rows — and
-// its own log plumbing (the runner's request and wait, library.ts), so a user's row at `itx.facets`
-// or `itx.rpcStubs` redirects the user's calls and nothing else. A hosted processor's ENGINE speaks
-// the context roots (`append`, `readEvents`, `processors.claim` — implicit everywhere, sdk/index.ts):
-// a loaded processor may not spell the fixed point, and a row at a context root is the owner's
-// deliberate wall. A LENT RPC
-// STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.builtins.rpcStubs`
-// registry (physical) under the key = the canonical match and configures that pure-data rule — the log
-// records the rule, never the socket. AT REST (`normalizeRewriteRuleConfigured`, below): the event stores
-// the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
-// reduce parses the match once and takes the target as it is.
+// THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins` — a lent stub's rule, a processor's
+// row, a parent link, its own log plumbing (library.ts) — so a user's row at `itx.facets` or
+// `itx.rpcStubs` redirects the user's calls and nothing else. A hosted processor's ENGINE speaks the
+// context roots (sdk/index.ts), so a row at a context root is the owner's deliberate wall. AT REST
+// (`normalizeRewriteRuleConfigured`, below) an event stores the match as its canonical STRING (the
+// table's key) and the target PARSED; the core reduce parses the match once.
 
 import {
   codedError,
@@ -1111,21 +1094,14 @@ export class ItxExpressionResolver {
   /** THE ONE DISPATCH BOUNDARY (`invoke` has the contract): the call folded and ADMITTED here,
    *  whole, as its caller made it (`#admit`), then resolved through every context its chain crosses
    *  without calling any of them — this context's own table live where it has one, and, where the
-   *  chain meets `itx.builtins.cd(P)…`, P's snapshot with P's implicit rows: the rules a forwarded
-   *  call would meet there, the same pure walls. A relative `cd` means the caller's origin, as the
-   *  built-in `cd` has it. The walk ends at the fixed point of one context's table, or early where
-   *  a call enters a context without a live table here naming one of that context's own roots
+   *  chain meets `itx.builtins.cd(P)…`, P's snapshot with P's implicit rows. A relative `cd` means
+   *  the caller's origin. The walk ends at the fixed point of one context's table, or early where a
+   *  call enters a context without a live table here naming one of that context's own roots
    *  (`entersOwnRoot`): that context resolves it, so its snapshot is not read. A refusal a snapshot
-   *  gives stands like any answer until the snapshot expires — except this context's own, which
-   *  the context decides live.
-   *
-   *  WALKED against built-ins (dispatch.ts `walkSteps`): this context's own, a portable root this
-   *  resolver holds, a bare `cd` handle, or `workers` speaking for `at`. LOCATED: a call that
-   *  crossed a `cd` carries the caller stamped with where it came from (`Caller.path`) — the
-   *  trusted mark that its input was admitted at the boundary it entered by, so the context it
-   *  lands in resolves it with its live table, the owner's rows included, and walls it no more
-   *  (`#admit`): the built-in `cd`'s hop, without the context in between. Anything else goes to
-   *  this context as it was made, under the caller as it came, and the context admits it itself. */
+   *  gives stands until the snapshot expires — except this context's own, decided live. A LOCATED
+   *  call carries the caller stamped with where it came from (`Caller.path`), the trusted mark that
+   *  its input was admitted here, so the context it lands in resolves it live and walls it no
+   *  more. */
   async #route(call: ItxExpressionInput, extraArgs: unknown[]) {
     let expression = normalizedItxExpression(call);
     const last = expression.at(-1);

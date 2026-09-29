@@ -1324,13 +1324,13 @@ export class SubscriptionDelivery {
   //                                                                      another context's snapshot
   //                                                                      refused it at that snapshot's
   //                                                                      expiry
-  //
-  // A pending record waits for its rung — unless the row's target, evaluated again, resolves
-  // elsewhere (the config pointer moved): then every pending record is due at once.
   //   wedged                    every slot holds a call past its         the incarnation is ended
   //                             watchdog                                 (`abortIncarnation`)
   //   out of room               the in-flight budget is full             the next release
   //   halted                    —                                        an operator's resume
+  //
+  // A pending record waits for its rung — unless the row's target, evaluated again, resolves
+  // elsewhere (the config pointer moved): then every pending record is due at once.
   //
   // INVARIANTS. Every event the row takes up to the cursor is settled or has a record, so nothing
   // is lost and a death redelivers exactly the records. A call keeps its slot and its room until it
@@ -1782,14 +1782,10 @@ export class SubscriptionDelivery {
     };
   }
 
-  /** The row's cursor written when it changed — a quiet row writes nothing — with a PROBE while it
-   *  is parked, dangling or paused, with a backlog: the probe standing while it is ahead, else the
-   *  next rung of its own ladder, DELIVERY_MAX_ATTEMPTS probes since its last success — unless it
-   *  WAITS rather than fails: a target another context's snapshot refused is read again once that
-   *  snapshot expires, on the ladder's rungs and then its top rung for as long as it dangles, since
-   *  nothing else tells a quiet context that a rule landed there (the project's first
-   *  publication). A row with nothing left to deliver keeps no time: nothing in memory is a reason
-   *  to wake. */
+  /** The row's cursor written when it changed — a quiet row writes nothing — with its PROBE while
+   *  it is dangling or paused with a backlog (the table above): the probe standing while it is
+   *  ahead, else its ladder's next rung, the refusing snapshot's expiry at the soonest. A row with
+   *  nothing left to deliver keeps no time. */
   #persistFanOutCursor(name: string, fanOut: FanOutRow): void {
     const record = this.#deliveryRecordFor(name);
     const now = Date.now();

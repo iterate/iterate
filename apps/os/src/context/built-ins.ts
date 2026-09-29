@@ -2551,8 +2551,7 @@ function callerStampedRequest(
  *  `caller`, which resolves it with its live table. Its delivery authority (caller.ts
  *  `Caller.delivery`) is the CALL's, read from `delivery` as each call is made — this one and each
  *  on a handle it answers — never the one `caller` carried: the delivery loop evaluates a target
- *  without it and reuses the handle it answered, and only the call that delivers the log's event
- *  carries it. No `delivery` (the stateless entrypoint's hops, loaded code's): none. A call whose terminal step is `fetch(request)`
+ *  without it and reuses the handle. A call whose terminal step is `fetch(request)`
  *  rides the context's native fetch with the expression in `x-itx-expression` — a socket-bearing
  *  Response crosses a native fetch, never Workers RPC (context/rpc-stubs.ts doctrine, point 4). A
  *  Request that cannot do anything twice — a GET or HEAD with no body, never an upgrade — that a

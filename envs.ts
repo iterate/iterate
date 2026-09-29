@@ -39,13 +39,10 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
-/** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment, local dev and the e2e suite
- *  alike (the Workers suite's rows opt in, apps/os __workers-tests__/support.ts
- *  `bornWithBirthRows`): two fan-out rows (`ordered: false`), from the context's birth on. `config` delivers
- *  every durable event to the project's config entrypoint — `itx.config`, the pointer on `/` to
- *  its published config (apps/os src/project/publication.ts) — in the context itself: a context
- *  born before the first publication delivers what waited once the pointer lands. `platform`
- *  delivers each to the platform's own hook (apps/os src/platform-hook.ts). */
+/** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment (a change reaches the contexts
+ *  born after it): two fan-out rows from the context's birth on. `config` delivers every durable
+ *  event to the project's published config entrypoint, `itx.config` on `/` (apps/os
+ *  src/project/publication.ts); `platform` to the platform's own hook (apps/os src/platform-hook.ts). */
 export const PROJECT_CONTEXT_BIRTH_EVENTS = [
   {
     type: "events.iterate.com/itx/subscription-configured",

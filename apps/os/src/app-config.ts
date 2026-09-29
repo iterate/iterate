@@ -391,14 +391,10 @@ export const AppConfig = z.object({
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
     .prefault({ key: "" }),
-  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (stream/stream.ts `appendBirthRecord`): ordinary
-   *  events, appended in the birth's own batch after `itx/created` and `itx/woken` — the platform's
-   *  stack of what every context starts with (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`: the config
-   *  entrypoint's fan-out row and the platform hook's). The context layer appends them without
-   *  reading them. Each is checked here, at boot, and kept as the append boundary stores it at `/`
-   *  (a birth event is the same at every path), so a malformed one fails the deploy, not every
-   *  project context. A change reaches the contexts born after it. Every deployment writes envs.ts's
-   *  list as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`. Unset ⇒ none. */
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`, written
+   *  as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`), appended unread in the birth's own batch (stream/stream.ts
+   *  `appendBirthRecord`). Each is checked here, at boot, as the append boundary checks one at `/`,
+   *  so a malformed one fails the deploy, not every project context. Unset ⇒ none. */
   contextBirthEvents: z
     .array(
       z.strictObject({
