@@ -13,7 +13,8 @@
 // the callers that find it dead while that attempt runs wait on it (two rows, under load). A
 // producer's lost connection is read once more first (platform-retry.ts `ONCE_NOW`), so only a
 // failure that stands marks the id dead.
-import { expect, test } from "vitest";
+import type { ItxExpression } from "iterate/expression";
+import { expect, test, vi } from "vitest";
 import { DurableObjectNameCodec } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
@@ -88,16 +89,14 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
     loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "todo@3f2a1c"]),
   });
   expect(keys.at(-1)).toBe(first.loaderId);
-  await settled(); // let getCode's async body run
-  expect(produced).toBe(1);
+  await vi.waitFor(() => expect(produced).toBe(1)); // getCode's async body runs, its key digested first
   // … and NOT when it is warm — "same key ⇒ same code" is the caller's contract
   await load("todo@3f2a1c");
   await settled();
   expect(produced).toBe(1);
   // a new key is a new isolate: the producer runs again
   await load("todo@4b7d");
-  await settled();
-  expect(produced).toBe(2);
+  await vi.waitFor(() => expect(produced).toBe(2));
 });
 
 test("a producer's modules are read once per commit, not once per cold isolate: a cold isolate under the same key reads ITX_KV and never asks the producer again", async () => {
@@ -110,7 +109,12 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
     produced++;
     return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
   };
-  const site = ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "c0ffee" }]];
+  const site: ItxExpression = [
+    "itx",
+    "repos",
+    ["get", "/repos/config"],
+    ["modules", { commitOid: "c0ffee" }],
+  ];
   const coldIsolate = async () => {
     const { env, warm } = fakeLoaderEnv({ kv }); // the last isolate idled out: nothing warm
     const { loaderId } = await loadConfined(env, { source: site, cacheKey: "c0ffee", invoke });
@@ -124,6 +128,72 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
     modules: { "worker.js": "export default class Site {}" },
   });
   expect(produced).toBe(1);
+});
+
+test("what a producer answered is kept for a day, per deploy, owner, key and expression: no other caller reads it, and a KV failure is a miss that is logged", async () => {
+  const shared = fakeKv();
+  let produced = 0;
+  const invoke = async () => {
+    produced++;
+    return { "package.json": '{"main":"worker.js"}', "worker.js": `export default ${produced}` };
+  };
+  const site: ItxExpression = [
+    "itx",
+    "repos",
+    ["get", "/repos/config"],
+    ["modules", { commitOid: "c0ffee" }],
+  ];
+  const load = (overrides: Partial<ConfinedWorkerOptions> = {}) =>
+    loadConfined(fakeLoaderEnv({ kv: shared.kv }).env, {
+      source: site,
+      cacheKey: "c0ffee",
+      invoke,
+      ...overrides,
+    });
+  await load();
+  await vi.waitFor(() => expect(shared.puts).toHaveLength(1));
+  expect(shared).toMatchObject({
+    puts: [
+      { key: expect.stringMatching(/^produced-modules-1\//), options: { expirationTtl: 86_400 } },
+    ],
+  });
+  // each part of the input is its own entry: nothing crosses a project, a deploy, a key or a source
+  const others: Partial<ConfinedWorkerOptions>[] = [
+    { owner: "prj_other.iterate/" },
+    { deployId: "deploy-2" },
+    { cacheKey: "decade" },
+    { source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "decade" }]] },
+  ];
+  for (const other of others) {
+    const before = produced;
+    await load(other);
+    await vi.waitFor(() => expect(produced).toBe(before + 1));
+  }
+  expect(new Set(shared.puts.map((put) => put.key))).toMatchObject({ size: 5 });
+  // a KV that cannot be read or written costs the producer's run, never the load
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const broken = {
+    get: () => Promise.reject(new Error("KV GET failed")),
+    put: () => Promise.reject(new Error("KV PUT failed")),
+  } as unknown as KVNamespace;
+  const { env, warm } = fakeLoaderEnv({ kv: broken });
+  const before = produced;
+  const { loaderId } = await loadConfined(env, { source: site, cacheKey: "c0ffee", invoke });
+  await expect(warm.get(loaderId)).resolves.toMatchObject({
+    modules: { "worker.js": expect.any(String) },
+  });
+  expect(produced).toBe(before + 1);
+  expect(warn.mock.calls.map(([line]) => line)).toEqual([
+    expect.objectContaining({
+      event: "worker-loader.platform-failure-module-cache",
+      action: "get",
+    }),
+    expect.objectContaining({
+      event: "worker-loader.platform-failure-module-cache",
+      action: "put",
+    }),
+  ]);
+  warn.mockRestore();
 });
 
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
@@ -233,6 +303,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
   await expect(warm.get(dead)).rejects.toThrow(/Network connection lost/);
   expect(produced).toBe(2);
   const herd = Array.from({ length: 50 }, () => load());
+  await vi.waitFor(() => expect(produced).toBe(3));
   await settled();
   expect(produced).toBe(3); // one recovery, however many callers
   release();
@@ -288,6 +359,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
     });
   const incarnation1 = {} as Fetcher;
   await load(incarnation1); // dies inside getCode
+  await vi.waitFor(() => expect(produced).toBe(1));
   await settled();
   // a failing recovery: every caller waiting on it fails with it, the producer ran once for them
   const failing = await Promise.allSettled([load(incarnation1), load(incarnation1)]);
@@ -296,8 +368,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   // an incarnation that dies with its recovery in flight leaves a promise that never settles …
   outcome = "hang";
   void load(incarnation1);
-  await settled();
-  expect(produced).toBe(3);
+  await vi.waitFor(() => expect(produced).toBe(3));
   // … and the next incarnation (a new stub) starts its own instead of waiting on it forever
   outcome = "ok";
   const incarnation2 = {} as Fetcher;
@@ -393,7 +464,10 @@ const fakeKv = () => {
   const values = new Map<string, string>();
   const puts: { key: string; options?: KVNamespacePutOptions }[] = [];
   const kv = {
-    get: async (key: string) => values.get(key) ?? null,
+    get: async (key: string, type?: "json") => {
+      const value = values.get(key) ?? null;
+      return type === "json" && value ? JSON.parse(value) : value;
+    },
     put: async (key: string, value: string, options?: KVNamespacePutOptions) => {
       values.set(key, value);
       puts.push({ key, options });
