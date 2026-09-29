@@ -1,5 +1,5 @@
 // Stick the feed's scroll container to its bottom edge, Slack-style, with plain DOM events — no
-// timers, no polling. Its failure modes were tuned in #1847/#1848.
+// timers, no polling.
 //
 // Why not TanStack Virtual's followOnAppend/scrollToEnd: they act on the virtualizer's INTERNAL
 // offset/size model, which drifts from the real DOM by small amounts while rows settle (its

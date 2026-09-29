@@ -53,6 +53,7 @@ function newCarrier(): Carrier {
       loaded = true;
       const outbound = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
+        // the cause is carried unread, so `current()` is `unknown`: the mark reads its fields alone
         const cause = current() as
           | { chain?: unknown; depth?: unknown; hops?: unknown; parent?: unknown }
           | undefined;

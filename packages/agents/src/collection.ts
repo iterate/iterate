@@ -213,10 +213,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         requestedAtOffset,
       );
     }
-    // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
-    // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
-    // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
-    // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
+    // Disable last, including on retries; see apps/os/src/project/collection.ts for the deletion-order rationale.
     if ((await rows()).some((row) => row.name === "agent"))
       await context.processors.disable("agent");
     return { path };

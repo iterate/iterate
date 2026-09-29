@@ -109,11 +109,10 @@ test("a run whose script returned a live value does not keep its context residen
 
 // A FACET reaches its own context the other way round: through the SDK's `getItx` on the loopback
 // entrypoint — the repo facet's `itx.cfArtifacts.get(path).remote()`, the collection's
-// `itx.cd(path)…waitForEvent`. A step such a round trip left holding the context's session kept
-// facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every project an apps/os preview's
-// e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
-// the call. What a `getItx` scope leaves undisposed keeps the FACET running instead, so it releases
-// every call (the rows at the bottom).
+// `itx.cd(path)…waitForEvent`. A step such a round trip leaves holding the context's session would
+// keep facet → ItxEntrypoint → context resident until the next deploy, so the context ends that
+// session with the call. What a `getItx` scope leaves undisposed keeps the FACET running instead,
+// so it releases every call (the rows at the bottom).
 test("a repo read through its facet does not keep its own context resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_facet");
   const itx = openItx(ctx);
@@ -304,10 +303,9 @@ deployedOnly(
 // it awaited — keeps running after its context is evicted, until V8 collects the value: each new
 // incarnation reattaches to it, and the object stays billed. Wakes cannot see it (the context
 // evicts on time), so these rows read the facet's own birth: its live state is built when it starts
-// (`liveSnapshot().rev` is that moment × 4096, stream/processor.ts `LiveState`). Measured 2026-09-23
-// on previews of main: after one page load a website project's `/` and `/repos/config` were billed
-// every minute with no request until the next deploy; both rows below failed there, the facets'
-// births unchanged across three evictions, and pass once the `getItx` scope releases every call.
+// (`liveSnapshot().rev` is that moment × 4096, stream/processor.ts `LiveState`). One value kept
+// from a page load leaves the facets of a website project's `/` and `/repos/config` running, their
+// births unchanged across evictions; the rows below require each to start again.
 
 test("a website project's facets do not outlive their contexts after a page load", async () => {
   const slug = freshDnsSafeProjectSlug("residency-site");

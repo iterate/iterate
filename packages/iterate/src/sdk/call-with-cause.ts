@@ -27,7 +27,8 @@ export function walkUnderCause(host: object, cause: unknown, steps: RpcSteps): P
       value =
         typeof step === "string"
           ? await member
-          : await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
+          : // a step with arguments calls its member; Reflect.apply throws on anything else
+            await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
     }
     return value;
   });
@@ -43,8 +44,10 @@ function memberRpcReaches(value: unknown, name: string): unknown {
     value instanceof DurableObject ||
     value instanceof WorkerEntrypoint
       ? name in value && !Object.hasOwn(value, name) && !(name in Object.prototype)
-      : (prototype === Object.prototype || prototype === Array.prototype || prototype === null) &&
+      : // one of these prototypes means `value` is an object
+        (prototype === Object.prototype || prototype === Array.prototype || prototype === null) &&
         Object.hasOwn(value as object, name);
   if (!reaches) throw codedError("NOT_A_METHOD", `${name} is no method Workers RPC would reach`);
+  // `reaches` holds only for an object: its member, read by name
   return (value as Record<string, unknown>)[name];
 }

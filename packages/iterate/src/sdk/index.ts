@@ -131,14 +131,9 @@ export abstract class FacetDurableObject<
   }
 
   /** `using itx = this.getItx()`: this facet's context's scope, released with every call made
-   *  through it when the block ends (itx-scope.ts). A Workers-RPC value this facet keeps past that —
-   *  the `itx.cd(path)` of `itx.cd(path).append(…)`, the `cfArtifacts.get(p)` of `.remote()`, an
-   *  answer awaited (`const { state } = await context.invoke(…)`), data included — keeps THIS FACET
-   *  running and billed after its context is evicted, until V8 collects the value, which an idle
-   *  isolate may not do for many minutes: each new incarnation of the context reattaches to the
-   *  facet. The context cannot end this from its side: the facet holds the value
-   *  (context-residency.e2e.test.ts, "… does not outlive …"). A field, not a method: Workers RPC
-   *  reaches a class's methods, and no caller may get the scope. */
+   *  through it when the block ends (itx-scope.ts). Keep no RPC values past the block; see
+   *  apps/os/e2e/context-residency.e2e.test.ts, "A FACET DOES NOT OUTLIVE ITS CONTEXT", for why.
+   *  A field, not a method: Workers RPC reaches a class's methods, and no caller may get the scope. */
   protected readonly getItx = (): Scope & Disposable => itxScope(this.#itxEntrypoint());
 
   /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
