@@ -139,7 +139,7 @@ test("gives up after three PATCHes when every one of them replaces a newer edit"
   await expect(
     writePullRequestBody(github.pullRequest, "the LOC report", withLocReport),
   ).rejects.toThrow(
-    "could not write the LOC report into PR #3394's body in 3 rounds: its newest version not ours is mmkal's of 2026-09-28T22:27:35Z",
+    "could not write the LOC report into PR #3394's body in 3 PATCHes: its newest version not ours is mmkal's of 2026-09-28T22:27:35Z",
   );
   expect(github.requests()).toEqual([
     "query",
@@ -169,7 +169,7 @@ test.for<{ name: string; landed: boolean; requests: string[] }>([
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   onTestFinished(() => void vi.useRealTimers());
   vi.spyOn(console, "warn").mockImplementation(() => {});
-  const github = fakeGitHub({ body: "Intro.", saves: [], failedPatch: { patch: 1, landed } });
+  const github = fakeGitHub({ body: "Intro.", saves: [], failedPatches: [{ patch: 1, landed }] });
 
   const written = writePullRequestBody(github.pullRequest, "the LOC report", withLocReport);
   await vi.advanceTimersByTimeAsync(4_999);
@@ -181,6 +181,32 @@ test.for<{ name: string; landed: boolean; requests: string[] }>([
   expect(github.body()).toBe(withLocReport("Intro."));
 });
 
+test("gives up after three PATCHes that all failed, though each sent the same body", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const github = fakeGitHub({
+    body: "Intro.",
+    saves: [],
+    failedPatches: [1, 2, 3].map((patch) => ({ patch, landed: false })),
+  });
+
+  await expect(
+    writePullRequestBody(github.pullRequest, "the LOC report", withLocReport),
+  ).rejects.toThrow("could not write the LOC report into PR #3394's body in 3 PATCHes");
+  expect(github.requests()).toEqual([
+    "query",
+    "PATCH",
+    "query",
+    "PATCH",
+    "query",
+    "PATCH",
+    "query",
+  ]);
+  expect(github.body()).toBe("Intro.");
+});
+
 /** Another editor's version, landing just before or just after one of our PATCHes. */
 type Save = { landing: `${"before" | "after"} PATCH ${number}`; editor: string; body: string };
 
@@ -190,12 +216,12 @@ type Save = { landing: `${"before" | "after"} PATCH ${number}`; editor: string; 
  * does: the body, and the edit history newest first, which starts at the first edit with the
  * version the PR was opened with, an empty one as a null `diff`. Each REST PATCH saves a version
  * edited by `depot-code-access`, the CI token's login, with `saves` landing around it, one second
- * apart. `failedPatch` answers 502, having saved the body first when `landed`.
+ * apart. `failedPatches` answer 502, having saved the body first when `landed`.
  */
 function fakeGitHub(input: {
   body: string;
   saves: Save[];
-  failedPatch?: { patch: number; landed: boolean };
+  failedPatches?: { patch: number; landed: boolean }[];
 }) {
   let body = input.body;
   const history: { body: string; editor: string; editedAt: string }[] = [];
@@ -253,8 +279,9 @@ function fakeGitHub(input: {
     requests.push("PATCH");
     const patch = requests.filter((sent) => sent === "PATCH").length;
     savesLanding(`before PATCH ${patch}`);
-    if (input.failedPatch?.patch === patch) {
-      if (input.failedPatch.landed) save("depot-code-access", request.body);
+    const failed = input.failedPatches?.find((failure) => failure.patch === patch);
+    if (failed) {
+      if (failed.landed) save("depot-code-access", request.body);
       return json(502, { message: "Bad gateway" });
     }
     save("depot-code-access", request.body);

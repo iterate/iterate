@@ -20,8 +20,9 @@ export type PullRequestBody = {
   replace: (body: string) => Promise<void>;
 };
 
-/** The most PATCHes one write sends. A write is sent again only when a version landed in the second
- *  or so around the previous one; three in a row means the body is being written continuously. */
+/** The most PATCHes one write sends, failed ones included. A write is sent again when the previous
+ *  PATCH failed or a version landed in the second or so around it; three in a row means GitHub keeps
+ *  refusing it or the body is being written continuously. */
 const MAX_WRITES = 3;
 
 /**
@@ -45,8 +46,10 @@ export async function writePullRequestBody(
   splice: (body: string) => string,
 ) {
   const pr = `PR #${pullRequest.number}`;
-  /** each body this call PATCHed, and the version it was spliced onto, in the order sent */
+  /** each body this call PATCHed, and the version it was spliced onto, in the order last sent */
   const writes = new Map<string, BodyVersion>();
+  /** every PATCH counts, a failed one sent again with the same body included */
+  let patches = 0;
   for (;;) {
     const versions = await pullRequest.versions();
     const base = versions.find((version) => !writes.has(version.body));
@@ -65,13 +68,15 @@ export async function writePullRequestBody(
           ? `wrote ${what} into the body of ${pr}`
           : `${pr}'s body already carries ${what}`,
       );
-    if (writes.size === MAX_WRITES)
+    if (patches === MAX_WRITES)
       throw new Error(
-        `could not write ${what} into ${pr}'s body in ${MAX_WRITES} rounds: its newest version not ours is ${base.editor}'s of ${base.editedAt}`,
+        `could not write ${what} into ${pr}'s body in ${MAX_WRITES} PATCHes: its newest version not ours is ${base.editor}'s of ${base.editedAt}`,
       );
     if (lastBase && base.body !== lastBase.body)
       console.warn(JSON.stringify(logged("edit-kept", pullRequest, what, base)));
+    writes.delete(body);
     writes.set(body, base);
+    patches++;
     const sent = await pullRequest.replace(body).then(
       () => true,
       (error: unknown) => {
