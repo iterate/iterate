@@ -7,8 +7,11 @@ import { SECRET_OAUTH_TTL_MS } from "../secret-oauth.ts";
 import type { IntegrationConnectionRow } from "./contract.ts";
 import {
   appendConnected,
+  connectionPathOf,
   consentAttemptKeyOf,
+  deleteTokenSecret,
   ownerEgress,
+  routedWhile,
   tokenSecretPathOf,
   type ConnectionAttempt,
   type IntegrationScope,
@@ -107,14 +110,34 @@ export async function finishXConnect(
     throw new Error(`X account lookup answered ${response.status}`);
   }
   const { data } = XUserResponse.parse(await response.json());
-  return {
-    row: await appendConnected(scope, {
+  const connected = () =>
+    appendConnected(scope, {
       provider: "x",
       connection,
       client: attempt.client,
       account: `@${data.username}`,
       externalId: data.id,
       scopes: grantedScopes,
-    }),
-  };
+    });
+  // Iterate's app routes an X account to ONE project connection, as for Slack and GitHub: a second
+  // connection of the same account, here or in another project, is refused, and the token the
+  // callback stored for it goes. A person's own account and a project's own client are not routed.
+  if (attempt.client !== "iterate" || scope.rootPath !== "/") return { row: await connected() };
+  try {
+    return {
+      row: await routedWhile(
+        scope.env,
+        {
+          provider: "x",
+          externalId: data.id,
+          projectId: scope.projectId,
+          path: connectionPathOf("x", connection),
+        },
+        connected,
+      ),
+    };
+  } catch (error) {
+    await deleteTokenSecret(scope, "x", connection);
+    throw error;
+  }
 }
