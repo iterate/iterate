@@ -2,10 +2,15 @@
 // compose one id share an isolate), a producer runs inside `getCode`, and the dead-id WORKAROUND
 // (worker-loader.ts `loaderIdGenerations`), over a fake loader; the real one is the Workers suite's.
 import type { ItxExpression } from "iterate/expression";
+import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./paths.ts";
-import { assertFacetSourceWithinCeiling, prepareConfinedWorker } from "./worker-loader.ts";
+import {
+  assertFacetSourceWithinCeiling,
+  isLoadedWorkerPlatformFailure,
+  prepareConfinedWorker,
+} from "./worker-loader.ts";
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
@@ -492,6 +497,47 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
   expect(before).not.toMatchObject({ loaderId: after.loaderId });
   expect(again).toMatchObject({ loaderId: after.loaderId });
+});
+
+// The Worker Loader defect's two spellings (workerd #7486 moved it to the opaque one on
+// 2026-09-27), and every look-alike that is not it: code's own error, an overload, a coded hop.
+test.for([
+  {
+    name: "V8's clone-version text",
+    error: new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    retired: true,
+  },
+  {
+    name: "the runtime's opaque internal error",
+    error: new Error("internal error; reference = h0v550femca1l7qboin7l1f1"),
+    retired: true,
+  },
+  {
+    name: "the same text thrown by the loaded code (remote)",
+    error: Object.assign(new Error("internal error; reference = h0v550femca1l7qboin7l1f1"), {
+      remote: true,
+    }),
+    retired: false,
+  },
+  {
+    name: "an overload the runtime spelled opaquely",
+    error: Object.assign(new Error("internal error; reference = h0v550femca1l7qboin7l1f1"), {
+      overloaded: true,
+    }),
+    retired: false,
+  },
+  {
+    name: "a hop below's coded failure carrying the opaque text",
+    error: codedError("UNAVAILABLE", "internal error; reference = h0v550femca1l7qboin7l1f1", {
+      kind: "disconnected",
+    }),
+    retired: false,
+  },
+  { name: "a lost connection", error: new Error("Network connection lost."), retired: false },
+  { name: "the loaded code's own failure", error: new Error("recipe: 503"), retired: false },
+  { name: "not an Error", error: "internal error; reference = x", retired: false },
+])("isLoadedWorkerPlatformFailure: $name → $retired", ({ error, retired }) => {
+  expect(isLoadedWorkerPlatformFailure(error)).toBe(retired);
 });
 
 /** The site ingress's producer expression: the config repo's tree at one commit. */

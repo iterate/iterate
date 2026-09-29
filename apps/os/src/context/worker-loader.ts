@@ -24,7 +24,7 @@
 // `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
 // author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
 
-import { codedError } from "iterate/lib";
+import { codedError, errorCode } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
@@ -420,6 +420,29 @@ export async function prepareConfinedWorker(
         loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
     },
   };
+}
+
+/** WHETHER A CALL INTO A LOADED WORKER MET THE WORKER LOADER DEFECT that poisons a cached entry
+ *  (facet-host.ts `isFacetStartPlatformFailure` names it; `retire` above is the recovery). The
+ *  runtime spelled it with V8's clone-version text until workerd #7486, and since then (in
+ *  production from 2026-09-27) spells it `internal error; reference = …`, its detail logged nowhere.
+ *  That bare text counts only when the runtime raised it: an internal failure inside the loaded
+ *  worker reaches the caller unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`),
+ *  while an error the loaded code threw itself, the same text rethrown included, arrives with
+ *  `remote` set and is the code's own. Retiring on that would mint a new billed identity for every
+ *  request. An overload is its own kind of platform failure (platform-retry.ts `failureKind`),
+ *  answered 503, and never a bad isolate. */
+export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
+  if (!(error instanceof Error) || errorCode(error) !== undefined) return false;
+  if (error.message.includes("Unable to deserialize cloned data")) return true;
+  // workerd's own flag on an error that crossed from another worker (jsg `decodeTunneledException`);
+  // absent from the Error type, so read as the unknown it is.
+  const { remote } = error as { remote?: unknown };
+  return (
+    error.message.startsWith("internal error; reference = ") &&
+    remote !== true &&
+    failureKind(error) === "failed"
+  );
 }
 
 /** How the loader resolves a source (module-resolution.ts): this deployment's platform packages,
