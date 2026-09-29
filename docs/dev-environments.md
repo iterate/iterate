@@ -481,12 +481,11 @@ names the new version, GETs each production project host and pages
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
 (`main-os-e2e.yml`) deploys the pushed commit as `main-<sha7>`, runs the e2e
 suite and the browser specs against it, and deletes the `main-…` deployments
-before it; the hourly **Health** job (`health.yml`) pages #error-pulse when a
-run turns main red or green again ([Depot CI](depot-ci.md#health)). Main OS
-e2e's runs never cancel each other: the pushes that land during a run queue
-behind it, collapsed to the newest, so every run that starts reaches a verdict
-unless someone cancels it by hand. A job that hangs until its timeout counts as
-red. The full mutating proof is each PR's deployment.
+before it that no run still tests; its own page job pages #error-pulse when a
+run turns main red or green again ([Depot CI](depot-ci.md#health)). Every main
+commit gets its own Main OS e2e run, and runs never cancel each other, so every
+run reaches a verdict unless someone cancels it by hand. A job that hangs until
+its timeout counts as red. The full mutating proof is each PR's deployment.
 
 **Main on dev** (`os`, `dash`, … at `*.iterate-dev-preview.workers.dev`,
 `osEnvs.preview` in `envs.ts`) is main on the dev/preview account, redeployed

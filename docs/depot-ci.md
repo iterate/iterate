@@ -370,10 +370,12 @@ test jobs' evidence steps read the finalizer step's outputs instead
   `cancel-in-progress: true`, except a push to `main`, whose group is its sha: every merge commit
   gets its own Test and Lint verdict, since one shared group cancels the run in progress or
   replaces the pending one.
-- Main OS e2e (`main-os-e2e`), the latency guard (`os-latency`) and the real-model suite
-  (`os-real-model`) each redeploy one preview, so each has one fixed group with
-  `cancel-in-progress: false`: every started run reaches a verdict, and pushes meanwhile collapse
-  to the newest pending run.
+- Main OS e2e groups by commit (`main-os-e2e-<sha>`) with `cancel-in-progress: false`: every main
+  commit gets its own run and verdict, and runs of different commits overlap, each on its own
+  deployment ([Main OS e2e deploys each commit fresh](#main-os-e2e-deploys-each-commit-fresh)).
+- The latency guard (`os-latency`) and the real-model suite (`os-real-model`) each have one fixed
+  group with `cancel-in-progress: false`: every started run reaches a verdict, and runs triggered
+  meanwhile collapse to the newest pending run.
 - Every mainline job has `timeout-minutes`, a watchdog, not a retry: Deploy OS 30 (build, rollout,
   readiness probes, the host check and its Slack notice), the client deploys 15–20.
 - No automatic workflow retries: a deploy rerun can repeat external side effects, so an operator
@@ -743,8 +745,13 @@ at the median in place (p90 25 s, against 22.8 s and 34 s) and 14.7 s brand-new 
 19.8 s and 39 s), and no row failed on a deploy signature. A storage reset or a dropped socket can
 still fail a row in any shape, and CI's one retry absorbs it.
 
-- Each workflow's runs are serialized (`cancel-in-progress: false`), so a run's cleanup deletes only
-  the deployments of runs before it.
+- Every main commit gets its own Main OS e2e run, and runs of different commits overlap. A run's
+  cleanup deletes only the deployments created before its own, and none that a run still in progress
+  tests (Depot's queued and running runs of the workflow, `cleanup-superseded`), so an older commit's
+  run keeps its deployment until it ends; a later run's cleanup or the nightly sweep takes it then.
+  The latency guard's and the real-model suite's runs are serialized, one at a time.
+- The runs' page jobs take turns, oldest run first: each waits until the older push runs have
+  ended ([Health](#health)).
 - Every row mints its own people and projects, so nothing reads what earlier runs left, and a fresh
   deployment starts with none of it.
 - The nightly sweep keeps a workflow's newest deployment through quiet days and takes it only once
@@ -846,9 +853,12 @@ commit its run tested, where red reads as "main e2e broke": a broken probe of it
 slow row not run, an incomplete or missing suite summary) is an "unjudged" page instead, and the
 job fails only when it cannot judge its run or post. Each run since the last judged is judged,
 oldest first, so a page names the run where its suite changed state: Main OS e2e's page job judges
-its own run after any settled one whose page was lost. A settled run that Depot ended before its
-jobs started has no verdict. A re-run keeps its creation time and is not judged again, so the next
-push's run pages it.
+its own run after any settled one whose page was lost. Runs of Main OS e2e overlap, so its page jobs
+take turns, oldest run first: each waits until no push run created before its own is queued or
+running (`health.ts await-older-runs`), then reads the state the one before it kept. One that has
+waited 30 minutes fails, and the next run's page job judges its run after the older ones. A settled
+run that Depot ended before its jobs started has no verdict. A re-run keeps its creation time and is
+not judged again, so the next push's run pages it.
 
 Each job's memory is its own artifact, `health-state` and `main-e2e-state`: its checks' memory
 and each open page's Slack ts and text, written only after every post succeeded. A state of another

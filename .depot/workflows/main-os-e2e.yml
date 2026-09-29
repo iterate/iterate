@@ -12,14 +12,14 @@
 # for debugging a red main; the nightly sweep keeps it through quiet days
 # (apps/os/scripts/preview-sweep.ts rule 4).
 #
-# Runs never cancel each other: one at a time, so each run's cleanup only ever deletes the runs
-# before it, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
-# tests its last commit). So every started run that is not cancelled by hand reaches a verdict, a
-# job that hits its timeout counting as red. The `alert` job pages its changes of state to
-# #error-pulse as soon as the suites have ended, from the jobs' results and the suite summaries they
-# upload with their flake records (docs/depot-ci.md#health). Nothing is written to any PR. The
-# `trace` job posts the "CI trace" and "Playwright report" statuses on the pushed commit, as a PR
-# preview's does (docs/ci-traces.md).
+# EVERY MAIN COMMIT GETS ITS OWN RUN, and runs never cancel each other, so every run that is not
+# cancelled by hand reaches a verdict, a job that hits its timeout counting as red. Runs of different
+# commits overlap, each on its own deployment: a run's cleanup keeps any `main-…` deployment a run
+# still in progress tests, and the runs' `alert` jobs take turns, oldest run first. The `alert` job
+# pages its changes of state to #error-pulse as soon as the suites have ended, from the jobs'
+# results and the suite summaries they upload with their flake records (docs/depot-ci.md#health).
+# Nothing is written to any PR. The `trace` job posts the "CI trace" and "Playwright report"
+# statuses on the pushed commit, as a PR preview's does (docs/ci-traces.md).
 #
 # The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by the
 # prefix `main`).
@@ -72,8 +72,12 @@ on:
       - scripts/ci/toolchain.sh
   workflow_dispatch:
 
+# ONE GROUP PER COMMIT, the commit its deployment `main-<sha7>` is named for: each push runs at once,
+# however many land meanwhile, where one group for all of main keeps one pending run and a newer push
+# replaces it, leaving that commit with no verdict. Two runs of one commit (a dispatch beside its
+# push) share the deployment, so they take turns.
 concurrency:
-  group: main-os-e2e
+  group: main-os-e2e-${{ github.sha }}
   cancel-in-progress: false
 
 env:
@@ -297,7 +301,8 @@ jobs:
           overwrite: true
 
   # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (apps/os/scripts/preview.ts
-  # `cleanup-superseded`), beside the suites and never gating them or the alert.
+  # `cleanup-superseded`), beside the suites and never gating them or the alert. One that a run still
+  # in progress tests stays, for a later run's cleanup or the nightly sweep.
   cleanup:
     name: Clean up superseded
     needs: deploy
@@ -321,14 +326,16 @@ jobs:
   # main e2e and slow e2e rows, each with a page of its own while it is red or unjudged
   # (docs/depot-ci.md#health). Its memory is its own `main-e2e-state` artifact, with each open
   # page's Slack ts, which the next run reads back with the Depot organization token (Doppler
-  # _shared/preview); runs never overlap, so the next run reads this one's. A push
-  # run only: a dispatch pages nothing and keeps nothing, and a run cancelled by hand is left out.
+  # _shared/preview). The page jobs take turns, oldest run first (health.ts
+  # `awaitOlderMainE2eRuns`), so the next run reads this one's. A push run only: a dispatch pages
+  # nothing and keeps nothing, and a run cancelled by hand is left out.
   alert:
     name: Page a change of state
     needs: [deploy, e2e, specs, specs-shard]
     if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on: depot-ubuntu-24.04
-    timeout-minutes: 10
+    # the wait for the older runs' page jobs at its longest (health.ts AWAIT_OLDER_RUNS), then ten
+    timeout-minutes: 40
     env:
       DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       # the subjects of the commits the pages name
@@ -343,6 +350,8 @@ jobs:
       # The script reads the Depot organization token, which reads the runs, the artifacts and the
       # previous state (scripts/ci/depot.ts `depotApi`), and the Slack bot token
       # (scripts/ci/slack.ts) from Doppler itself.
+      - name: Wait for the older runs' pages
+        run: node scripts/monitors/health.ts await-older-runs
       - name: Judge, page #error-pulse on a change of state
         run: |-
           set -euo pipefail

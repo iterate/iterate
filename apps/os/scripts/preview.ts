@@ -30,7 +30,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -45,6 +45,7 @@ import {
 } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
+import { depotApi, workflowsInProgress } from "../../../scripts/ci/depot.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import {
@@ -93,6 +94,7 @@ import {
   templateQuickLaunches,
 } from "./preview-config.ts";
 import {
+  CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
   newestPreviewDeployment,
   planFormerParents,
@@ -351,7 +353,12 @@ async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentLi
  *  run's `Clean up superseded` job, once its own deployment is ready. Never the run's verdict: the
  *  job does not gate the checks, and what it leaves the next run's cleanup or the sweep takes. */
 async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolean }) {
-  const superseded = planSupersededCleanup(await listPreviewDeployments(cf), name);
+  const deployments = await listPreviewDeployments(cf);
+  const underTest = await deploymentsUnderTest(name);
+  for (const deployment of deployments)
+    if (deployment.name !== name && underTest.has(deployment.name))
+      console.log(`  keep ${deployment.name}: a run still in progress tests it`);
+  const superseded = planSupersededCleanup(deployments, name, underTest);
   for (const deployment of superseded)
     console.log(
       `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name}: superseded by ${name}`,
@@ -364,6 +371,18 @@ async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolea
       `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
     );
   if (failures.length > 0) throw new Error(`cleanup failures:\n  ${failures.join("\n  ")}`);
+}
+
+/** The deployments of `name`'s prefix that a run still in progress tests. A CI workflow's own prefix
+ *  (preview-sweep.ts CI_WORKFLOW_PREVIEWS): `<prefix>-<sha7>` of each queued or running run of that
+ *  workflow, whatever started it, from Depot. A PR's: none, since its next push cancels the run in
+ *  progress. */
+async function deploymentsUnderTest(name: string): Promise<ReadonlySet<string>> {
+  const prefix = previewDeployment(name)?.prefix || "";
+  const workflow = CI_WORKFLOW_PREVIEWS.get(prefix);
+  if (!workflow) return new Set();
+  const runs = await workflowsInProgress(depotApi(), { name: workflow });
+  return new Set(runs.map((run) => previewDeploymentName(prefix, run.sha)));
 }
 
 /** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. */
