@@ -1,18 +1,23 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { z } from "zod";
 import { OS_DOPPLER_PROJECT, getEnv, spaEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { smoke } from "../../../scripts/lib/deploy-helpers.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 const assets = new URL("../dist/assets/", import.meta.url);
+/** The packaged extension's version, which scripts/build.ts names the download after. */
+const extensionManifest = new URL("../../browser-extension/public/manifest.json", import.meta.url);
 
 /** scripts/build.ts (static files + the packaged extension), an assets-only Worker's config beside
  *  them, deployed (scripts/lib/deploy-app.ts); then the deployed oauth.js, client logo and extension
  *  bundle match this checkout. */
 export default async function deploy(options: { env: string }) {
+  const { version } = z
+    .object({ version: z.string() })
+    .parse(JSON.parse(readFileSync(extensionManifest, "utf8")));
   await deployApp(getEnv(options.env, spaEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
@@ -30,24 +35,18 @@ export default async function deploy(options: { env: string }) {
         }),
       );
     },
-    smokes: [],
-    // The extension zip's name comes from the build, so these probes run after the deploy rather
-    // than as `smokes`. A status alone could be the single-page fallback's: each file's bytes are
-    // the build's.
-    async afterDeploy(ctx) {
-      const bundle = readdirSync(new URL("downloads/", assets)).find((name) =>
-        name.endsWith(".zip"),
-      );
-      if (!bundle) throw new Error("No packaged extension found");
-      for (const path of ["oauth.js", "client-logo.svg", `downloads/${bundle}`])
-        await smoke(
-          new URL(path, ctx.env.baseUrl).href,
-          async (response) =>
-            response.ok &&
-            readFileSync(new URL(path, assets)).equals(Buffer.from(await response.arrayBuffer())),
-          `deployed ${path} matches this checkout`,
-        );
-    },
+    // A status alone could be the single-page fallback's: each file's bytes are the build's.
+    smokes: [
+      "/oauth.js",
+      "/client-logo.svg",
+      `/downloads/iterate-chrome-extension-${version}.zip`,
+    ].map((path) => ({
+      url: path,
+      ok: async (response) =>
+        response.ok &&
+        readFileSync(new URL(`.${path}`, assets)).equals(Buffer.from(await response.arrayBuffer())),
+      label: `deployed ${path} matches this checkout`,
+    })),
   });
 }
 

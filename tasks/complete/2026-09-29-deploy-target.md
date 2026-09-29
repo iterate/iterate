@@ -41,7 +41,7 @@ Every caller passes `env.workerName` and `env.baseUrl`, so those are part of the
 - [x] `deployApp`: no `envs`, `workerName`, `servingUrl` or `resources`; `smokes` is an array _it reads `workerName`, `baseUrl` and `resources` off `env`_
 - [x] callers: apps/os deploy, start-app `deploy`/`ensureResources`, ci-reports, dummy-petshop, spa
 - [x] `resolveEnvContext` callers: ensure-resources, erase-data, project-seed, seed-instance-secrets, preview.ts, context-sweep, flake-dashboard
-- [x] spa: the checks that compare deployed files with the build move to `afterDeploy`, since the zip's name only exists after the build _calls deploy-helpers `smoke()` directly; `smokes: []`_
+- [x] ~~spa: the checks that compare deployed files with the build move to `afterDeploy`, since the zip's name only exists after the build~~ _wrong premise: the zip is named after the version in the checked-in `apps/browser-extension/public/manifest.json`, so deploy.ts reads it up front and the three checks are ordinary `smokes`_
 - [x] tests: erase-data.test.ts, preview.test.ts and any others that build an `EnvContext` _only erase-data.test.ts builds one: `name` moved into its `env`_
 - [x] ~~docs and skills that show the old `deployApp`/`resolveEnvContext` shape~~ _none show it: docs/depot-ci.md, docs/dev-environments.md and the creating-an-app skill only name the functions_
 
