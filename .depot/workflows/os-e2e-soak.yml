@@ -99,6 +99,11 @@ jobs:
           RUN_RESIDENCY_TIMING: ${{ inputs.residency-timing }}
           REDEPLOY: ${{ inputs.redeploy }}
           GAP: ${{ inputs.gap }}
+          # THE COMMIT the agents rows pin the published build of (apps/agents/e2e/support.ts
+          # `publishedPackage`): its merge base with main, which GitHub answers with this token. The
+          # checkout is shallow and has no origin/main to find it in.
+          TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS")
           elif [ "$REDEPLOY" = true ]; then target=(--redeploy "$PREVIEW" --gap "${GAP:-0}")
