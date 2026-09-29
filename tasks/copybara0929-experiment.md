@@ -5,12 +5,12 @@ size: small
 
 # Copybara experiment: one-way copies of parts of iterate/iterate
 
-**Status:** round 3 starting: iterate/os0929 has to pass the self-host recipe. This PR never merges: it's the experiment and the place to bikeshed the real layout.
+**Status:** round 3 done: a fresh clone of iterate/os0929 passes the self-host recipe (install, build, dry-run deploy) in CI after every copy. This PR never merges: it's the experiment and the place to bikeshed the real layout.
 
 - Round 1 (done): `packages/` copied to iterate/copybara0929, and every scenario below ran.
 - Round 2 (done): the `copybara/` layout, with two copies, iterate/os0929 and iterate/packages0929. Each got exactly its own commits.
-- Round 3 (now): what iterate/os has to contain so self-hosting works from it: the build's files, a slimmed workspace and lockfile, a check that a fresh clone builds, and baked templates.
-- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants).
+- Round 3 (done): the build's files, the copy's own slimmed workspace and lockfile (dependencies a subset of the root's), and the recipe run against a fresh clone. main's #3439 already bakes templates; this branch makes its build work from a copy.
+- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants). The open inputs for `core/` are in "What `iterate/os` contains".
 
 ## Why
 
@@ -93,16 +93,33 @@ A real deploy needs a Cloudflare account with Artifacts access; the dry run prov
 
 **The plan:**
 
-- [ ] The `os` workflow copies the build's files, listed by hand in `copybara/copy.bara.sky`
-- [ ] `copybara/os/package.json`: the copy's root manifest, written by hand. No scripts, and only the dependencies the root-level files import
-- [ ] `copybara/os/pnpm-workspace.yaml` and `copybara/os/pnpm-lock.yaml`, generated from the root's: the copy's 4 packages, the root's settings, and the catalog, patches and lockfile trimmed to what those packages use. `pnpm install --lockfile-only` in a scratch folder holding only the copy's manifests does the trimming
-- [ ] **Dependencies are a subset of the root's:** every package the copy's lockfile resolves is in the root lockfile at the same version. Each copied package's lockfile entry equals the root's, and `copybara/os/package.json` asks for the same versions as the root. The copy never resolves anything the root hasn't
-- [ ] A check fails when the generated files are stale or break the subset rule
-- [ ] The Copybara job clones the copy fresh after each push and runs the four commands above
-- [ ] **Templates are baked** (option A in the explainer): every `configs/` template goes into the Worker as `default` already does, each file with its source path, target path and content (the fields a shadcn registry item has). A creation records `builtin:<name>@<build sha>`. Custom `github:owner/repo#…` templates are unchanged. A preview bakes the PR's own templates, so `preview-config.ts`'s quick-launch rewrite to the PR head goes
-- [ ] Record what `iterate/os` contains, as input for the `core/` restructure
+- [x] The `os` workflow copies the build's files, listed by hand in `copybara/copy.bara.sky` _(apps/os, packages/{iterate,shared,ui}, configs/, envs.ts, 3 scripts/lib files, 2 tsconfigs, .nvmrc, and both patches: apps/os uses @cloudflare/vitest-plugin too)_
+- [x] `copybara/os/package.json`: the copy's root manifest, written by hand. No scripts, and only the dependencies the root-level files import _(zod and @iterate-com/shared)_
+- [x] `copybara/os/pnpm-workspace.yaml` and `copybara/os/pnpm-lock.yaml`, generated from the root's: the copy's 4 packages, the root's settings, and the catalog, patches and lockfile trimmed to what those packages use. `pnpm install --lockfile-only` in a scratch folder holding only the copy's manifests does the trimming _(`node scripts/ci/copybara.ts root`, ~6 s: lockfile 15.7k → 10.4k lines. pnpm trims the catalog itself (`cleanupUnusedCatalogs`) and rewrites the workspace file without comments)_
+- [x] **Dependencies are a subset of the root's:** every package the copy's lockfile resolves is in the root lockfile at the same version. Each copied package's lockfile entry equals the root's, and `copybara/os/package.json` asks for the same versions as the root. The copy never resolves anything the root hasn't _(checked as versions and integrity. Peer contexts and `optional` flags legitimately differ: trpc-cli is locked without the `effect` another package brings, and 9 packages are optional in the copy)_
+- [x] A check fails when the generated files are stale or break the subset rule _(`root --check`, first in both copy jobs, printing the diff. It first went stale on CI only: a laptop's pnpm metadata cache gave crossws another peer range, so the generator now runs pnpm with an empty cache of its own)_
+- [x] The Copybara job clones the copy fresh after each push and runs the four commands above _(CI: the job took 65 s in all. Setup, both copies ([os0929 dc3dd69](https://github.com/iterate/os0929/commit/dc3dd6965d9c1111c4def14f45fcaa8ab2406a3b), [packages0929 5ffb336](https://github.com/iterate/packages0929/commit/5ffb33681fd7a9bb324a96a63dfac22c680a47e1)), then a fresh clone of os0929: frozen install 1.8 s with a warm store, the self-host build, the dry-run deploy, and `iterate/node` and `capnweb` importing. A failed Deploy preview (the kit app's new hostname 404ing) skipped the job, as a failed deploy should)_
+- [x] ~~**Templates are baked** (option A in the explainer): every `configs/` template goes into the Worker as `default` already does, each file with its source path, target path and content (the fields a shadcn registry item has). A creation records `builtin:<name>@<build sha>`. Custom `github:owner/repo#…` templates are unchanged. A preview bakes the PR's own templates, so `preview-config.ts`'s quick-launch rewrite to the PR head goes~~ _(main's #3439 landed the same idea first: each preset's files are baked in (`templateFiles`), keyed by the build's `github:iterate/iterate#<sha>&path:configs/<name>` reference, so creation never downloads a preset. This branch's version was reverted. main's version broke the self-host build in the copy, though: it pins the templates' agents and voice at a pkg.pr.new build it finds through `git merge-base HEAD origin/main` and `.github/workflows/pkg-pr-new.yml`, neither of which a copy has. Fixed in iterate/iterate's source: `checkoutPublishedPackageCommit` returns the commit HEAD's `GitOrigin-RevId` trailer names)_
+- [x] Record what `iterate/os` contains, as input for the `core/` restructure _(below)_
 
 Later, not in round 3: a template registry served by the Worker (shadcn's item format), once features get added to existing projects. Links that name iterate/iterate (the MCP tool's examples link, the recipe's clone URL, `packages/iterate`'s npm metadata, the dash's commit links) wait for the real `iterate/os`.
+
+### What `iterate/os` contains, as input for `core/`
+
+What the self-host recipe needs today, and where each piece would sit in the call's layout:
+
+| Today                                                          | Why the recipe needs it                                              | In `core/`?                                                                                                                                                                                              |
+| -------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/os`                                                      | the Worker                                                           | `core/os`. But it also carries internal tooling that has no business in a public copy: `scripts/preview*`, `erase-data`, `ensure-resources`, and `e2e/`, `perf/`, `bench/`. Those belong outside `core/` |
+| `packages/iterate`                                             | the SDK, and the platform modules baked into the Worker              | `core/lib`                                                                                                                                                                                               |
+| `packages/shared`, `packages/ui`                               | the Worker imports them (helpers, and the sign-in and consent pages) | inside `core/`, or a `core/` that stops importing them. As shared, unpublished packages they drag the copy's workspace wider                                                                             |
+| `configs/`                                                     | baked into the Worker as project templates                           | with `core/os`, since the Worker ships them                                                                                                                                                              |
+| `envs.ts`                                                      | the build reads its self-host environment from it                    | **no**: 511 lines of every app's environments, Cloudflare account ids, bucket and Doppler names. The OS build should import an OS-only module inside `core/`, and the rest stays private                 |
+| `scripts/lib/{deploy-helpers,env-context,wrangler-config}.ts`  | the build's imports                                                  | inside `core/os`, or dropped from the build path                                                                                                                                                         |
+| root `package.json`, workspace file, lockfile                  | install                                                              | the copy's own, generated (`copybara/os/`)                                                                                                                                                               |
+| `tsconfig.base.json`, `tsconfig.app.json`, `.nvmrc`, 2 patches | the tsconfigs extend them; the lockfile applies the patches          | a `core/` tsconfig base; the patches follow the lockfile                                                                                                                                                 |
+
+The rule the recipe check enforces is "`core/` builds from a clone of itself". That covers two things: no imports reaching outside `core/`, and no build step reading this repo's git history or CI files. `checkoutPublishedPackageCommit` was the first case of the second; the trailer handles it.
 
 ## Where the copies' files live (for the real `iterate/os`)
 
@@ -224,3 +241,6 @@ Through the Preview OS job, with the origin ref being this branch:
 - Round 2: the iterate App token now covers every copy repo at once. `iterateAppToken` takes `repositories` and finds the App through the org's installation (`/orgs/iterate/installation`), not through one repo.
 - Round 2: `gh repo delete iterate/copybara0929` failed: the `gh` login lacks the `delete_repo` scope, and `gh auth refresh -s delete_repo` needs a browser. Misha to delete it.
 - Round 2: the PR conflicted with main (#3429 changed `resolveEnvContext` to take `getEnv(...)`). A conflicting PR gets no Depot runs, so nothing ran until the merge. The flake dashboard keeps this branch's side, and `iterate-app-token.ts` uses the new signature.
+- Round 3: `apps/os`'s build now needs to know which iterate/iterate commit it's built from (to pin the templates' agents and voice builds). In a copy, the `GitOrigin-RevId` trailer is that answer. Any future code that reads git history, `origin/main` or CI files at build time needs the same treatment; the fresh-clone recipe check is what catches it.
+- Round 3, found on the side: main's `build()` fails in a shallow checkout whose HEAD isn't pushed (it fetches HEAD from origin to unshallow: "upload-pack: not our ref"). The root checkout on Misha's laptop is shallow, so `apps/os`'s vitest global setup fails until the commit is pushed. Pre-existing in main, not fixed here.
+- Round 3, branch-phase caveat: on this branch the copy's trailer is a PR commit, which pkg.pr.new only publishes when the PR changes a published package. So a self-host build of os0929 may pin template packages at a build that 404s. On main, every copied commit is published.
