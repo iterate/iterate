@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  catalog,
   followConsent,
   ORIGIN,
   petshopFakes,
@@ -207,4 +208,31 @@ test("an X account is one connection: a second is refused here and in another pr
   });
   await member.itx.integrations.disconnect("x", "one");
   expect(await connect(other, "one")).toMatchObject({ status: 303 });
+});
+
+test("a refused reconnect of an X connection that lost its route keeps the connection's token", async () => {
+  const member = await projectWithMember("x-route-lost");
+  const other = await projectWithMember("x-route-took");
+  const petshop = petshopFakes();
+  const consent = async (who: typeof member, scopes?: string[]) =>
+    followConsent(
+      petshop,
+      `${(await who.itx.integrations.connect("x", { connection: "one", scopes, next: `${ORIGIN}/done` })).authorizationUrl}&user=320&username=jonas`,
+      who.cookie,
+    );
+  expect(await consent(member)).toMatchObject({ status: 303 });
+  // a connection made before X was routed holds no route: another project takes the account
+  await catalog().releaseIntegrationRoutes(member.projectId, "/integrations/x/one");
+  expect(await consent(other)).toMatchObject({ status: 303 });
+  const refused = await consent(member, ["tweet.write"]);
+  expect({ status: refused.status, body: await refused.text() }).toMatchObject({
+    status: 400,
+    body: expect.stringContaining("connected to another project"),
+  });
+  const me = await member.itx.fetch(
+    new Request("https://x.test/2/users/me", {
+      headers: { authorization: 'Bearer getSecret("/secrets/x-one", { field: "accessToken" })' },
+    }),
+  );
+  expect(await me.json()).toMatchObject({ data: { id: "320" } });
 });

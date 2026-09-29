@@ -8,6 +8,7 @@ import type { IntegrationConnectionRow } from "./contract.ts";
 import {
   appendConnected,
   connectionPathOf,
+  connectionRowOf,
   consentAttemptKeyOf,
   deleteTokenSecret,
   ownerEgress,
@@ -123,6 +124,9 @@ export async function finishXConnect(
   // connection of the same account, here or in another project, is refused, and the token the
   // callback stored for it goes. A person's own account and a project's own client are not routed.
   if (attempt.client !== "iterate" || scope.rootPath !== "/") return { row: await connected() };
+  const path = connectionPathOf("x", connection);
+  // a reconnect's callback replaced the live token already: only a connection with no row is new
+  const isNew = !(await connectionRowOf(scope.env, scope.projectId, path));
   try {
     return {
       row: await routedWhile(
@@ -131,13 +135,13 @@ export async function finishXConnect(
           provider: "x",
           externalId: data.id,
           projectId: scope.projectId,
-          path: connectionPathOf("x", connection),
+          path,
         },
         connected,
       ),
     };
   } catch (error) {
-    await deleteTokenSecret(scope, "x", connection);
+    if (isNew) await deleteTokenSecret(scope, "x", connection);
     throw error;
   }
 }
