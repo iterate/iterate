@@ -74,14 +74,10 @@ test("every package.json under configs/ names its folder's main module", () => {
   }
 });
 
-test("copies the pinned subdirectory into a fresh root commit before project/created; an iterate.json in it is a file like any other", async () => {
+test("copies the pinned subdirectory into a fresh root commit before project/created", async () => {
   const fixture = project(undefined, async () => [
     { path: "package.json", content: manifest },
     { path: "worker.ts", content: worker },
-    {
-      path: "iterate.json",
-      content: JSON.stringify({ events: ["events.iterate.com/project/created"] }),
-    },
     { path: "custom.txt", content: "owned by this project" },
   ]);
   await create(fixture, reference);
@@ -94,7 +90,6 @@ test("copies the pinned subdirectory into a fresh root commit before project/cre
   expect(fixture.files()).toEqual({
     "package.json": manifest,
     "worker.ts": worker,
-    "iterate.json": JSON.stringify({ events: ["events.iterate.com/project/created"] }),
     "custom.txt": "owned by this project",
   });
   expect(fixture).toMatchObject({

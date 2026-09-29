@@ -1,5 +1,6 @@
 // install.ts — what a config repo's init case calls (README.md), and the Agents app's upgrade of
 // the build the config pins. Not the runtime, so importing it loads none.
+import type {} from "./api.ts"; // registers `itx.agents` on InstalledAppRoots
 import type { FacetSpec, IterateContextApi, RepoHandle } from "iterate/api";
 import { errorCode } from "iterate/lib";
 

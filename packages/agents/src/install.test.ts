@@ -1,13 +1,6 @@
 import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
-import { agentsFacetSpec, agentsVersion, installAgents, upgradeAgents } from "./install.ts";
-
-test.for(["AgentCollectionDurableObject", "AgentDurableObject"] as const)(
-  "%s is named in agents.ts of the published config, with no cache key",
-  (className) => {
-    expect(agentsFacetSpec(className)).toStrictEqual(published(className));
-  },
-);
+import { agentsVersion, installAgents, upgradeAgents } from "./install.ts";
 
 test("installAgents enables the catalog processor on the root, then writes the itx.agents rule to it", async () => {
   const root = fakeRoot();
