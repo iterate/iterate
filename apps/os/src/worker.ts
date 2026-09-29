@@ -161,6 +161,8 @@ export { RepoDurableObject } from "./repo/durable-object.ts";
 export { SecretDurableObject } from "./secret/durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
+// Workers AI for a context's `itx.ai`, minted per project with the project as props.
+export { ItxAi } from "./itx-ai.ts";
 // A secret's exchange code's only egress, minted per jail with the pin as props.
 export { PinnedOutbound } from "./secret/exchange-jail.ts";
 

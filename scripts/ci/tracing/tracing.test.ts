@@ -392,6 +392,7 @@ test("nested concurrent deploys and readiness become measured children of their 
           if (error.message !== "private diagnostic payload") throw error;
         });
         await traceOperation("Failed command", async span => { span.fail(); });
+        await traceOperation({ name: "Wait for the deploy", phase: "wait" }, async () => {});
       `,
     ],
     { env: { ...process.env, CI_TRACE_ENABLED: "1" } },
@@ -450,6 +451,9 @@ test("nested concurrent deploys and readiness become measured children of their 
     status: { code: 2 },
   });
   expect(byName("Failed command")).toMatchObject({ status: { code: 2 } });
+  expect(byName("Wait for the deploy")).toMatchObject({
+    attributes: expect.arrayContaining([{ key: "ci.phase", value: { stringValue: "wait" } }]),
+  });
   expect(
     spans.every((span) => BigInt(span.endTimeUnixNano) >= BigInt(span.startTimeUnixNano)),
   ).toBe(true);
@@ -573,15 +577,20 @@ test("quiet steps retain their duration, retries have distinct parents, and unfi
   expect(tests).toHaveLength(2);
   expect(tests[0]).not.toMatchObject({ spanId: tests[1].spanId });
   expect(tests[0]).toMatchObject({ parentSpanId: tests[1].parentSpanId });
+  // the suite step's tests, in its Run tests row under the job
   expect(spans.find((span) => span.spanId === tests[0].parentSpanId)).toMatchObject({
-    name: "pnpm spec",
+    name: "Run tests",
+    parentSpanId: spans.find((span) => span.name === "E2E tests")!.spanId,
+    attributes: expect.arrayContaining([
+      { key: "ci.command", value: { stringValue: "pnpm spec" } },
+      { key: "ci.status", value: { stringValue: "incomplete" } },
+    ]),
   });
   expect(tests[1].attributes).toContainEqual({
     key: "ci.evidence",
     value: { stringValue: "incomplete; end bounded by job finish" },
   });
   expect([...new Set(spans.map((span) => span.traceId))]).toHaveLength(1);
-  expect(spans.filter((span) => ["Setup", "Test"].includes(span.name))).toHaveLength(2);
   expect(
     spans.every(
       (span) => !span.parentSpanId || spans.some((parent) => parent.spanId === span.parentSpanId),
@@ -730,7 +739,7 @@ test.for([
   },
 );
 
-test("a second-precision Depot finish does not invent a negative finish phase", () => {
+test("a second-precision Depot finish before the suite's exit marker keeps the marker's time", () => {
   const report = assembleTrace(
     {
       workflowId: "failed-e2e",
@@ -772,15 +781,10 @@ test("a second-precision Depot finish does not invent a negative finish phase", 
     ]),
   );
   const spans = report.resourceSpans[0].scopeSpans[0].spans;
-  const suite = spans.find((span) => span.name === "suite")!;
-  const finish = spans.find((span) => span.name === "Finish")!;
-  expect(suite).toMatchObject({
+  // a suite that failed and ran no tests still has its row, red
+  expect(spans.find((span) => span.name === "Run tests")).toMatchObject({
     status: { code: 2 },
     endTimeUnixNano: String(BigInt(ms(33.5)) * 1_000_000n),
-  });
-  expect(finish).toMatchObject({
-    startTimeUnixNano: suite.endTimeUnixNano,
-    endTimeUnixNano: finish.startTimeUnixNano,
   });
   expect(spans.find((span) => span.name === "E2E tests")).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(33)) * 1_000_000n),
@@ -880,8 +884,15 @@ test("the standalone report embeds OTLP without allowing source names to break o
 // --- the Preview OS workflow: Deploy preview → E2E tests and Browser specs, then the trace job ---
 
 test("the preview trace covers the deploy and both test jobs: green at the last one's completion, the trace job excluded", () => {
+  // the specs as one shard, which runs the suite
+  const workflow = osPreviewWorkflow();
+  const shard = {
+    ...workflow.jobs[2]!,
+    jobKey: "preview-os.yml:specs-shard:matrix-0",
+    jobDisplayName: "Browser specs 1/1",
+  };
   const trace = assembleTrace(
-    osPreviewWorkflow(),
+    { ...workflow, jobs: [...workflow.jobs.slice(0, 2), shard, ...workflow.jobs.slice(3)] },
     new Map([
       [
         "e2e-attempt",
@@ -889,35 +900,31 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
           line("install", { kind: "shell-start", id: "install", step: "install", time: ms(42) }),
           line("install", { kind: "shell-end", id: "install", time: ms(50), exitCode: 0 }),
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(52) }),
+          ...operation("suite", { name: "Set up the suite", phase: "setup" }, 52, 53),
+          ...operation("suite", { name: "Wait for Deploy preview", phase: "wait" }, 53, 60),
+          ...playwrightTest("suite", "greets", 61, 165),
           line("suite", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
+          line("evidence", {
+            kind: "shell-start",
+            id: "evidence",
+            step: "evidence",
+            time: ms(171),
+          }),
+          line("evidence", { kind: "shell-end", id: "evidence", time: ms(172), exitCode: 0 }),
         ],
       ],
       [
         "specs-attempt",
         [
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
+          ...operation("suite", { name: "Wait for Deploy preview", phase: "wait" }, 50, 58),
+          ...playwrightTest("suite", "signs in", 59, 100),
           line("suite", { kind: "shell-end", id: "suite", time: ms(110), exitCode: 0 }),
         ],
       ],
     ]),
   );
   const spans = trace.resourceSpans[0].scopeSpans[0].spans;
-  expect(spans.map((span) => span.name)).toEqual([
-    "Preview OS",
-    "Workflow queue",
-    "Deploy preview",
-    "E2E tests",
-    "Setup",
-    "Test",
-    "Finish",
-    "install",
-    "suite",
-    "Browser specs",
-    "Setup",
-    "Test",
-    "Finish",
-    "suite",
-  ]);
   expect(spans[0]).toMatchObject({
     endTimeUnixNano: String(BigInt(ms(180)) * 1_000_000n),
     attributes: expect.arrayContaining([
@@ -925,17 +932,130 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
       { key: "ci.time_to_green_ms", value: { stringValue: "180000" } },
     ]),
   });
-  // Each job's suite step opens its Test phase; its exit opens Finish (telemetry and uploads).
-  expect(spans.filter((span) => span.name === "Test")).toMatchObject([
+  // Each job's steps sit directly under it, coloured by where they fall around its suite step.
+  // The suite step is no row: its set-up and deploy wait sit beside the other steps, and its
+  // tests in one Run tests row, from the end of the wait to the step's exit.
+  const children = (parent: string) => {
+    const spanId = spans.find((span) => span.name === parent)?.spanId;
+    return spans
+      .filter((span) => span.parentSpanId === spanId)
+      .map((span) => [
+        span.name,
+        span.attributes.find((attribute) => attribute.key === "ci.phase")?.value.stringValue,
+      ]);
+  };
+  expect({ e2e: children("E2E tests"), specs: children("Browser specs 1/1") }).toEqual({
+    e2e: [
+      ["install", "setup"],
+      ["evidence", "finish"],
+      ["Set up the suite", "setup"],
+      ["Wait for Deploy preview", "wait"],
+      ["Run tests", "test"],
+    ],
+    specs: [
+      ["Wait for Deploy preview", "wait"],
+      ["Run tests", "test"],
+    ],
+  });
+  expect(spans.filter((span) => span.name === "Run tests")).toMatchObject([
     {
-      startTimeUnixNano: String(BigInt(ms(52)) * 1_000_000n),
+      startTimeUnixNano: String(BigInt(ms(60)) * 1_000_000n),
       endTimeUnixNano: String(BigInt(ms(170)) * 1_000_000n),
     },
     {
-      startTimeUnixNano: String(BigInt(ms(50)) * 1_000_000n),
+      startTimeUnixNano: String(BigInt(ms(58)) * 1_000_000n),
       endTimeUnixNano: String(BigInt(ms(110)) * 1_000_000n),
     },
   ]);
+  const runs = spans.filter((span) => span.name === "Run tests");
+  expect(
+    runs.map((run) =>
+      spans.filter((span) => span.parentSpanId === run.spanId).map((span) => span.name),
+    ),
+  ).toEqual([["greets"], ["signs in"]]);
+});
+
+test("the Browser specs shards sit under the Browser specs job that waits for them, its newest attempt when it was retried, below its own steps", () => {
+  const workflow = osPreviewWorkflow();
+  const specs = workflow.jobs[2]!;
+  const attempt = specs.attempts[0]!;
+  const retried = {
+    ...specs,
+    attempts: [
+      { ...attempt, status: "failed", finishedAt: at(60) },
+      {
+        ...attempt,
+        attemptId: "specs-attempt-2",
+        attempt: 2,
+        startedAt: at(61),
+        finishedAt: at(130),
+      },
+    ],
+  };
+  const shard = (index: number, status: string) => ({
+    ...specs,
+    jobId: `specs-shard-${index}`,
+    jobKey: `preview-os.yml:specs-shard:matrix-${index}`,
+    jobDisplayName: `Browser specs ${index + 1}/2`,
+    status,
+    attempts: [{ ...attempt, attemptId: `shard-${index}-attempt`, status }],
+  });
+
+  const trace = assembleTrace(
+    {
+      ...workflow,
+      jobs: [...workflow.jobs.slice(0, 2), retried, shard(0, "finished"), shard(1, "failed")],
+    },
+    new Map([
+      [
+        "specs-attempt-2",
+        [
+          line("checkout", { kind: "shell-start", id: "checkout", step: "checkout", time: ms(62) }),
+          line("checkout", { kind: "shell-end", id: "checkout", time: ms(63), exitCode: 0 }),
+          line("collect", { kind: "shell-start", id: "collect", step: "collect", time: ms(64) }),
+          ...operation("collect", { name: "Wait for the shards", phase: "wait" }, 64, 128),
+          line("collect", { kind: "shell-end", id: "collect", time: ms(129), exitCode: 1 }),
+        ],
+      ],
+      [
+        "shard-1-attempt",
+        [
+          line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
+          line("suite", { kind: "shell-end", id: "suite", time: ms(100), exitCode: 1 }),
+        ],
+      ],
+    ]),
+  );
+
+  const spans = trace.resourceSpans[0].scopeSpans[0].spans;
+  const children = (name: string) => {
+    const parent = spans.find((span) => span.name === name);
+    return spans.filter((span) => span.parentSpanId === parent?.spanId).map((span) => span.name);
+  };
+  expect({
+    workflow: children("Preview OS"),
+    firstAttempt: children("Browser specs"),
+    newestAttempt: children("Browser specs (attempt 2)"),
+    // its own steps in one row, where its collect step is no row, just what it did
+    coordinator: children("Coordinate shards"),
+    // its suite failed without a test: that row, red
+    shard: children("Browser specs 2/2"),
+  }).toEqual({
+    workflow: [
+      "Workflow queue",
+      "Deploy preview",
+      "E2E tests",
+      "Browser specs",
+      "Browser specs (attempt 2)",
+    ],
+    firstAttempt: [],
+    newestAttempt: ["Coordinate shards", "Browser specs 1/2", "Browser specs 2/2"],
+    coordinator: ["checkout", "Wait for the shards"],
+    shard: ["Run tests"],
+  });
+  expect(spans.find((span) => span.name === "Browser specs 2/2")).toMatchObject({
+    status: { code: 2 },
+  });
 });
 
 test("a failed deploy is red at its completion and neither suite ran", () => {
@@ -960,6 +1080,7 @@ test.for([
   ["preview-os.yml:e2e", "e2e"],
   ["preview-os.yml:specs", "specs"],
   ["preview-os.yml:deploy", "deploy"],
+  ["preview-os.yml:specs-shard:matrix-3", "specs-shard"],
 ])("%s is job %s of its workflow", ([jobKey, key]) => {
   expect(jobKeyInWorkflow(jobKey)).toBe(key);
 });
@@ -1050,3 +1171,37 @@ const line = (stepKey: string, event: object) => ({
   stepId: stepKey,
   body: `@@ci-trace ${JSON.stringify(event)}`,
 });
+
+/** A traced operation of step `stepKey` (preview.ts `traceOperation`), from `start` to `end` s. */
+const operation = (
+  stepKey: string,
+  what: { name: string; phase: string },
+  start: number,
+  end: number,
+) => [
+  line(stepKey, { kind: "span-start", id: what.name, parentId: "", ...what, time: ms(start) }),
+  line(stepKey, { kind: "span-end", id: what.name, status: "passed", time: ms(end) }),
+];
+
+/** One passing Playwright attempt in step `stepKey`, from `start` to `end` s. */
+const playwrightTest = (stepKey: string, title: string, start: number, end: number) => [
+  line(stepKey, {
+    kind: "test-start",
+    id: title,
+    title,
+    framework: "playwright",
+    file: "specs/a.spec.ts",
+    line: 1,
+    project: "os",
+    retry: 0,
+    time: ms(start),
+  }),
+  line(stepKey, {
+    kind: "test-end",
+    id: title,
+    time: ms(end),
+    status: "passed",
+    expectedStatus: "passed",
+    worker: 0,
+  }),
+];

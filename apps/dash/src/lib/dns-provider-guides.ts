@@ -1,6 +1,6 @@
 // src/lib/dns-provider-guides.ts — WHERE AND HOW to add a hostname's three CNAMEs by hand, for the DNS
 // providers apps/os recognises by their nameservers (apps/os src/project/dns-provider.ts, whose ids
-// key this table). The Hostnames page shows the guide for the provider a hostname's DNS is on, under
+// key this table). The Domains page shows the guide for the provider a hostname's DNS is on, under
 // the Connect button when there is one. Every name field wants the part before the customer's domain
 // (`iterate`, `*.iterate`, `_acme-challenge.iterate` for `iterate.example.com`); `trailingDot` marks
 // the providers whose target field wants the final dot. Paths follow each provider's own docs as of

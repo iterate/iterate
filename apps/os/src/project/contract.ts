@@ -189,7 +189,8 @@ export const ProjectContract = defineProcessorContract({
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, its
   // connections' facts (src/integrations/contract.ts, shared with the account), and the
-  // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
+  // core's apex target (`itx/ingress-configured`), which it both appends and reduces, and the
+  // config worker's subscription row (`itx/subscription-configured`), which it only appends.
   processorDeps: [
     RepoContract,
     WorkspaceContract,
@@ -230,6 +231,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/github/disconnected",
     "events.iterate.com/waitrose/connected",
     "events.iterate.com/waitrose/disconnected",
+    "events.iterate.com/x/connected",
+    "events.iterate.com/x/disconnected",
   ],
   emits: [
     "events.iterate.com/project/created",
@@ -239,9 +242,11 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
-    // the core's: the saga points the project's apex at the seeded config repo's commit, and the
-    // processor re-points it at every later commit of the config repo (a commit IS its publication)
+    // the core's: the saga publishes the seeded config repo's commit, and the processor every later
+    // commit of the config repo (a commit IS its publication) — the apex and the config worker's
+    // subscription, both at that commit
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/subscription-configured",
   ],
 });
 

@@ -163,15 +163,24 @@ read secrets.
   (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
-  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
-  (`appSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test&provider_hint=os.iterate.com`
+  (`signInLinkOf` in `apps/os/scripts/preview-config.ts`). `provider_hint`
+  makes the platform's sign-in page lead with **Sign in with os.iterate.com**,
+  the rest one "sign in another way" click away; a hint naming a way the
+  deployment does not offer changes nothing. CI seeds that
   person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
   `seedSignIn`). The PR body is public, so a link grants nothing. The app
   passes `login_hint` on to the issuer, whose consent page opens an admin's
   **Sign in as someone else…** with that person filled in, only for one of our
   own apps. One confirm signs the app in as them for an hour (see
   [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
-  the ordinary consent page. A deployment's admins are prd's (`envs.ts`
+  the ordinary consent page. Notes and Docs have no sign-in of their own: they
+  run on the platform's, through a project. Their link is the platform's own
+  `/.auth/login`, landing on the app's page in `pr<N>`
+  (`/projects/pr<N>/<app>/projects/pr<N>`). The seed gives
+  `pr<N>` a fetch route per such app to the deployment's own Worker and makes
+  the deployment's admins members of its organization, so a reviewer opens it
+  as themselves. A deployment's admins are prd's (`envs.ts`
   `admins`) plus the specs' `admin@preview.iterate.test`, and they sign in to
   the deployment as themselves with **Continue with os.iterate.com**: prd
   confirms who they are through an OAuth grant that can only read that (prd's
@@ -304,17 +313,18 @@ channels. The local values in `scripts/dev.ts` are public dev values.
 The root Playwright config runs every app's browser specs from the root
 `specs/` directory, and `pnpm spec` runs them from the repo root. It has one
 project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
-with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
+with touch, for the sign-in and consent specs), `agents` (`specs/agents/`,
+skipped locally unless `AGENTS_BASE_URL` is set), `notes` (`specs/notes/`,
 skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
-skipped locally unless `VOICE_BASE_URL` is set) and `suite` (the flake sentinel
-and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
+skipped locally unless `VOICE_BASE_URL` is set), the other apps' projects and
+`suite` (the flake sentinel and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
 `pnpm dev -- --port <WORKER_PORT, default 8788>`, reuses an already running
 server outside CI, and waits on `/version`.
 
 Specs sign in through the real `/login` password step and stamp their own
-identities, so in CI files and tests run side by side (`fullyParallel`, six
-workers, one retry); locally they run on one worker so a single dev server
+identities, so in CI files and tests run side by side (`fullyParallel`, shards
+of six workers, one retry); locally they run on one worker so a single dev server
 isn't hammered. The target is the only thing that changes between local and
 deployed runs:
 
@@ -475,12 +485,11 @@ names the new version, GETs each production project host and pages
 clear (`scripts/ci/prd-post-deploy-check.ts`). In parallel, **Main OS e2e**
 (`main-os-e2e.yml`) deploys the pushed commit as `main-<sha7>`, runs the e2e
 suite and the browser specs against it, and deletes the `main-…` deployments
-before it; the hourly **Health** job (`health.yml`) pages #error-pulse when a
-run turns main red or green again ([Depot CI](depot-ci.md#health)). Main OS
-e2e's runs never cancel each other: the pushes that land during a run queue
-behind it, collapsed to the newest, so every run that starts reaches a verdict
-unless someone cancels it by hand. A job that hangs until its timeout counts as
-red. The full mutating proof is each PR's deployment.
+before it that no run still tests; its own page job pages #error-pulse when a
+run turns main red or green again ([Depot CI](depot-ci.md#health)). Every main
+commit gets its own Main OS e2e run, and runs never cancel each other, so every
+run reaches a verdict unless someone cancels it by hand. A job that hangs until
+its timeout counts as red. The full mutating proof is each PR's deployment.
 
 **Main on dev** (`os`, `dash`, … at `*.iterate-dev-preview.workers.dev`,
 `osEnvs.preview` in `envs.ts`) is main on the dev/preview account, redeployed

@@ -156,6 +156,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:packages/shared
+      '@iterate-com/voice':
+        specifier: workspace:*
+        version: link:packages/voice
       '@playwright/test':
         specifier: 'catalog:'
         version: 1.63.0
@@ -975,6 +978,9 @@ importers:
 
   apps/voice:
     dependencies:
+      '@iterate-com/agents':
+        specifier: workspace:*
+        version: link:../../packages/agents
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared

@@ -14,8 +14,7 @@
     "./install": "./src/install.ts",
     "./contract": "./src/contract.ts",
     "./processor": "./src/processor.ts",
-    "./codemode-format": "./src/codemode-format.ts",
-    "./ai-transport-source": "./src/ai-transport-source.ts"
+    "./codemode-format": "./src/codemode-format.ts"
   },
   "files": [
     "dist"
@@ -42,10 +41,6 @@
       "./codemode-format": {
         "types": "./dist/codemode-format.d.mts",
         "import": "./dist/codemode-format.mjs"
-      },
-      "./ai-transport-source": {
-        "types": "./dist/ai-transport-source.d.mts",
-        "import": "./dist/ai-transport-source.mjs"
       }
     }
   },

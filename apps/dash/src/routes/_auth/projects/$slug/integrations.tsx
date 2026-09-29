@@ -50,7 +50,7 @@ import { stepUpUrl } from "../../../../lib/scopes.ts";
 const Provider = z.enum(INTEGRATION_PROVIDERS);
 type Provider = z.infer<typeof Provider>;
 /** The providers with a project-app mode ("Your own app"). */
-const OwnAppProvider = z.enum(["slack", "google", "github"]);
+const OwnAppProvider = z.enum(["slack", "google", "github", "x"]);
 type OwnAppProvider = z.infer<typeof OwnAppProvider>;
 
 const Connection = z.object({
@@ -235,7 +235,7 @@ function ProjectIntegrations() {
   const stepUpNext = `/projects/${project.slug}/integrations?${stepUpParams}`;
   /** "another", or the article the next word takes when the person has none of their own. */
   const another = (nextWord: string) =>
-    hasYourOwn ? "another" : /^[aeiou]/i.test(nextWord) ? "an" : "a";
+    hasYourOwn ? "another" : /^[aeioux]/i.test(nextWord) ? "an" : "a";
 
   /** Whether the Connect sheet offers one of the person's own accounts not connected here yet: its
    *  Use is then the sheet's one primary action, and connecting another account is secondary. */
@@ -453,7 +453,9 @@ function ProjectIntegrations() {
                   connectedHere={rows}
                   askedScopes={
                     // only Google's and Cloudflare's consents add scopes to your own account
-                    connecting.provider === "google" || connecting.provider === "cloudflare"
+                    connecting.provider === "google" ||
+                    connecting.provider === "cloudflare" ||
+                    connecting.provider === "x"
                       ? [
                           ...(info.iterateAppScopes[connecting.provider] || []),
                           ...(askedScopes || []),
@@ -867,6 +869,14 @@ function ownAppOf(
         ],
         // the connection's whole pin up front (slack.com first: the connect reads it as the origin)
         pin: ["https://slack.com", "https://files.slack.com"],
+      };
+    case "x":
+      return {
+        title,
+        console: "A confidential Web App you create in the X Developer Console.",
+        urls: [callback("User authentication settings → Callback URI / Redirect URL.")],
+        fields: [secret("clientId", "Client ID"), secret("clientSecret", "Client secret")],
+        pin: ["https://api.x.com"],
       };
     case "google":
       return {

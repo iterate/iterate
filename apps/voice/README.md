@@ -29,6 +29,10 @@ the commit main's builds are at, which the app's Worker asks pkg.pr.new for), an
 installed from them. It works against any platform the app
 connects to, a self-hosted one included.
 
+Under Call, **Voice build** shows the build the project's voice runs and, when main has published a
+newer one, **Upgrade to the newest**: `upgradeVoice` (`@iterate-com/voice/install`) commits that
+build's `voice/` folder and installs it. The agents app keeps its build; the Agents app upgrades it.
+
 ## Run
 
 ```bash

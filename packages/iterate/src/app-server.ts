@@ -494,14 +494,18 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       }
       await session!.discard();
     }
-    if (config.loginPage)
+    // A PROVIDER HINT rides on as well: which way to sign in the link that started this suggests
+    // (`provider_hint`, the platform's sign-in page leads with it: apps/os login.server.ts). A hint,
+    // like `login_hint` below: the page still offers every way.
+    const providerHint = url.searchParams.get("provider_hint");
+    if (config.loginPage) {
+      const query = new URLSearchParams({ next });
+      if (providerHint) query.set("provider_hint", providerHint);
       return new Response(null, {
         status: 303,
-        headers: {
-          Location: `${config.loginPage}?${new URLSearchParams({ next })}`,
-          "Cache-Control": "no-store",
-        },
+        headers: { Location: `${config.loginPage}?${query}`, "Cache-Control": "no-store" },
       });
+    }
     // The fresh session goes where this browser was CONNECTED (an expired grant at a self-host
     // signs in again at that self-host, not at the deployment's own issuer); a browser with no
     // record signs in at the default.
@@ -519,6 +523,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     const loginHint = url.searchParams.get("login_hint");
     const authorize = new URL(location);
     if (loginHint) authorize.searchParams.set("login_hint", loginHint);
+    if (providerHint) authorize.searchParams.set("provider_hint", providerHint);
     return new Response(null, {
       status: 302,
       headers: {

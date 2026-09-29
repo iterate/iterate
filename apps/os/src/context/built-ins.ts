@@ -275,11 +275,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  `route.target` with `x-itx-expression` through `env.ITX.fetch` (configs/default/worker.ts).
    *  Only on a project's root. */
   fetchRoutes: IterateContextApi["fetchRoutes"];
-  /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
-   *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
-   *  `autorag(id)` — no wrapper, so `itx.ai` reads exactly like `env.AI` and a rewrite rule can pin a
-   *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
-   *  fake)`; the physical binding stays `itx.builtins.ai`. */
+  /** THE FIRST BINDINGS ROOT: Workers AI's `run(model, inputs, options?)` and `models()`, through
+   *  the stateless `ItxAi` entrypoint (itx-ai.ts), so a rewrite rule can pin a model with `@`
+   *  (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai", fake)`; the
+   *  platform's stays `itx.builtins.ai`. */
   ai: IterateContextApi["ai"];
   /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
    *  action's RESULT; `.fetch(input, init)` is the raw CDP endpoint. */
@@ -385,8 +384,8 @@ export interface BuiltInScope extends LibraryRoots {
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
    *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "package.json":
    *  '{"main":"worker.js"}', "worker.js": code, … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
-   *  only when no isolate is warm under it (worker-loader.ts: Cloudflare's `get(id, getCode)`
-   *  contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
+   *  only when no isolate is warm under it and its answer is not kept (a day, per deploy;
+   *  worker-loader.ts: Cloudflare's `get(id, getCode)` contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
    *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as
    *  `this.ctx.props` (a url, a key name, …). No name and no `list`: a stateless worker is its spec. */
   workers: IterateContextApi["workers"];
@@ -482,14 +481,15 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers test project binds neither AI, Browser Run, nor Artifacts;
+  /** `ItxAi` for this context's project (itx-ai.ts `itxAiFor`): the built-in root `itx.ai`. */
+  ai: IterateContextApi["ai"];
+  /** The bindings the built-ins reach (the workers test project binds neither Browser Run nor Artifacts;
    *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
     FILES: R2Bucket;
-    AI: Ai;
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
     DB: D1Database;
@@ -735,10 +735,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           : `itx.integrations.connect: you have ${accounts.length} ${provider} accounts named ${input.account}`,
       );
     const account = accounts[0]!;
-    // Only Google's and Cloudflare's consents add scopes to a person's own connection; a GitHub
+    // Google's, Cloudflare's and X's consents add scopes to a person's own connection; a GitHub
     // user's token and a Waitrose login have none to add, so they connect as they are.
     const requiredScopes =
-      provider === "google" || provider === "cloudflare"
+      provider === "google" || provider === "cloudflare" || provider === "x"
         ? [...(deps.iterateAppScopes()[provider] || []), ...(input.scopes || [])]
         : [];
     if (missingScopes(provider, account.scopes || [], requiredScopes).length === 0) {
@@ -1886,7 +1886,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
     },
-    ai: env.AI, // the binding object itself — dispatch walks its methods
+    ai: deps.ai,
     browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {
@@ -1928,8 +1928,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         type: "events.iterate.com/itx/aborted",
         payload: { reason, callerPath, app },
       });
-      // The runtime logs this message as an error line (uncatchable); the prd fault alarm
-      // (scripts/ci/prd-fault-alarm.ts) excludes its prefix as the expected outcome it is.
+      // The runtime logs this message as an error line (uncatchable), after the DO logs the
+      // expected outcome at info (iterate-context-durable-object.ts `#abort`).
       deps.abortAfterTheAnswer(
         `itx.abort() reset the context ${path}${reason ? `: ${reason}` : ""}`,
       );

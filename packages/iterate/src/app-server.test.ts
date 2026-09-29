@@ -148,7 +148,7 @@ test("a login that names no scope asks for the app's own, so Switch account and 
   expect(begun).toEqual([["iterate", "admin"]]);
 });
 
-test("a login hint rides on to the issuer's authorization URL, and a login without one adds none", async () => {
+test("a login hint and a provider hint ride on to the issuer's authorization URL, and a login without them adds none", async () => {
   const sessions = {
     getByName: () => ({
       begin: async (host: { issuer: string }) => `${host.issuer}/oauth2/auth?state=x`,
@@ -164,10 +164,30 @@ test("a login hint rides on to the issuer's authorization URL, and a login witho
     (await appAuth(new Request(`https://dash.example${path}`), config))?.headers.get("location");
   expect(
     await location(
-      `/.auth/login?${new URLSearchParams({ next: "/projects/pr1", login_hint: "pr1@preview.iterate.test" })}`,
+      `/.auth/login?${new URLSearchParams({ next: "/projects/pr1", login_hint: "pr1@preview.iterate.test", provider_hint: "os.iterate.com" })}`,
     ),
-  ).toBe(`${ISSUER}/oauth2/auth?state=x&login_hint=pr1%40preview.iterate.test`);
+  ).toBe(
+    `${ISSUER}/oauth2/auth?state=x&login_hint=pr1%40preview.iterate.test&provider_hint=os.iterate.com`,
+  );
   expect(await location("/.auth/login?next=%2F")).toBe(`${ISSUER}/oauth2/auth?state=x`);
+});
+
+test("on the issuer's own origin, a signed-out login goes to its sign-in page with the provider hint", async () => {
+  const config = {
+    sessions: { getByName: () => ({}) } as unknown as DurableObjectNamespace<BrowserSession>,
+    issuer: ISSUER,
+    resource: `${ISSUER}/api`,
+    api: () => new Response(""),
+    loginPage: "/login",
+  };
+  const location = async (path: string) =>
+    (await appAuth(new Request(`${ISSUER}${path}`), config))?.headers.get("location");
+  expect(
+    await location(
+      `/.auth/login?${new URLSearchParams({ next: "/projects/pr1/notes/", provider_hint: "os.iterate.com" })}`,
+    ),
+  ).toBe("/login?next=%2Fprojects%2Fpr1%2Fnotes%2F&provider_hint=os.iterate.com");
+  expect(await location("/.auth/login?next=%2F")).toBe("/login?next=%2F");
 });
 
 test("client metadata publishes app branding relative to its own origin, independently of the issuer", async () => {

@@ -36,6 +36,7 @@
     // iterate's Slack app and Google and Cloudflare clients, answered by the pet shop's fakes at
     // slack.test, google.test and cloudflare.test (__workers-tests__/integrations.test.ts); its GitHub App is vitest.config.ts's
     "APP_CONFIG_INTEGRATIONS__SLACK": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"webhookSigningSecret\":\"slack-test-signing-secret\",\"slackOrigin\":\"https://slack.test\"}",
+    "APP_CONFIG_INTEGRATIONS__X": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"xOrigin\":\"https://x.test\"}",
     "APP_CONFIG_INTEGRATIONS__GOOGLE": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"googleOrigin\":\"https://google.test\"}",
     "APP_CONFIG_INTEGRATIONS__CLOUDFLARE": "{\"oauthClientId\":\"petshop-default\",\"oauthClientSecret\":\"petshop-default-secret\",\"cloudflareOrigin\":\"https://cloudflare.test\"}",
   },

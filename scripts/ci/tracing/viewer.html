@@ -147,6 +147,24 @@
         border-radius: 3px;
         background: #6486b9;
         min-width: 3px;
+        overflow: hidden;
+      }
+      .segment {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+      }
+      /* a failed or unfinished row keeps its colour as an outline where its children's show */
+      .adopted.failed::after,
+      .adopted.incomplete::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 2px #f17982;
+      }
+      .adopted.incomplete::after {
+        box-shadow: inset 0 0 0 2px #788498;
       }
       .axis {
         height: 32px;
@@ -173,8 +191,7 @@
           #5e4c2e 8px
         );
       }
-      .phase-test,
-      .passed {
+      .phase-test {
         background: #56bc98;
       }
       .phase-finish {
@@ -255,8 +272,8 @@
       <h1 id="title">Preview CI trace</h1>
       <p id="subtitle"></p>
       <p>
-        Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence.
+        Expand a job, then a step, to see individual tests and retries. Click any bar for its timing
+        and evidence. A bar takes its children's colour wherever every child running then shares it.
       </p>
       <div class="stats" id="stats"></div>
       <p id="outcome-note"></p>
@@ -268,7 +285,7 @@
           placeholder="Find a test, step or file…"
           aria-label="Filter trace"
         />
-        <button id="phases">Show phases</button><button id="expand">Expand all</button>
+        <button id="phases">Show steps</button><button id="expand">Expand all</button>
         <button id="zoom">Zoom to selection</button><button id="reset">Full run</button>
         <button id="download">Download OTLP JSON</button>
       </div>
@@ -314,6 +331,12 @@
           inside deployed workers.
         </p>
         <p>
+          A bar takes its children's colour for any stretch where every child running then has that
+          colour, so a job waiting on nothing but the deploy is striped for that wait. Where
+          children running side by side differ, or none runs, the bar keeps its own colour. A failed
+          or unfinished bar that takes its children's colours keeps a red or grey outline.
+        </p>
+        <p>
           The download is an OpenTelemetry ExportTraceServiceRequest JSON object: one trace, stable
           span IDs, parent IDs, nanosecond timestamps and attributes. This page is self-contained
           and can be saved or shared without a tracing service.
@@ -335,6 +358,7 @@
         }));
       const root = spans.find((s) => !s.parentSpanId);
       const byId = new Map(spans.map((span) => [span.spanId, span]));
+      const emitted = new Map(spans.map((span, index) => [span.spanId, index]));
       const rows = new Map();
       function spanLabel(span) {
         let job = span;
@@ -347,30 +371,37 @@
           spans
             .filter((c) => c.parentSpanId === s.spanId)
             .sort((a, b) => {
-              if (s === root) {
-                const rank = (span) =>
-                  span.a["ci.kind"] === "queue"
-                    ? -1
-                    : span.a["ci.job.key"]?.endsWith(":plan")
-                      ? 0
-                      : span.name === "Prepare"
-                        ? 1
-                        : span.name === "App tests"
-                          ? 2
-                          : span.name.startsWith("Playwright ")
-                            ? 3
-                            : 4;
+              // the queue, then the jobs in the order the trace job names them (tracing.ts)
+              if (s === root)
                 return (
-                  rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
+                  (b.a["ci.kind"] === "queue") - (a.a["ci.kind"] === "queue") ||
+                  emitted.get(a.spanId) - emitted.get(b.spanId)
                 );
-              }
-              return a.start - b.start;
+              // a job's own rows by their start, then its nested jobs, the Browser specs shards, by
+              // their number
+              const nested = (span) => span.a["ci.kind"] === "job";
+              return (
+                nested(a) - nested(b) ||
+                (nested(a)
+                  ? a.name.localeCompare(b.name, undefined, { numeric: true })
+                  : a.start - b.start)
+              );
             }),
         ]),
       );
-      let open = new Set(
-        spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-      );
+      // Opened at first and by "Show steps": the workflow and each job's steps, but a nested job
+      // (a Browser specs shard) one row until opened.
+      const stepsOpen = () =>
+        new Set(
+          spans
+            .filter(
+              (s) =>
+                s.a["ci.kind"] === "workflow" ||
+                (s.a["ci.kind"] === "job" && s.parentSpanId === root.spanId),
+            )
+            .map((s) => s.spanId),
+        );
+      let open = stepsOpen();
       // Cancellation can finish the workflow before its cleanup markers stop.
       const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
@@ -452,6 +483,53 @@
         ].join("\n");
         document.getElementById("source").href = span.a["ci.url"] || root.a["ci.url"];
         markSelected();
+      }
+      /** A span's own colour: a class of the legend, or "" for none. */
+      function colorOf(span) {
+        const state = span.a["ci.status"];
+        if (state === "incomplete" || state === "cancelled") return "incomplete";
+        if (span.status.code === 2) return "failed";
+        if (span.a["ci.kind"] === "test" && state === "passed") return "phase-test";
+        return span.a["ci.phase"] ? `phase-${span.a["ci.phase"]}` : "";
+      }
+      const segmentsBySpan = new Map();
+      /** A span's bar as coloured stretches from its start to its end: where every child running at
+       *  that moment has one colour (each child's own bar worked out this way first), that colour;
+       *  where children running side by side differ, none runs, or they have none, the span's own. */
+      function segments(span) {
+        if (segmentsBySpan.has(span.spanId)) return segmentsBySpan.get(span.spanId);
+        const own = colorOf(span);
+        // a step can end just after its job (docs/ci-traces.md#timing-limits)
+        const parts = children
+          .get(span.spanId)
+          .flatMap(segments)
+          .map((part) => ({
+            ...part,
+            start: Math.max(part.start, span.start),
+            end: Math.min(part.end, span.end),
+          }))
+          .filter((part) => part.end > part.start);
+        const cuts = [
+          ...new Set([span.start, span.end, ...parts.flatMap((part) => [part.start, part.end])]),
+        ].sort((a, b) => a - b);
+        const stretches = [];
+        for (let i = 0; i < cuts.length - 1; i++) {
+          const [start, end] = [cuts[i], cuts[i + 1]];
+          const colors = new Set(
+            parts
+              .filter((part) => part.start <= start && part.end >= end)
+              .map((part) => part.color),
+          );
+          const [shared] = colors;
+          const color = colors.size === 1 && shared ? shared : own;
+          const last = stretches.at(-1);
+          if (last?.color === color) last.end = end;
+          else stretches.push({ start, end, color });
+        }
+        // a span with no duration
+        if (!stretches.length) stretches.push({ start: span.start, end: span.end, color: own });
+        segmentsBySpan.set(span.spanId, stretches);
+        return stretches;
       }
       function render() {
         const container = document.getElementById("trace");
@@ -542,11 +620,22 @@
             }
           };
           const bar = document.createElement("div");
-          const state = span.a["ci.status"];
-          bar.className = `bar phase-${span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
+          const own = colorOf(span);
+          bar.className = `bar ${own}`;
           if (span.end >= range[0] && span.start <= range[1]) {
-            bar.style.left = `${Math.max(0, ((span.start - range[0]) / (range[1] - range[0])) * 100)}%`;
-            bar.style.width = `${Math.max(0, ((Math.min(span.end, range[1]) - Math.max(span.start, range[0])) / (range[1] - range[0])) * 100)}%`;
+            const [start, end] = [Math.max(span.start, range[0]), Math.min(span.end, range[1])];
+            bar.style.left = `${Math.max(0, ((start - range[0]) / (range[1] - range[0])) * 100)}%`;
+            bar.style.width = `${Math.max(0, ((end - start) / (range[1] - range[0])) * 100)}%`;
+            for (const part of segments(span)) {
+              const [from, to] = [Math.max(part.start, start), Math.min(part.end, end)];
+              if (part.color === own || to <= from) continue;
+              const piece = document.createElement("div");
+              piece.className = `segment ${part.color}`;
+              piece.style.left = `${((from - start) / (end - start)) * 100}%`;
+              piece.style.width = `${((to - from) / (end - start)) * 100}%`;
+              bar.append(piece);
+              bar.classList.add("adopted");
+            }
             timeline.append(bar);
           }
           row.append(label, timeline);
@@ -566,9 +655,7 @@
         render();
       };
       document.getElementById("phases").onclick = () => {
-        open = new Set(
-          spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-        );
+        open = stepsOpen();
         document.getElementById("search").value = "";
         render();
       };

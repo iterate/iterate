@@ -21,7 +21,14 @@ const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
     plugins: [
       hydrationWaiter({ timeout: 30_000 }),
       uiErrorReporter(),
-      spinnerWaiter({ spinnerTimeout: 30_000 }),
+      // A page that has not hydrated is loading: its controls do nothing until React owns it
+      // (`data-hydrated`, apps/os __root.tsx and packages/ui document.tsx). hydrationWaiter looks
+      // only when an action starts, so a page the action lands on by navigating (a client app's
+      // redirect to consent) counts as a spinner until it hydrates.
+      spinnerWaiter({
+        spinnerTimeout: 30_000,
+        spinnerSelectors: [...spinnerWaiter.defaults.spinnerSelectors, '[data-hydrated="false"]'],
+      }),
       screenshot(),
       process.env.VIDEO_MODE === "1" &&
         videoMode({
@@ -63,7 +70,7 @@ export const test = base.extend<{
     /** The origin of a client app deployed against the platform under test, from its
      *  `<APP>_BASE_URL`. Locally a missing app skips the spec; in CI it fails, because the
      *  preview's e2e job always sets the variable. */
-    appOrigin: (app: "notes" | "docs" | "voice" | "dash" | "admin") => string;
+    appOrigin: (app: "agents" | "notes" | "docs" | "voice" | "dash" | "admin") => string;
   };
   page: Awaited<ReturnType<typeof addPagePlugins>>;
 }>({

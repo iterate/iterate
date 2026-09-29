@@ -9,7 +9,6 @@ export default defineConfig({
     contract: "src/contract.ts",
     processor: "src/processor.ts",
     "codemode-format": "src/codemode-format.ts",
-    "ai-transport-source": "src/ai-transport-source.ts",
   },
   format: "esm",
   fixedExtension: true,

@@ -3,7 +3,8 @@
 // sent back to the sign-in page with the error, and the failure is logged as a platform failure
 // naming the person, so it joins the line the token request logged about the hop it waited on.
 // And the token endpoint's own grant checks (src/oauth.ts `accountStateOf`) ride out a deploy's
-// Durable Object reset, so a sign-in during a deploy does not fail at all.
+// Durable Object reset, so a sign-in during a deploy does not fail at all; a sign-in's own exchange
+// reads no account, so one whose person's Durable Object has not started still lands.
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
@@ -174,13 +175,46 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
   await expect(exchange(2)).rejects.toThrow(/Durable Object reset because its code was updated/);
 });
 
+test("a sign-in lands while the person's account Durable Object has not started: its own code exchange reads no account", async () => {
+  // A Durable Object Cloudflare has not started yet: a call on it never answers.
+  const accountCalls: string[] = [];
+  const notStarted = {
+    getByName: (name: string) => ({
+      invoke: () => {
+        accountCalls.push(name);
+        return new Promise(() => {});
+      },
+    }),
+  } as unknown as typeof env.ITERATE_CONTEXT;
+  const response = await signInWhile("account-not-started@example.com", (request, signal) =>
+    Promise.race([
+      authorizationServerFetch(
+        { ...env, ITERATE_CONTEXT: notStarted },
+        platformAddressesOf(env, request),
+        request,
+        createExecutionContext(),
+      ),
+      // the browser session's bound on the exchange (`AbortSignal.timeout(10_000)`)
+      new Promise<never>((_, reject) =>
+        signal?.addEventListener("abort", () => reject(signal.reason)),
+      ),
+    ]),
+  );
+  expect(response, response.headers.get("location") ?? "").toMatchObject({ status: 302 });
+  expect(response.headers.getSetCookie().join("; ")).toContain("__Host-itx-session=");
+  expect(accountCalls).toEqual([]);
+});
+
 /** A password sign-in's POST /login, its token endpoint answered by `tokenEndpoint`. */
-async function signInWhile(email: string, tokenEndpoint: () => Promise<Response>) {
+async function signInWhile(
+  email: string,
+  tokenEndpoint: (request: Request, signal: AbortSignal | null | undefined) => Promise<Response>,
+) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== ORIGIN) throw new Error(`Unexpected external fetch: ${url}`);
-    if (url.pathname === "/oauth2/token") return tokenEndpoint();
+    if (url.pathname === "/oauth2/token") return tokenEndpoint(request, init?.signal);
     return exports.default.fetch(request);
   });
   return exports.default.fetch(

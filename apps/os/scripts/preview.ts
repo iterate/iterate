@@ -22,6 +22,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { connectIterate } from "iterate/node";
+import type { IngressRouting } from "iterate/project-ingress";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
@@ -29,7 +30,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -44,8 +45,13 @@ import {
 } from "../../../scripts/lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
+import { depotApi, workflowsInProgress } from "../../../scripts/ci/depot.ts";
 import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
+import {
+  githubPullRequestBody,
+  writePullRequestBody,
+} from "../../../scripts/ci/pull-request-body.ts";
 import { getSlackClient, keepPage, slackChannelIds } from "../../../scripts/ci/slack.ts";
 import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
 import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
@@ -79,14 +85,16 @@ import {
   previewDeploymentName,
   previewDeploymentUrls,
   previewPullRequestNumber,
+  proxiedAppRoute,
+  PROXIED_APPS,
   renderPullRequestSection,
   PREVIEW_SECTION,
   resolvePreviewPrefix,
+  signInLinkOf,
   templateQuickLaunches,
-  writePullRequestBody,
-  type PullRequestBody,
 } from "./preview-config.ts";
 import {
+  CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
   newestPreviewDeployment,
   planFormerParents,
@@ -151,21 +159,9 @@ async function listAll<T>(cf: Cf, route: string) {
 /** The pull request `number` of this repository (GITHUB_REPOSITORY), as Octokit's parameters. */
 const pullRequest = (number: string | number) => ({ ...getRepo(), pull_number: Number(number) });
 
-/** The PR's body on GitHub, read and replaced (preview-config.ts `writePullRequestBody`). */
-function pullRequestBody(prNumber: string): PullRequestBody {
-  const github = getOctokit();
-  return {
-    number: prNumber,
-    read: async () => (await github.rest.pulls.get(pullRequest(prNumber))).data.body || "",
-    replace: async (body) => {
-      await github.rest.pulls.update({
-        ...pullRequest(prNumber),
-        body,
-        request: { askOnce: true },
-      });
-    },
-  };
-}
+/** The PR's body on GitHub, written by scripts/ci/pull-request-body.ts `writePullRequestBody`. */
+const pullRequestBody = (prNumber: string) =>
+  githubPullRequestBody(getOctokit(), getRepo(), Number(prNumber));
 
 /** The commit this checkout is: the one the job deployed or tested (the PR merged into main in CI). */
 function checkedOutCommit() {
@@ -357,7 +353,12 @@ async function deletePreviewDeployments(cf: Cf, deployments: PreviewDeploymentLi
  *  run's `Clean up superseded` job, once its own deployment is ready. Never the run's verdict: the
  *  job does not gate the checks, and what it leaves the next run's cleanup or the sweep takes. */
 async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolean }) {
-  const superseded = planSupersededCleanup(await listPreviewDeployments(cf), name);
+  const deployments = await listPreviewDeployments(cf);
+  const underTest = await deploymentsUnderTest(name);
+  for (const deployment of deployments)
+    if (deployment.name !== name && underTest.has(deployment.name))
+      console.log(`  keep ${deployment.name}: a run still in progress tests it`);
+  const superseded = planSupersededCleanup(deployments, name, underTest);
   for (const deployment of superseded)
     console.log(
       `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name}: superseded by ${name}`,
@@ -370,6 +371,18 @@ async function cleanupSuperseded(cf: Cf, name: string, options: { dryRun: boolea
       `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
     );
   if (failures.length > 0) throw new Error(`cleanup failures:\n  ${failures.join("\n  ")}`);
+}
+
+/** The deployments of `name`'s prefix that a run still in progress tests. A CI workflow's own prefix
+ *  (preview-sweep.ts CI_WORKFLOW_PREVIEWS): `<prefix>-<sha7>` of each queued or running run of that
+ *  workflow, whatever started it, from Depot. A PR's: none, since its next push cancels the run in
+ *  progress. */
+async function deploymentsUnderTest(name: string): Promise<ReadonlySet<string>> {
+  const prefix = previewDeployment(name)?.prefix || "";
+  const workflow = CI_WORKFLOW_PREVIEWS.get(prefix);
+  if (!workflow) return new Set();
+  const runs = await workflowsInProgress(depotApi(), { name: workflow });
+  return new Set(runs.map((run) => previewDeploymentName(prefix, run.sha)));
 }
 
 /** EVERY DEPLOYMENT OF A PREFIX: a closed PR's (preview-delete.yml), or a name's by hand. */
@@ -575,7 +588,15 @@ async function deployPreviewSteps(
   );
   console.log(`\ndeployment ${name}: ${url}`);
   const signIn = prNumber
-    ? signInLinks({ url, prNumber, apps: deployedApps, changedPaths: await changed })
+    ? signInLinks({
+        url,
+        ingressRouting: osEnv(name)!.ingressRouting || null,
+        // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
+        providerHint: new URL(osEnv(name)!.adminIssuer!).host,
+        prNumber,
+        apps: deployedApps,
+        changedPaths: await changed,
+      })
     : undefined;
   const publish = async (seeded: boolean) => {
     mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -608,7 +629,11 @@ async function deployPreviewSteps(
   };
   // The seed and the section side by side: a seed that failed rewrites the section to say so.
   const [seeded] = await Promise.all([
-    signIn ? traceOperation("Seed sign-in", () => seedSignIn(config, { url, ...signIn })) : true,
+    signIn
+      ? traceOperation("Seed sign-in", () =>
+          seedSignIn(config, { url, ...signIn, admins: osEnv(name)!.admins || [] }),
+        )
+      : true,
     publish(true),
   ]);
   if (!seeded) await publish(false);
@@ -637,17 +662,21 @@ async function changedPaths(prNumber: string | undefined) {
     .filter(Boolean);
 }
 
-/** THE SIGN-IN a PR's body links (preview-config.ts `appSignInLink`): the heading's link, one per
+/** THE SIGN-IN a PR's body links (preview-config.ts `signInLinkOf`): the heading's link, one per
  *  app, and with the Dash one per config template into its New project sheet (preview-config.ts
  *  `templateQuickLaunches`), each the app's own sign-in naming the PR's test person
  *  `pr<N>@preview.iterate.test`, whose project `pr<N>` seedSignIn creates. The link is public and
  *  grants nothing: a reviewer signs in to the deployment as themselves, one of prd's admins
  *  (src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
  *  which the link pre-fills (src/consent.ts). The admin app's names nobody: an admin opens it as
- *  themselves. The heading's lands in the Dash's `/projects/pr<N>` when the Dash was deployed,
- *  else on the issuer's own sign-in page. */
+ *  themselves, and so does a proxied app's (Notes, Docs), which is the app's page in `pr<N>`, whose
+ *  organization seedSignIn makes the admins members of. The heading's lands in the Dash's
+ *  `/projects/pr<N>` when the Dash was deployed, else on the issuer's own sign-in page. */
 function signInLinks(preview: {
   url: string;
+  ingressRouting: IngressRouting;
+  /** the admin issuer's host, the way a reviewer signs in */
+  providerHint: string;
   prNumber: string;
   apps: { name: string; url: string }[];
   changedPaths: string[];
@@ -655,10 +684,14 @@ function signInLinks(preview: {
   const project = `pr${preview.prNumber}`;
   const email = `${project}@${TEST_EMAIL_DOMAIN}`;
   const link = (app: { name: string; url: string }) =>
-    appSignInLink(
-      app.name === "dash" ? `${app.url}/projects/${project}` : app.url,
-      app.name === "admin" ? undefined : email,
-    );
+    signInLinkOf({
+      app,
+      platform: preview.url,
+      ingressRouting: preview.ingressRouting,
+      project,
+      email,
+      providerHint: preview.providerHint,
+    });
   const dash = preview.apps.find((app) => app.name === "dash");
   return {
     heading: dash ? link(dash) : `${preview.url}/login`,
@@ -673,33 +706,62 @@ function signInLinks(preview: {
         }).map(({ name, fromHead, next }) => ({
           name,
           fromHead,
-          link: appSignInLink(next, email),
+          link: appSignInLink(next, { provider_hint: preview.providerHint, login_hint: email }),
         }))
       : [],
     email,
     project,
+    // the proxied apps this deployment has, which the project serves (seedSignIn)
+    proxiedApps: preview.apps.filter((app) => PROXIED_APPS.has(app.name)),
   };
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it. It never fails the deploy: it logs, and the section says when it failed. */
+ *  lands inside it. Then what a proxied app's link needs: a fetch route per proxied app to the
+ *  deployment's own Worker (preview-config.ts `proxiedAppRoute`), and the deployment's `admins`
+ *  members of the project's organization, so a reviewer signed in as themselves opens it. Each admin
+ *  is found or created by email, the row their first sign-in finds. It never fails the deploy: it
+ *  logs, and the section says when it failed. */
 async function seedSignIn(
   config: AppConfig,
-  preview: { url: string; email: string; project: string },
+  preview: {
+    url: string;
+    email: string;
+    project: string;
+    proxiedApps: { name: string; url: string }[];
+    admins: string[];
+  },
 ) {
   const { email, project } = preview;
+  const secret = config.secrets.adminBearer.exposeSecret();
   try {
     using connection = await connectIterate({
       baseUrl: preview.url,
-      auth: {
-        type: "admin-secret",
-        secret: config.secrets.adminBearer.exposeSecret(),
-        as: { email },
-      },
+      auth: { type: "admin-secret", secret, as: { email } },
     });
-    await connection.session.projects.create({ project });
-    console.log(`sign-in: seeded ${email} with project ${project}`);
+    using created = await connection.session.projects.create({ project });
+    await Promise.all(
+      preview.proxiedApps.map((app) =>
+        created.fetchRoutes.set(app.name, proxiedAppRoute(app.name, app.url)),
+      ),
+    );
+    const { orgId } = (await connection.session.projects.list()).find(
+      (record) => record.slug === project,
+    )!;
+    using operator = await connectIterate({
+      baseUrl: preview.url,
+      auth: { type: "admin-secret", secret },
+    });
+    await Promise.all(
+      preview.admins.map(async (admin) => {
+        const user = await operator.session.users.create({ email: admin });
+        await operator.session.organizations.addMember(orgId, { userId: user.id });
+      }),
+    );
+    console.log(
+      `sign-in: seeded ${email} with project ${project}, serving ${preview.proxiedApps.map((app) => app.name).join(", ") || "no proxied app"}, its members ${preview.admins.join(", ")}`,
+    );
     return true;
   } catch (error) {
     console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);
@@ -769,10 +831,10 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
- *  the specs in specs/setup.ts. Every spec project runs, the notes, docs and voice projects against this
- *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in its Dash
- *  (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their specs fail in CI without
- *  them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
+ *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
+ *  deployment's Agents, Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out
+ *  in its Dash (AGENTS_BASE_URL, NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL,
+ *  ADMIN_BASE_URL; their specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
  *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
  *  each row to its timeout ceiling (e2e/support/setup.ts), and the PR's number as
  *  PREVIEW_PR_NUMBER, by which the pkg.pr.new rows find the PR's own builds. */
@@ -789,6 +851,7 @@ async function runSuite(
     suite === "specs"
       ? {
           WORKER_BASE_URL: url,
+          AGENTS_BASE_URL: appUrl("agents"),
           NOTES_BASE_URL: appUrl("notes"),
           DOCS_BASE_URL: appUrl("docs"),
           VOICE_BASE_URL: appUrl("voice"),
@@ -819,7 +882,7 @@ async function runSuite(
     new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
   let tests: { args: string[]; env: Record<string, string> };
   try {
-    tests = await traceOperation("Set up the suite", async () => {
+    tests = await traceOperation({ name: "Set up the suite", phase: "setup" }, async () => {
       if (suite === "specs") {
         // The headless shell alone, which headless Chromium with no `channel`
         // (playwright.config.ts) launches: a no-op when CI restored it.
@@ -859,7 +922,9 @@ async function runSuite(
   }
   if (deployJob) {
     try {
-      await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
+      await traceOperation({ name: "Wait for Deploy preview", phase: "wait" }, () =>
+        awaitDeployOfThisRun(deployJob),
+      );
     } catch (error) {
       await warm?.stop();
       throw error;
@@ -872,7 +937,7 @@ async function runSuite(
       name,
       // the client apps the specs run against; the vitest rows use none
       suite === "specs"
-        ? ["notes", "docs", "voice", "dash", "admin"].map((app) => ({
+        ? ["agents", "notes", "docs", "voice", "dash", "admin"].map((app) => ({
             name: app,
             url: appUrl(app),
           }))
@@ -989,7 +1054,7 @@ function warmUp(
   let stopping = false;
   let closed = false;
   const exited = traceOperation(
-    `Warm up ${what}`,
+    { name: `Warm up ${what}`, phase: "setup" },
     () =>
       new Promise<void>((resolve) => {
         child.once("error", (error) => {

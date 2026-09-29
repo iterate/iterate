@@ -24,13 +24,13 @@ test.each([
 });
 
 test.each([
-  ["pr2990-a1b2c3d-os.iterate-dev-preview.workers.dev", 2990],
-  ["pr2990-a1b2c3d-dash.iterate-dev-preview.workers.dev", 2990],
-  ["pr2990-os.iterate-dev-preview.workers.dev", 2990],
-  ["pr2990-dash.iterate-dev-preview.workers.dev", 2990],
-  ["pr7-kit.iterate-dev-preview.workers.dev", 7],
-])("%s is PR %i's preview", (hostname, pr) => {
-  expect(deploymentEnvironment(hostname)).toEqual({ kind: "preview", pr });
+  ["pr2990-a1b2c3d-os.iterate-dev-preview.workers.dev", 2990, "pr2990-a1b2c3d"],
+  ["pr2990-a1b2c3d-dash.iterate-dev-preview.workers.dev", 2990, "pr2990-a1b2c3d"],
+  ["pr2990-os.iterate-dev-preview.workers.dev", 2990, "pr2990"],
+  ["pr2990-dash.iterate-dev-preview.workers.dev", 2990, "pr2990"],
+  ["pr7-kit.iterate-dev-preview.workers.dev", 7, "pr7"],
+])("%s is PR %i's preview, deployment %s", (hostname, pr, deployment) => {
+  expect(deploymentEnvironment(hostname)).toEqual({ kind: "preview", pr, deployment });
 });
 
 test.each(["localhost", "petshop.localhost", "127.0.0.1"])("%s is dev", (hostname) => {
@@ -39,7 +39,9 @@ test.each(["localhost", "petshop.localhost", "127.0.0.1"])("%s is dev", (hostnam
 
 test("the title is prefixed off production only", () => {
   expect(environmentTitle({ kind: "production" }, "Dash")).toBe("Dash");
-  expect(environmentTitle({ kind: "preview", pr: 2990 }, "Dash")).toBe("[pr2990] Dash");
+  expect(
+    environmentTitle({ kind: "preview", pr: 2990, deployment: "pr2990-a1b2c3d" }, "Dash"),
+  ).toBe("[pr2990] Dash");
   expect(environmentTitle({ kind: "dev" }, "Sign in · Dash")).toBe("[dev] Sign in · Dash");
 });
 
@@ -50,7 +52,9 @@ test("production keeps its own icon file", () => {
 });
 
 test("a preview's icon is purple, with its PR number", () => {
-  const svg = decodeSvg(environmentFaviconHref({ kind: "preview", pr: 2990 }, "/x.svg"));
+  const svg = decodeSvg(
+    environmentFaviconHref({ kind: "preview", pr: 2990, deployment: "pr2990-a1b2c3d" }, "/x.svg"),
+  );
   expect(svg).toContain('fill="#7C3AED"');
   expect(svg).toContain(">2990</text>");
 });
@@ -69,7 +73,9 @@ test.each([
   [2990, 198],
   [12345, 158],
 ])("PR %i's digits fit across the square at font-size %i", (pr, fontSize) => {
-  expect(environmentFaviconSvg({ kind: "preview", pr })).toContain(`font-size="${fontSize}"`);
+  expect(environmentFaviconSvg({ kind: "preview", pr, deployment: `pr${pr}-a1b2c3d` })).toContain(
+    `font-size="${fontSize}"`,
+  );
 });
 
 function decodeSvg(href: string) {

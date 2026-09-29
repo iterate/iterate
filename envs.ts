@@ -463,7 +463,8 @@ export const ciReportsEnvs: Record<
 };
 
 /** The CI bucket, `iterate-ci` (docs/test-evidence.md#one-bucket): each CI job attempt's test
- *  evidence folder under `evidence/`, and later the alert guards' state under `state/`. CI tooling, so it lives on the dev/preview account; CI
+ *  evidence folder under `evidence/`, and later the alert guards' state under `state/`; never prd
+ *  data (`backupBucketEnvs`). CI tooling, so it lives on the dev/preview account; CI
  *  writes it with that account's Cloudflare API token (Doppler `_shared/preview`'s
  *  CLOUDFLARE_API_TOKEN, used as S3 keys by `scripts/ci/test-evidence.ts upload`). Created by hand
  *  with that token, with lifecycle rules on `evidence/` only: docs/test-evidence.md#setup. */
@@ -473,3 +474,14 @@ export const ciBucketEnvs = {
     bucketName: "iterate-ci",
   },
 };
+
+/** The backup bucket of an OS deployment, by its `osEnvs` name: where the context sweep
+ *  (scripts/ci/context-sweep.ts) keeps what it destroys, each orphan context's durable log. A
+ *  deployment's event logs stay on its own account, written with its own Cloudflare API token (the
+ *  one its Doppler config carries), never the dev/preview token every CI job holds. Only prd has
+ *  one: the sweep's `--destroy` is refused for any other deployment. Created by hand, every object
+ *  expiring 365 days after it lands: the context sweep's header has the commands. */
+export const backupBucketEnvs: Record<string, { cloudflareAccountId: string; bucketName: string }> =
+  {
+    prd: { cloudflareAccountId: PRD_ACCOUNT_ID, bucketName: "iterate-prd-backups" },
+  };

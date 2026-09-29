@@ -35,6 +35,7 @@ const quiet: FaultReading = {
   heals: [],
   healEvents: [],
   errors: [],
+  closeResets: [],
   pagers: [],
 };
 const now = new Date("2026-09-23T07:30:00Z");
@@ -124,6 +125,38 @@ test.for([
         ["rpc-stub-pager-redialed", 2],
         ["rpc-stub-pager-redial-failed", 1],
       ],
+    },
+    pages: true,
+  },
+  {
+    name: "a socket close's reset with every pager re-dialed (2026-09-28 14:49) pages nothing",
+    reading: {
+      closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 3]],
+      pagers: [["rpc-stub-pager-redialed", 3]],
+    },
+    pages: false,
+  },
+  {
+    name: "a socket close's reset with a pager that gave up pages",
+    reading: {
+      closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 3]],
+      pagers: [
+        ["rpc-stub-pager-redialed", 2],
+        ["rpc-stub-pager-redial-failed", 1],
+      ],
+    },
+    pages: true,
+  },
+  {
+    name: "a socket close's reset no pager re-dialed through pages",
+    reading: { closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 1]] },
+    pages: true,
+  },
+  {
+    name: "an internal error that is not a socket close's pages with every pager re-dialed (a 500 from the expression fetch, 2026-09-28 13:04)",
+    reading: {
+      errors: [["internal error; reference = 4b2bd3s1lpsjhc4kfd1fh7gm", 1]],
+      pagers: [["rpc-stub-pager-redialed", 3]],
     },
     pages: true,
   },
@@ -226,7 +259,7 @@ test("an incident grown tenfold since the channel last heard is broadcast in its
 test("a deploy's incident grown tenfold is broadcast with the hosts this window added", () => {
   const reset = (hosts: [string, number][]): FaultReading => ({
     ...quiet,
-    causes: [{ cause: "deploy reset", deploy: "os-prd@502616fb", serverErrors: hosts }],
+    causes: [{ cause: "deploy reset", worker: "os-prd", serverErrors: hosts }],
   });
   const first = triageAt("07:30", reset([["https://a.com/", 1]]), null);
   const grown = triageAt(
@@ -238,7 +271,7 @@ test("a deploy's incident grown tenfold is broadcast with the hosts this window 
     first.next,
   );
   expect(grown.triage.updates.map((update) => update.reply?.text.split("\n")[1])).toEqual([
-    "• grew tenfold: deploy reset (os-prd@502616fb): 10 visitor 5xx on a.com 5, b.com 5",
+    "• grew tenfold: deploy reset (os-prd): 10 visitor 5xx on a.com 5, b.com 5",
   ]);
 });
 
@@ -350,16 +383,16 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
     triageIncidents(
       {
         ...quiet,
-        causes: [{ cause: "deploy reset", deploy: "os-prd@502616fb", serverErrors: hosts }],
+        causes: [{ cause: "deploy reset", worker: "os-prd", serverErrors: hosts }],
       },
       window,
       null,
       false,
     ).page?.text.split("\n"),
   ).toEqual([
-    `🚨 prd: deploy reset (os-prd@502616fb), 21 visitor 5xx ${mentions}`,
+    `🚨 prd: deploy reset (os-prd), 21 visitor 5xx ${mentions}`,
     "Impact: since 07:30 UTC",
-    "• deploy reset (os-prd@502616fb): 21 visitor 5xx on a.com 6, b.com 5, c.com 4, d.com 3, e.com 2 +1 · last 07:30 UTC",
+    "• deploy reset (os-prd): 21 visitor 5xx on a.com 6, b.com 5, c.com 4, d.com 3, e.com 2 +1 · last 07:30 UTC",
     doLine,
   ]);
 });
@@ -722,6 +755,19 @@ test.for([
     page: ["• errors: GET https://garple.com/… 1 · last 07:30 UTC"],
   },
   {
+    name: "a 500 a project's own code answered pages as its host (garple.com's POST /chat/warm, 2026-09-28 19:51)",
+    events: () => [
+      invocation({
+        hop: "IterateContextDurableObject",
+        status: 500,
+        url: "https://garple.com/chat/warm",
+        rayId: "warm",
+      }),
+      invocation({ status: 500, url: "https://garple.com/chat/warm", rayId: "warm" }),
+    ],
+    page: ["• visitor 5xx: garple.com 1 · last 07:30 UTC"],
+  },
+  {
     name: "a jsrpc summary of a call that logged its exception is that exception's one sighting",
     events: () => [
       invocation({
@@ -733,12 +779,10 @@ test.for([
       line({
         hop: "IterateContextDurableObject",
         requestId: "call",
-        message: "IterateContextDurableObject must be addressed by name (reach it via getByName).",
+        message: 'The RPC receiver does not implement the method "append".',
       }),
     ],
-    page: [
-      "• errors: IterateContextDurableObject must be addressed by name (reach it via getByName). 1 · last 07:30 UTC",
-    ],
+    page: ['• errors: The RPC receiver does not implement the method "append". 1 · last 07:30 UTC'],
   },
   {
     name: "an alarm's summary of an alarm that logged its exception is that exception's one sighting",
@@ -780,21 +824,87 @@ test.for([
     page: ["• errors: SecretDurableObject.jsrpc 1 · last 07:30 UTC"],
   },
   {
-    name: "a context destroyed with its deleted project pages nothing, nor its jsrpc summary",
+    name: "a context destroyed with its deleted project, announced at info, pages nothing, nor its jsrpc summary",
+    events: () => announcedReset("context.destroyed", "do-1", "destroyed: its project was deleted"),
+    page: null,
+  },
+  {
+    name: "the context sweep's lookup of an id nothing was born at, announced at info, pages nothing, nor its jsrpc summary",
+    events: () =>
+      announcedReset(
+        "context.unborn-by-id",
+        "do-1",
+        "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
+      ),
+    page: null,
+  },
+  {
+    name: "an itx.abort() reset, announced at info, pages nothing",
+    events: () =>
+      announcedReset(
+        "context.aborted",
+        "do-1",
+        "itx.abort() reset the context /: a deploy's reset, on demand",
+      ),
+    page: null,
+  },
+  {
+    name: "a deleted root's reset once its project came back, announced at info, pages nothing",
+    events: () =>
+      announcedReset(
+        "context.root-restored",
+        "do-1",
+        "project prj_x was restored: its root is born on the next request",
+      ),
+    page: null,
+  },
+  {
+    name: "the calls in flight a reset rejects with its message page nothing (itx.abort() on a preview, 2026-09-29 09:56)",
     events: () => [
-      line({
-        hop: "IterateContextDurableObject",
-        requestId: "destroy",
-        message: "destroyed: its project was deleted",
-      }),
-      invocation({
-        hop: "IterateContextDurableObject",
-        eventType: "jsrpc",
-        outcome: "exception",
-        requestId: "destroy",
-      }),
+      ...announcedReset("context.aborted", "do-1", "itx.abort() reset the context /: busy"),
+      ...rejectedInFlight("do-1", "in-flight", "itx.abort() reset the context /: busy"),
     ],
     page: null,
+  },
+  {
+    name: "the same error in a Durable Object that announced nothing pages",
+    events: () => [
+      ...announcedReset("context.destroyed", "do-1", "destroyed: its project was deleted"),
+      ...rejectedInFlight("do-2", "unannounced", "destroyed: its project was deleted"),
+    ],
+    page: ["• errors: destroyed: its project was deleted 1 · last 07:30 UTC"],
+  },
+  {
+    name: "a secret facet's last call session, cut off as its deletion was announced at info, pages nothing (prd's secrets.delete, 2026-09-28 11:20)",
+    events: () => [deletedSecretFacet("do-1"), cutOffSecretCall("do-1")],
+    page: null,
+  },
+  {
+    name: "a bare SecretDurableObject.jsrpc in a Durable Object that announced no deletion pages",
+    events: () => [deletedSecretFacet("do-1"), cutOffSecretCall("do-2")],
+    page: ["• errors: SecretDurableObject.jsrpc 1 · last 07:30 UTC"],
+  },
+  {
+    name: "another class's bare summary in a Durable Object that deleted its secret facet pages",
+    events: () => [
+      deletedSecretFacet("do-1"),
+      invocation({
+        hop: "RepoDurableObject",
+        eventType: "jsrpc",
+        outcome: "exception",
+        requestId: "repo-cut",
+        objectId: "do-1",
+      }),
+    ],
+    page: ["• errors: RepoDurableObject.jsrpc 1 · last 07:30 UTC"],
+  },
+  {
+    name: "another error in a Durable Object that announced a reset pages",
+    events: () => [
+      ...announcedReset("context.aborted", "do-1", "itx.abort() reset the context /: busy"),
+      ...rejectedInFlight("do-1", "other", "Durable Object storage operation exceeded timeout"),
+    ],
+    page: ["• errors: Durable Object storage operation exceeded timeout 1 · last 07:30 UTC"],
   },
 ])("$name", async ({ events, page }) => {
   queryableWorkersLogs(events());
@@ -805,14 +915,12 @@ test.for([
 // The deploy causes: CAUSES in ./prd-fault-alarm.ts.
 test.for([
   {
-    name: "a deploy reset's visitor 5xx are one incident of that deploy, and its errors page nothing",
+    name: "a deploy reset's visitor 5xx are one incident of its Worker, and its errors page nothing",
     events: () => [
       ...deployResetRay("r1", "https://api-sandbox.garple.com/proc/self/cgroup"),
       ...deployResetRay("r2", "https://api-sandbox.garple.com/@fs/.env"),
     ],
-    page: [
-      "• deploy reset (os-prd@502616fb): 2 visitor 5xx on api-sandbox.garple.com 2 · last 07:30 UTC",
-    ],
+    page: ["• deploy reset (os-prd): 2 visitor 5xx on api-sandbox.garple.com 2 · last 07:30 UTC"],
   },
   {
     name: "a deploy reset whose visitor got no 5xx pages nothing",
@@ -841,7 +949,7 @@ test.for([
     page: ["• errors: a lent stub's pager dropped and could not be re-dialed 1 · last 07:30 UTC"],
   },
   {
-    name: "a version skew's visitor 5xx are one incident of that deploy",
+    name: "a version skew's visitor 5xx are one incident of its Worker",
     events: () =>
       deployResetRay("r1", "https://garple.com/").map((event) =>
         event.$metadata.message?.startsWith("Durable Object reset")
@@ -854,17 +962,31 @@ test.for([
             }
           : event,
       ),
-    page: ["• version skew (os-prd@502616fb): 1 visitor 5xx on garple.com 1 · last 07:30 UTC"],
+    page: ["• version skew (os-prd): 1 visitor 5xx on garple.com 1 · last 07:30 UTC"],
   },
   {
-    name: "another deploy's reset is another incident",
+    name: "a deploy's resets logged by its old and new version, and the next deploy's, are one incident of the Worker",
     events: () => [
       ...deployResetRay("r1", "https://garple.com/"),
-      ...deployResetRay("r2", "https://garple.com/", "a65e434e-0000"),
+      ...deployResetRay("r2", "https://lispwoso.com/", "a65e434e-0000"),
+      ...deployResetRay("r3", "https://garple.com/", "c0ffee00-0000"),
     ],
     page: [
-      "• deploy reset (os-prd@502616fb): 1 visitor 5xx on garple.com 1 · last 07:30 UTC",
-      "• deploy reset (os-prd@a65e434e): 1 visitor 5xx on garple.com 1 · last 07:30 UTC",
+      "• deploy reset (os-prd): 3 visitor 5xx on garple.com 2, lispwoso.com 1 · last 07:30 UTC",
+    ],
+  },
+  {
+    name: "another Worker's reset is another incident",
+    events: () => [
+      ...deployResetRay("r1", "https://garple.com/"),
+      ...deployResetRay("r2", "https://dash.iterate.com/").map((event) => ({
+        ...event,
+        $metadata: { ...event.$metadata, service: "dash" },
+      })),
+    ],
+    page: [
+      "• deploy reset (os-prd): 1 visitor 5xx on garple.com 1 · last 07:30 UTC",
+      "• deploy reset (dash): 1 visitor 5xx on dash.iterate.com 1 · last 07:30 UTC",
     ],
   },
 ])("$name", async ({ events, page }) => {
@@ -879,9 +1001,7 @@ test.for([
 ])("expected outcomes have the same policy in metadata.$name", async ({ key }) => {
   const messages = [
     "Durable Object reset because its code was updated.",
-    "itx.abort() reset the context",
     "Can't read from request stream after response has been sent.",
-    "destroyed: its project was deleted",
     "Unable to deserialize cloned data due to invalid or unsupported version.",
   ];
   queryableWorkersLogs(
@@ -911,6 +1031,84 @@ test.for([
   expect(bullets(await summary())).toEqual([
     "• errors: Can't read from request stream after response has been sent. 1 · last 07:30 UTC",
   ]);
+});
+
+const HUNG =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/";
+const RPC_BODY_ENDED_EARLY = "ReadableStream received over RPC disconnected prematurely.";
+
+// PINNED_LINES and a socket close's reset (CLOSE_RESET) in ./prd-fault-alarm.ts, as prd logged them.
+test.for([
+  {
+    name: "a hung line on ItxEntrypoint is the pinned false one, and its jsrpc summary folds into it",
+    events: () => [
+      line({ hop: "ItxEntrypoint", requestId: "ai-run", message: HUNG }),
+      invocation({
+        hop: "ItxEntrypoint",
+        eventType: "jsrpc",
+        outcome: "exception",
+        requestId: "ai-run",
+      }),
+    ],
+    page: null,
+  },
+  {
+    name: "a hung line on any other invocation pages",
+    events: () => [line({ message: HUNG })],
+    page: [
+      "• errors: The Workers runtime canceled this request because it detected that your Worker's 1 · last 07:30 UTC",
+    ],
+  },
+  {
+    name: "a context forwarding a repo's git requests logs the pinned RPC body line on its fetch and its jsrpc session (2026-09-29 10:35)",
+    events: () => [
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "session",
+        message: RPC_BODY_ENDED_EARLY,
+      }),
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "forward",
+        message: RPC_BODY_ENDED_EARLY,
+        url: "https://github.com/iterate/config.git/git-upload-pack",
+      }),
+    ],
+    page: null,
+  },
+  {
+    name: "the RPC body line on any other invocation pages",
+    events: () => [line({ hop: "ItxEntrypoint", message: RPC_BODY_ENDED_EARLY })],
+    page: [
+      "• errors: ReadableStream received over RPC disconnected prematurely. 1 · last 07:30 UTC",
+    ],
+  },
+  {
+    name: "a context's socket close logging its reset pages nothing once every pager re-dialed (2026-09-28 14:49)",
+    events: () => [...closeReset("close"), pagerRedialed()],
+    page: null,
+  },
+  {
+    name: "a context's socket close logging its reset pages when no pager re-dialed",
+    events: () => closeReset("close"),
+    page: ["• errors: internal error; reference = … 1 · last 07:30 UTC"],
+  },
+  {
+    name: "the same reset in a context's jsrpc call pages, every pager re-dialed or not",
+    events: () => [
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "call",
+        message: "internal error; reference = 4b2bd3s1lpsjhc4kfd1fh7gm",
+      }),
+      pagerRedialed(),
+    ],
+    page: ["• errors: internal error; reference = … 1 · last 07:30 UTC"],
+  },
+])("$name", async ({ events, page }) => {
+  queryableWorkersLogs(events());
+  const result = await summary();
+  expect(page ? bullets(result) : result).toEqual(page || "prd is quiet");
 });
 
 test.for([
@@ -1083,8 +1281,8 @@ test("filter nodes count as Cloudflare counts them: every leaf and every group, 
 });
 
 // Each count at its most: 1,999 rays across the outcomes and causes it applies (four `not_in` of
-// them), and for the other summaries 500 jsrpc calls beside them. Every query fits, no keep is
-// dropped, and what is not expected still pages.
+// them), and for the other summaries 500 folded summaries beside them, jsrpc calls' and deleted
+// facets'. Every query fits, no keep is dropped, and what is not expected still pages.
 test.for([
   {
     name: "the 5xx beside an offline stub's and a deploy reset's rays",
@@ -1098,11 +1296,14 @@ test.for([
     most: 15,
   },
   {
-    name: "the lines and request lines beside gone visitors' and deploy resets' rays",
+    name: "the lines and request lines beside gone visitors' and deploy resets' rays and 500 contexts' announced resets",
     events: () => [
       ...rays("gone-", 1000).flatMap((ray) => vanishedVisitorRequest(ray)),
       ...rays("reset-", 999).flatMap((ray) =>
         deployResetRay(ray, "https://garple.com/").slice(1, 2),
+      ),
+      ...rays("destroyed-", 500).flatMap((objectId) =>
+        announcedReset("context.destroyed", objectId, "destroyed: its project was deleted"),
       ),
       invocation({ outcome: "exception", url: "https://garple.com/chat", rayId: "other" }),
       line({ message: "boom", rayId: "gone-3" }),
@@ -1116,12 +1317,16 @@ test.for([
     most: 16,
   },
   {
-    name: "the other summaries beside deploy resets' rays and jsrpc calls",
+    name: "the other summaries beside deploy resets' rays and 500 folded summaries, jsrpc calls' and deleted facets'",
     events: () => [
       ...rays("reset-", 1999).flatMap((ray) =>
         deployResetRay(ray, "https://garple.com/").slice(1, 2),
       ),
-      ...rays("call-", 498).flatMap((requestId) => [
+      ...rays("deleted-", 250).flatMap((objectId) => [
+        deletedSecretFacet(objectId),
+        cutOffSecretCall(objectId),
+      ]),
+      ...rays("call-", 248).flatMap((requestId) => [
         invocation({
           hop: "RepoDurableObject",
           eventType: "jsrpc",
@@ -1145,7 +1350,7 @@ test.for([
       }),
     ],
     page: [
-      "• errors: boom 498 · last 07:30 UTC",
+      "• errors: boom 248 · last 07:30 UTC",
       "• errors: SecretDurableObject.jsrpc 1 · last 07:30 UTC",
     ],
     most: 16,
@@ -1351,9 +1556,10 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
   });
 });
 
-/** How many queries a quiet run sends: the outcomes', causes' and jsrpc summaries' evidence, then
- *  the 5xx by URL and in all, the heals by name and event, the four error counts and the pagers. */
-const QUIET_RUN_QUERIES = 16;
+/** How many queries a quiet run sends: the outcomes', causes', jsrpc summaries' and announced
+ *  outcomes' evidence, then the 5xx by URL and in all, the heals by name and event, the error counts
+ *  (each of PINNED_LINES where it pages, and a socket close's reset, among them) and the pagers. */
+const QUIET_RUN_QUERIES = 20;
 
 /** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function pageFor(reading: Partial<FaultReading>) {
@@ -1597,6 +1803,7 @@ function invocation(options: {
   requestId?: string;
   version?: string;
   message?: string;
+  objectId?: string;
 }) {
   const {
     hop,
@@ -1617,6 +1824,7 @@ function invocation(options: {
     $workers: {
       executionModel: durableObject ? "durableObject" : "stateless",
       entrypoint: hop,
+      durableObjectId: options.objectId,
       eventType,
       outcome,
       scriptVersion: { id: version },
@@ -1636,6 +1844,7 @@ function line(options: {
   requestId?: string;
   version?: string;
   url?: string;
+  objectId?: string;
 }) {
   const durableObject = options.hop?.endsWith("DurableObject");
   return {
@@ -1649,6 +1858,7 @@ function line(options: {
     $workers: {
       executionModel: durableObject ? "durableObject" : "stateless",
       entrypoint: options.hop,
+      durableObjectId: options.objectId,
       scriptVersion: { id: options.version || "502616fb-0000" },
       event: options.url ? { request: { url: options.url } } : undefined,
     },
@@ -1704,6 +1914,102 @@ function failedDocsRequest() {
       rayId: "docs",
     }),
   ];
+}
+
+/** The context DO `objectId` announcing an outcome at info with its message (apps/os
+ *  iterate-context-durable-object.ts `#abort`), then the error line the runtime logs for it in the
+ *  same invocation and that invocation's jsrpc summary, as a preview logged its `itx.abort()` on
+ *  2026-09-29 09:56. */
+function announcedReset(event: string, objectId: string, message: string) {
+  const requestId = `${objectId}-asked`;
+  return [
+    {
+      timestamp: 42,
+      event,
+      $metadata: { type: "cf-worker", level: "info", requestId, message },
+      $workers: { entrypoint: "IterateContextDurableObject", durableObjectId: objectId },
+    },
+    ...rejectedInFlight(objectId, requestId, message),
+  ];
+}
+
+/** Another call on the context DO `objectId`, failed with `message`: its error line and its jsrpc
+ *  summary. */
+function rejectedInFlight(objectId: string, requestId: string, message: string) {
+  return [
+    line({ hop: "IterateContextDurableObject", requestId, message, objectId }),
+    invocation({
+      hop: "IterateContextDurableObject",
+      eventType: "jsrpc",
+      outcome: "exception",
+      requestId,
+      objectId,
+    }),
+  ];
+}
+
+/** The context DO `objectId` deleting its `secret` facet, as apps/os context/facet-host.ts
+ *  `#deleteFacet` announces it: at info, with the summary of a call session the deletion cuts off. */
+function deletedSecretFacet(objectId: string) {
+  return {
+    timestamp: 42,
+    event: "facet.deleted",
+    name: "secret",
+    $metadata: {
+      type: "cf-worker",
+      level: "info",
+      requestId: `${objectId}-delete`,
+      message: "SecretDurableObject.jsrpc",
+    },
+    $workers: { entrypoint: "IterateContextDurableObject", durableObjectId: objectId },
+  };
+}
+
+/** The secret facet's `endingLends` session in `objectId`, answered and then cut off by the
+ *  deletion before its caller released it: an exception summary and no line. */
+function cutOffSecretCall(objectId: string) {
+  return invocation({
+    hop: "SecretDurableObject",
+    eventType: "jsrpc",
+    outcome: "exception",
+    requestId: `${objectId}-ending-lends`,
+    objectId,
+  });
+}
+
+/** A context's hibernatable WebSocket `close` event after its object was reset, as prd logged it
+ *  on 2026-09-28 14:49: the runtime's opaque reason, and the event's exception summary. */
+function closeReset(requestId: string) {
+  const close = {
+    eventType: "hibernatableWebSocket",
+    event: { webSocketType: "close", code: 1006 },
+  };
+  const $workers = { entrypoint: "IterateContextDurableObject", ...close };
+  return [
+    {
+      timestamp: 42,
+      $metadata: {
+        type: "cf-worker",
+        requestId,
+        message: "internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo",
+      },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker-event", requestId, message: "close" },
+      $workers: { ...$workers, outcome: "exception" },
+    },
+  ];
+}
+
+/** An rpc-stub pager that re-dialed after its socket closed (apps/os context/rpc-stub-relay.ts). */
+function pagerRedialed() {
+  return {
+    timestamp: 42,
+    event: "rpc-stub-pager-redialed",
+    $metadata: { type: "cf-worker", level: "info" },
+  };
 }
 
 /** `n` ray IDs starting with `prefix`. */

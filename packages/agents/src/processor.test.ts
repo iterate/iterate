@@ -4,12 +4,13 @@
 // model call, the script run, the breakers as appends — are proven end to end on the worker
 // (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { type AgentState } from "./contract.ts";
 import {
   AgentProcessor,
   buildChatMessages,
+  raceAbort,
   renderCapabilityTree,
   renderScriptSettlement,
 } from "./processor.ts";
@@ -511,11 +512,44 @@ test("buildChatMessages: the tree rides as ONE system message after the journale
   expect(withTree[1]!.content).toContain("itx.kv — kv");
 });
 
+test.for([
+  { answer: "a Response", wrap: (body: ReadableStream) => new Response(body) },
+  { answer: "a bare stream", wrap: (body: ReadableStream) => body },
+])(
+  "raceAbort: an abort during the dial rejects at once, and $answer the dial answers after it is cancelled with the abort's reason",
+  async ({ wrap }) => {
+    const controller = new AbortController();
+    let answer!: (value: unknown) => void;
+    const raced = raceAbort(
+      controller.signal,
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const interrupted = new Error("interrupted");
+    controller.abort(interrupted);
+    await expect(raced).rejects.toBe(interrupted);
+    const { body, watch } = watchedBody();
+    answer(wrap(body));
+    await vi.waitFor(() => expect(watch).toMatchObject({ cancelled: interrupted }));
+  },
+);
+
+test("raceAbort: a dial that answers before any abort hands its body over unread, and a later abort leaves it to the reader", async () => {
+  const controller = new AbortController();
+  const { body, watch } = watchedBody();
+  const response = new Response(body);
+  expect(await raceAbort(controller.signal, Promise.resolve(response))).toBe(response);
+  controller.abort(new Error("interrupted"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(watch).toEqual({});
+  expect(response).toMatchObject({ bodyUsed: false });
+});
+
 /** The reduce never reaches the context; the saga and the model call are the e2e's. */
 const processor = () =>
   new AgentProcessor({
     withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
-    runModel: () => Promise.reject(new Error("the reduce reaches no model transport")),
     now: () => 0,
     sleep: () => Promise.resolve(),
   });
@@ -565,3 +599,14 @@ const items = (files?: (typeof png)[]) => [
   { offset: 2, role: "developer" as const, content: "note" },
   { offset: 3, role: "user" as const, content: "Look.", files },
 ];
+
+/** A body that records whether, and why, its reader cancelled it. */
+const watchedBody = () => {
+  const watch: { cancelled?: unknown } = {};
+  const body = new ReadableStream({
+    cancel(reason) {
+      watch.cancelled = reason;
+    },
+  });
+  return { body, watch };
+};

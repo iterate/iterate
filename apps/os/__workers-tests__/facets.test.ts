@@ -242,6 +242,47 @@ test("a push hung on a facet whose row is removed is that removal — NO_FACET, 
   expect(issueLines(errors)).toEqual([]);
 });
 
+// The prd fault alarm reads a `<class>.jsrpc` summary with no line, in a Durable Object that
+// announced this, as the deletion's (scripts/ci/prd-fault-alarm.ts `ANNOUNCED`).
+test.for([
+  {
+    name: "a loaded facet deleted with its row",
+    ctx: "prj_facet_deleted_loaded",
+    remove: async (ctx: string) => {
+      await hostCounter(ctx);
+      await stub(ctx).append({
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "counter", target: null },
+      });
+    },
+    announced: { name: "counter", message: "HangingCounterDurableObject.jsrpc" },
+  },
+  {
+    name: "a secret deleted, its first-party facet with it (prd's `secrets.delete`)",
+    ctx: "prj_facet_deleted_secret",
+    remove: async (ctx: string) => {
+      const secrets = (call: unknown[]) =>
+        stub(ctx).invoke(["itx", "secrets", call], [], { principal: null });
+      await secrets(["set", "/secrets/gone", "k", { urls: [SHOP] }]);
+      await secrets(["delete", "/secrets/gone"]);
+    },
+    announced: { name: "secret", message: "SecretDurableObject.jsrpc" },
+  },
+])(
+  "$name is announced at info with the summary a call session it cuts off ends with",
+  async ({ ctx, remove, announced }) => {
+    const infos = vi.spyOn(console, "info");
+    await remove(ctx);
+    const line = await until("the facet.deleted line", async () =>
+      infos.mock.calls.flat().find((logged) => {
+        const text = JSON.stringify(logged);
+        return text.includes('"facet.deleted"') && text.includes(`"name":"${announced.name}"`);
+      }),
+    );
+    expect(line).toEqual({ event: "facet.deleted", ...announced });
+  },
+);
+
 test("a claim released after its facet was deleted leaves no facet-ran row for a birth to start", async () => {
   const ctx = "prj_facet_release_after_delete";
   await hostCounter(ctx);
@@ -758,6 +799,46 @@ test.for([
     expect(rows.map((row) => row.hostedFacet.restarts)).toEqual([1]); // the one restart, on the row
   },
 );
+
+// A facet whose own outbound call gave up (an overloaded hop) rejects with that hop's UNAVAILABLE,
+// workerd's opaque text for its message: the facet-start defect's text, coded.
+test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try", async () => {
+  const ctx = "prj_facet_coded_internal_error";
+  const s = stub(ctx);
+  const errors = vi.spyOn(console, "error");
+  const failure = { code: "UNAVAILABLE", data: { kind: "overloaded", retryAfterMs: 10_000 } };
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "flaky",
+      target: [
+        "itx",
+        "builtins",
+        "facets",
+        [
+          "get",
+          "flaky",
+          flakyCounter("internal error; reference = cn4da7sq5qdv4vobadb1tse3", failure),
+        ],
+        "processEventBatch",
+      ],
+    },
+  });
+  const loaderId = await until("the facet materialized at configure", () =>
+    kv<string>(ctx, "facet:flaky:loader-id"),
+  );
+  await until("the push's failure is reported", async () =>
+    issueLines(errors).some((line) => JSON.stringify(line).includes("cn4da7sq5qdv4vobadb1tse3")),
+  );
+  const rows = (await s.invoke("itx.processors.list()")) as {
+    hostedFacet: { restarts: number };
+  }[];
+  expect({
+    loaderId: await kv<string>(ctx, "facet:flaky:loader-id"),
+    restarts: rows.map((row) => row.hostedFacet.restarts),
+    tries: ((await s.invoke("itx.facets.get('flaky').tries()")) as unknown[]).length,
+  }).toEqual({ loaderId, restarts: [0], tries: 1 });
+});
 
 test("a platform start that rejects with the platform's clone-version text restarts once under a fresh loaded identity, and the facet answers", async () => {
   // The platform's own start (facet-host.ts `#start`, after every abort it makes and at a birth)

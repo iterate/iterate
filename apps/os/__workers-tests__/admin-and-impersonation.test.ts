@@ -211,6 +211,36 @@ test("signing a client in as someone: offered to an admin alone, the person's gr
   expect(noOrigin).toMatchObject({ status: 403 });
 });
 
+test("a client signed in as someone mints no personal access token for them, though it holds `account`: the key would outlive the hour and act without the admin's name; the person's own sign-in still mints", async () => {
+  fetchReachesThisWorker();
+  const target = await approverFor("impersonated-mint@example.com");
+  using _project = await (
+    await actingAs(target.user.email)
+  ).projects.create({
+    project: "impersonated-mint",
+  });
+  const project = (await controlPlane().getProject("impersonated-mint"))!;
+  const admin = await approverFor(ADMIN);
+  const signedIn = await authorize(admin.approver, {
+    scope: "iterate account admin",
+    impersonate: target.user.id,
+  });
+  expect(signedIn.scope?.split(" ")).toContain("account");
+
+  const { root } = await rpc(signedIn.token!);
+  await expect(
+    Promise.resolve(root.grants.mint({ name: "Outlives the hour", projects: [project.id] })),
+  ).rejects.toThrow(/signed in as someone else/);
+
+  const own = await authorize(target.approver, { scope: "iterate account" });
+  const { root: theirs } = await rpc(own.token!);
+  expect((await theirs.grants.list()).items.filter((item) => item.kind === "personal")).toEqual([]);
+  const minted = await theirs.grants.mint({ name: "Their own", projects: [project.id] });
+  expect((await theirs.grants.list()).items).toContainEqual(
+    expect.objectContaining({ id: minted.id, kind: "personal", name: "Their own" }),
+  );
+});
+
 test("a sign-in link naming a test person (`login_hint`, a PR body's `Sign in ↗`) pre-fills an admin's Sign in as someone else for one of our own apps, and signs nobody in as them by itself", async () => {
   fetchReachesThisWorker();
   // under the test email domain (wrangler.test.jsonc `login.testEmailDomain`), as a PR's pr<N>@…

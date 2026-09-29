@@ -27,6 +27,10 @@ non-secret counts, hostnames and paths.
    pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
    ```
 
+   A seed does not carry the connections, installed processors or repo origins a project set up
+   at runtime. List them for each project and keep the list with the archive
+   ([What a seed does not carry](../../../apps/os/docs/project-seeds.md#what-a-seed-does-not-carry)).
+
 2. Pause merges from the erase until `verify-structure` passes: every merge that touches the Worker
    redeploys prd, and a deploy resets Durable Objects under a running `apply`. The owner or you
    announce the pause where the team merges (nothing enforces it), and check that no Deploy OS run
@@ -48,6 +52,14 @@ non-secret counts, hostnames and paths.
    was updated"), wait for it to finish, rerun `apply` for every seed with the same
    `--organization` and `--owners`, then `verify-structure`. Lift the pause once verification
    passes.
+
+5. Restore what the seeds did not carry: reconnect each integration under its archived connection
+   name, set each repo's origin and make it one history with the remote again, reinstall each
+   processor, and check that every row on the list is back. This is part of the recreate, not an
+   owner to-do for later. If a step needs a person, such as a GitHub admin opening the connect
+   link once, ask for it during the window. If nobody does it, the first line of your report says
+   the recreate is not done and names what is missing. The recipe is in
+   [What a seed does not carry](../../../apps/os/docs/project-seeds.md#what-a-seed-does-not-carry).
 
 A rerun of `apply` resets the project to its archive (config tree, every archived secret's value,
 the members). Inside the restore window that only finishes what was cut off. Never rerun it on a

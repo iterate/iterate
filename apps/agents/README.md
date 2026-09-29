@@ -28,7 +28,11 @@ Mask the sandbox's specific `itx.agents` grant too when denying access to the co
 The loader resolves the pinned package through esm.sh and locks it. Installation also rebinds
 existing normal agents to the current runtime; their grants and history are retained. Reinstalling
 is safe. A platform deployment upgrades no project: a project upgrades by committing a newer pin to
-its `agents/` folder, which its config worker installs from that commit
+its `agents/` folder and installing from that commit. The sidebar's **Agents build** does both: it
+shows the build the project runs and, when main has published a newer one (`buildStanding` from
+`@iterate-com/shared/pkg-pr-new`, asked in this app's Worker), **Upgrade to the newest** commits
+that build's folder and installs it (`upgradeApp` from `@iterate-com/agents/install`). A
+with-agents project's config worker also installs every commit that changes `agents/`
 (configs/with-agents/worker.ts).
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:

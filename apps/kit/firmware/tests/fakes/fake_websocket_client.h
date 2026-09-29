@@ -11,5 +11,7 @@
 void iterate_kit_fake_websocket_client_queue_peer_close(void);
 void iterate_kit_fake_websocket_client_set_open_result(
     enum iterate_kit_websocket_open_result result);
+/* The next opens get this answer: 101 upgrades, any other status fails. */
+void iterate_kit_fake_websocket_client_answer_upgrade(int32_t status);
 
 #endif

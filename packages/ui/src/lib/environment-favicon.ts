@@ -13,14 +13,16 @@
  * `/favicon.svg` (apps/os/src/issuer-pages.ts), which the SDK's gate pages link.
  */
 export function deploymentEnvironment(hostname: string) {
-  const preview = /^pr(\d+)-[^.]+\.[^.]+\.workers\.dev$/.exec(hostname);
-  if (preview) return { kind: "preview" as const, pr: Number(preview[1]) };
+  const preview = /^(pr(\d+)(?:-[^.]+)?)-[^.-]+\.[^.]+\.workers\.dev$/.exec(hostname);
+  // `deployment`: the name every worker of the set shares, the host's first label without its app
+  // (`pr2990-a1b2c3d`), which the sign-in page shows so a reader knows which commit they are on
+  if (preview) return { kind: "preview" as const, pr: Number(preview[2]), deployment: preview[1]! };
   if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "127.0.0.1")
     return { kind: "dev" as const };
   return { kind: "production" as const };
 }
 
-type DeploymentEnvironment = ReturnType<typeof deploymentEnvironment>;
+export type DeploymentEnvironment = ReturnType<typeof deploymentEnvironment>;
 
 /** `Dash` → `[pr2990] Dash` on a preview, `[dev] Dash` locally, `Dash` in production. */
 export function environmentTitle(environment: DeploymentEnvironment, title: string) {

@@ -1,6 +1,6 @@
-// ai-root-shadow-and-fable.e2e.test.ts — `itx.ai` IS THE FIRST BINDINGS ROOT: Cloudflare's Workers AI
-// binding, verbatim (`run(model, inputs, options?)`, `models()`, `gateway(id).run(req)`, …), under the
-// reserved root as `itx.builtins.ai` and reached as `itx.ai` through its platform row. So a test can
+// ai-root-shadow-and-fable.e2e.test.ts — `itx.ai` IS THE FIRST BINDINGS ROOT: Workers AI's
+// `run(model, inputs, options?)` and `models()` (apps/os/src/itx-ai.ts), under the reserved root as
+// `itx.builtins.ai` and reached as `itx.ai` through its platform row. So a test can
 // SHADOW it with a deterministic stub (`provide("itx.ai", fake)`) — Misha's test on the real root —
 // and THE DREAM is one rewrite rule: `itx.fable ⇒ itx.ai.run('@cf/…', @)` pins the model, and `@`
 // (`fillItxExpressionHoles`) is the caller's input — spliced as an argument, the one argument when nested, its fields

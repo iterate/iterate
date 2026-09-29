@@ -29,13 +29,28 @@ Worker's `DEPOT_CI_TELEMETRY_TOKEN` secret, from Doppler `_shared/preview`), wit
 ZIP directory and the requested entry only. Each response's CSP confines the page to its own
 artifact's path.
 
+`/explainers/<ref>/<name>` opens `explainers/<name>.html` of `iterate/iterate` at a branch, tag or
+commit, read from GitHub (the repository is public), so a pull request can link the explainer on its
+own branch: `/explainers/<branch>/<name>`. An explainer is a standalone HTML page, served as
+committed. Once the branch is deleted (its pull request merged), the 404 links the page on `main`.
+
 ## What the trace shows
 
-The report shows the workflow, its jobs, each test job's Setup, Test and Finish
-phases, the measured shell steps, and individual Playwright attempts and Vitest
-tests.
+The report shows the workflow, its jobs in the order the trace job names them
+(Deploy preview, E2E tests, Browser specs), each job's measured shell steps
+directly under it, and individual Playwright attempts and Vitest tests. The
+Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) sit under
+the **Browser specs** job that waits for them, **Browser specs 1/11** to
+**11/11**, in order, each one row until opened, below that job's own steps in one
+**Coordinate shards** row: its checkout and setup, then its wait for the shards,
+the downloads and the merge.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
+
+A bar takes its children's colour wherever every child running at that moment has it: E2E tests is
+striped for as long as it only waits for Deploy preview, Browser specs only while it and all its
+shards wait. Where children running side by side differ, or none runs, a bar keeps its own colour.
+A failed or unfinished bar that takes its children's colours keeps a red or grey outline.
 
 The summary shows **Time to green** at the last traced job's finish (the later
 of the two suites, usually E2E tests) when none failed or was cancelled, and **Time to red** from the first failed job attempt
@@ -54,7 +69,7 @@ the span keeps a generic label. Cancellation before any recorded start ends the
 queue at the recorded cancellation time; it does not invent a workflow start.
 Runner startup and checkout remain inside their jobs.
 
-## Steps and phases
+## Steps
 
 `BASH_ENV` (`scripts/ci/tracing/shell.sh`) writes each run step's start and
 exit as `@@ci-trace` lines into the Depot logs, and `TraceReporter` in
@@ -64,11 +79,14 @@ to the authored commands. Reports show the step's name, falling back to its ID
 and then its normalized run command; hover the label or bar to see all three.
 Commands have the Doppler wrapper stripped and come from the workflow YAML at
 the run's triggering SHA (the merge revision on PR runs), never from expanded
-runner logs. Each test job's suite step, `suite` in E2E tests and Browser specs
-(one definition), opens its **Test** phase. Since the suites start beside the
-deploy, that phase begins with **Set up the suite** and **Wait for Deploy
-preview**, spans of their own (`runSuite` in `apps/os/scripts/preview.ts`), and
-its first test comes after them. The shell hook preserves
+runner logs. Each test job's suite step, `suite` in E2E tests and the specs shards
+(one definition), is no row of its own. Since the suites start beside the
+deploy, it begins with **Set up the suite** and **Wait for Deploy preview**
+(`runSuite` in `apps/os/scripts/preview.ts`), which sit beside the job's other
+steps, and its tests sit in one **Run tests** row, from the end of that wait to
+the step's exit. The steps before it are coloured as setup and the ones after
+as finish; Set up the suite and the specs' warm-up as setup, and the waits for Deploy preview and
+for the shards as waiting, the phase `traceOperation({ name, phase })` gives them. The shell hook preserves
 exit codes and ignores nested shells. It is plain bash that starts no process,
 so it measures `pnpm install` too and adds about a millisecond to a step.
 
@@ -111,7 +129,7 @@ node scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
 
 ## Timing limits
 
-- Checkout and artifact actions currently remain within the enclosing job/phase;
+- Checkout and artifact actions currently remain within the enclosing job;
   their individual start/end timestamps are not exposed by Depot's public API.
   Quiet shell commands have measured start/exit times, not stdout estimates.
 - A missing completion marker produces a striped incomplete span bounded by the
@@ -120,8 +138,8 @@ node scripts/ci/tracing/cli.ts render <workflow-id> /tmp/ci-trace
   finish precedes it. This means the end is unknown, not that the work was instant.
   Measured timestamps remain unchanged; invalid intervals still fail rendering.
 - Depot job-finish timestamps have whole-second precision. A millisecond marker
-  can fall just after that timestamp: preserve both recorded times and give the
-  synthetic trailing Finish phase zero duration rather than a negative interval.
+  can fall just after that timestamp: both recorded times are kept, so a step can
+  end just after its job.
 - Playwright durations include fixtures. Retries appear as separate attempts.
 - Vitest emits test lifecycle markers through the existing retry telemetry reporter
   when `CI_TRACE_ENABLED=1`. Each span uses the runner's start time and duration,

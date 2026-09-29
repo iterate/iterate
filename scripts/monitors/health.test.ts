@@ -1,6 +1,8 @@
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { fakeDepot, mainRun } from "./fake-depot.ts";
 import {
+  AWAIT_OLDER_RUNS,
+  awaitOlderMainE2eRuns,
   judgeMainE2eRun,
   readMainE2eState,
   readState,
@@ -362,6 +364,47 @@ test("Main OS e2e's state starts empty with none, or one of another schemaVersio
   }).toEqual({ none: empty, two: empty, four: empty });
 });
 
+// Main OS e2e's page jobs take turns, oldest run first (health.ts `awaitOlderMainE2eRuns`), on a
+// fake clock: `ends` is how many of the wait's Depot listings see the older push run still running.
+test.for<{ name: string; ends: number; expected: { seconds: number; logged: string[] } }>([
+  {
+    name: "an older push run still in progress holds this run's page job until it ends",
+    ends: 3,
+    expected: {
+      seconds: 30,
+      logged: [
+        "[await-older-runs] 0 s: waiting for wf-older (olderaaaa, running)",
+        "[await-older-runs] 30 s: no older run in progress",
+      ],
+    },
+  },
+  {
+    name: "with no older push run in progress it goes at once",
+    ends: 0,
+    expected: { seconds: 0, logged: ["[await-older-runs] 0 s: no older run in progress"] },
+  },
+])(
+  "$name; a newer run, a dispatch and a run of the same second but a later id never do",
+  async ({ ends, expected }) => {
+    const turns = takingTurns(ends);
+
+    await awaitOlderMainE2eRuns({ depot: turns.depot, workflowId: "wf-current", log: turns.log });
+
+    expect({ seconds: (Date.now() - turns.started) / 1000, logged: turns.lines }).toEqual(expected);
+  },
+);
+
+test("an older run that never ends fails the wait after its bound, naming the run", async () => {
+  const turns = takingTurns(Infinity);
+
+  await expect(
+    awaitOlderMainE2eRuns({ depot: turns.depot, workflowId: "wf-current", log: turns.log }),
+  ).rejects.toThrow(
+    "the older runs wf-older (olderaaaa, running) are still in progress after 30 minutes: the next run's page job judges this run after them",
+  );
+  expect((Date.now() - turns.started) / 1000).toBe(AWAIT_OLDER_RUNS.boundMs / 1000);
+});
+
 /** A poster that records each call and answers each post with the next ts, "1" first; with
  *  `failUpdate`, every edit fails as Slack refuses one. */
 /** A poster that records its calls; its edits succeed, answer "gone" as a deleted page's would, or
@@ -387,4 +430,40 @@ function fakePoster(
       return "edited";
     },
   };
+}
+
+/** The current push run of Main OS e2e at 01:00:00, and in progress beside it: an older push run,
+ *  running for the wait's first `ends` listings; an older dispatch; a newer push run; and a push run
+ *  of the same second with a later workflow id. */
+function takingTurns(ends: number) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  vi.setTimerTickMode("nextTimerAsync");
+  onTestFinished(() => void vi.useRealTimers());
+  const older = mainRun("older", "2026-09-27T00:58:00Z", { running: true });
+  const fake = fakeDepot({
+    "Main OS e2e": [
+      mainRun("current", "2026-09-27T01:00:00Z", { running: true }),
+      older,
+      {
+        ...mainRun("dispatch", "2026-09-27T00:30:00Z", { running: true }),
+        trigger: "workflow_dispatch",
+      },
+      mainRun("newer", "2026-09-27T01:02:00Z", { running: true }),
+      mainRun("same-second", "2026-09-27T01:00:00Z", { running: true }),
+    ],
+  });
+  const turns = {
+    started: Date.now(),
+    listings: 0,
+    lines: [] as string[],
+    log: (line: string) => void turns.lines.push(line),
+    depot: async (method: string, body: object) => {
+      if (method === "ListWorkflows") {
+        older.status = turns.listings < ends ? "running" : "finished";
+        turns.listings++;
+      }
+      return fake(method, body);
+    },
+  };
+  return turns;
 }

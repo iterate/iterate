@@ -212,9 +212,72 @@ static void peer_close_reconnects_with_new_generation(void) {
          ITERATE_KIT_OK);
 }
 
+/*
+ * A 401 or 403 upgrade is the OS refusing the Mac's key. The Mac holds its
+ * next upgrade back on the gate every platform shares, a minute rather than
+ * its 250 ms reconnect gate, and reports the refusal until an upgrade succeeds.
+ */
+static void refused_key_waits_a_minute(void) {
+  const int64_t minute_us =
+      (int64_t)ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS * 1000;
+  struct fixture fixture;
+  struct iterate_kit_itx_transport_metrics metrics;
+  fixture_init(&fixture);
+  iterate_kit_fake_websocket_client_answer_upgrade(401);
+
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(!fixture.transport.socket_connected);
+  iterate_kit_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(metrics.credential_refused);
+  assert(metrics.websocket_start_attempts == 1U);
+
+  iterate_kit_fake_websocket_client_answer_upgrade(101);
+  fixture.now_us = minute_us - 1;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(!fixture.transport.socket_connected);
+  iterate_kit_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(metrics.websocket_start_attempts == 1U);
+
+  fixture.now_us = minute_us;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(fixture.transport.socket_connected);
+  iterate_kit_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(!metrics.credential_refused);
+  assert(metrics.websocket_start_attempts == 2U);
+  assert(iterate_kit_itx_transport_stop(&fixture.transport) ==
+         ITERATE_KIT_OK);
+}
+
+/* Any other failed upgrade retries on the Mac's own reconnect gate. */
+static void unavailable_server_retries_promptly(void) {
+  struct fixture fixture;
+  struct iterate_kit_itx_transport_metrics metrics;
+  fixture_init(&fixture);
+  iterate_kit_fake_websocket_client_answer_upgrade(503);
+
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(!fixture.transport.socket_connected);
+  iterate_kit_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(!metrics.credential_refused);
+
+  iterate_kit_fake_websocket_client_answer_upgrade(101);
+  fixture.now_us = fixture.transport.websocket_retry.ready_at_us;
+  assert(iterate_kit_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(fixture.transport.socket_connected);
+  assert(iterate_kit_itx_transport_stop(&fixture.transport) ==
+         ITERATE_KIT_OK);
+}
+
 int main(void) {
   stalled_open_times_out_and_recovers();
   ready_step_that_crosses_deadline_times_out();
   peer_close_reconnects_with_new_generation();
+  refused_key_waits_a_minute();
+  unavailable_server_retries_promptly();
   return 0;
 }

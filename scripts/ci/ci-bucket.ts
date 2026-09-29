@@ -1,11 +1,13 @@
 // scripts/ci/ci-bucket.ts — THE CI BUCKET (envs.ts `ciBucketEnvs.ci`, docs/test-evidence.md)
 // through R2's S3 API (https://developers.cloudflare.com/r2/api/s3/api/): the test evidence upload
-// (scripts/ci/test-evidence.ts) and the context sweep's backups (scripts/ci/context-sweep.ts) write
-// to it, and the flake dashboard (scripts/ci/flake-dashboard) reads it.
+// (scripts/ci/test-evidence.ts) writes to it, and the flake dashboard (scripts/ci/flake-dashboard)
+// reads it. The context sweep (scripts/ci/context-sweep.ts) writes prd's backup bucket
+// (envs.ts `backupBucketEnvs`) through it too, with prd's token.
 //
-// The credentials are the Cloudflare API token CI already holds (Doppler `_shared/preview`'s
-// CLOUDFLARE_API_TOKEN, the one preview deploys use): an API token with R2 permissions is also an
-// S3 key pair, its id the access key id and the SHA-256 of its value the secret
+// The credentials are a Cloudflare API token of the bucket's account: for the CI bucket the one CI
+// already holds (Doppler `_shared/preview`'s CLOUDFLARE_API_TOKEN, the one preview deploys use). An
+// API token with R2 permissions is also an S3 key pair, its id the access key id and the SHA-256 of
+// its value the secret
 // (https://developers.cloudflare.com/r2/api/tokens/#get-s3-api-credentials-from-an-api-token).
 // Every request, the token's check included, is asked again when Cloudflare itself fails it
 // (fetchRetryingPlatformFailures), each a read or a write-once PUT that a repeat cannot double.
@@ -19,7 +21,7 @@ import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retr
 export async function ciBucket(input: {
   accountId: string;
   bucketName: string;
-  /** Doppler `_shared/preview`'s CLOUDFLARE_API_TOKEN. */
+  /** A Cloudflare API token of the bucket's account, with R2 permissions. */
   apiToken: string;
   /** The caller's name in each retry's `<area>.platform-failure-retry` warn. */
   area: string;

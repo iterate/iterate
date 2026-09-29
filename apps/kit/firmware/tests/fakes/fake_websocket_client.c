@@ -5,6 +5,7 @@
 static bool peer_close_queued;
 static enum iterate_kit_websocket_open_result open_result =
     ITERATE_KIT_WEBSOCKET_OPEN_READY;
+static int32_t upgrade_status = 101;
 
 void iterate_kit_fake_websocket_client_queue_peer_close(void) {
   peer_close_queued = true;
@@ -13,6 +14,14 @@ void iterate_kit_fake_websocket_client_queue_peer_close(void) {
 void iterate_kit_fake_websocket_client_set_open_result(
     enum iterate_kit_websocket_open_result result) {
   open_result = result;
+  upgrade_status = result == ITERATE_KIT_WEBSOCKET_OPEN_READY ? 101 : 0;
+}
+
+void iterate_kit_fake_websocket_client_answer_upgrade(int32_t status) {
+  open_result = status == 101
+      ? ITERATE_KIT_WEBSOCKET_OPEN_READY
+      : ITERATE_KIT_WEBSOCKET_OPEN_FAILED;
+  upgrade_status = status;
 }
 
 enum iterate_kit_status iterate_kit_websocket_client_prepare(
@@ -36,6 +45,7 @@ enum iterate_kit_status iterate_kit_websocket_client_prepare(
   client->initialized = true;
   peer_close_queued = false;
   open_result = ITERATE_KIT_WEBSOCKET_OPEN_READY;
+  upgrade_status = 101;
   return ITERATE_KIT_OK;
 }
 
@@ -46,6 +56,7 @@ enum iterate_kit_websocket_open_result iterate_kit_websocket_client_open(
     return ITERATE_KIT_WEBSOCKET_OPEN_FAILED;
   }
   client->upgraded = open_result == ITERATE_KIT_WEBSOCKET_OPEN_READY;
+  client->last_upgrade_status = upgrade_status;
   return open_result;
 }
 

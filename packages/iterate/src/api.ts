@@ -238,6 +238,7 @@ export const INTEGRATION_PROVIDERS = [
   "cloudflare",
   "github",
   "waitrose",
+  "x",
 ] as const;
 export type IntegrationProvider = (typeof INTEGRATION_PROVIDERS)[number];
 
@@ -248,6 +249,7 @@ export const INTEGRATION_PROVIDER_NAMES = {
   cloudflare: "Cloudflare",
   github: "GitHub",
   waitrose: "Waitrose",
+  x: "X",
 } as const satisfies Record<IntegrationProvider, string>;
 
 /** The providers a deployment holds an app of iterate's at (APP_CONFIG `integrations`): every one
@@ -259,7 +261,7 @@ export type IterateAppProvider = Exclude<IntegrationProvider, "waitrose">;
 export type OAuthIntegrationProvider = Exclude<IterateAppProvider, "github">;
 
 /** The providers a person signs in with, each through iterate's app there. */
-export type SignInProvider = Exclude<IterateAppProvider, "slack">;
+export type SignInProvider = Exclude<IterateAppProvider, "slack" | "x">;
 
 /** Whose OAuth app a secret's `beginOAuth` goes through: the deployment's (`platform`) or the
  *  project's own registered for that provider (`project`). */
@@ -933,8 +935,9 @@ export interface IterateContextApi {
    *  request, `deleted` cross-posted to `/`, the row disabled). A relative `path` means the caller's. */
   repos: EntityCollectionApi<RepoHandle>;
   workspaces: EntityCollectionApi<WorkspaceHandle>;
-  /** Workers AI, verbatim, under this context's capability rules. */
-  ai: Ai;
+  /** Workers AI's `run(model, inputs, options?)` and `models()`, under this context's capability
+   *  rules. */
+  ai: Pick<Ai, "run" | "models">;
   /** Cloudflare Browser Run. */
   browser: CfBrowserApi;
   /** Cloudflare Artifacts, project-scoped (`repos` is the friendlier surface). */

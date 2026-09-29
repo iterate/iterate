@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { ensureVoiceAgent, installVoice, voiceFolder } from "./install.ts";
+import { ensureVoiceAgent, installVoice, upgradeVoice, voiceFolder } from "./install.ts";
 
 const versions = {
   agents: "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@abc1234",
@@ -130,6 +130,40 @@ test("voice refuses a project without the agents app", async () => {
     "Voice needs the agents app",
   );
   expect(root.append).not.toHaveBeenCalled();
+});
+
+test("an upgrade rewrites voice/ at the new build, mounts it, and asks the new build for health", async () => {
+  const root = project();
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
+  root.voice.health.mockClear();
+  const newer = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@def5678";
+
+  await upgradeVoice(root, newer);
+  expect(root.commits.at(-1)).toMatchObject({
+    message: `Upgrade @iterate-com/voice to ${newer}`,
+    changes: [
+      { path: "voice/package.json", content: voiceFolder(newer)["package.json"] },
+      { path: "voice/worker.ts" },
+      { path: "package.json" },
+    ],
+  });
+  expect(JSON.parse(root.kv.values["voice/runtime"]!)).toMatchObject({
+    source: voiceFolder(newer),
+  });
+  expect(root.voice.health).toHaveBeenCalledOnce();
+  // the agents app keeps its own build
+  expect(root.files["agents/package.json"]).toContain(versions.agents);
+});
+
+test("a new voice build that fails its health check is an install that failed", async () => {
+  const root = project();
+  expect(await ensureVoiceAgent(root, versions)).toBe("ready");
+  root.voice.health.mockRejectedValue(new Error("No matching export VoiceDelegateDurableObject"));
+  await expect(
+    upgradeVoice(root, "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@def5678"),
+  ).rejects.toThrow(
+    "installing it failed, so the project may still run the old one: No matching export VoiceDelegateDurableObject",
+  );
 });
 
 /** A project root over an in-memory config repo, whose rewrite rules are the ones appended. */
