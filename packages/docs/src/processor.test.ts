@@ -190,6 +190,29 @@ test("a typo fixed under a comment keeps the comment, and a deleted sentence det
   );
 });
 
+test("a reply on a doc whose processor has just started again still shows the doc as saved", async () => {
+  const doc = openDoc({ "plan.md": "# Plan\n" });
+  const misha = await doc.join("misha@iterate.com");
+  misha.append(COMMENT_ADDED, { thread: "t1", quote: null, body: "Looks good?" });
+  await vi.waitFor(async () => expect(await doc.live()).toMatchObject({ threads: [{}] }));
+  // a new incarnation (a new build of the config, an eviction): nothing has loaded the doc yet
+  doc.restart({ autosave: { idleMs: 5, maxMs: 20 } });
+
+  const [reply] = await misha.append(COMMENT_REPLIED, {
+    thread: "t1",
+    comment: "c2",
+    body: "Yes.",
+  });
+
+  // as the page sees it: the live state the push published, not a read that catches up first
+  await doc.engine.waitUntilProcessed({ offset: reply!.offset });
+  expect(await doc.live()).toMatchObject({
+    commitOid: doc.repo.latest().oid,
+    dirty: false,
+    threads: [{ comments: [{ body: "Looks good?" }, { body: "Yes." }] }],
+  });
+});
+
 test("the root's docs processor tells only the opened docs a commit changed", async () => {
   const root = memoryStream("/");
   const noticed: { path: string; event: StreamEventInput }[] = [];
@@ -238,6 +261,8 @@ function openDoc(
   const log = memoryStream("/docs/config/plan.md");
   const repo = fakeRepo(files);
   const storage = nodeSqliteDurableObjectStorage();
+  // the engine's checkpoint outlives an incarnation, as the facet's storage does
+  const checkpoints = memoryStorage();
   const start = (autosave: { idleMs: number; maxMs: number }) => {
     const processor = new DocProcessor({
       sql: storage.sql as unknown as SqlStorage,
@@ -256,7 +281,7 @@ function openDoc(
       publishLiveState: () => engine.publishLiveState(),
       autosave,
     });
-    const engine = new ProcessorEngine(processor, { stream: log.stream, storage: memoryStorage() });
+    const engine = new ProcessorEngine(processor, { stream: log.stream, storage: checkpoints });
     log.engines.splice(0, log.engines.length, engine);
     return { processor, engine };
   };

@@ -111,18 +111,21 @@ export class DocProcessor extends StreamProcessor<DocState> {
   override processEvent({
     event,
     state,
+    delivery,
     blockProcessorWhile,
     runInBackground,
   }: ProcessEventArgs<DocState>): undefined {
     this.#threads = state.threads;
-    // The at-head pass, after a reset or a revive: edits the last incarnation hadn't saved yet.
-    if (!event) {
+    // At the head (the eventless pass, or the last event of a batch that reaches it), after a
+    // reset or a revive: the doc loaded, so the live state has its commit even when only comments
+    // arrive, and what the last incarnation hadn't saved yet is saved.
+    if (delivery.caughtUp)
       blockProcessorWhile(async () => {
         await this.#load();
-        if (this.#dirty()) this.#scheduleSave(runInBackground);
+        // an edit's own timer stands: this isn't an edit
+        if (this.#dirty() && !this.#saveScheduled) this.#scheduleSave(runInBackground);
       });
-      return;
-    }
+    if (!event) return;
     if (event.type === COMMIT_NOTICED) {
       blockProcessorWhile(async () => {
         await this.#load();
