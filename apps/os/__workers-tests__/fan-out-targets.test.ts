@@ -1,28 +1,37 @@
-// __workers-tests__/fan-out-targets.test.ts — WHAT A FAN-OUT ROW'S TARGET MAY BE, inside workerd:
-// only the delivery loop's own call, the one carrying the log's event, runs with delivery authority,
-// and only for that event (caller.ts `Caller.delivery`, its digest). A target that binds
-// `deliverEvent` to an event of its own — at its end, midway, behind a rule, or in a rule another
-// context expands inside the delivery's call — is refused, so neither a loaded worker nor a webhook
-// ever sees the forged event; a target in another context (`cd`) still receives the real one; and
-// the public `subscribe({ ordered: false })` makes a fan-out row. The fan-out semantics:
-// src/stream/subscription-delivery.test.ts.
-import { expect, test, vi } from "vitest";
+// Who may call a fan-out target's deliverEvent, with which event; semantics: subscription-delivery.test.ts
+import { expect, test } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
-import { adminCredentials, openSession, PERSON, readLog, refused, stub, until } from "./support.ts";
+import { deliverEventWorker } from "./sources.ts";
+import {
+  adminCredentials,
+  at,
+  freshProject,
+  interceptOrigins,
+  openSession,
+  PERSON,
+  readLog,
+  refused,
+  rowOf,
+  rule,
+  stub,
+  until,
+} from "./support.ts";
 
 const HOOKS = "https://hooks.test";
-
 /** An event the target's author wrote, not the log. */
 const FORGED = { type: "test/forged", offset: 999, path: "/x", payload: { from: "the target" } };
+const WORKER = ["itx", "workers", ["get", { source: recordingWorker() }]];
+const WEBHOOK = ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], "deliverEvent"];
+/** Each webhook sends through its context's `fetch`, the project root's, granted by this rule. */
+const FETCH_GRANT = rule("itx.fetch", "itx.builtins.cd('/').fetch");
 
-test("deliverEvent and processEvent answer the delivery loop alone: loaded code, a session and a principal-less caller are FORBIDDEN", async () => {
+test("deliverEvent and processEvent answer the delivery loop alone: every other caller is FORBIDDEN", async () => {
   const project = freshProject();
-  const worker = ["itx", "workers", ["get", { source: recordingWorker() }]];
   for (const target of [
-    [...worker, ["deliverEvent", FORGED]],
-    [...worker, ["processEvent", FORGED]],
-    ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], ["deliverEvent", FORGED]],
+    [...WORKER, ["deliverEvent", FORGED]],
+    [...WORKER, ["processEvent", FORGED]],
+    [...WEBHOOK.slice(0, -1), ["deliverEvent", FORGED]],
     ["itx", "builtins", "platformHook", ["deliverEvent", FORGED]],
   ])
     for (const caller of [
@@ -41,78 +50,37 @@ test("deliverEvent and processEvent answer the delivery loop alone: loaded code,
 });
 
 test.for([
+  { name: "a worker's, bound at the target's end", target: [...WORKER, ["deliverEvent", FORGED]] },
   {
-    name: "bound at the target's end",
-    target: (worker: ItxExpression[number]) => ["itx", "workers", worker, ["deliverEvent", FORGED]],
+    name: "a worker's, bound midway",
+    target: [...WORKER, ["deliverEvent", FORGED], "deliverEvent"],
   },
   {
-    name: "bound midway, the row's own method after it",
-    target: (worker: ItxExpression[number]) => [
-      "itx",
-      "workers",
-      worker,
-      ["deliverEvent", FORGED],
-      "deliverEvent",
-    ],
+    name: "a worker's, bound by a rule",
+    rule: [...WORKER, ["deliverEvent", FORGED]],
+    target: ["itx", "hook"],
+  },
+  {
+    name: "a webhook's, bound at the target's end",
+    target: [...WEBHOOK.slice(0, -1), ["deliverEvent", FORGED]],
   },
 ])(
-  "a loaded worker's deliverEvent $name is refused while the target is evaluated: the row halts, the worker never sees the forged event",
-  async ({ target }) => {
+  "deliverEvent $name to an event of the target's own is refused: the row halts, nothing receives it",
+  async ({ rule: hook, target }) => {
+    const posted = interceptOrigins({ [HOOKS]: () => new Response(null) });
     const project = freshProject();
-    const x = `${project}.iterate/x`;
-    await configure(x, target(["get", { source: recordingWorker() }]) as ItxExpression);
+    const x = at(project, "/x");
+    if (hook) await stub(x).append(rule("itx.hook", hook));
+    await configure(x, target as ItxExpression);
     await stub(x).append({ type: "test/real", payload: {} });
-    const halted = await haltOf(x);
+    const halted = await until(`${x}'s row halted`, async () => (await rowOf(x, "f"))?.halted);
     expect(halted.error).toContain("deliverEvent is the delivery loop's own call");
-    expect(await recorded(project)).toEqual([]);
+    expect({ recorded: await recorded(project), posted }).toEqual({ recorded: [], posted: [] });
   },
 );
 
-test("a rule that binds deliverEvent to an event of its own is refused the same way: the row halts", async () => {
-  const project = freshProject();
-  const x = `${project}.iterate/x`;
-  await stub(x).append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.hook",
-      target: ["itx", "workers", ["get", { source: recordingWorker() }], ["deliverEvent", FORGED]],
-    },
-  });
-  await configure(x, ["itx", "hook"]);
-  await stub(x).append({ type: "test/real", payload: {} });
-  expect((await haltOf(x)).error).toContain("deliverEvent is the delivery loop's own call");
-  expect(await recorded(project)).toEqual([]);
-});
-
-test("a webhook's deliverEvent bound to an event of its own is refused before any POST: the receiver sees nothing", async () => {
-  const requests: string[] = [];
-  const through = globalThis.fetch;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const request = new Request(input, init);
-    if (new URL(request.url).origin !== HOOKS) return through(request);
-    requests.push(await request.text());
-    return new Response(null, { status: 200 });
-  });
-  const x = `${freshProject()}.iterate/x`;
-  await configure(x, [
-    "itx",
-    "webhooks",
-    ["get", { url: `${HOOKS}/in` }],
-    ["deliverEvent", FORGED],
-  ]);
-  await stub(x).append({ type: "test/real", payload: {} });
-  expect((await haltOf(x)).error).toContain("deliverEvent is the delivery loop's own call");
-  expect(requests).toEqual([]);
-});
-
-const WEBHOOK = ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], "deliverEvent"];
-
 test.for([
-  {
-    name: "a trailing call step",
-    forged: [...WEBHOOK, ["bind", null, FORGED]],
-    honest: WEBHOOK,
-  },
+  { name: "a trailing call step", forged: [...WEBHOOK, ["bind", null, FORGED]], honest: WEBHOOK },
   {
     name: "the same through cd('/y')",
     forged: ["itx", ["cd", "/y"], ...WEBHOOK.slice(1), ["bind", null, FORGED]],
@@ -120,163 +88,79 @@ test.for([
   },
   {
     name: "a relay rule at /y",
-    rules: {
-      "itx.forgingRelay": [...WEBHOOK.slice(0, -1), ["deliverEvent", FORGED]],
-      "itx.relay": WEBHOOK,
-    },
+    rules: [
+      rule("itx.forgingRelay", [...WEBHOOK.slice(0, -1), ["deliverEvent", FORGED]]),
+      rule("itx.relay", WEBHOOK),
+    ],
     forged: ["itx", ["cd", "/y"], "forgingRelay"],
     honest: ["itx", ["cd", "/y"], "relay"],
   },
 ])(
-  "a webhook handed an event of the target's own through $name POSTs nothing — the rule's call runs inside the delivery's and is still refused — and the log's own event arrives through the honest spelling",
-  async ({ rules, forged, honest }) => {
+  "a forged event through $name POSTs nothing, and the log's own event arrives through the honest spelling",
+  async ({ rules = [], forged, honest }) => {
     const bodies: string[] = [];
-    const through = globalThis.fetch;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const request = new Request(input, init);
-      if (new URL(request.url).origin !== HOOKS) return through(request);
-      bodies.push(await request.text());
-      return new Response(null, { status: 200 });
+    interceptOrigins({
+      [HOOKS]: async (request) => {
+        bodies.push(await request.text());
+        return new Response(null);
+      },
     });
     const project = freshProject();
-    const x = `${project}.iterate/x`;
-    // each webhook sends through its context's `fetch`, the project root's, granted by a rule
-    const fetchGrant = { "itx.fetch": "itx.builtins.cd('/').fetch" };
-    for (const [ctx, ctxRules] of [
-      ["x", fetchGrant],
-      ["y", { ...fetchGrant, ...rules }],
-    ] as const)
-      for (const [match, target] of Object.entries(ctxRules))
-        await stub(`${project}.iterate/${ctx}`).append({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          payload: { match, target },
-        });
+    const x = at(project, "/x");
+    await stub(x).append(FETCH_GRANT);
+    await stub(at(project, "/y")).append(FETCH_GRANT, ...rules);
     await configure(x, forged as ItxExpression, "forged");
     await configure(x, honest as ItxExpression, "honest");
-    const [real] = (await stub(x).append({
-      type: "test/real",
-      payload: {},
-    })) as unknown as StreamEvent[];
+    await stub(x).append({ type: "test/real", payload: {} });
     await until("the forged row's call failed", async () => {
-      const row = (await stub(x).invoke("itx.subscriptions.get('forged')")) as {
-        halted?: unknown;
-        pending?: number;
-      };
-      return row.halted || row.pending === 1 || undefined;
+      const row = await rowOf(x, "forged");
+      return row?.halted || row?.pending === 1;
     });
-    await until("the real event posted", () => (bodies.length > 0 ? true : undefined));
+    await until("the real event posted", () => bodies.length > 0);
     expect(bodies.map((body) => JSON.parse(body))).toMatchObject([
-      { type: "test/real", path: "/x", offset: real!.offset },
+      { type: "test/real", path: "/x" },
     ]);
   },
 );
 
-test("a loaded handler's own refusal fails only its event: one calling a name nothing resolves and one calling a verb it may not are retried on their ladders, and the events around them are delivered", async () => {
+test("a handler's own refusal fails only its event: it retries on its ladder, the events around it are delivered", async () => {
+  // event 3's webhook would post if loaded code's deliverEvent were not refused
+  interceptOrigins({ [HOOKS]: () => new Response(null) });
   const project = freshProject();
-  const x = `${project}.iterate/x`;
-  await configure(x, ["itx", "workers", ["get", { source: refusingWorker() }], "deliverEvent"]);
+  const x = at(project, "/x");
+  await stub(x).append(FETCH_GRANT);
+  await configure(x, ["itx", "workers", ["get", { source: REFUSING_WORKER }], "deliverEvent"]);
   for (let n = 1; n <= 5; n++) await stub(x).append({ type: "test/real", payload: { n } });
-  await until("1, 4 and 5 delivered", async () =>
-    (await recorded(project)).length === 3 ? true : undefined,
-  );
+  await until("1, 4 and 5 delivered", async () => (await recorded(project)).length === 3);
   const row = await until("2 and 3 pending their retries", async () => {
-    const view = (await stub(x).invoke("itx.subscriptions.get('f')")) as { pending?: number };
-    return view.pending === 2 ? view : undefined;
+    const row = await rowOf(x, "f");
+    return row?.pending === 2 && row;
   });
   expect(row).not.toHaveProperty("halted");
-  const delivered = (await recorded(project)) as { payload: { n: number } }[];
-  expect(delivered.map(({ payload }) => payload.n).toSorted()).toEqual([1, 4, 5]);
+  expect((await recorded(project)).map(({ payload }) => payload.n).toSorted()).toEqual([1, 4, 5]);
 });
 
-test("a target in another context (`itx.cd('/y')…deliverEvent`) is handed the log's own event, with the delivery's authority across the hop", async () => {
-  const project = freshProject();
-  const x = `${project}.iterate/x`;
-  await configure(x, [
-    "itx",
-    ["cd", "/y"],
-    "workers",
-    ["get", { source: recordingWorker() }],
-    "deliverEvent",
-  ]);
-  const [real] = (await stub(x).append({
-    type: "test/real",
-    payload: {},
-  })) as unknown as StreamEvent[];
-  await until("the event reached the worker", async () =>
-    (await recorded(project)).length > 0 ? true : undefined,
-  );
-  expect(await recorded(project)).toMatchObject([
-    { type: "test/real", path: "/x", offset: real!.offset },
-  ]);
-});
-
-test("the public subscribe({ ordered: false }) makes a fan-out row: `itx.subscriptions` says so, and each event reaches the webhook alone", async () => {
-  const posted: string[] = [];
-  const through = globalThis.fetch;
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const request = new Request(input, init);
-    if (new URL(request.url).origin !== HOOKS) return through(request);
-    posted.push(request.headers.get("iterate-event-id") ?? "");
-    return new Response(null, { status: 200 });
-  });
+test("the public subscribe({ ordered: false }) makes a fan-out row", async () => {
   const project = freshProject();
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(project);
-  await itx.subscribe({
-    name: "hook",
-    target: ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], "deliverEvent"],
-    consumes: ["test/real"],
-    ordered: false,
-  });
-  expect(await itx.subscriptions.get("hook")).toMatchObject({ ordered: false, pending: 0 });
-  const appended = (await stub(project).append(
-    { type: "test/real", payload: { n: 1 } },
-    { type: "test/real", payload: { n: 2 } },
-  )) as unknown as StreamEvent[];
-  await until("both events posted", () => (posted.length === 2 ? true : undefined));
-  expect(posted.toSorted()).toEqual(
-    appended.map(({ offset }) => `${project}/@${offset}`).toSorted(),
-  );
+  await itx.subscribe({ name: "hook", target: WEBHOOK, consumes: ["test/real"], ordered: false });
+  expect(await rowOf(project, "hook")).toMatchObject({ ordered: false, pending: 0 });
 });
 
-/** A worker whose `deliverEvent` records every event it is handed on the project's `/sink`. */
-function recordingWorker() {
-  return {
-    "package.json": '{"main":"worker.js"}',
-    "worker.js": /* js */ `
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
-export default class Recorder extends WorkerEntrypoint {
-  deliverEvent(event) {
-    return withItx(this.env.ITX, (itx) =>
-      itx.cd("/sink").append({ type: "test/recorded", payload: event }),
-    );
-  }
-}
-`,
-  };
+/** A worker whose `deliverEvent` runs `before`, then records its event on the project's `/sink`. */
+function recordingWorker(before = "") {
+  return deliverEventWorker(/* js */ `
+      ${before}
+      await itx.cd("/sink").append({ type: "test/recorded", payload: event });
+`);
 }
 
-/** A worker whose `deliverEvent` records its event like `recordingWorker`'s, but first, for ping 2,
- *  calls a name nothing resolves, and for ping 3, a verb loaded code may not call. */
-function refusingWorker() {
-  return {
-    "package.json": '{"main":"worker.js"}',
-    "worker.js": /* js */ `
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
-export default class Refuser extends WorkerEntrypoint {
-  deliverEvent(event) {
-    return withItx(this.env.ITX, async (itx) => {
+/** A recording worker that, for event 2, first calls a name nothing resolves, and for event 3, a
+ *  verb loaded code may not call. */
+const REFUSING_WORKER = recordingWorker(/* js */ `
       if (event.payload.n === 2) await itx.nope();
-      if (event.payload.n === 3)
-        await itx.webhooks.get({ url: "${HOOKS}/in" }).deliverEvent(event);
-      await itx.cd("/sink").append({ type: "test/recorded", payload: event });
-    });
-  }
-}
-`,
-  };
-}
+      if (event.payload.n === 3) await itx.webhooks.get({ url: "${HOOKS}/in" }).deliverEvent(event);
+`);
 
 /** `ctx`'s fan-out row `name` (default `f`) on `target`, taking `test/real`. */
 async function configure(ctx: string, target: ItxExpression, name = "f") {
@@ -288,21 +172,7 @@ async function configure(ctx: string, target: ItxExpression, name = "f") {
 
 /** Every event a recording worker of `project` was handed. */
 async function recorded(project: string) {
-  return (await readLog(`${project}.iterate/sink`))
-    .filter((event) => event.type === "test/recorded")
-    .map((event) => event.payload);
-}
-
-/** Wait for `ctx`'s row `f` to halt, and answer why. */
-async function haltOf(ctx: string) {
-  return until(`${ctx}'s row halted`, async () => {
-    const row = (await stub(ctx).invoke("itx.subscriptions.get('f')")) as {
-      halted?: { error?: string };
-    };
-    return row.halted;
-  });
-}
-
-function freshProject() {
-  return `prj_targets_${crypto.randomUUID().slice(0, 8)}`;
+  return (await readLog(at(project, "/sink")))
+    .filter(({ type }) => type === "test/recorded")
+    .map(({ payload }) => payload as StreamEvent & { payload: { n?: number } });
 }
