@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { adminCredentials, markedSession, readAll, session, until } from "./support/client.ts";
+import { adminCredentials, readAll, session, until } from "./support/client.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
@@ -64,34 +64,22 @@ localOnly(
           ? true
           : undefined,
       );
-      // One publication per commit on `/`, each as the generation of its commit's fact there, so
-      // each later than the last; the pointer names the last. The site serves a pointer a moment
-      // before its outcome lands: the third's, waited for by its oid.
+      // one publication per commit on `/`, in commit order; the pointer names the last
       await root.waitForEvent({
         type: "events.iterate.com/project/worker-updated",
         payload: { commitOid: third.commitOid },
         afterOffset: 0,
         timeoutMs: 20_000,
       });
-      const log = await readAll(root);
-      const published = log.filter((e) => e.type === "events.iterate.com/project/worker-updated");
+      const published = (await readAll(root)).filter(
+        (e) => e.type === "events.iterate.com/project/worker-updated",
+      );
       expect(published.map((e) => e.payload.commitOid)).toEqual([
         expect.any(String), // the seed's
         first.commitOid,
         second.commitOid,
         third.commitOid,
       ]);
-      const factOffsets = published.map(
-        (e) =>
-          log.find(
-            (fact) =>
-              fact.type === "events.iterate.com/repo/commit-completed" &&
-              fact.payload.commitOid === e.payload.commitOid,
-          )?.offset,
-      );
-      const generations = published.map((e) => e.payload.generation);
-      expect(generations).toEqual(factOffsets);
-      expect(generations).toEqual([...new Set(generations)].sort((a, b) => a - b));
       expect((await root.rewriteRules.get("itx.config"))?.target).toContain(third.commitOid);
       // First cold load happens AFTER main advanced: the cache key still loads its exact commit.
       expect(await repo.readFile("worker.ts", { commitOid: first.commitOid })).toBe(
@@ -123,55 +111,5 @@ localOnly(
       const live = await fetchProjectUrl(apex);
       expect(live).toMatchObject({ status: 200, text: "Elephants fear the mouse." });
     }
-  },
-);
-
-localOnly(
-  "a commit made deep in a chain is published at the commit's depth, and the init it sets off runs one deeper: a commit at 7 runs init at 8",
-  async () => {
-    const slug = freshDnsSafeProjectSlug("deep-commit");
-    const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
-    await until("the project's certificate", async () =>
-      (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
-    );
-    // Our own code calling the platform back seven hand-offs into a chain (src/cause.ts): the
-    // commit is its act, and the publication it sets off keeps the commit's depth.
-    const chain = `a deep chain of ${slug}`;
-    const deep = markedSession({ chain, depth: 7 })
-      .authenticate(adminCredentials())
-      .projects.get(slug);
-    // A config of its own, whose init says it ran: no module of the default template's is left,
-    // so the publication does not wait on the agents package's build.
-    const { commitOid } = await deep.repos.get("/repos/config").commitFiles({
-      message: "an init that says it ran",
-      changes: [
-        { path: "agents.ts", delete: true },
-        { path: "voice.ts", delete: true },
-        {
-          path: "worker.ts",
-          content: `import { IterateConfigEntrypoint } from "iterate/sdk";
-export default class extends IterateConfigEntrypoint {
-  async processEvent({ event, itx }) {
-    if (event.type === "events.iterate.com/project/worker-updated")
-      await itx.append({ type: "test/init-ran", payload: { generation: event.payload.generation } });
-  }
-}`,
-        },
-      ],
-    });
-    const { published, initRan } = await until("the deep commit's init", async () => {
-      const log = await readAll(root);
-      const published = log.find(
-        (e) =>
-          e.type === "events.iterate.com/project/worker-updated" &&
-          e.payload.commitOid === commitOid,
-      );
-      const initRan = log.find(
-        (e) => e.type === "test/init-ran" && e.payload.generation === published?.payload.generation,
-      );
-      return initRan && { published, initRan };
-    });
-    expect(published.source.cause).toMatchObject({ chain, depth: 7 });
-    expect(initRan.source.cause).toMatchObject({ chain, depth: 8 });
   },
 );

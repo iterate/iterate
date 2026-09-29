@@ -9,7 +9,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
-import { afterAll, expect, vi } from "vitest";
+import { afterAll, expect, onTestFinished, vi } from "vitest";
 import type { StreamPage } from "iterate/api";
 import type { Caller } from "../src/caller.ts";
 import { contextStub } from "../src/context-stub.ts";
@@ -19,6 +19,8 @@ import { projectsByHostnames } from "../src/control-plane/db/queries/.generated/
 import { accessibleOrganizations } from "../src/control-plane/db/queries/.generated/organizations.sql.ts";
 import { projectsByRef } from "../src/control-plane/db/queries/.generated/projects.sql.ts";
 import { ControlPlane } from "../src/control-plane/edge.ts";
+import type { Env } from "../src/env.ts";
+import { receiveEmail } from "../src/integrations/email.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
@@ -50,6 +52,51 @@ export async function appendAsPlatform(ctx: string, ...events: unknown[]): Promi
     platform: true,
   });
 }
+
+/** A fresh project's root context. */
+export const freshProject = (prefix = "prj_workers") =>
+  `${prefix}_${crypto.randomUUID().slice(0, 8)}`;
+
+/** The context at `path` in `project`. */
+export const at = (project: string, path: string) =>
+  path === "/" ? project : `${project}.iterate${path}`;
+
+/** A person signed in at the edge: what a session's call carries. */
+export const PERSON = { actor: "usr_workers", email: "person@example.test" };
+
+/** A `rewrite-rule-configured` event: `match ⇒ target`, `null` a mask. */
+export const rule = (match: string, target: string | unknown[] | null) => ({
+  type: "events.iterate.com/itx/rewrite-rule-configured",
+  payload: { match, target },
+});
+
+/** `project`'s config pointer `itx.config` at a worker loaded from `source`, as a publication lands
+ *  it; `options` join the source in the worker's spec. */
+export const pointAt = (
+  project: string,
+  source: unknown,
+  options: { manifest?: unknown; cacheKey?: string } = {},
+) =>
+  appendAsPlatform(
+    project,
+    rule("itx.config", ["itx", "builtins", "workers", ["get", { source, ...options }]]),
+  );
+
+/** `ctx`'s subscription row `name`, as `itx.subscriptions.get` shows it. */
+export const rowOf = (ctx: string, name: string) =>
+  stub(ctx).invoke(["itx", "subscriptions", ["get", name]]) as Promise<{
+    ordered?: false;
+    pending?: number;
+    halted?: { error?: string; code?: string };
+    cursor?: { confirmedOffset: number; nextAttemptAtMs?: number };
+  } | null>;
+
+/** `root`'s inbound-call census: its incarnation and inbound calls by kind. */
+export const census = (root: string) => stub(root).inboundCallCensus();
+
+/** Every inbound call a census counted, of any kind. */
+export const totalCalls = ({ calls }: Awaited<ReturnType<typeof census>>) =>
+  calls.loaded + calls.context + calls.other;
 
 /** `itx.run(script)` on `ctx` as the platform's own callers make it (src/context-stub.ts
  *  `contextStub`): the context answers with the request, and this reads the run's settlement back,
@@ -400,11 +447,11 @@ export async function until<T>(
   fn: () => T | undefined | false | Promise<T | undefined | false>,
   timeoutMs = 10_000,
 ): Promise<T> {
-  const t0 = Date.now();
+  const t0 = performance.now(); // not Date.now(): a row that fakes Date cannot hang the wait
   for (;;) {
     const v = await fn();
     if (v !== undefined && v !== false) return v;
-    if (Date.now() - t0 > timeoutMs)
+    if (performance.now() - t0 > timeoutMs)
       throw new Error(`until(${label}): timed out after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, 25));
   }
@@ -448,4 +495,57 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
     return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
   });
   return { hostnames, writes };
+}
+
+/** Date faked at 2035-01-01 until the test finishes, so workerd fires no alarm of its own; answers
+ *  that start. */
+export function fakeDate(): number {
+  const start = Date.parse("2035-01-01T00:00:00Z");
+  vi.useFakeTimers({ now: start, toFake: ["Date"] });
+  onTestFinished(() => void vi.useRealTimers());
+  return start;
+}
+
+/** The test's one `fetch` spy: a request to an origin `answers` names is answered there and kept in
+ *  the list this returns; any other goes through. */
+export function interceptOrigins(
+  answers: Record<string, (request: Request) => Response | Promise<Response>>,
+): Request[] {
+  const answered: Request[] = [];
+  const through = globalThis.fetch;
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    const answer = answers[new URL(request.url).origin];
+    if (!answer) return through(request);
+    answered.push(request);
+    return answer(request);
+  });
+  return answered;
+}
+
+/** One delivery by Cloudflare Email Routing to `to`: what `receiveEmail` rejected it with, and the
+ *  addresses it forwarded it to (`forward` runs first and may throw, as Email Routing's does). */
+export async function deliverMail(
+  to: string,
+  mime: string,
+  { from = "ann@example.com", forward = (_to: string) => {} } = {},
+) {
+  const rejected: string[] = [];
+  const forwarded: string[] = [];
+  const raw = new TextEncoder().encode(mime);
+  // the fields of a ForwardableEmailMessage that `receiveEmail` reads
+  const message = {
+    from,
+    to,
+    raw: new Response(raw).body!,
+    rawSize: raw.byteLength,
+    headers: new Headers(),
+    setReject: (reason: string) => void rejected.push(reason),
+    forward: async (address: string) => {
+      forward(address);
+      forwarded.push(address);
+    },
+  } as unknown as ForwardableEmailMessage;
+  await receiveEmail(message, env as unknown as Env);
+  return { rejected, forwarded };
 }

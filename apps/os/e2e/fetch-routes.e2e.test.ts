@@ -7,9 +7,8 @@
 //   • a WebSocket asking for a subprotocol (Vite's HMR asks for `vite-hmr`) opens: the provider's
 //     choice rides back to the eyeball's 101, or a spec-following client refuses the handshake
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
-//   • the lend recalled: its rule and the route to it go with it, the config worker's own answer
-//     once the edge's snapshot of the route expires; a route deleted by hand at once (its `set`
-//     answers once no host can be served from the table before it)
+//   • the lend recalled: its rule and route go with it, and the host is the config worker's once the
+//     edge's snapshot of the route expires; a route deleted by hand at once
 //   • `set` refuses a malformed route and appends nothing for a route that stands
 // The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
@@ -69,9 +68,7 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
       (routes) => routes.length === 0,
     ),
   ).toEqual([]);
-  // The recall has no writer to hold until the edge's snapshot of the old route expires
-  // (worker.ts `serveProjectHost`, context/rule-snapshots.ts): the host is the config worker's
-  // again within that snapshot's life.
+  // polled: no writer holds the recall, so the edge serves its snapshot of the old route until it expires
   expect(
     await untilValue(
       "the recalled tunnel's host is the config worker's",

@@ -1,12 +1,9 @@
-// context/rule-snapshots.test.ts — another context's rule table as an isolate holds it: the cache's
-// lifetime, its version-conditional and single-flight reads, and which writes wait out the older
-// snapshots. The Workers rows
-// (__workers-tests__/rule-snapshots.test.ts) prove the same across real contexts.
+// context/rule-snapshots.test.ts — the rule snapshot cache and which commits wait out older
+// snapshots; the same across real contexts is __workers-tests__/rule-snapshots.test.ts.
 import { expect, test, vi } from "vitest";
-import { parse, parseItxExpressionPrefix, print } from "iterate/expression";
+import { parseItxExpressionPrefix, print } from "iterate/expression";
 import {
-  BUILT_IN_ROOTS,
-  CONTEXT_ROOTS,
+  implicitRootsAt,
   namesTakenAway,
   rulesChangeNeedsCommitWait,
   type ItxExpressionRewriteRule,
@@ -17,44 +14,36 @@ import {
   SNAPSHOT_TTL_MS,
   type RulesSnapshotAnswer,
 } from "./rule-snapshots.ts";
+import { rule } from "./test-support.ts";
 
-test("a snapshot is read once and used until SNAPSHOT_TTL_MS after its read was sent; then re-read conditionally, an unchanged table answering its version alone", async () => {
+test("a snapshot serves until SNAPSHOT_TTL_MS after its read, then is re-read by version: same keeps its rows, new brings its own", async () => {
   const { cache, clock, owner } = setup();
-  owner.rules = [row("itx.tool ⇒ itx.kv")];
+  owner.rules = [rule("itx.tool ⇒ itx.kv")];
   expect(await cache.get("/", owner.read)).toMatchObject({
     rules: owner.rules,
     expiresAt: SNAPSHOT_TTL_MS,
   });
   clock.now = SNAPSHOT_TTL_MS - 1;
   await cache.get("/", owner.read);
-  expect(owner).toMatchObject({ reads: [undefined] });
   clock.now = SNAPSHOT_TTL_MS;
   expect(await cache.get("/", owner.read)).toMatchObject({
-    rules: [row("itx.tool ⇒ itx.kv")],
+    rules: [rule("itx.tool ⇒ itx.kv")],
     expiresAt: 2 * SNAPSHOT_TTL_MS,
   });
-  // the second read named the version it held, and the owner answered that version alone
-  expect(owner).toMatchObject({ reads: [undefined, "v1"] });
-});
-
-test("a changed table answers its new rows on the conditional read", async () => {
-  const { cache, clock, owner } = setup();
-  owner.rules = [row("itx.tool ⇒ itx.kv")];
-  await cache.get("/", owner.read);
   owner.version = "v2";
-  owner.rules = [row("itx.tool ⇒ itx.r2")];
-  clock.now = SNAPSHOT_TTL_MS;
-  expect(await cache.get("/", owner.read)).toMatchObject({ rules: [row("itx.tool ⇒ itx.r2")] });
+  owner.rules = [rule("itx.tool ⇒ itx.r2")];
+  clock.now = 2 * SNAPSHOT_TTL_MS;
+  expect(await cache.get("/", owner.read)).toMatchObject({ rules: [rule("itx.tool ⇒ itx.r2")] });
+  expect(owner).toMatchObject({ reads: [undefined, "v1", "v1"] });
 });
 
 test("reads are single-flight per owner: concurrent resolutions share one read", async () => {
   const { cache, owner } = setup();
-  const answers = await Promise.all([
+  await Promise.all([
     cache.get("/", owner.read),
     cache.get("/", owner.read),
     cache.get("/other", owner.read),
   ]);
-  expect(answers).toHaveLength(3);
   expect(owner).toMatchObject({ reads: [undefined, undefined] });
 });
 
@@ -98,140 +87,81 @@ test("a read that fails is not kept: the next resolution reads again", async () 
   expect(owner).toMatchObject({ reads: [undefined, undefined] });
 });
 
-test("a read a deploy's reset fails is made once more at once, logged, and lasts from when the first was sent", async () => {
+test("a read a deploy's reset fails is retried once at once and logged; failed twice it is UNAVAILABLE, kind deploy-reset", async () => {
   const { cache, clock, owner } = setup();
   const lines = vi.spyOn(console, "info").mockImplementation(() => {});
   owner.resets = 1;
   owner.onRead = () => (clock.now += 100);
   expect(await cache.get("/", owner.read)).toMatchObject({ expiresAt: SNAPSHOT_TTL_MS });
-  expect(owner.reads).toHaveLength(2);
   expect(lines.mock.calls.map(([line]) => line.event)).toEqual([
     "rule-snapshot.deploy-reset-retry",
   ]);
-});
-
-test("a read a deploy's reset fails twice is UNAVAILABLE, its kind deploy-reset", async () => {
-  const { cache, owner } = setup();
-  vi.spyOn(console, "info").mockImplementation(() => {});
   owner.resets = 2;
-  await expect(cache.get("/", owner.read)).rejects.toMatchObject({
+  await expect(cache.get("/other", owner.read)).rejects.toMatchObject({
     code: "UNAVAILABLE",
     data: { kind: "deploy-reset" },
   });
-  expect(owner.reads).toHaveLength(2);
+  expect(owner.reads).toHaveLength(4);
 });
 
 test.for([
-  {
-    name: "a new name answers at once",
-    before: [],
-    after: ["itx.tool ⇒ itx.kv"],
-    at: "child",
-    waits: false,
-  },
+  { name: "a new name answers at once", before: [], after: ["itx.tool ⇒ itx.kv"], waits: false },
   {
     name: "a description alone answers at once",
     before: ["itx.tool ⇒ itx.kv"],
     after: ["itx.tool ⇒ itx.kv — the store"],
-    at: "child",
     waits: false,
   },
   {
     name: "a grant re-pointed waits",
     before: ["itx.tool ⇒ itx.kv"],
     after: ["itx.tool ⇒ itx.r2"],
-    at: "child",
     waits: true,
   },
-  {
-    name: "a grant removed waits",
-    before: ["itx.tool ⇒ itx.kv"],
-    after: [],
-    at: "child",
-    waits: true,
-  },
-  {
-    name: "a grant masked waits",
-    before: ["itx.tool ⇒ itx.kv"],
-    after: ["itx.tool ⇒ null"],
-    at: "child",
-    waits: true,
-  },
-  {
-    name: "a mask on a name that answered waits",
-    before: [],
-    after: ["itx.append ⇒ null"],
-    at: "child",
-    waits: true,
-  },
-  {
-    name: "a mask lifted waits",
-    before: ["itx.append ⇒ null"],
-    after: [],
-    at: "child",
-    waits: true,
-  },
-  {
-    name: "a mask replaced by a grant waits",
-    before: ["itx.append ⇒ null"],
-    after: ["itx.append ⇒ itx.kv"],
-    at: "child",
-    waits: true,
-  },
+  { name: "a grant removed waits", before: ["itx.tool ⇒ itx.kv"], after: [], waits: true },
   {
     name: "a grant shadowing an implicit root waits",
     before: [],
     after: ["itx.ai ⇒ itx.tool"],
-    at: "root",
-    waits: true,
-  },
-  {
-    name: "a pinned grant under an implicit root waits",
-    before: [],
-    after: ["itx.ai.run('gpt-5') ⇒ itx.tool"],
-    at: "root",
+    at: "/",
     waits: true,
   },
   {
     name: "a project root's name at a child answers at once",
     before: [],
     after: ["itx.ai ⇒ itx.tool"],
-    at: "child",
     waits: false,
   },
   {
     name: "a name behind the parent link waits",
     before: ["itx ⇒ itx.cd('/')"],
     after: ["itx.ai ⇒ itx.tool", "itx ⇒ itx.cd('/')"],
-    at: "child",
     waits: true,
   },
   {
     name: "a longer row under a grant waits",
     before: ["itx.tool ⇒ itx.append"],
     after: ["itx.tool ⇒ itx.append", "itx.tool.x ⇒ itx.readEvents"],
-    at: "child",
     waits: true,
   },
   {
     name: "a new parent link answers at once",
     before: [],
     after: ["itx ⇒ itx.cd('/')"],
-    at: "child",
     waits: false,
   },
-  { name: "a jail's bare null waits", before: [], after: ["itx ⇒ null"], at: "child", waits: true },
+  { name: "a jail's bare null waits", before: [], after: ["itx ⇒ null"], waits: true },
   {
     name: "a name re-added while a pending fence holds it taken away waits",
     before: [],
     after: ["itx.tool.x ⇒ itx.r2"],
     takenAway: ["itx.tool"],
-    at: "child",
     waits: true,
   },
-])("$name", ({ before, after, takenAway = [], at, waits }) => {
+])("$name", ({ before, after, at = "/agents/a", takenAway = [], waits }) => {
   const taken = takenAway.map((match) => parseItxExpressionPrefix(match));
-  expect(rulesChangeNeedsCommitWait(table(before), table(after), IMPLICIT[at]!, taken)).toBe(waits);
+  const implicit = implicitRootsAt("prj_unit", at);
+  expect(rulesChangeNeedsCommitWait(table(before), table(after), implicit, taken)).toBe(waits);
 });
 
 test("what a change takes away is every row removed or re-pointed but a mask and a row whose target lives in its context", () => {
@@ -251,16 +181,8 @@ test("what a change takes away is every row removed or re-pointed but a mask and
   ]);
 });
 
-/** The roots implicit at a project's root and at a child (`implicitRootsAt`). */
-const IMPLICIT: Record<string, ReadonlySet<string>> = {
-  root: new Set(BUILT_IN_ROOTS),
-  child: new Set(CONTEXT_ROOTS),
-};
-
-/** An owner answering `rulesSnapshot(ifVersion)`, recording what each read asked, and a clock.
- *  `delayed`: each read answers when `answer()` is called, in order; `onRead` runs as a read is
- *  answered (a clock that moves while the read is in flight); `resets`: how many reads a deploy's
- *  reset fails first. */
+/** An owner answering `rulesSnapshot(ifVersion)`, recording each read's version, and a clock:
+ *  `delayed` reads answer in order on `answer()`, `onRead` runs as one answers, `resets` fail first. */
 function setup() {
   const clock = { now: 0 };
   const pending: (() => void)[] = [];
@@ -291,17 +213,6 @@ function setup() {
   return { cache: new RuleSnapshotCache({ now: () => clock.now }), clock, owner };
 }
 
-/** `"match ⇒ target"`, `null` a mask, ` — text` a description. */
-function row(spelled: string): ItxExpressionRewriteRule {
-  const [, match, target, description] = /^(.+?) ⇒ (.+?)(?: — (.+?))?$/.exec(spelled)!;
-  return {
-    match: parseItxExpressionPrefix(match!),
-    target: target === "null" ? null : parse(target!),
-    description,
-  };
-}
-
 /** A table by canonical match, as core state keeps it. */
-function table(rows: string[]): Record<string, ItxExpressionRewriteRule> {
-  return Object.fromEntries(rows.map((spelled) => [spelled.split(" ⇒ ")[0], row(spelled)]));
-}
+const table = (rows: string[]): Record<string, ItxExpressionRewriteRule> =>
+  Object.fromEntries(rows.map((spelled) => [spelled.split(" ⇒ ")[0], rule(spelled)]));

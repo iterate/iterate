@@ -44,7 +44,7 @@ export type ProjectPublisher = {
 export async function manifestOf(
   commitOid: string,
   generation: number,
-  publisher: ProjectPublisher,
+  publisher: Pick<ProjectPublisher, "files" | "identityOf" | "probe">,
 ): Promise<WorkerManifest> {
   const files = await publisher.files(commitOid);
   const { entry } = readPackage(files, "the config repo");

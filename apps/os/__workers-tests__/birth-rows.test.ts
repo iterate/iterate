@@ -1,35 +1,26 @@
-// __workers-tests__/birth-rows.test.ts — A CONTEXT BORN WITH THE DEPLOYMENT'S BIRTH ROWS (envs.ts
-// `PROJECT_CONTEXT_BIRTH_EVENTS`): its `config` fan-out row hands every durable event of its own, its
-// birth included, to the project's config entrypoint, `itx.config` on `/`, in the context itself.
-// One born before the project's first publication has nothing to deliver to: its row dangles, and
-// probes again as the root's snapshot that refused it expires (src/stream/subscription-delivery.ts),
-// so the pointer's landing reaches it within SNAPSHOT_TTL_MS with no commit of its own.
+// __workers-tests__/birth-rows.test.ts — a context born with the deployment's birth rows (envs.ts).
 import { expect, test } from "vitest";
 import { SNAPSHOT_TTL_MS } from "../src/context/rule-snapshots.ts";
-import { appendAsPlatform, bornWithBirthRows, readLog, stub, until } from "./support.ts";
+import {
+  at,
+  bornWithBirthRows,
+  freshProject,
+  pointAt,
+  readLog,
+  rowOf,
+  stub,
+  until,
+} from "./support.ts";
 
-test("a context born before the project's first publication hands the config entrypoint what waited — its birth included — within SNAPSHOT_TTL_MS of the pointer's landing, with no commit of its own", async () => {
-  const project = `prj_birth_rows_${crypto.randomUUID().slice(0, 8)}`;
-  const x = `${project}.iterate/x`;
+test("a context born before the first publication hands the config entrypoint what waited, its birth included, within the TTL", async () => {
+  const project = freshProject("prj_birth_rows");
+  const x = at(project, "/x");
   await bornWithBirthRows(project);
   await bornWithBirthRows(x);
   await stub(x).append({ type: "ping" });
-  // its row has tried and found no `itx.config` on `/`
-  await until("x's row dangles", async () => {
-    const row = (await stub(x).invoke("itx.subscriptions.get('config')")) as {
-      pending?: number;
-    } | null;
-    return (row?.pending ?? 0) > 0;
-  });
-
+  await until("x's row dangles", async () => ((await rowOf(x, "config"))?.pending ?? 0) > 0);
   const landed = Date.now();
-  await appendAsPlatform(project, {
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: {
-      match: "itx.config",
-      target: ["itx", "builtins", "workers", ["get", { source: RECORDING_CONFIG }]],
-    },
-  });
+  await pointAt(project, RECORDING_CONFIG);
   // what waited is told in any order (a fan-out row's calls race): its birth, its row, its ping
   const waited = [
     "events.iterate.com/itx/created",
@@ -39,7 +30,7 @@ test("a context born before the project's first publication hands the config ent
   await until(
     "x's waiting events told",
     async () => {
-      const told = (await readLog(`${project}.iterate/sink`))
+      const told = (await readLog(at(project, "/sink")))
         .filter((event) => event.type === "told")
         .map((event) => event.payload as { path: string; type: string });
       return waited.every((type) =>

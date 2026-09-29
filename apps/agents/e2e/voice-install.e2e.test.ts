@@ -1,20 +1,16 @@
-// VOICE SET UP the way Kit's Prepare and the voice app set it up: through the project's OAuth
-// session, a project created from the default template gets agents and voice from its config repo's
-// init case, both this checkout's pkg.pr.new builds that the loader resolves through esm.sh, and
-// `ensureVoiceAgent` asks for the OpenAI key, stores it, and `itx.voice.health()` answers; the
-// project's own data is left as it was. A config that installs no voice is refused at once.
+// Voice set up as Kit's Prepare and the voice app set it up, through project OAuth, on a project
+// whose default template installs this checkout's published builds. Refusals are install.test's.
 import type {} from "@iterate-com/voice";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import type { IterateContextApiWith } from "iterate/api";
-import { expect, test } from "vitest";
-import { freshCtx, openItx, publishConfig, runId } from "../../os/e2e/support/client.ts";
+import { expect } from "vitest";
+import { runId } from "../../os/e2e/support/client.ts";
 import { oauthSession } from "../../os/e2e/support/principal.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
-import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 import { publishedPackage } from "./support.ts";
 
 // This checkout's pkg.pr.new builds, published once its commit is pushed: the PR preview's e2e.
@@ -59,14 +55,3 @@ deployedOnly(
     expect(await project.secrets.list()).toEqual(secretsBefore);
   },
 );
-
-test("a project whose config installs no voice is refused at once, and no key is stored", async () => {
-  const root = openItx(freshCtx("voice-not-installed"));
-  await publishConfig(root, agentsWorkspaceConfig);
-  await expect(ensureVoiceAgent(root, "a key")).rejects.toThrow(
-    "This project's config repo does not install voice",
-  );
-  expect(await root.secrets.list()).not.toContainEqual(
-    expect.objectContaining({ path: "/secrets/openai" }),
-  );
-});

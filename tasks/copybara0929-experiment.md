@@ -10,7 +10,7 @@ size: small
 - Round 1 (done): `packages/` copied to iterate/copybara0929, and every scenario below ran.
 - Round 2 (done): the `copybara/` layout, with two copies, iterate/os0929 and iterate/packages0929. Each got exactly its own commits.
 - Round 3 (done): the build's files, the copy's own slimmed workspace and lockfile (dependencies a subset of the root's), and the recipe run against a fresh clone. main's #3439 already bakes templates; this branch makes its build work from a copy.
-- Missing: deleting iterate/copybara0929 (`gh` needs the `delete_repo` scope, which only an interactive login grants). The open inputs for `core/` are in "What `iterate/os` contains".
+- Missing: nothing for the experiment (iterate/copybara0929 is deleted). The open inputs for `core/` are in "What `iterate/os` contains".
 
 ## Why
 
@@ -183,7 +183,7 @@ Commits pushed straight to the experiment branch have no `(#N)`, so their title 
 - [x] Merging `main` into the branch makes one copy commit per copy it touches _(main brought apps/os and packages/cli changes: [14a7879](https://github.com/iterate/os0929/commit/14a7879), [a94b7df](https://github.com/iterate/packages0929/commit/a94b7df))_
 - [x] Executable files keep their mode (`packages/cli/bin/iterate.js` is `100755`) _(both executables are `100755` in packages0929. The check compares a copy with Copybara's own output, so it wouldn't catch Copybara dropping a mode; the hash comparison against iterate/iterate would)_
 
-### Round 1: `packages/` → iterate/copybara0929 (repo to delete)
+### Round 1: `packages/` → iterate/copybara0929 (repo since deleted)
 
 Through the Preview OS job, with the origin ref being this branch:
 

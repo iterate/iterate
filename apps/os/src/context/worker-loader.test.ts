@@ -1,24 +1,16 @@
-// context/worker-loader.test.ts — the Worker Loader cacheKey is an AUTHORITY boundary: the
-// isolate's whole world (its env.ITX host stub, its globalOutbound) is baked in at first
-// materialization, so two callers who compose the same key SHARE an isolate. prepareConfinedWorker
-// mints the JSON array `[kind, deploy, platformOrigin, owner, sourceVersion]` (tagged: a published
-// module's `module:` identity, the caller's `key:` cacheKey, else the modules' `content:` hash)
-// WITHOUT asking the loader — `load()` is the one call that does (the
-// last-but-one row). A facet's owner is the pair (context name, class name), and either half may
-// contain ":" (a context path is any string; ES2022 allows `export { X as "y:Tally" }`); as one JSON
-// element of the id, the pair is unambiguous whatever either half contains. The second
-// half pins Cloudflare's `get(id, getCode)` contract as we use it: a PRODUCER expression runs inside
-// `getCode` (a cold isolate only) and is refused without a cacheKey. The last row pins the workerd
-// WORKAROUND (worker-loader.ts `loaderIdGenerations`): a producer that threw marks its id dead, the
-// next attempt produces outside the loader and loads literally under the id's next generation, and
-// the callers that find it dead while that attempt runs wait on it (two rows, under load). A
-// producer's lost connection is read once more first (platform-retry.ts `ONCE_NOW`), so only a
-// failure that stands marks the id dead.
+// context/worker-loader.test.ts — the Worker Loader id is an authority boundary (two callers who
+// compose one id share an isolate), a producer runs inside `getCode`, and the dead-id WORKAROUND
+// (worker-loader.ts `loaderIdGenerations`), over a fake loader; the real one is the Workers suite's.
 import type { ItxExpression } from "iterate/expression";
+import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./paths.ts";
-import { assertFacetSourceWithinCeiling, prepareConfinedWorker } from "./worker-loader.ts";
+import {
+  assertFacetSourceWithinCeiling,
+  isLoadedWorkerPlatformFailure,
+  prepareConfinedWorker,
+} from "./worker-loader.ts";
 
 test("two literal sources whose djb2 hashes collide never share one Worker Loader cacheKey", async () => {
   // djb2("Aa") === djb2("B@") — one 32-bit hash, two sources.
@@ -247,35 +239,23 @@ test("literal modules: the key is their content hash unless the caller names a c
 
 test("a main module is one more element of the key, and a module identity names the code in place of the cacheKey: every source that answers it loads the same code for that module", async () => {
   const { env } = fakeLoaderEnv();
-  const producer = { source: "itx.repos.get('/repos/config').modules()", cacheKey: "commit-1" };
-  const agents = await loadConfined(env, { ...producer, mainModule: "agents.ts" });
-  expect(JSON.parse(agents.loaderId)).toEqual([
-    "worker",
-    "deploy-1",
-    null,
-    "prj_u.iterate/",
-    "key:commit-1",
-    "agents.ts",
-  ]);
-  const identified = (cacheKey: string) =>
-    loadConfined(env, { ...producer, cacheKey, mainModule: "agents.ts", moduleIdentity: "a1" });
+  const source = "itx.repos.get('/repos/config').modules()";
+  // the id past its kind, deploy, origin and owner
+  const keyOf = async (cacheKey: string, moduleIdentity?: string) => {
+    const options = workerOptions(env, {
+      source,
+      cacheKey,
+      mainModule: "agents.ts",
+      moduleIdentity,
+    });
+    return JSON.parse((await prepareConfinedWorker(options)).loaderId).slice(4);
+  };
+  expect(await keyOf("commit-1")).toEqual(["key:commit-1", "agents.ts"]);
   // two commits whose agents.ts is one identity: one isolate identity
-  expect(await identified("commit-1")).toMatchObject({
-    loaderId: (await identified("commit-2")).loaderId,
-  });
-  expect(JSON.parse((await identified("commit-2")).loaderId)).toEqual([
-    "worker",
-    "deploy-1",
-    null,
-    "prj_u.iterate/",
-    "module:a1",
-    "agents.ts",
-  ]);
+  expect(await keyOf("commit-1", "a1")).toEqual(["module:a1", "agents.ts"]);
+  expect(await keyOf("commit-2", "a1")).toEqual(["module:a1", "agents.ts"]);
   // a cacheKey spelled as that identity is still a cacheKey: it never takes the module's id
-  const spoofed = await prepareConfinedWorker(
-    workerOptions(env, { ...producer, cacheKey: "a1", mainModule: "agents.ts" }),
-  );
-  expect(JSON.parse(spoofed.loaderId)).toContain("key:a1");
+  expect(await keyOf("a1")).toEqual(["key:a1", "agents.ts"]);
 });
 
 test("WORKAROUND: a producer that threw marks its id dead; the next attempt produces OUTSIDE the loader and loads literally under the id's next generation; a producer that keeps failing mints nothing", async () => {
@@ -517,6 +497,47 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
   expect(before).not.toMatchObject({ loaderId: after.loaderId });
   expect(again).toMatchObject({ loaderId: after.loaderId });
+});
+
+// The Worker Loader defect's two spellings, and every look-alike that is not it: code's own error,
+// an overload, a coded hop.
+test.for([
+  {
+    name: "V8's clone-version text",
+    error: new Error("Unable to deserialize cloned data due to invalid or unsupported version."),
+    retired: true,
+  },
+  {
+    name: "the runtime's opaque internal error",
+    error: new Error("internal error; reference = h0v550femca1l7qboin7l1f1"),
+    retired: true,
+  },
+  {
+    name: "the same text thrown by the loaded code (remote)",
+    error: Object.assign(new Error("internal error; reference = h0v550femca1l7qboin7l1f1"), {
+      remote: true,
+    }),
+    retired: false,
+  },
+  {
+    name: "an overload the runtime spelled opaquely",
+    error: Object.assign(new Error("internal error; reference = h0v550femca1l7qboin7l1f1"), {
+      overloaded: true,
+    }),
+    retired: false,
+  },
+  {
+    name: "a hop below's coded failure carrying the opaque text",
+    error: codedError("UNAVAILABLE", "internal error; reference = h0v550femca1l7qboin7l1f1", {
+      kind: "disconnected",
+    }),
+    retired: false,
+  },
+  { name: "a lost connection", error: new Error("Network connection lost."), retired: false },
+  { name: "the loaded code's own failure", error: new Error("recipe: 503"), retired: false },
+  { name: "not an Error", error: "internal error; reference = x", retired: false },
+])("isLoadedWorkerPlatformFailure: $name → $retired", ({ error, retired }) => {
+  expect(isLoadedWorkerPlatformFailure(error)).toBe(retired);
 });
 
 /** The site ingress's producer expression: the config repo's tree at one commit. */

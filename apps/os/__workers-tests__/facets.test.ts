@@ -24,6 +24,7 @@ import {
   APP_FACET,
   CLONE_VERSION_TEXT,
   CLONE_VERSION_WORKER,
+  OPAQUE_TEXT_WORKER,
   COUNTING_TALLY,
   flakyCounter,
   FRAGILE,
@@ -41,6 +42,7 @@ import {
 import {
   adminCredentials,
   openSession,
+  freshProject,
   readLog,
   releasePins,
   signedInSession,
@@ -1089,6 +1091,39 @@ test.for([
   },
 );
 
+// The opaque spelling of the same defect counts only when the runtime raised it: a loaded worker
+// whose OWN code throws that text reaches the caller marked `remote` (workerd
+// `exceptionToPropagate`), so its identity is kept and nothing is replayed.
+test("a loaded worker whose own code throws workerd's opaque text keeps its identity: no retire, no replay", async () => {
+  const s = stub("prj_worker_throws_opaque_text");
+  const warns = vi.spyOn(console, "warn");
+  const page = async () => {
+    const response = await s.fetch(
+      new Request("https://site.test/", {
+        headers: {
+          "x-itx-expression": JSON.stringify([
+            "itx",
+            "workers",
+            ["get", { source: OPAQUE_TEXT_WORKER }],
+          ]),
+        },
+      }),
+    );
+    return { status: response.status, text: await response.text() };
+  };
+  const first = await page();
+  expect(first).toMatchObject({ status: 500 });
+  expect(first.text).toContain("internal error; reference = thrown-by-code");
+  // the same isolate answers again: its load counter says so
+  expect(await page()).toMatchObject({
+    status: 500,
+    text: expect.stringContaining("load 1, call 2"),
+  });
+  expect(
+    warns.mock.calls.filter(([line]) => String(line?.event).startsWith("workers.platform-failure")),
+  ).toEqual([]);
+});
+
 test("a burst of 20 concurrent callers after a loaded worker's failed cold load runs the producer once, and every caller gets the site", async () => {
   const s = stub("prj_loader_recovers_once");
   expect(await s.invoke(["itx", "facets", ["get", "producer", PRODUCER], ["runs"]])).toBe(0);
@@ -1446,57 +1481,31 @@ test("a signed-in person reaches `itx.facets.get(name)` on every context they ho
   );
 });
 
-test("`processors.enable` with changed code configures the new code, and with the same code again appends nothing", async () => {
-  const ctx = "prj_enable_upgrades_source";
-  const enable = (spec: FacetSpec) =>
-    stub(ctx).invoke(["itx", "processors", ["enable", "tally", spec]]);
-  const configured = async () =>
-    (await readLog(ctx)).filter(
-      (event) =>
-        event.type === "events.iterate.com/itx/subscription-configured" &&
-        (event.payload as { name?: string }).name === "tally",
-    ).length;
-  await enable(HELLO_PROCESSOR);
-  await enable(HELLO_PROCESSOR);
-  expect(await configured()).toBe(1);
-  const source = HELLO_PROCESSOR.source as Record<string, string>;
-  const changed: FacetSpec = {
-    ...HELLO_PROCESSOR,
-    source: {
-      "package.json": '{"main":"worker.js"}',
-      "worker.js": `${source["worker.js"]}\n// the next version`,
-    },
-  };
-  await enable(changed);
-  expect(await configured()).toBe(2);
-  await enable(changed);
-  expect(await configured()).toBe(2);
-});
-
-test("`processors.enable` naming another worker, or another module of it, configures it; the same name again appends nothing", async () => {
-  const ctx = `prj_enable_names_${crypto.randomUUID().slice(0, 8)}`;
-  const enable = (source: unknown, mainModule = "agents.ts") =>
-    stub(ctx).invoke([
-      "itx",
-      "processors",
-      ["enable", "tally", { className: "Tally", mainModule, source }],
-    ]);
-  const configured = async () =>
-    (await readLog(ctx)).filter(
-      (event) =>
-        event.type === "events.iterate.com/itx/subscription-configured" &&
-        (event.payload as { name?: string }).name === "tally",
-    ).length;
-  await enable(["itx", ["cd", "/"], "config"]);
-  await enable(["itx", ["cd", "/"], "config"]);
-  expect(await configured()).toBe(1);
-  await enable(["itx", ["cd", "/"], "staging"]);
-  expect(await configured()).toBe(2);
-  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
-  expect(await configured()).toBe(3);
-  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
-  expect(await configured()).toBe(3);
-});
+test.for([
+  { name: "changed code", first: HELLO_PROCESSOR, next: changedHello() },
+  { name: "another worker", first: namedTally("config"), next: namedTally("staging") },
+  {
+    name: "another module of the worker",
+    first: namedTally("staging"),
+    next: namedTally("staging", "tally.ts"),
+  },
+])(
+  "`processors.enable` with $name configures it, and the same spec again appends nothing",
+  async ({ first, next }) => {
+    const ctx = freshProject("prj_enable");
+    const configured: number[] = [];
+    for (const spec of [first, first, next, next]) {
+      await stub(ctx).invoke(["itx", "processors", ["enable", "tally", spec]]);
+      const rows = (await readLog(ctx)).filter(
+        (event) =>
+          event.type === "events.iterate.com/itx/subscription-configured" &&
+          (event.payload as { name?: string }).name === "tally",
+      );
+      configured.push(rows.length);
+    }
+    expect(configured).toEqual([1, 1, 2, 2]);
+  },
+);
 
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {
   const session = await signedInSession("placement-enable@example.com");
@@ -2147,4 +2156,19 @@ async function projectWithSecret(slug: string) {
       project.cd("/secrets/hook").invoke(["itx", "facets", ["get", "secret"], call]),
     verifies,
   };
+}
+
+/** HELLO_PROCESSOR's next version: the same class, from changed code. */
+function changedHello(): FacetSpec {
+  const source = HELLO_PROCESSOR.source as Record<string, string>;
+  const worker = `${source["worker.js"]}\n// the next version`;
+  return {
+    ...HELLO_PROCESSOR,
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": worker },
+  };
+}
+
+/** A Tally named by the root's worker `name`, in module `mainModule` of it. */
+function namedTally(name: string, mainModule = "agents.ts"): FacetSpec {
+  return { className: "Tally", mainModule, source: ["itx", ["cd", "/"], name] };
 }

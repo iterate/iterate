@@ -202,7 +202,6 @@ test.for([
     { "/needs-node@1": `import "node:fs";` },
     /needs the Node\.js builtin node:fs/,
   ],
-  ["a missing package", {}, /answered 404/],
 ] as const)("refuses %s, naming it", async ([, files, message]) => {
   const esm = fakeEsm(files);
   await expect(

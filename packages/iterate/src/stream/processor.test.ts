@@ -1311,7 +1311,7 @@ test("rule 3 claim: A REVIVE catches up and runs the at-head pass; an attempt st
   }
 });
 
-test("five-deaths-then-failed: work in flight that dies with its host is started again by each revive, its deaths counted across hosts; the fifth revive is refused PERMANENT_FAILURE, a restart onto other code is no death, and an attempt that settles starts the count over", async () => {
+test("five-deaths-then-failed: each revive restarts work that died with its host; the fifth is refused, and new code or a settle starts the count over", async () => {
   const mem = memoryStream();
   const storage = memoryStorage();
   const stored = new Map<string, unknown>();
@@ -1341,25 +1341,18 @@ test("five-deaths-then-failed: work in flight that dies with its host is started
   const first = host();
   await first.engine.catchUpFromLog();
   expect(first.work).toMatchObject({ started: 1 });
-  // each death: the host is gone, a fresh one is revived for the claim it left
-  const restarted: (number | string | undefined)[] = [];
+  const revived: unknown[] = [];
   for (let death = 1; death <= 6; death++) {
     const next = host();
-    restarted.push(
-      await next.engine.revive().then(
-        () => next.work.started,
-        (error: unknown) => errorCode(error),
-      ),
-    );
+    revived.push(await next.engine.revive().then(() => next.work.started, errorCode));
   }
-  expect(restarted).toEqual([1, 1, 1, 1, "PERMANENT_FAILURE", "PERMANENT_FAILURE"]);
-  expect(stored.get("processor-work-started")).toEqual({ deaths: 6, codeId: "g1" });
-  // a host restarted onto other code (its own commit, a deploy) is no death: the count starts over
+  expect(revived).toEqual([1, 1, 1, 1, "PERMANENT_FAILURE", "PERMANENT_FAILURE"]);
+  // a host restarted onto other code (its own commit, a deploy) is no death
   const moved = host("g2");
   await moved.engine.revive();
   expect(moved.work).toMatchObject({ started: 1 });
   expect(stored.get("processor-work-started")).toEqual({ deaths: 0, codeId: "g2" });
-  // what it receives next starts it again, and an attempt that settles starts the count over
+  // an attempt that settles starts the count over
   settles = true;
   const later = host();
   commit(mem, { type: "e" });

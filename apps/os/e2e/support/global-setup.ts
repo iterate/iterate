@@ -45,9 +45,7 @@ declare module "vitest" {
     /** The run's id, folded into every identifier a test mints (client.ts `freshCtx`): E2E_RUN_ID
      *  when the run pins one (CI: the workflow run and attempt), else minted here once per run. */
     runId: string;
-    /** The commit whose pkg.pr.new builds this checkout's packages are, by the rule the build
-     *  stamps the default template with (scripts/published-package-commit.ts): worked out once
-     *  here, so parallel files never race on the checkout's git fetch. */
+    /** This checkout's pkg.pr.new commit (scripts/published-package-commit.ts), worked out once. */
     publishedPackageCommit: string;
   }
 }
