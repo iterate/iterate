@@ -30,7 +30,6 @@ import type {
   IterateContextApi,
   WaitForEventFilter,
 } from "iterate/api";
-import type { Cause } from "./cause.ts";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
@@ -242,13 +241,17 @@ export function runScriptModule(script: string) {
       // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
-      // the SDK's door, which `iterate/with-itx` shares by name (cause.ts runningCause)
+      // the SDK's carrier, which `iterate/with-itx` shares by name (cause.ts runningCause)
       'const door = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
-      "  async run(cause) {",
+      "  // THE DOOR (cause.ts): the platform runs the script under the cause of its request",
+      "  callWithCause(cause) {",
+      "    return door.run(cause, () => this.run());",
+      "  }",
+      "  async run() {",
       "    let deadline;",
       "    try {",
-      "      return await door.run(cause, () => withItx(this.env.ITX, async (itx) => {",
+      "      return await withItx(this.env.ITX, async (itx) => {",
       "        const value = await Promise.race([",
       "          script(itx),",
       "          new Promise((_, reject) => {",
@@ -257,7 +260,7 @@ export function runScriptModule(script: string) {
       "        ]);",
       "        const json = JSON.stringify(value);",
       "        return json === undefined ? undefined : JSON.parse(json);",
-      "      }));",
+      "      });",
       "    } finally {",
       "      clearTimeout(deadline);",
       "    }",
@@ -269,15 +272,16 @@ export function runScriptModule(script: string) {
 }
 
 /** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
- *  with a requested run. Same text, same module: the loader's content hash reuses the warm isolate. */
-export async function executeScript(itx: LibraryItx, code: string, cause: Cause): Promise<unknown> {
+ *  with a requested run, under the cause it runs `itx` with (`run` goes through the door). Same
+ *  text, same module: the loader's content hash reuses the warm isolate. */
+export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`
   // is its own dispatch on that value — exactly what a remote holder of the same handle would do.
   const worker = (await itx.builtins.workers.get({ source: runScriptModule(code) })) as unknown as {
-    run(cause: Cause): Promise<unknown>;
+    run(): Promise<unknown>;
   };
-  return worker.run(cause);
+  return worker.run();
 }
 
 /** THE RUNNER'S SETTLEMENT of one execution (iterate-context-durable-object.ts `#executeRun`): the

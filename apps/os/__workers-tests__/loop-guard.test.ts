@@ -79,6 +79,24 @@ test("cause-table: a script runs one deeper than its request, and its settlement
   ]);
 });
 
+test("cause-table: a run its context's `itx.run` row sends elsewhere runs one deeper than its request all the same, where the row sends it", async () => {
+  const ctx = freshProject();
+  const asPerson = (event: unknown) =>
+    stub(ctx).invoke(["itx", ["append", event]], [], { principal: PERSON }) as Promise<
+      StreamEvent[]
+    >;
+  await asPerson({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.run", target: "itx.builtins.cd('/sandbox').builtins.run" },
+  });
+  const [requested] = await asPerson({
+    type: "events.iterate.com/itx/run-requested",
+    payload: { code: "async (itx) => { await itx.append({ type: 'test/by-script' }); }" },
+  });
+  const byScript = await eventually(at(ctx, "/sandbox"), "test/by-script");
+  expect(causeOf(byScript)).toEqual({ chain: causeOf(requested!).chain, depth: 1 });
+});
+
 test("cause-table: a schedule's firing — and its receipt — keep the depth it was set at, and the alarm's wake is caused by the deepest work the context owes", async () => {
   const start = Date.parse("2035-01-01T00:00:00Z");
   vi.useFakeTimers({ now: start, toFake: ["Date"] });
@@ -972,6 +990,35 @@ test("a row to a worker's own method delivers through the SDK's door, under the 
     0, 1, 2, 3, 4, 5, 6, 7, 8,
   ]);
   expect(ofType(log, LOOP_LIMIT_FACT)).toHaveLength(1);
+});
+
+test("a loaded isolate's code that no door runs — a class with no door — acts under the newest cause the isolate saw, never a chain of its own, which would escape the limit", async () => {
+  const ctx = freshProject();
+  const source = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { IterateConfigEntrypoint } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
+export default class extends IterateConfigEntrypoint {
+  async touch() {}
+}
+export class Doorless extends WorkerEntrypoint {
+  async act() {
+    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/doorless" }));
+  }
+}
+`,
+  };
+  await stub(ctx).invoke(["itx", "workers", ["get", { source }], ["touch"]], [], caller(5));
+  await stub(ctx).invoke(
+    ["itx", "workers", ["get", { source, className: "Doorless" }], ["act"]],
+    [],
+    caller(1),
+  );
+  expect(ofType(await readLog(ctx), "test/doorless").map(causeOf)).toEqual([
+    { chain: CHAIN, depth: 5 },
+  ]);
 });
 
 test("the platform's own isolate, which every project shares, keeps no cause outside a door: the chain one project's call ran under reaches no code another runs", async () => {

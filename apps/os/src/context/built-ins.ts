@@ -84,7 +84,12 @@ import {
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
 import { hostedFacetMarkerOf } from "../stream/core-processor.ts";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
+import {
+  FacetHandle,
+  isMissingRpcMethod,
+  RpcStubHandle,
+  materializeItxHandleReference,
+} from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
@@ -2373,9 +2378,9 @@ async function callThroughDoor(
   args: unknown[],
 ): Promise<unknown> {
   try {
-    return await entrypoint.callWithCause!(cause, method, ...args);
+    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
   } catch (error) {
-    if (!String(error).includes('does not implement the method "callWithCause"')) throw error;
+    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
     return await entrypoint[method]!(...args);
   }
 }
@@ -2424,14 +2429,13 @@ export function workersRoot(deps: {
         const [method, ...callArgs] = call;
         if (method === "callWithCause")
           throw codedError("NOT_A_METHOD", "workers.get(spec).callWithCause: the platform's door");
-        // The cause rides into the SDK's doors (cause.ts): on the Request, beside the event, or
-        // through the door any other method rides. A loaded worker's `fetch` reads who is asking
-        // off its Request (iterate/principal): the call's own caller, stamped here — never what the
-        // Request says, which `fetch(url, { headers })` would let the code that called it write.
+        // The cause rides into the SDK's doors (cause.ts): on the Request, or through the door every
+        // other method rides. A loaded worker's `fetch` reads who is asking off its Request
+        // (iterate/principal): the call's own caller, stamped here — never what the Request says,
+        // which `fetch(url, { headers })` would let the code that called it write.
         const cause = deps.cause();
         const args =
           method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
-        if (method === "deliverEvent") args[1] = cause;
         // A handler's one-event hooks are the delivery loop's to call, as a subscriber's
         // `deliverEvent` is (an IterateConfigEntrypoint's `processEvent` among them).
         if (method === "deliverEvent" || method === "processEvent")
@@ -2487,25 +2491,25 @@ export function workersRoot(deps: {
             const fn = entrypoint[method];
             if (typeof fn !== "function")
               throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-            if (method !== "deliverEvent" && method !== "fetch" && cause)
-              return await callThroughDoor(entrypoint, cause, method, args);
-            if (method !== "deliverEvent") return await Reflect.apply(fn, entrypoint, args);
+            const called =
+              method === "fetch" || !cause
+                ? (Reflect.apply(fn, entrypoint, args) as Promise<unknown>)
+                : callThroughDoor(entrypoint, cause, method, args);
+            if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the
             // row's, which those codes dangle or halt (subscription-delivery.ts `#fanOutFailed`).
-            return await (Reflect.apply(fn, entrypoint, args) as Promise<unknown>).catch(
-              (error: unknown) => {
-                const code = errorCode(error);
-                if (
-                  code === "NO_ITX_EXPRESSION_MATCH" ||
-                  code === "NOT_A_METHOD" ||
-                  code === "FORBIDDEN" ||
-                  code === "GONE"
-                )
-                  throw new Error((error as Error).message);
-                throw error;
-              },
-            );
+            return await called.catch((error: unknown) => {
+              const code = errorCode(error);
+              if (
+                code === "NO_ITX_EXPRESSION_MATCH" ||
+                code === "NOT_A_METHOD" ||
+                code === "FORBIDDEN" ||
+                code === "GONE"
+              )
+                throw new Error((error as Error).message);
+              throw error;
+            });
           } catch (error) {
             if (isCloneVersionFailure(error)) retire();
             throw error;

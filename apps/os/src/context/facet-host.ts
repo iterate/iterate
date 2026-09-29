@@ -55,7 +55,12 @@ import { RepoDurableObject } from "../repo/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
 import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
-import { walkSteps, awaitAnswerReleasedIfRejected, FacetHandle } from "./dispatch.ts";
+import {
+  walkSteps,
+  awaitAnswerReleasedIfRejected,
+  FacetHandle,
+  isMissingRpcMethod,
+} from "./dispatch.ts";
 import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
@@ -533,8 +538,7 @@ export class FacetHost {
     const steps: ItxExpression = [["listPublicMethods"]];
     const watchdog: FacetCallWatchdog = { watchdogMs: FACET_START_WATCHDOG_MS, onTimeout: "leave" };
     const startedIfRefused = (error: unknown) => {
-      if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
-        throw error;
+      if (!isMissingRpcMethod(error, "listPublicMethods")) throw error;
     };
     const start = async () => {
       const firstPartyClassName = firstPartyFacetClassOf(name);
@@ -893,8 +897,7 @@ export class FacetHost {
         .array(z.string())
         .parse(await this.#call(materialized, name, [["listPublicMethods"]], FACET_CALL_WATCHDOG));
     } catch (error) {
-      if (!(error instanceof TypeError && error.message.includes("does not implement the method")))
-        throw error;
+      if (!isMissingRpcMethod(error, "listPublicMethods")) throw error;
       publicMethods = [];
     }
     this.#publicMethodsByLoaderId.set(loaderId, publicMethods);

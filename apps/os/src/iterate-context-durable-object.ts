@@ -978,12 +978,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
     }
     // code run because of its request: one hand-off deeper (cause.ts)
-    if (!redirect)
-      return executeScript(
-        this.#libraryItx,
-        code,
-        causeOfDelivery([{ source: { cause: this.#caller.cause } }]),
+    if (!redirect) {
+      const cause = causeOfDelivery([{ source: { cause: this.#caller.cause } }]);
+      return this.#callerStorage.run({ ...this.#caller, cause }, () =>
+        executeScript(this.#libraryItx, code),
       );
+    }
     // The row's context answers with the request (library.ts `ScriptRunRequested`); its settlement
     // is read from here, in slices of fresh calls, so an instance of that context Cloudflare
     // replaces mid-run costs a slice and settles the run `interrupted`, never a call held on it.

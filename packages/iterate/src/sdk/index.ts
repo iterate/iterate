@@ -112,25 +112,10 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
         runCausedBy(causeOfRequest(request), () => serve.call(this, request)) as Promise<Response>;
   }
 
-  /** THE FACET DOOR (../cause.ts): the platform's way to walk `steps` on this facet — a caller's
-   *  `itx.facets.get(name).<steps>`, the alarm's revive — under the cause of the call that made
-   *  it. On no list: only the platform calls it (apps/os context/facet-host.ts). */
-  async callWithCause(
-    cause: unknown,
-    steps: (string | [string, ...unknown[]])[],
-  ): Promise<unknown> {
-    return runCausedBy(cause, async () => {
-      let value: unknown = this;
-      for (const step of steps) {
-        const [name, ...args] = typeof step === "string" ? [step] : step;
-        const member = memberRpcReaches(value, name);
-        value =
-          typeof step === "string"
-            ? await member
-            : await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
-      }
-      return value;
-    });
+  /** THE FACET DOOR (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the alarm's
+   *  revive. On no list: only the platform calls it (apps/os context/facet-host.ts). */
+  callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
+    return walkUnderCause(this, cause, steps);
   }
 
   /** This class's `publicMethods`, for the context that loaded it — a static does not cross the
@@ -145,6 +130,28 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
 /** A step of the facet door's walk, which reaches no further than Workers RPC would: on this facet
  *  or an RpcTarget, a member its class declares (never a field of its own); anything on a stub; on
  *  plain data, its own members (never a method of data the facet holds live). */
+/** An expression's steps past a host: a property, or a method and its arguments. */
+type RpcSteps = (string | [string, ...unknown[]])[];
+
+/** THE DOOR (../cause.ts): the platform's way to walk `steps` on `host` under the cause of the call
+ *  that made it — only as far as Workers RPC would reach, and never through the door itself. */
+function walkUnderCause(host: object, cause: unknown, steps: RpcSteps): Promise<unknown> {
+  return runCausedBy(cause, async () => {
+    let value: unknown = host;
+    for (const step of steps) {
+      const [name, ...args] = typeof step === "string" ? [step] : step;
+      if (name === "callWithCause")
+        throw codedError("NOT_A_METHOD", "callWithCause is the platform's door");
+      const member = memberRpcReaches(value, name);
+      value =
+        typeof step === "string"
+          ? await member
+          : await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
+    }
+    return value;
+  });
+}
+
 function memberRpcReaches(value: unknown, name: string): unknown {
   // (RpcStub's own type is generic past what TypeScript will narrow)
   if (value instanceof (RpcStub as unknown as new () => object))
@@ -343,25 +350,16 @@ export abstract class IterateConfigEntrypoint<
       runCausedBy(causeOfRequest(request), () => serve.call(this, request));
   }
 
-  /** The platform's delivery of one event (the dispatch boundary refuses any other caller):
-   *  `processEvent` inside ONE `withItx` round trip, released when it settles. */
+  /** The platform's delivery of one event (the dispatch boundary refuses any other caller),
+   *  through the door: `processEvent` inside ONE `withItx` round trip, released when it settles. */
   async deliverEvent(event: StreamEvent): Promise<void> {
-    // THE DELIVERY DOOR (../cause.ts): the platform hands the delivery's cause beside the event, a
-    // second argument on no signature, and `processEvent` runs under it.
-    const cause: unknown = arguments[1];
-    await runCausedBy(cause, () => this.withItx((itx) => this.processEvent({ event, itx })));
+    await this.withItx((itx) => this.processEvent({ event, itx }));
   }
 
-  /** THE DOOR FOR ANY OTHER METHOD (../cause.ts): the platform's way to call `method` — one this
-   *  class declares, as Workers RPC reaches it — under the cause of the call that makes it. On no
-   *  list: only the platform calls it (apps/os context/built-ins.ts `workers`). */
-  async callWithCause(cause: unknown, method: string, ...args: unknown[]): Promise<unknown> {
-    const member = method === "callWithCause" ? undefined : memberRpcReaches(this, method);
-    if (typeof member !== "function")
-      throw codedError("NOT_A_METHOD", `${method} is no method Workers RPC would reach`);
-    return runCausedBy(cause, () =>
-      Reflect.apply(member as (...a: unknown[]) => unknown, this, args),
-    );
+  /** THE DOOR (`walkUnderCause`) every method but `fetch` is called through. On no list: only the
+   *  platform calls it (apps/os context/built-ins.ts `workers`). */
+  callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
+    return walkUnderCause(this, cause, steps);
   }
 
   /** ONE round trip on the itx scope, then release the scope and every call made through it

@@ -49,6 +49,11 @@ export function registerRpcSessionBrand(brand: abstract new (...args: never[]) =
 }
 const holdsRpcSession = (v: unknown): boolean => RPC_SESSION_BRANDS.some((b) => v instanceof b);
 
+/** Whether `error` is workerd's refusal of an RPC to `method`, which its receiver does not
+ *  implement: a loaded class that is no SDK host has neither door nor list. */
+export const isMissingRpcMethod = (error: unknown, method: string): boolean =>
+  String(error).includes(`does not implement the method "${method}"`);
+
 /** A walk's ANSWER (`walkSteps`' value), awaited — and RELEASED if it rejects. A Workers-RPC call
  *  that threw keeps its session open, and the actor at its far end with it, until its promise is
  *  disposed: workerd drops a call's pipeline when an answer arrives, never when an exception does,
