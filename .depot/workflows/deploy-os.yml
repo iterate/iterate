@@ -120,6 +120,9 @@ jobs:
         with:
           # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
           pnpm-store: none
+      # iterate/os's own workspace file and lockfile (copybara/os/) match this commit's manifests
+      - name: Check the copy's generated root files
+        run: node scripts/ci/copybara.ts root --check
       # Copybara's jar is built for Java 25 (class file version 69), which Depot's stock image lacks:
       # Temurin's, which also sets JAVA_HOME
       - name: Setup Java
@@ -131,4 +134,4 @@ jobs:
       - name: Copy up to the deployed commit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: node scripts/ci/copybara.ts --sha "$GITHUB_SHA"
+        run: node scripts/ci/copybara.ts sync --sha "$GITHUB_SHA"

@@ -61,7 +61,26 @@ def copy_workflow(name, repo, files, exclude = []):
 copy_workflow(
     name = "os",
     repo = "os0929",
-    files = ["apps/os/**", "packages/iterate/**"],
+    # What the self-host recipe (apps/os/public/setup-prompt.md) builds from: apps/os and the
+    # workspace packages it depends on, the files its build scripts import or read, and the root
+    # tsconfigs they extend. The root package.json, pnpm-workspace.yaml and pnpm-lock.yaml are the
+    # copy's own, in copybara/os/ (scripts/ci/copybara.ts `root`).
+    files = [
+        "apps/os/**",
+        "packages/iterate/**",
+        "packages/shared/**",
+        "packages/ui/**",
+        "configs/**",
+        "envs.ts",
+        "scripts/lib/deploy-helpers.ts",
+        "scripts/lib/env-context.ts",
+        "scripts/lib/wrangler-config.ts",
+        "tsconfig.base.json",
+        "tsconfig.app.json",
+        ".nvmrc",
+        "patches/zod@4.6.5.patch",
+        "patches/@cloudflare__vitest-plugin@1.2.5.patch",
+    ],
 )
 copy_workflow(
     name = "packages",
