@@ -841,10 +841,20 @@ const EXPECTED_ERRORS = [
 // call, not a site visit (`/api/…` is a site's path).
 const UNREAD_BODY = "Can't read from request stream after response has been sent";
 
-/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, or an unread body
- *  outside `/api`, which the `/api` count reads on its own). Pure. */
+// A Cloudflare defect pinned by apps/agents/e2e/ai-stream-hung-request.e2e.test.ts: the runtime
+// cancels the ItxEntrypoint invocation that carried Workers AI's streamed Response from a context
+// Durable Object to a facet (an agent's `itx.ai.run`) after the whole body arrived, and logs it as
+// hung. The reply completes, so the line is false there. Remove this when the pin passes. It pages
+// on any other invocation.
+const FALSE_HUNG =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response";
+
+/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, an unread body
+ *  outside `/api` or a hung line on ItxEntrypoint, which their own counts read). Pure. */
 function expectedError(message: string) {
-  return [...EXPECTED_ERRORS, UNREAD_BODY].some((expected) => message.includes(expected));
+  return [...EXPECTED_ERRORS, UNREAD_BODY, FALSE_HUNG].some((expected) =>
+    message.includes(expected),
+  );
 }
 
 async function readWindow(
@@ -1170,6 +1180,22 @@ async function readWindow(
     );
     return n ? [[`${UNREAD_BODY}.`, n] satisfies [string, number]] : [];
   };
+  const readHungOffItxEntrypoint = async () => {
+    const [[, n] = ["", 0]] = await count(
+      [
+        errorLevel,
+        ...ERROR_ROWS.lines,
+        // the runtime's own line: always a message
+        leaf("$metadata.message", "includes", FALSE_HUNG),
+        anyOf(
+          leaf("$workers.entrypoint", "is_null"),
+          leaf("$workers.entrypoint", "neq", "ItxEntrypoint"),
+        ),
+      ],
+      exclusionsFor("lines"),
+    );
+    return n ? [[`${FALSE_HUNG}.`, n] satisfies [string, number]] : [];
+  };
   const healed = [leaf("event", "includes", "platform-failure")];
   const [
     serverErrors,
@@ -1179,6 +1205,7 @@ async function readWindow(
     lines,
     structured,
     apiUnreadBody,
+    hungOffItxEntrypoint,
     requestLines,
     summaries,
     pagers,
@@ -1193,6 +1220,7 @@ async function readWindow(
       anyOf(leaf("$metadata.message", "is_null"), leaf("$metadata.message", "eq", "")),
     ]),
     readUnreadBodyOnApi(),
+    readHungOffItxEntrypoint(),
     readErrors("requestLines", "$metadata.message", []),
     readErrors("summaries", "$metadata.message", []),
     rows([leaf("event", "includes", "rpc-stub-pager-")], ["event"]),
@@ -1207,6 +1235,7 @@ async function readWindow(
     errors: [
       ...[...lines, ...structured].filter(([message]) => !expectedError(message)),
       ...apiUnreadBody,
+      ...hungOffItxEntrypoint,
       ...requestLines,
       ...summaries,
     ],

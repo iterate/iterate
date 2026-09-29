@@ -9,7 +9,11 @@
 // the facet drains the body itself, with no agents code. The verdict is the outcome of every
 // stateless invocation on the way, ItxEntrypoint's `ai.run` and ItxAi's, read from Workers Logs
 // (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so
-// only the real-model suite runs it (os-real-model.yml).
+// only the real-model suite runs it (os-real-model.yml). ItxAi's invocation ends `ok`; the fault
+// lands on ItxEntrypoint's.
+//
+// When it goes red because it passed, Cloudflare fixed the fault: keep this body as a plain row and
+// delete FALSE_HUNG from the prd fault alarm (scripts/ci/prd-fault-alarm.ts).
 import { expect } from "vitest";
 import { z } from "zod";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
