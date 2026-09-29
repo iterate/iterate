@@ -133,17 +133,17 @@ Commits pushed straight to the experiment branch have no `(#N)`, so their title 
 On the branch, through the temporary Preview OS job (origin ref = the `copybara0929` branch):
 
 - [x] Branch point: first run creates `main` in the copy (`packages/` plus README), and the check is green _(local run, 26 s cold: [2aa4af2](https://github.com/iterate/copybara0929/commit/2aa4af2c25d3cdf566762eaeca7f61b90363d585), with `--last-rev` = the branch point)_
-- [ ] A commit that touches `packages/` makes one copy commit with the right trailer
-- [ ] A commit that doesn't touch `packages/` is a green no-op
+- [x] A commit that touches `packages/` makes one copy commit with the right trailer _(CI, after the PR's Deploy preview: [70b9392](https://github.com/iterate/copybara0929/commit/70b9392d90d460ba1e3a5cef33e389f0cda8de96))_
+- [x] A commit that doesn't touch `packages/` is a green no-op _(the same run skipped the two workflow commits pushed with it; a local run with nothing new said "No new changes to import")_
 - [ ] Merging `main` into the branch makes one copy commit
 - [ ] Deleting a file or folder under `packages/` deletes it in the copy
 - [ ] Editing the README flows through
-- [ ] A squash-merged-style message: the title's `(#N)` becomes `(iterate/iterate#N)` and links; only the `<!-- copybara -->` sections come through; a message with no sections becomes the title alone
-- [ ] GitHub adds a "referenced this pull request" backlink to the iterate/iterate PR when the copy commit lands
+- [x] A squash-merged-style message: the title's `(#N)` becomes `(iterate/iterate#N)` and links; only the `<!-- copybara -->` sections come through; a message with no sections becomes the title alone _(70b9392: the title, the one marked paragraph, the trailer; the mid-sentence marker and Co-Authored-By dropped)_
+- [x] GitHub adds a "referenced this pull request" backlink to the iterate/iterate PR when the copy commit lands _(a cross-repository ReferencedEvent on #3434 from 70b9392, 3 s after the push; visible to people who can read the private copy)_
 - [ ] Migrating up to an older sha, then the newest: the copy stops at the older one, then catches up
 - [ ] A push that cancels the Preview OS run in progress: the next run catches up
 - [ ] A commit that touches `packages/github-sync` only (not a preview path, so no deploy): it reaches the copy with the next deploy
-- [ ] A hand-made commit on the copy's `main` makes the check go red, and the next sync overwrites it (before the ruleset blocks hand pushes)
+- [ ] A hand-made commit on the copy's `main` makes the check go red, and the next sync overwrites it (before the ruleset blocks hand pushes) _(red: a local no-op run over [19a8749](https://github.com/iterate/copybara0929/commit/19a87497553841f55076e5bdeb41f0c0cce5b621) failed with "the copy's head … has no GitOrigin-RevId trailer"; Copybara itself looked past it)_
 - [ ] Time per run on a warm cache, and with a cold cache
 
 After merge, on main:
@@ -151,7 +151,7 @@ After merge, on main:
 - [ ] The first Deploy OS after merge runs the `copybara` job: the copy is at the deployed sha, and the check is green
 - [ ] A deploy that fails leaves the copy where it was, and the next successful one catches up
 - [ ] A PR that only touches `packages/agents` reaches the copy with the next OS deploy
-- [ ] Switching from branch history to main: the copy's last trailer names a branch commit that main's squash commit doesn't descend from. See what Copybara does (catch up from the branch point, or need `--force --last-rev`)
+- [x] Switching from branch history to main: the copy's last trailer names a branch commit that main's squash commit doesn't descend from. See what Copybara does _(dry run before merge: it refuses, "last imported revision … is not ancestor of requested revision". After merge, the first Deploy OS copy goes red until one run with `--last-rev <squash commit's parent>`)_
 
 Claude creates iterate/copybara0929 (private) with `gh`. Misha is an org admin, and members may create private repos. Nothing needs Misha's hands.
 
