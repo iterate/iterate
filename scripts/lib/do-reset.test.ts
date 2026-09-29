@@ -21,18 +21,6 @@ test.for([
     },
   },
   {
-    name: "retires a preview parent's own classes, none of its Worker Previews' namespaces",
-    workerName: "os",
-    workers: ["os"],
-    namespaces: [
-      { id: "own", script: "os", class: "ProjectDurableObject" },
-      { id: "pr7", script: "os", class: "ProjectDurableObject", preview: { name: "pr7" } },
-      // a class only the pull request declares
-      { id: "pr7-repo", script: "os", class: "RepoDurableObject", preview: { name: "pr7" } },
-    ],
-    exports: { ProjectDurableObject: { type: "durable-object", state: "deleted" } },
-  },
-  {
     name: "never deploys, and so never creates, a worker that does not exist",
     workerName: "os-prd",
     workers: ["dash-prd"],
@@ -60,7 +48,6 @@ test.for([
         main: "worker.js",
         compatibility_date: COMPATIBILITY_DATE,
         workers_dev: false,
-        preview_urls: true,
         exports,
       },
       worker: readFileSync(new URL("./parked-worker/worker.js", import.meta.url), "utf8"),

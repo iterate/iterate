@@ -14,8 +14,7 @@
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
 //   delete              every deployment of a prefix: a closed PR's (preview-delete.yml), its PR
 //                       body's section folded
-//   sweep               the stale deployments, the legacy Worker Previews and the former parents
-//                       (preview-sweep.ts), nightly (preview-sweep.yml)
+//   sweep               the stale deployments (preview-sweep.ts), nightly (preview-sweep.yml)
 //   deploy-parents      main on the dev/preview account, redeployed in place (preview-parents.yml)
 //   reset-parent        main on dev's data erased, then deployed again (preview-sweep.yml)
 // `--dry-run` prints the plan.
@@ -72,14 +71,12 @@ import {
   type Cf,
 } from "./preview-artifacts.ts";
 import {
-  accountResourceNames,
   accountWorkerNames,
   APPS,
   appSignInLink,
   assertFreshInstall,
   configTemplateNames,
   foldPreviewSection,
-  FORMER_PARENTS,
   MAIN_ON_DEV,
   previewDeploymentName,
   previewDeploymentUrls,
@@ -102,8 +99,6 @@ import {
   CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
   newestPreviewDeployment,
-  planFormerParents,
-  planLegacyWorkerPreviewSweep,
   planPreviewSweep,
   planSupersededCleanup,
   previewMemberSuffixes,
@@ -187,12 +182,11 @@ const memberSuffixes = () =>
     readWranglerBase().kv_namespaces.map(({ binding }: { binding: string }) => binding),
   );
 
-/** Every worker, KV namespace, R2 bucket (of a deployment's or a former parent's shape), D1 and
- *  Artifacts namespace on the account. */
+/** Every worker, KV namespace, R2 bucket (of a deployment's shape), D1 and Artifacts namespace on
+ *  the account. */
 async function listAccountMembers(cf: Cf) {
   // R2 pages by cursor, which the API client does not hand back: one page of the API's ceiling,
-  // narrowed to the `…-files` buckets a deployment and a former parent's previews have, and a full
-  // one refused.
+  // narrowed to the `…-files` buckets a deployment has, and a full one refused.
   const [scripts, kv, { buckets }, d1, artifacts] = await Promise.all([
     cf<{ id: string; created_on?: string }[]>("/workers/scripts"),
     listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
@@ -1017,85 +1011,14 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
   }
 }
 
-/** THE LEGACY WORKER PREVIEWS still on main on dev's workers and the former parents
- *  (preview-config.ts FORMER_PARENTS), each holding a Durable Object namespace per class of the
- *  account's 500, and the resources of `os`'s and `os-preview`'s previews
- *  (`<worker>-<preview>-<binding>`): the stale ones go (preview-sweep.ts
- *  `planLegacyWorkerPreviewSweep`). No deploy makes a Worker Preview, so this and the sweep's call
- *  go once a run logs "no Worker Previews left". */
-async function deleteLegacyWorkerPreviews(cf: Cf, options: { dryRun: boolean }) {
-  const osWorkers = [MAIN_ON_DEV.workerName, "os-preview"];
-  const workers = [
-    ...new Set([
-      MAIN_ON_DEV.workerName,
-      ...APPS.map((app) => app.envs.preview!.workerName),
-      ...FORMER_PARENTS,
-    ]),
-  ];
-  const listed = (
-    await Promise.all(
-      workers.map(async (worker) =>
-        (
-          await listAll<{ name: string; created_on?: string; deployed_on?: string }>(
-            cf,
-            `/workers/workers/${worker}/previews`,
-          ).catch((error) => {
-            // a worker already deleted holds no previews
-            if (!isCloudflareError(error, 404, 10007)) throw error;
-            return [];
-          })
-        ).map((preview) => ({
-          worker,
-          name: preview.name,
-          lastDeployedAt: preview.deployed_on || preview.created_on,
-        })),
-      ),
-    )
-  ).flat();
-  if (listed.length === 0) {
-    console.log("no Worker Previews left");
-    return { listed, failures: [] };
-  }
-  const plan = planLegacyWorkerPreviewSweep(Date.now(), listed);
-  for (const { worker, name, verdict, reason } of plan)
-    console.log(
-      `  ${verdict === "stale" ? "delete" : "keep  "} legacy Worker Preview ${name} of ${worker}: ${reason}`,
-    );
-  if (options.dryRun) return { listed, failures: [] };
-  const failures: string[] = [];
-  const stale = plan.filter(({ verdict }) => verdict === "stale");
-  for (const { worker, name } of stale)
-    await cf(`/workers/workers/${worker}/previews/${name}?force=true`, { method: "DELETE" }).catch(
-      (error) => failures.push(`${worker} preview ${name}: ${describe(error)}`),
-    );
-  const [kv, d1] = await Promise.all([
-    listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
-    listAll<D1Row>(cf, "/d1/database"),
-  ]);
-  for (const { worker, name } of stale.filter(({ worker }) => osWorkers.includes(worker))) {
-    const resource = (binding: string) => `${worker}-${name}-${binding}`;
-    const removals = [
-      ...kv
-        .filter((row) => [resource("itx-kv"), resource("oauth-kv")].includes(row.title))
-        .map((row) => () => deleteKvNamespace(cf, row)),
-      ...d1.filter((row) => row.name === resource("db")).map((row) => () => deleteD1(cf, row)),
-      () => deleteR2Bucket(cf, resource("files")),
-      () => deleteArtifactsNamespace(cf, resource("repos")).then(() => undefined),
-    ];
-    for (const remove of removals)
-      await remove().catch((error) => failures.push(`${worker} ${name}: ${describe(error)}`));
-  }
-  return { listed, failures };
-}
-
 /** How far back the sweep looks for its own open page: a page stays open, edited each night, until
  *  Cloudflare deletes what it names, and a Cloudflare escalation takes weeks. */
 const PAGE_LOOKBACK_HOURS = 30 * 24;
 
-/** The stale deployments, the legacy Worker Previews and the former parents (scripts/preview-sweep.ts),
- *  then the Durable Object namespaces no worker holds. A run on main keeps one #error-pulse page per
- *  kind of resource Cloudflare left (keepPage); a run on any other ref prints its pages. A 🧪 test run
- *  deletes nothing and posts what it would page to #ci. */
+/** The stale deployments (scripts/preview-sweep.ts), then the Durable Object namespaces no worker
+ *  holds. A run on main keeps one #error-pulse page per kind of resource Cloudflare left
+ *  (keepPage); a run on any other ref prints its pages. A 🧪 test run deletes nothing and posts what
+ *  it would page to #ci. */
 async function sweep(
   cf: Cf,
   options: { dryRun: boolean; testRun: boolean; onMain: boolean; jobUrl: string | undefined },
@@ -1124,30 +1047,6 @@ async function sweep(
   const stale = plan
     .filter(({ verdict }) => verdict === "stale")
     .map(({ deployment }) => deployment);
-  const legacy = await deleteLegacyWorkerPreviews(cf, { dryRun });
-  const previewsLeft = new Map<string, number>();
-  for (const { worker } of legacy.listed)
-    previewsLeft.set(worker, (previewsLeft.get(worker) || 0) + 1);
-  const formerParents = planFormerParents({
-    workers,
-    deployedWorkerNames: accountWorkerNames(),
-    accountResourceNames: accountResourceNames(),
-    resources: members.filter(({ kind }) => kind !== "worker"),
-    suffixes,
-    previewsLeft,
-  });
-  for (const { name, worker, resources, verdict, reason } of formerParents)
-    console.log(
-      `  ${verdict === "stale" ? "delete" : "keep  "} former parent ${name} (${worker ? "its worker" : "no worker"}, ${resources.length} resources: ${resources.map((resource) => resource.name).join(", ") || "none"}): ${reason}`,
-    );
-  // a former parent is deleted like a deployment: its worker, if any is left, then its resources
-  const staleFormerParents = formerParents
-    .filter(({ verdict }) => verdict === "stale")
-    .map(({ name, worker, resources }) => ({
-      name,
-      prefix: name,
-      members: [...(worker ? [{ kind: "worker" as const, name, id: name }] : []), ...resources],
-    }));
   const unmapped = unmappedWorkers(workers, accountWorkerNames(), deployments);
   if (unmapped.length > 0)
     console.log(
@@ -1155,8 +1054,8 @@ async function sweep(
     );
   // What the account's Durable Object namespace count (Cloudflare's limit is per account) loses.
   const deletedWorkers = new Set(
-    [...stale, ...staleFormerParents].flatMap((group) =>
-      group.members.filter(({ kind }) => kind === "worker").map(({ name }) => name),
+    stale.flatMap((deployment) =>
+      deployment.members.filter(({ kind }) => kind === "worker").map(({ name }) => name),
     ),
   );
   const freedNamespaceIds = new Set(
@@ -1170,7 +1069,7 @@ async function sweep(
       `  ${workerless.length} Durable Object namespace(s) whose worker is gone, paged if still listed once the run is done: ${workerless.map(({ name }) => name).join(", ")}`,
     );
   console.log(
-    `plan: ${stale.length} stale deployment(s) of ${plan.length}; ${staleFormerParents.length} former parent(s); ${freedNamespaceIds.size} of the account's ${namespaces.length} Durable Object namespaces go with them; ${unmapped.length} unmapped worker(s) kept`,
+    `plan: ${stale.length} stale deployment(s) of ${plan.length}; ${freedNamespaceIds.size} of the account's ${namespaces.length} Durable Object namespaces go with them; ${unmapped.length} unmapped worker(s) kept`,
   );
   if (testRun) {
     // Only the workerless kind can be judged without deleting: a stuck namespace is one a delete
@@ -1178,17 +1077,13 @@ async function sweep(
     const text =
       workerless.length > 0
         ? renderWorkerlessNamespacesPage(workerless, { jobUrl, testRun })
-        : `🧪 TEST RUN — preview sweep: nothing to page; ${stale.length} stale deployment(s) and ${staleFormerParents.length} former parent(s) to delete${jobUrl ? ` · <${jobUrl}|run>` : ""}`;
+        : `🧪 TEST RUN — preview sweep: nothing to page; ${stale.length} stale deployment(s) to delete${jobUrl ? ` · <${jobUrl}|run>` : ""}`;
     console.log(text);
     await getSlackClient().chat.postMessage({ channel: slackChannelIds["#ci"], text });
     return;
   }
   if (dryRun) return;
-  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, [
-    ...stale,
-    ...staleFormerParents,
-  ]);
-  failures.push(...legacy.failures);
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, stale);
   // Once the deletes are done, each namespace they took should be gone from the listing. One still
   // listed after deletes that all succeeded is Cloudflare's: a warn now, and the next run's page,
   // which finds it workerless (so a namespace Cloudflare drops a moment late pages no one).
@@ -1301,7 +1196,7 @@ export default class Preview {
   async delete(options: PreviewOptions = {}) {
     await main("delete", options);
   }
-  /** the stale deployments (scripts/preview-sweep.ts) and the legacy Worker Previews */
+  /** the stale deployments (scripts/preview-sweep.ts) */
   async sweep(options: PreviewOptions = {}) {
     await main("sweep", options);
   }
