@@ -650,10 +650,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
    *  at, and the session's verified principal, or none. */
   const append = async (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // Loaded code can delegate its scope to descendants through durable rows; child code
-    // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app)
-      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
+    // Loaded code's rows are walled as they resolve here; the append boundary validates the rest.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
     refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
     refusePlatformFacts(events, caller);
     // STABLE RETRY EFFECTS (cause.ts): during a delivery, an event without a key of its own is keyed

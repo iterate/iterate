@@ -30,8 +30,7 @@ export type Caller = {
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
    *  `env.ITX`. Under it the resolver walls the INPUT expression (itx-expression-rewriting.ts
-   *  `#admit`: no fixed point, `cd` down only but for `itx.cd(path).append(…)`); rewrites the owner
-   *  wrote are never subject. */
+   *  `#admit`: no fixed point); rewrites the owner wrote are never subject. */
   app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
    *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the

@@ -809,7 +809,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       "failed",
     ]);
     expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
-    expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+    expect(settled[1]!.error).toMatch(/is masked/); // cd('/'): the bare null masks `cd`
     expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
     expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
     expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
