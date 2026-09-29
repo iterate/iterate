@@ -2,7 +2,7 @@
 size: medium
 ---
 
-# deployApp takes a DeployTarget: one named env object, no env map, no per-env callbacks
+# deployApp takes one named env object: no env map, no per-env callbacks
 
 Status: done. `deployApp` and `resolveEnvContext` take one named env; every caller and the one test double updated. CI is the remaining check: the preview deploy runs apps/os `deploy.ts` through the new `deployApp`.
 
