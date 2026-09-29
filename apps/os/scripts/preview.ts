@@ -36,7 +36,7 @@ import {
   getOsDeployTarget,
   osEnvs,
   previewDeployment,
-  type OsEnv,
+  type OsDeployTarget,
 } from "../../../envs.ts";
 import {
   appConfigSecretsOf,
@@ -457,7 +457,7 @@ async function deployStartApp(
  *  links to the others (start-app.ts startAppWorkerConfig). preview-parents.yml runs this on every
  *  push to main. Nothing a PR deploys depends on it. Side by side; every one settles before the
  *  failed ones are named. */
-async function deployParents(ctx: EnvContext<OsEnv>) {
+async function deployParents(ctx: EnvContext<OsDeployTarget>) {
   const credentials = {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
@@ -498,7 +498,7 @@ async function resetParent(options: { dryRun: boolean }) {
  *  that lands writes its own section after the fold has landed. A body write that fails is logged,
  *  never the deploy's failure. */
 async function deployPreview(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployTarget>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
@@ -522,7 +522,7 @@ async function deployPreview(
  *  (the first listed), all of its traffic on one version, the id `/version` answers with
  *  (src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
  *  answers 404 from some locations for seconds after the deploy's smokes have passed. */
-async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
+async function deployedVersion(ctx: EnvContext<OsDeployTarget>, workerName: string) {
   const { deployments } = await ctx.cf<{
     deployments: { versions: { version_id: string; percentage: number }[] }[];
   }>(`/workers/scripts/${workerName}/deployments`);
@@ -540,7 +540,7 @@ async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
  *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
  *  seed and the PR body's section side by side. */
 async function deployPreviewSteps(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployTarget>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],

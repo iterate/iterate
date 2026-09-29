@@ -4,17 +4,6 @@ import { z } from "zod";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { UNPROVISIONED } from "../../envs.ts";
 
-/**
- * The minimum an app's envs.ts entry must carry for the deploy tooling:
- * which Doppler config supplies secrets and which Cloudflare account the
- * env lives in. Each app's env interface (envs.ts OsEnv, KitEnv,
- * DummyPetshopEnv; start-app.ts StartAppEnv) extends this structurally.
- */
-export interface DeployableEnv {
-  cloudflareAccountId: string;
-  dopplerConfig: string;
-}
-
 /** Structured Cloudflare API failure so callers can handle specific statuses without parsing text. */
 export class CloudflareApiError extends Error {
   method: string;
@@ -35,20 +24,26 @@ export class CloudflareApiError extends Error {
 }
 
 /**
- * An envs.ts entry and the name it was found by (envs.ts `getDeployTarget`,
- * `getOsDeployTarget`): `prd`, `preview`, a per-commit deployment's
- * `pr3144-a1b2c3d`. The name travels with the entry because the vite build
- * runs in its own process and finds the entry again by it (`CLOUDFLARE_ENV`).
+ * An app's envs.ts entry and the name it was found by (envs.ts `getDeployTarget`,
+ * `getOsDeployTarget`), as the deploy tooling needs every one: which Doppler
+ * config supplies its secrets and which Cloudflare account it lives in. The
+ * name (`prd`, `preview`, a per-commit deployment's `pr3144-a1b2c3d`) travels
+ * with the entry because the vite build runs in its own process and finds the
+ * entry again by it (`CLOUDFLARE_ENV`).
  */
-export type DeployTarget<E extends DeployableEnv> = E & { name: string };
+export interface DeployTarget {
+  name: string;
+  cloudflareAccountId: string;
+  dopplerConfig: string;
+}
 
 /**
  * A resolved `--env <name>` invocation: the app's envs.ts entry plus that
  * env's Doppler secrets. Every deployed-environment script starts here, so
  * the environment is always selected by name.
  */
-export interface EnvContext<E extends DeployableEnv> {
-  env: DeployTarget<E>;
+export interface EnvContext<E extends DeployTarget = DeployTarget> {
+  env: E;
   /** The env's full Doppler secret set. */
   secrets: Record<string, string>;
   /** Cloudflare API fetch scoped to the env's account (path after /accounts/<id>). */
@@ -63,8 +58,8 @@ export interface EnvContext<E extends DeployableEnv> {
  * the target up by its `--env` flag, the only way to choose one; this
  * function never reads argv or the environment for it.
  */
-export async function resolveEnvContext<E extends DeployableEnv>(options: {
-  env: DeployTarget<E>;
+export async function resolveEnvContext<E extends DeployTarget>(options: {
+  env: E;
   /** Doppler project the env's config lives in (e.g. "os", "dash"). */
   dopplerProject: string;
 }): Promise<EnvContext<E>> {

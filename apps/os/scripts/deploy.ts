@@ -4,7 +4,7 @@ import {
   OS_DOPPLER_PROJECT,
   getOsDeployTarget,
   osResourceNames,
-  type OsEnv,
+  type OsDeployTarget,
 } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { appConfigSecretsOf } from "../../../scripts/lib/deploy-helpers.ts";
@@ -97,7 +97,7 @@ export default async function deploy(options: {
  *  wrangler's to create during the deploy. The D1 is created near this job (`automatic`, d1.ts
  *  `D1Location`), which in CI is where the deployment's suites call it from. Resolves to the D1's id. The delete that takes them is
  *  scripts/preview.ts `deletePreviewDeployment`. */
-async function createResources(ctx: EnvContext<OsEnv>) {
+async function createResources(ctx: EnvContext<OsDeployTarget>) {
   const names = osResourceNames(ctx.env.resourceNamePrefix);
   const [database] = await Promise.all([
     ensureD1(ctx.cf, names.db, "automatic"),

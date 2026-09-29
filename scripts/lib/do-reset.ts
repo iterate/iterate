@@ -20,10 +20,10 @@ import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAsync } from "./deploy-helpers.ts";
-import type { DeployableEnv, EnvContext } from "./env-context.ts";
+import type { EnvContext } from "./env-context.ts";
 
 /** The slice of EnvContext the reset needs: the account-scoped CF API fetch. */
-type CfContext = Pick<EnvContext<DeployableEnv>, "cf">;
+type CfContext = Pick<EnvContext, "cf">;
 
 /** The Durable Object namespaces (class + namespace id) live on one worker script. */
 export async function getWorkerDoNamespaces(

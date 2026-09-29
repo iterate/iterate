@@ -9,7 +9,6 @@ import {
 import {
   assertProvisioned,
   resolveEnvContext,
-  type DeployableEnv,
   type DeployTarget,
   type EnvContext,
 } from "./env-context.ts";
@@ -33,7 +32,7 @@ import {
  * `prepare`/`afterDeploy`.
  */
 export async function deployApp<
-  E extends DeployableEnv & {
+  E extends DeployTarget & {
     workerName: string;
     /** Public origin for the final success line. */
     baseUrl: string;
@@ -43,7 +42,7 @@ export async function deployApp<
   },
 >(input: {
   /** The deploy script's `--env`, looked up (envs.ts `getDeployTarget`, `getOsDeployTarget`). */
-  env: DeployTarget<E>;
+  env: E;
   dopplerProject: string;
   /** Absolute app root (wrangler/vite commands run here). */
   appRoot: string;

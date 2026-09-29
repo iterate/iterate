@@ -30,7 +30,7 @@ import {
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
-import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
+import { resolveEnvContext } from "./env-context.ts";
 import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** The commit an app is built from, as vite.config.ts defines it for the client
@@ -43,8 +43,11 @@ export function sourceCommit(): string {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
-/** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
-export interface StartAppEnv extends DeployableEnv {
+/** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
+ *  project named for the app), the worker and its origin. */
+export interface StartAppEnv {
+  cloudflareAccountId: string;
+  dopplerConfig: string;
   workerName: string;
   baseUrl: string;
   /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
