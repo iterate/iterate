@@ -27,8 +27,7 @@ import {
 } from "./project-seed-format.ts";
 
 async function target(env: string) {
-  const context = await resolveEnvContext({
-    env: getEnv(env, osEnvs),
+  const context = await resolveEnvContext(getEnv(env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   // Match deploy.ts: only these two secrets are shipped.

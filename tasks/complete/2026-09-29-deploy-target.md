@@ -31,7 +31,7 @@ Every caller passes `env.workerName` and `env.baseUrl`, so those are part of the
 - `getEnv(name, envs)` (envs.ts) returns `{ ...envs[name], name }`, or throws `Unknown environment "x". Known: …`. The name comes first because it's the thing that matters; `envs` is just the collection to look in.
 - `getOsEnv(name)` (envs.ts, was `osEnv`) finds an `osEnvs` entry or a per-commit deployment, named; throws instead of returning `undefined`.
 - `deployApp(env, { dopplerProject, appRoot, appLabel, requiredSecrets?, prepare?, build?, afterDeploy?, smokes, withoutRoutes? })` reads `workerName`, `baseUrl` and `resources` off `env`. `smokes` is a plain array; a smoke `url` starting with "/" is under `env.baseUrl`.
-- `resolveEnvContext({ env, dopplerProject })` takes a `DeployableEnv`. `EnvContext.name` goes; callers read `ctx.env.name`.
+- `resolveEnvContext(env, { dopplerProject })` takes a `DeployableEnv` first, like `deployApp`. `EnvContext.name` goes; callers read `ctx.env.name`.
 
 ## Checklist
 

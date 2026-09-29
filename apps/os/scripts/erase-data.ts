@@ -74,8 +74,7 @@ async function eraseDataWith(
 ) {
   if (options.env === "prd" && !options.yesIMeanPrd)
     throw new Error("Refusing to erase PRODUCTION data without --yes-i-mean-prd.");
-  const context = await services.resolveEnvContext({
-    env: getEnv(options.env, osEnvs),
+  const context = await services.resolveEnvContext(getEnv(options.env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const { env, cf } = context;

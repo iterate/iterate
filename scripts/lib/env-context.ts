@@ -58,12 +58,13 @@ export interface EnvContext<E extends DeployableEnv> {
  * up by its `--env` flag, the only way to choose one; this function never
  * reads argv or the environment for it.
  */
-export async function resolveEnvContext<E extends DeployableEnv>(options: {
-  env: E;
-  /** Doppler project the env's config lives in (e.g. "os", "dash"). */
-  dopplerProject: string;
-}): Promise<EnvContext<E>> {
-  const { env } = options;
+export async function resolveEnvContext<E extends DeployableEnv>(
+  env: E,
+  options: {
+    /** Doppler project the env's config lives in (e.g. "os", "dash"). */
+    dopplerProject: string;
+  },
+): Promise<EnvContext<E>> {
   const secrets = loadDopplerSecrets(options.dopplerProject, env.dopplerConfig);
 
   const accountId = secrets.CLOUDFLARE_ACCOUNT_ID;

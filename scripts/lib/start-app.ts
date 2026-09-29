@@ -223,8 +223,7 @@ async function deploy(app: StartApp, options: { env: string }) {
 }
 
 async function ensureResources(app: StartApp, options: { env: string }) {
-  const ctx = await resolveEnvContext({
-    env: getEnv(options.env, app.envs),
+  const ctx = await resolveEnvContext(getEnv(options.env, app.envs), {
     dopplerProject: app.name,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(

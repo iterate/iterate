@@ -94,7 +94,7 @@ export async function deployApp<
     withoutRoutes?: boolean;
   },
 ) {
-  const ctx = await resolveEnvContext({ env, dopplerProject: options.dopplerProject });
+  const ctx = await resolveEnvContext(env, { dopplerProject: options.dopplerProject });
   if (env.resources) assertProvisioned(env.name, env.resources);
   console.log(
     `Deploying ${options.appLabel} to ${env.name} (worker ${env.workerName}, account ${env.cloudflareAccountId})`,

@@ -149,8 +149,7 @@ export default async function contextSweep(options: {
   /** Back up and destroy each orphan (session.contexts.readEvents, then destroy). */
   destroy?: boolean;
 }) {
-  const ctx = await resolveEnvContext({
-    env: getEnv(options.env, osEnvs),
+  const ctx = await resolveEnvContext(getEnv(options.env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   // Before anything is read: a backup that cannot be written would leave every orphan standing.

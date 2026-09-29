@@ -7,8 +7,7 @@ import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env: string }) {
-  const ctx = await resolveEnvContext({
-    env: getEnv(options.env, osEnvs),
+  const ctx = await resolveEnvContext(getEnv(options.env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(

@@ -143,8 +143,7 @@ type Command = z.infer<typeof Command>;
  *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
  *  that is not the dev/preview one. */
 const accountContext = () =>
-  resolveEnvContext({
-    env: getEnv("preview", osEnvs),
+  resolveEnvContext(getEnv("preview", osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
 

@@ -38,8 +38,7 @@ export default async function seedInstanceSecrets(options: {
 }) {
   if (options.env === "prd" && !options.confirmPrd)
     throw new Error("--env prd sets production's keys: pass --confirm-prd as well");
-  const context = await resolveEnvContext({
-    env: getEnv(options.env, osEnvs),
+  const context = await resolveEnvContext(getEnv(options.env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const baseUrl = options.deployment

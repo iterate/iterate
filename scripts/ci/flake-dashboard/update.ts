@@ -35,8 +35,7 @@ export default async function update(
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new Error(`GITHUB_REPOSITORY is not owner/repo: ${repository}`);
   const bucket = ciBucketEnvs.ci;
-  const prd = await resolveEnvContext({
-    env: getEnv("prd", osEnvs),
+  const prd = await resolveEnvContext(getEnv("prd", osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const iterateApp = parseAppConfig({
