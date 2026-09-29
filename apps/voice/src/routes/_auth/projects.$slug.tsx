@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
+import type { IterateContextApi } from "iterate/api";
 import { useFacetLiveState } from "iterate/react";
 import { AppBuild } from "@iterate-com/ui/components/app-build";
 import { Button } from "@iterate-com/ui/components/button";
@@ -43,9 +44,10 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     const [rule, secrets, build] = await Promise.all([
       itx.rewriteRules.get("itx.voice"),
       itx.secrets.list(),
-      // the build of voice the project's config pins, for the upgrade: none shown while a project
-      // created a moment ago has no config repo yet
-      voiceVersion(itx).catch(() => undefined),
+      // the build of voice the project runs, for the upgrade, none while a project created a moment
+      // ago has no config repo yet: capnweb's stub erases the type of the `project` facet it reads,
+      // as it does every facet's (iterate/api `facets.get`)
+      voiceVersion(itx as unknown as IterateContextApi).catch(() => undefined),
     ]);
     const voice = {
       installed: Boolean(rule?.target),

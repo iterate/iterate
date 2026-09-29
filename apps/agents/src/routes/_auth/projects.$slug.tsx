@@ -106,8 +106,12 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
         installed: false,
         build: undefined,
       };
-    // the agents build the project's config pins, for the sidebar's upgrade
-    const [agents, build] = await Promise.all([withAgents(itx).agents.list(), agentsVersion(itx)]);
+    // the agents build the project runs, for the sidebar's upgrade: capnweb's stub erases the type
+    // of the `project` facet it reads, as it does every facet's (iterate/api `facets.get`)
+    const [agents, build] = await Promise.all([
+      withAgents(itx).agents.list(),
+      agentsVersion(itx as unknown as IterateContextApi),
+    ]);
     return {
       projects,
       project,
