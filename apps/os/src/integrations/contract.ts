@@ -26,12 +26,12 @@ export const IntegrationConnectionRow = z.object({
   /** Which OAuth app the token was issued to: iterate's (the deployment's) or the project's own. */
   client: z.enum(["iterate", "project"]),
   /** What the provider calls the account: a Slack workspace's name, a Google or Cloudflare address,
-   *  a GitHub login, a Waitrose username. */
+   *  a GitHub login, a Waitrose username, or an X handle. */
   account: z.string(),
   /** Its id there: the Slack team, the Google or Cloudflare user, the GitHub installation (a
-   *  project's) or user (a person's). */
+   *  project's) or user (a person's), or the X user ID. */
   externalId: z.string().min(1),
-  /** The scopes granted, where the provider has them (Google, Cloudflare): what the token response
+  /** The scopes granted, where the provider has them (Google, Cloudflare, X): what the token response
    *  of the sign-in or the connect says was granted (rules.ts `grantedScopesOf`), never what was
    *  asked for unless the response names none. */
   scopes: z.array(z.string()).optional(),
@@ -62,6 +62,10 @@ const disconnected = {
 /** The facts, a catalog the owners' contracts depend on (`processorDeps`). */
 export const IntegrationEventCatalog = {
   events: {
+    "events.iterate.com/x/connected": connected(
+      "An X account was verified through OAuth and connected.",
+    ),
+    "events.iterate.com/x/disconnected": disconnected,
     "events.iterate.com/slack/connected": connected(
       "A Slack workspace was connected: its bot token is in the connection's secret.",
     ),

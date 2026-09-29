@@ -1068,7 +1068,8 @@ test.for([
         client: { platform: "linear" },
       },
     },
-    refused: /refresh\.client is \{ platform: "slack" \| "google" \| "cloudflare" \| "github" \}/,
+    refused:
+      /refresh\.client is \{ platform: "slack" \| "google" \| "cloudflare" \| "github" \| "x" \}/,
   },
   {
     row: "an installation of iterate's GitHub App",

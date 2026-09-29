@@ -193,6 +193,8 @@ export const AccountContract = defineProcessorContract({
     "events.iterate.com/github/disconnected",
     "events.iterate.com/waitrose/connected",
     "events.iterate.com/waitrose/disconnected",
+    "events.iterate.com/x/connected",
+    "events.iterate.com/x/disconnected",
   ],
   emits: [],
 });
