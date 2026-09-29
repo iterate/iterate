@@ -90,6 +90,9 @@ type DocSessionOptions = {
 
 const Seed = z.object({ rev: z.number(), state: DocLiveState });
 
+/** A tab's awareness state as collab.ts sets it: whose tab it is. */
+const AwarenessUser = z.object({ user: z.object({ name: z.string().min(1) }) });
+
 /** One mount of the editor: whether it's gone, and what to let go when it goes. */
 type Attachment = { unmounted: boolean; cleanups: (() => void)[] };
 
@@ -311,11 +314,14 @@ export class DocSession {
             : live.dirty || !live.commitOid
               ? { kind: "editing" }
               : { kind: "saved", oid: live.commitOid, by: live.savedBy };
-    const others = this.#collab
-      ? [...this.#collab.awareness.getStates()]
-          .filter(([client]) => client !== this.#collab!.doc.clientID)
-          .map(([, state]) => (state as { user?: { name?: string } }).user?.name)
-          .filter((name): name is string => Boolean(name))
+    const collab = this.#collab;
+    const others = collab
+      ? [...collab.awareness.getStates()]
+          .filter(([client]) => client !== collab.doc.clientID)
+          .flatMap(([, state]) => {
+            const parsed = AwarenessUser.safeParse(state);
+            return parsed.success ? [parsed.data.user.name] : [];
+          })
       : [];
     this.#set({ status, others });
   }

@@ -72,6 +72,21 @@ test("a save the repo refuses because main moved takes the tip in and saves the 
   await vi.waitFor(() => expect(misha.text()).toBe("zero\none\ntwo\nthree\nfour\n"));
 });
 
+test("a commit deleting a doc with unsaved edits in it: the save writes it back, edits and all", async () => {
+  const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
+  const misha = await doc.join("misha@iterate.com");
+  misha.type(misha.text().length, "Unsaved.\n");
+  await vi.waitFor(async () => expect(await doc.live()).toMatchObject({ dirty: true }));
+
+  doc.repo.deleteElsewhere("plan.md");
+  doc.notice();
+  misha.leave();
+
+  await vi.waitFor(() =>
+    expect(doc.repo.latest()).toMatchObject({ files: { "plan.md": "# Plan\nUnsaved.\n" } }),
+  );
+});
+
 test("the last person closing the doc saves it at once, not a minute later", async () => {
   const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
   const misha = await doc.join("misha@iterate.com");
@@ -398,6 +413,10 @@ function fakeRepo(files: Record<string, string>) {
         files: { ...repo.latest().files, [path]: content },
         message: "elsewhere",
       }),
+    deleteElsewhere: (path: string) => {
+      const { [path]: _deleted, ...files } = repo.latest().files;
+      commits.push({ oid: oid(commits.length), files, message: "deleted elsewhere" });
+    },
   };
   return repo;
 }

@@ -18,8 +18,8 @@
 //
 // An ephemeral push can be dropped under load, and nothing redelivers it. Yjs updates can be applied
 // in any order and more than once, so a browser syncs again with the processor (`sync`, by state
-// vector, both ways) when an update arrives that needs one it never got, when a send fails, and after
-// each save.
+// vector, both ways) when an update arrives that needs one it never got, after each save, and after
+// a send failed: when asked to try again, and before it leaves the doc.
 import { z } from "zod";
 import { CommentThread } from "./comments.ts";
 

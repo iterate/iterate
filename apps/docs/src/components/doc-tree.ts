@@ -1,12 +1,11 @@
-// The sidebar's file tree: @pierre/trees, the tree the old apps/docs used (packages/ui's
-// repo-file-tree before #2837), through its vanilla model rather than its React hooks, so the page
-// needs no effects: the tree is made when its element mounts, follows the page's live list of the
-// repo's files, and selects the open file after each navigation. It draws in its own shadow DOM,
+// The sidebar's file tree: @pierre/trees, through its vanilla model rather than its React hooks, so
+// the page needs no effects: the tree is made when its element mounts, follows the page's live list
+// of the repo's files, and selects the open file after each navigation. It draws in its own shadow DOM,
 // so ⌘K gets the files from the page (routes/_auth/projects.$slug.tsx), not by reading the sidebar.
 //
 // Right-clicking a row, or the space below the rows, offers "New doc": a row named `untitled.md` in
 // that folder (the repo's root below the rows), named in place with the tree's own rename input
-// (the old app's new-file flow). A name with no extension gets `.md`. Enter makes the file, as the
+// A name with no extension gets `.md`. Enter makes the file, as the
 // New doc box does, and opens it; Escape drops the row.
 import { FileTree } from "@pierre/trees";
 import type { DocList } from "../lib/doc-list.ts";
@@ -226,7 +225,8 @@ function popUp(x: number, y: number, newDoc: () => void) {
   element.style.top = `${y}px`;
   element.style.zIndex = "50";
   const onPointerDown = (event: PointerEvent) => {
-    if (!element.contains(event.target as Node)) close();
+    // the event's path, not its target: a click inside the tree is retargeted to its shadow host
+    if (!event.composedPath().includes(element)) close();
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") close();

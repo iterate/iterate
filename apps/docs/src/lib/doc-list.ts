@@ -4,6 +4,7 @@
 // while something on the page reads it (React's useSyncExternalStore: the first listener opens it,
 // the last one leaving closes it).
 import { createContext, use, useSyncExternalStore } from "react";
+import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { repoFiles } from "./docs-repo.ts";
 
@@ -11,6 +12,9 @@ export type DocListState =
   | { kind: "loading" }
   | { kind: "loaded"; paths: string[] }
   | { kind: "failed"; message: string };
+
+/** A commit's event as the list reads it: which repo it was to. */
+const CommitCompleted = z.object({ payload: z.object({ path: z.string() }) });
 
 /** The project's root context, as the page's session holds it. */
 type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
@@ -72,10 +76,11 @@ export class DocList {
       const subscription = await project.subscribe({
         consumes: ["events.iterate.com/repo/commit-completed"],
         target: (events) => {
-          // capnweb hands each event as a proxy: a plain copy to read
-          const moved = (
-            JSON.parse(JSON.stringify(events)) as { payload?: { path?: string } }[]
-          ).some((event) => event.payload?.path === this.#repo);
+          // capnweb hands each event as a proxy: a plain copy to parse
+          const moved = z
+            .array(z.unknown())
+            .parse(JSON.parse(JSON.stringify(events)))
+            .some((event) => CommitCompleted.safeParse(event).data?.payload.path === this.#repo);
           if (moved) void this.#read(project);
         },
       });

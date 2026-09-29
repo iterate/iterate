@@ -1,12 +1,7 @@
-// One tab's side of co-editing a doc (@iterate-com/docs frames.ts): the text as a Y.Doc, synced
-// with the doc's processor, and who else is here (y-protocols awareness). Every edit goes out as an
-// ephemeral `docs/edit-frame` on the doc's context and comes in the same way; the processor holds
-// the text between tabs and saves it, so an edit is safe once it has been sent. Closing the doc
-// says `docs/left` once the last edit is out: the last tab to leave has the processor save at once.
-//
-// Frames can go missing (an ephemeral push dropped under load, a send that failed), and Yjs updates
-// apply in any order and more than once, so the tab just syncs again with the processor, both ways:
-// when an update arrives that needs one it never got, after a failed send, and after each save.
+// One tab's side of co-editing a doc, in the protocol @iterate-com/docs frames.ts describes: the
+// text as a Y.Doc, who else is here (y-protocols awareness), this tab's edits sent one merged frame
+// at a time, and `sync` whenever the protocol says to sync again. A failed send leaves the tab
+// unsynced: `unsent()` holds true, so closing it warns, and it syncs before it says `docs/left`.
 import * as Y from "yjs";
 import {
   applyAwarenessUpdate,
@@ -14,6 +9,7 @@ import {
   encodeAwarenessUpdate,
   removeAwarenessStates,
 } from "y-protocols/awareness";
+import { z } from "zod";
 import type { IterateContextApi } from "iterate/api";
 import type { DocDurableObject } from "@iterate-com/docs";
 import {
@@ -34,6 +30,9 @@ export type CollabStatus =
 /** An empty Yjs update: nothing the other side lacks. */
 const NOTHING = 2;
 
+/** An event as the subscription delivers it, before its payload is parsed by its type. */
+const Delivered = z.object({ type: z.string(), payload: z.unknown() });
+
 export class DocCollab {
   doc = new Y.Doc();
   text = this.doc.getText("file");
@@ -48,6 +47,8 @@ export class DocCollab {
   /** `open()` while it runs: closing waits for it, so the goodbye can't overtake the hello. */
   #opening: Promise<void> | null = null;
   #syncAgain = false;
+  /** A send failed: the processor lacks edits of this tab's until the next sync. */
+  #unsynced = false;
   #disposed = false;
   #subscription: Disposable | null = null;
 
@@ -116,6 +117,8 @@ export class DocCollab {
         const answer = await facet.sync(toBase64(Y.encodeStateVector(this.doc)), this.doc.clientID);
         Y.applyUpdate(this.doc, fromBase64(answer.update), this);
         const missing = Y.encodeStateAsUpdate(this.doc, fromBase64(answer.stateVector));
+        // what a failed send lost is in `missing`; its own send failing marks the tab again
+        this.#unsynced = false;
         if (missing.length > NOTHING) this.#send(missing);
         this.#onStatus({ kind: "live" });
       } catch (error) {
@@ -139,6 +142,8 @@ export class DocCollab {
     this.#subscription?.[Symbol.dispose]();
     this.awareness.destroy();
     await this.#flushing;
+    // edits a failed send lost: one more try to hand them over before the processor saves without
+    if (this.#unsynced) await this.sync();
     await this.#context
       .append({ type: DOC_LEFT, ephemeral: true, payload: { client: this.doc.clientID } })
       // a lost goodbye costs only time: the processor saves a minute after the first edit anyway
@@ -147,12 +152,14 @@ export class DocCollab {
 
   /** Edits this tab made that haven't reached the doc's context yet. */
   unsent() {
-    return this.#sending || this.#outbox.length > 0;
+    return this.#sending || this.#outbox.length > 0 || this.#unsynced;
   }
 
   #receive(raw: unknown) {
     // capnweb hands each event as a proxy: a plain copy to parse
-    const event = JSON.parse(JSON.stringify(raw)) as { type: string; payload: unknown };
+    const delivered = Delivered.safeParse(JSON.parse(JSON.stringify(raw)));
+    if (!delivered.success) return;
+    const event = delivered.data;
     if (event.type === AWARENESS_FRAME) {
       const frame = AwarenessFrame.safeParse(event.payload);
       if (frame.success && frame.data.client !== this.doc.clientID)
@@ -188,8 +195,9 @@ export class DocCollab {
         });
       }
     } catch (error) {
-      // the text is still here: the next sync sends the processor whatever it lacks
+      // the text is still here: the next sync ("Try again", a save, leaving) sends what it lacks
       this.#outbox = [];
+      this.#unsynced = true;
       this.#onStatus({ kind: "failed", message: messageOf(error) });
     } finally {
       this.#sending = false;

@@ -72,7 +72,9 @@ function insertLink(view: EditorView, url: string) {
 /** Ask for a URL (the browser's own prompt, for now) and make the selection a link to it. */
 export function promptLink(view: EditorView) {
   const url = window.prompt("Link URL");
-  return url ? insertLink(view, url) : true;
+  // cancelled: nothing to do, and the key is still the command's
+  if (!url) return true;
+  return insertLink(view, url);
 }
 
 export const TABLE_TEMPLATE = "| Column | Column |\n| ------ | ------ |\n|        |        |";

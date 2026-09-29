@@ -331,13 +331,16 @@ export class DocProcessor extends StreamProcessor<DocState> {
     }
     if (!tip || tip === this.#base.oid) return false;
     const ours = this.#text();
-    // the file deleted at the tip: keep the live text, which the next save writes back
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- an emptied file is "" and merges like any edit; only a deleted one is null
-    const theirsText = theirs === null ? ours : theirs;
-    const merged =
-      ours === this.#base.text ? theirsText : mergeText(ours, this.#base.text, theirsText).text;
+    const unsaved = ours !== this.#base.text;
+    // the file deleted at the tip: the live text stays in the open tabs; a delete of a doc with no
+    // unsaved edits stands (until someone edits it again), and unsaved edits are dirty against a
+    // base of nothing, so the next save writes the doc back with them
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- only a deleted file is null; an emptied one is "" and merges like any edit
+    const deleted = theirs === null;
+    const theirsText = deleted ? ours : theirs || "";
+    const merged = unsaved ? mergeText(ours, this.#base.text, theirsText).text : theirsText;
     const update = this.#replaceText(ours, merged);
-    this.#base = { oid: tip, text: theirsText };
+    this.#base = { oid: tip, text: deleted && unsaved ? "" : theirsText };
     this.#writeMeta();
     if (update) {
       using itx = this.#deps.getItx();
