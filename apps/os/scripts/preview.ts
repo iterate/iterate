@@ -31,7 +31,14 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getEnv,
+  getOsEnv,
+  osEnvs,
+  previewDeployment,
+  type OsDeployableEnv,
+} from "../../../envs.ts";
 import {
   appConfigSecretsOf,
   collectSecrets,
@@ -137,7 +144,9 @@ type Command = z.infer<typeof Command>;
  *  there ships — the way ensure-resources and erase-data resolve theirs. Refuses a Doppler account
  *  that is not the dev/preview one. */
 const accountContext = () =>
-  resolveEnvContext({ envs: osEnvs, dopplerProject: OS_DOPPLER_PROJECT, env: "preview" });
+  resolveEnvContext(getEnv("preview", osEnvs), {
+    dopplerProject: OS_DOPPLER_PROJECT,
+  });
 
 function describe(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -333,7 +342,7 @@ async function deployStartApp(
  *  links to the others (start-app.ts startAppWorkerConfig). preview-parents.yml runs this on every
  *  push to main. Nothing a PR deploys depends on it. Side by side; every one settles before the
  *  failed ones are named. */
-async function deployParents(ctx: EnvContext<OsEnv>) {
+async function deployParents(ctx: EnvContext<OsDeployableEnv>) {
   const credentials = {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
@@ -374,7 +383,7 @@ async function resetParent(options: { dryRun: boolean }) {
  *  that lands writes its own section after the fold has landed. A body write that fails is logged,
  *  never the deploy's failure. */
 async function deployPreview(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployableEnv>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
@@ -398,7 +407,7 @@ async function deployPreview(
  *  (the first listed), all of its traffic on one version, the id `/version` answers with
  *  (src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
  *  answers 404 from some locations for seconds after the deploy's smokes have passed. */
-async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
+async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: string) {
   const { deployments } = await ctx.cf<{
     deployments: { versions: { version_id: string; percentage: number }[] }[];
   }>(`/workers/scripts/${workerName}/deployments`);
@@ -416,7 +425,7 @@ async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
  *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
  *  seed and the PR body's section side by side. */
 async function deployPreviewSteps(
-  ctx: EnvContext<OsEnv>,
+  ctx: EnvContext<OsDeployableEnv>,
   name: string,
   prNumber: string | undefined,
   apps: StartApp[],
@@ -461,7 +470,7 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
+  const versionId = await deployedVersion(ctx, getOsEnv(name).workerName);
   const config = parseAppConfig({
     ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
     ...appConfigSecretsOf(ctx.secrets),
@@ -480,9 +489,9 @@ async function deployPreviewSteps(
   const signIn = prNumber
     ? signInLinks({
         url,
-        ingressRouting: osEnv(name)!.ingressRouting || null,
+        ingressRouting: getOsEnv(name).ingressRouting || null,
         // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
-        providerHint: new URL(osEnv(name)!.adminIssuer!).host,
+        providerHint: new URL(getOsEnv(name).adminIssuer!).host,
         prNumber,
         apps: deployedApps,
         changedPaths: await changed,
@@ -521,7 +530,7 @@ async function deployPreviewSteps(
   const [seeded] = await Promise.all([
     signIn
       ? traceOperation("Seed sign-in", () =>
-          seedSignIn(config, { url, ...signIn, admins: osEnv(name)!.admins || [] }),
+          seedSignIn(config, { url, ...signIn, admins: getOsEnv(name).admins || [] }),
         )
       : true,
     publish(true),
