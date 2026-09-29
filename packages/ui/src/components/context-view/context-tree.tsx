@@ -1,6 +1,6 @@
 // The context tree: every context an app knows (a project's registry, the global namespace's
 // announced children) as an indented tree, `/` first, the one shown marked — the explorer's
-// navigation, the old platform's left pane. One input over it, "Filter or go to a path": typing
+// navigation. One input over it, "Filter or go to a path": typing
 // narrows the tree to the paths that contain it; Enter opens the one match, else the path typed,
 // resolved against the one shown by the caller's `resolvePath` (the SDK's `resolveContextPath`, so
 // `..` and `/agents/x` work); "/" anywhere on the page focuses it. A segment no context sits at

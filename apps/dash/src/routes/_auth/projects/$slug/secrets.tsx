@@ -8,12 +8,11 @@
 // the same sheet on an existing row: the name locked, the pin pre-filled, the value pasted again —
 // the current one is never shown, and a pin only ever enters together with the value it guards (the
 // platform has no verb that changes a pin alone). An agent's collection link opens a page of its own,
-// outside the shell (collect-secret.$slug.tsx); a link that names this page (`?collect=1&…`) is sent
-// on there.
+// outside the shell (collect-secret.$slug.tsx).
 // The list is the route's loader; a set or a delete invalidates the router, which reloads it.
 
 import { useRef, useState, type FormEvent, type RefObject } from "react";
-import { createFileRoute, redirect, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
@@ -59,18 +58,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/secrets")({
   validateSearch: z.object({
     new: z.literal(1).optional().catch(undefined),
     update: z.string().optional().catch(undefined),
-    collect: z.literal(1).optional().catch(undefined),
   }),
-  // `?collect=1`: a collection link that names this page, whose query goes on to the link's own page
-  beforeLoad: ({ search, location, params }) => {
-    if (search.collect !== 1) return;
-    const collectionLinkSearch = new URLSearchParams(location.searchStr);
-    collectionLinkSearch.delete("collect");
-    throw redirect({
-      href: `/collect-secret/${encodeURIComponent(params.slug)}?${collectionLinkSearch}`,
-      replace: true,
-    });
-  },
   loader: async ({ context }) => ({
     secrets: await context.api.projects.get(context.project.id).secrets.list(),
   }),

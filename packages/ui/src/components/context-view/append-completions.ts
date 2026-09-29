@@ -1,8 +1,7 @@
 // What the append composer's editor offers as you type, as pure functions over the draft's text: an
 // event's four fields at the start of a mapping, and after `type:` the event types this context
 // knows — the ones some processor here consumes, then the ones in the loaded log, most frequent
-// first. The old platform's message composer completed `@` files and `/` commands the same way
-// (apps/os `composer-completions.ts`, removed in #2837); the raw editor had none.
+// first.
 import type { CodeEditorCompletions } from "../code-editor.client.tsx";
 import { shortEventType } from "./filters.tsx";
 

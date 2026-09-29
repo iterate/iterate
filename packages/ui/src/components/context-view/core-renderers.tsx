@@ -67,8 +67,7 @@ export const coreEventRenderers: EventRenderers = {
     const p = record(e.payload);
     // what began the chain that woke it: `<ISO> with <origin> ~<nonce>` (apps/os/src/cause.ts)
     const began = e.source?.cause?.chain.match(/ with (.*) ~[a-z0-9]+$/)?.[1];
-    // the context's Durable Object started again (an eviction, a deploy): purple, as the old feed
-    // drew it
+    // the context's Durable Object started again (an eviction, a deploy): purple
     return (
       <span className="text-purple-700">
         Woke · {str(p.cause, "?")}

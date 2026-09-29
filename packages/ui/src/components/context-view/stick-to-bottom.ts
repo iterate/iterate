@@ -1,6 +1,5 @@
 // Stick the feed's scroll container to its bottom edge, Slack-style, with plain DOM events — no
-// timers, no polling. Ported from the old platform's feed (apps/os `lib/use-stick-to-bottom.ts`,
-// removed in #2837), where its failure modes were tuned (#1847/#1848).
+// timers, no polling. Its failure modes were tuned in #1847/#1848.
 //
 // Why not TanStack Virtual's followOnAppend/scrollToEnd: they act on the virtualizer's INTERNAL
 // offset/size model, which drifts from the real DOM by small amounts while rows settle (its
