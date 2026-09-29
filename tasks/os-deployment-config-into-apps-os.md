@@ -21,7 +21,7 @@ Today apps/os reaches `envs.ts` in two ways:
 Plan ("split the difference"): move (1) into apps/os now and invert (2), so apps/os builds
 self-host and local dev by itself and iterate's deploy tooling hands it every other deployment.
 
-Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Open question: where local dev's Cloudflare account comes from (below).
+Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Local dev's account: option 1 (below). Still reached: envs.ts's pet shop origin, through the preview fakes (follow-up).
 
 ## PR 1: the moves (no behaviour change)
 
@@ -41,9 +41,10 @@ Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config i
 - [x] `buildOs(deployment)` takes the looked-up deployment and sets `OS_DEPLOYMENT`; the callers
       (scripts/deploy.ts through `deployApp`, scripts/preview.ts) pass `getOsEnv(name)` _build.ts
       `viteBuildOs`; deploy.ts passes it as deployApp's `build`_
-- [ ] ~~local dev's `account_id` comes from the caller (`CLOUDFLARE_ACCOUNT_ID`, which iterate's dev
-      tooling sets) instead of `PREVIEW_AND_DEV_ACCOUNT_ID`~~ _deferred to an open question: nothing
-      sets it today. `pnpm dev`, the Playwright web server and `pnpm e2e` run without Doppler._
+- [x] local dev's `account_id` comes from the caller (`CLOUDFLARE_ACCOUNT_ID`) instead of
+      `PREVIEW_AND_DEV_ACCOUNT_ID` _Misha picked option 1: the local config sets no account and
+      wrangler reads CLOUDFLARE_ACCOUNT_ID itself; root `pnpm dev` and the specs' local worker run
+      apps/os's dev through scripts/os-dev.ts, which sets the dev/preview account_
 - [x] the build path stops reaching envs.ts through scripts/lib: build.ts imports `viteBuild` from
       deploy-helpers.ts, which reaches envs.ts through env-context.ts `UNPROVISIONED`. `viteBuild`
       moves to a module of its own that imports nothing, as scripts/lib/wrangler-config.ts already
@@ -62,7 +63,7 @@ Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config i
   project-seed, seed-instance-secrets) keep importing envs.ts. Moving them out of apps/os is its
   own task.
 
-## Open question: local dev's Cloudflare account
+## Decided: local dev's Cloudflare account (option 1)
 
 Local dev and the local build (`pnpm dev`, `pnpm e2e`, the Playwright web server) proxy Artifacts,
 AI and Browser to a real account, today `PREVIEW_AND_DEV_ACCOUNT_ID` from envs.ts. A self-hoster's
@@ -98,3 +99,11 @@ local dev wants their own account. Options:
   `CLOUDFLARE_ENV=self-host pnpm --filter os build` (the recipe's) still builds.
 - PR 2 checks: lint, oxfmt, `pnpm typecheck`, knip, `pnpm --filter os test` (148 files),
   scripts/lib and context-sweep tests all pass.
+- PR 2, option 1: the local build's wrangler.json no longer names an account. Root `pnpm dev start
+--detach` through scripts/os-dev.ts answered `/version`, its process carried the dev/preview
+  CLOUDFLARE_ACCOUNT_ID, and wrangler established the remote connection for Artifacts, AI and
+  Browser.
+- Still reached from the build: envs.ts `dummyPetshopEnvs.prd.baseUrl`, through the four
+  scripts/preview-*-app.ts fakes a per-commit deployment turns on (`petshopIntegrations`). Follow-up:
+  the deployment carries the pet shop's origin (`petshopOrigin`) and the fakes are built from it,
+  so apps/os never names iterate's pet shop. It touches the integrations e2e and two specs.

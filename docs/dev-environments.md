@@ -62,7 +62,14 @@ its Doppler project (`apps/os` → `os`), so `doppler setup` once per
 worktree scopes the monorepo for the deploy, preview and seed commands that do
 read secrets.
 
-- **Config selection**: `pnpm dev` runs `apps/os/scripts/dev.ts`, which builds
+- **Cloudflare account**: a local worker proxies Artifacts, AI and Browser to a
+  real account: wrangler's `CLOUDFLARE_ACCOUNT_ID`, else your `wrangler login`'s.
+  Root `pnpm dev` and the specs' local worker set the dev/preview account
+  (`scripts/os-dev.ts`). A command run in `apps/os` itself (`pnpm --dir apps/os e2e`)
+  takes your shell's: if your login spans several accounts, export
+  `CLOUDFLARE_ACCOUNT_ID` as envs.ts `PREVIEW_AND_DEV_ACCOUNT_ID`.
+- **Config selection**: `pnpm dev` runs `apps/os/scripts/dev.ts` (through
+  `scripts/os-dev.ts`, which sets the account), which builds
   once (`scripts/build.ts`: the generated `wrangler.jsonc` and modules) and then
   starts `wrangler dev` with the local deployment's configuration as plain
   `--var`s: the `APP_CONFIG` object (sign-in password `dev`, the mailed code,

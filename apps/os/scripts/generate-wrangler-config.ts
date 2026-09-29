@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import JSON5 from "json5";
-import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../src/project/context-birth-events.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
@@ -95,17 +94,16 @@ export function readWranglerBase() {
 }
 
 /** Runtime bindings stay with the app; deployed names and IDs come from the deployment. This is local dev
- *  (projects under `<project>.localhost`, the secrets as plain dev vars — scripts/dev.ts) on the
- *  dev/preview account; `deploymentWranglerConfig` is what a deployment puts on top. */
+ *  (projects under `<project>.localhost`, the secrets as plain dev vars — scripts/dev.ts);
+ *  `deploymentWranglerConfig` is what a deployment puts on top. */
 function localWranglerConfig() {
   return {
     ...readWranglerBase(),
-    // The account a LOCAL worker (`pnpm dev`, the local e2e run) reaches Cloudflare on: wrangler's
-    // local runtime has no simulator for Artifacts, AI or Browser and proxies those three bindings
-    // to the real products on this account under the developer's `wrangler login` — so a local
-    // run's repos land in the dev/preview account's `os-dev-repos` (wrangler.base.jsonc),
-    // never in a deployment's namespace.
-    account_id: PREVIEW_AND_DEV_ACCOUNT_ID,
+    // No `account_id`: wrangler's local runtime has no simulator for Artifacts, AI or Browser and
+    // proxies those three bindings to the real products on the account wrangler picks,
+    // CLOUDFLARE_ACCOUNT_ID or else the `wrangler login`'s. iterate's root `pnpm dev`
+    // (scripts/os-dev.ts) sets the dev/preview account, so a local run's repos land in its
+    // `os-dev-repos` (wrangler.base.jsonc), never in a deployment's namespace.
     routes: [],
   };
 }
