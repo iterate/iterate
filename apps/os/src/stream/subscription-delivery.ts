@@ -390,11 +390,15 @@ export class SubscriptionDelivery {
   /** WHY AN ALARM COMES BACK FOR DELIVERY: the deepest cause among the events the loop owes by
    *  `dueBy` — each fan-out record due, and the next page after each row's cursor whose claim is
    *  (a cursor row's batch, a fan-out row's backlog), each at the cause it was stored with
-   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another. */
+   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another.
+   *  Each page is folded in as it is read, so one page is held at a time, never one per due row. */
   owedCause(dueBy: number): Cause | undefined {
     const state = this.#stream.coreReducedState;
     const now = Date.now();
-    const owed: StreamEvent[] = [];
+    let owed: Cause | undefined;
+    const owe = (events: StreamEvent[]) => {
+      owed = deepestCause([owed, ...events.map((event) => event.source?.cause)]);
+    };
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
       if (!row || row.halted) continue;
@@ -405,17 +409,16 @@ export class SubscriptionDelivery {
         cursor.confirmedOffset < this.#stream.highestDurableOffset()
       )
         try {
-          owed.push(...this.#stream.read(cursor.confirmedOffset, 100).events);
+          owe(this.#stream.read(cursor.confirmedOffset, 100).events);
         } catch {
           // an unreadable batch halts its row when the pass reaches it; it causes nothing here
         }
       for (const delivery of record.deliveries.values()) {
         const claim = fanOutClaim(record, delivery, now);
-        if (claim !== undefined && claim <= dueBy)
-          owed.push(...this.#readFanOutEvent(delivery.offset));
+        if (claim !== undefined && claim <= dueBy) owe(this.#readFanOutEvent(delivery.offset));
       }
     }
-    return deepestCause(owed.map((event) => event.source?.cause));
+    return owed;
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
