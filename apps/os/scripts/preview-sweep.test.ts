@@ -1,12 +1,10 @@
 import { expect, test } from "vitest";
 import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../../envs.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
-import { accountResourceNames, accountWorkerNames, MAIN_ON_DEV } from "./preview-config.ts";
+import { accountWorkerNames, MAIN_ON_DEV } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
   newestPreviewDeployment,
-  planFormerParents,
-  planLegacyWorkerPreviewSweep,
   planPreviewSweep,
   planSupersededCleanup,
   previewMemberSuffixes,
@@ -37,7 +35,7 @@ test("members group into deployments by name; nothing of another shape on the ac
       { kind: "kv", name: "pr3144-a1b2c3d-os-oauth-kv", id: "k1" },
       d1("pr3144-a1b2c3d-os-db", 3),
       worker("real-model-0f0f0f0-os", 5),
-      // main on dev, prd-shaped names, local dev's, the legacy Worker Previews' resources
+      // main on dev, prd-shaped names, local dev's, a name of no deployment's shape
       worker("os", 100),
       worker("dash", 100),
       d1("os-parent-db", 100),
@@ -207,105 +205,9 @@ test.for<{ name: string; olderHoursAgo?: number; verdict: "stale" | "keep" }>(
   },
 );
 
-// A Worker Preview from before per-commit deployments, on main on dev's workers or a former parent,
-// goes once idle a day, whatever its name or PR.
-test.for<{
-  name: string;
-  worker: string;
-  preview: string;
-  deployedHoursAgo?: number;
-  verdict: "stale" | "keep";
-}>(
-  // prettier-ignore
-  [
-    { name: "an open PR's, a day idle", worker: "os", preview: "pr7", deployedHoursAgo: 25, verdict: "stale" },
-    { name: "a CI workflow's name on a former parent, a day idle", worker: "os-preview", preview: "latency", deployedHoursAgo: 25, verdict: "stale" },
-    { name: "an app's former parent", worker: "dash-preview", preview: "pr3061-worker-bundler", deployedHoursAgo: 60, verdict: "stale" },
-    { name: "deployed 23 h ago, by a checkout from before per-commit deployments", worker: "os", preview: "pr7", deployedHoursAgo: 23, verdict: "keep" },
-    { name: "last deploy unknown", worker: "kit-preview", preview: "soak", verdict: "keep" },
-  ],
-)("a legacy Worker Preview: $name ⇒ $verdict", ({ worker, preview, deployedHoursAgo, verdict }) => {
-  const lastDeployedAt = deployedHoursAgo === undefined ? undefined : hoursAgo(deployedHoursAgo);
-  expect(
-    planLegacyWorkerPreviewSweep(NOW, [{ worker, name: preview, lastDeployedAt }]),
-  ).toMatchObject([{ worker, name: preview, verdict }]);
-});
-
-// A former parent with no Worker Preview left goes, with everything under its name but a legacy
-// slot's and the account's own.
-test.for<{
-  name: string;
-  workers: string[];
-  previewsLeft: number;
-  expected: { name: string; worker: boolean; verdict: "stale" | "keep" }[];
-}>(
-  // prettier-ignore
-  [
-    { name: "no Worker Preview left: the worker and everything under its name go", workers: ["os", "os-preview"], previewsLeft: 0, expected: [{ name: "os-preview", worker: true, verdict: "stale" }] },
-    { name: "a Worker Preview left: the legacy rule first", workers: ["os", "os-preview"], previewsLeft: 1, expected: [{ name: "os-preview", worker: true, verdict: "keep" }] },
-    { name: "the worker gone, its resources left: tried again", workers: ["os"], previewsLeft: 0, expected: [{ name: "os-preview", worker: false, verdict: "stale" }] },
-    { name: "an app's former parent, which has no resources", workers: ["os", "os-preview", "dash-preview"], previewsLeft: 0, expected: [{ name: "os-preview", worker: true, verdict: "stale" }, { name: "dash-preview", worker: true, verdict: "stale" }] },
-  ],
-)("a former parent: $name", ({ workers, previewsLeft, expected }) => {
-  const plan = planFormerParents({
-    workers,
-    deployedWorkerNames: accountWorkerNames(),
-    accountResourceNames: accountResourceNames(),
-    resources: [...osPreviewResources(), ...notOsPreviewResources()],
-    suffixes: suffixes(),
-    previewsLeft: new Map([["os-preview", previewsLeft]]),
-  });
-  expect(plan).toMatchObject(
-    expected.map((parent) => ({
-      ...parent,
-      resources: parent.name === "os-preview" ? osPreviewResources() : [],
-    })),
-  );
-});
-
-test("a deployment whose prefix begins with a former parent's name keeps its resources: they are the deployment's, not the former parent's", () => {
-  const deployment: PreviewMember[] = [
-    d1("os-preview-foo-a1b2c3d-os-db", 2),
-    { kind: "kv", name: "os-preview-foo-a1b2c3d-os-oauth-kv", id: "k" },
-    { kind: "r2", name: "os-preview-foo-a1b2c3d-os-files", id: "os-preview-foo-a1b2c3d-os-files" },
-    {
-      kind: "artifacts",
-      name: "os-preview-foo-a1b2c3d-os-repos",
-      id: "os-preview-foo-a1b2c3d-os-repos",
-    },
-  ];
-  const plan = planFormerParents({
-    workers: ["os", "os-preview", "os-preview-foo-a1b2c3d-os"],
-    deployedWorkerNames: accountWorkerNames(),
-    accountResourceNames: accountResourceNames(),
-    resources: [...osPreviewResources(), ...deployment],
-    suffixes: suffixes(),
-    previewsLeft: new Map(),
-  });
-  expect(plan).toMatchObject([{ name: "os-preview", resources: osPreviewResources() }]);
-});
-
-test("a former parent envs.ts deploys again, and a resource the account has for something else, are never a former parent's", () => {
-  const plan = planFormerParents({
-    workers: ["os", "os-preview", "dash-preview"],
-    deployedWorkerNames: new Set([...accountWorkerNames(), "dash-preview"]),
-    accountResourceNames: new Set([...accountResourceNames(), "os-preview-files"]),
-    resources: osPreviewResources(),
-    suffixes: suffixes(),
-    previewsLeft: new Map(),
-  });
-  expect(plan).toMatchObject([
-    {
-      name: "os-preview",
-      resources: osPreviewResources().filter(({ name }) => name !== "os-preview-files"),
-    },
-  ]);
-});
-
-test("only a deployment's or a former parent's worker is ever deleted; the ones envs.ts does not name are listed", () => {
+test("only a deployment's worker is ever deleted; the ones envs.ts does not name are listed", () => {
   const workers = [
     ...accountWorkerNames(),
-    "os-preview",
     "pr7-aaaaaaa-os",
     "iterate",
     "do-alarm-held-repro",
@@ -351,8 +253,7 @@ test.for([
   const namespaces = [
     { id: "n1", name: "os_ProjectDurableObject", script: "os" },
     { id: "n2", name: "os-preview_ProjectDurableObject", script: "os-preview" },
-    { id: "n3", name: "os_pr7_ProjectDurableObject", script: "os" },
-    { id: "n4", name: "LegacyDurableObject" },
+    { id: "n3", name: "LegacyDurableObject" },
   ];
   const workerless = workerlessNamespaces(namespaces, ["os", "dash"]);
   // exact: the page is what the on-call reads
@@ -366,7 +267,7 @@ test.for([
     "Impact: each counts toward the account's 500 Durable Object namespaces",
     "Do: escalate to Cloudflare with these ids: a worker's delete takes its namespaces, and the API deletes no namespace alone. The sweep checks again each night.",
     "• os-preview_ProjectDurableObject (n2), worker os-preview",
-    "• LegacyDurableObject (n4), worker unnamed",
+    "• LegacyDurableObject (n3), worker unnamed",
     "<https://depot.dev/orgs/x/workflows/y|run>",
   ]);
 });
@@ -393,56 +294,4 @@ function suffixes() {
 
 function group(members: PreviewMember[]) {
   return groupPreviewDeployments(members, suffixes());
-}
-
-/** The former parent `os-preview`'s own resources and its previews', which a former parent's
- *  delete takes. */
-function osPreviewResources(): PreviewMember[] {
-  return [
-    { kind: "kv", name: "os-preview-itx", id: "k1" },
-    { kind: "kv", name: "os-preview-oauth", id: "k2" },
-    { kind: "r2", name: "os-preview-files", id: "os-preview-files", createdAt: hoursAgo(100) },
-    {
-      kind: "artifacts",
-      name: "os-preview-repos",
-      id: "os-preview-repos",
-      createdAt: hoursAgo(100),
-    },
-    { kind: "kv", name: "os-preview-soak-itx-kv", id: "k3" },
-    {
-      kind: "r2",
-      name: "os-preview-soak-files",
-      id: "os-preview-soak-files",
-      createdAt: hoursAgo(90),
-    },
-    {
-      kind: "artifacts",
-      name: "os-preview-pr3061-worker-bundler-repos",
-      id: "os-preview-pr3061-worker-bundler-repos",
-      createdAt: hoursAgo(90),
-    },
-  ];
-}
-
-/** Resources that read as `os-preview-…` but are not its: the legacy platform's slots, a name of no
- *  suffix of its kind, and `os`'s own and its previews'. */
-function notOsPreviewResources(): PreviewMember[] {
-  return [
-    {
-      kind: "artifacts",
-      name: "os-preview-1-repos",
-      id: "os-preview-1-repos",
-      createdAt: hoursAgo(3000),
-    },
-    {
-      kind: "artifacts",
-      name: "os-preview-16-repos",
-      id: "os-preview-16-repos",
-      createdAt: hoursAgo(1500),
-    },
-    { kind: "kv", name: "os-preview-3-project-directory", id: "k4" },
-    { kind: "r2", name: "os-preview-soak-itx-kv", id: "os-preview-soak-itx-kv" },
-    { kind: "r2", name: "os-parent-files", id: "os-parent-files", createdAt: hoursAgo(90) },
-    { kind: "r2", name: "os-pr7-files", id: "os-pr7-files", createdAt: hoursAgo(1) },
-  ];
 }

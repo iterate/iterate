@@ -27,19 +27,6 @@
 // Anything else is kept. A GitHub lookup that failed never makes a deployment stale: rule 2 takes
 // GitHub's "closed" or "missing", never "unknown".
 //
-// A LEGACY WORKER PREVIEW (`planLegacyWorkerPreviewSweep`), one of main on dev's workers or of a
-// former parent (preview-config.ts FORMER_PARENTS) from before per-commit deployments, is STALE
-// once its last deploy is more than 24 h old, whatever its name: the day is for a checkout that
-// still deploys one. One whose last deploy is unknown is kept.
-//
-// A FORMER PARENT (`planFormerParents`) with no Worker Preview left on it goes: the worker, its
-// Durable Object namespaces with it, and every KV, R2, D1 and Artifacts namespace under its name —
-// its own (`<parent>-itx`, `-oauth`, `-files`, `-db`, `-repos`) and its previews'
-// (`<parent>-<preview>-<suffix>`), but never a legacy slot's (`os-preview-<n>-repos`, a number where
-// the preview's name would be; the legacy platform's, thousands of repos each), nor one the account
-// has for something else (preview-config.ts accountResourceNames), nor a deployment's member, whatever
-// its prefix. One still holding a preview waits for the legacy rule to take it.
-//
 // EVERY OTHER WORKER stays: envs.ts's on this account (preview-config.ts accountWorkerNames) and any
 // worker envs.ts does not name (`unmappedWorkers`), which the plan lists for a person to judge.
 //
@@ -49,7 +36,7 @@
 // (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
 import { pageText } from "../../../scripts/ci/slack.ts";
-import { FORMER_PARENTS, previewPullRequestNumber } from "./preview-config.ts";
+import { previewPullRequestNumber } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
 export type PullRequestState = "open" | "closed" | "missing" | "unknown";
@@ -225,90 +212,8 @@ export function planPreviewSweep(input: PreviewSweepInput): PreviewSweepVerdict[
   });
 }
 
-/** A Worker Preview from before per-commit deployments, named with the worker it hangs from. */
-export type LegacyWorkerPreview = { worker: string; name: string; lastDeployedAt?: string };
-
-export function planLegacyWorkerPreviewSweep(
-  now: number,
-  previews: LegacyWorkerPreview[],
-): (LegacyWorkerPreview & { verdict: "stale" | "keep"; reason: string })[] {
-  return previews.map((preview) => {
-    // NaN without a stamp, which compares false and keeps it
-    const hours = preview.lastDeployedAt
-      ? (now - Date.parse(preview.lastDeployedAt)) / 3_600_000
-      : NaN;
-    return {
-      ...preview,
-      verdict: hours > 24 ? "stale" : "keep",
-      reason: Number.isNaN(hours)
-        ? "last deploy unknown"
-        : `last deployed ${hours.toFixed(1)} h ago`,
-    };
-  });
-}
-
-/** The deployments' resources of `parent`'s name alone: its own (`<parent>-files`, …) and its
- *  previews' (`<parent>-<preview>-<suffix>`, a suffix of apps/os's `suffixes` less its `os-`), a
- *  legacy slot's (`<parent>-<n>-…`) never. */
-function isFormerParentResource(
-  parent: string,
-  resource: Pick<PreviewMember, "kind" | "name">,
-  suffixes: Record<PreviewMemberKind, string[]>,
-) {
-  if (!resource.name.startsWith(`${parent}-`)) return false;
-  const rest = resource.name.slice(parent.length + 1);
-  if (["oauth", "itx", "files", "db", "repos"].includes(rest)) return true;
-  return suffixes[resource.kind].some((memberSuffix) => {
-    const suffix = memberSuffix.replace(/^os-/, "");
-    const previewName = rest.endsWith(`-${suffix}`) ? rest.slice(0, -suffix.length - 1) : "";
-    return /^[a-z0-9]+(-[a-z0-9]+)*$/.test(previewName) && !/^\d+$/.test(previewName);
-  });
-}
-
-/** Every former parent the account still has a worker or a resource of, and whether it goes. */
-export function planFormerParents(input: {
-  workers: string[];
-  /** envs.ts's workers on this account: a former parent envs.ts deploys again is not one */
-  deployedWorkerNames: ReadonlySet<string>;
-  accountResourceNames: ReadonlySet<string>;
-  resources: PreviewMember[];
-  suffixes: Record<PreviewMemberKind, string[]>;
-  /** by former parent, how many Worker Previews it still holds */
-  previewsLeft: ReadonlyMap<string, number>;
-}): {
-  name: string;
-  worker: boolean;
-  resources: PreviewMember[];
-  verdict: "stale" | "keep";
-  reason: string;
-}[] {
-  return FORMER_PARENTS.flatMap((parent) => {
-    if (input.deployedWorkerNames.has(parent)) return [];
-    const worker = input.workers.includes(parent);
-    // a deployment's member is never a former parent's, even one whose prefix begins with its name
-    // (`--name os-preview-foo` makes `os-preview-foo-<sha7>-os-db`)
-    const resources = input.resources.filter(
-      (resource) =>
-        !input.accountResourceNames.has(resource.name) &&
-        !previewDeploymentOfMember(resource, input.suffixes) &&
-        isFormerParentResource(parent, resource, input.suffixes),
-    );
-    if (!worker && resources.length === 0) return [];
-    const left = input.previewsLeft.get(parent) || 0;
-    return [
-      {
-        name: parent,
-        worker,
-        resources,
-        verdict: left > 0 ? "keep" : "stale",
-        reason: left > 0 ? `${left} Worker Preview(s) left on it` : "no Worker Preview left on it",
-      },
-    ];
-  });
-}
-
-/** The workers that are neither envs.ts's, a former parent nor a deployment's member: kept, and
- *  listed for a person to judge. */
+/** The workers that are neither envs.ts's nor a deployment's member: kept, and listed for a person
+ *  to judge. */
 export function unmappedWorkers(
   workers: string[],
   deployedWorkerNames: ReadonlySet<string>,
@@ -319,10 +224,7 @@ export function unmappedWorkers(
       deployment.members.filter(({ kind }) => kind === "worker").map(({ name }) => name),
     ),
   );
-  return workers.filter(
-    (name) =>
-      !deployedWorkerNames.has(name) && !FORMER_PARENTS.includes(name) && !members.has(name),
-  );
+  return workers.filter((name) => !deployedWorkerNames.has(name) && !members.has(name));
 }
 
 /** One Durable Object namespace on the account, `script` the worker whose class it holds. */
