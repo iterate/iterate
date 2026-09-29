@@ -195,6 +195,19 @@ test("a regex literal holding `//` or a backtick is code, not a comment or a tem
   ]);
 });
 
+test("a hashbang is code, not a comment: changing it is Significant", () => {
+  using repo = createGitRepo();
+  const bin = (hashbang: string) => [hashbang, "// run the report", "main();", ""].join("\n");
+  const base = repo.commit({ "bin/report.cjs": bin("#!/usr/bin/env node") });
+  const head = repo.commit({
+    "bin/report.cjs": bin("#!/usr/bin/env -S node --conditions=review"),
+  });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "bin/report.cjs", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
 test("the PR report explains the TypeScript runtime-line filter", () => {
   expect(renderBodySection(computeReport([]), "1234567890", "abcdef1234")).toContain(
     "TypeScript lines with no runtime output",

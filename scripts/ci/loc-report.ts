@@ -234,14 +234,17 @@ function slocDiffCounts(before: string, after: string) {
   }
 }
 
-/** Blanks every comment oxc finds, keeping its newlines so each line stays where it was. */
+/** Blanks every comment oxc finds, keeping its newlines so each line stays where it was. oxc lists a
+ *  hashbang among the comments; it is code, what runs the file. */
 function stripJsComments(path: string, source: string) {
+  const { comments, program } = parseSync(path, source);
   let stripped = source;
-  for (const { start, end } of parseSync(path, source).comments.toReversed())
-    stripped =
-      stripped.slice(0, start) +
-      source.slice(start, end).replace(/[^\n]/g, "") +
-      stripped.slice(end);
+  for (const { start, end } of comments.toReversed())
+    if (start !== program.hashbang?.start)
+      stripped =
+        stripped.slice(0, start) +
+        source.slice(start, end).replace(/[^\n]/g, "") +
+        stripped.slice(end);
   return stripped;
 }
 
