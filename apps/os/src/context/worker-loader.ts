@@ -425,7 +425,8 @@ export async function prepareConfinedWorker(
 /** WHETHER A CALL INTO A LOADED WORKER MET THE WORKER LOADER DEFECT that poisons a cached entry
  *  (facet-host.ts `isFacetStartPlatformFailure` names it; `retire` above is the recovery). The
  *  runtime reports it either as V8's clone-version text or as the opaque
- *  `internal error; reference = …`, whose detail it logs nowhere. The opaque text counts only when
+ *  `internal error; reference = …`: its detail goes only to Cloudflare's own runtime log (workerd
+ *  jsg/ser.c++), and the reference is logged nowhere, so it looks nothing up. The opaque text counts only when
  *  the runtime raised it: an internal failure inside the loaded worker reaches the caller
  *  unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`), while an error the loaded
  *  code threw itself, the same text rethrown included, arrives with `remote` set and is the code's
