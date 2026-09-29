@@ -1,7 +1,7 @@
 // The sidebar's docs: which repo, "New doc", then every file in the repo as a tree (doc-tree.ts),
 // the open file selected and its folders open.
 import { useMemo } from "react";
-import { Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { Link, useNavigate, useRouteContext, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
@@ -12,7 +12,10 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
+import { authorOf } from "../lib/author.ts";
+import { createDoc } from "../lib/create-doc.ts";
 import { useDocList } from "../lib/doc-list.ts";
+import { repoPath } from "../lib/docs-repo.ts";
 import { DocTree } from "./doc-tree.ts";
 
 /** The doc route, whose splat is the open file's path. */
@@ -32,6 +35,7 @@ export function DocsNav({
   const { list, docs } = useDocList();
   const navigate = useNavigate();
   const router = useRouter();
+  const { api, project, info } = useRouteContext({ from: "/_auth/projects/$slug" });
   const tree = useMemo(
     () =>
       new DocTree({
@@ -41,8 +45,23 @@ export function DocsNav({
         onNavigated: (listener) => router.subscribe("onResolved", listener),
         open: (path) =>
           void navigate({ to: "/projects/$slug/$repo/$", params: { slug, repo, _splat: path } }),
+        create: async (path) => {
+          using itx = await api.projects.get(project.id);
+          await createDoc({
+            project: itx,
+            repo: repoPath(repo),
+            path,
+            heading: path
+              .split("/")
+              .at(-1)!
+              .replace(/\.[^.]+$/, ""),
+            author: authorOf(info.principal),
+          });
+          list.reload();
+          await navigate({ to: "/projects/$slug/$repo/$", params: { slug, repo, _splat: path } });
+        },
       }),
-    [list, router, navigate, slug, repo],
+    [list, router, navigate, slug, repo, api, project.id, info.principal],
   );
   return (
     <SidebarGroup className="min-h-0 flex-1">
@@ -79,8 +98,6 @@ export function DocsNav({
           <div
             ref={tree.mount}
             aria-label="Files"
-            // pierre themes itself with light-dark(); the app is light only (packages/ui globals.css)
-            style={{ colorScheme: "light" }}
             className="min-h-0 flex-1 group-data-[collapsible=icon]:hidden"
           />
         ) : (

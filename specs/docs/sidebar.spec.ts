@@ -1,6 +1,8 @@
 // The sidebar lists the files of one of the project's repos as a tree (@pierre/trees), folders from
 // their paths, and follows the repo: a doc an agent commits shows up without a reload. Its picker
 // switches repo. ⌘K (the shell's palette) finds a file by name, one in a closed folder included.
+// Right-clicking a folder, or the space below the rows, makes a doc there, named in place.
+import { expect } from "@playwright/test";
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
@@ -56,11 +58,30 @@ test("the sidebar shows a repo's docs as a tree, follows a doc an agent adds, sw
     .filter({ hasText: "Q4 roadmap" })
     .waitFor();
 
-  // the picker shows another repo's files
+  // right-clicking a folder makes a doc in it, named in the tree; no extension means markdown
+  const sidebar = page.locator('[data-slot="sidebar"]');
+  await tree.getByRole("treeitem", { name: "offsites", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "New doc", exact: true }).click();
+  await sidebar.getByRole("textbox").fill("agenda");
+  await sidebar.getByRole("textbox").press("Enter");
   await page
-    .locator('[data-slot="sidebar"]')
-    .getByRole("combobox", { name: "Repo" })
-    .selectOption("handbook");
+    .getByRole("textbox", { name: "offsites/agenda.md", exact: true })
+    .filter({ hasText: "agenda" })
+    .waitFor();
+  // and below the rows, at the repo's root
+  const files = sidebar.getByLabel("Files");
+  const box = (await files.boundingBox())!;
+  await files.click({ button: "right", position: { x: 20, y: box.height - 10 } });
+  await page.getByRole("menuitem", { name: "New doc", exact: true }).click();
+  await sidebar.getByRole("textbox").fill("notes");
+  await sidebar.getByRole("textbox").press("Enter");
+  await page.getByRole("textbox", { name: "notes.md", exact: true }).waitFor();
+  await expect
+    .poll(() => fixture.itx.repos.get("/repos/config").readFile("notes.md"))
+    .toBe("# notes\n");
+
+  // the picker shows another repo's files
+  await sidebar.getByRole("combobox", { name: "Repo" }).selectOption("handbook");
   await tree.getByRole("treeitem", { name: "welcome.md", exact: true }).click();
   await page
     .getByRole("textbox", { name: "welcome.md", exact: true })

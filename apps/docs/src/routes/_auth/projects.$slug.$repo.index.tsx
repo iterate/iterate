@@ -5,6 +5,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Input } from "@iterate-com/ui/components/input";
 import { useDocList } from "../../lib/doc-list.ts";
 import { authorOf } from "../../lib/author.ts";
+import { createDoc } from "../../lib/create-doc.ts";
 import { newDocHeading, newDocPath, repoPath } from "../../lib/docs-repo.ts";
 
 /** Every doc in one of the project's repos (the page's live list), and a box to start one there;
@@ -23,16 +24,13 @@ function DocListPage() {
       const path = newDocPath(title);
       if (!path) throw new Error("A title needs a letter or a digit in it.");
       using itx = await api.projects.get(project.id);
-      using handle = itx.repos.get(repoPath(repo));
-      // the repo as it is now, not as the page loaded it: someone may have made this doc since
-      const { commitOid, paths } = await handle.listFiles();
-      if (!paths.includes(path))
-        await handle.commitFiles({
-          message: `docs: new ${path}`,
-          changes: [{ path, content: `# ${newDocHeading(title)}\n` }],
-          parent: commitOid,
-          author: authorOf(info.principal),
-        });
+      await createDoc({
+        project: itx,
+        repo: repoPath(repo),
+        path,
+        heading: newDocHeading(title),
+        author: authorOf(info.principal),
+      });
       return path;
     },
     // returned, so the button stays pending until the doc's page has loaded
