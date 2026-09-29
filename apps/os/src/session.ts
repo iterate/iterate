@@ -1165,7 +1165,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     const root = sessionInput.contextNamespace.getByName(
       DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
     );
-    await root.invoke(["itx", "processors", ["enable", "project"]], [], caller);
+    await root.invoke(["itx", "builtins", "processors", ["enable", "project"]], [], caller);
     await root.invoke(
       [
         "itx",
