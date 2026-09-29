@@ -40,7 +40,7 @@ import {
   type ItxExpression,
   print,
 } from "iterate/expression";
-import { jsonEqual } from "iterate/lib";
+import { codedError, jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
 import type { FacetSpec, RewriteRuleConfigured } from "iterate/api";
@@ -175,18 +175,6 @@ function elideHostedFacetSource(
   };
 }
 
-/** Does a row's target OWN ITS PROGRESS — a facet (its own checkpoint) or a lent rpc stub (a live
- *  client's own offset), so the stream keeps no cursor for it and its deliveries are PUSHES? Decided
- *  from the rules alone, never by evaluating the target: a fresh incarnation classifies every row
- *  before anything runs, so a facet row is never a cursor row's claim on the alarm (the delivery
- *  loop). A target that cannot be resolved yet (a `subscribe` before its `provide`) cannot own
- *  progress: the stream keeps its cursor, as for any plain target. */
-export function targetOwnsProgress(state: CoreState, row: Subscription): boolean {
-  const resolved = resolveThroughState(state, row.target);
-  if (!resolved) return false;
-  return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
-}
-
 /** Does a row's target resolve, through the rules alone, to an HTTP webhook
  *  (`itx.builtins.webhooks.get(…)`, context/built-ins.ts)? Its fan-out events climb a longer ladder
  *  (subscription-delivery.ts). */
@@ -210,7 +198,12 @@ export function targetIsWebhook(state: CoreState, row: Subscription): boolean {
 export function rowsPushingFacet(state: CoreState, facetName: string) {
   return Object.entries(state.subscriptions)
     .filter(([, row]) => {
-      if (row.halted || row.target.length <= 2 || row.target.at(-1) !== "processEventBatch")
+      if (
+        row.delivery !== "processor" ||
+        row.halted ||
+        row.target.length <= 2 ||
+        row.target.at(-1) !== "processEventBatch"
+      )
         return false;
       const head = resolveThroughState(state, row.target.slice(0, -1));
       return head?.length === 4 && builtInsGetStep(head, "facets")?.[1] === facetName;
@@ -262,6 +255,8 @@ function withHostedFacetMarkersFollowingRules(
 
 /** One subscription row (by name; a same-named configure REPLACES). */
 export type Subscription = {
+  /** A live provider, a checkpoint-owning processor, or a context-owned durable delivery. */
+  delivery: "live" | "processor" | "durable";
   /** The target, parsed; its terminal is callable with (events, range). */
   target: ItxExpression;
   /** Event types delivered; absent = every durable event; naming a type opts its ephemerals in. */
@@ -370,7 +365,11 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "17.0.0",
+  // Delivery is now an explicit durable contract. A version bump re-reduces every checkpoint, and
+  // the reducer below rejects old rows rather than silently treating their missing delivery as a
+  // subscription that no runner selects. Existing persisted contexts must be recreated for this
+  // deliberately breaking core shape.
+  version: "18.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
    *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
    *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
@@ -512,8 +511,10 @@ export function reduceCoreEvent(
         return existing && jsonEqual(existing.target, payload.ifTarget)
           ? withRule(undefined)
           : undefined;
-      const description =
-        typeof payload.description === "string" ? { description: payload.description } : {};
+      const metadata = {
+        ...(typeof payload.description === "string" && { description: payload.description }),
+        ...(typeof payload.declaration === "string" && { declaration: payload.declaration }),
+      };
       if (payload.target === null) {
         // A MASK where something beneath would answer the match — an implicit row, or a stored
         // SHORTER row with a target (the parent link `itx ⇒ itx.builtins.cd('/agents/a')`, a granted
@@ -530,11 +531,16 @@ export function reduceCoreEvent(
               row.match.every((step, i) => jsonEqual(step, matchPrefix[i])),
           );
         if (!answeredBeneath) return existing ? withRule(undefined) : undefined;
-        if (existing && !existing.target && jsonEqual(existing.description, payload.description))
+        if (
+          existing &&
+          !existing.target &&
+          existing.description === metadata.description &&
+          existing.declaration === metadata.declaration
+        )
           return undefined;
-        return withRule({ match: matchPrefix, target: null, ...description });
+        return withRule({ match: matchPrefix, target: null, ...metadata });
       }
-      const target = normalizedItxExpression(payload.target as ItxExpressionInput, { holes: true }); // a target may hold `@` (`fillItxExpressionHoles`); stored as the parsed form
+      const target = normalizedItxExpression(payload.target as ItxExpressionInput);
       // A target that restates THE implicit row of its match (`itx.kv ⇒ itx.builtins.kv` at the owner
       // root, `itx ⇒ itx.builtins` there, `itx.append ⇒ itx.builtins.append` anywhere) is "back to
       // the default": the row is deleted, never stored, so the table never carries a row that only
@@ -544,24 +550,31 @@ export function reduceCoreEvent(
       const wall =
         matchPrefix.length > 1 && state.itxExpressionRewriteRules["itx"]?.target === null;
       // The implicit row of THIS match: `itx.<root>` with `root` implicit here, or the bare `itx`
-      // where every root is (the owner root) — nothing longer, nothing pinned.
+      // where every root is (the owner root) — nothing longer.
       const isImplicitRow =
         matchPrefix.length === 1
           ? implicitRoots.size === BUILT_IN_ROOTS.length
           : matchPrefix.length === 2 &&
             typeof matchPrefix[1] === "string" &&
             implicitRoots.has(matchPrefix[1]);
-      if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
+      if (
+        !wall &&
+        isImplicitRow &&
+        !metadata.description &&
+        !metadata.declaration &&
+        jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)])
+      )
         return existing ? withRule(undefined) : undefined;
       // THE SAME ROW AGAIN is no change: a reinstall that restates its rules moves no version, so
       // no snapshot another context holds is invalidated by it (context/rule-snapshots.ts).
       if (
         existing &&
         jsonEqual(existing.target, target) &&
-        existing.description === description.description
+        existing.description === metadata.description &&
+        existing.declaration === metadata.declaration
       )
         return undefined;
-      return withRule({ match: matchPrefix, target, ...description });
+      return withRule({ match: matchPrefix, target, ...metadata });
     }
 
     case "events.iterate.com/itx/subscription-configured": {
@@ -579,6 +592,12 @@ export function reduceCoreEvent(
       const consumes = payload.consumes as string[] | undefined;
       const afterOffset = payload.afterOffset as number | undefined;
       const ordered = payload.ordered as false | undefined;
+      const delivery = payload.delivery;
+      if (delivery !== "live" && delivery !== "processor" && delivery !== "durable")
+        throw codedError(
+          "INVALID_INPUT",
+          `subscription ${JSON.stringify(name)} at offset ${event.offset} has no explicit delivery; this context predates CoreContract ${CoreContract.version} and must be recreated`,
+        );
       // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
       const configuredTarget = normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
       const { target, hostedFacet } = elideHostedFacetSource(
@@ -587,6 +606,7 @@ export function reduceCoreEvent(
       );
       return withSubscription(name, {
         target,
+        delivery,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(consumes && { consumes }),
         configuredAtOffset: event.offset,
@@ -643,6 +663,7 @@ export function reduceCoreEvent(
 function normalizeSubscriptionConfigured(input: {
   name: string;
   target: ItxExpressionInput | null;
+  delivery?: Subscription["delivery"];
   consumes?: string[];
   afterOffset?: number;
   ordered?: boolean;
@@ -658,11 +679,27 @@ function normalizeSubscriptionConfigured(input: {
     .boolean({ error: "a subscription's `ordered` is a boolean: false for fan-out delivery" })
     .optional()
     .parse(input.ordered);
+  // A subscription filter is a list of exact event-type selectors. In particular, accepting a
+  // string here would make `Array.prototype.includes` below act as a substring match at delivery.
+  // `*` stays an ordinary selector for the shared consumesEvent rule; an empty list deliberately
+  // selects nothing.
+  const consumes = z
+    .array(
+      z
+        .string({ error: "a subscription's `consumes` entries are event type strings" })
+        .min(1, "a subscription's `consumes` entries are non-empty event type strings"),
+      { error: "a subscription's `consumes` is an array of event type strings" },
+    )
+    .optional()
+    .parse(input.consumes);
   // Through the codec (`normalizedItxExpression`), so a target the reduce could not read fails LOUD
   // here, in the parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
   // the reduce must never re-parse that through the string codec (its 2 KiB cap).
   // oxlint-disable-next-line iterate/simple-truthiness-check -- input.target is `string | ItxExpression | null`; its null is the explicit undo/mask sentinel, distinct from a malformed empty-string target that normalization must still reject
   const target = input.target === null ? null : normalizedItxExpression(input.target);
+  const delivery = target
+    ? z.enum(["live", "processor", "durable"]).parse(input.delivery)
+    : undefined;
   if (target && target[0] !== "itx")
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
@@ -670,7 +707,8 @@ function normalizeSubscriptionConfigured(input: {
   return {
     name,
     target,
-    ...(target && input.consumes && { consumes: input.consumes }),
+    ...(target && { delivery }),
+    ...(target && consumes && { consumes }),
     ...(target && afterOffset !== undefined && { afterOffset }),
     // `true` is the default, the ordered queue: only the fan-out's `false` is stored
     ...(target && ordered === false && { ordered }),

@@ -39,7 +39,8 @@
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
-    "./node": "./src/node.ts"
+    "./node": "./src/node.ts",
+    "./stream/durable-delivery": "./src/stream/durable-delivery.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -117,6 +118,10 @@
       "./node": {
         "types": "./dist/node.d.mts",
         "import": "./dist/node.mjs"
+      },
+      "./stream/durable-delivery": {
+        "types": "./dist/stream/durable-delivery.d.mts",
+        "import": "./dist/stream/durable-delivery.mjs"
       }
     }
   },

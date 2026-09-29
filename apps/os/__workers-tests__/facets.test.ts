@@ -780,6 +780,7 @@ test.for([
           ["get", "flaky", flakyCounter(message)],
           "processEventBatch",
         ],
+        delivery: "processor",
       },
     });
     const loaderIdBefore = await until("the facet materialized at configure", () =>
@@ -836,6 +837,7 @@ test("a facet call that rejects with a hop below's coded platform failure, worke
         ],
         "processEventBatch",
       ],
+      delivery: "processor",
     },
   });
   const loaderId = await until("the facet materialized at configure", () =>
@@ -1858,6 +1860,7 @@ function enable(ctx: string, name: string, spec: FacetSpec, consumes?: string[])
     payload: {
       name,
       target: ["itx", "facets", ["get", name, spec], "processEventBatch"],
+      delivery: "processor",
       consumes,
     },
   });

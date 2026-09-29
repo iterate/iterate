@@ -30,7 +30,7 @@ import {
   reportIssue,
 } from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
-import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { consumesEvent, type StreamEvent, type StreamEventInput } from "iterate/stream/processor";
 import {
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
@@ -40,6 +40,7 @@ import {
   type ItxExpressionPrefix,
   InvokeHandle,
   normalizedItxExpression,
+  parseItxExpressionPrefix,
 } from "iterate/expression";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
@@ -57,11 +58,21 @@ import {
   ITX_GRANT_HEADER,
   refuseNonPlatformWrites,
   sha256Hex,
-  stampCaller,
   type Caller,
 } from "./caller.ts";
-import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
-import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
+import {
+  callOn,
+  FacetHandle,
+  RpcStubHandle,
+  walkSteps,
+  itxAnswerDetachedFromSession,
+} from "./context/dispatch.ts";
+import {
+  normalizeControlEvent,
+  targetIsWebhook,
+  type CoreState,
+  type Subscription,
+} from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   parseFetchExpression,
@@ -104,15 +115,15 @@ import {
 } from "./app-config.ts";
 import {
   ItxExpressionResolver,
+  admitLoadedCodeRow,
   describeRewriteRules,
-  rowsNamingRpcStub,
   refuseLiftingAJail,
-  rpcStubKeysNamed,
   implicitRootsAt,
   namesTakenAway,
   rulesChangeNeedsCommitWait,
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
+import { FetchRouteConfiguredPayload, type FetchRouteTable } from "./fetch-routes.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
 import { buildBuiltIns, projectConfigDeps } from "./context/built-ins.ts";
 import { contextReach, itxEntrypointFor } from "./context/stateless-context.ts";
@@ -123,7 +134,11 @@ import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
 import { egress } from "./context/egress.ts";
 import { SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./context/rule-snapshots.ts";
-import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
+import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
+import {
+  parseSubscriptionDeliveryBridgeRequest,
+  parseSubscriptionDeliveryTerminalRequest,
+} from "./context/subscription-delivery-bridge.ts";
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
  *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
@@ -182,9 +197,6 @@ export type AlarmTrace = {
   alarm: { before: number | null; after: number | null };
   deadlines: {
     schedule: number | null;
-    /** The cursor rows holding a claim, earliest first, at most 32. */
-    delivery: DeliveryDeadline[];
-    deliveryOmitted: number;
     /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
     claims: { name: string; at: number }[];
     /** The unclaimed-facet sweep's deadline — in memory, so null in a fresh incarnation. */
@@ -313,119 +325,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
-    // The SET half of "the DO owns both ends of a lent stub's rule": the events a pager attach
-    // carries are committed like any append, in the turn the pager is accepted (the
-    // un-set half is `#unsetWhatNamesRpcStub`). They are a client's events: their `source` is the
-    // DO's — this context's own, and a lent stub's rule is unattributed.
-    appendEvents: (events) =>
-      void this.#appendAndRunCommittedEffects(
-        events.map((event) =>
-          stampCaller(event, { principal: null }, this.#durableObjectAddress.path),
-        ),
-      ),
-    // PRESENCE is physical (`itx.rpcStubs.list()`); its changes are EPHEMERAL facts, never durable
-    // rows — the log must never claim a socket is open. A refusal (a paused stream) is nothing to
-    // report: a watcher re-seeds from list().
+    // Presence is observable live state. These ephemeral notifications never alter the durable
+    // rule/subscription tables; detach simply exposes any durable row underneath.
     onPresence: (kind, rpcStubKey) => {
       void this.append({
         type: `events.iterate.com/itx/rpc-stub-${kind}`,
         ephemeral: true,
         payload: { rpcStubKey },
       }).catch(() => undefined);
-      // THE STUB IS GONE, SO IS WHAT NAMED IT: a key's LAST pager closing un-sets every rule and
-      // row whose target RESOLVES to `itx.builtins.rpcStubs.get('<key>')`. Decided HERE and not in
-      // the lender's session teardown because only this side knows the truth: a reconnect REPLACES
-      // the pager (never a detach), so the reconnected session's rule survives a late-dying old
-      // session, while a genuine last close un-sets it exactly once.
-      if (kind === "detached") this.#unsetWhatNamesRpcStub(rpcStubKey);
     },
   });
-
-  #unsetWhatNamesRpcStub(rpcStubKey: string): void {
-    // ONE frozen census BEFORE any append (`rowsNamingRpcStub`): the answer never depends on the
-    // order the rows were configured in or on a row removed a moment earlier. Then appended one by
-    // one, each catching its own async refusal so one failure stops none of the others. A rule is
-    // REMOVED (back to the platform row beneath, if any — a dead fake `itx.ai` restores the real
-    // one), never masked: `null` is the caller's deliberate deny.
-    const { ruleUnsets, subscriptionNames, fetchRouteNames } = rowsNamingRpcStub({
-      rpcStubKey,
-      ...this.#rowsForRpcStubCensus(),
-    });
-    // Each commits in this turn and answers no one, so it waits out no fence: the owner's live table
-    // refuses the stub's name from the commit on, and no timer keeps this context resident.
-    const unset = (event: StreamEventInput) => {
-      try {
-        this.#appendAndRunCommittedEffects([event]);
-      } catch {
-        // refused (a paused stream): the next wake's census un-sets it (`#unsetWhatNamesDeadRpcStubs`)
-      }
-    };
-    // Compare-and-set: each removal carries `ifTarget` (the target the census saw), so a `provide` that
-    // re-claims the same match during this detach window is not clobbered — the reduce skips a stale undo.
-    for (const { match, ifTarget } of ruleUnsets)
-      unset({
-        type: "events.iterate.com/itx/rewrite-rule-configured",
-        payload: { match, target: null, ifTarget },
-      });
-    for (const name of subscriptionNames)
-      unset({
-        type: "events.iterate.com/itx/subscription-configured",
-        payload: { name, target: null },
-      });
-    for (const fetchRouteName of fetchRouteNames)
-      unset({
-        type: "events.iterate.com/itx/fetch-route-configured",
-        payload: { fetchRouteName, requestMatcher: null },
-      });
-  }
-
-  /** The three tables as the pure census functions read them: every rule, every subscription's
-   *  target, every fetch route's target. */
-  #rowsForRpcStubCensus(): {
-    rules: ItxExpressionRewriteRule[];
-    subscriptionTargets: Record<string, ItxExpression>;
-    fetchRouteTargets: Record<string, ItxExpression>;
-    implicitRoots: ReadonlySet<string>;
-  } {
-    const { itxExpressionRewriteRules, subscriptions, fetchRoutes } = this.#stream.coreReducedState;
-    return {
-      implicitRoots: this.#implicitRoots,
-      rules: Object.values(itxExpressionRewriteRules),
-      subscriptionTargets: Object.fromEntries(
-        Object.entries(subscriptions).map(([name, row]) => [name, row.target]),
-      ),
-      fetchRouteTargets: Object.fromEntries(
-        Object.entries(fetchRoutes).map(([fetchRouteName, route]) => [
-          fetchRouteName,
-          route.target,
-        ]),
-      ),
-    };
-  }
-
-  /** A stub whose last pager closed with no close handler run never had what named it un-set: a DO
-   *  reset (every deploy) kills every hibernatable socket silently, and a stub whose last pager
-   *  closed DURING a pause had its un-set refused (`itx/paused` refuses ordinary appends). So on the
-   *  `woken` commit (a fresh incarnation) and the `resumed` one, every key a row names that has NO
-   *  transport (neither borrowed nor pager-backed) is un-set — a lender still alive re-dials, and its
-   *  attach re-appends the row. Safe across hibernation: the pager sockets that rode it rehydrate with
-   *  their attachments before any handler runs, so `listRpcStubKeys()` is exact on the wake. The
-   *  census is taken now, the un-sets are appends of their own off the commit's turn, and a key
-   *  whose pager attached in between (a re-dial is the wake) is present by then and kept. */
-  #unsetWhatNamesDeadRpcStubs(committedEvents: StreamEvent[]): void {
-    const sweep = committedEvents.some(
-      (event) =>
-        event.type === "events.iterate.com/itx/woken" ||
-        event.type === "events.iterate.com/itx/resumed",
-    );
-    if (!sweep) return;
-    const named = rpcStubKeysNamed(this.#rowsForRpcStubCensus());
-    queueMicrotask(() => {
-      const present = new Set(this.#rpcStubs.listRpcStubKeys());
-      for (const rpcStubKey of named)
-        if (!present.has(rpcStubKey)) this.#unsetWhatNamesRpcStub(rpcStubKey);
-    });
-  }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -536,7 +445,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
-    deployId: this.#appConfig.deployId,
     incarnationCountedByHost: true,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
@@ -555,11 +463,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (events.length === 0) return;
       this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
+        this.#pushDurableSubscriptionFacet(events, { after: afterOffset, through: throughOffset });
         this.#startRequestedRuns(events);
       });
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
       if (woken) this.#announceToAncestors(woken.source?.cause);
-      this.#unsetWhatNamesDeadRpcStubs(events);
       this.#alarmCoordinator.reconcile();
     },
   });
@@ -723,6 +631,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return fence && fence.until > Date.now() ? fence : undefined;
   }
 
+  /** A live attachment can replace a durable rule without a stream commit. Do not acknowledge that
+   * replacement while a snapshot served before the attachment can still route through its old
+   * authority. */
+  async #waitOutLiveAttachmentSnapshots(): Promise<void> {
+    const until = Math.max(this.#snapshotLeaseUntil, this.#pendingFence()?.until ?? 0);
+    for (let wait; (wait = until - Date.now()) > 0;)
+      await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+
   /** THE LEASE on this context's rule snapshots (context/rule-snapshots.ts), in memory: none at a
    *  birth. */
   #snapshotLeaseUntil = 0;
@@ -747,12 +664,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     let life = this.ctx.storage.kv.get<string>("life"); // `destroy`'s `deleteAll` takes it
     if (!life && this.#stream.highestDurableOffset() > 0)
       this.ctx.storage.kv.put("life", (life = crypto.randomUUID()));
-    const version = `${life || "unborn"}:${snapshotVersion}`;
+    const version = `${life || "unborn"}:${snapshotVersion}:${this.#rpcStubs.liveAttachmentVersion()}`;
     if (ifVersion === version) return { version };
     return {
       version,
-      rules: Object.values(itxExpressionRewriteRules),
-      routing: { fetchRoutes, ingressTarget },
+      rules: this.#effectiveRewriteRules(Object.values(itxExpressionRewriteRules)),
+      routing: { fetchRoutes: this.#effectiveFetchRoutes(fetchRoutes), ingressTarget },
     };
   }
 
@@ -809,6 +726,172 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
+  /** All durable rows share one private cursor facet. It sees identities and source batches, never
+   * a target or delivery authority; the bridge below derives both again from this context. */
+  #pushDurableSubscriptionFacet(
+    events: StreamEvent[],
+    range: { after: number; through: number },
+  ): void {
+    const rows = Object.entries(this.#stream.coreReducedState.subscriptions)
+      .filter(([, row]) => row.delivery === "durable")
+      .map(([name, row]) => ({
+        name,
+        configuredAtOffset: row.configuredAtOffset,
+        consumes: row.consumes,
+        afterOffset: row.afterOffset,
+        ordered: row.ordered,
+        resumedAtOffset: row.resumed?.atOffset,
+        resumedAfterOffset: row.resumed?.afterOffset,
+        resumedOffset: row.resumed?.offset,
+        ...(row.halted && { halted: true as const }),
+        ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
+          maxAttempts: 25,
+          retryCapMs: 4 * 60 * 60_000,
+        }),
+      }));
+    if (rows.length === 0) {
+      if (events.some((event) => event.type === "events.iterate.com/itx/subscription-configured"))
+        this.#facetHost.deleteFirstPartyFacet("subscriptions");
+      return;
+    }
+    void this.#facetHost
+      .callFacetAsPlatform("subscriptions", [["processEventBatch", events, range, rows]])
+      .catch((error) => reportIssue("subscription-delivery.facet-push", error));
+  }
+
+  /** The private counterpart of `ItxEntrypoint.deliverConfiguredSubscription`. A trusted facet can
+   * name only its subscription row and its scanned range: this context re-reads the current row and
+   * source page, resolves that row's target afresh, and derives the delivery caller from those real
+   * events. It never accepts a target, event body, cause, or delivery key over Workers RPC. */
+  async deliverConfiguredSubscription(input: unknown): Promise<void> {
+    const request = parseSubscriptionDeliveryBridgeRequest(input);
+    if (request.range.through <= request.range.after)
+      throw codedError("INVALID_INPUT", "delivery range must advance past its after offset");
+    this.#inboundRequestInOneTurn("deliverConfiguredSubscription");
+    const row = this.#stream.coreReducedState.subscriptions[request.name];
+    if (!row || row.configuredAtOffset !== request.configuredAtOffset || row.delivery !== "durable")
+      throw codedError("GONE", "configured subscription no longer exists");
+    // This is the runner's fixed page limit. Reading it here, rather than accepting the facet's
+    // event array, makes a retry's source and delivery authority a property of the log alone. A
+    // later retry may cut differently at the byte budget, so reconstruct until the requested
+    // durable proof rather than requiring this fresh page to end at precisely the old boundary.
+    const sourceEvents: StreamEvent[] = [];
+    let cursor = request.range.after;
+    for (let pages = 0; cursor < request.range.through && pages < 16; pages++) {
+      const page = this.#stream.read(cursor, 100, { includeEphemeral: true });
+      sourceEvents.push(...page.events.filter((event) => event.offset > cursor));
+      if (page.scannedThroughOffset <= cursor) break;
+      cursor = page.scannedThroughOffset;
+    }
+    // A durable range is proved by the log's scanned mark. An ephemeral has no durable mark: the
+    // only safe form is the runner's one-event range, and the ring must still contain that exact
+    // event. It is intentionally best effort — a restart or ring eviction makes it unavailable.
+    const ephemeral =
+      request.range.through === request.range.after + 1
+        ? sourceEvents.find((event) => event.ephemeral && event.offset === request.range.through)
+        : undefined;
+    if (cursor < request.range.through && !ephemeral)
+      throw codedError("GONE", "configured subscription source range is no longer available");
+    const events = (ephemeral ? [ephemeral] : sourceEvents)
+      .filter((event) => event.offset <= request.range.through)
+      .filter((event) => consumesEvent(row.consumes, event));
+    if (events.length === 0)
+      throw codedError("GONE", "configured subscription has no events in its source range");
+    const cause = causeOfDelivery(events);
+    const fanOut = row.ordered === false;
+    const caller: Caller = {
+      principal: null,
+      cause: fanOut
+        ? {
+            ...cause,
+            writeKey: `${request.name}:${events[0].path}@${events[0].offset}`,
+          }
+        : cause,
+      ...(fanOut && { delivery: await sha256Hex(JSON.stringify(events[0])) }),
+    };
+    // Resolve without delivery authority, then fence the row generation AGAIN before its only
+    // capability call. A reconfigure while a cross-context snapshot or worker load awaited can
+    // therefore never execute the old target under the new row's authority.
+    const args = fanOut ? [events[0]] : [events, request.range];
+    const last = row.target.at(-1);
+    const method = typeof last === "string" && row.target.length > 2 ? last : undefined;
+    const targetPrefix = method ? row.target.slice(0, -1) : row.target;
+    const { value } = await this.#callerStorage.run(
+      this.#withPlatformOrigin({ principal: null, cause }),
+      () => this.#itxExpressionResolver.evaluate(targetPrefix),
+    );
+    const current = this.#stream.coreReducedState.subscriptions[request.name];
+    if (
+      !current ||
+      current.configuredAtOffset !== request.configuredAtOffset ||
+      current.delivery !== "durable"
+    ) {
+      releaseRpcSessions([value]);
+      throw codedError("GONE", "configured subscription changed while its target was resolving");
+    }
+    let result: unknown;
+    try {
+      result = await this.#callerStorage.run(this.#withPlatformOrigin(caller), async () => {
+        // A FacetHandle deliberately refuses `processEventBatch` through its public expression
+        // surface. Its platform host owns this particular push route; preserve that boundary after
+        // resolving and fencing the configured row above.
+        if (value instanceof FacetHandle && method === "processEventBatch")
+          return this.#facetHost.callFacetAsPlatform(value, [[method, ...args]]);
+        return method
+          ? (await walkSteps({ value, receiver: undefined }, [[method, ...args]])).value
+          : await callOn(value, undefined, args);
+      });
+    } finally {
+      releaseRpcSessions([value, result]);
+    }
+  }
+
+  /** Atomically record a runner's terminal outcome only while its configured row still stands. */
+  recordConfiguredSubscriptionTerminal(input: unknown): void {
+    const request = parseSubscriptionDeliveryTerminalRequest(input);
+    this.#inboundRequestInOneTurn("recordConfiguredSubscriptionTerminal");
+    const row = this.#stream.coreReducedState.subscriptions[request.name];
+    if (!row || row.configuredAtOffset !== request.configuredAtOffset || row.delivery !== "durable")
+      throw codedError("GONE", "configured subscription no longer exists");
+    if (row.resumed?.atOffset !== request.resumeAtOffset)
+      throw codedError(
+        "GONE",
+        "configured subscription resumed while a terminal receipt was pending",
+      );
+    if (request.fanOut) {
+      if (row.ordered !== false)
+        throw codedError("GONE", "configured subscription is no longer fan-out delivery");
+      const offset = request.afterOffset + 1;
+      const event = this.#stream
+        .read(request.afterOffset, 1)
+        .events.find((candidate) => candidate.offset === offset);
+      if (!event || event.ephemeral)
+        throw codedError("GONE", "fan-out delivery source event is no longer available");
+      this.#appendAndRunCommittedEffects([
+        {
+          type: "events.iterate.com/itx/subscription-delivery-failed",
+          idempotencyKey: `itx/subscription-delivery-failed:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${offset}`,
+          payload: { name: request.name, offset, attempts: request.attempts, error: request.error },
+          source: { cause: event.source?.cause },
+        },
+      ]);
+      return;
+    }
+    if (row.halted) return;
+    this.#appendAndRunCommittedEffects([
+      {
+        type: "events.iterate.com/itx/subscription-delivery-halted",
+        idempotencyKey: `itx/subscription-delivery-halted:${request.name}:${request.configuredAtOffset}:${request.afterOffset}`,
+        payload: {
+          name: request.name,
+          afterOffset: request.afterOffset,
+          attempts: request.attempts,
+          error: request.error,
+        },
+      },
+    ]);
+  }
+
   /** THE EFFECTIVE table at `path`, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`):
    *  this context's own rows live, and the table behind a bare link, hop by hop, from its snapshot
    *  (context/rule-snapshots.ts) — a list calls no other context. */
@@ -829,8 +912,65 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  snapshot. */
   async #rulesAt(path: string): Promise<readonly ItxExpressionRewriteRule[]> {
     if (path === this.#durableObjectAddress.path)
-      return Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules);
+      return this.#effectiveRewriteRules(
+        Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+      );
     return (await this.#reach.snapshotOf(path)).rules;
+  }
+
+  /** Socket attachments shadow same-named durable rows while present. The durable rows are never
+   * changed, so a detach simply reveals them again. */
+  #effectiveRewriteRules(durable: readonly ItxExpressionRewriteRule[]): ItxExpressionRewriteRule[] {
+    const live = this.#rpcStubs.liveProvides().map((provide) => ({
+      match: parseItxExpressionPrefix(provide.match),
+      target: ["itx", "builtins", "rpcStubs", ["get", provide.rpcStubKey]] as ItxExpression,
+      description: provide.description,
+      declaration: provide.declaration,
+    }));
+    const names = new Set(live.map((rule) => canonicalItxExpressionPrefix(rule.match)));
+    return [
+      ...live,
+      ...durable.filter((rule) => !names.has(canonicalItxExpressionPrefix(rule.match))),
+    ];
+  }
+
+  #effectiveFetchRoutes(durable: FetchRouteTable): FetchRouteTable {
+    const routes: FetchRouteTable = { ...durable };
+    for (const provide of this.#rpcStubs.liveProvides()) {
+      if (!provide.fetchRoute) continue;
+      const parsed = FetchRouteConfiguredPayload.safeParse({
+        ...provide.fetchRoute,
+        target: ["itx", "builtins", "rpcStubs", ["get", provide.rpcStubKey]],
+      });
+      if (!parsed.success || !parsed.data.requestMatcher || !parsed.data.target) continue;
+      routes[parsed.data.fetchRouteName] = {
+        requestMatcher: parsed.data.requestMatcher,
+        target: normalizedItxExpression(parsed.data.target),
+        authRequirement: parsed.data.authRequirement || null,
+        priority: parsed.data.priority || 0,
+        configuredOffset: Number.MAX_SAFE_INTEGER,
+      };
+    }
+    return routes;
+  }
+
+  #liveSubscriptions(): Record<string, Subscription> {
+    return Object.fromEntries(
+      this.#rpcStubs.liveSubscriptions().map((subscription) => [
+        subscription.name,
+        {
+          delivery: "live" as const,
+          target: ["itx", "builtins", "rpcStubs", ["get", subscription.rpcStubKey]],
+          consumes: subscription.consumes,
+          // An attachment is replaced with a new id on every dial, so the delivery queue never
+          // carries a prior callback's evaluated target across a replacement.
+          configuredAtOffset: Number.parseInt(
+            subscription.attachmentId.replaceAll("-", "").slice(0, 12),
+            16,
+          ),
+        },
+      ]),
+    );
   }
 
   /** THE LIBRARY's itx (library.ts): a genuine InvokeHandle over `invoke`, so a library call's
@@ -1049,11 +1189,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ?.primaryHostname ?? null,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
+    deployId: this.#appConfig.deployId,
     otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
-    deployId: this.#appConfig.deployId,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
     iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
@@ -1110,9 +1250,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     subscriptions: {
       list: () => this.#subscriptionList(),
-      get: (name) => this.#subscriptionList().find((s) => s.name === name) ?? null,
+      get: async (name) => (await this.#subscriptionList()).find((s) => s.name === name) ?? null,
     },
-    fetchRoutes: () => this.#stream.coreReducedState.fetchRoutes,
+    fetchRoutes: () => this.#effectiveFetchRoutes(this.#stream.coreReducedState.fetchRoutes),
     rewriteRules: {
       list: (depth = 3) => this.#rewriteRuleListAt(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
@@ -1153,7 +1293,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       ...this.#reach,
       recordLoopLimit: (_path, cause, message) => this.#stream.recordLoopLimit(cause, message),
     },
-    rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+    rewriteRules: () =>
+      this.#effectiveRewriteRules(
+        Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+      ),
     builtIns: this.#builtIns,
     path: this.#durableObjectAddress.path,
     caller: () => this.#caller,
@@ -1180,6 +1323,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
+    liveSubscriptions: () => this.#liveSubscriptions(),
     // The RESOLVER's `evaluate`, not this class's `invoke`: the loop's evaluation is the kernel's own
     // call — never with delivery authority, whatever the store holds (`runAsDelivery` below).
     evaluateItxExpression: (itxExpression) =>
@@ -1246,14 +1390,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
   });
 
-  /** The three sources a fresh incarnation derives again — schedules, cursor-row claims, facet
-   *  claims; the unclaimed-facet sweep and the runs owed to the alarm are this incarnation's alone. */
+  /** Schedules and facet claims are the context alarm's durable sources. Subscription retries live
+   *  in the private subscriptions facet and claim this same alarm through FacetHost. */
   #durableAlarmDeadlines(): (number | null)[] {
-    return [
-      this.#stream.nextScheduledAppendAt(),
-      this.#subscriptionDelivery.deadlines()[0]?.at ?? null,
-      this.#facetHost.deadlines()[0]?.at ?? null,
-    ];
+    return [this.#stream.nextScheduledAppendAt(), this.#facetHost.deadlines()[0]?.at ?? null];
   }
 
   // ── THE FACETS (context/facet-host.ts): the hosted classes' lifecycle and their alarm claims, wired to this DO ──
@@ -1261,10 +1401,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   readonly #facetHost = new FacetHost({
     ctx: this.ctx,
     env: () => this.env,
-    deployId: this.#appConfig.deployId,
     iterateContextName: this.#durableObjectAddress.name,
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
+    deployId: this.#appConfig.deployId,
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
     // A producer is loaded code's word: walled on its input and on every row it appends.
@@ -1298,7 +1438,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     before: number | null,
     extra: Pick<AlarmTrace, "error" | "dueSchedules" | "runs"> = {},
   ) {
-    const delivery = this.#subscriptionDelivery.deadlines();
     const facets = this.#facetHost.snapshot();
     const trace: AlarmTrace = {
       at: Date.now(),
@@ -1307,8 +1446,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       alarm: { before, after: this.#alarmCoordinator.snapshot().armedAt },
       deadlines: {
         schedule: this.#stream.nextScheduledAppendAt(),
-        delivery: delivery.slice(0, 32),
-        deliveryOmitted: Math.max(0, delivery.length - 32),
         claims: this.#facetHost.deadlines(),
         ...this.#residency.deadlines(),
       },
@@ -1336,32 +1473,60 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #alarmStory(now: number): string {
     const { armedAt, passInProgress, lastPassStartedAt } = this.#alarmCoordinator.snapshot();
     const when = (at: number | null | undefined) =>
-      at === null || at === undefined
+      at == null
         ? "none"
         : `${new Date(at).toISOString()} (${at <= now ? `${now - at} ms ago` : `in ${at - now} ms`})`;
     return [
       `alarm armed for ${when(armedAt)}`,
       `${passInProgress ? "a pass running since" : "this incarnation's last pass"} ${when(lastPassStartedAt)}`,
       `next schedule ${when(this.#stream.nextScheduledAppendAt())}`,
-      `delivery claim ${when(this.#subscriptionDelivery.deadlines()[0]?.at)}`,
       `facet claim ${when(this.#facetHost.deadlines()[0]?.at)}`,
     ].join("; ");
   }
 
-  /** The `itx.subscriptions` view: the reduced table joined with the delivery loop's cursors. */
-  #subscriptionList(): SubscriptionListEntry[] {
-    return Object.entries(this.#stream.coreReducedState.subscriptions).map(([name, s]) => {
-      const cursor = this.#subscriptionDelivery.cursor(name);
+  /** The `itx.subscriptions` view: durable cursor state lives with the private subscriptions facet. */
+  async #subscriptionList(): Promise<SubscriptionListEntry[]> {
+    const subscriptions = {
+      ...this.#stream.coreReducedState.subscriptions,
+      ...this.#liveSubscriptions(),
+    };
+    const durable = Object.entries(subscriptions).filter(([, row]) => row.delivery === "durable");
+    const snapshots =
+      durable.length === 0
+        ? {}
+        : ((await this.#facetHost.callFacetAsPlatform("subscriptions", [
+            ["deliverySnapshots"],
+          ])) as Record<
+            string,
+            {
+              confirmedOffset: number;
+              pending?: { attempt: number; nextAttemptAtMs?: number };
+              halted?: { after: number; attempts: number; error: string };
+              fanOut?: { admittedThrough: number; pending: unknown[] };
+            }
+          >);
+    return Object.entries(subscriptions).map(([name, s]) => {
+      const snapshot = snapshots[`${name}@${s.configuredAtOffset}`];
+      const cursor = snapshot
+        ? s.delivery === "durable"
+          ? {
+              confirmedOffset: snapshot.fanOut?.admittedThrough ?? snapshot.confirmedOffset,
+              attempt: snapshot.pending?.attempt ?? 0,
+              nextAttemptAtMs: snapshot.pending?.nextAttemptAtMs,
+            }
+          : undefined
+        : undefined;
       return {
         name,
         target: print(s.target),
+        delivery: s.delivery,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.consumes && { consumes: s.consumes }),
         configuredAtOffset: s.configuredAtOffset,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         ...(s.ordered === false && { ordered: false as const }),
-        ...this.#subscriptionDelivery.fanOutView(name),
+        ...(snapshot?.fanOut && { pending: snapshot.fanOut.pending.length, paused: false }),
         // an absent facet stays ABSENT on the wire, like the fields around it
         ...(s.hostedFacet && {
           hostedFacet: { ...s.hostedFacet, restarts: this.#facetHost.restarts(s.hostedFacet.name) },
@@ -1376,8 +1541,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }),
           },
         }),
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
-        ...(s.halted && { halted: s.halted }),
+        ...(snapshot?.halted
+          ? {
+              halted: {
+                afterOffset: snapshot.halted.after,
+                attempts: snapshot.halted.attempts,
+                error: snapshot.halted.error,
+              },
+            }
+          : s.halted && { halted: s.halted }),
       };
     });
   }
@@ -1401,13 +1573,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const wakeRecordSettlesARun =
       !this.#stream.wakeRecorded() &&
       Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
-    const [schedule, delivery, facetClaim] = this.#durableAlarmDeadlines().map(
-      (at) => at !== null && at <= wokeAt,
+    const [schedule, facetClaim] = this.#durableAlarmDeadlines().map((at) =>
+      at ? at <= wokeAt : false,
     );
     if (
       this.#runsOwedToTheAlarm.size === 0 &&
       !wakeRecordSettlesARun &&
-      !(schedule || delivery || facetClaim)
+      !(schedule || facetClaim)
     ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
@@ -1425,7 +1597,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             cause: "alarm",
             due: [
               ...(schedule ? ["schedule" as const] : []),
-              ...(delivery ? ["retry" as const] : []),
               ...(facetClaim ? ["claim" as const] : []),
               ...(this.#runsOwedToTheAlarm.size > 0 || wakeRecordSettlesARun
                 ? ["run" as const]
@@ -1436,7 +1607,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             ...Object.values(schedules)
               .filter((row) => !row.failure && Date.parse(row.nextAt) <= wokeAt)
               .map((row) => row.source?.cause),
-            this.#subscriptionDelivery.owedCause(wokeAt),
             this.#facetHost.owedCause(wokeAt),
             ...Object.values(scriptRuns).map((run) => run.cause),
           ]),
@@ -1518,9 +1688,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             reportIssue("scheduled-append.failed", error, payload);
           }
         }
-        // The stream-kept cursors' due retries, and anything an eviction left mid-delivery — AWAITED so
-        // the deadline it leaves is the one derived below.
-        await this.#subscriptionDelivery.deliverEveryCursorSubscription();
         // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
         // revive may make is the one derived below.
         await this.#facetHost.reviveDueClaims();
@@ -1730,13 +1897,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
       if (pager) {
         await this.#waitOutOlderSnapshots(before, true);
+        await this.#waitOutLiveAttachmentSnapshots();
         return pager;
       }
       const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
       if (upgradeLeg) return upgradeLeg;
     }
     const itxExpressionHeader = request.headers.get(ITX_EXPRESSION_FETCH_HEADER);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects an itx-expression fetch, absent (null) routes to egress — that distinction must not collapse
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects an itx-expression fetch; absent routes to egress
     if (itxExpressionHeader !== null) {
       try {
         // The header is UNTRUSTED (rpc-stubs.ts `parseFetchExpression`); the edge serves a
@@ -1929,6 +2097,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#rpcStubs.lendRpcStub({
       rpcStubKey: input.rpcStubKey,
       stub: input.stub as BorrowedRpcStub, // unvalidatable by design (the docstring above)
+    });
+  }
+
+  /** Private edge preflight for a live pager owned by loaded code. It applies the same app-row,
+   * jail, and platform-write guards as append, but deliberately does not append the proposed row. */
+  validateLivePagerRows(events: StreamEventInput[], caller: Caller): void {
+    this.#inboundRequestInOneTurn("validateLivePagerRows");
+    if (!caller.app) throw codedError("FORBIDDEN", "live pager preflight is for loaded code");
+    const normalized = events.map((event) =>
+      normalizeControlEvent(event, this.#durableObjectAddress.path),
+    );
+    for (const event of normalized) admitLoadedCodeRow(event, this.#durableObjectAddress.path);
+    refuseLiftingAJail(normalized, this.#stream.coreReducedState.itxExpressionRewriteRules, caller);
+    refuseNonPlatformWrites(normalized, caller);
+    // A live lend is still an app's attempted append for authority purposes. Resolve the same
+    // `itx.append(event)` through this caller's live table, without dispatching it, so a jail's
+    // mask at `itx.append` refuses the lend just as it refuses a durable configuration write.
+    this.#callerStorage.run(this.#withPlatformOrigin(caller), () => {
+      for (const event of normalized)
+        this.#itxExpressionResolver.resolve(["itx", ["append", event]]);
     });
   }
 }

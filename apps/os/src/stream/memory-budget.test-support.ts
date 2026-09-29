@@ -468,6 +468,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name: "watcher",
+            delivery: "processor",
             target: ["itx", "facets", ["get", "watcher"], "processEventBatch"],
             consumes: ["events.iterate.com/itx/live-state-changed"],
           },
@@ -528,6 +529,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
             type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `p${i}`,
+              delivery: "processor",
               target: ["itx", "facets", ["get", `p${i}`], "processEventBatch"],
               consumes: [typeOf(i)],
             },
@@ -613,6 +615,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
             type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `sink${i}`,
+              delivery: "durable",
               target: ["itx", "sink"],
               consumes: ["blob"],
             },
@@ -698,6 +701,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
             type: "events.iterate.com/itx/subscription-configured",
             payload: {
               name: `sink${i}`,
+              delivery: "durable",
               target: "itx.sink",
               consumes: [`blob-${i}`],
             },
@@ -758,6 +762,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
           type: "events.iterate.com/itx/subscription-configured",
           payload: {
             name,
+            delivery: "processor",
             target: ["itx", "facets", ["get", name], "processEventBatch"],
             consumes: ["blob"],
           },

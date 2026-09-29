@@ -87,8 +87,8 @@ export const stateArtifact = {
   file: "state.json",
 };
 
-/** The prd account's Workers Logs API access. */
-type CloudflareCredentials = { accountId: string; apiToken: string };
+/** The account's Workers Logs API access. */
+export type CloudflareCredentials = { accountId: string; apiToken: string };
 
 /** One window's rows per signal: [label, count], biggest first. `serverErrors` are the 5xx
  *  visitors were answered, by URL, outside a cause's rays; `causes` holds those inside them. `pagers`
@@ -260,7 +260,7 @@ export function runMode(options: {
  * edits, thread replies and a new page. `slack: null` posts nothing. It resolves to what it posted
  * (or would post) and the next state, so a paged run ends green: a scheduled run reports on main's
  * head commit, where red reads as "this commit broke". It throws only when it could not read prd
- * (readWindow) or post (the Slack client throws on an error).
+ * (readWorkersFaultWindow) or post (the Slack client throws on an error).
  */
 export async function alarm(input: {
   window: LogWindow;
@@ -270,7 +270,7 @@ export async function alarm(input: {
   testRun: boolean;
 }) {
   const { window, testRun } = input;
-  const reading = await readWindow(window, input.cloudflare);
+  const reading = await readWorkersFaultWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state, testRun);
   // A test run shows the page alone: the pins keep their state on main.
@@ -610,6 +610,17 @@ const prdWorkers: LogFilter = {
   type: "string",
 };
 
+/** The one service selector every Workers Logs query starts with. */
+export function workersFilter(workerNames: readonly string[]): LogFilter {
+  if (workerNames.length === 0) throw new Error("Workers Logs needs at least one worker name");
+  return {
+    key: "$metadata.service",
+    operation: "in",
+    value: workerNames.join(","),
+    type: "string",
+  };
+}
+
 /** Cloudflare refuses a query whose filters pass 16 nodes, each leaf and each group one node and
  *  the top-level list none: "Filter expression is too complex; maximum is 16 filter nodes". Its API
  *  reference names only a nesting depth of 4. */
@@ -642,7 +653,11 @@ export type Exclusion = {
  * `or(key is_null, key not_in values, keep)`. A part still past MAX_FILTER_NODES is sent without
  * its last keeps, named in `dropped`: its expected rows may page, and a fault never hides. Pure.
  */
-export function exclusionQueries(base: LogFilter[], exclusions: Exclusion[]) {
+export function exclusionQueries(
+  base: LogFilter[],
+  exclusions: Exclusion[],
+  leadingFilter: LogFilter = prdWorkers,
+) {
   let parts: { filters: LogFilter[]; keeps: Exclusion[] }[] = [{ filters: [], keeps: [] }];
   for (const key of new Set(exclusions.map((exclusion) => exclusion.key))) {
     const excludedBy = new Map<string, Exclusion[]>();
@@ -698,8 +713,8 @@ export function exclusionQueries(base: LogFilter[], exclusions: Exclusion[]) {
     const kept = [...keeps];
     const dropped: string[] = [];
     const query = () => [...base, ...filters, ...kept.flatMap((exclusion) => exclusion.keep || [])];
-    // readWindow's `query` leads every query with prdWorkers
-    while (kept.length && filterNodes([prdWorkers, ...query()]) > MAX_FILTER_NODES)
+    // The caller's query leads every query with `leadingFilter`.
+    while (kept.length && filterNodes([leadingFilter, ...query()]) > MAX_FILTER_NODES)
       dropped.unshift(kept.pop()!.name);
     return { filters: query(), dropped };
   });
@@ -929,10 +944,13 @@ function expectedError(message: string) {
   );
 }
 
-async function readWindow(
+/** Reads one bounded Workers Logs window for the named workers without writing or posting. */
+export async function readWorkersFaultWindow(
   window: LogWindow,
   { accountId, apiToken }: CloudflareCredentials,
+  workerNames: readonly string[] = PRD_WORKERS,
 ): Promise<FaultReading> {
+  const leadingFilter = workersFilter(workerNames);
   // One grouped count per signal: one query, or with exclusions several over disjoint rows
   // (exclusionQueries). Its rows sum to a lower bound (events without the grouped field, or past
   // 2,000 groups in a query, drop out) — a burst still pages.
@@ -958,7 +976,7 @@ async function readWindow(
               parameters: {
                 datasets: ["cloudflare-workers"],
                 ...parameters,
-                filters: [prdWorkers, ...filters],
+                filters: [leadingFilter, ...filters],
               },
             }),
           },
@@ -1038,7 +1056,7 @@ async function readWindow(
     ]);
   };
   const count = async (base: LogFilter[], exclusions: Exclusion[], groupBy?: string) => {
-    const parts = exclusionQueries(base, exclusions);
+    const parts = exclusionQueries(base, exclusions, leadingFilter);
     const counted = new Map<string, number>();
     const found = await Promise.all(
       parts.map(({ filters }) => rows(filters, groupBy ? [groupBy] : [])),

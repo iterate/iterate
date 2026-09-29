@@ -212,6 +212,7 @@ test("the raw event-sourced form agrees with the verb — a hand-appended subscr
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "tally",
+      delivery: "processor",
       target: [
         "itx",
         "facets",

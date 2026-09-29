@@ -23,6 +23,7 @@ test(`a processor's ${TURNS} turns of run-requested → run-settled: every run s
     payload: {
       name: "looper",
       target: ["itx", "facets", ["get", "looper", LOOPER_SPEC], "processEventBatch"],
+      delivery: "processor",
       consumes: ["test/loop", "events.iterate.com/itx/run-settled"],
     },
   });

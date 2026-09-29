@@ -188,5 +188,4 @@ const directory = (pagers: WebSocket[] = []) =>
     ctx: { acceptWebSocket: () => {}, getWebSockets: () => pagers },
     onPresence: () => {},
     rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
-    appendEvents: () => {},
   });

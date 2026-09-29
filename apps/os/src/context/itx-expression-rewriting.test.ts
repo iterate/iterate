@@ -25,16 +25,15 @@ import {
   ItxExpressionResolver,
   type ItxExpressionRewriteRule,
   matchItxExpressionPrefix,
+  normalizeRewriteRuleConfigured,
   resolveItxExpression,
-  rowsNamingRpcStub,
-  rpcStubKeysNamed,
   BUILT_IN_ROOTS,
-  BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
   admitLoadedCodeRow,
   refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
+import { BUILT_IN_ROOT_DESCRIPTIONS } from "./capability-manifest.ts";
 
 /** The roots implicit at the owner root (every built-in) and at a child (the context roots) —
  *  `implicitRootsAt` for the two kinds of path, without a projectId. */
@@ -129,99 +128,12 @@ const resolveRows: { rules: string[]; call: string; becomes: string }[] = [
     call: "itx.a.c()",
     becomes: "itx.builtins.kv.c()",
   },
-  // PINNED ARGS: `itx.ai.run('special')` beats `itx.ai.run`; the pinned arg is consumed
+  // A target may have its own fixed calls. The caller's arguments apply afterwards to the target's
+  // final value; transforming or pinning them belongs in an ordinary adapter worker.
   {
-    rules: ["itx.ai.run('special') ⇒ itx.whoami", "itx.ai.run ⇒ itx.kv.get"],
-    call: "itx.ai.run('special')",
-    becomes: "itx.builtins.whoami()",
-  },
-  {
-    rules: ["itx.ai.run('special') ⇒ itx.whoami", "itx.ai.run ⇒ itx.kv.get"],
-    call: "itx.ai.run('other')",
-    becomes: "itx.builtins.kv.get('other')",
-  },
-  // unpinned trailing args are the call on the target (partial application)
-  {
-    rules: ["itx.ai.run('special') ⇒ itx.kv.get"],
-    call: "itx.ai.run('special', 'k')",
-    becomes: "itx.builtins.kv.get('k')",
-  },
-  // two pinned args outrank one
-  {
-    rules: ["itx.ai.run('m') ⇒ itx.kv.get", "itx.ai.run('m', 'fast') ⇒ itx.whoami"],
-    call: "itx.ai.run('m', 'fast')",
-    becomes: "itx.builtins.whoami()",
-  },
-  {
-    rules: ["itx.ai.run('m') ⇒ itx.kv.get", "itx.ai.run('m', 'fast') ⇒ itx.whoami"],
-    call: "itx.ai.run('m', 'slow')",
-    becomes: "itx.builtins.kv.get('slow')",
-  },
-  // a MID-PREFIX pinned step is consumed too (the target replaces it)
-  {
-    rules: ["itx.repo.get('main').files ⇒ itx.kv.get"],
-    call: "itx.repo.get('main').files('k')",
-    becomes: "itx.builtins.kv.get('k')",
-  },
-  // structural equality: key order in a pinned object is irrelevant
-  {
-    rules: ["itx.ai.run({ a: 1, b: 2 }) ⇒ itx.whoami"],
-    call: "itx.ai.run({ b: 2, a: 1 })",
-    becomes: "itx.builtins.whoami()",
-  },
-  // `@` IS THE CALLER'S INPUT (`fillItxExpressionHoles`): the target is a TEMPLATE, the fold of the
-  // caller's args into the rewritten call does not apply.
-  // As a top-level argument `@` is the unpinned args, SPLICED — the real Workers AI shape,
-  // `run(model, inputs, options?)`, with the model pinned (THE DREAM: `itx.fable(inputs)`)
-  {
-    rules: ["itx.fable ⇒ itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)"],
-    call: "itx.fable({ prompt: 'hi' })",
-    becomes: "itx.builtins.ai.run('@cf/meta/llama-3.2-1b-instruct',{prompt:'hi'})",
-  },
-  {
-    rules: ["itx.fable ⇒ itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)"],
-    call: "itx.fable({ prompt: 'hi' }, { gateway: { id: 'g' } })",
-    becomes:
-      "itx.builtins.ai.run('@cf/meta/llama-3.2-1b-instruct',{prompt:'hi'},{gateway:{id:'g'}})",
-  },
-  // …a property access on the match has no args: `@` DROPS (and the steps after the match follow)
-  {
-    rules: ["itx.fable ⇒ itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)"],
-    call: "itx.fable",
-    becomes: "itx.builtins.ai.run('@cf/meta/llama-3.2-1b-instruct')",
-  },
-  {
-    rules: ["itx.fable ⇒ itx.ai.run('m', @)"],
-    call: "itx.fable.then",
-    becomes: "itx.builtins.ai.run('m').then",
-  },
-  // …only a BARE `@` is the marker: `'@cf/…'`, `'a@b.c'` inside quotes are strings like any other
-  {
-    rules: ["itx.mail ⇒ itx.kv.get('a@b.c', @)"],
-    call: "itx.mail('x@y')",
-    becomes: "itx.builtins.kv.get('a@b.c','x@y')",
-  },
-  // …a lent stub's method called with args through `@` (the registry is the fixed point)
-  {
-    rules: ["itx.snap ⇒ itx.builtins.rpcStubs.get('cam').shot('wide', @)"],
-    call: "itx.snap(1, 2)",
-    becomes: "itx.builtins.rpcStubs.get('cam').shot('wide',1,2)",
-  },
-  // …NESTED inside a literal `@` is THE one argument
-  {
-    rules: ["itx.ask ⇒ itx.ai.gateway('g').run({ provider: 'workers-ai', query: @ })"],
+    rules: ["itx.ask ⇒ itx.ai.gateway('fixed').run"],
     call: "itx.ask({ prompt: 'hi' })",
-    becomes: "itx.builtins.ai.gateway('g').run({provider:'workers-ai',query:{prompt:'hi'}})",
-  },
-  // …`...@` merges the one argument's fields under the template's own keys — a frontier model through
-  // the gateway with the model PINNED: the template's `model` WINS over the caller's
-  {
-    rules: [
-      "itx.claude ⇒ itx.ai.gateway('g').run({ provider: 'anthropic', endpoint: 'v1/messages', query: { model: 'claude-x', ...@ } })",
-    ],
-    call: "itx.claude({ messages: [{ role: 'user', content: 'hi' }], model: 'evil' })",
-    becomes:
-      "itx.builtins.ai.gateway('g').run({endpoint:'v1/messages',provider:'anthropic',query:{messages:[{content:'hi',role:'user'}],model:'claude-x'}})",
+    becomes: "itx.builtins.ai.gateway('fixed').run({prompt:'hi'})",
   },
 ];
 for (const { rules, call, becomes } of resolveRows)
@@ -243,25 +155,6 @@ const refusals: { rules: string[]; call: string; throws: RegExp }[] = [
   { rules: ["itx ⇒ null"], call: "itx.whoami()", throws: /is masked/ },
   // …a mask reached THROUGH another rule still refuses (rules first, at every step)
   { rules: ["itx.db ⇒ itx.kv", "itx.kv ⇒ null"], call: "itx.db.get('k')", throws: /is masked/ },
-  // a literal that differs and no plain rule beneath → nothing matches (`llm` is no root; `itx.ai`
-  // would fall to its platform row — see the pinned-args resolveRows above)
-  {
-    rules: ["itx.llm.run('special') ⇒ itx.whoami"],
-    call: "itx.llm.run('other')",
-    throws: /no rewrite rule matches/,
-  },
-  // a residual arg on a NON-final pinned step has nowhere to go
-  {
-    rules: ["itx.repo.get('main').files ⇒ itx.kv.get"],
-    call: "itx.repo.get('main', 'x').files('k')",
-    throws: /no rewrite rule matches/,
-  },
-  // a property is not a call: the pinned rule does not claim `itx.llm.run`
-  {
-    rules: ["itx.llm.run('special') ⇒ itx.whoami"],
-    call: "itx.llm.run",
-    throws: /no rewrite rule matches/,
-  },
   // a target not rooted at itx (a smuggled event) is denied whole — the built-ins are unreachable by name
   {
     rules: ["itx.evil ⇒ kv"],
@@ -273,27 +166,6 @@ const refusals: { rules: string[]; call: string; throws: RegExp }[] = [
   // a bare `itx` row with a SHORT, unclaimed target claims its own target: a loop, refused by the
   // depth budget — a name an implicit row answers never re-enters it (`itx.append` above)
   { rules: ["itx ⇒ itx.cam.get('itx')"], call: "itx.nothing(1)", throws: /depth 32/ },
-  // `@` refusals (`fillItxExpressionHoles`): a nested `@` or a `...@` needs EXACTLY one argument — never a guess
-  {
-    rules: ["itx.ask ⇒ itx.ai.gateway('g').run({ query: @ })"],
-    call: "itx.ask(1, 2)",
-    throws: /a nested `@` in the target .* takes exactly one argument, got 2/,
-  },
-  {
-    rules: ["itx.ask ⇒ itx.ai.gateway('g').run({ query: @ })"],
-    call: "itx.ask",
-    throws: /takes exactly one argument, got 0/,
-  },
-  {
-    rules: ["itx.claude ⇒ itx.ai.run({ query: { ...@ } })"],
-    call: "itx.claude({}, {})",
-    throws: /`\.\.\.@` in the target .* takes exactly one argument, got 2/,
-  },
-  {
-    rules: ["itx.claude ⇒ itx.ai.run({ query: { ...@ } })"],
-    call: "itx.claude('not an object')",
-    throws: /merges an object; the argument is "not an object"/,
-  },
 ];
 for (const { rules, call, throws } of refusals)
   test(`resolveItxExpression — the call that runs: ${call}  with  [${rules.join(" | ") || "no rules"}]  is refused: ${throws}`, () => {
@@ -386,23 +258,6 @@ const prefixRows: {
   { match: "itx.a.b", call: "itx.a.b(1)", claims: { unpinnedArgs: [1], stepsAfterMatch: [] } }, // a name's FINAL step may claim a call
   { match: "itx.a.b", call: "itx.a(1).b", claims: null }, // a call at a NON-final name step is not that name
   { match: "itx.a.b", call: "itx.a", claims: null }, // the match is longer than the call
-  {
-    match: "itx.ai.run('gpt-5')",
-    call: "itx.ai.run('gpt-5', { n: 1 })",
-    claims: { unpinnedArgs: [{ n: 1 }], stepsAfterMatch: [] },
-  },
-  { match: "itx.ai.run('gpt-5')", call: "itx.ai.run('other')", claims: null },
-  { match: "itx.ai.run('gpt-5')", call: "itx.ai.run", claims: null },
-  {
-    match: "itx.repo.get('main').files",
-    call: "itx.repo.get('main').files('k')",
-    claims: { unpinnedArgs: ["k"], stepsAfterMatch: [] },
-  },
-  {
-    match: "itx.repo.get('main').files",
-    call: "itx.repo.get('main', 'x').files('k')",
-    claims: null,
-  },
   // the bare root claims every call (the whole-context override)
   {
     match: "itx",
@@ -414,6 +269,10 @@ for (const { match, call, claims } of prefixRows)
   test(`matchItxExpressionPrefix — one match against one call: ${match}  against  ${call}  →  ${claims ? `${print(claims.stepsAfterMatch) || "(nothing after)"}${claims.unpinnedArgs ? `, unpinned ${JSON.stringify(claims.unpinnedArgs)}` : ""}` : "no match"}`, () => {
     expect(matchItxExpressionPrefix(parseItxExpressionPrefix(match), parse(call))).toEqual(claims);
   });
+
+test("matchItxExpressionPrefix refuses malformed historical call matches", () => {
+  expect(matchItxExpressionPrefix(["itx", ["ai", "fixed"]], parse("itx.ai('fixed')"))).toBeNull();
+});
 
 test("the anonymous call step round-trips the codec: `f(x)(y)` parses to an anonymous call and prints back; a prefix may not use it", () => {
   expect(parse("itx.rpcStubs.get('cam')(1,2)")).toEqual([
@@ -428,45 +287,18 @@ test("the anonymous call step round-trips the codec: `f(x)(y)` parses to an anon
   expect(() => parseItxExpressionPrefix("itx.a.b('x')(1)")).toThrow(/cannot call a result/);
 });
 
-test("`@` round-trips the codec (targets only): parse → print → parse; the one reserved literal: `@` and `...@` lex to the marker literals and print back; nothing inside quotes is touched", () => {
-  const target =
-    "itx.ai.gateway('g').run({ provider: 'anthropic', query: { model: 'claude-x', ...@ } }, @, [@], 'a@b')";
-  const parsed = parse(target, { holes: true });
-  expect(parsed).toEqual([
-    "itx",
-    "ai",
-    ["gateway", "g"],
-    [
-      "run",
-      { provider: "anthropic", query: { model: "claude-x", "...@": true } },
-      { "@": true },
-      [{ "@": true }],
-      "a@b",
-    ],
-  ]);
-  expect(print(parsed, { holes: true })).toBe(
-    "itx.ai.gateway('g').run({provider:'anthropic',query:{...@,model:'claude-x'}},@,[@],'a@b')",
-  );
-  expect(parse(print(parsed, { holes: true }), { holes: true })).toEqual(parsed);
-  // without `holes` the reserved literals print as the plain JSON5 they are — a CALL that carries
-  // `{ "@": true }` as data round-trips through `parse` (no holes) unchanged
-  expect(print(parsed)).toBe(
-    "itx.ai.gateway('g').run({provider:'anthropic',query:{'...@':true,model:'claude-x'}},{'@':true},[{'@':true}],'a@b')",
-  );
+test("the expression codec keeps @-spelled values as ordinary data", () => {
   expect(parse(print(["itx", ["x", { "@": true }, { "...@": true }]]))).toEqual([
     "itx",
     ["x", { "@": true }, { "...@": true }],
   ]);
-  // a string VALUE that spells the marker's printed form is a string — print skips string literals
-  expect(print(["itx", "kv", ["put", "k", "{'@':true}"]], { holes: true })).toBe(
-    `itx.kv.put('k',"{'@':true}")`,
-  );
+  expect(print(["itx", "kv", ["put", "k", "{'@':true}"]])).toBe(`itx.kv.put('k',"{'@':true}")`);
   expect(parse(`itx.kv.put('k',"{'@':true}")`)).toEqual(["itx", "kv", ["put", "k", "{'@':true}"]]);
 });
 
-test("`@` round-trips the codec (targets only): parse → print → parse; the one reserved literal: a bare `@` in a CALL (or any parse without `holes`) is refused in the marker's own words", () => {
-  expect(() => parse("itx.kv.get(@)")).toThrow(/legal only in a rewrite rule's target/);
-  expect(() => parse("itx.ai.run({ q: ...@ })")).toThrow(/legal only in a rewrite rule's target/);
+test("the expression codec refuses bare @ markers", () => {
+  expect(() => parse("itx.kv.get(@)")).toThrow(/call args are not JSON5/);
+  expect(() => parse("itx.ai.run({ q: ...@ })")).toThrow(/call args are not JSON5/);
   expect(parse("itx.kv.get('a@b', \"x@y\")")).toEqual(["itx", "kv", ["get", "a@b", "x@y"]]);
 });
 
@@ -515,10 +347,39 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
   });
 });
 
-// THE APPEND BOUNDARY'S REFUSALS, one row each: `{ match, target, throws }` — rooting, the reserved
-// root, the proxy's verbs, `@` (in a match, in a non-final step, in a call), and the
-// prefix grammar (an argless pinned step, an anonymous step, an unbalanced paren, a non-identifier
-// step in the ARRAY half).
+test("rewrite-rule-configured metadata preserves declarations and rejects malformed present values", () => {
+  expect(
+    normalizeRewriteRuleConfigured({
+      match: "itx.camera",
+      target: "itx.builtins.rpcStubs.get('camera')",
+      description: "a live camera",
+      declaration: "declare const camera: unknown;",
+    }),
+  ).toMatchObject({
+    description: "a live camera",
+    declaration: "declare const camera: unknown;",
+  });
+  for (const [field, value] of [
+    ["description", 0],
+    ["description", false],
+    ["description", null],
+    ["declaration", 0],
+    ["declaration", false],
+    ["declaration", null],
+  ] as const)
+    expect(() =>
+      normalizeControlEvent(
+        {
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match: "itx.camera", target: "itx.builtins.rpcStubs", [field]: value },
+        },
+        "/",
+      ),
+    ).toThrow(/description|declaration/);
+});
+
+// THE APPEND BOUNDARY'S REFUSALS, one row each: rooted names, the reserved root, proxy verbs, and
+// the property-only name grammar. Calls and template markers cannot enter the rule table.
 const appendRefusals: {
   match: ItxExpressionInput;
   target: ItxExpressionInput | null;
@@ -538,21 +399,17 @@ const appendRefusals: {
     target: "itx.kv",
     throws: new RegExp(`may not start with the proxy's own verb "${verb}"`),
   })),
-  // `cd` is a NAME, not a proxy verb: `itx.cd ⇒ null` (a wall) and `itx.cd('/x') ⇒ …` are rows
-  { match: "itx.a(@)", target: "itx.kv", throws: /legal only in a rewrite rule's target/ }, // `@`: never in a match…
-  { match: ["itx", ["a", { "@": true }]], target: "itx.kv", throws: /not its match/ }, // …in either half
-  {
-    match: "itx.x",
-    target: "itx.ai.run(@).then",
-    throws: /legal only in the target's FINAL step/,
-  },
-  { match: "itx.a()", target: "itx.kv", throws: /pins literal args.*spell "a"/ }, // an argless pinned step pins nothing
-  { match: "itx.a('x')(1)", target: "itx.kv", throws: /cannot call a result/ },
+  // `cd` is a name, not a proxy verb: `itx.cd ⇒ null` is a wall; calls cannot be matches.
+  { match: "itx.a('x')", target: "itx.kv", throws: /dotted capability name, not a call/ },
+  { match: ["itx", ["a", "x"]], target: "itx.kv", throws: /dotted capability name, not a call/ },
+  { match: "itx.a(@)", target: "itx.kv", throws: /call args are not JSON5/ },
+  { match: "itx.x", target: "itx.ai.run(@)", throws: /call args are not JSON5/ },
+  { match: "itx.x", target: "itx.ai.run({ query: { ...@ } })", throws: /call args are not JSON5/ },
   { match: "itx.broken(", target: "itx.kv", throws: /unbalanced/ },
   { match: ["itx", "builtins.kv"], target: "itx.kv", throws: /not an identifier/ }, // the ARRAY half reads like the string half
   { match: ["itx", "a b"], target: "itx.kv", throws: /not an identifier/ },
   { match: ["itx", "cd.x"], target: "itx.kv", throws: /not an identifier/ }, // …a dotted step never bypasses the proxy-verb refusal
-  { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /not an identifier/ }, // …a call step's name too
+  { match: ["itx", ["builtins.kv", 1]], target: "itx.kv", throws: /not an identifier/ },
   { match: ["itx", "__proto__"], target: "itx.kv", throws: /reserved/ },
 ];
 for (const { match, target, throws } of appendRefusals)
@@ -584,7 +441,7 @@ test("rewrite-rule-configured — REFUSED: a target over the ceiling, which ever
   ).toThrow(expect.objectContaining({ code: "FACET_SOURCE_TOO_LARGE" }));
 });
 
-// …and what the append boundary ACCEPTS: both halves the PARSED form (either codec half in), `{ match, target, payload }`.
+// …and what the append boundary accepts: a property-only name and an ordinary parsed target.
 const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload: unknown }[] = [
   {
     match: "itx.db",
@@ -596,30 +453,12 @@ const accepted: { match: ItxExpressionInput; target: ItxExpressionInput; payload
     target: "itx.cd('/archive')",
     payload: { match: ["itx", "archive"], target: ["itx", ["cd", "/archive"]] },
   }, // …and a proxy verb (a built-in root in an expression)
-  {
-    match: "itx.ai.run('gpt-5')",
-    target: "itx.kv",
-    payload: { match: ["itx", "ai", ["run", "gpt-5"]], target: ["itx", "kv"] },
-  }, // pinned args in the match, parsed once at the append boundary
-  {
-    match: ["itx", "ok", ["get", 1]],
-    target: "itx.kv",
-    payload: { match: ["itx", "ok", ["get", 1]], target: ["itx", "kv"] },
-  }, // the ARRAY half of a match passes through as the parsed form
   // The physical spelling of the match itself is an ordinary target at the append boundary — the
   // REDUCE decides: a deletion where it restates the implicit row, a grant where it does not.
   {
     match: "itx.kv",
     target: "itx.builtins.kv",
     payload: { match: ["itx", "kv"], target: ["itx", "builtins", "kv"] },
-  },
-  {
-    match: "itx.ai.run('gpt-5')",
-    target: "itx.builtins.ai.run('gpt-5')",
-    payload: {
-      match: ["itx", "ai", ["run", "gpt-5"]],
-      target: ["itx", "builtins", "ai", ["run", "gpt-5"]],
-    },
   },
   {
     match: "itx",
@@ -666,6 +505,9 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
   expect(() =>
     normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.(" }),
   ).toThrow();
+  expect(() =>
+    normalized({ match: "itx.x", target: "itx.builtins.x", ifTarget: "itx.ai.run(@)" }),
+  ).toThrow(/call args are not JSON5/);
 });
 
 test("rewrite-rule-configured — ONE event, both halves canonical, loud at the append boundary: REFUSED against the path the row LANDS on, whichever caller appends: a bare `itx` row whose target is `cd` of that context; a bare link elsewhere, a longer match, a mask and a foreign event pass; a schedule's batch is checked as it is scheduled", () => {
@@ -710,17 +552,17 @@ test("rewrite-rule-configured — ONE event, both halves canonical, loud at the 
 
 // ───────────────────────────── the table, described ─────────────────────────────
 
-test("describeRewriteRules — the effective table as `rewriteRules.list()` shows it: own rows first, as spelled (a template's `@`, a mask as null), then the implicit rows here minus what an own `itx.<root>` row claims — the context roots at a child, every root at the owner root", async () => {
-  const rows = ["itx.fable ⇒ itx.ai.run('m', @)", "itx.append ⇒ null"];
+test("describeRewriteRules — the effective table as `rewriteRules.list()` shows own rows first, then the implicit rows they do not claim", async () => {
+  const rows = ["itx.fable ⇒ itx.ai.run('m')", "itx.append ⇒ null"];
   expect(await listed(rows)).toEqual([
-    ownRow("itx.fable", "itx.ai.run('m',@)", "/agents/a"),
+    ownRow("itx.fable", "itx.ai.run('m')", "/agents/a"),
     ownRow("itx.append", null, "/agents/a"),
     ...CONTEXT_ROOTS.filter((root) => root !== "append").map((root) =>
       platformRow(root, "/agents/a"),
     ),
   ]);
   expect(await listed(rows, { path: "/", implicitRoots: ROOT })).toEqual([
-    ownRow("itx.fable", "itx.ai.run('m',@)", "/"),
+    ownRow("itx.fable", "itx.ai.run('m')", "/"),
     ownRow("itx.append", null, "/"),
     ...BUILT_IN_ROOTS.filter((root) => root !== "append").map((root) => platformRow(root, "/")),
   ]);
@@ -751,26 +593,30 @@ test("describeRewriteRules — the effective table as `rewriteRules.list()` show
   ]);
 });
 
-test("describeRewriteRules — the effective table as `rewriteRules.list()` shows it: behind a bare link, the linked context's list one hop shallower — an inherited row shown iff a call spelled like it is forwarded, the resolver's own law: hidden under a longer own row (a mask at `itx.browser` hides `itx.browser.quickAction`, `itx.kv` hides `itx.kv.get`, the same pinned row is claimed), under an implicit root here (`itx.append` stays the child's own), and never the linked context's own bare row; a pinned row with other args is forwarded, every row keeping the context it was read from", async () => {
+test("describeRewriteRules — an implicit root gives a model its actual description and public type", async () => {
+  const ai = (await listed([], { implicitRoots: ROOT })).find((row) => row.match === "itx.ai");
+  expect(ai).toEqual({
+    match: "itx.ai",
+    target: "itx.builtins.ai",
+    description: "Workers AI, verbatim: `ai.run(model, inputs)`",
+    declaration: 'IterateContextApi["ai"]',
+    context: "/agents/a",
+  });
+});
+
+test("describeRewriteRules — inherited rows show only when the child forwards their property name", async () => {
   const hops: [string, number][] = [];
   const parentRows: RewriteRuleListEntry[] = [
     ownRow("itx", "itx.builtins.cd('/organizations/o')", "/"),
-    ownRow("itx.ai.run('gpt-5')", "itx.builtins.ai.run('gpt-5-fast')", "/"),
-    ownRow("itx.ai.run('b')", "itx.builtins.ai.run('b-fast')", "/"),
     ownRow("itx.browser.quickAction", "itx.builtins.browser.quickAction", "/"),
-    ownRow("itx.kv.get", "itx.builtins.kv.get", "/"),
+    ownRow("itx.kv.get", "itx.builtins.kv.get", "/", undefined, "declare const kv: unknown;"),
     ownRow("itx.repos.get", "itx.builtins.repos.get", "/", "the parent's repos"),
     platformRow("append", "/"),
     platformRow("secrets", "/"),
     ownRow("itx.tools", "itx.builtins.rpcStubs.get('itx.tools')", "/organizations/o"),
   ];
   const rows = await listed(
-    [
-      "itx ⇒ itx.builtins.cd('/')",
-      "itx.browser ⇒ null",
-      "itx.ai.run('b') ⇒ itx.builtins.ai.run('b')",
-      "itx.kv ⇒ itx.builtins.kv",
-    ],
+    ["itx ⇒ itx.builtins.cd('/')", "itx.browser ⇒ null", "itx.kv ⇒ itx.builtins.kv"],
     {
       inherit: async (path, depth) => {
         hops.push([path, depth]);
@@ -782,10 +628,8 @@ test("describeRewriteRules — the effective table as `rewriteRules.list()` show
   expect(rows).toEqual([
     ownRow("itx", "itx.builtins.cd('/')", "/agents/a"),
     ownRow("itx.browser", null, "/agents/a"),
-    ownRow("itx.ai.run('b')", "itx.builtins.ai.run('b')", "/agents/a"),
     ownRow("itx.kv", "itx.builtins.kv", "/agents/a"),
     ...CONTEXT_ROOTS.map((root) => platformRow(root, "/agents/a")),
-    ownRow("itx.ai.run('gpt-5')", "itx.builtins.ai.run('gpt-5-fast')", "/"),
     ownRow("itx.repos.get", "itx.builtins.repos.get", "/", "the parent's repos"),
     platformRow("secrets", "/"),
     ownRow("itx.tools", "itx.builtins.rpcStubs.get('itx.tools')", "/organizations/o"),
@@ -810,64 +654,6 @@ test("describeRewriteRules — the effective table as `rewriteRules.list()` show
     1 + CONTEXT_ROOTS.length,
   );
   expect(hopped).toBe(false);
-});
-
-// ───────────────────────────── what a dead stub's un-set removes ─────────────────────────────
-
-// When a lent stub's last pager closes, the DO un-sets every row that NAMES its key — decided against
-// ONE frozen table: the rows naming the key directly, plus the rows that still resolve to it once
-// those are gone. Order-independent by construction: a user's alias to a shadowed root (`itx.llm ⇒
-// itx.ai` while `itx.ai` is a lent fake) survives the fake dying whichever row was configured first.
-const alias = "itx.llm ⇒ itx.ai";
-const fake = "itx.ai ⇒ itx.builtins.rpcStubs.get('itx.ai')";
-const ownRegistry = "itx.reg ⇒ itx.builtins.rpcStubs";
-const throughOwnRegistry = "itx.cam ⇒ itx.reg.get('itx.ai')";
-for (const [order, rules] of [
-  ["alias first", [alias, fake, ownRegistry, throughOwnRegistry]],
-  ["stub first", [fake, alias, ownRegistry, throughOwnRegistry]],
-] as const)
-  test(`rowsNamingRpcStub — decided against a frozen table, whatever the configuration order: ${order}: the fake's own row and a row naming the key through the user's own registry go; the alias stays`, () => {
-    const { ruleUnsets, subscriptionNames, fetchRouteNames } = rowsNamingRpcStub({
-      rpcStubKey: "itx.ai",
-      implicitRoots: ROOT,
-      rules: rules.map(rule),
-      subscriptionTargets: {
-        viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
-        viaAlias: parse("itx.llm.notify"),
-      },
-      fetchRouteTargets: {
-        "via-short-spelling": parse("itx.rpcStubs.get('itx.ai')"),
-        "via-own-registry": parse("itx.cam"),
-        "via-fake": parse("itx.ai"),
-        "via-alias": parse("itx.llm"),
-        elsewhere: parse("itx.kv"),
-      },
-    });
-    expect(ruleUnsets.map((u) => print(u.match)).sort()).toEqual(["itx.ai", "itx.cam"]);
-    // each unset carries the target the census saw, so the DO's removal is a compare-and-set
-    expect(Object.fromEntries(ruleUnsets.map((u) => [print(u.match), print(u.ifTarget)]))).toEqual({
-      "itx.ai": "itx.builtins.rpcStubs.get('itx.ai')",
-      "itx.cam": "itx.reg.get('itx.ai')",
-    });
-    // the short spelling names the registry through the platform row and goes; the alias-spelled
-    // subscription resolves to the platform `ai` beneath once the fake is gone, and stays
-    expect(subscriptionNames).toEqual(["viaShortSpelling"]);
-    // a route reaching the stub goes unless the table left behind still serves it: `itx.cam`
-    // dangles once its rule is gone, while `itx.ai` and its alias fall to the platform `ai`
-    expect(fetchRouteNames.sort()).toEqual(["via-own-registry", "via-short-spelling"]);
-  });
-
-test("rowsNamingRpcStub — every row the wake's census counts for a key goes with its stub: a lend spelled with arguments after the key is named by it too", () => {
-  const rows = {
-    rules: [rule("itx.cam ⇒ itx.builtins.rpcStubs.get('cam', 'extra')")],
-    subscriptionTargets: { viaArguments: parse("itx.rpcStubs.get('cam', 'extra').notify") },
-    fetchRouteTargets: {},
-    implicitRoots: ROOT,
-  };
-  expect(rpcStubKeysNamed(rows)).toEqual(new Set(["cam"]));
-  const { ruleUnsets, subscriptionNames } = rowsNamingRpcStub({ rpcStubKey: "cam", ...rows });
-  expect(ruleUnsets.map((unset) => print(unset.match))).toEqual(["itx.cam"]);
-  expect(subscriptionNames).toEqual(["viaArguments"]);
 });
 
 // ───────────────────────────── the resolver, over the reduce as the DO runs it ─────────────────────────────
@@ -921,25 +707,11 @@ test("built-in resolution + default-deny: `invoke(call, ...args)`: live args are
   expect(typeof (await invoke("itx.whoami"))).toBe("function"); // no args, no call: the value the expression denotes
 });
 
-test("built-in resolution + default-deny: `invoke(call, ...args)` folds the live args into a name-final call BEFORE resolving: a template fills from them, a pinned row and a pinned mask see them; a call-final expression applies them to the value it denotes", async () => {
+test("built-in resolution + default-deny: `invoke(call, ...args)` applies live arguments to an ordinary target value", async () => {
   const { invoke, rewrite, provide } = setup();
   provide("itx.s", (...args: unknown[]) => ["stubbed", args]);
-  rewrite("itx.fable", "itx.ai.run('@cf/x', @)");
-  rewrite("itx.ai.run('gpt-5')", "itx.builtins.rpcStubs.get('itx.s')");
-  rewrite("itx.kv.get('secret')", null);
-  // the template fills from the live args, exactly as the dotted call would
-  expect(await invoke("itx.fable", { prompt: "hi" })).toEqual({
-    model: "@cf/x",
-    inputs: { prompt: "hi" },
-    options: undefined,
-  });
-  // a pinned row matches the live args; the unpinned tail is the call on the target
-  expect(await invoke("itx.ai.run", "gpt-5", { q: 1 })).toEqual(["stubbed", [{ q: 1 }]]);
-  // a pinned mask refuses the live args it claims (default-deny); a sibling arg reaches the root
-  await expect(invoke("itx.kv.get", "secret")).rejects.toMatchObject({
-    code: "NO_ITX_EXPRESSION_MATCH",
-  });
-  expect(await invoke("itx.kv.get", "public")).toBeNull();
+  rewrite("itx.adapter", "itx.builtins.rpcStubs.get('itx.s')");
+  expect(await invoke("itx.adapter", "first", { q: 1 })).toEqual(["stubbed", ["first", { q: 1 }]]);
   // a call-final expression keeps the old shape: the args apply to the value it denotes
   expect(await invoke("itx.builtins.rpcStubs.get('itx.s')", 1, 2)).toEqual(["stubbed", [1, 2]]);
 });
@@ -1085,46 +857,15 @@ test("the rule table — a MAP by match: set replaces, null masks or deletes, th
   expect(await invoke("itx.rpcStubs.list()")).toEqual(["itx.cam"]); // presence is physical
 });
 
-test("the rule table — a MAP by match: set replaces, null masks or deletes, the platform-equivalent target restores: args at the match: a call at the match itself applies the rewritten target", async () => {
+test("the rule table — a MAP by name: a call at the match applies after the target's fixed calls", async () => {
   const { rewrite, invoke, builtIns } = setup();
   rewrite("itx.grok", "itx.ai.chat");
   expect(await invoke("itx.grok({ model: 'grok-4' })")).toBe("chat:grok-4");
   expect(builtIns.aiCalls[0]).toEqual({ model: "grok-4" });
-});
-
-test("the rule table — a MAP by match: set replaces, null masks or deletes, the platform-equivalent target restores: THE DREAM, through the reduce: `itx.fable ⇒ itx.ai.run('@cf/…', @)` is one row at rest; the caller's inputs fill `@`; `...@` pins a gateway model", async () => {
-  const { rewrite, invoke, resolve, events } = setup();
-  rewrite("itx.fable", "itx.ai.run('@cf/meta/llama-3.2-1b-instruct', @)");
-  expect(events.at(-1)!).toMatchObject({
-    payload: {
-      match: ["itx", "fable"],
-      target: ["itx", "ai", ["run", "@cf/meta/llama-3.2-1b-instruct", { "@": true }]], // `@` at rest is the reserved literal
-    },
-  });
-  expect(await invoke("itx.fable({ prompt: 'hi' })")).toEqual({
-    model: "@cf/meta/llama-3.2-1b-instruct",
-    inputs: { prompt: "hi" },
-    options: undefined,
-  });
-  expect(await invoke("itx.fable({ prompt: 'hi' }, { gateway: { id: 'g' } })")).toMatchObject({
-    options: { gateway: { id: "g" } },
-  });
-  expect(resolve("itx.fable({ prompt: 'hi' })")).toEqual([
-    "itx.fable({prompt:'hi'})",
-    "itx.ai.run('@cf/meta/llama-3.2-1b-instruct',{prompt:'hi'})",
-    "itx.builtins.ai.run('@cf/meta/llama-3.2-1b-instruct',{prompt:'hi'})",
-  ]);
-  rewrite(
-    "itx.claude",
-    "itx.ai.gateway('g').run({ provider: 'anthropic', endpoint: 'v1/messages', query: { model: 'claude-x', ...@ } })",
-  );
-  expect(await invoke("itx.claude({ messages: ['hi'], model: 'evil' })")).toEqual({
-    gateway: "g",
-    request: {
-      provider: "anthropic",
-      endpoint: "v1/messages",
-      query: { messages: ["hi"], model: "claude-x" }, // the template's model wins
-    },
+  rewrite("itx.ask", "itx.ai.gateway('fixed').run");
+  expect(await invoke("itx.ask({ prompt: 'hi' })")).toEqual({
+    gateway: "fixed",
+    request: { prompt: "hi" },
   });
 });
 
@@ -1209,8 +950,17 @@ test.for<{ call: string; refused?: RegExp }>([
   },
 );
 test("the app wall (`Caller.app`): a ROW loaded code appends is walled on its target: the fixed point is refused, its own lend (`itx.builtins.rpcStubs.get`), a plain expression and a cd anywhere pass, a mask says nothing", () => {
-  const row = (type: string, target: unknown) => () =>
-    admitLoadedCodeRow({ type, payload: { match: "itx.x", target } }, "/agents/a");
+  const row = (type: string, target: unknown, delivery?: "durable" | "live") => () =>
+    admitLoadedCodeRow(
+      {
+        type,
+        payload:
+          type === "events.iterate.com/itx/subscription-configured"
+            ? { name: "s", target, delivery }
+            : { match: "itx.x", target },
+      },
+      "/agents/a",
+    );
   expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.cd('/')")).toThrow(
     /not a loaded worker's word/,
   );
@@ -1221,22 +971,21 @@ test("the app wall (`Caller.app`): a ROW loaded code appends is walled on its ta
     row("events.iterate.com/itx/rewrite-rule-configured", "itx.cd('..').whoami"),
   ).not.toThrow();
   expect(
-    row("events.iterate.com/itx/subscription-configured", "itx.builtins.cd('/').append"),
+    row("events.iterate.com/itx/subscription-configured", "itx.builtins.cd('/').append", "durable"),
   ).toThrow(/not a loaded worker's word/);
   expect(
     row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.rpcStubs.get('itx.x')"),
   ).not.toThrow();
-  // a lend is named by its key: a row whose caller picks the key is no lend of the code's own
+  // A lend is named by its key. The removed template marker cannot let loaded code choose it.
   expect(
     row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.rpcStubs.get(@)"),
-  ).toThrow(/not a loaded worker's word/);
+  ).toThrow(/call args are not JSON5/);
   expect(
-    row("events.iterate.com/itx/subscription-configured", [
-      "itx",
-      "builtins",
-      "rpcStubs",
-      ["get", "subscription:s"],
-    ]),
+    row(
+      "events.iterate.com/itx/subscription-configured",
+      ["itx", "builtins", "rpcStubs", ["get", "subscription:s"]],
+      "live",
+    ),
   ).not.toThrow();
   expect(row("events.iterate.com/itx/rewrite-rule-configured", "itx.whoami")).not.toThrow();
   expect(
@@ -1260,7 +1009,7 @@ test.for([
 ])(
   "the app wall: loaded code names a webhook's signing secret only at the project's root — $name",
   ({ at, call = SIGNED_WEBHOOK, row, refused }) => {
-    const hook = { name: "hook", target: SIGNED_WEBHOOK, ordered: false };
+    const hook = { name: "hook", target: SIGNED_WEBHOOK, delivery: "durable", ordered: false };
     const admit = () =>
       row
         ? admitLoadedCodeRow(
@@ -1340,6 +1089,7 @@ test("the app wall on a row walls the source producer in its target too", () => 
             ["get", "p", { source, className: "P", cacheKey: "k" }],
             "processEventBatch",
           ],
+          delivery: "processor",
         },
       },
       "/agents/a",
@@ -1657,6 +1407,9 @@ const platformRow = (root: string, context: string): RewriteRuleListEntry => ({
   match: `itx.${root}`,
   target: `itx.builtins.${root}`,
   description: BUILT_IN_ROOT_DESCRIPTIONS[root as keyof typeof BUILT_IN_ROOT_DESCRIPTIONS],
+  ...(root !== "platformHook" && {
+    declaration: `IterateContextApi[${JSON.stringify(root)}]`,
+  }),
   context,
 });
 
@@ -1665,7 +1418,8 @@ const ownRow = (
   target: string | null,
   context: string,
   description?: string,
-): RewriteRuleListEntry => ({ match, target, description, context });
+  declaration?: string,
+): RewriteRuleListEntry => ({ match, target, description, declaration, context });
 
 /** The list at `path` over these rows; `inherit` answers the hop (none by default). */
 const listed = (

@@ -36,6 +36,7 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
     payload: {
       name: "dig",
       target: ["itx", "workers", ["get", { source: DIGEST_MODULES }], "processEventBatch"],
+      delivery: "durable",
       consumes: ["mark"],
     },
   });
@@ -95,6 +96,7 @@ test("enable with a consumes filter: itx.facets.get(name) answers before the fir
         ),
         "processEventBatch",
       ],
+      delivery: "processor",
       consumes: ["tick"],
     },
   });
@@ -120,6 +122,7 @@ test("processor: a read-driven catch-up (snapshot after the release) with epheme
           ),
           "processEventBatch",
         ],
+        delivery: "processor",
         consumes: ["tick", "events.iterate.com/itx/subscription-configured"],
       },
     }),

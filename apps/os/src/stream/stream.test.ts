@@ -10,6 +10,7 @@ import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import type { StreamEvent, StreamEventInput, SqlStorageHandle } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
+import { CoreContract } from "./core-processor.ts";
 import { Stream, type DurableObjectStorageSlice, type Wake } from "./stream.ts";
 
 test("waitForEvent: a registered waiter resolves with the committed event, fed from the fresh batch", async () => {
@@ -22,6 +23,58 @@ test("waitForEvent: a registered waiter resolves with the committed event, fed f
   expect(got).toMatchObject({ type: "ping", offset: receipt.offset, payload: { n: 1 } });
   // the resolving event was exactly the one the commit tail fanned out
   expect(batches.at(-1)?.some((e) => e.offset === got.offset)).toBe(true);
+});
+
+test("a pre-v18 checkpoint with an implicit subscription delivery refuses the next context operation instead of replaying and dropping the row", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const first = bareStream({ storage });
+  first.storage.insertEvent(
+    1,
+    JSON.stringify({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: { name: "legacy", target: "itx.worker.processEventBatch" },
+      ephemeral: false,
+    }),
+    null,
+  );
+  first.storage.reduceCheckpoints.write(
+    CoreContract.slug,
+    { reducerVersion: "17.0.0", reducedThroughOffset: 1 },
+    undefined,
+    false,
+  );
+
+  try {
+    bareStream({ storage });
+    throw new Error("expected the old core shape to be refused");
+  } catch (error) {
+    expect(errorCode(error)).toBe("INVALID_INPUT");
+    expect(error instanceof Error ? error.message : String(error)).toMatch(
+      /cannot be reconstructed.*recreate the context/,
+    );
+  }
+});
+
+test("a pre-v18 checkpoint with a pinned rewrite match refuses reconstruction instead of treating its old call as a name", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const first = bareStream({ storage });
+  first.storage.insertEvent(
+    1,
+    JSON.stringify({
+      type: "events.iterate.com/itx/rewrite-rule-configured",
+      payload: { match: ["itx", ["ai", "fixed-model"]], target: "itx.worker.run" },
+      ephemeral: false,
+    }),
+    null,
+  );
+  first.storage.reduceCheckpoints.write(
+    CoreContract.slug,
+    { reducerVersion: "17.0.0", reducedThroughOffset: 1 },
+    undefined,
+    false,
+  );
+
+  expect(() => bareStream({ storage })).toThrow(/cannot be reconstructed.*recreate the context/);
 });
 
 test("waitForEvent: the type filter holds a waiter through non-matching commits", async () => {
@@ -494,6 +547,7 @@ test("a raw subscription-configured lands at the stream: a name is normalizeCont
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "presence",
+      delivery: "processor",
       target: ["itx", "facets", ["get", "presence"], "processEventBatch"],
     },
   });
@@ -531,14 +585,14 @@ test("a malformed subscription-configured (a target that does not parse) lands a
   const stream = bareStream();
   stream.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "broken", target: "itx.broken(" },
+    payload: { name: "broken", target: "itx.broken(", delivery: "durable" },
   });
   expect(stream).toMatchObject({
     coreReducedState: expect.objectContaining({ subscriptions: {} }),
   });
   const [good] = stream.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "fine", target: "itx.whoami" },
+    payload: { name: "fine", target: "itx.whoami", delivery: "durable" },
   });
   expect(Object.keys(stream.coreReducedState.subscriptions)).toEqual(["fine"]);
   expect(stream.coreReducedState.subscriptions).toMatchObject({
@@ -703,6 +757,7 @@ test("a paused stream admits an idempotent replay of an explicitly configured su
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "config",
+      delivery: "processor",
       target: "itx.workers.get({ source: { 'worker.js': 'test-source' } }).processEventBatch",
       consumes: ["*"],
     },

@@ -57,12 +57,13 @@
 //                   (fetch-upgrade-splice.ts).
 
 import { failureKind } from "@iterate-com/shared/platform-retry";
-import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
-import type { StreamEventInput } from "iterate/stream/processor";
-import { parse, type ItxExpression } from "iterate/expression";
+import { canonicalItxExpressionPrefix, parse, type ItxExpression } from "iterate/expression";
 import { causeHeader } from "../cause.ts";
+import { FetchRouteConfiguredPayload } from "../fetch-routes.ts";
+import { normalizeRewriteRuleConfigured } from "./itx-expression-rewriting.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -105,21 +106,104 @@ import {
 // ── the wire: what the relay (rpc-stub-relay.ts) speaks to this side ──
 
 export const RPC_STUB_PAGER_WEBSOCKET_HEADER = "x-itx-rpc-stub-pager";
-/** What the pager upgrade's header carries: the key, and the events that NAME it — appended by the DO
- *  in the turn it accepts the pager (empty for a bare pager, the workers-project tests' probes). */
-type RpcStubPagerAttachRequest = { rpcStubKey: string; appendEvents: StreamEventInput[] };
+/** The pager attachment is the live part of a provide or subscription. It deliberately contains no
+ * stream event: a socket may disappear at any time, so it must never change the durable table. */
+export type RpcStubPagerLiveProvide = {
+  match: string;
+  description?: string;
+  declaration?: string;
+  fetchRoute?: Record<string, unknown>;
+};
+export type RpcStubPagerLiveSubscription = { name: string; consumes?: string[] };
+type RpcStubPagerAttachRequest = {
+  rpcStubKey: string;
+  attachmentId?: string;
+  liveProvide?: RpcStubPagerLiveProvide;
+  liveSubscription?: RpcStubPagerLiveSubscription;
+};
 /** The header value: URI-encoded JSON — a header is a ByteString, a key or an event is not. */
 export const encodeRpcStubPagerAttachRequest = (request: RpcStubPagerAttachRequest): string =>
   encodeURIComponent(JSON.stringify(request));
 /** The inverse — throws on anything that is not a well-formed attach request. */
 function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
-  const decoded = JSON.parse(decodeURIComponent(header)) as Partial<RpcStubPagerAttachRequest>;
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- runtime validation of JSON.parse output; the `Partial<...>` cast is a claim, not a guarantee
-  if (typeof decoded?.rpcStubKey !== "string" || !Array.isArray(decoded.appendEvents))
-    throw new Error("expected { rpcStubKey: string, appendEvents: [] }");
-  return { rpcStubKey: decoded.rpcStubKey, appendEvents: decoded.appendEvents };
+  const decoded: unknown = JSON.parse(decodeURIComponent(header));
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded))
+    throw new Error("expected an object");
+  const record = decoded as Record<string, unknown>;
+  const allowed = new Set(["rpcStubKey", "attachmentId", "liveProvide", "liveSubscription"]);
+  if (Object.keys(record).some((key) => !allowed.has(key)) || typeof record.rpcStubKey !== "string")
+    throw new Error("expected { rpcStubKey: string }");
+  if (record.attachmentId !== undefined && typeof record.attachmentId !== "string")
+    throw new Error("attachmentId must be a string");
+  const liveProvide = record.liveProvide;
+  if (liveProvide !== undefined) {
+    if (!liveProvide || typeof liveProvide !== "object" || Array.isArray(liveProvide))
+      throw new Error("liveProvide must be an object");
+    const provide = liveProvide as Record<string, unknown>;
+    if (
+      Object.keys(provide).some(
+        (key) => !["match", "description", "declaration", "fetchRoute"].includes(key),
+      ) ||
+      typeof provide.match !== "string" ||
+      (provide.description !== undefined && typeof provide.description !== "string") ||
+      (provide.declaration !== undefined && typeof provide.declaration !== "string") ||
+      (provide.fetchRoute !== undefined &&
+        (!provide.fetchRoute ||
+          typeof provide.fetchRoute !== "object" ||
+          Array.isArray(provide.fetchRoute)))
+    )
+      throw new Error("invalid liveProvide");
+    // The attachment is an untrusted HTTP header. Give it the same two normalizers as a durable
+    // provide; it is only kept in the socket attachment after both accept it.
+    try {
+      const normalized = normalizeRewriteRuleConfigured({
+        match: provide.match as string,
+        target: ["itx", "builtins", "rpcStubs", ["get", record.rpcStubKey]],
+        ...(provide.description !== undefined && { description: provide.description }),
+        ...(provide.declaration !== undefined && { declaration: provide.declaration }),
+      });
+      if (record.rpcStubKey !== canonicalItxExpressionPrefix(normalized.match))
+        throw new Error("liveProvide rpcStubKey must equal its canonical match");
+      if (
+        provide.fetchRoute !== undefined &&
+        !FetchRouteConfiguredPayload.safeParse({
+          ...(provide.fetchRoute as Record<string, unknown>),
+          target: ["itx", "builtins", "rpcStubs", ["get", record.rpcStubKey]],
+        }).success
+      )
+        throw new Error("invalid liveProvide fetchRoute");
+    } catch (error) {
+      throw new Error(
+        `invalid liveProvide: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  const liveSubscription = record.liveSubscription;
+  if (liveSubscription !== undefined) {
+    if (
+      !liveSubscription ||
+      typeof liveSubscription !== "object" ||
+      Array.isArray(liveSubscription)
+    )
+      throw new Error("liveSubscription must be an object");
+    const subscription = liveSubscription as Record<string, unknown>;
+    if (
+      Object.keys(subscription).some((key) => !["name", "consumes"].includes(key)) ||
+      typeof subscription.name !== "string" ||
+      (subscription.consumes !== undefined &&
+        (!Array.isArray(subscription.consumes) ||
+          subscription.consumes.some((type) => typeof type !== "string")))
+    )
+      throw new Error("invalid liveSubscription");
+    if (record.rpcStubKey !== `subscription:${subscription.name}`)
+      throw new Error("liveSubscription rpcStubKey must equal subscription:<name>");
+  }
+  if (liveProvide !== undefined && liveSubscription !== undefined)
+    throw new Error("a pager is either a provide or a subscription");
+  return record as RpcStubPagerAttachRequest;
 }
 const RPC_STUB_PAGER_WEBSOCKET_TAG = "itx-rpc-stub-pager-websocket";
+const RPC_STUB_PAGER_ATTACHMENT_MAX_BYTES = 2_048;
 /** The pager keepalive pair — one shared definition for the edge sender and the DO's
  *  setWebSocketAutoResponse. DELIBERATELY distinctive literals: the auto-response is DO-WIDE
  *  (it also covers fetch-upgrade eyeball sockets), so a plain "ping" would silently hijack any
@@ -142,7 +226,7 @@ export type BorrowedRpcStub = RpcStubFetchTransport & {
 
 /** One pager socket's durable record — its attachment (survives hibernation). The key alone: the
  *  socket is its own identity. */
-type RpcStubPagerRecord = { rpcStubKey: string };
+type RpcStubPagerRecord = RpcStubPagerAttachRequest & { attachmentId: string };
 
 /** THE one disposer for any RPC-ish stub (borrowed Workers-RPC legs here, the session's own capnweb
  *  stubs in the relay): a no-op for anything that is not disposable. */
@@ -181,20 +265,14 @@ export class RpcStubDirectory {
   // the second must not report the pager (and its presence) as lost twice.
   readonly #closedRpcStubPagerSockets = new WeakSet<WebSocket>();
 
-  /** The DO's append, SYNCHRONOUS (Stream.append is): what a pager attach carries is committed
-   *  through it in the turn the pager is accepted; a refusal throws the coded error. */
-  readonly #appendEvents: (events: StreamEventInput[]) => void;
-
   constructor(deps: {
     ctx: Pick<DurableObjectState, "acceptWebSocket" | "getWebSockets">;
     onPresence: (kind: "attached" | "detached", rpcStubKey: string) => void;
     rpcStubFetch: RpcStubFetchServer;
-    appendEvents: (events: StreamEventInput[]) => void;
   }) {
     this.#ctx = deps.ctx;
     this.#onPresence = deps.onPresence;
     this.#rpcStubFetch = deps.rpcStubFetch;
-    this.#appendEvents = deps.appendEvents;
   }
 
   // ── LAYER 1: lend · call · return ──
@@ -282,33 +360,23 @@ export class RpcStubDirectory {
         { status: 400 },
       );
     }
-    const { rpcStubKey, appendEvents } = attachRequest;
+    const { rpcStubKey } = attachRequest;
     const hadPager = this.#rpcStubPagerFor(rpcStubKey) !== undefined;
+    const attachment = {
+      ...attachRequest,
+      attachmentId: attachRequest.attachmentId || crypto.randomUUID(),
+    } satisfies RpcStubPagerRecord;
+    const attachmentBytes = new TextEncoder().encode(JSON.stringify(attachment)).byteLength;
+    if (attachmentBytes > RPC_STUB_PAGER_ATTACHMENT_MAX_BYTES)
+      return new Response(
+        `rpc stub pager attachment is ${attachmentBytes} bytes; the ${RPC_STUB_PAGER_ATTACHMENT_MAX_BYTES}-byte Durable Object limit includes live description, declaration, and route\n`,
+        { status: 400 },
+      );
     // Accepted and stamped in the same turn, so every pager socket this side ever sees carries its
     // record — through hibernation too.
     const pair = new WebSocketPair();
     this.#ctx.acceptWebSocket(pair[1], [RPC_STUB_PAGER_WEBSOCKET_TAG]);
-    pair[1].serializeAttachment({ rpcStubKey } satisfies RpcStubPagerRecord);
-    // THE SET HALF, with the pager already accepted — so a push the commit fans out finds the pager
-    // to page. Still the same turn: the fan-out's first await is after this function returns.
-    try {
-      if (appendEvents.length > 0) this.#appendEvents(appendEvents);
-    } catch (error) {
-      this.#closedRpcStubPagerSockets.add(pair[1]); // its close must not report a presence it never had
-      try {
-        pair[1].close(1011, "attach refused");
-      } catch {
-        /* already closing */
-      }
-      // The refusal IS the upgrade's answer — the error's code + message as JSON, so the relay
-      // re-throws the same coded error to the caller. 409 = the DO refused (a coded refusal such as
-      // STREAM_PAUSED); 500 = something uncoded.
-      const code = errorCode(error);
-      return Response.json(
-        { code: code || null, message: error instanceof Error ? error.message : String(error) },
-        { status: code ? 409 : 500 },
-      );
-    }
+    pair[1].serializeAttachment(attachment);
     // ONE pager per key, enforced when a pager becomes VISIBLE (a CONCURRENT provide at the same key
     // may still be opening its own, invisible to any earlier scan): drop every OTHER same-key socket
     // now — the newest wins. "replaced" is a swap, not a real close: a page in flight is the KEY's,
@@ -355,6 +423,36 @@ export class RpcStubDirectory {
         ...this.#rpcStubPagerRecords().map((record) => record.rpcStubKey),
       ]),
     ];
+  }
+
+  /** Live rows reconstructed from socket attachments after every hibernation. */
+  liveProvides(): Array<RpcStubPagerLiveProvide & { rpcStubKey: string }> {
+    return this.#rpcStubPagerRecords().flatMap((record) =>
+      record.liveProvide ? [{ ...record.liveProvide, rpcStubKey: record.rpcStubKey }] : [],
+    );
+  }
+  liveSubscriptions(): Array<
+    RpcStubPagerLiveSubscription & { rpcStubKey: string; attachmentId: string }
+  > {
+    return this.#rpcStubPagerRecords().flatMap((record) =>
+      record.liveSubscription
+        ? [
+            {
+              ...record.liveSubscription,
+              rpcStubKey: record.rpcStubKey,
+              attachmentId: record.attachmentId,
+            },
+          ]
+        : [],
+    );
+  }
+  /** Included in snapshots. A replacement with the same name is still a different attachment. */
+  liveAttachmentVersion(): string {
+    return JSON.stringify(
+      this.#rpcStubPagerRecords()
+        .map(({ rpcStubKey, attachmentId }) => [rpcStubKey, attachmentId])
+        .sort((a, b) => a[0].localeCompare(b[0])),
+    );
   }
 
   /** In-memory transport facts — the DO's `rpcStubTransportState()` verb for the hibernation probes;

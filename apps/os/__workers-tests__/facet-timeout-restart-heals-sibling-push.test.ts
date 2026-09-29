@@ -42,6 +42,7 @@ test(
           ],
           "processEventBatch",
         ],
+        delivery: "processor",
       },
     });
     await until("the configure batch was pushed", async () => (await probe(ctx)).seen.length === 1);

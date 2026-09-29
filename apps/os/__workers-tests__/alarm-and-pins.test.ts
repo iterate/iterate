@@ -148,11 +148,11 @@ test("a facet TWO rows host survives the removal of ONE of them — memo and sto
   // Two rows, both HOSTING the same facet — the `processors.enable` shape, twice.
   await context.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "a", target, consumes: ["demo/ping"] },
+    payload: { name: "a", target, delivery: "processor", consumes: ["demo/ping"] },
   });
   await context.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "b", target, consumes: ["demo/ping"] },
+    payload: { name: "b", target, delivery: "processor", consumes: ["demo/ping"] },
   });
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
   await context.invoke(["itx", "facets", ["get", "shared", spec], ["bump"]]);
@@ -209,6 +209,7 @@ test("RE-ENABLE WITH NEW SOURCE: a materialized processor re-enabled under the s
         ],
         "processEventBatch",
       ],
+      delivery: "processor",
     },
   });
   await new Promise((r) => setTimeout(r, 400));
@@ -508,6 +509,7 @@ test("ALARM PUMPS CURSOR DELIVERY: a failed at-least-once delivery is retried fr
         ["get", { source: { "package.json": '{"main":"worker.js"}', "worker.js": FLAKY_SRC } }],
         "processEventBatch",
       ],
+      delivery: "durable",
       consumes: ["mark"],
     },
   });
@@ -584,6 +586,7 @@ async function enableCounter(ctx: string, name = "counter"): Promise<void> {
         ],
         "processEventBatch",
       ],
+      delivery: "processor",
     },
   });
 }

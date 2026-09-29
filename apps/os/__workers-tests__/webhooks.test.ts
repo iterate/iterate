@@ -20,6 +20,7 @@ const HOOKS = "https://hooks.test";
 const ROW = {
   name: "hook",
   target: ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], "deliverEvent"],
+  delivery: "durable",
   consumes: ["test/order-placed"],
   ordered: false,
 };

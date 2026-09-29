@@ -13,6 +13,7 @@ export const PROJECT_CONTEXT_BIRTH_EVENTS = [
     payload: {
       name: "config",
       target: "itx.builtins.cd('/').config.deliverEvent",
+      delivery: "durable",
       afterOffset: 0,
       ordered: false,
     },
@@ -22,6 +23,7 @@ export const PROJECT_CONTEXT_BIRTH_EVENTS = [
     payload: {
       name: "platform",
       target: "itx.builtins.platformHook.deliverEvent",
+      delivery: "durable",
       afterOffset: 0,
       ordered: false,
     },

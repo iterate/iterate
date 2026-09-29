@@ -447,7 +447,7 @@ test.for([
       APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([
         {
           type: "events.iterate.com/itx/subscription-configured",
-          payload: { name: "config", target: "itx.config(" },
+          payload: { name: "config", target: "itx.config(", delivery: "durable" },
         },
       ]),
     },

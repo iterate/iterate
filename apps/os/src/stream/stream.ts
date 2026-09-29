@@ -55,6 +55,28 @@ const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
 /** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
  *  the byte budget cannot see. */
 const READ_PAGE_MAX_EVENTS = 1000;
+
+/** The v17 rule language let a match carry calls and reserved `@` objects inside a target. Both
+ *  were programs, rather than a durable name selecting one ordinary call. Only reconstruction of a
+ *  pre-v18 checkpoint checks for them: a current row can never be admitted with either spelling. */
+function hasRemovedRewriteSyntax(payload: Record<string, unknown> | undefined): boolean {
+  if (!payload) return false;
+  return (
+    (Array.isArray(payload.match) && payload.match.some(Array.isArray)) ||
+    hasLegacyMarker(payload.target) ||
+    hasLegacyMarker(payload.ifTarget)
+  );
+}
+
+function hasLegacyMarker(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasLegacyMarker);
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- unknown persisted JSON: null is a leaf while objects recurse
+  if (value === null || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record["@"] === true || record["...@"] === true || Object.values(record).some(hasLegacyMarker)
+  );
+}
 /** THE RECENT-EPHEMERALS RING's size, in serialized JS chars: what an incarnation keeps of its
  *  ephemerals after the moment they were appended — the one way to see one after the fact, since no
  *  ephemeral ever reaches a row. Oldest out first, never the newest: an event over the whole budget
@@ -130,9 +152,6 @@ interface StreamDeps {
   /** The cause the running append runs under (the DO: its caller's), stamped on every event that
    *  names none (cause.ts). Absent or none: a chain of this context's own. */
   cause?: () => Cause | undefined;
-  /** The deploy this code runs as: a fan-out delivery's lease names it, so a lease a restart onto
-   *  other code finds is no death of its call (`FanOutDeliveryRecord.leased`). */
-  deployId?: string;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
@@ -169,7 +188,7 @@ export class Stream {
   #coreReducedThroughOffset: number;
 
   constructor(deps: StreamDeps) {
-    this.storage = new StreamStorage(deps.storage, deps.deployId || "this deploy");
+    this.storage = new StreamStorage(deps.storage);
     if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
     this.#path = deps.path;
     this.#projectId = deps.projectId;
@@ -206,6 +225,7 @@ export class Stream {
       this.#coreReducedState = checkpoint.state || CoreContract.initialState();
       this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
+      this.#refuseRemovedCoreSyntax();
       this.#coreReducedState = CoreContract.initialState();
       this.#coreReducedThroughOffset = 0;
       // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
@@ -230,6 +250,34 @@ export class Stream {
         if (page.scannedThroughOffset <= this.#coreReducedThroughOffset) break; // nothing left
         this.#coreReducedThroughOffset = page.scannedThroughOffset;
       }
+    }
+  }
+
+  /** A v18 reconstruction deliberately does not reinterpret the removed rewrite language or an
+   *  implicit subscription delivery. The log is immutable, so report a typed failure at the first
+   *  operation that opens the context instead of silently dropping a row during re-reduce. */
+  #refuseRemovedCoreSyntax(): void {
+    let afterOffset = 0;
+    for (;;) {
+      const page = this.read(afterOffset, 500);
+      for (const event of page.events) {
+        const payload = event.payload as Record<string, unknown> | undefined;
+        const removedDelivery =
+          event.type === "events.iterate.com/itx/subscription-configured" &&
+          payload?.target !== null &&
+          !Object.hasOwn(payload || {}, "delivery");
+        const removedRewriteSyntax =
+          event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+          hasRemovedRewriteSyntax(payload);
+        if (removedDelivery || removedRewriteSyntax)
+          throw codedError(
+            "INVALID_INPUT",
+            `context ${this.#path} cannot be reconstructed by CoreContract ${CoreContract.version}: event at offset ${event.offset} uses a removed core shape; recreate the context`,
+            { offset: event.offset, type: event.type },
+          );
+      }
+      if (page.atHead) return;
+      afterOffset = page.scannedThroughOffset;
     }
   }
 
@@ -719,9 +767,6 @@ export class Stream {
 //                         the events row keeps an EMPTY body as the chunked marker (a real body is
 //                         never empty JSON); reads and the idempotency lookup reassemble it
 //   stream_meta           key · value                       the incarnation counter
-//   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
-//   subscription_deliveries name · offset · attempt ·       a fan-out row's admitted events, each
-//                         next_attempt_at_ms · leased · error until it is acked or dead-lettered
 //   reduce_checkpoints    ReduceCheckpointTable (processor.ts) the core reduce's checkpoint (a facet host
 //                                                           keeps its own, in its own storage)
 
@@ -737,38 +782,6 @@ export type DurableObjectStorageSlice = {
  *  under it stays single-cell (the fast path — no chunk join on read). */
 export const EVENT_CHUNK_SIZE = 512 * 1024;
 
-/** THE cursor of a subscription the stream delivers at-least-once (subscription-delivery.ts): the
- *  offset an acked call confirmed, the ladder attempt, when the next attempt is due, and the
- *  offset of the delivery-resumed fact already applied (so a resume applies exactly once). A
- *  FAN-OUT row's `confirmedOffset` is its admission cursor, `nextAttemptAtMs` its next probe while
- *  it is parked, `parkedProbes` how many it has had since its last success, and `failingOffsets`
- *  the last distinct events that failed with no success since (its pause). */
-export type SubscriptionCursor = {
-  confirmedOffset: number;
-  attempt: number;
-  nextAttemptAtMs?: number;
-  resumeAppliedAtOffset?: number;
-  failingOffsets?: number[];
-  parkedProbes?: number;
-  /** A fan-out row's: a digest of where its target last resolved (subscription-delivery.ts
-   *  `#evaluateTargetHeadForRow`), kept across incarnations so a re-point while the context slept
-   *  is seen by the next one. */
-  route?: string;
-};
-
-/** One event a fan-out row admitted and still owes (subscription-delivery.ts): the attempts made,
- *  when it is due — its lease's end while `leased` (a call under this attempt began under this
- *  deploy and has not reported: stored as the deploy, so a lease another deploy left is none), its
- *  next rung after a failure, null while the row's target resolves to nothing — and the last
- *  error. */
-export type FanOutDeliveryRecord = {
-  offset: number;
-  attempt: number;
-  nextAttemptAtMs: number | null;
-  leased: boolean;
-  error: string | null;
-};
-
 /** One durable row as stored: its offset and its serialized body, reassembled. */
 type StoredEventRow = { offset: number; body: string };
 
@@ -781,9 +794,7 @@ class StreamStorage {
    *  `countIncarnation`: an incarnation starting. Growth across idle ⇒ the actor hibernated. */
   readonly incarnation: number;
 
-  readonly #deployId: string;
-  constructor(storage: DurableObjectStorageSlice, deployId: string) {
-    this.#deployId = deployId;
+  constructor(storage: DurableObjectStorageSlice) {
     this.#storage = storage;
     this.#sql = storage.sql;
     // The tables ONLY on a virgin store: a store with an incarnation was opened by a prior one and
@@ -809,20 +820,6 @@ class StreamStorage {
            chunk_index INTEGER NOT NULL,
            chunk TEXT NOT NULL,
            PRIMARY KEY (offset, chunk_index)
-         )`,
-      );
-      this.#sql.exec(
-        "CREATE TABLE IF NOT EXISTS subscription_cursors (name TEXT PRIMARY KEY, cursor TEXT NOT NULL)",
-      );
-      this.#sql.exec(
-        `CREATE TABLE IF NOT EXISTS subscription_deliveries (
-           name TEXT NOT NULL,
-           offset INTEGER NOT NULL,
-           attempt INTEGER NOT NULL,
-           next_attempt_at_ms INTEGER,
-           leased TEXT NOT NULL,
-           error TEXT,
-           PRIMARY KEY (name, offset)
          )`,
       );
       ReduceCheckpointTable.createTable(this.#sql);
@@ -926,80 +923,6 @@ class StreamStorage {
       rows.push({ offset, body: this.#reassembleBody(offset, String(row.body)) });
     }
     return { rows, nextRowDidNotFit: false };
-  }
-
-  listSubscriptionCursors(): [name: string, cursor: SubscriptionCursor][] {
-    return (
-      this.#sql
-        .exec<{ name: string; cursor: string }>("SELECT name, cursor FROM subscription_cursors")
-        .toArray()
-        // `cursor` is written only by writeSubscriptionCursor, as JSON.stringify(SubscriptionCursor).
-        .map((row) => [String(row.name), JSON.parse(String(row.cursor)) as SubscriptionCursor])
-    );
-  }
-
-  writeSubscriptionCursor(name: string, cursor: SubscriptionCursor): void {
-    this.#sql.exec(
-      "INSERT OR REPLACE INTO subscription_cursors (name, cursor) VALUES (?, ?)",
-      name,
-      JSON.stringify(cursor),
-    );
-  }
-
-  deleteSubscriptionCursor(name: string): void {
-    this.#sql.exec("DELETE FROM subscription_cursors WHERE name = ?", name);
-  }
-
-  /** Every fan-out delivery record, every row: the delivery loop reads them once, as it starts. */
-  listSubscriptionDeliveries(): [name: string, record: FanOutDeliveryRecord][] {
-    return this.#sql
-      .exec<{
-        name: string;
-        offset: number;
-        attempt: number;
-        next_attempt_at_ms: number | null;
-        leased: string;
-        error: string | null;
-      }>(
-        "SELECT name, offset, attempt, next_attempt_at_ms, leased, error FROM subscription_deliveries",
-      )
-      .toArray()
-      .map((row) => [
-        String(row.name),
-        {
-          offset: Number(row.offset),
-          attempt: Number(row.attempt),
-          nextAttemptAtMs: row.next_attempt_at_ms === null ? null : Number(row.next_attempt_at_ms),
-          leased: String(row.leased) === this.#deployId,
-          error: row.error || null,
-        },
-      ]);
-  }
-
-  writeSubscriptionDelivery(name: string, record: FanOutDeliveryRecord): void {
-    this.#sql.exec(
-      "INSERT OR REPLACE INTO subscription_deliveries (name, offset, attempt, next_attempt_at_ms, leased, error) VALUES (?, ?, ?, ?, ?, ?)",
-      name,
-      record.offset,
-      record.attempt,
-      record.nextAttemptAtMs,
-      record.leased ? this.#deployId : "",
-      record.error,
-    );
-  }
-
-  /** One delivery settled: acked or dead-lettered. */
-  deleteSubscriptionDelivery(name: string, offset: number): void {
-    this.#sql.exec(
-      "DELETE FROM subscription_deliveries WHERE name = ? AND offset = ?",
-      name,
-      offset,
-    );
-  }
-
-  /** Every delivery record of a row that was removed or replaced. */
-  deleteSubscriptionDeliveries(name: string): void {
-    this.#sql.exec("DELETE FROM subscription_deliveries WHERE name = ?", name);
   }
 
   /** An EMPTY cell is the chunked marker (a real body is never empty JSON); otherwise the cell IS the body. */

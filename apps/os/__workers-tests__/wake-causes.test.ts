@@ -81,6 +81,7 @@ test("a fan-out row on the platform hook takes every durable event of its contex
     payload: {
       name: "platform",
       target: "itx.builtins.platformHook.deliverEvent",
+      delivery: "durable",
       afterOffset: 0,
       ordered: false,
     },
@@ -110,6 +111,7 @@ async function configureWakeHandler(ctx: string) {
     payload: {
       name: "config",
       target: ["itx", "workers", ["get", { source: WAKE_HANDLER }], "deliverEvent"],
+      delivery: "durable",
       consumes: ["*"],
       ordered: false,
     },

@@ -249,6 +249,7 @@ test("cause-table: a birth or wake takes its call's cause; past the limit, none,
 test("agent-turns-one-depth: an agent's turns stay at its trigger's depth; only its scripts run one deeper", async () => {
   const ctx = freshProject("prj_loop");
   await subscribe(ctx, "agent", ["itx", "facets", ["get", "agent", AGENT], "processEventBatch"], {
+    delivery: "processor",
     consumes: ["test/said", RUN_SETTLED],
   });
   const [spoken] = await said(ctx);
@@ -476,8 +477,9 @@ test.for([
     }
     const beforeWake = asleep && (await sweep(asleep));
     if (row) {
-      const fanOut = row.at(-1) === "deliverEvent" ? { ordered: false } : {};
-      await subscribe(project, "row", row, { consumes: ["test/said"], ...fanOut });
+      const delivery = row.at(-1) === "deliverEvent" ? "durable" : "processor";
+      const fanOut = delivery === "durable" ? { ordered: false } : {};
+      await subscribe(project, "row", row, { delivery, consumes: ["test/said"], ...fanOut });
       await stub(project).invoke(["itx", ["append", { type: "test/said" }]], [], caller(8));
     }
     if (script) expect(await outcome(runOn(project, script, caller(8)))).toMatch(/refused/);
@@ -764,7 +766,11 @@ function subscribe(ctx: string, name: string, target: unknown[], row: object) {
 /** `ctx`'s fan-out row `react`: each event of `consumes` to `config(onEvent)`, loaded at `ctx` or,
  *  with `["cd", "/"]`, at the project's root. */
 function react(ctx: string, consumes: string[], onEvent: string, at: unknown[] = []) {
-  return subscribe(ctx, "react", delivered(onEvent, at), { consumes, ordered: false });
+  return subscribe(ctx, "react", delivered(onEvent, at), {
+    delivery: "durable",
+    consumes,
+    ordered: false,
+  });
 }
 
 /** `react`, its handler loaded at the project's root, where `itx.email` is. */

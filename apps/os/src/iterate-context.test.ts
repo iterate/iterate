@@ -208,6 +208,30 @@ test("a fetch's Response is answered on a stream of this isolate's own, its stat
   expect(answer).toMatchObject({ status: 201, headers: new Headers({ "x-upstream": "1" }) });
   expect(await answer.text()).toBe(chunks.join(""));
 });
+test.for([
+  { options: { delivery: "durable" }, field: "delivery" },
+  { options: { afterOffset: 0 }, field: "afterOffset" },
+  { options: { ordered: false }, field: "ordered" },
+])(
+  "a live subscription callback refuses the incompatible $field policy before it opens a pager",
+  async ({ options }) => {
+    const getByName = vi.fn();
+    const context = new IterateContextRpcTarget(
+      { getByName } as unknown as IterateContextNamespace,
+      DurableObjectNameCodec.address({ projectId: "prj_edge", path: "/" }),
+      new SessionTeardown(),
+      () => {},
+      { principal: null },
+    );
+    await expect(
+      context.subscribe({
+        target: () => {},
+        ...options,
+      } as Parameters<typeof context.subscribe>[0]),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(getByName).not.toHaveBeenCalled();
+  },
+);
 
 type Failure =
   | "storage timeout"

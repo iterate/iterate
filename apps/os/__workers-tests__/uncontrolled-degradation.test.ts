@@ -616,6 +616,7 @@ function enableProcessorByEvent(
     payload: {
       name,
       target: hostingTarget(name, source, className),
+      delivery: "processor",
       consumes,
     },
   });
@@ -701,6 +702,7 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
         ],
         "processEventBatch",
       ],
+      delivery: "durable",
       consumes: ["mark"],
     },
   });
@@ -718,7 +720,7 @@ async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
   const s = stub(ctx);
   await s.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "u", target: "itx.kv", consumes: ["mark"] },
+    payload: { name: "u", target: "itx.kv", delivery: "durable", consumes: ["mark"] },
   });
   await s.append({ type: "mark" });
   return until("the first failure (a halt or a ladder attempt)", async () => {

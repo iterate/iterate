@@ -4,7 +4,6 @@
 // rpc-stubs.ts). The pager is a fake socket; the Workers suite drops real ones
 // (__workers-tests__/rpc-stub-pager-drop.test.ts).
 
-import type { StreamEventInput } from "iterate/stream/processor";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { lendRpcStubOverPager } from "./rpc-stub-relay.ts";
 import {
@@ -137,7 +136,7 @@ test.for([
     context,
     session,
     "subscription:fan-104",
-    [],
+    {},
     (p) => void waitedUntil.push(p),
   );
   onTestFinished(() => relay.dispose());
@@ -148,6 +147,57 @@ test.for([
     lendTries: tries,
     lent: failures < tries ? 1 : 0,
     lines: logged,
+  });
+});
+
+test("a responsive client whose call never settles is refused at its configured lease", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const disposeCall = vi.fn();
+  const hangingCall = Object.assign(new Promise(() => {}), { [Symbol.dispose]: disposeCall });
+  const client = {
+    dup: () => client,
+    onRpcBroken() {},
+    [Symbol.dispose]() {},
+    hello: () => hangingCall,
+    itxLivenessProbe: () => Promise.reject(new TypeError("not a method")),
+  };
+  const lentStubs: BorrowedRpcStub[] = [];
+  const pager = new FakePagerWebSocket();
+  const relay = await lend(
+    {
+      fetch: async () => ({ status: 101, webSocket: pager }),
+      lendRpcStub: async (input: { stub: BorrowedRpcStub }) => void lentStubs.push(input.stub),
+    },
+    client,
+    "itx.tunnels.laptop",
+    {},
+    () => {},
+    { callDeadlineMs: 25_000 },
+  );
+  onTestFinished(() => relay.dispose());
+  pager.page();
+  const call = lentStubs[0].invoke([["hello"]]).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await vi.advanceTimersByTimeAsync(24_999);
+  expect(warn).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await call).toMatchObject({ code: "TIMEOUT" });
+  expect(disposeCall).toHaveBeenCalledOnce();
+  expect(warn.mock).toMatchObject({
+    calls: [
+      [
+        expect.objectContaining({
+          event: "rpc-stub-client-call-timed-out",
+          rpcStubKey: "itx.tunnels.laptop",
+          deadlineMs: 25_000,
+          waitedMs: 25_000,
+        }),
+      ],
+    ],
   });
 });
 
@@ -171,7 +221,7 @@ test("a lend recalled while its repeat waits is not lent again, and its failure 
     context,
     session,
     "subscription:fan-104",
-    [],
+    {},
     (p) => void waitedUntil.push(p),
   );
   pager.page();
@@ -559,9 +609,7 @@ test("a refused pager upgrade (the DO would not append what names the key) lends
     },
   };
 
-  const refusal = await lend(context, provider, "key-2", [
-    { type: "events.iterate.com/itx/rewrite-rule-configured", payload: {} },
-  ]).then(
+  const refusal = await lend(context, provider, "key-2").then(
     () => undefined,
     (e: unknown) => e as Error & { code?: string },
   );
@@ -667,7 +715,7 @@ async function relayOverFakeDurableObject(
     context,
     { dup: () => lent },
     "key-4",
-    [],
+    {},
     (p) => void fake.waitedUntil.push(p),
   );
   return Object.assign(fake, { relay });
@@ -679,14 +727,16 @@ function lend(
   context: object,
   clientRpcStub: object,
   rpcStubKey: string,
-  appendEvents: StreamEventInput[] = [],
+  live: { provide?: { match: string }; subscription?: { name: string } } = {},
   waitUntil: (p: Promise<unknown>) => void = () => {},
+  options: { callDeadlineMs?: number } = {},
 ) {
   return lendRpcStubOverPager(
     (() => context) as unknown as Parameters<typeof lendRpcStubOverPager>[0],
     clientRpcStub as unknown as Parameters<typeof lendRpcStubOverPager>[1],
     rpcStubKey,
-    appendEvents,
+    live,
     waitUntil,
+    options,
   );
 }

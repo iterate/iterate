@@ -12,6 +12,10 @@ import { parse, print, type ItxExpression, type ItxExpressionInput } from "itera
 import type { StreamEvent } from "iterate/stream/processor";
 import { committedEvent as at, nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
 import {
+  implicitRootsAt,
+  rulesChangeNeedsCommitWait,
+} from "../context/itx-expression-rewriting.ts";
+import {
   CoreContract,
   rowsPushingFacet,
   reduceCoreEvent,
@@ -511,28 +515,6 @@ test("rewrite rules: a malformed configured (a match with an argless call step, 
   expect(Object.keys(s.itxExpressionRewriteRules)).toEqual(["itx.fine"]);
 });
 
-// A rule match whose CANONICAL form crosses the string codec cap still reduces. The boundary
-// stores the match as the PARSED prefix (not a re-stringified canonical that `print` could expand
-// past 2048 — `1e99`→`1e+99`), so the reduce reads it in place and only `print`s it for the table
-// key (printing has no cap). Boundary and reduce agree: the boundary accepts it, the reduce
-// stores it.
-test("rewrite rules: a well-formed match the boundary accepts reduces even when its canonical form crosses the codec cap", () => {
-  const longMatch = "itx.foo(" + Array(400).fill("1e99").join(",") + ")";
-  const normalized = normalizeControlEvent(
-    {
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: longMatch, target: "itx.kv" },
-    },
-    "/",
-  );
-  expect(Array.isArray((normalized.payload as { match: unknown }).match)).toBe(true); // parsed, not re-stringified
-  const reduced = reduceCoreEvent({
-    event: at(1, normalized.type, normalized.payload as Record<string, unknown>),
-    state: CoreContract.initialState(),
-  });
-  expect(Object.keys(reduced?.itxExpressionRewriteRules || {})).toHaveLength(1);
-});
-
 test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only while the row's target is still that — a replacement survives a stale undo, identity kept; a mask's undo names `null`", () => {
   const configure = (offset: number, target: string | null) =>
     at(offset, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.x", target });
@@ -575,7 +557,52 @@ test("rewrite rules: `snapshotVersion` is the offset of the last commit that CHA
   expect(deleted).toMatchObject({ snapshotVersion: 8 });
   expect(reduceCoreEvent({ event: rule(9, "itx.tool", null), state: deleted })).toBeUndefined();
   // a fact of another table moves no rule version
-  expect(reduceAll([configured(10, "tab")], deleted)).toMatchObject({ snapshotVersion: 8 });
+  expect(reduceAll([configured(10, "tab", "durable")], deleted)).toMatchObject({
+    snapshotVersion: 8,
+  });
+});
+
+test("rewrite rules: declaration metadata makes an implicit restatement a stored public declaration; the identical declaration is a fold no-op", () => {
+  const declaration = 'IterateContextApi["kv"]';
+  const event = at(4, "events.iterate.com/itx/rewrite-rule-configured", {
+    match: "itx.kv",
+    target: "itx.builtins.kv",
+    declaration,
+  });
+  const state = reduceAll([event]);
+  expect(state.itxExpressionRewriteRules["itx.kv"]).toEqual({
+    match: ["itx", "kv"],
+    target: ["itx", "builtins", "kv"],
+    declaration,
+  });
+  expect(reduceCoreEvent({ event: at(5, event.type, event.payload), state })).toBeUndefined();
+});
+
+test("rewrite rules: metadata-only declarations do not wait out an older resolver snapshot", () => {
+  const before = reduceAll([
+    at(1, "events.iterate.com/itx/rewrite-rule-configured", {
+      match: "itx.tool",
+      target: "itx.kv",
+      declaration: "ToolV1",
+    }),
+  ]);
+  const after = reduceAll(
+    [
+      at(2, "events.iterate.com/itx/rewrite-rule-configured", {
+        match: "itx.tool",
+        target: "itx.kv",
+        declaration: "ToolV2",
+      }),
+    ],
+    before,
+  );
+  expect(
+    rulesChangeNeedsCommitWait(
+      before.itxExpressionRewriteRules,
+      after.itxExpressionRewriteRules,
+      implicitRootsAt("prj_unit", "/"),
+    ),
+  ).toBe(false);
 });
 
 // ── the subscriptions table — by name ──
@@ -584,6 +611,7 @@ test("subscriptions table: configured: a row is `{ target (parsed), consumes?, c
   const e = at(3, "events.iterate.com/itx/subscription-configured", {
     name: "tab",
     target: "itx.rpcStubs.get('subscription:tab')",
+    delivery: "live",
     consumes: ["mark"],
   });
   expect(reduceAll([e])).toEqual(
@@ -591,6 +619,7 @@ test("subscriptions table: configured: a row is `{ target (parsed), consumes?, c
       subscriptions: {
         tab: {
           target: parse("itx.rpcStubs.get('subscription:tab')"),
+          delivery: "live",
           consumes: ["mark"],
           configuredAtOffset: 3,
         },
@@ -599,16 +628,34 @@ test("subscriptions table: configured: a row is `{ target (parsed), consumes?, c
   );
 });
 
+test("subscriptions table: a replayed pre-delivery row is rejected and reported, never silently omitted", () => {
+  const legacy = at(3, "events.iterate.com/itx/subscription-configured", {
+    name: "config",
+    target: "itx.config.processEventBatch",
+  });
+  expect(() => reduceCoreEvent({ event: legacy, state: CoreContract.initialState() })).toThrow(
+    /predates CoreContract 18\.0\.0 and must be recreated/,
+  );
+  const reported: unknown[] = [];
+  const state = reduceCoreEventBatch([legacy], CoreContract.initialState(), (error) =>
+    reported.push(error),
+  );
+  expect(reported).toHaveLength(1);
+  expect(state).toMatchObject({ subscriptions: {} });
+});
+
 test("subscriptions table: configured with `afterOffset` stores it on the row (where cursor delivery starts — 0 = the whole log); without it, no key at all (= from the configure offset)", () => {
   const s = reduceAll([
     at(4, "events.iterate.com/itx/subscription-configured", {
       name: "history",
       target: "itx.digest.processEventBatch",
+      delivery: "durable",
       afterOffset: 0,
     }),
     at(5, "events.iterate.com/itx/subscription-configured", {
       name: "now",
       target: "itx.digest.processEventBatch",
+      delivery: "durable",
     }),
   ]);
   expect(s.subscriptions.history).toMatchObject({ configuredAtOffset: 4, afterOffset: 0 });
@@ -620,6 +667,7 @@ test("subscriptions table: configured without `consumes` stores no `consumes` ke
     at(1, "events.iterate.com/itx/subscription-configured", {
       name: "all",
       target: "itx.facets.get('tally').processEventBatch",
+      delivery: "processor",
     }),
   ]);
   expect(s.subscriptions.all).not.toHaveProperty("consumes");
@@ -630,11 +678,13 @@ test("subscriptions table: configured with the SAME NAME REPLACES the row — no
     at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.old.processEventBatch",
+      delivery: "durable",
       consumes: ["a"],
     }),
     at(2, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.new.processEventBatch",
+      delivery: "durable",
     }),
   ]);
   expect(Object.keys(s.subscriptions)).toEqual(["digest"]);
@@ -645,8 +695,16 @@ test("subscriptions table: configured with the SAME NAME REPLACES the row — no
 
 test("subscriptions table: configured with a NULL target drops the row; dropping an unknown name → undefined (keep the state), never a throw or a phantom row", () => {
   const s = reduceAll([
-    at(1, "events.iterate.com/itx/subscription-configured", { name: "a", target: "itx.x.f" }),
-    at(2, "events.iterate.com/itx/subscription-configured", { name: "b", target: "itx.y.f" }),
+    at(1, "events.iterate.com/itx/subscription-configured", {
+      name: "a",
+      target: "itx.x.f",
+      delivery: "durable",
+    }),
+    at(2, "events.iterate.com/itx/subscription-configured", {
+      name: "b",
+      target: "itx.y.f",
+      delivery: "durable",
+    }),
     at(3, "events.iterate.com/itx/subscription-configured", { name: "a", target: null }),
   ]);
   expect(Object.keys(s.subscriptions)).toEqual(["b"]);
@@ -666,6 +724,7 @@ test("subscriptions table: a null target with `ifConfiguredAtOffset` (a handle's
     at(offset, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
+      delivery: "durable",
     });
   const remove = (offset: number, ifConfiguredAtOffset: number) =>
     at(offset, "events.iterate.com/itx/subscription-configured", {
@@ -688,6 +747,7 @@ test("subscriptions table: delivery-halted sets `halted { afterOffset, attempts,
     at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
+      delivery: "durable",
     }),
   ]);
   const halted = reduceAll(
@@ -735,6 +795,7 @@ test("subscriptions table: delivery-resumed CLEARS `halted` and records `resumed
     at(1, "events.iterate.com/itx/subscription-configured", {
       name: "digest",
       target: "itx.digest.processEventBatch",
+      delivery: "durable",
     }),
     at(2, "events.iterate.com/itx/subscription-delivery-halted", {
       name: "digest",
@@ -779,6 +840,7 @@ test("subscriptions table: a malformed target THROWS at the reduce (no row) — 
       event: at(1, "events.iterate.com/itx/subscription-configured", {
         name: "broken",
         target: "itx.broken(", // does not parse
+        delivery: "durable",
       }),
       state: CoreContract.initialState(),
     }),
@@ -787,6 +849,7 @@ test("subscriptions table: a malformed target THROWS at the reduce (no row) — 
     at(2, "events.iterate.com/itx/subscription-configured", {
       name: "fine",
       target: "itx.whoami",
+      delivery: "durable",
     }),
   ]);
   expect(Object.keys(s.subscriptions)).toEqual(["fine"]);
@@ -811,6 +874,7 @@ test("an EPHEMERAL event is never reduced, whatever its type — the state is re
     ephemeral("events.iterate.com/itx/subscription-configured", {
       name: "blip",
       target: "itx.whoami",
+      delivery: "durable",
     }),
   ])
     expect(reduceCoreEvent({ event: e, state })).toBeUndefined();
@@ -830,16 +894,16 @@ test("purity: an event the reduce does not know → undefined (keep the state)",
 
 test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the input state and its tables are untouched — and a second batch over the result leaves the first result untouched too", () => {
   const first = [
-    configured(1, "a"),
+    configured(1, "a", "durable"),
     rule(2, "itx.x", "itx.kv"),
-    configured(3, "b"),
+    configured(3, "b", "durable"),
     at(4, "events.iterate.com/itx/fetch-route-configured", numberedRoute(1)),
     at(5, "events.iterate.com/itx/fetch-route-configured", numberedRoute(2)),
   ];
   const second = [
-    configured(6, "a", "itx.y.f"),
+    configured(6, "a", "durable", "itx.y.f"),
     rule(7, "itx.x", null),
-    configured(8, "b", null),
+    configured(8, "b", "durable", null),
     at(9, "events.iterate.com/itx/fetch-route-configured", {
       fetchRouteName: "route-1",
       requestMatcher: null,
@@ -865,10 +929,14 @@ test("reduceCoreEventBatch: a batch folds to exactly the per-event fold; the inp
 });
 
 test("reduceCoreEventBatch: a batch that touches nothing hands the SAME state back (identity is the host's change signal — no checkpoint rewrite, no live delta)", () => {
-  const state = reduceCoreEventBatch([configured(1, "a")], CoreContract.initialState(), onError);
+  const state = reduceCoreEventBatch(
+    [configured(1, "a", "durable")],
+    CoreContract.initialState(),
+    onError,
+  );
   expect(
     reduceCoreEventBatch(
-      [at(2, "work"), { ...configured(3, "z"), ephemeral: true }],
+      [at(2, "work"), { ...configured(3, "z", "durable"), ephemeral: true }],
       state,
       onError,
     ),
@@ -878,7 +946,7 @@ test("reduceCoreEventBatch: a batch that touches nothing hands the SAME state ba
 test("reduceCoreEventBatch: a throwing event is handed to onError and SKIPPED — the events after it still reduce, and its state is the previous event's", () => {
   const reported: number[] = [];
   const state = reduceCoreEventBatch(
-    [configured(1, "a"), rule(2, "itx.call()", "itx.kv"), configured(3, "b")],
+    [configured(1, "a", "durable"), rule(2, "itx.call()", "itx.kv"), configured(3, "b", "durable")],
     CoreContract.initialState(),
     (_error, event) => void reported.push(event.offset),
   );
@@ -986,11 +1054,21 @@ test("builtins root: hosting is decided on the RESOLVED target (any spelling, a 
       match: "itx.hosts",
       target: "itx.facets",
     }),
-    configured(2, "platform", `itx.builtins.facets.get('a', ${specJson}).processEventBatch`),
-    configured(3, "short", `itx.facets.get('b', ${specJson}).processEventBatch`),
-    configured(4, "viaRule", `itx.hosts.get('c', ${specJson}).processEventBatch`),
-    configured(5, "address", "itx.facets.get('d').processEventBatch"),
-    configured(6, "agent", `itx.facets.get('agent', ${JSON.stringify(named)}).processEventBatch`),
+    configured(
+      2,
+      "platform",
+      "processor",
+      `itx.builtins.facets.get('a', ${specJson}).processEventBatch`,
+    ),
+    configured(3, "short", "processor", `itx.facets.get('b', ${specJson}).processEventBatch`),
+    configured(4, "viaRule", "processor", `itx.hosts.get('c', ${specJson}).processEventBatch`),
+    configured(5, "address", "processor", "itx.facets.get('d').processEventBatch"),
+    configured(
+      6,
+      "agent",
+      "processor",
+      `itx.facets.get('agent', ${JSON.stringify(named)}).processEventBatch`,
+    ),
   ]);
   expect(s.subscriptions.platform).toMatchObject({
     hostedFacet: { name: "a", className: "TallyDurableObject" },
@@ -1018,12 +1096,12 @@ test("builtins root: hosting is decided on the RESOLVED target (any spelling, a 
 test("builtins root: a hosting target that cannot resolve yet (its rule comes later, or a mask sits on `itx.facets`) is stored as given and hosts nothing", () => {
   const specJson = JSON.stringify(SPEC);
   const s = reduceAll([
-    configured(1, "early", `itx.later.get('e', ${specJson}).processEventBatch`),
+    configured(1, "early", "processor", `itx.later.get('e', ${specJson}).processEventBatch`),
     at(2, "events.iterate.com/itx/rewrite-rule-configured", {
       match: "itx.facets",
       target: null,
     }),
-    configured(3, "masked", `itx.facets.get('f', ${specJson}).processEventBatch`),
+    configured(3, "masked", "processor", `itx.facets.get('f', ${specJson}).processEventBatch`),
   ]);
   expect(s.subscriptions.early).not.toHaveProperty("hostedFacet");
   expect(s.subscriptions.masked).not.toHaveProperty("hostedFacet");
@@ -1043,14 +1121,17 @@ const markerRows: {
 }[] = [
   {
     rule: "a rule configured AFTER the row makes the row host that facet",
-    log: [configured(1, "s", "itx.proc.processEventBatch"), rule(2, "itx.proc", facetF)],
+    log: [
+      configured(1, "s", "processor", "itx.proc.processEventBatch"),
+      rule(2, "itx.proc", facetF),
+    ],
     hosts: "f",
   },
   {
     rule: "a rule RE-POINTED after the row moves the marker",
     log: [
       rule(1, "itx.proc", facetF),
-      configured(2, "s", "itx.proc.processEventBatch"),
+      configured(2, "s", "processor", "itx.proc.processEventBatch"),
       rule(3, "itx.proc", facetG),
     ],
     hosts: "g",
@@ -1059,7 +1140,7 @@ const markerRows: {
     rule: "a rule REMOVED leaves the row unresolvable — the marker is kept, across later table changes",
     log: [
       rule(1, "itx.proc", facetF),
-      configured(2, "s", "itx.proc.processEventBatch"),
+      configured(2, "s", "processor", "itx.proc.processEventBatch"),
       rule(3, "itx.proc", null),
       rule(4, "itx.other", "itx.builtins.kv"),
     ],
@@ -1069,7 +1150,7 @@ const markerRows: {
     rule: "a rule re-pointed AWAY from `itx.builtins.facets` drops the marker",
     log: [
       rule(1, "itx.proc", facetF),
-      configured(2, "s", "itx.proc.processEventBatch"),
+      configured(2, "s", "processor", "itx.proc.processEventBatch"),
       rule(3, "itx.proc", "itx.builtins.kv"),
     ],
     hosts: undefined,
@@ -1077,7 +1158,12 @@ const markerRows: {
   {
     rule: "a row whose OWN target carried the spec (elided at configure) keeps its marker across rule commits",
     log: [
-      configured(1, "s", `${facetF.replace("itx.builtins.", "itx.")}.processEventBatch`),
+      configured(
+        1,
+        "s",
+        "processor",
+        `${facetF.replace("itx.builtins.", "itx.")}.processEventBatch`,
+      ),
       rule(2, "itx.unrelated", "itx.builtins.kv"),
     ],
     hosts: "f",
@@ -1086,7 +1172,7 @@ const markerRows: {
   {
     rule: "a platform-written (builtins-rooted, elided) row is untouched by rule commits",
     log: [
-      configured(1, "s", `${facetF}.processEventBatch`),
+      configured(1, "s", "processor", `${facetF}.processEventBatch`),
       rule(2, "itx.facets", "itx.builtins.kv"),
     ],
     hosts: "f",
@@ -1103,60 +1189,63 @@ test.for(markerRows)("the marker follows the rules: $rule", ({ log, hosts, targe
 const pushedRows: { row: string; log: StreamEvent[]; pushers: string[] }[] = [
   {
     row: "a processor row in the platform's spelling (its source elided at configure)",
-    log: [configured(1, "p", `${facetF}.processEventBatch`)],
+    log: [configured(1, "p", "processor", `${facetF}.processEventBatch`)],
     pushers: ["p"],
   },
   {
     row: "the caller's short spelling, an address with no spec",
-    log: [configured(1, "p", "itx.facets.get('f').processEventBatch")],
+    log: [configured(1, "p", "processor", "itx.facets.get('f').processEventBatch")],
     pushers: ["p"],
   },
   {
     row: "two rows pushing the facet: both",
     log: [
-      configured(1, "p", "itx.facets.get('f').processEventBatch"),
-      configured(2, "q", `${facetF}.processEventBatch`),
-      configured(3, "r", `${facetG}.processEventBatch`),
+      configured(1, "p", "processor", "itx.facets.get('f').processEventBatch"),
+      configured(2, "q", "processor", `${facetF}.processEventBatch`),
+      configured(3, "r", "processor", `${facetG}.processEventBatch`),
     ],
     pushers: ["p", "q"],
   },
   {
     row: "a row through a rule of the caller's that names the facet",
-    log: [rule(1, "itx.proc", facetF), configured(2, "s", "itx.proc.processEventBatch")],
+    log: [
+      rule(1, "itx.proc", facetF),
+      configured(2, "s", "processor", "itx.proc.processEventBatch"),
+    ],
     pushers: ["s"],
   },
   {
     row: "a row pushing ANOTHER facet of this context",
-    log: [configured(1, "p", `${facetG}.processEventBatch`)],
+    log: [configured(1, "p", "processor", `${facetG}.processEventBatch`)],
     pushers: [],
   },
   {
     row: "a row that calls another method of the facet: the loop walks it, never pushes",
-    log: [configured(1, "p", "itx.facets.get('f').fetch")],
+    log: [configured(1, "p", "durable", "itx.facets.get('f').fetch")],
     pushers: [],
   },
   {
     row: "a row that walks PAST the facet to a member's processEventBatch: walked, never pushed",
-    log: [configured(1, "p", "itx.facets.get('f').inner.processEventBatch")],
+    log: [configured(1, "p", "durable", "itx.facets.get('f').inner.processEventBatch")],
     pushers: [],
   },
   {
     row: "a rule that turns the whole target, method included, into the push: the loop evaluates the head, which resolves nowhere",
     log: [
       rule(1, "itx.a.processEventBatch", `${facetF}.processEventBatch`),
-      configured(2, "s", "itx.a.processEventBatch"),
+      configured(2, "s", "durable", "itx.a.processEventBatch"),
     ],
     pushers: [],
   },
   {
     row: "a row pushing another context's facet `f` (`cd` resolves past `builtins.facets`)",
-    log: [configured(1, "p", "itx.cd('/other').facets.get('f').processEventBatch")],
+    log: [configured(1, "p", "durable", "itx.cd('/other').facets.get('f').processEventBatch")],
     pushers: [],
   },
   {
     row: "a halted row: the loop skips it until an operator resumes it",
     log: [
-      configured(1, "p", "itx.facets.get('f').processEventBatch"),
+      configured(1, "p", "processor", "itx.facets.get('f').processEventBatch"),
       at(2, "events.iterate.com/itx/subscription-delivery-halted", {
         name: "p",
         afterOffset: 1,
@@ -1167,14 +1256,17 @@ const pushedRows: { row: string; log: StreamEvent[]; pushers: string[] }[] = [
   },
   {
     row: "a removed row",
-    log: [configured(1, "p", "itx.facets.get('f').processEventBatch"), configured(2, "p", null)],
+    log: [
+      configured(1, "p", "processor", "itx.facets.get('f').processEventBatch"),
+      configured(2, "p", "processor", null),
+    ],
     pushers: [],
   },
   {
     row: "a rule re-pointed away from the facet",
     log: [
       rule(1, "itx.proc", facetF),
-      configured(2, "s", "itx.proc.processEventBatch"),
+      configured(2, "s", "processor", "itx.proc.processEventBatch"),
       rule(3, "itx.proc", facetG),
     ],
     pushers: [],
@@ -1209,6 +1301,7 @@ test("configure: builds ONE subscription-configured with the target STORED AS TH
   const event = configure({
     name: "tally",
     target: ["itx", "facets", ["get", "tally"], "processEventBatch"],
+    delivery: "processor",
     consumes: ["mark", "tick"],
   });
   expect(event).toEqual({
@@ -1216,6 +1309,7 @@ test("configure: builds ONE subscription-configured with the target STORED AS TH
     payload: {
       name: "tally",
       target: ["itx", "facets", ["get", "tally"], "processEventBatch"], // the parsed form at rest — a target may carry a whole source as data
+      delivery: "processor",
       consumes: ["mark", "tick"],
     },
   });
@@ -1225,11 +1319,14 @@ test("configure: builds ONE subscription-configured with the target STORED AS TH
 
 test("configure: omits `consumes` from the payload when none was given", () => {
   const { configure } = setup();
-  expect(configure({ name: "all", target: "itx.digest.processEventBatch" })).toEqual({
+  expect(
+    configure({ name: "all", target: "itx.digest.processEventBatch", delivery: "durable" }),
+  ).toEqual({
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "all",
       target: ["itx", "digest", "processEventBatch"], // a string target is parsed ONCE, on append
+      delivery: "durable",
     },
   });
 });
@@ -1244,14 +1341,25 @@ test.for([
   { afterOffset: undefined, becomes: "omitted from the payload and the row", payloadHas: {} },
 ])("configure: `afterOffset` $afterOffset is $becomes", ({ afterOffset, payloadHas }) => {
   const { configure, rows } = setup();
-  const event = configure({ name: "h", target: "itx.digest.processEventBatch", afterOffset });
+  const event = configure({
+    name: "h",
+    target: "itx.digest.processEventBatch",
+    delivery: "durable",
+    afterOffset,
+  });
   expect(event).toEqual({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "h", target: ["itx", "digest", "processEventBatch"], ...payloadHas },
+    payload: {
+      name: "h",
+      target: ["itx", "digest", "processEventBatch"],
+      delivery: "durable",
+      ...payloadHas,
+    },
   });
   expect(rows()).toEqual({
     h: {
       target: ["itx", "digest", "processEventBatch"],
+      delivery: "durable",
       configuredAtOffset: rows().h.configuredAtOffset,
       ...payloadHas,
     },
@@ -1263,25 +1371,56 @@ test.for([-1, 1.5, Number.NaN, "0"])(
   (afterOffset) => {
     const { configure, events } = setup();
     expect(() =>
-      configure({ name: "h", target: "itx.digest.f", afterOffset: afterOffset as number }),
+      configure({
+        name: "h",
+        target: "itx.digest.f",
+        delivery: "durable",
+        afterOffset: afterOffset as number,
+      }),
     ).toThrow(/afterOffset is a non-negative integer/);
     expect(events).toHaveLength(0);
   },
 );
 
+test.for([
+  { consumes: "mark", shape: "a string" },
+  { consumes: ["mark", 1], shape: "an array with a non-string entry" },
+  { consumes: [""], shape: "an array with an empty entry" },
+])(
+  "configure: `consumes` $shape is refused before it can become a substring filter",
+  ({ consumes }) => {
+    const { configure, events } = setup();
+    expect(() =>
+      configure({
+        name: "bad-filter",
+        target: "itx.hook.deliverEvent",
+        delivery: "durable",
+        consumes: consumes as string[],
+      }),
+    ).toThrow(/consumes/);
+    expect(events).toHaveLength(0);
+  },
+);
+
+test("configure: an empty `consumes` list is retained as an explicit match-nothing filter", () => {
+  const { configure, rows } = setup();
+  configure({ name: "none", target: "itx.hook.deliverEvent", delivery: "durable", consumes: [] });
+  expect(rows().none).toMatchObject({ consumes: [] });
+});
+
 test("configure: `ordered: true` is the default and stores no key; anything but a boolean is refused", () => {
   const { configure, rows } = setup();
-  configure({ name: "queue", target: "itx.hook.deliverEvent", ordered: true });
+  configure({ name: "queue", target: "itx.hook.deliverEvent", delivery: "durable", ordered: true });
   expect(rows().queue).not.toHaveProperty("ordered");
-  expect(() => configure({ name: "bad", target: "itx.hook.deliverEvent", ordered: "no" })).toThrow(
-    /ordered/,
-  );
+  expect(() =>
+    configure({ name: "bad", target: "itx.hook.deliverEvent", delivery: "durable", ordered: "no" }),
+  ).toThrow(/ordered/);
 });
 
 test("configure: the SAME NAME REPLACES the row — target and filter of the newest configure, never a stack", () => {
   const { configure, events, rows } = setup();
-  configure({ name: "w", target: "itx.a.processEventBatch", consumes: ["x"] });
-  configure({ name: "w", target: "itx.b.processEventBatch" });
+  configure({ name: "w", target: "itx.a.processEventBatch", delivery: "durable", consumes: ["x"] });
+  configure({ name: "w", target: "itx.b.processEventBatch", delivery: "durable" });
   expect(events).toHaveLength(2);
   expect(Object.keys(rows())).toEqual(["w"]);
   expect(print(rows().w.target)).toBe("itx.b.processEventBatch");
@@ -1291,20 +1430,20 @@ test("configure: the SAME NAME REPLACES the row — target and filter of the new
 
 test("configure: a HALTED row re-configured identically gets a fresh row that carries no halt", () => {
   const { configure, append, rows } = setup();
-  configure({ name: "digest", target: "itx.digest.processEventBatch" });
+  configure({ name: "digest", target: "itx.digest.processEventBatch", delivery: "durable" });
   append("events.iterate.com/itx/subscription-delivery-halted", {
     name: "digest",
     afterOffset: 1,
     attempts: 15,
   });
   expect(rows().digest.halted).toBeDefined();
-  configure({ name: "digest", target: "itx.digest.processEventBatch" });
+  configure({ name: "digest", target: "itx.digest.processEventBatch", delivery: "durable" });
   expect(rows().digest).not.toHaveProperty("halted");
 });
 
 test("configure: a NULL target is the removal: the same event, target null (and no consumes); an unknown name is a no-op through the reduce", () => {
   const { configure, events, rows } = setup();
-  configure({ name: "tab", target: "itx.rpcStubs.get('subscription:tab')" });
+  configure({ name: "tab", target: "itx.rpcStubs.get('subscription:tab')", delivery: "live" });
   expect(configure({ name: "tab", target: null, consumes: ["ignored"] })).toEqual({
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "tab", target: null },
@@ -1317,28 +1456,36 @@ test("configure: a NULL target is the removal: the same event, target null (and 
 
 test("configure: the target must be rooted at `itx` (a bare built-in root is unspellable) — a throw, nothing appended", () => {
   const { configure, events } = setup();
-  expect(() => configure({ name: "evil", target: "kv.get('a')" })).toThrow(
+  expect(() => configure({ name: "evil", target: "kv.get('a')", delivery: "durable" })).toThrow(
     /must be rooted at "itx"/,
   );
-  expect(() => configure({ name: "evil", target: ["kv", ["get", "a"]] })).toThrow(
-    /must be rooted at "itx"/,
-  );
+  expect(() =>
+    configure({ name: "evil", target: ["kv", ["get", "a"]], delivery: "durable" }),
+  ).toThrow(/must be rooted at "itx"/);
   expect(events).toHaveLength(0);
 });
 
 test("configure: a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused on append, nothing appended", () => {
   const { configure, events } = setup();
-  expect(() => configure({ name: "a.b", target: "itx.whoami" })).toThrow(/one segment/);
-  expect(() => configure({ name: "has space", target: "itx.whoami" })).toThrow(/one segment/);
+  expect(() => configure({ name: "a.b", target: "itx.whoami", delivery: "durable" })).toThrow(
+    /one segment/,
+  );
+  expect(() => configure({ name: "has space", target: "itx.whoami", delivery: "durable" })).toThrow(
+    /one segment/,
+  );
   expect(() => configure({ name: "a.b", target: null })).toThrow(/one segment/);
   // a key of Object.prototype would name the table's prototype, never a row
-  expect(() => configure({ name: "__proto__", target: "itx.whoami" })).toThrow(/Object.prototype/);
-  expect(() => configure({ name: "constructor", target: "itx.whoami" })).toThrow(
+  expect(() => configure({ name: "__proto__", target: "itx.whoami", delivery: "durable" })).toThrow(
     /Object.prototype/,
   );
+  expect(() =>
+    configure({ name: "constructor", target: "itx.whoami", delivery: "durable" }),
+  ).toThrow(/Object.prototype/);
   // the always-on core reduce is addressable as a facet, never a configurable subscription — a
   // row named `core` would be undeliverable and climb the retry ladder to a halt
-  expect(() => configure({ name: "core", target: "itx.whoami" })).toThrow(/reserved/);
+  expect(() => configure({ name: "core", target: "itx.whoami", delivery: "durable" })).toThrow(
+    /reserved/,
+  );
   expect(() => configure({ name: "core", target: null })).toThrow(/reserved/);
   expect(events).toHaveLength(0);
 });
@@ -1350,10 +1497,10 @@ test("configure: the stored target IS the parsed form: an array target is stored
     ["itx", "x", ["y", { "@": true }]],
   ];
   for (const [i, target] of targets.entries()) {
-    const event = configure({ name: `odd${i}`, target });
+    const event = configure({ name: `odd${i}`, target, delivery: "durable" });
     expect(event).toEqual({
       type: "events.iterate.com/itx/subscription-configured",
-      payload: { name: `odd${i}`, target },
+      payload: { name: `odd${i}`, target, delivery: "durable" },
     });
     expect(rows()[`odd${i}`]).toEqual(expect.objectContaining({ target }));
   }
@@ -1427,9 +1574,19 @@ function settled(offset: number, requestOffset: number) {
   });
 }
 
-/** A durable subscription-configured for `name` (default target: a plain method). */
-function configured(offset: number, name: string, target: string | null = "itx.x.f"): StreamEvent {
-  return at(offset, "events.iterate.com/itx/subscription-configured", { name, target });
+/** A subscription-configured for `name`, with its delivery contract explicit. */
+function configured(
+  offset: number,
+  name: string,
+  delivery: "live" | "processor" | "durable",
+  target: string | null = "itx.x.f",
+): StreamEvent {
+  return at(offset, "events.iterate.com/itx/subscription-configured", {
+    name,
+    target,
+    // oxlint-disable-next-line iterate/simple-truthiness-check -- target null is the removal wire form, which deliberately has no delivery contract
+    ...(target !== null && { delivery }),
+  });
 }
 
 /** A durable rewrite-rule-configured for `match`, with its `description` if given. */
@@ -1465,7 +1622,8 @@ function setup() {
   const configure = (input: {
     name: string;
     target: ItxExpressionInput | null;
-    consumes?: string[];
+    consumes?: unknown;
+    delivery?: "live" | "processor" | "durable";
     afterOffset?: number;
     ordered?: unknown;
   }) => {

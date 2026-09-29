@@ -1,13 +1,8 @@
-// context/itx-expression-rewriting.ts — HOW A CALL FINDS ITS TARGET, pure and total. An itx-expression
-// REWRITE RULE is `{ match, target }`: a call that starts with `match` runs as the same call with
-// `match` replaced by `target`. Rewriting repeats until the call is rooted at THE RESERVED ROOT,
-// `itx.builtins` — the physical scope (kv, whoami, rpcStubs, facets, …; context/built-ins.ts) — and
-// that call is what actually runs (dispatch.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
-// stream/core-processor.ts reduces `itx/rewrite-rule-configured` into `state.itxExpressionRewriteRules`,
-// a MAP by canonical match (set replaces; `null` MASKS a name that has a platform row beneath it and
-// deletes any other). This module is the rules of matching (each on the code it governs, each one row
-// of the table in itx-expression-rewriting.test.ts), the ONE event that writes the table, the app
-// wall on loaded code's calls and rows, and the resolver that reads the table.
+// context/itx-expression-rewriting.ts — HOW A CALL FINDS A PROVIDED CAPABILITY, pure and total.
+// A durable row is `{ match, target }`: a property-only itx name selects a no-hole invocation recipe.
+// Its fixed calls run first; ordinary caller arguments apply at its final value. `null` masks a
+// name. The resolver still uses the historical event/table spelling while callers migrate, but it
+// has no argument matching, partial application, or argument transformation.
 //
 // THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins` — a lent stub's rule, a processor's
 // row, a parent link, its own log plumbing (library.ts) — so a user's row at `itx.facets` or
@@ -26,9 +21,6 @@ import {
 import type { RewriteRuleConfigured, RewriteRuleListEntry } from "iterate/api";
 import {
   normalizedItxExpression,
-  containsItxExpressionHole,
-  isItxExpressionHole,
-  ITX_EXPRESSION_MERGE_KEY,
   itxExpressionStepName,
   parse,
   parseItxExpressionPrefix,
@@ -45,141 +37,42 @@ import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
 import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
+import {
+  BUILT_IN_ROOT_DESCRIPTIONS,
+  CONTEXT_BUILT_IN_ROOT_NAMES,
+  PORTABLE_BUILT_IN_ROOT_NAMES,
+  BUILT_IN_ROOT_NAMES,
+  type BuiltInRootName,
+} from "./capability-manifest.ts";
 
-// ── built-in roots ── THE RESERVED ROOT'S KEYS, each with the one line `rewriteRules.list()` says
-// for its implicit row (what a model reads for it). `itx.builtins.<root>` is the physical scope
-// (context/built-ins.ts `BuiltInScope`), and every short name `itx.<root>` is the IMPLICIT ROW
-// `itx.<root> ⇒ itx.builtins.<root>` where the root is implicit (`implicitRootsAt`, below). The
-// record stands apart from the scope on purpose: the core reduce and the DO's `list()` read it, and
-// neither may import the scope itself (it closes over bindings and the loader). built-ins.ts asserts,
-// at the type level, that these keys and `keyof BuiltInScope` are the same set.
-export const BUILT_IN_ROOT_DESCRIPTIONS = {
-  whoami: "who this context is: `itx.whoami()` → { projectId, path }",
-  url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
-  kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
-  secrets:
-    'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description?, fields? })` returns an authenticated collection link (`description` is markdown with links; `fields: [{ name, label }]` asks for a secret of several parts, saved as one JSON secret); a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret; `secrets.verifyEquals(path, { value })` checks a static header token a caller sent against the secret, constant-time, without revealing it; `secrets.beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret, scope? })` → { authorizationUrl } (send the human there), its `clientSecret` a `getSecret("/secrets/x", { field })` placeholder for a client secret collected into a secret pinned to the token endpoint\'s origin (`clientId` is the ID itself)',
-  integrations:
-    "connect a provider through this deployment's app: `integrations.connect(provider, { scopes? })` → { authorizationUrl, connection } (send the human there); a person connects one of their own accounts to a project with `integrations.connect(provider, { account })` from their own session; `integrations.requestFromUser(provider, { scopes? })` → a Dash link asking a person to connect their account (or another) to this project, which then uses it as `/secrets/<provider>-<connection>`; `integrations.disconnect(provider, connection)` removes one",
-  fetchRoutes:
-    "which itx expression a request on this project's hosts goes to: `fetchRoutes.set(name, { requestMatcher: { routingSlug?, url?, headers? }, target, authRequirement?, priority? } | null)` · `list()` · `match({ url, headers })`; the platform serves a match from `route.target`, before the config worker's fetch",
-  ai: "Workers AI, verbatim: `ai.run(model, inputs)`",
-  browser: 'browser rendering: `browser.quickAction("markdown", { url })`',
-  r2: "the object store, verbatim (`files` is the friendlier surface)",
-  cfArtifacts: "the Artifacts binding, project-scoped (`repos` is the friendlier surface)",
-  append: "write events to this log: `itx.append({ type, payload })`",
-  schedules:
-    "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
-  readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
-  waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "any context of the project, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./sandbox').append({ type, payload })`; a jail's bare null refuses what reaches in",
-  fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
-  rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
-  rewriteRules: "this table, described: `await rewriteRules.list()`",
-  facets:
-    "a durable facet hosted here: `facets.get(name)` · `facets.abort(name, reason?)` resets that one facet",
-  abort:
-    "reset this context: its log and storage stay, its in-memory state, facets and sockets go — `itx.abort(reason?)`; another: `itx.cd(path).abort()`",
-  subscriptions: "the rows delivered each commit: `subscriptions.list()`",
-  processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
-  workers: "load code as a stateless worker: `workers.get({ source }).run()`",
-  platformHook:
-    "the platform's own subscriber of every durable event here: a fan-out row's target, called by the delivery loop alone",
-  webhooks:
-    'an HTTP webhook as a fan-out row\'s target: `subscribe({ target: "itx.webhooks.get({ url, signingSecret? }).deliverEvent", ordered: false })` POSTs each event, signed with the secret when one is named',
-  run: 'a fresh confined run of a script you write as text: `itx.run("async (itx) => …")`',
-  connectToMcp:
-    "a live MCP handle: `(await itx.connectToMcp(url)).listTools()`, one method per tool",
-  connectToOpenApi:
-    "a live OpenAPI handle: one method per operationId, `call(operationId, input)` too",
-  connectToCapnweb: "a live capnweb handle: `itx.connectToCapnweb(url)`, dotted calls pipelined",
-  repos:
-    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes, parent? })` with whole files (edit the text in your script: `replace`, a regex) · `repos.list()`",
-  workspaces:
-    "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
-  files:
-    "project files: `files.get(path).put({ contentType, data })` · `.bytes()` · `.url()` · `files.list(prefix)`",
-  email:
-    "the project's mail at `<slug>@<email domain>`: `email.send({ to, subject, text?, html?, from?, attachments?: [{ path }] })`, or `{ inReplyToOffset, text }` to answer a message; mail in and out lands on `/integrations/email`, threaded by its `email` facet",
-} as const satisfies Record<string, string>;
+// ── built-in roots ──
 
-/** A built-in root's name — a key of the record above. */
-export type BuiltInRoot = keyof typeof BUILT_IN_ROOT_DESCRIPTIONS;
-export const BUILT_IN_ROOTS = Object.keys(BUILT_IN_ROOT_DESCRIPTIONS) as readonly BuiltInRoot[];
+export type BuiltInRoot = BuiltInRootName;
+export const BUILT_IN_ROOTS = BUILT_IN_ROOT_NAMES;
 
-const BUILT_IN_ROOT_SET: ReadonlySet<string> = new Set<string>(BUILT_IN_ROOTS);
+const BUILT_IN_ROOT_SET: ReadonlySet<string> = new Set(BUILT_IN_ROOTS);
+export const CONTEXT_ROOTS = CONTEXT_BUILT_IN_ROOT_NAMES;
+const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set(CONTEXT_ROOTS);
+const PORTABLE_ROOT_SET: ReadonlySet<string> = new Set(PORTABLE_BUILT_IN_ROOT_NAMES);
 
-/** THE CONTEXT ROOTS: the built-ins that are a context's OWN — its log, its tables, its facets, the
- *  hosts whose loaded code speaks for it, its own reset, and where it lives (`whoami`, `url`:
- *  information, not a capability). Implicit in every context (`implicitRootsAt`): nothing else could `append`
- *  or `abort` mean at `/agents/x`, and a hop for it would land in another context. Everything else in
- *  `BUILT_IN_ROOTS` is a PROJECT resource or an external capability (`fetch`, `ai`, `browser`),
- *  implicit at the owner root only. */
-export const CONTEXT_ROOTS = [
-  "whoami",
-  "url",
-  "append",
-  "abort",
-  "readEvents",
-  "waitForEvent",
-  "cd",
-  "facets",
-  "subscriptions",
-  "processors",
-  "schedules",
-  "rewriteRules",
-  "rpcStubs",
-  "workers",
-  "run",
-  "webhooks",
-] as const satisfies readonly BuiltInRoot[];
-
-const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set<string>(CONTEXT_ROOTS);
-
-/** THE PORTABLE ROOTS (`ItxExpressionResolver.invoke` says where they run): the project's resources and
- *  the outside world — a kv, r2 or Artifacts prefix is the project's, a binding the deployment's,
- *  egress substitutes the project's secrets, a library verb takes the caller's origin. A SECURITY
- *  SURFACE: a root belongs here only if it answers identically at every context of a project but
- *  for whom it names as the caller. __workers-tests__/rule-snapshots.test.ts compares kv, r2, files
- *  and fetch at a child against the root's answers, and email.test.ts has a child's mail name the
- *  child. */
-const PORTABLE_ROOTS = [
-  "kv",
-  "r2",
-  "ai",
-  "browser",
-  "cfArtifacts",
-  "fetch",
-  "email",
-  "repos",
-  "workspaces",
-  "files",
-  "connectToMcp",
-  "connectToOpenApi",
-  "connectToCapnweb",
-] as const satisfies readonly BuiltInRoot[];
-
-const PORTABLE_ROOT_SET: ReadonlySet<string> = new Set<string>(PORTABLE_ROOTS);
-
-/** THE ONE PREDICATE: which roots have an implicit row at `path` — every built-in at a
- *  project's root, the context roots anywhere below it. The GLOBAL namespace is not navigable (no
- *  `cd`, so nothing there can inherit through a link): a user's or an organization's subtree is that
- *  owner's own, and every context in it has every root — `/users/<id>/x` reads its owner's kv and
- *  shares its owner's secrets catalog. Read by the resolver, the reduce and `list()`. */
+/** Which roots are implicit at a context. Global contexts retain the full surface; navigation guards
+ * decide which global operations a caller may use. */
 export function implicitRootsAt(projectId: string, path: string): ReadonlySet<string> {
   return projectId === GLOBAL_PROJECT_ID || resolveContextPath("/", path) === "/"
     ? BUILT_IN_ROOT_SET
     : CONTEXT_ROOT_SET;
 }
 
-/** One rewrite rule as the table stores it: a canonical match prefix and the target it rewrites to
- *  (both parsed once, at reduce; a call step pins literal args, `itx.ai.run('gpt-5')` — expression.ts).
+/** One rewrite rule as the table stores it: a canonical, property-only match prefix and the target
+ *  it rewrites to (both parsed once, at reduce).
  *  A `null` target is a MASK: the row matches like any other and refuses the call. */
 export type ItxExpressionRewriteRule = {
   match: ItxExpressionPrefix;
   target: ItxExpression | null;
   /** The one line a model reads for `match` here (`normalizeRewriteRuleConfigured`). */
   description?: string;
+  /** Optional TypeScript declaration for the capability named by this rule. */
+  declaration?: string;
 };
 
 /** The most a worker's literal source may be, serialized: in a rule's target, which every context
@@ -197,11 +90,11 @@ export function isBuiltInsRooted(call: ItxExpression): boolean {
 
 // ── the rules (pure) ──
 
-/** What `matchItxExpressionPrefix` claims: the final step's unpinned args (present when the final
- *  prefix step matched a call step) and the call's steps after the match. */
+/** What a provided name claims: the final call's ordinary arguments (when the name is called) and
+ * the steps after the name. Names contain properties only; they never match or pin arguments. */
 type ItxExpressionPrefixMatch = { unpinnedArgs?: unknown[]; stepsAfterMatch: ItxExpression };
 
-/** Claim `call` with `match`, step by step from the start — or null. */
+/** Claim `call` with a provided dotted name, step by step from the start — or null. */
 export function matchItxExpressionPrefix(
   match: ItxExpressionPrefix,
   call: ItxExpression,
@@ -213,100 +106,38 @@ export function matchItxExpressionPrefix(
     const final = i === match.length - 1;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- out-of-bounds detection: call[i] is undefined past the call's end, distinct from any present step
     if (callStep === undefined) return null; // the match is longer than the call
-    if (typeof matchStep === "string") {
-      if (typeof callStep === "string") {
-        if (callStep !== matchStep) return null;
-      } else if (callStep[0] !== matchStep || !final) return null;
-      else unpinnedArgs = callStep.slice(1);
-    } else {
-      if (typeof callStep === "string" || callStep[0] !== matchStep[0]) return null;
-      const pinned = matchStep.slice(1);
-      const args = callStep.slice(1);
-      if (args.length < pinned.length || !pinned.every((p, k) => jsonEqual(p, args[k])))
-        return null;
-      const residual = args.slice(pinned.length);
-      if (final) unpinnedArgs = residual;
-      else if (residual.length > 0) return null;
-    }
+    // The append boundary makes every provided name property-only. Keep this defensive refusal so
+    // a malformed historical row cannot recover argument matching after the language is removed.
+    if (typeof matchStep !== "string") return null;
+    if (typeof callStep === "string") {
+      if (callStep !== matchStep) return null;
+    } else if (callStep[0] !== matchStep || !final) return null;
+    else unpinnedArgs = callStep.slice(1);
   }
   return { unpinnedArgs, stepsAfterMatch: call.slice(match.length) };
 }
 
-const pinnedArgCount = (match: ItxExpressionPrefix): number =>
-  match.reduce<number>((n, step) => n + (Array.isArray(step) ? step.length - 1 : 0), 0);
-
-/** The most specific matching rule — or null. A mask row competes like any other. */
+/** The longest provided name — or null. A mask competes like any other provided name. */
 function pickItxExpressionRewriteRule(
   rules: readonly ItxExpressionRewriteRule[],
   call: ItxExpression,
 ): { rule: ItxExpressionRewriteRule; match: ItxExpressionPrefixMatch } | null {
   let best: { rule: ItxExpressionRewriteRule; match: ItxExpressionPrefixMatch } | null = null;
-  const moreSpecific = (a: ItxExpressionRewriteRule, b: ItxExpressionRewriteRule): boolean =>
-    a.match.length !== b.match.length
-      ? a.match.length > b.match.length
-      : pinnedArgCount(a.match) > pinnedArgCount(b.match);
   for (const rule of rules) {
     const match = matchItxExpressionPrefix(rule.match, call);
-    if (match && (!best || moreSpecific(rule, best.rule))) best = { rule, match };
+    if (match && (!best || rule.match.length > best.rule.match.length)) best = { rule, match };
   }
   return best;
 }
 
-/** The template's arguments with `@` filled from the caller's unpinned args. */
-function fillItxExpressionHoles(
-  templateArgs: unknown[],
-  unpinnedArgs: unknown[] | undefined,
-  target: ItxExpression,
-): unknown[] {
-  const spelled = print(target, { holes: true });
-  const theOneUnpinnedArg = (what: string): unknown => {
-    if (unpinnedArgs?.length !== 1)
-      throw new Error(
-        `${what} in the target ${JSON.stringify(spelled)} takes exactly one argument, got ${unpinnedArgs?.length ?? 0}`,
-      );
-    return unpinnedArgs[0];
-  };
-  const fill = (value: unknown): unknown => {
-    if (isItxExpressionHole(value)) return theOneUnpinnedArg("a nested `@`");
-    if (Array.isArray(value)) return value.map(fill);
-    // oxlint-disable-next-line iterate/simple-truthiness-check -- `value` is `unknown`; the typeof separates real objects from primitives (bare truthiness would misroute strings/numbers)
-    if (value !== null && typeof value === "object") {
-      const template = value as Record<string, unknown>;
-      const out: Record<string, unknown> = {};
-      if (template[ITX_EXPRESSION_MERGE_KEY] === true) {
-        const source = theOneUnpinnedArg("`...@`");
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- `source` is `unknown` (a caller-supplied arg); the typeof is real validation that it is a mergeable object
-        if (source === null || typeof source !== "object" || Array.isArray(source))
-          throw new Error(
-            `\`...@\` in the target ${JSON.stringify(spelled)} merges an object; the argument is ${JSON.stringify(source)}`,
-          );
-        Object.assign(out, source);
-      }
-      for (const [k, v] of Object.entries(template))
-        if (k !== ITX_EXPRESSION_MERGE_KEY) out[k] = fill(v); // the template's own keys win
-      return out;
-    }
-    return value;
-  };
-  return templateArgs.flatMap((arg) =>
-    isItxExpressionHole(arg) ? unpinnedArgs || [] : [fill(arg)],
-  );
-}
-
-/** The call with the matched prefix replaced by the target (its `@` holes filled by
- *  `fillItxExpressionHoles`). */
+/** The call with the matched name replaced by its target. The target's fixed calls happen first;
+ * the caller's ordinary arguments then apply to the final value. */
 function applyItxExpressionRewriteRule(
   target: ItxExpression,
   match: ItxExpressionPrefixMatch,
 ): ItxExpression {
   const { unpinnedArgs, stepsAfterMatch } = match;
   const last = target.at(-1);
-  if (Array.isArray(last) && containsItxExpressionHole(last))
-    return [
-      ...target.slice(0, -1),
-      [last[0], ...fillItxExpressionHoles(last.slice(1), unpinnedArgs, target)],
-      ...stepsAfterMatch,
-    ];
   if (!unpinnedArgs) return [...target, ...stepsAfterMatch];
   return typeof last === "string"
     ? [...target.slice(0, -1), [last, ...unpinnedArgs], ...stepsAfterMatch]
@@ -403,9 +234,9 @@ const withoutBuiltIns = (call: ItxExpression): ItxExpression =>
 
 /** Validate + normalize the payload of a LITERAL `events.iterate.com/itx/rewrite-rule-configured`
  *  event (the append boundary calls this — core-processor's `normalizeControlEvent`): the match is
- *  validated (rooted at `itx`, no `@` hole, not `itx.builtins`, not a proxy verb) and canonicalized to
+ *  validated (rooted at `itx`, properties only, not `itx.builtins`, not a proxy verb) and canonicalized to
  *  a string; the target is validated (rooted at `itx`, whole-context override targets the physical
- *  spelling, `@` only in its final step) and normalized to the PARSED array form BEFORE storage — a
+ *  spelling) and normalized to the PARSED array form BEFORE storage — a
  *  target may carry a whole facet source, which the reduce must never re-parse through the string
  *  codec (its 2 KiB cap). So call sites write `itx.append({ type, payload: { match, target } })`
  *  literally. A `null` target is the caller's deliberate MASK (deny); the platform-equivalent target
@@ -416,21 +247,33 @@ export function normalizeRewriteRuleConfigured(
   match: ItxExpression;
   target: ItxExpression | null;
   description?: string;
+  declaration?: string;
   ifTarget?: ItxExpression | null;
 } {
   const matchPrefix = parseItxExpressionPrefix(payload.match);
-  const d = payload.description;
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- wire-fed: a present non-string (a number, an object) must be refused where the event is normalized, not coerced
-  if (d && (typeof d !== "string" || d.length > 500))
+  const descriptionInput: unknown = payload.description;
+  if (
+    descriptionInput !== undefined &&
+    (typeof descriptionInput !== "string" || descriptionInput.length > 500)
+  )
     throw new Error("a rewrite rule's description is one line: a string of at most 500 chars");
-  const description = payload.description ? { description: payload.description } : {};
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- the wire shape permits an explicit empty string after validation, distinct from a missing field.
+  const description = typeof descriptionInput === "string" ? { description: descriptionInput } : {};
+  const declarationInput: unknown = payload.declaration;
+  if (
+    declarationInput !== undefined &&
+    (typeof declarationInput !== "string" || declarationInput.length > 16_384)
+  )
+    throw new Error("a rewrite rule's declaration is a string of at most 16384 chars");
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- the wire shape permits an explicit empty string after validation, distinct from a missing field.
+  const declaration = typeof declarationInput === "string" ? { declaration: declarationInput } : {};
   if (matchPrefix[0] !== "itx")
     throw new Error(
       `a rewrite rule's match must be rooted at "itx" (every call starts there — ${JSON.stringify(print(matchPrefix))} could never match one)`,
     );
-  if (containsItxExpressionHole(matchPrefix))
+  if (matchPrefix.some(Array.isArray))
     throw new Error(
-      `\`@\` (the caller's input) is legal only in a rewrite rule's target, not its match (${JSON.stringify(print(matchPrefix))})`,
+      `a rewrite rule's match is a dotted capability name, not a call (${JSON.stringify(print(matchPrefix))})`,
     );
   const firstName = itxExpressionStepName(matchPrefix[1]);
   if (firstName === "builtins")
@@ -445,14 +288,10 @@ export function normalizeRewriteRuleConfigured(
   // codec again); a string target is parsed once here, an array shape-checked in place.
   const targetExpression =
     // oxlint-disable-next-line iterate/simple-truthiness-check -- payload.target is `string | ItxExpression | null`; its null is the explicit mask sentinel (default-deny), distinct from a malformed empty-string target that normalization must still reject
-    payload.target === null ? null : normalizedItxExpression(payload.target, { holes: true });
+    payload.target === null ? null : normalizedItxExpression(payload.target);
   if (targetExpression && targetExpression[0] !== "itx")
     throw new Error(
       `a rewrite rule's target must be rooted at "itx" (a bare built-in root is unspellable — targets resolve through the rules; the physical spelling is "itx.builtins.…")`,
-    );
-  if (targetExpression && targetExpression.slice(0, -1).some(containsItxExpressionHole))
-    throw new Error(
-      `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier`,
     );
   const chars = targetExpression ? JSON.stringify(targetExpression).length : 0;
   if (chars > SOURCE_MAX_CHARS)
@@ -467,7 +306,7 @@ export function normalizeRewriteRuleConfigured(
   // jsonEquals it against the stored (parsed) target, so a string `ifTarget` must become the same
   // parsed shape here or the undo would silently never match. `null` is the mask sentinel, kept as-is.
   if (!("ifTarget" in payload))
-    return { match: matchPrefix, target: targetExpression, ...description };
+    return { match: matchPrefix, target: targetExpression, ...description, ...declaration };
   // oxlint-disable-next-line iterate/simple-truthiness-check -- a PRESENT key with an undefined value (reachable over capnweb, never JSON) is malformed and refused loudly here; folding it into the null sentinel would silently turn a handle's undo into a mask-lift
   if (payload.ifTarget === undefined)
     throw new Error(
@@ -475,8 +314,8 @@ export function normalizeRewriteRuleConfigured(
     );
   const ifTarget =
     // oxlint-disable-next-line iterate/simple-truthiness-check -- like `target` above: null is the explicit sentinel (compare against a masked, null-target row), distinct from a malformed empty-string ifTarget that normalization must still parse and reject
-    payload.ifTarget === null ? null : normalizedItxExpression(payload.ifTarget, { holes: true });
-  return { match: matchPrefix, target: targetExpression, ...description, ifTarget };
+    payload.ifTarget === null ? null : normalizedItxExpression(payload.ifTarget);
+  return { match: matchPrefix, target: targetExpression, ...description, ...declaration, ifTarget };
 }
 
 // ── WHICH WRITES WAIT OUT THE OLDER SNAPSHOTS (pure; context/rule-snapshots.ts says why) ──
@@ -534,65 +373,6 @@ export function namesTakenAway(
     .map(([, old]) => old.match);
 }
 
-// ── WHAT NAMES A LENT STUB (pure; the DO appends the removals it decides) ──
-
-/** THE ROWS THAT NAME A LENT STUB — decided against ONE frozen table, so the answer never depends on
- *  the order the rows were configured in. A row names `rpcStubKey` DIRECTLY when its target IS the
- *  physical spelling (the row `provide(stub)` writes, or a caller's own); every other row is resolved
- *  through the table MINUS the direct namers — the table as it will stand once they are gone — and
- *  names the key only if it still ends at the physical spelling then (a user's own `itx.reg ⇒
- *  itx.builtins.rpcStubs` + `itx.reg.get('k')`). So an alias to a shadowed root (`itx.llm ⇒ itx.ai`
- *  while `itx.ai` is a lent fake) resolves to the platform row beneath and is KEPT; a row that only
- *  dangles once the stub is gone (`itx.x ⇒ itx.cam`, `cam` no built-in) is kept too — it errors like
- *  any unconfigured name and revives with the next provide. Subscriptions are read the same way.
- *  A FETCH ROUTE is different: a dangling route still takes its host (a 404 for every visitor, the
- *  routing slug blocked for the project's own router), so a route goes with the stub it serves —
- *  its target reaches the stub through the table as it stands, and reaches nothing else once the
- *  stub's rules are gone (a route to a shadowed root's alias is kept, like the alias). */
-export function rowsNamingRpcStub(args: {
-  rpcStubKey: string;
-  rules: readonly ItxExpressionRewriteRule[];
-  subscriptionTargets: Record<string, ItxExpression>;
-  fetchRouteTargets: Record<string, ItxExpression>;
-  implicitRoots: ReadonlySet<string>;
-}): {
-  ruleUnsets: { match: ItxExpressionPrefix; ifTarget: ItxExpression }[];
-  subscriptionNames: string[];
-  fetchRouteNames: string[];
-} {
-  const { rpcStubKey, rules, subscriptionTargets, fetchRouteTargets, implicitRoots } = args;
-  const names = (target: ItxExpression | null | undefined): boolean =>
-    !!target && builtInsGetStep(target, "rpcStubs")?.[1] === rpcStubKey;
-  const through = (table: readonly ItxExpressionRewriteRule[], target: ItxExpression) =>
-    fixedPointOf(() => table, target, implicitRoots);
-  const direct = rules.filter((rule) => names(rule.target));
-  const remaining = rules.filter((rule) => !direct.includes(rule));
-  const namesThroughRemaining = (target: ItxExpression) => names(through(remaining, target));
-  const indirect = remaining.filter((rule) => rule.target && namesThroughRemaining(rule.target));
-  const unsetRules = [...direct, ...indirect];
-  const survivingRules = rules.filter((rule) => !unsetRules.includes(rule));
-  const reachesOnlyRpcStub = (target: ItxExpression): boolean => {
-    if (!names(through(rules, target))) return false;
-    const afterwards = through(survivingRules, target);
-    return !afterwards || names(afterwards);
-  };
-  return {
-    // Each unset carries the target the census SAW (`ifTarget`), so the removal is a compare-and-set:
-    // the reduce removes the row only while it still names this dead stub. A `provide` that lands at
-    // the same match in the detach window owns the row with a different target, and is left untouched.
-    ruleUnsets: unsetRules.map((rule) => ({
-      match: rule.match,
-      ifTarget: rule.target!,
-    })),
-    subscriptionNames: Object.entries(subscriptionTargets)
-      .filter(([, target]) => namesThroughRemaining(target))
-      .map(([name]) => name),
-    fetchRouteNames: Object.entries(fetchRouteTargets)
-      .filter(([, target]) => reachesOnlyRpcStub(target))
-      .map(([fetchRouteName]) => fetchRouteName),
-  };
-}
-
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
  *  TARGET of a row it appends), starting at the context `at` it runs at (where a row lands): never
  *  the fixed point, and a webhook's `signingSecret` only at the project's root, `cd` steps resolved
@@ -614,7 +394,7 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
     if (name === "builtins")
       throw codedError(
         "FORBIDDEN",
-        `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression, { holes: true }))})`,
+        `"itx.builtins" is not a loaded worker's word — this context's rows say what its code may spell (${JSON.stringify(print(expression))})`,
       );
     if (Array.isArray(step))
       for (const arg of step.slice(1)) {
@@ -675,7 +455,7 @@ function admitWorkerName(name: ItxExpression): void {
     if (!readsRules)
       throw codedError(
         "FORBIDDEN",
-        `a worker's name only reads rules — property steps and cd(path) — and ${JSON.stringify(print(name, { holes: true }))} does more: give a source you produce its cacheKey`,
+        `a worker's name only reads rules — property steps and cd(path) — and ${JSON.stringify(print(name))} does more: give a source you produce its cacheKey`,
       );
   }
 }
@@ -722,8 +502,10 @@ export function admitLoadedCodeRow(
   const target = payload?.target;
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
-  const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
-  if (builtInsGetStep(expression, "rpcStubs")) return;
+  const expression = normalizedItxExpression(target as ItxExpressionInput);
+  const [, root, registry, lend] = expression;
+  if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
+    return;
   admitLoadedCodeExpression(expression, landsAt);
 }
 
@@ -770,7 +552,7 @@ export function refuseSelfLoopRow(
   if (!Array.isArray(cdStep) || cdStep[0] !== "cd" || typeof cdStep[1] !== "string") return;
   if (resolveContextPath(ownPath, cdStep[1]) === ownPath)
     throw new Error(
-      `a bare itx row may not name its own context: "itx ⇒ ${print(row.target, { holes: true })}" at ${JSON.stringify(ownPath)} would route every call back to itself`,
+      `a bare itx row may not name its own context: "itx ⇒ ${print(row.target)}" at ${JSON.stringify(ownPath)} would route every call back to itself`,
     );
 }
 
@@ -792,36 +574,13 @@ export function builtInsGetStep(
     : undefined;
 }
 
-/** Every rpc-stub key some row (a rule, a subscription, a fetch route) currently names, resolved
- *  through the whole table — the census an `itx/woken` or `itx/resumed` commit compares against the
- *  registry's presence. */
-export function rpcStubKeysNamed(args: {
-  rules: readonly ItxExpressionRewriteRule[];
-  subscriptionTargets: Record<string, ItxExpression>;
-  fetchRouteTargets: Record<string, ItxExpression>;
-  implicitRoots: ReadonlySet<string>;
-}): Set<string> {
-  const { rules, subscriptionTargets, fetchRouteTargets, implicitRoots } = args;
-  const keys = new Set<string>();
-  const targets = [
-    ...rules.flatMap((rule) => (rule.target ? [rule.target] : [])),
-    ...Object.values(subscriptionTargets),
-    ...Object.values(fetchRouteTargets),
-  ];
-  for (const target of targets) {
-    const resolved = fixedPointOf(() => rules, target, implicitRoots);
-    const getStep = resolved && builtInsGetStep(resolved, "rpcStubs");
-    if (getStep) keys.add(getStep[1]);
-  }
-  return keys;
-}
-
 // ── THE TABLE, DESCRIBED (pure; the DO hands it the rows and the hop) ──
 
 /** THE EFFECTIVE table as `rewriteRules.list()` shows it — the tree this context can spell: its own
- *  rows (a template's `@` spelled, a mask as `target: null`, each with the description its event
+ *  rows (a mask as `target: null`, each with the description and optional declaration its event
  *  carried); the implicit rows HERE not shadowed by an own `itx.<root>` row, each with the platform's
- *  one-liner — none under a bare null, which denies all; and, behind a bare row that hops
+ *  one-liner — `itx.ai`, for example, declares `IterateContextApi["ai"]`; an absent declaration is
+ *  unknown. None appear under a bare null, which denies all; and, behind a bare row that hops
  *  (`itx ⇒ itx.builtins.cd(path)`), THAT context's list (`inherit(path, depth - 1)`) minus what this
  *  one's rows claim, every row keeping the `context` it was read from — a bare `itx ⇒ itx.builtins`
  *  lists every root as local. `depth` bounds the hops; a hop to `path` itself is none. */
@@ -838,8 +597,9 @@ export async function describeRewriteRules(args: {
   const { rules, implicitRoots, path: ownPath, depth } = args;
   const own = rules.map((rule): RewriteRuleListEntry => ({
     match: print(rule.match),
-    target: rule.target && print(rule.target, { holes: true }),
+    target: rule.target && print(rule.target),
     description: rule.description,
+    declaration: rule.declaration,
     context: ownPath,
   }));
   const claimed = new Set(own.map((row) => row.match));
@@ -853,6 +613,9 @@ export async function describeRewriteRules(args: {
         match: `itx.${root}`,
         target: `itx.builtins.${root}`,
         description: BUILT_IN_ROOT_DESCRIPTIONS[root as BuiltInRoot],
+        ...(root !== "platformHook" && {
+          declaration: `IterateContextApi[${JSON.stringify(root)}]`,
+        }),
         context: ownPath,
       }));
   const bare = rules.find((rule) => rule.match.length === 1);
@@ -992,9 +755,8 @@ export class ItxExpressionResolver {
    *  How fresh the tables it resolves through are is context/rule-snapshots.ts's contract.
    *  Runtime `extraArgs` are LIVE args (a Request, a callback — not
    *  expression data; an `x-itx-expression` fetch and the public `invoke(call, ...args)` hand them
-   *  in): when the call ends in a NAME they are FOLDED INTO it BEFORE resolving —
-   *  `invoke("itx.kv.get", "k")` IS `itx.kv.get("k")`, so a template fills, a pinned row matches and a
-   *  mask refuses exactly as the dotted call would; when it ends in a call they apply to the value
+   *  in): when the call ends in a NAME they are folded into it before resolving —
+   *  `invoke("itx.kv.get", "k")` is `itx.kv.get("k")`; when it ends in a call they apply to the value
    *  the expression denotes. */
   async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
     try {

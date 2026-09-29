@@ -54,6 +54,7 @@ import { OrganizationDurableObject } from "../organization/durable-object.ts";
 import { ProjectDurableObject } from "../project/durable-object.ts";
 import { RepoDurableObject } from "../repo/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
+import { SubscriptionDeliveryDurableObject } from "../subscription-delivery-durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
 import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
 import {
@@ -172,6 +173,7 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   project: ProjectDurableObject.publicMethods,
   repo: RepoDurableObject.publicMethods,
   secret: SecretDurableObject.publicMethods,
+  subscriptions: SubscriptionDeliveryDurableObject.publicMethods,
   workspace: WorkspaceDurableObject.publicMethods,
 } satisfies Record<keyof typeof FIRST_PARTY_FACET_CLASSES, readonly string[]>;
 
@@ -453,6 +455,14 @@ export class FacetHost {
         message: `facet "${name}" was aborted${why} — its next call starts it fresh`,
       }),
     );
+  }
+
+  /** A platform coordinator has no hosting row of its own. Its last configuration removal ends
+   * its facet and the facet's cursor storage together. */
+  deleteFirstPartyFacet(name: string): void {
+    const className = firstPartyFacetClassOf(name);
+    if (!className) throw new Error(`facet "${name}" is not a first-party facet`);
+    this.#deleteFacet(name, className);
   }
 
   /** THE BIRTH'S FIRST ACT, before this incarnation writes anything (the DO counts the incarnation

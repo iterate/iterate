@@ -19,7 +19,6 @@ import {
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 import { codedError } from "iterate/lib";
-import type { StreamEventInput } from "iterate/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { dialRpcStubFetch } from "./fetch-upgrade.ts";
@@ -27,6 +26,8 @@ import { redial } from "./redial.ts";
 import {
   disposeRpcStub,
   encodeRpcStubPagerAttachRequest,
+  type RpcStubPagerLiveProvide,
+  type RpcStubPagerLiveSubscription,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
 } from "./rpc-stubs.ts";
@@ -36,6 +37,27 @@ import {
  *  were answered by the third try, 6 s after the drop; the tenfold headroom keeps a slower deploy's
  *  reset from paging. */
 const RPC_STUB_PAGER_REDIAL_DEADLINE_MS = 60_000;
+/** A provider call may be slow, but it cannot keep the relay's copy of a client's capability and its
+ *  Workers-RPC leg alive forever. A caller may ask for a longer lease (up to the cap below) when its
+ *  capability deliberately performs long work. The liveness probe still finds a vanished client in
+ *  20 s; this is the separate bound for a client that answers probes while one call never settles. */
+const RPC_STUB_CALL_DEFAULT_DEADLINE_MS = 5 * 60_000;
+const RPC_STUB_CALL_MAX_DEADLINE_MS = 30 * 60_000;
+
+/** Validate a borrowed-provider call lease before an edge operation creates its durable row. */
+export function rpcStubCallDeadlineMs(value: number | undefined): number {
+  const deadlineMs = value ?? RPC_STUB_CALL_DEFAULT_DEADLINE_MS;
+  if (
+    !Number.isInteger(deadlineMs) ||
+    deadlineMs < 20_000 ||
+    deadlineMs > RPC_STUB_CALL_MAX_DEADLINE_MS
+  )
+    throw codedError(
+      "INVALID_INPUT",
+      `rpc stub callDeadlineMs must be an integer from 20000 to ${RPC_STUB_CALL_MAX_DEADLINE_MS} (got ${JSON.stringify(value)})`,
+    );
+  return deadlineMs;
+}
 
 /** The context DO's Workers-RPC stub — what the edge proxies to and this relay pages against. */
 export type IterateContextDurableObjectStub = DurableObjectStub<IterateContextDurableObject>;
@@ -62,17 +84,20 @@ class LentRpcStub extends WorkersRpcTarget {
   /** Minted per dial: the upgrade leg re-dials after a reset (fetch-upgrade-splice.ts), and a stub
    *  that saw the reset replays it. */
   #durableObjectStub: () => IterateContextDurableObjectStub;
+  #callDeadlineMs: number;
   constructor(
     clientRpcStub: ClientRpcStub,
     rpcStubKey: string,
     lendEnded: { reason: string | null },
     durableObjectStub: () => IterateContextDurableObjectStub,
+    callDeadlineMs: number,
   ) {
     super();
     this.#clientRpcStub = clientRpcStub;
     this.#rpcStubKey = rpcStubKey;
     this.#lendEnded = lendEnded;
     this.#durableObjectStub = durableObjectStub;
+    this.#callDeadlineMs = callDeadlineMs;
   }
 
   /** The lend ended mid-call — the client died, or the lender recalled the stub while the DO still
@@ -94,19 +119,24 @@ class LentRpcStub extends WorkersRpcTarget {
     request: Request,
   ): Promise<unknown> {
     try {
-      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, async () => {
-        // The steps stop short of the terminal `fetch` the call named (terminalFetchOf split it
-        // off), so the receiver is what the client serves `fetch` on; a client without one rejects.
-        const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
-          fetch(r: Request): Promise<unknown>;
-        };
-        return await dialRpcStubFetch(
-          (r) => receiver.fetch(r),
-          request,
-          upgradeId,
-          this.#durableObjectStub,
-        );
-      });
+      return await whileClientAnswers(
+        this.#clientRpcStub,
+        this.#rpcStubKey,
+        this.#callDeadlineMs,
+        async () => {
+          // The steps stop short of the terminal `fetch` the call named (terminalFetchOf split it
+          // off), so the receiver is what the client serves `fetch` on; a client without one rejects.
+          const receiver = (await walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps)) as {
+            fetch(r: Request): Promise<unknown>;
+          };
+          return await dialRpcStubFetch(
+            (r) => receiver.fetch(r),
+            request,
+            upgradeId,
+            this.#durableObjectStub,
+          );
+        },
+      );
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-fetch");
     }
@@ -114,8 +144,11 @@ class LentRpcStub extends WorkersRpcTarget {
 
   async invoke(itxExpressionSteps: ItxExpression): Promise<unknown> {
     try {
-      return await whileClientAnswers(this.#clientRpcStub, this.#rpcStubKey, () =>
-        walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps),
+      return await whileClientAnswers(
+        this.#clientRpcStub,
+        this.#rpcStubKey,
+        this.#callDeadlineMs,
+        () => walkStepsOnRpcStub(this.#clientRpcStub, itxExpressionSteps),
       );
     } catch (e) {
       this.#recodeIfLendEnded(e, "mid-invoke");
@@ -126,19 +159,23 @@ class LentRpcStub extends WorkersRpcTarget {
 /** A LENT CALL THE CLIENT HAS NOT ANSWERED for 10 s is followed by a question (the lend's recovery
  *  [C], rpc-stubs.ts): a call on a member no client has (`itxLivenessProbe`), which a live client
  *  answers at once, with an error (capnweb's "is not a function", the kit firmware's "unknown
- *  device capability"). Any answer proves the client is there, and the call waits on (a slow local
- *  server is the client's business), asked again every 10 s. No answer within 10 s more means the
- *  client's network went away without a close — a laptop asleep, a NAT mapping expired — and its
- *  socket would stay open at the edge until the edge's TCP retransmits give up (12 to 16 minutes,
- *  measured on prd 2026-09-25). The call fails RPC_STUB_OFFLINE instead (a 502 on a fetch,
- *  `expression-fetch.rpc-stub-offline`). The lend stays: a client that was only slow answers the
- *  next call, and a dead one's session close ends it. */
+ *  device capability"). Any answer proves the client is there, and the call keeps waiting within
+ *  its configured lease, asked again every 10 s. No answer within 10 s more means the client's
+ *  network went away without a close — a laptop asleep, a NAT mapping expired — and its socket would
+ *  stay open at the edge until the edge's TCP retransmits give up (12 to 16 minutes, measured on prd
+ *  2026-09-25). That case fails RPC_STUB_OFFLINE; a responsive client whose original call crosses its
+ *  lease fails TIMEOUT. Neither outcome is retried here. */
 async function whileClientAnswers(
   clientRpcStub: ClientRpcStub,
   rpcStubKey: string,
+  deadlineMs: number,
   makeCall: () => unknown,
 ): Promise<unknown> {
-  const call = Promise.resolve().then(makeCall);
+  // Keep the original capnweb promise: unlike the Promise wrapper below it may be disposable, and
+  // disposing it when the lease expires releases its import/session instead of leaving an unanswered
+  // RPC pinned until the client or runtime eventually gives up.
+  let callAnswer: unknown;
+  const call = Promise.resolve().then(() => (callAnswer = makeCall()));
   const settled = call.then(
     () => "settled" as const,
     () => "settled" as const,
@@ -151,14 +188,40 @@ async function whileClientAnswers(
     ]).finally(() => clearTimeout(timer));
   };
   const startedAt = Date.now();
-  while ((await within(settled, 10_000)) === "silent") {
+  const deadlineAt = startedAt + deadlineMs;
+  const timedOut = (): never => {
+    disposeRpcStub(callAnswer);
+    console.warn({
+      event: "rpc-stub-client-call-timed-out",
+      namespace: "rpc-stubs",
+      message:
+        "a lent rpc stub's client kept answering liveness probes but one call exceeded its configured lease",
+      rpcStubKey,
+      waitedMs: Date.now() - startedAt,
+      deadlineMs,
+    });
+    throw codedError(
+      "TIMEOUT",
+      `rpc stub ${JSON.stringify(rpcStubKey)}: its call exceeded the ${deadlineMs / 1000}s lease`,
+    );
+  };
+  for (;;) {
+    const remaining = deadlineAt - Date.now();
+    if (remaining <= 0) timedOut();
+    if ((await within(settled, Math.min(10_000, remaining))) !== "silent") return await call;
     // A capnweb stub answers every member name as a remote callable, so this call goes to the
     // client, which has no such member: its rejection is the answer.
     const probe = Promise.resolve()
       .then(() => (clientRpcStub.itxLivenessProbe as () => Promise<unknown>)())
       .then(disposeRpcStub, () => undefined)
       .then(() => "answered" as const);
-    if ((await within(Promise.race([settled, probe]), 10_000)) !== "silent") continue;
+    const probeRemaining = deadlineAt - Date.now();
+    if (probeRemaining <= 0) timedOut();
+    if (
+      (await within(Promise.race([settled, probe]), Math.min(10_000, probeRemaining))) !== "silent"
+    )
+      continue;
+    if (Date.now() >= deadlineAt) timedOut();
     console.warn({
       event: "rpc-stub-client-unanswered",
       namespace: "rpc-stubs",
@@ -172,20 +235,18 @@ async function whileClientAnswers(
       `rpc stub ${JSON.stringify(rpcStubKey)}: its client stopped answering`,
     );
   }
-  return await call;
 }
 
 /** Offer the DO a lend of `clientRpcStub` under `rpcStubKey`: dup the client's stub for the session,
- *  open the pager WebSocket — its header carries the key AND `appendEvents`, the rows naming the key,
- *  which the DO appends as it accepts the pager (rpc-stubs.ts, the directory; a refusal comes back
- *  as the upgrade's answer with its code, and this function throws it with nothing lent) — and answer
+ *  open the pager WebSocket — its header carries the key and the live provide or subscription that
+ *  exists while that socket is attached — and answer
  *  every page with a fresh `LentRpcStub`. The pager lives until disposed (explicitly, or at session
  *  end); its close makes the DO return the stub. THE LEND IS THE SESSION'S, NOT THE SOCKET'S: the
  *  pager is a connection between this isolate and the DO, never the client's own socket, and it
  *  drops while the session lives — a fault on the hop between colos, a DO reset (which kills every
  *  hibernatable socket with no close handler run). A pager that closes with neither side having
- *  ended the lend is RE-DIALED (redial.ts, the lend's recovery [B]): the DO's attach re-appends
- *  `appendEvents`, and the directory treats a second pager at the key as a reconnect, never a
+ *  ended the lend is RE-DIALED (redial.ts, the lend's recovery [B]): the attachment is restored,
+ *  and the directory treats a second pager at the key as a reconnect, never a
  *  detach. */
 export async function lendRpcStubOverPager(
   /** Minted per use, never held: a DurableObjectStub that saw a reset replays it on every later call
@@ -193,9 +254,11 @@ export async function lendRpcStubOverPager(
   durableObjectStub: () => IterateContextDurableObjectStub,
   clientRpcStub: ClientRpcStub,
   rpcStubKey: string,
-  appendEvents: StreamEventInput[],
+  live: { provide?: RpcStubPagerLiveProvide; subscription?: RpcStubPagerLiveSubscription },
   waitUntil: (p: Promise<unknown>) => void,
+  options: { callDeadlineMs?: number } = {},
 ): Promise<{ dispose(): void; lendEnded: Promise<string> }> {
+  const callDeadlineMs = rpcStubCallDeadlineMs(options.callDeadlineMs);
   const sessionRpcStub = clientRpcStub.dup(); // dup FIRST: a value that is not a stub fails here, before any socket
   // the one shared "the lend ended" reason (LentRpcStub#lendEnded says why it is shared)
   const lendEnded: { reason: string | null } = { reason: null };
@@ -207,7 +270,10 @@ export async function lendRpcStubOverPager(
         Upgrade: "websocket",
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
           rpcStubKey,
-          appendEvents,
+          attachmentId: crypto.randomUUID(),
+          // JSON omits undefined object values; keep absent wire fields absent.
+          liveProvide: live.provide,
+          liveSubscription: live.subscription,
         }),
       },
     });
@@ -262,7 +328,13 @@ export async function lendRpcStubOverPager(
           if (lendEnded.reason) return; // recalled while a repeat waited: there is nothing to lend
           await durableObjectStub().lendRpcStub({
             rpcStubKey,
-            stub: new LentRpcStub(sessionRpcStub, rpcStubKey, lendEnded, durableObjectStub),
+            stub: new LentRpcStub(
+              sessionRpcStub,
+              rpcStubKey,
+              lendEnded,
+              durableObjectStub,
+              callDeadlineMs,
+            ),
           });
         },
         {

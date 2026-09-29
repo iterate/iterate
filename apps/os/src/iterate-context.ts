@@ -52,6 +52,7 @@ import {
 } from "./context/rpc-stubs.ts";
 import {
   lendRpcStubOverPager,
+  rpcStubCallDeadlineMs,
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
@@ -70,6 +71,10 @@ import {
 import { SessionTeardown } from "./session.ts";
 import { contextStub } from "./context-stub.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import {
+  parseSubscriptionDeliveryBridgeRequest,
+  parseSubscriptionDeliveryTerminalRequest,
+} from "./context/subscription-delivery-bridge.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -333,6 +338,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     target: ClientRpcStub | ItxExpressionInput | null,
     options: {
       description?: string;
+      declaration?: string;
+      callDeadlineMs?: number;
       fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
     } = {},
   ): Promise<RewriteRuleHandleRpcTarget> {
@@ -344,7 +351,12 @@ export class IterateContextRpcTarget extends RpcTarget {
         "FORBIDDEN",
         "loaded code writes a row with itx.append({ type: 'events.iterate.com/itx/rewrite-rule-configured', payload: { match, target, description } }); provide lends a live stub only",
       );
-    const description = options.description ? { description: options.description } : {};
+    const description = {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- an invalid falsy runtime value must reach the row parser and be refused, while undefined is omitted from canonical event data
+      ...(options.description !== undefined && { description: options.description }),
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- an invalid falsy runtime value must reach the row parser and be refused, while undefined is omitted from canonical event data
+      ...(options.declaration !== undefined && { declaration: options.declaration }),
+    };
     const matchString = canonicalItxExpressionPrefix(match);
     const sessionTeardownKey = this.#sessionTeardownKey(matchString);
     const isRow = !target || typeof target === "string" || Array.isArray(target);
@@ -377,8 +389,9 @@ export class IterateContextRpcTarget extends RpcTarget {
         this.#removeRuleInBackground(matchString, expectedTarget),
       );
     }
-    // Built BEFORE the lend so a match the codec refuses throws with nothing lent; the rule rides the
-    // pager upgrade and the DO appends it as it accepts the pager (context/rpc-stubs.ts).
+    const callDeadlineMs = rpcStubCallDeadlineMs(options.callDeadlineMs);
+    // Build and validate the live attachment before the lend. It is reconstructed from the
+    // hibernatable pager socket; it never writes a durable rewrite row.
     const ruleEvent: StreamEventInput = {
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: {
@@ -387,18 +400,27 @@ export class IterateContextRpcTarget extends RpcTarget {
         ...description,
       },
     };
-    const fetchRouteEvents = options.fetchRoute
-      ? [fetchRouteEventTo(normalizedItxExpression(matchString), options.fetchRoute)]
-      : [];
-    // LOADED CODE's row goes through its own table FIRST (a jail's mask refuses it, and nothing is
-    // lent); the platform's rides the pager and the DO appends it as it accepts the pager.
-    if (this.#caller.app) await this.#append(ruleEvent);
+    if (options.fetchRoute)
+      fetchRouteEventTo(normalizedItxExpression(matchString), options.fetchRoute); // validation only
+    // Loaded code gets the append boundary's admission and jail checks without leaving a durable
+    // row behind when its pager detaches.
+    if (this.#caller.app)
+      await this.#durableObject.validateLivePagerRows([ruleEvent], this.#caller);
     const pager = await lendRpcStubOverPager(
       () => this.#durableObject,
       target,
       matchString,
-      this.#caller.app ? [] : [ruleEvent, ...fetchRouteEvents],
+      this.#caller.app
+        ? {}
+        : {
+            provide: {
+              match: matchString,
+              ...description,
+              fetchRoute: options.fetchRoute,
+            },
+          },
       this.#waitUntil,
+      { callDeadlineMs },
     );
     // Registered with the session so a dying session recalls it even when the handle was never
     // disposed (`SessionTeardown`: a re-provide replaces the entry). The rule is NOT un-set by this
@@ -413,10 +435,10 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  `(events, range)`. `target` is EITHER an itx EXPRESSION whose terminal is callable that way (a
    *  facet's `.processEventBatch`, a loaded entrypoint's method, a sibling context's `.append`) OR a
    *  LIVE callback, which is lent to the registry under the key `subscription:<name>` and targeted as
-   *  `itx.builtins.rpcStubs.get('subscription:<name>')`; `null` removes the row. HOW it is served is not declared here: the
-   *  context looks at what the target evaluates to — a facet or a lent stub owns its progress and gets
-   *  a push (the client heals a gap with `readEvents`); anything else gets an at-least-once cursor the
-   *  stream keeps. Same name REPLACES. Literally `append({ type: "…/subscription-configured", payload: … })` — the handle
+   *  `itx.builtins.rpcStubs.get('subscription:<name>')`; `null` removes the row. A live callback gets
+   *  a best-effort push and heals gaps with `readEvents`. An expression defaults to durable cursor
+   *  delivery; `delivery: "processor"` delegates progress to a facet's checkpoint/catch-up protocol.
+   *  Same name REPLACES. Literally `append({ type: "…/subscription-configured", payload: … })` — the handle
    *  removes the row (and recalls the lent callback) when disposed or when the session ends. */
   async subscribe(input: {
     name?: string;
@@ -428,9 +450,14 @@ export class IterateContextRpcTarget extends RpcTarget {
       | ((events: unknown[], range: unknown) => void)
       | null;
     consumes?: string[];
-    /** Where the cursor starts (0 = the whole log); absent = from now. A push target ignores it. */
+    /** Expression targets select durable delivery by default or processor checkpoint delivery.
+     *  A live callback always selects live delivery and refuses this field. */
+    delivery?: "durable" | "processor";
+    /** Where durable cursor delivery starts (0 = the whole log); processors repair from their own
+     *  checkpoint. A live callback refuses this field. */
     afterOffset?: number;
-    /** `false`: fan-out delivery (stream/subscription-delivery.ts). A push target ignores it. */
+    /** `false`: durable fan-out delivery (stream/subscription-delivery.ts). Processor pushes stay
+     *  ordered; a live callback refuses this field. */
     ordered?: false;
   }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
@@ -448,29 +475,40 @@ export class IterateContextRpcTarget extends RpcTarget {
     const name = input.name ?? `sub-${crypto.randomUUID().slice(0, 8)}`;
     const rpcStubKey = `subscription:${name}`;
     const sessionTeardownKey = this.#sessionTeardownKey(rpcStubKey);
-    const delivery = {
+    const subscriptionOptions = {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
       ordered: input.ordered,
     };
     if (input.target && typeof input.target !== "string" && !Array.isArray(input.target)) {
-      // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
-      // first, so a name the reduce rejects throws with nothing lent).
+      if (
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- false or an empty runtime value is an incompatible policy field and must be refused, not silently ignored
+        input.delivery !== undefined ||
+        input.afterOffset !== undefined ||
+        input.ordered !== undefined
+      )
+        throw codedError(
+          "INVALID_INPUT",
+          "a live subscription callback cannot set delivery, afterOffset, or ordered; it heals by read instead",
+        );
+      // A live callback is kept by its pager attachment, never by a durable subscription row.
       const row: StreamEventInput = {
         type: "events.iterate.com/itx/subscription-configured",
         payload: {
           name,
           target: ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]],
-          ...delivery,
+          ...subscriptionOptions,
+          delivery: "live",
         },
       };
-      if (this.#caller.app) await this.#append(row); // loaded code's row: its table first, as in `provide`
+      if (this.#caller.app) await this.#durableObject.validateLivePagerRows([row], this.#caller);
       const pager = await lendRpcStubOverPager(
         () => this.#durableObject,
         input.target as ClientRpcStub, // neither a string nor an array, so a live object or a plain callback
         rpcStubKey,
-        this.#caller.app ? [] : [row],
+        this.#caller.app ? {} : { subscription: { name, consumes: input.consumes } },
         this.#waitUntil,
+        { callDeadlineMs: 20_000 },
       );
       const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
       // The handle only recalls its own lend (the lease is the handle; a stale one is inert); the DO
@@ -482,7 +520,15 @@ export class IterateContextRpcTarget extends RpcTarget {
     const target = input.target as ItxExpressionInput | null; // the live-object branch returned above, so this is an expression or null
     const [committed] = (await this.#append({
       type: "events.iterate.com/itx/subscription-configured",
-      payload: { name, target, ...delivery },
+      payload: {
+        name,
+        target,
+        ...subscriptionOptions,
+        ...(target && {
+          // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty runtime delivery must reach the parser and be refused; only absence selects durable
+          delivery: input.delivery ?? "durable",
+        }),
+      },
     })) as StreamEvent[]; // `append` answers the committed events; `invoke` is untyped over RPC
     this.#sessionTeardown.dispose(sessionTeardownKey);
     return new SubscriptionHandleRpcTarget(name, () => {
@@ -586,7 +632,12 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 export type ItxEntrypointScope = ReturnType<Service<ItxEntrypoint>["get"]>;
 export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   Env,
-  { iterateContextName: string; platform?: true; platformOrigin: string | null }
+  {
+    iterateContextName: string;
+    platform?: true;
+    platformOrigin: string | null;
+    subscription?: { name: string; configuredAtOffset: number };
+  }
 > {
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
    *  gets from `projects.get(id)` (capnweb's RpcTarget IS the native `cloudflare:workers` RpcTarget
@@ -622,6 +673,39 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
           ctx: this.ctx,
         }),
     );
+  }
+
+  /** Private Workers-RPC hand-off for a platform facet that owns a durable subscription cursor.
+   * The entrypoint's props are minted by this worker's `ctx.exports`; loaded code receives a
+   * separate entrypoint without `platform`, so it cannot use this to manufacture delivery authority. */
+  deliverConfiguredSubscription(input: unknown): Promise<void> {
+    const request = parseSubscriptionDeliveryBridgeRequest(input);
+    const subscription = this.ctx.props.subscription;
+    if (
+      this.ctx.props.platform !== true ||
+      !subscription ||
+      subscription.name !== request.name ||
+      subscription.configuredAtOffset !== request.configuredAtOffset
+    )
+      throw codedError("FORBIDDEN", "configured subscription delivery is platform-only");
+    return this.env.ITERATE_CONTEXT.getByName(
+      this.ctx.props.iterateContextName,
+    ).deliverConfiguredSubscription(input);
+  }
+
+  recordConfiguredSubscriptionTerminal(input: unknown): Promise<void> {
+    const request = parseSubscriptionDeliveryTerminalRequest(input);
+    const subscription = this.ctx.props.subscription;
+    if (
+      this.ctx.props.platform !== true ||
+      !subscription ||
+      subscription.name !== request.name ||
+      subscription.configuredAtOffset !== request.configuredAtOffset
+    )
+      throw codedError("FORBIDDEN", "configured subscription terminal is platform-only");
+    return this.env.ITERATE_CONTEXT.getByName(
+      this.ctx.props.iterateContextName,
+    ).recordConfiguredSubscriptionTerminal(input);
   }
 
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a

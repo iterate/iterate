@@ -46,13 +46,19 @@ export type WaitForEventFilter = {
 };
 
 /** The `rewrite-rule-configured` event's payload — what `itx.append` writes durably and `provide`
- *  writes for its session: make `match` mean `target` (an expression, or `null` to deny). `description` is the one
- *  line a model reads for the name; it rides the row into `rewriteRules.list()`. */
+ * writes for its session: a property-only `match` name invokes `target`, or is denied by `null`.
+ * A target has fixed calls but never consumes, pins, or transforms caller arguments; put that
+ * composition in an ordinary confined worker. `description` is the one line a model reads for the
+ * name; it rides the row into `rewriteRules.list()`. */
 export type RewriteRuleConfigured = {
+  /** A property-only dotted `itx` name: no calls, `@`, or `...@`. */
   match: ItxExpressionInput;
+  /** A rooted expression with no `@` or `...@`; its calls happen before the caller's arguments. */
   target: ItxExpressionInput | null;
   /** What the name means here, in one line (≤ 500 chars). */
   description?: string;
+  /** Optional TypeScript declaration for the capability this rule exposes. */
+  declaration?: string;
 };
 
 /** One row of `rewriteRules.list()` — the tree a context can spell. `context` is the path the row
@@ -62,6 +68,7 @@ export type RewriteRuleListEntry = {
   match: string;
   target: string | null;
   description?: string;
+  declaration?: string;
   context: string;
 };
 
@@ -71,6 +78,8 @@ export type SubscriptionListEntry = {
   target: string;
   consumes?: string[];
   configuredAtOffset: number;
+  /** The delivery contract selected when this subscription was configured. */
+  delivery: "live" | "processor" | "durable";
   afterOffset?: number;
   /** `false`: a FAN-OUT row — one event per call, in any order, each event retried on its own and
    *  dead-lettered alone (`itx/subscription-delivery-failed`). Its `cursor` is how far it has
@@ -903,8 +912,8 @@ export interface IterateContextApi {
     abort(name: string, reason?: string): Promise<StreamEvent>;
   };
   subscriptions: {
-    list(): SubscriptionListEntry[];
-    get(name: string): SubscriptionListEntry | null;
+    list(): Promise<SubscriptionListEntry[]>;
+    get(name: string): Promise<SubscriptionListEntry | null>;
   };
   /** The rpc stubs lent to this context right now, by key (a live session's `provide`): `get(key)`
    *  one, as a handle over its transport (offline ⇒ RPC_STUB_OFFLINE at call time). */
@@ -915,7 +924,7 @@ export interface IterateContextApi {
       spec?: (FacetSpec & { consumes?: string[] }) | { consumes?: string[] },
     ): Promise<{ name: string }>;
     disable(name: string): Promise<void>;
-    list(): SubscriptionListEntry[];
+    list(): Promise<SubscriptionListEntry[]>;
     /** A hosted processor's claim on this context's alarm: "revive me by `at`" (a facet with a
      *  `runInBackground` attempt in flight), or `null` to release it. */
     claim(name: string, at: number | null): Promise<void>;
@@ -951,10 +960,15 @@ export interface IterateContextApi {
     name?: string;
     target: ItxExpressionInput | ((events: unknown[], range: unknown) => void) | null;
     consumes?: string[];
+    /** A normal expression target is durable by default; processor rows are
+     * configured by `processors.enable`. A callback is always live and cannot set this field. */
+    delivery?: "durable" | "processor";
+    /** Durable cursor delivery starts here; processor checkpoints own their catch-up. A live
+     * callback rejects this field because it heals gaps by read. */
     afterOffset?: number;
-    /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
-     *  retried and dead-lettered on its own. Absent: the ordered queue, the one that may take a
-     *  dead letter (`itx/subscription-delivery-failed`): alert on dead letters from an ordered row. */
+    /** `false`: durable FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order,
+     * retried and dead-lettered on its own. A processor is ordered by its checkpoint; a live callback
+     * rejects this field. */
     ordered?: false;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
@@ -971,6 +985,7 @@ export interface IterateContextApi {
     target: unknown,
     options?: {
       description?: string;
+      declaration?: string;
       fetchRoute?: Omit<FetchRouteInput, "target"> & { fetchRouteName: string };
     },
   ): Promise<{ [Symbol.dispose](): void; lendEnded(): Promise<string> }>;

@@ -5,12 +5,12 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one
 //                   `invoke(expression)` — what `itx.facets.get(name)` and every other mid-chain
 //                   capability of api.ts is, and what a connector builds over a remote API
-// What the PLATFORM does with an expression is apps/os: the rewrite rules (match, rank, rewrite) are
-// src/context/itx-expression-rewriting.ts, and executing a rewritten call against a live object graph
+// What the PLATFORM does with an expression is apps/os: a provided name selects a fixed invocation
+// recipe in src/context/itx-expression-rewriting.ts, and executing that call against a live object graph
 // (`walkSteps`, the answer a context hands back) is src/context/dispatch.ts.
 import JSON5 from "json5";
 import { RpcTarget } from "capnweb";
-import { codedError, jsonEqual } from "./lib.ts";
+import { codedError } from "./lib.ts";
 
 /** A STRING expression is for what a person types: short. Anything bigger — a worker's source, a large
  *  literal — rides the PARSED form (`["itx","workers",["get",{ source }]]`), which is plain data and never
@@ -31,11 +31,8 @@ export type ItxExpression = ItxExpressionStep[];
  *  Both carry call args (the string via `.method(args)`), and `normalizedItxExpression` normalizes
  *  either to the structured form — so either works wherever one works, in every method that dispatches. */
 export type ItxExpressionInput = string | ItxExpression;
-/** An itx-expression PREFIX — a rewrite rule's `match`: dotted names, any of which may be a call step
- *  PINNING literal args — `itx.ai.run` or `itx.ai.run('gpt-5')` or `itx.repo.get('main').files`. A
- *  pinned arg must equal the call's arg at that position for the rule to match, and is CONSUMED by
- *  the match (partial application): `itx.ai.run('gpt-5') ⇒ itx.openai.chat` makes
- *  `itx.ai.run('gpt-5', inputs)` into `itx.openai.chat(inputs)`. */
+/** An itx-expression prefix. The context's durable names use property-only prefixes; expression
+ * calls remain the ordinary invocation wire. */
 export type ItxExpressionPrefix = ItxExpression;
 /** The name a step carries: the property itself, or a call step's method. */
 export const itxExpressionStepName = (step: ItxExpressionStep | undefined): string | undefined =>
@@ -44,60 +41,19 @@ export const itxExpressionStepName = (step: ItxExpressionStep | undefined): stri
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$-]*/;
 const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 
-// ── `@`, THE CALLER'S INPUT — a rewrite rule's target may hold it, nothing else may ──
-// In the string half a bare `@` outside a string literal is the marker (`'@cf/…'` inside quotes is a
-// string like any other); `...@` as an object-literal entry is the merge form. In the array half the
-// marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
-// `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
-// target (the codec's one reservation). What `@` MEANS is `fillItxExpressionHoles` in
-// apps/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
-// printed back (print, targets only).
-/** The marker's array-half spelling, the one reserved literal. */
-const ITX_EXPRESSION_HOLE = { "@": true } as const;
-/** The merge entry's key — `...@` — read by apps/os `fillItxExpressionHoles`. */
-export const ITX_EXPRESSION_MERGE_KEY = "...@";
-
 /** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):
- *  THE one pattern every walk that must skip what is inside them is built from — the marker lex, the
- *  marker print, the paren matcher. In an alternation a span is consumed whole, so nothing inside one
- *  (a quote in a comment, an `@` in a string) is ever seen by the other alternatives. */
+ * THE one pattern the parenthesis matcher uses. In an alternation a span is consumed whole, so
+ * brackets in quoted values and comments are never read as expression syntax. */
 const STRING_OR_COMMENT = String.raw`"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*'|/\*[\s\S]*?\*/|//[^\n]*`;
-const isStringOrComment = (match: string): boolean =>
-  match[0] === '"' || match[0] === "'" || match[0] === "/";
-/** In call args: a literal (kept verbatim) or a marker — `...@` before `@`, so the merge form wins. */
-const MARKERS_IN_ARGS = new RegExp(`${STRING_OR_COMMENT}|\\.\\.\\.@|@`, "g");
-/** In JSON5's printed output: the marker literal `{'@':true}` and the merge entry `'...@':true` are
- *  spelled with a single-quoted key and matched on those exact boundaries — listed BEFORE the literal
- *  alternative so the entry's `'...@'` is read as the entry, not as a string. A user's string that
- *  merely contains those characters is emitted by JSON5 as a longer (double-quoted) literal and is
- *  consumed whole. */
-const MARKERS_IN_PRINT = new RegExp(`\\{'@':true\\}|'\\.\\.\\.@':true|${STRING_OR_COMMENT}`, "g");
 /** A bracket outside a literal. */
 const BRACKETS = new RegExp(`${STRING_OR_COMMENT}|[()[\\]{}]`, "g");
-
-/** Is `value` the marker literal `{ "@": true }`? */
-export const isItxExpressionHole = (value: unknown): boolean =>
-  jsonEqual(value, ITX_EXPRESSION_HOLE);
-
-/** Does `value` (a step, an arg tree, a whole expression) hold the marker or a merge entry anywhere? */
-export function containsItxExpressionHole(value: unknown): boolean {
-  if (isItxExpressionHole(value)) return true;
-  if (Array.isArray(value)) return value.some(containsItxExpressionHole);
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- `value` is `unknown`; the typeof separates real objects from primitives (a bare truthiness check would recurse into strings/numbers)
-  if (value !== null && typeof value === "object")
-    return (
-      (value as Record<string, unknown>)[ITX_EXPRESSION_MERGE_KEY] === true ||
-      Object.values(value).some(containsItxExpressionHole)
-    );
-  return false;
-}
 
 /** Index of the `)` closing the `(` at `open`; tracks bracket depth, skipping quoted string args. */
 function matchingParen(source: string, open: number): number {
   let depth = 0;
   BRACKETS.lastIndex = open;
   for (let bracket = BRACKETS.exec(source); bracket; bracket = BRACKETS.exec(source)) {
-    if (isStringOrComment(bracket[0])) continue;
+    if (bracket[0][0] === '"' || bracket[0][0] === "'" || bracket[0][0] === "/") continue;
     if ("([{".includes(bracket[0])) depth++;
     else if (--depth === 0) return bracket.index;
   }
@@ -105,9 +61,8 @@ function matchingParen(source: string, open: number): number {
 }
 
 /** Parse the STRING half: dotted names + `.method(args)` calls (args JSON5-parsed); rejects reserved
- *  names + bare scope calls. `holes: true` — a rewrite rule's TARGET only — lexes `@` / `...@` into
- *  the marker literals; anywhere else a bare `@` is refused. */
-export function parse(source: string, options?: { holes?: boolean }): ItxExpression {
+ * names and bare scope calls. */
+export function parse(source: string): ItxExpression {
   if (source.length > ITX_EXPRESSION_STRING_MAX_CHARS)
     throw codedError(
       "EXPRESSION_TOO_LONG",
@@ -134,18 +89,9 @@ export function parse(source: string, options?: { holes?: boolean }): ItxExpress
     else if (c === "(") {
       const end = matchingParen(s, i);
       const raw = s.slice(i + 1, end).trim();
-      // `@` outside a string literal: the marker (targets only), a refusal everywhere else.
-      const inner = raw.replace(MARKERS_IN_ARGS, (match) => {
-        if (isStringOrComment(match)) return match;
-        if (!options?.holes)
-          fail("`@` (the caller's input) is legal only in a rewrite rule's target");
-        return match === "@"
-          ? JSON.stringify(ITX_EXPRESSION_HOLE)
-          : `${JSON.stringify(ITX_EXPRESSION_MERGE_KEY)}:true`;
-      });
       let args: unknown[] = [];
       try {
-        if (inner !== "") args = JSON5.parse(`[${inner}]`) as unknown[];
+        if (raw !== "") args = JSON5.parse(`[${raw}]`) as unknown[];
       } catch (e) {
         fail(`call args are not JSON5 (${(e as Error).message})`);
       }
@@ -195,19 +141,14 @@ function assertItxExpressionShape(expression: ItxExpression): void {
     } else name(method, "a method");
     if (i === 0) fail("a call on the root itself");
   });
-  // No hole check on the array half: `{ "@": true }` carried as DATA is data (edge#6) — only the
-  // STRING form lexes a bare `@` into the marker, and only for a rule's target.
 }
 
 /** THE ONE NORMALIZER: either half, normalized to the array half and checked — a string is
  *  parsed (short by rule), an array is shape-checked in place. Every function that takes an
  *  `ItxExpressionInput` (the edge `invoke`, the resolver, the event builders, the prefix parser
  *  below) enters through it. */
-export function normalizedItxExpression(
-  input: ItxExpressionInput,
-  options?: { holes?: boolean },
-): ItxExpression {
-  if (typeof input === "string") return parse(input, options);
+export function normalizedItxExpression(input: ItxExpressionInput): ItxExpression {
+  if (typeof input === "string") return parse(input);
   assertItxExpressionShape(input);
   return input;
 }
@@ -226,30 +167,20 @@ export const keySortedForPrint = (_key: string, value: unknown): unknown =>
     : value;
 
 /** Canonical stored form: dotted path + `.method(args)` calls (args `JSON5.stringify`d, object keys
- *  sorted). `holes: true` — a rewrite rule's TARGET only — spells the marker literals back as `@` /
- *  `...@`, and `parse(print(e, { holes: true }), { holes: true })` round-trips; without it the
- *  reserved literals print as the plain JSON5 they are, so a CALL that happens to carry `{ "@": true }`
- *  as data round-trips through `parse` (no holes) unchanged — the resolve/invoke law holds for it. */
-export function print(expr: ItxExpression, options?: { holes?: boolean }): string {
+ * sorted). */
+export function print(expr: ItxExpression): string {
   return expr
     .map((step, i) => {
       const dot = i ? "." : "";
       if (typeof step === "string") return dot + step;
       const json = JSON5.stringify(step.slice(1), keySortedForPrint).slice(1, -1);
-      const args = options?.holes
-        ? json.replace(MARKERS_IN_PRINT, (match) =>
-            match === "{'@':true}" ? "@" : match === "'...@':true" ? "...@" : match,
-          )
-        : json;
-      return step[0] === "" ? `(${args})` : `${dot}${step[0]}(${args})`;
+      return step[0] === "" ? `(${json})` : `${dot}${step[0]}(${json})`;
     })
     .join("");
 }
 
-/** Parse an itx-expression prefix (either codec half) — `normalizedItxExpression` (so every step is
- *  an identifier that is not reserved, in either half) plus the two refusals only a PREFIX has: the
- *  anonymous call step (`f(x)(y)` — a prefix cannot call a result), and a call step with NO args,
- *  which pins nothing and is the same prefix as the plain name: spell `itx.ai.run`. */
+/** Parse an itx-expression prefix (either codec half) — `normalizedItxExpression` plus the two
+ * structural refusals a prefix has: an anonymous call and an empty call step. */
 export function parseItxExpressionPrefix(source: ItxExpressionInput): ItxExpressionPrefix {
   const expr = normalizedItxExpression(source);
   const spelled = typeof source === "string" ? source : print(expr);
@@ -258,16 +189,12 @@ export function parseItxExpressionPrefix(source: ItxExpressionInput): ItxExpress
     if (step[0] === "")
       throw new Error(`an itx-expression prefix cannot call a result — ${JSON.stringify(spelled)}`);
     if (step.length === 1)
-      throw new Error(
-        `an itx-expression prefix pins literal args with a call step — ${JSON.stringify(spelled)} has "${step[0]}()" with none; spell "${step[0]}"`,
-      );
+      throw new Error(`an itx-expression prefix has an empty call step — spell "${step[0]}"`);
   }
   return expr;
 }
 
-/** THE ONE canonical spelling of an itx-expression prefix — the rewrite-rule table's key, what a lent
- *  stub is keyed by through `provide`'s sugar: parsed, then printed (dotted names; pinned args as JSON5
- *  literals). */
+/** THE ONE canonical spelling of an itx-expression prefix: parsed, then printed. */
 export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string {
   return print(parseItxExpressionPrefix(source));
 }

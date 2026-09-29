@@ -37,12 +37,12 @@ export async function settle<T>(run: () => Promise<T>) {
 /** When a live snapshot expires: never within a test, and finite, as a refusal's `validUntil`. */
 export const FAR = 8.64e15;
 
-/** `"match ⇒ target — description"`: `null` a mask; a target may hold holes (`@`). */
+/** `"match ⇒ target — description"`: `null` is a mask and targets are ordinary expressions. */
 export function rule(spelled: string): ItxExpressionRewriteRule {
   const [, match, target, description] = /^(.+?) ⇒ (.+?)(?: — (.+?))?$/.exec(spelled)!;
   return {
     match: parseItxExpressionPrefix(match!),
-    target: target === "null" ? null : parse(target!, { holes: true }),
+    target: target === "null" ? null : parse(target!),
     description,
   };
 }

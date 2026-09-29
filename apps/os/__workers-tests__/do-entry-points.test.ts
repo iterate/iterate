@@ -41,6 +41,7 @@ import {
   openSession,
   owedAlarm,
   readLog,
+  releasePins,
   snapshot,
   stub,
   until,
@@ -116,6 +117,153 @@ test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumb
   expect(print(row.match)).toBe("itx.aliased.ghost"); // stored CANONICAL — the one-canonicalizer rule
   expect(print(row.target)).toBe("itx.rpcStubs.get('itx.aliased.ghost')"); // the target, verbatim
   expect(Object.keys(row).sort()).toEqual(["match", "target"]); // and nothing else
+});
+
+test("the private durable-subscription bridge accepts no target, event, caller or delivery authority from its facet", async () => {
+  const context = "prj_do_delivery_bridge";
+  await stub(context).append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "sink", target: "itx.builtins.platformHook", delivery: "durable" },
+  });
+  await runInDurableObject(stub(context), async (instance) => {
+    await expect(
+      instance.deliverConfiguredSubscription({
+        name: "sink",
+        configuredAtOffset: 1,
+        range: { after: 0, through: 1 },
+        target: "itx.attacker",
+        events: [{ type: "forged", offset: 1 }],
+        caller: { delivery: "forged" },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      instance.deliverConfiguredSubscription({
+        name: "sink",
+        configuredAtOffset: 999,
+        range: { after: 0, through: 1 },
+      }),
+    ).rejects.toMatchObject({ code: "GONE" });
+  });
+});
+
+test("a fan-out terminal is one idempotent failed receipt, and stale terminals cannot mutate a replacement or resumed row", async () => {
+  const context = "prj_do_subscription_terminal_fences";
+  const s = stub(context);
+  const [configured] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "fanout",
+      target: "itx.builtins.platformHook.deliverEvent",
+      delivery: "durable",
+      ordered: false,
+      consumes: ["mark"],
+    },
+  })) as unknown as [{ offset: number }];
+  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await runInDurableObject(s, async (instance) => {
+    await instance.recordConfiguredSubscriptionTerminal({
+      name: "fanout",
+      configuredAtOffset: configured.offset,
+      afterOffset: mark.offset - 1,
+      attempts: 15,
+      error: "receiver refused",
+      fanOut: true,
+    });
+    await instance.recordConfiguredSubscriptionTerminal({
+      name: "fanout",
+      configuredAtOffset: configured.offset,
+      afterOffset: mark.offset - 1,
+      attempts: 15,
+      error: "receiver refused",
+      fanOut: true,
+    });
+  });
+  const receipts = (await s.read(0)).events.filter(
+    (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
+  );
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({
+    payload: { name: "fanout", offset: mark.offset, attempts: 15, error: "receiver refused" },
+  });
+  expect(
+    (await s.invoke("itx.subscriptions.list()")).find(
+      (row: { name: string }) => row.name === "fanout",
+    ),
+  ).not.toHaveProperty("halted");
+
+  const [replacement] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "fanout", target: "itx.whoami", delivery: "durable", consumes: ["mark"] },
+  })) as unknown as [{ offset: number }];
+  await expect(
+    runInDurableObject(s, (instance) =>
+      instance.recordConfiguredSubscriptionTerminal({
+        name: "fanout",
+        configuredAtOffset: configured.offset,
+        afterOffset: mark.offset - 1,
+        attempts: 15,
+        error: "late predecessor",
+        fanOut: true,
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "GONE" });
+  expect(
+    (await s.invoke("itx.subscriptions.list()")).find(
+      (row: { name: string }) => row.name === "fanout",
+    ),
+  ).toMatchObject({ configuredAtOffset: replacement.offset });
+
+  await s.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "fanout", afterOffset: mark.offset },
+  });
+  await expect(
+    runInDurableObject(s, (instance) =>
+      instance.recordConfiguredSubscriptionTerminal({
+        name: "fanout",
+        configuredAtOffset: replacement.offset,
+        afterOffset: mark.offset,
+        attempts: 15,
+        error: "late before resume",
+      }),
+    ),
+  ).rejects.toMatchObject({ code: "GONE" });
+  await releasePins(context);
+});
+
+test("the private subscriptions facet owns ordered and fan-out durable progress", async () => {
+  const context = "prj_do_subscription_facet";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "ordered", target: "itx.whoami", delivery: "durable", consumes: ["mark"] },
+  });
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "fanout",
+      target: "itx.builtins.platformHook.deliverEvent",
+      delivery: "durable",
+      ordered: false,
+      consumes: ["mark"],
+    },
+  });
+  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await until("the subscriptions facet acknowledges both delivery shapes", async () => {
+    const rows = (await s.invoke("itx.subscriptions.list()")) as {
+      name: string;
+      cursor?: { confirmedOffset: number };
+      pending?: number;
+    }[];
+    const ordered = rows.find((row) => row.name === "ordered");
+    const fanout = rows.find((row) => row.name === "fanout");
+    return (
+      ordered?.cursor?.confirmedOffset === mark.offset &&
+      fanout?.cursor?.confirmedOffset === mark.offset &&
+      fanout.pending === 0
+    );
+  });
+  await releasePins(context);
 });
 
 test("the rule table is a MAP: a re-set at the same match REPLACES (one row, nothing beneath), `null` DELETES, a second `null` is a benign no-op — and every set or un-set is exactly ONE event, never deduped", async () => {
@@ -240,11 +388,11 @@ test("a handle's undo is a COMPARE-AND-SET decided in the reduce: a stale remova
   // SUBSCRIPTIONS: the row's identity is its configure offset.
   const [first] = (await s.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "digest", target: "itx.digest.processEventBatch" },
+    payload: { name: "digest", target: "itx.digest.processEventBatch", delivery: "durable" },
   })) as unknown as { offset: number }[];
   const [second] = (await s.append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "digest", target: "itx.digest.processEventBatch" },
+    payload: { name: "digest", target: "itx.digest.processEventBatch", delivery: "durable" },
   })) as unknown as { offset: number }[];
   const row = async () =>
     (await s.invoke("itx.subscriptions.get('digest')")) as { configuredAtOffset: number } | null;

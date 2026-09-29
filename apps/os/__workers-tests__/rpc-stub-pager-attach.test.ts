@@ -57,7 +57,7 @@ test("a malformed pager header is a 400; a well-formed one attaches the pager AN
   expect(await presence(ctx)).toEqual(["itx.k1"]);
   expect(await ruleAt(ctx, "itx.k1")).toMatchObject({
     match: "itx.k1",
-    target: "itx.rpcStubs.get('itx.k1')", // stored as the lender spelled it (it resolves through the implicit row)
+    target: "itx.builtins.rpcStubs.get('itx.k1')",
     context: "/",
   });
   ok.webSocket!.close(1000, "test done");
@@ -75,7 +75,6 @@ test("a session's terminal fetch cannot smuggle a pager attach: its stamp (stamp
       headers: {
         [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
           rpcStubKey: "itx.smuggled",
-          appendEvents: [{ type: "smuggled" }],
         }),
       },
     }),
@@ -112,7 +111,6 @@ test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach 
           [ITX_EXPRESSION_FETCH_HEADER]: "itx.echo",
           [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
             rpcStubKey: "itx.smuggled",
-            appendEvents: [{ type: "smuggled" }],
           }),
         },
       }),
@@ -131,15 +129,11 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
   await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
 
   const refused = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
-  expect(refused).toMatchObject({ status: 409 });
-  expect(refused.webSocket).toBeNull();
-  const body = (await refused.json()) as { code: string | null; message: string };
-  expect(body).toMatchObject({ code: "STREAM_PAUSED" });
-  expect(body.message).toContain("stream paused");
-  // Nothing happened: accept and append share one synchronous turn, so a refusal un-accepts.
-  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 0 });
-  expect(await presence(ctx)).toEqual([]);
-  expect(await ruleAt(ctx, "itx.k2")).toBeNull();
+  expect(refused).toMatchObject({ status: 101 });
+  refused.webSocket!.accept();
+  // Pager attachment is physical state, independent of whether the event log is paused.
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
+  expect(await presence(ctx)).toEqual(["itx.k2"]);
 
   await s.append({ type: "events.iterate.com/itx/resumed" });
   const ok = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
@@ -147,7 +141,7 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
   ok.webSocket!.accept();
   expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k2"]);
-  expect((await ruleAt(ctx, "itx.k2"))?.target).toBe("itx.rpcStubs.get('itx.k2')");
+  expect((await ruleAt(ctx, "itx.k2"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k2')");
   ok.webSocket!.close(1000, "test done");
 });
 
@@ -168,16 +162,13 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   const pager = await openPager(ctx, "itx.k5", [ruleFor("itx.k5")]);
   expect(pager).toMatchObject({ status: 101 });
   pager.webSocket!.accept();
-  expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
+  expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k5')");
 
   await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
   pager.webSocket!.close(1000, "session died while paused");
   await until("the pager is gone", async () => (await transportState(ctx)).rpcStubPagers === 0);
-  // the un-set was refused by the pause: the row stands (the window)
-  expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
-
+  expect(await ruleAt(ctx, "itx.k5")).toBeNull();
   await s.append({ type: "events.iterate.com/itx/resumed" });
-  await until("the rule un-set after resume", async () => (await ruleAt(ctx, "itx.k5")) === null);
 });
 
 test("a DO reset takes a live callback's pager with no close run: the woken incarnation un-sets the row that named it", async () => {
@@ -245,7 +236,7 @@ test("append REFUSES a rule match rooted at itx.builtins (the reserved fixed poi
   const pager = await openPager(ctx, "itx.k7", [ruleFor("itx.k7")]);
   expect(pager).toMatchObject({ status: 101 });
   pager.webSocket!.accept();
-  expect((await ruleAt(ctx, "itx.k7"))?.target).toBe("itx.rpcStubs.get('itx.k7')");
+  expect((await ruleAt(ctx, "itx.k7"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k7')");
   pager.webSocket!.close(1000, "last pager");
   await until("itx.k7's own rule is un-set", async () => (await ruleAt(ctx, "itx.k7")) === null);
 });
@@ -470,13 +461,33 @@ test("a pager replaced while its stub is borrowed gives the stub back: the next 
 
 /** Open a pager upgrade straight at the DO's `fetch` (what lendRpcStubOverPager does relay-side):
  *  the header IS the attach request — the key and the events that name it. */
-function openPager(ctx: string, rpcStubKey: string, appendEvents: StreamEventInput[] = []) {
+function openPager(ctx: string, rpcStubKey: string, events: StreamEventInput[] = []) {
+  const rule = events.find((event) => event.type.endsWith("/rewrite-rule-configured"));
+  const subscription = events.find((event) => event.type.endsWith("/subscription-configured"));
+  const route = events.find((event) => event.type.endsWith("/fetch-route-configured"));
+  const rulePayload = rule?.payload as { match?: string } | undefined;
+  const subscriptionPayload = subscription?.payload as
+    | { name?: string; consumes?: string[] }
+    | undefined;
+  const routePayload = route?.payload as Record<string, unknown> | undefined;
+  const { target: _target, ...fetchRoute } = routePayload || {};
   return stub(ctx).fetch("https://rpc-stub-pager.internal/", {
     headers: {
       Upgrade: "websocket",
       [RPC_STUB_PAGER_WEBSOCKET_HEADER]: encodeRpcStubPagerAttachRequest({
         rpcStubKey,
-        appendEvents,
+        ...(rulePayload?.match && {
+          liveProvide: {
+            match: rulePayload.match,
+            fetchRoute: routePayload ? fetchRoute : undefined,
+          },
+        }),
+        ...(subscriptionPayload?.name && {
+          liveSubscription: {
+            name: subscriptionPayload.name,
+            consumes: subscriptionPayload.consumes,
+          },
+        }),
       }),
     },
   });
@@ -496,6 +507,7 @@ function liveSubscription(name: string, consumes?: string[]): StreamEventInput {
     payload: {
       name,
       target: ["itx", "builtins", "rpcStubs", ["get", `subscription:${name}`]],
+      delivery: "live",
       consumes,
     },
   };

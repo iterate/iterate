@@ -180,6 +180,7 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
         type: "events.iterate.com/itx/subscription-configured",
         payload: {
           name: "voice-agent",
+          delivery: "processor",
           target: [
             "itx",
             "facets",

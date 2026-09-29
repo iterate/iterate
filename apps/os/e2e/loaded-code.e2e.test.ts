@@ -66,7 +66,7 @@ test("loaded code may not spell itx.builtins, and its cd goes anywhere in the pr
   expect(
     await worker().appendEvent({
       type: "events.iterate.com/itx/subscription-configured",
-      payload: { name: "leak", target: "itx.builtins.cd('/').append" },
+      payload: { name: "leak", target: "itx.builtins.cd('/').append", delivery: "durable" },
     }),
   ).toMatchObject({ error: expect.stringMatching(/not a loaded worker's word/) });
   expect(await worker().writeRow("itx.kv", null)).toMatchObject({ ok: expect.anything() });

@@ -16,6 +16,7 @@ export const FIRST_PARTY_FACET_CLASSES = {
   project: "ProjectDurableObject",
   repo: "RepoDurableObject",
   secret: "SecretDurableObject",
+  subscriptions: "SubscriptionDeliveryDurableObject",
   workspace: "WorkspaceDurableObject",
 } as const;
 

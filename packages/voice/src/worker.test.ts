@@ -79,6 +79,7 @@ test.for(["waveshare_rlcd_4_2", "zectrix_note4", "home_assistant_voice_preview_e
     ).toEqual([
       {
         name: "voice-agent",
+        delivery: "processor",
         target: [
           "itx",
           "facets",

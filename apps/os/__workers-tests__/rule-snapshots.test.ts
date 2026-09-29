@@ -215,6 +215,30 @@ test("warm loaded code's portable calls call neither its context nor the root, a
   });
 });
 
+test("a jailed context exposes a named adapter worker and one live ai capability: the worker fixes and reorders inputs in code while caller shadows and other roots stay unavailable", async () => {
+  const root = project();
+  const child = `${root}.iterate/agents/adapter`;
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(root);
+  using _ai = await itx.provide("itx.ai", new FixedAi());
+  await stub(child).append(
+    rule("itx", null),
+    rule("itx.ai", "itx.builtins.cd('/').ai"),
+    rule("itx.adapter", ["itx", "builtins", "workers", ["get", { source: ADAPTER_WORKER }]]),
+  );
+  expect(
+    await stub(child).invoke(
+      "itx.adapter.transform({ model: 'caller-shadow', left: 'left', right: 'right' })",
+    ),
+  ).toEqual({
+    ai: { model: "fixed-model", input: { right: "right", left: "left" } },
+    forbidden: {
+      fetch: "NO_ITX_EXPRESSION_MATCH",
+      secrets: "NO_ITX_EXPRESSION_MATCH",
+      cd: "NO_ITX_EXPRESSION_MATCH",
+    },
+  });
+});
+
 test("a worker loaded code reaches receives none of the platform's headers loaded code forged, and a fetch nothing answers is a 404 Response", async () => {
   const root = project();
   await stub(root).append(
@@ -307,6 +331,40 @@ class FakeKv extends RpcTarget {
     return `fake:${key}`;
   }
 }
+
+class FixedAi extends RpcTarget {
+  run(model: string, input: unknown) {
+    return { model, input };
+  }
+}
+
+const ADAPTER_WORKER = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+const refusal = async (operation) => {
+  try {
+    await operation();
+    return "answered";
+  } catch (error) {
+    return error.code;
+  }
+};
+export default class Adapter extends WorkerEntrypoint {
+  async transform(input) {
+    using itx = this.getItx();
+    return {
+      ai: await itx.ai.run("fixed-model", { right: input.right, left: input.left }),
+      forbidden: {
+        fetch: await refusal(() => itx.fetch("https://example.test/")),
+        secrets: await refusal(() => itx.secrets.list()),
+        cd: await refusal(() => itx.cd("/").whoami()),
+      },
+    };
+  }
+}
+`,
+};
 
 /** What `ctx`'s portable roots answer: the kv key, the R2 object's text, the files, an egress. */
 async function portableView(ctx: string) {

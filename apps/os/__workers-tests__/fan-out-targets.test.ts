@@ -166,7 +166,7 @@ const REFUSING_WORKER = recordingWorker(/* js */ `
 async function configure(ctx: string, target: ItxExpression, name = "f") {
   await stub(ctx).append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name, target, consumes: ["test/real"], ordered: false },
+    payload: { name, target, delivery: "durable", consumes: ["test/real"], ordered: false },
   });
 }
 

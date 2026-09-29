@@ -102,6 +102,7 @@ test(
           ],
           "processEventBatch",
         ],
+        delivery: "processor",
       },
     });
     type Probe = {
