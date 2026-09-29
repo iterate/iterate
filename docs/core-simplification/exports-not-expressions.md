@@ -1,4 +1,11 @@
-# Phase 2 design: exports, not expressions
+# Paused first-pass design: exports, not expressions
+
+> **Status: superseded as the active recommendation.** This document records
+> the initial typed-export proposal and its review constraints. The current
+> recommendation in [findings.md](findings.md) is a smaller model: an event
+> log, an ordinary RPC namespace, explicit inheritance/jail boundaries, and
+> ordinary code mounted by private factories. Do not implement this as a new
+> public descriptor or target-kind framework without a fresh decision.
 
 This is a source-verified replacement plan for the rewrite language. It is a
 design and handoff artifact only: it does not change the concurrent capability

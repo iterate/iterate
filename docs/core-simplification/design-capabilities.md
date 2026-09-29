@@ -1,4 +1,10 @@
-# Design proposal: capability objects, trusted exports and jail boundaries
+# Paused first-pass design: capability objects, trusted exports and jail boundaries
+
+> **Status: superseded as the active recommendation.** This document preserves
+> a useful audit of the old design, but its descriptor/target taxonomy is not
+> the proposed core API. See [findings.md](findings.md) for the lean current
+> model: event log, ordinary RPC namespace, explicit inheritance/jail, and
+> normal code composed above the context.
 
 This proposal is based on `ce251e06c1c3c5894aebdc674e57b2196be0ae08`.
 It accepts breaking the rule/provide API. The objective is to remove the

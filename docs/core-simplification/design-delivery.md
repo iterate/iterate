@@ -1,4 +1,12 @@
-# Delivery kernel proof of concept
+# Paused delivery-kernel proof of concept
+
+> **Status: superseded for the next source slice.** This proposal removes
+> ordered cursors through a processor-owned runner. The independent lean-model
+> review found that the runner does not yet replace config birth delivery,
+> batching, wake behaviour, or retry semantics. Keep it as a future product
+> investigation; do not use it to justify a current core deletion. See
+> [findings.md](findings.md) and
+> [opus-lean-round-3.md](reviews/opus-lean-round-3.md).
 
 This design narrows the kernel while keeping append-only contexts, reads, low-latency ephemerals, Cap'n Web clients, hosted processors, processor authoring, and the React hooks built on live subscriptions.
 
