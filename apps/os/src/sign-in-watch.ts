@@ -6,9 +6,10 @@
 // SLOW_STEP_MS logs its line WHILE it still waits — a line that lands even when the client gives up
 // first and the invocation is cancelled.
 //
-// The code exchange is itself a chain, inside the token endpoint: the grant store, the person's
-// account (oauth.ts `accountStateOf`) and the provider's KV. Its hops are watched the same way, as
-// `oauth.step-slow`, because every refresh and every admission runs them too.
+// The code exchange is itself a chain, inside the token endpoint: the grant store and the provider's
+// KV (a client's exchange, and every refresh and admission, also read the person's account, oauth.ts
+// `accountStateOf`; a sign-in's own exchange does not, oauth.ts `grantLifetime`). Its hops are
+// watched the same way, as `oauth.step-slow`.
 
 /** Well above a healthy step (a whole sign-in answers in about a second), well below the 10 s the
  *  code exchange is bounded by and the 15 s a spec's sign-in waits. */

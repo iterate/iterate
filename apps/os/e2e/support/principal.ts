@@ -19,8 +19,11 @@ export async function issuerCookie(
     body: new URLSearchParams({ email, password: loginPassword(), next }),
     redirect: "manual",
   });
+  // The sign-in page answers what went wrong as a 303 back to itself, the reason in `?error=`.
   if (login.status !== 302)
-    throw new Error(`Sign-in fixture: ${login.status} ${await login.text()}`);
+    throw new Error(
+      `Sign-in fixture: ${login.status} ${login.headers.get("location") ?? ""} ${await login.text()}`,
+    );
   const cookie = login.headers
     .getSetCookie()
     .map((value) => value.split(";")[0])
