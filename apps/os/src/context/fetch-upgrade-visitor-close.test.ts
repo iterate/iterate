@@ -15,22 +15,17 @@
 // errors), so this row serves `visitorEndOfSplice` — the edge's code, both ends of the splice wired
 // through a stand-in context socket — from a bare workerd, and reads workerd's own log.
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { writeFile } from "node:fs/promises";
-import { createServer, type AddressInfo } from "node:net";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build } from "esbuild";
 import { WebSocket } from "ws";
 import { expect, test, vi } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { bareWorkerd, isUncaught } from "./bare-workerd-test-support.ts";
 
 test("a visitor that closes its WebSocket to the edge's spliced upgrade ends the invocation without an uncaught error", async () => {
-  await using runtime = await bareWorkerd();
+  await using runtime = await servedSplice();
   for (let visit = 0; visit < 3; visit++)
-    expect(await visitTheClock(`${runtime.origin}/spliced`)).toEqual({
+    expect(await visitTheClock(`${runtime.ws}/spliced`)).toEqual({
       ticks: 3,
       closeCode: 1000,
     });
@@ -43,8 +38,8 @@ test("a visitor that closes its WebSocket to the edge's spliced upgrade ends the
 // named line the prd fault alarm files that error under, and closes its end, or the invocation
 // waits on it for good and fails as "hung".
 test("a visitor whose connection vanishes without a close frame: the edge logs fetch-upgrade.local-gone and closes its end; the invocation's only error is the dead connection, never a hung invocation", async () => {
-  await using runtime = await bareWorkerd();
-  const socket = new WebSocket(`${runtime.origin}/spliced`);
+  await using runtime = await servedSplice();
+  const socket = new WebSocket(`${runtime.ws}/spliced`);
   const out = { ticks: 0, closeCode: 0 };
   socket.on("message", () => {
     if (++out.ticks === 3) socket.terminate();
@@ -68,8 +63,8 @@ test("a visitor whose connection vanishes without a close frame: the edge logs f
 createFailing(test, /the invocation failed: .*other end of WebSocketPipe was destroyed/)(
   "workerd: a WebSocketPair end accepted before the 101 carrying the other end is sent fails the invocation at a clean close",
   async () => {
-    await using runtime = await bareWorkerd();
-    expect(await visitTheClock(`${runtime.origin}/accepted-first`)).toEqual({
+    await using runtime = await servedSplice();
+    expect(await visitTheClock(`${runtime.ws}/accepted-first`)).toEqual({
       ticks: 3,
       closeCode: 1000,
     });
@@ -123,69 +118,9 @@ export default {
 };
 `;
 
-/** A bare workerd (the binary wrangler runs) serving FIXTURE on a free port, `--verbose` so its log
- *  names every invocation that failed. `settledLog` waits out the invocations' ends and returns
- *  the log's lines, the worker's console among them. */
-async function bareWorkerd() {
-  const port = await freePort();
-  const directory = temporaryDirectory();
-  const dir = directory.path;
-  const bundle = await build({
-    stdin: { contents: FIXTURE, resolveDir: dirname(fileURLToPath(import.meta.url)) },
-    bundle: true,
-    format: "esm",
-    write: false,
-  });
-  await writeFile(join(dir, "worker.js"), bundle.outputFiles[0]!.text);
-  await writeFile(
-    join(dir, "config.capnp"),
-    `using Workerd = import "/workerd/workerd.capnp";
-const config :Workerd.Config = (
-  services = [ (name = "main", worker = (
-    modules = [ (name = "worker.js", esModule = embed "worker.js") ],
-    compatibilityDate = "2026-09-01",
-  )) ],
-  sockets = [ (name = "http", address = "127.0.0.1:${port}", http = (), service = "main") ],
-);`,
-  );
-  const binary: string = createRequire(createRequire(import.meta.url).resolve("wrangler"))(
-    "workerd",
-  ).default;
-  const child: ChildProcess = spawn(binary, ["serve", join(dir, "config.capnp"), "--verbose"], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let log = "";
-  child.stdout!.on("data", (chunk) => (log += chunk));
-  child.stderr!.on("data", (chunk) => (log += chunk));
-  await vi.waitFor(
-    async () => expect(await fetch(`http://127.0.0.1:${port}/`)).toMatchObject({ ok: true }),
-    { timeout: 15_000, interval: 100 },
-  );
-  return {
-    origin: `ws://127.0.0.1:${port}`,
-    async settledLog() {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return log.split("\n");
-    },
-    async [Symbol.asyncDispose]() {
-      child.kill();
-      directory[Symbol.dispose]();
-    },
-  };
-}
-
-/** A line of workerd's log naming an invocation that failed. */
-function isUncaught(line: string): boolean {
-  return line.includes("uncaught exception");
-}
-
-/** A port nothing listens on: the OS's pick for a listener closed at once. */
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const { port } = server.address() as AddressInfo;
-  await new Promise((resolve) => server.close(resolve));
-  return port;
+/** FIXTURE served by a bare workerd. */
+function servedSplice() {
+  return bareWorkerd({ fixture: FIXTURE, resolveDir: dirname(fileURLToPath(import.meta.url)) });
 }
 
 /** Open the clock, read its three ticks, close 1000 as a browser tab does, and wait for the close. */

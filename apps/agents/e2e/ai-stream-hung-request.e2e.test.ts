@@ -13,7 +13,7 @@
 // lands on ItxEntrypoint's.
 //
 // When it goes red because it passed, Cloudflare fixed the fault: keep this body as a plain row and
-// delete FALSE_HUNG from the prd fault alarm (scripts/ci/prd-fault-alarm.ts).
+// delete its entry from PINNED_LINES in the prd fault alarm (scripts/ci/prd-fault-alarm.ts).
 import { expect } from "vitest";
 import { z } from "zod";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";

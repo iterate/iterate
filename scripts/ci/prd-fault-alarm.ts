@@ -20,6 +20,8 @@
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
 // here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
+// A Cloudflare defect that only logs an error line, where no call failed, is pinned by a test and
+// listed in PINNED_LINES with where its line still pages.
 //
 //   node scripts/ci/prd-fault-alarm.ts run   # prd's Cloudflare API token from Doppler _shared/prd
 //   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # posts and keeps state on main only
@@ -88,9 +90,11 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
  *  visitors were answered, by URL, outside a cause's rays; `causes` holds those inside them. `pagers`
  *  is not a fault: the rpc-stub pagers' re-dial outcomes by event, which say whether a Durable
  *  Object's close was recovered (apps/os context/rpc-stub-relay.ts); one that gives up logs an
- *  error, which is. `healEvents` is `heals` by event instead of by name, for PINNED_WORKAROUNDS. */
+ *  error, which is. `closeResets` are the errors a context's socket close logged for a reset
+ *  (CLOSE_RESET), by message: errors only when that recovery did not hold. `healEvents` is `heals`
+ *  by event instead of by name, for PINNED_WORKAROUNDS. */
 export type FaultReading = Record<
-  "serverErrors" | "heals" | "healEvents" | "errors" | "pagers",
+  "serverErrors" | "heals" | "healEvents" | "errors" | "closeResets" | "pagers",
   [string, number][]
 > & { causes: CauseReading[] };
 
@@ -357,8 +361,8 @@ type Sighting = Pick<Incident, "what" | "label" | "count" | "hosts">;
 
 /** Errors a Durable Object's close or storage reset logs, and the close's own summary: the
  *  recovery the rpc-stub pagers re-dial through. They count only when that recovery did not hold: a
- *  pager gave up in the window, or none re-dialed (a reset with no pager on it). A visitor 5xx in
- *  their rays counts whatever the pagers did. */
+ *  pager gave up in the window, or none re-dialed (a reset with no pager on it). So do a reading's
+ *  `closeResets`. A visitor 5xx in their rays counts whatever the pagers did. */
 const RECOVERED_BY_REDIAL = [
   /^Connection closed: this Durable Object instance is no longer active/u,
   /^close$/u,
@@ -401,7 +405,7 @@ export function incidentsOf(reading: FaultReading) {
   // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident. An
   // alarm's summary is the time it was scheduled for: one incident for all. A stack's frames move
   // with every deploy, and an id (a reference, an event, a project) is new with every error.
-  for (const [message, count] of reading.errors) {
+  for (const [message, count] of [...reading.errors, ...(recovered ? [] : reading.closeResets)]) {
     if (recovered && RECOVERED_BY_REDIAL.some((pattern) => pattern.test(message))) continue;
     const requestLine = /^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/u.exec(message);
     const label = requestLine
@@ -839,37 +843,88 @@ const EXPECTED_ERRORS = Object.values(CAUSES);
  * context, `itx.abort()`, a deleted root whose project came back), which the runtime logs in the
  * asking invocation and in every other call in flight that it rejects, and the constructor's refusal
  * of an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
- * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). An error line whose
- * message a Durable Object announced in the window, in that Durable Object, is that outcome and
- * pages nothing; its invocation's summary folds into it (summarized-exceptions). The same error in
- * a Durable Object that announced nothing pages.
+ * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). And a facet deleted with
+ * its hosting row, whose cut-off call session the runtime logs as a bare `<class>.jsrpc` summary
+ * (apps/os context/facet-host.ts `#deleteFacet`). An error line whose message a Durable Object
+ * announced in the window, in that Durable Object, is that outcome and pages nothing, and its
+ * invocation's summary folds into it; so does a summary with no line that the Durable Object
+ * announced (folded-summaries). The same error in a Durable Object that announced nothing pages.
  */
 const ANNOUNCED = [
   "context.destroyed",
   "context.aborted",
   "context.root-restored",
   "context.unborn-by-id",
+  "facet.deleted",
 ];
 
-// workerd#918: a Durable Object that answers before a request body is read can log
-// "Can't read from request stream after response has been sent." though the client got its
-// response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
-// itx-expression fetch's pipe. It pages only on `/api` itself — the capnweb endpoint, a platform
-// call, not a site visit (`/api/…` is a site's path).
 const UNREAD_BODY = "Can't read from request stream after response has been sent";
-
-// A Cloudflare defect pinned by apps/agents/e2e/ai-stream-hung-request.e2e.test.ts: the runtime
-// cancels the ItxEntrypoint invocation that carried Workers AI's streamed Response from a context
-// Durable Object to a facet (an agent's `itx.ai.run`) after the whole body arrived, and logs it as
-// hung. The reply completes, so the line is false there. Remove this when the pin passes. It pages
-// on any other invocation.
 const FALSE_HUNG =
   "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response";
+const RPC_BODY_ENDED_EARLY = "ReadableStream received over RPC disconnected prematurely";
 
-/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, an unread body
- *  outside `/api` or a hung line on ItxEntrypoint, which their own counts read). Pure. */
+/** Logged anywhere but on the `entrypoint` invocations, a stateless worker's own included. */
+const notOn = (entrypoint: string) =>
+  anyOf(leaf("$workers.entrypoint", "is_null"), leaf("$workers.entrypoint", "neq", entrypoint));
+
+/**
+ * CLOUDFLARE DEFECTS THAT ONLY LOG A LINE: the runtime logs an error where no call failed. Each is
+ * pinned (`pin`: the test that goes red once Cloudflare fixes it, or the upstream issue), and an
+ * error line with its `message` pages only where `pages` selects it: anywhere else it is the defect.
+ * Delete an entry when its pin goes red.
+ */
+const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
+  {
+    // A Durable Object that answers before a request body is read, though the client got its
+    // response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
+    // itx-expression fetch's pipe. It pages only on `/api` itself — the capnweb endpoint, a
+    // platform call, not a site visit (`/api/…` is a site's path).
+    message: UNREAD_BODY,
+    pin: "https://github.com/cloudflare/workerd/issues/918",
+    pages: [
+      anyOf(
+        leaf("$metadata.message", "includes", UNREAD_BODY),
+        leaf("$metadata.error", "includes", UNREAD_BODY),
+      ),
+      leaf("$workers.event.request.url", "regex", "^https?://[^/]+/api(\\?|$)"),
+    ],
+  },
+  {
+    // The ItxEntrypoint invocation that carried Workers AI's streamed Response from a context
+    // Durable Object to a facet (an agent's `itx.ai.run`), cancelled as hung after the whole body
+    // arrived. The reply completes. The runtime's own line: always a message.
+    message: FALSE_HUNG,
+    pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
+    pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
+  },
+  {
+    // A context Durable Object that forwards by native fetch a Request it received over Workers
+    // RPC with a body of known length: `cd`'s terminal fetch of a repo's git request from another
+    // context. The upstream read every byte and answered. The runtime's own line: always a message.
+    message: RPC_BODY_ENDED_EARLY,
+    pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
+    pages: [
+      leaf("$metadata.message", "includes", RPC_BODY_ENDED_EARLY),
+      notOn("IterateContextDurableObject"),
+    ],
+  },
+];
+
+/** The error line the runtime logs in a context's hibernatable WebSocket close event when the
+ *  object was reset under the socket: its opaque "internal error; reference = …", before any of our
+ *  code runs (workerd api/hibernatable-web-socket.c++). It is the drop of the socket an rpc-stub
+ *  pager holds: FaultReading `closeResets`, recovered as RECOVERED_BY_REDIAL's are. */
+const CLOSE_RESET: LogFilter[] = [
+  leaf("$metadata.message", "includes", "internal error; reference = "),
+  leaf("$workers.eventType", "eq", "hibernatableWebSocket"),
+  leaf("$workers.event.webSocketType", "eq", "close"),
+  leaf("$workers.entrypoint", "eq", "IterateContextDurableObject"),
+];
+
+/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, or a pinned line,
+ *  whose own count reads where it pages). Pure. */
 function expectedError(message: string) {
-  return [...EXPECTED_ERRORS, UNREAD_BODY, FALSE_HUNG].some((expected) =>
+  return [...EXPECTED_ERRORS, ...PINNED_LINES.map((pinned) => pinned.message)].some((expected) =>
     message.includes(expected),
   );
 }
@@ -1056,26 +1111,49 @@ async function readWindow(
   const announced = new Map<string, Set<string>>();
   for (const [[objectId, message]] of announcements)
     if (objectId && message) announced.set(objectId, new Set(announced.get(objectId)).add(message));
-  // The summary of an invocation that also logged its exception (a `*.jsrpc` call's, an alarm's) is
-  // that exception's sighting, counted (or expected) once, as the exception.
-  // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
-  // summaries, the rest page beside their exceptions, and the log says how many.
-  const summarizedExceptions = await evidence("summarized-exceptions", async () => {
-    const found = await Promise.all(
-      chunks(summaryRequests).map((chunk) =>
-        rows(
-          [errorLevel, ...ERROR_ROWS.lines, leaf("$metadata.requestId", "in", chunk.join(","))],
-          ["$metadata.requestId"],
+  // Summaries folded away, by request ID. The summary of an invocation that also logged its exception
+  // (a `*.jsrpc` call's, an alarm's) is that exception's sighting, counted (or expected) once, as the
+  // exception. A summary with no line whose message its Durable Object announced (ANNOUNCED: the
+  // call session a facet's deletion cut off) is that announced outcome.
+  const [summarizedExceptions, announcedSummaries] = await Promise.all([
+    evidence("summarized-exceptions", async () => {
+      const found = await Promise.all(
+        chunks(summaryRequests).map((chunk) =>
+          rows(
+            [errorLevel, ...ERROR_ROWS.lines, leaf("$metadata.requestId", "in", chunk.join(","))],
+            ["$metadata.requestId"],
+          ),
         ),
-      ),
-    );
-    const requestIds = found.flat().map(([[requestId]]) => requestId!);
-    if (requestIds.length > 500)
-      console.warn(
-        JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: requestIds.length - 500 }),
       );
-    return requestIds.slice(0, 500);
-  });
+      return found.flat().map(([[requestId]]) => requestId!);
+    }),
+    evidence("announced-summaries", async () => {
+      const found = await Promise.all(
+        chunks([...announced.keys()]).map((objectIds) =>
+          rows(
+            [
+              errorLevel,
+              ...ERROR_ROWS.summaries,
+              leaf("$workers.durableObjectId", "in", objectIds.join(",")),
+            ],
+            ["$metadata.requestId", "$workers.durableObjectId", "$metadata.message"],
+          ),
+        ),
+      );
+      return found
+        .flat()
+        .filter(([[, objectId = "", message = ""]]) => announced.get(objectId)?.has(message))
+        .map(([[requestId]]) => requestId!);
+    }),
+  ]);
+  // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
+  // summaries, the rest page, and the log says how many.
+  const folded = [...new Set([...summarizedExceptions, ...announcedSummaries])];
+  if (folded.length > 500)
+    console.warn(
+      JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: folded.length - 500 }),
+    );
+  const foldedSummaries = folded.slice(0, 500);
   // The rays of every outcome and cause, together, stay under 2,000: the most a count's four `not_in`
   // of rays can hold beside its own filters. Evidence past that excludes nothing.
   let excludedRays = 0;
@@ -1137,9 +1215,9 @@ async function readWindow(
     ...(rowsOf === "summaries"
       ? [
           {
-            name: "summarized-exceptions",
+            name: "folded-summaries",
             key: "$metadata.requestId",
-            values: summarizedExceptions,
+            values: foldedSummaries,
             keep: null,
           },
         ]
@@ -1211,37 +1289,19 @@ async function readWindow(
         expected.set(message, (expected.get(message) ?? 0) + n);
     return expected;
   };
-  const readUnreadBodyOnApi = async () => {
-    const [[, n] = ["", 0]] = await count(
-      [
-        errorLevel,
-        ...ERROR_ROWS.lines,
-        anyOf(
-          leaf("$metadata.message", "includes", UNREAD_BODY),
-          leaf("$metadata.error", "includes", UNREAD_BODY),
-        ),
-        leaf("$workers.event.request.url", "regex", "^https?://[^/]+/api(\\?|$)"),
-      ],
-      exclusionsFor("lines"),
-    );
-    return n ? [[`${UNREAD_BODY}.`, n] satisfies [string, number]] : [];
-  };
-  const readHungOffItxEntrypoint = async () => {
-    const [[, n] = ["", 0]] = await count(
-      [
-        errorLevel,
-        ...ERROR_ROWS.lines,
-        // the runtime's own line: always a message
-        leaf("$metadata.message", "includes", FALSE_HUNG),
-        anyOf(
-          leaf("$workers.entrypoint", "is_null"),
-          leaf("$workers.entrypoint", "neq", "ItxEntrypoint"),
-        ),
-      ],
-      exclusionsFor("lines"),
-    );
-    return n ? [[`${FALSE_HUNG}.`, n] satisfies [string, number]] : [];
-  };
+  // Each pinned line where it still pages, under its message (PINNED_LINES).
+  const readPinnedLinesElsewhere = async () =>
+    (
+      await Promise.all(
+        PINNED_LINES.map(async ({ message, pages }) => {
+          const [[, n] = ["", 0]] = await count(
+            [errorLevel, ...ERROR_ROWS.lines, ...pages],
+            exclusionsFor("lines"),
+          );
+          return n ? [[`${message}.`, n] satisfies [string, number]] : [];
+        }),
+      )
+    ).flat();
   const healed = [leaf("event", "includes", "platform-failure")];
   const [
     serverErrors,
@@ -1250,9 +1310,9 @@ async function readWindow(
     healEvents,
     lines,
     announcedLines,
+    closeResets,
     structured,
-    apiUnreadBody,
-    hungOffItxEntrypoint,
+    pinnedLinesElsewhere,
     requestLines,
     summaries,
     pagers,
@@ -1263,18 +1323,20 @@ async function readWindow(
     rows(healed, ["event"]),
     readErrors("lines", "$metadata.message", lineFilters),
     readAnnounced(),
+    readErrors("lines", "$metadata.message", CLOSE_RESET),
     readErrors("lines", "$metadata.error", [
       leaf("$metadata.error", "neq", ""),
       anyOf(leaf("$metadata.message", "is_null"), leaf("$metadata.message", "eq", "")),
     ]),
-    readUnreadBodyOnApi(),
-    readHungOffItxEntrypoint(),
+    readPinnedLinesElsewhere(),
     readErrors("requestLines", "$metadata.message", []),
     readErrors("summaries", "$metadata.message", []),
     rows([leaf("event", "includes", "rpc-stub-pager-")], ["event"]),
   ]);
   const single = (found: [string[], number][]) =>
     found.map(([[key = ""], n]): [string, number] => [key, n]);
+  // The close resets are lines the message lines' count read too: counted apart, as closeResets.
+  const closed = new Map(closeResets);
   return {
     serverErrors,
     causes,
@@ -1284,15 +1346,15 @@ async function readWindow(
       ...[
         ...lines.map(([message, n]): [string, number] => [
           message,
-          n - (announcedLines.get(message) ?? 0),
+          n - (announcedLines.get(message) ?? 0) - (closed.get(message) ?? 0),
         ]),
         ...structured,
       ].filter(([message, n]) => n > 0 && !expectedError(message)),
-      ...apiUnreadBody,
-      ...hungOffItxEntrypoint,
+      ...pinnedLinesElsewhere,
       ...requestLines,
       ...summaries,
     ],
+    closeResets,
     pagers: single(pagers),
   };
 }

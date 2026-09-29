@@ -110,7 +110,7 @@ export const CLONE_VERSION_TEXT =
 
 /** The counter, whose FIRST push ever rejects with `message`; every try is recorded in its own
  *  SQLite, which survives the abort and the new isolate. */
-export const flakyCounter = (message: string): FacetSpec => ({
+export const flakyCounter = (message: string, fields: Record<string, unknown> = {}): FacetSpec => ({
   source: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": counter(/* js */ `
@@ -124,7 +124,7 @@ export class FlakyDurableObject extends StreamProcessorDurableObject {
     this.#tries();
     const before = Number(this.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM tries").one().n);
     this.ctx.storage.sql.exec("INSERT INTO tries (at) VALUES (?)", Date.now());
-    if (before === 0) throw new Error(${JSON.stringify(message)});
+    if (before === 0) throw Object.assign(new Error(${JSON.stringify(message)}), ${JSON.stringify(fields)});
     return super.processEventBatch(events, range);
   }
   tries() {
