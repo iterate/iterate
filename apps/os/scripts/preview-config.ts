@@ -194,10 +194,10 @@ export const PROXIED_APPS = new Set(["notes", "docs"]);
  *  `<platform>/projects/<project>/<app>/projects/<project>`, through the platform's sign-in when
  *  signed out, where an admin signs in as themselves, a member of the project (the seed adds them).
  *  Its own page for the project, not its root: the root opens the person's first project, which for
- *  an admin may be another. The Dash's is its own sign-in into the project, naming the test person `email`; the
- *  admin app's names nobody (an admin opens it as themselves); every other app's is its own sign-in
- *  naming the test person (`appSignInLink`). Each suggests signing in through `providerHint`, the
- *  deployment's admin issuer's host. */
+ *  an admin may be another. The Dash's is its own sign-in into the project, naming the test person
+ *  `email`; the admin app's names nobody (an admin opens it as themselves); every other app's is
+ *  its own sign-in naming the test person (`appSignInLink`). Each suggests signing in through
+ *  `providerHint`, the deployment's admin issuer's host. */
 export function signInLinkOf(input: {
   app: { name: string; url: string };
   platform: string;

@@ -722,8 +722,11 @@ async function seedSignIn(
       auth: { type: "admin-secret", secret, as: { email } },
     });
     using created = await connection.session.projects.create({ project });
-    for (const app of preview.proxiedApps)
-      await created.fetchRoutes.set(app.name, proxiedAppRoute(app.name, app.url));
+    await Promise.all(
+      preview.proxiedApps.map((app) =>
+        created.fetchRoutes.set(app.name, proxiedAppRoute(app.name, app.url)),
+      ),
+    );
     const { orgId } = (await connection.session.projects.list()).find(
       (record) => record.slug === project,
     )!;
@@ -731,10 +734,12 @@ async function seedSignIn(
       baseUrl: preview.url,
       auth: { type: "admin-secret", secret },
     });
-    for (const admin of preview.admins) {
-      const user = await operator.session.users.create({ email: admin });
-      await operator.session.organizations.addMember(orgId, { userId: user.id });
-    }
+    await Promise.all(
+      preview.admins.map(async (admin) => {
+        const user = await operator.session.users.create({ email: admin });
+        await operator.session.organizations.addMember(orgId, { userId: user.id });
+      }),
+    );
     console.log(
       `sign-in: seeded ${email} with project ${project}, serving ${preview.proxiedApps.map((app) => app.name).join(", ") || "no proxied app"}, its members ${preview.admins.join(", ")}`,
     );

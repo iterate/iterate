@@ -3,6 +3,7 @@
 
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/itx_credential_retry.h"
 #include "iterate/kit/itx_outbox_sender.h"
 #include "iterate/kit/platforms/esp_tls_stream.h"
 #include "iterate/kit/spsc_ring.h"
@@ -67,28 +68,7 @@ enum {
    * bounded; the replacement generation follows the normal reconnect policy.
    */
   ITERATE_KIT_ITX_MOUNT_TIMEOUT_MS = 10000,
-  /*
-   * A refused key (iterate_kit_itx_refused_credential) is asked
-   * again after a minute, doubling to ten. Setting the device up again is what
-   * mends it, and that rewrites the key and reboots, so a retry serves only a
-   * refusal that ends on its own: a key minted moments ago that has not
-   * reached every location yet, or an OS that refused in error and was
-   * fixed. Ten minutes bounds how long either outlives its cause.
-   */
-  ITERATE_KIT_ITX_CREDENTIAL_RETRY_MS = 60000,
-  ITERATE_KIT_ITX_CREDENTIAL_RETRY_MAX_MS = 600000,
 };
-
-/*
- * A 401 or 403 answer to the upgrade is the OS refusing the key the upgrade
- * carried, before any session exists: unknown, expired, ended, or without the
- * scope `/api` needs. The same key gets the same answer however soon it is
- * asked again. A network failure or a 5xx is different: a prompt retry can
- * outlast it.
- */
-static inline bool iterate_kit_itx_refused_credential(int32_t upgrade_status) {
-  return upgrade_status == 401 || upgrade_status == 403;
-}
 
 /**
  * Application-visible lifecycle, not a mirror of ESP-IDF callback events.
@@ -369,8 +349,8 @@ struct iterate_kit_itx_transport {
   uint32_t websocket_start_attempts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
-  uint32_t websocket_credential_refusals;
-  uint32_t credential_refused;
+  /* Driven by the network task; metrics samples its refusal facts. */
+  struct iterate_kit_itx_credential_retry credential_retry;
   uint32_t mount_timeouts;
   uint32_t mount_timeout_generation;
   uint32_t protocol_failures;
