@@ -15,9 +15,11 @@
 // drop the `createFailing` wrapper and the quoted observation, and keep its assertions.
 //
 // Two cell-cap facts these rows lean on: a SQLite-backed DO's
-// storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH: 4 MiB in local
-// workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 MiB,
-// so a body can be small enough to append and too big to checkpoint or memo.
+// storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH, in bytes: 8 MiB in
+// local workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is
+// 8 Mi chars, so a body can be small enough to append and too big to checkpoint or memo. Locally
+// that takes a kv value whose V8 serialization outgrows its text: a string with any character
+// outside Latin-1 is written at two bytes per char.
 //
 // The CONTROL rows (plain `test`) pin the half that is handled well beside each red half, so a
 // change to either shows up. The rows, by theme:
@@ -121,11 +123,12 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
 });
 
 // WHAT IT DIES OF: the hosting row LANDS (a 4.5 MiB event is under the 8 MiB append ceiling), then
-// `FacetHost#callFacet`'s startup memo `kv.put("facet:big", spec)` dies of `string or blob too big:
-// SQLITE_TOOBIG` — at the enable-time catch-up AND on every push after it. Worse than a refusal:
-// with no memo, every push takes the recovery path (`read(configuredAtOffset - 1, 1)`), re-reads
-// and re-parses the 4.5 MiB event out of SQLite, and dies at the same put. `snapshot()` rejects with
-// the same raw text. Production's cell is 2 MB, so a 2–8 MiB processor bundle is exactly this row.
+// `FacetHost#callFacet`'s startup memo `kv.put("facet:big", spec)` (9 MiB serialized: the source's
+// `€` makes it two bytes per char) dies of `string or blob too big: SQLITE_TOOBIG` — at the
+// enable-time catch-up AND on every push after it. Worse than a refusal: with no memo, every push
+// takes the recovery path (`read(configuredAtOffset - 1, 1)`), re-reads and re-parses the 4.5 MiB
+// event out of SQLite, and dies at the same put. `snapshot()` rejects with the same raw text.
+// Production's cell is 2 MB, so a 2–8 MiB processor bundle is exactly this row.
 createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG"/, {
   timeoutMs: PIN_TIMEOUT_MS,
 })(
@@ -135,7 +138,7 @@ createFailing(test, /snapshot\(\) dies of "string or blob too big: SQLITE_TOOBIG
     const ctx = "prj_ud_facetmemo_cap";
     const s = stub(ctx);
     drainIssues();
-    const source = FINE_SRC + "\n// " + "x".repeat(4.5 * MiB) + "\n";
+    const source = FINE_SRC + "\n// € " + "x".repeat(4.5 * MiB) + "\n";
     const enableErr = await rejectionOf(() =>
       enableProcessorByEvent(ctx, "big", source, "FineDurableObject"),
     );

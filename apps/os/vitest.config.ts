@@ -121,7 +121,7 @@ class LongPolesFirst extends BaseSequencer {
 }
 
 /** EACH WORKERS RUNTIME'S STORAGE: a directory per Miniflare (its `resourcePersistencePath`, which
- *  patches/@cloudflare__vitest-plugin@1.2.5.patch lets through), so the pool knows where the files
+ *  patches/@cloudflare__vitest-plugin@1.3.2.patch lets through), so the pool knows where the files
  *  are and can empty them between two files (`TEST_STORAGE`, __workers-tests__/empty-runtime.ts). A
  *  runtime left alone keeps its storage in a temporary directory of Miniflare's own, where nothing
  *  outside workerd can reach it. Removed when vitest exits. */
