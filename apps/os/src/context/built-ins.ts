@@ -275,11 +275,10 @@ export interface BuiltInScope extends LibraryRoots {
    *  `route.target` with `x-itx-expression` through `env.ITX.fetch` (configs/default/worker.ts).
    *  Only on a project's root. */
   fetchRoutes: IterateContextApi["fetchRoutes"];
-  /** THE FIRST BINDINGS ROOT: Cloudflare's Workers AI binding, VERBATIM — `run(model, inputs,
-   *  options?)`, `models()`, `gateway(id).run({ provider, endpoint, headers, query })`, `toMarkdown()`,
-   *  `autorag(id)` — no wrapper, so `itx.ai` reads exactly like `env.AI` and a rewrite rule can pin a
-   *  model with `@` (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai",
-   *  fake)`; the physical binding stays `itx.builtins.ai`. */
+  /** THE FIRST BINDINGS ROOT: Workers AI's `run(model, inputs, options?)` and `models()`, through
+   *  the stateless `ItxAi` entrypoint (itx-ai.ts), so a rewrite rule can pin a model with `@`
+   *  (`itx.fable ⇒ itx.ai.run('@cf/…', @)`). A test shadows it with `provide("itx.ai", fake)`; the
+   *  platform's stays `itx.builtins.ai`. */
   ai: IterateContextApi["ai"];
   /** Cloudflare Browser Run: `.quickAction(action, options)` returns the
    *  action's RESULT; `.fetch(input, init)` is the raw CDP endpoint. */
@@ -482,14 +481,15 @@ interface BuildBuiltInsDeps {
   path: string;
   /** The codec name of the context these roots belong to (loader cache keys). */
   iterateContextName: string;
-  /** The bindings the built-ins reach (the workers test project binds neither AI, Browser Run, nor Artifacts;
+  /** `ItxAi` for this context's project (itx-ai.ts `itxAiFor`): the built-in root `itx.ai`. */
+  ai: IterateContextApi["ai"];
+  /** The bindings the built-ins reach (the workers test project binds neither Browser Run nor Artifacts;
    *  nothing there calls them). */
   env: {
     LOADER: WorkerLoader;
     ITX_KV: KVNamespace;
     /** The one R2 bucket, every owner's objects under its own prefix — the built-in root `itx.r2`. */
     FILES: R2Bucket;
-    AI: Ai;
     BROWSER: BrowserRun;
     ARTIFACTS: ArtifactsNamespace;
     DB: D1Database;
@@ -1886,7 +1886,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
     },
-    ai: env.AI, // the binding object itself — dispatch walks its methods
+    ai: deps.ai,
     browser: cfBrowser(env.BROWSER),
     cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
     email: {

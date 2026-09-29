@@ -31,11 +31,13 @@ on:
     - cron: "47 5 * * *"
   push:
     branches: [main]
-    # How an agent calls its model: the default model, the request, the byte transport, the pin of
-    # the fault the transport works around, a voice call's delegation, and this suite.
+    # How an agent calls its model: the default model, the request, the stateless `ItxAi` that makes
+    # every `itx.ai` call, the pin of a Cloudflare streaming fault, a voice call's delegation, and
+    # this suite.
     paths:
       - .depot/workflows/os-real-model.yml
       - packages/agents/**
+      - apps/os/src/itx-ai.ts
       - apps/agents/e2e/agents-default-model.e2e.test.ts
       - apps/agents/e2e/ai-stream-hung-request.e2e.test.ts
       - apps/agents/e2e/voice-agent.e2e.test.ts

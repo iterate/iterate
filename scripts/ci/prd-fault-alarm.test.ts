@@ -913,6 +913,26 @@ test.for([
   ]);
 });
 
+test("a hung line on ItxEntrypoint is the pinned false one; on any other invocation it pages", async () => {
+  const hung =
+    "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/";
+  queryableWorkersLogs([
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", message: hung },
+      $workers: { entrypoint: "ItxEntrypoint", eventType: "jsrpc" },
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker", message: hung },
+      $workers: { eventType: "fetch" },
+    },
+  ]);
+  expect(bullets(await summary())).toEqual([
+    "• errors: The Workers runtime canceled this request because it detected that your Worker's 1 · last 07:30 UTC",
+  ]);
+});
+
 test.for([
   { name: "undefined", message: undefined },
   { name: "null", message: null },
@@ -1352,8 +1372,9 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
 });
 
 /** How many queries a quiet run sends: the outcomes', causes' and jsrpc summaries' evidence, then
- *  the 5xx by URL and in all, the heals by name and event, the four error counts and the pagers. */
-const QUIET_RUN_QUERIES = 16;
+ *  the 5xx by URL and in all, the heals by name and event, the error counts (an unread /api body and
+ *  a hung line off ItxEntrypoint among them) and the pagers. */
+const QUIET_RUN_QUERIES = 17;
 
 /** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function pageFor(reading: Partial<FaultReading>) {

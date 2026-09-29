@@ -68,6 +68,7 @@ import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from ".
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
+import { itxAiFor } from "./itx-ai.ts";
 import {
   ancestorPathsOf,
   CONTEXT_DESTROYED,
@@ -199,7 +200,7 @@ export interface Env extends AppConfigEnv {
   DB: D1Database;
   LOADER: WorkerLoader;
   ITX_KV: KVNamespace;
-  /** Workers AI — the built-in root `itx.ai`, the binding verbatim (context/built-ins.ts). */
+  /** Workers AI — read only by the stateless `ItxAi` (itx-ai.ts), the built-in root `itx.ai`. */
   AI: Ai;
   /** Browser Run — the built-in root `itx.browser` (context/built-ins.ts). */
   BROWSER: BrowserRun;
@@ -832,6 +833,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     path: this.#durableObjectAddress.path,
     otherOwnerContext: (name) => this.env.ITERATE_CONTEXT.getByName(name),
     iterateContextName: this.#durableObjectAddress.name,
+    ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
     deployId: this.#appConfig.deployId,
     ingressRouting: this.#appConfig.urls.ingressRouting,
