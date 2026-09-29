@@ -1,9 +1,10 @@
 // A PR body's Notes `Sign in ↗` (apps/os/scripts/preview.ts `signInLinks`): Notes in the PR's test
 // project, on the platform. Notes has no sign-in of its own: under paths ingress it runs on the
-// platform's, so a signed-out browser is sent to the platform's sign-in and back. A reviewer signs
-// in as themselves, one of the deployment's admins, whom CI's seed made members of the project. On a
-// preview a reviewer signs in through prd, which no spec can hold, so this spec signs in as the
-// preview's test admin with the password (as specs/dash/sign-in-link.spec.ts does).
+// platform's, so a signed-out browser goes through the platform's sign-in and back. The link
+// suggests signing in through prd (`provider_hint`), which the page leads with, since a reviewer is
+// one of the deployment's admins, whom CI's seed made members of the project. No spec can hold a
+// prd session, so this one takes "sign in another way" and signs in as the preview's test admin with
+// the password (as specs/dash/sign-in-link.spec.ts does).
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { proxiedAppRoute, signInLinkOf } from "../../apps/os/scripts/preview-config.ts";
@@ -17,8 +18,10 @@ import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 // the admin a per-commit deployment and local dev both list (envs.ts `previewDeployment`,
 // apps/os/scripts/generate-wrangler-config.ts)
 const ADMIN_EMAIL = `admin@${TEST_EMAIL_DOMAIN}`;
+// where every per-commit deployment's admins sign in (envs.ts `previewDeployment`'s `adminIssuer`)
+const PRD_ISSUER_HOST = "os.iterate.com";
 
-test("the PR body's Notes link: an admin signs in as themselves and Notes opens on the PR's project", async ({
+test("the PR body's Notes link: the sign-in leads with os.iterate.com, an admin signs in as themselves, and Notes opens on the PR's project", async ({
   page,
   helpers,
 }) => {
@@ -54,9 +57,17 @@ test("the PR body's Notes link: an admin signs in as themselves and Notes opens 
       ingressRouting,
       project: slug,
       email: person,
+      providerHint: PRD_ISSUER_HOST,
     }),
   );
-  // signed out, the platform asks who this browser is, then comes back to the note
+  // signed out, the platform's sign-in leads with the way a reviewer signs in, and keeps the rest
+  // one click away
+  await page.getByRole("link", { name: `Sign in with ${PRD_ISSUER_HOST}`, exact: true }).waitFor();
+  expect(await page.getByRole("textbox", { name: "Email", exact: true }).count()).toBe(0);
+  await page
+    .getByRole("link", { name: "sign in another way", exact: true })
+    .click({ noWaitAfter: true });
+  // then comes back to the note
   await signInWithPassword(page, ADMIN_EMAIL);
   await page.getByRole("textbox", { name: "/repos/config/notes/log.md", exact: true }).waitFor();
   await page.getByRole("button", { name: "Switch project" }).filter({ hasText: slug }).waitFor();

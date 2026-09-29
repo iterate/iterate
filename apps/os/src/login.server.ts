@@ -15,7 +15,7 @@ import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import type { Env } from "./env.ts";
-import { switchAccountHref, type loginSearchOf } from "./login-search.ts";
+import { signInHref, switchAccountHref, type loginSearchOf } from "./login-search.ts";
 
 /** The sign-in page's data for this request and its search: who is signed in, or which ways to
  *  sign in exist. */
@@ -33,6 +33,11 @@ export async function loginState(
   return {
     next,
     signedInAs: session ? session.principal.email || session.principal.actor : null,
+    // which way to sign in a link suggests (`provider_hint`): signed out, the page leads with it,
+    // when this deployment offers it
+    providerHint: search.provider_hint?.trim().toLowerCase() || null,
+    // this page without the suggestion: every way to sign in
+    everyWay: signInHref(next, null),
     switchAccount: switchAccountHref(next),
     codeSentTo: session ? null : await loginCodePending(env, request),
     error: search.error || null,

@@ -195,22 +195,20 @@ test("a new deploy leaves a body without the section alone", () => {
 
 // ── template quick-launch links: the Dash's New project sheet, one click ──
 
-test("a `Sign in ↗` link is the app's own sign-in, landing where the link lands and naming whom the consent page pre-fills; the admin app's names nobody", () => {
-  const link = appSignInLink(
-    `${DASH}/projects?new=1&template=with-agents`,
-    "pr123@preview.iterate.test",
-  );
+test("a `Sign in ↗` link is the app's own sign-in, landing where the link lands, suggesting the way a reviewer signs in and naming whom the consent page pre-fills", () => {
+  const link = appSignInLink(`${DASH}/projects?new=1&template=with-agents`, {
+    provider_hint: "os.iterate.com",
+    login_hint: "pr123@preview.iterate.test",
+  });
   expect(link.startsWith(`${DASH}/.auth/login?`)).toBe(true);
   expect(Object.fromEntries(new URL(link).searchParams)).toEqual({
     next: "/projects?new=1&template=with-agents",
+    provider_hint: "os.iterate.com",
     login_hint: "pr123@preview.iterate.test",
   });
-  expect(appSignInLink("https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev")).toBe(
-    "https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login?next=%2F",
-  );
 });
 
-test("each app's `Sign in ↗` for PR 123: the Dash's into the test person's project, a proxied app's its page in that project on the platform, the admin app's naming nobody", () => {
+test("each app's `Sign in ↗` for PR 123, each suggesting os.iterate.com: the Dash's into the test person's project, a proxied app's through the platform's sign-in to its page in that project, the admin app's naming nobody", () => {
   const deployment = previewDeployment("pr123-ccccccc")!;
   const links = Object.fromEntries(
     ["dash", "agents", "notes", "docs", "admin"].map((app) => {
@@ -221,6 +219,7 @@ test("each app's `Sign in ↗` for PR 123: the Dash's into the test person's pro
           ingressRouting: deployment.os.ingressRouting!,
           project: "pr123",
           email: "pr123@preview.iterate.test",
+          providerHint: "os.iterate.com",
         }),
       );
       return [
@@ -230,13 +229,14 @@ test("each app's `Sign in ↗` for PR 123: the Dash's into the test person's pro
     }),
   );
   expect(links).toEqual({
-    dash: 'https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login {"next":"/projects/pr123","login_hint":"pr123@preview.iterate.test"}',
+    dash: 'https://pr123-ccccccc-dash.iterate-dev-preview.workers.dev/.auth/login {"next":"/projects/pr123","provider_hint":"os.iterate.com","login_hint":"pr123@preview.iterate.test"}',
     agents:
-      'https://pr123-ccccccc-agents.iterate-dev-preview.workers.dev/.auth/login {"next":"/","login_hint":"pr123@preview.iterate.test"}',
+      'https://pr123-ccccccc-agents.iterate-dev-preview.workers.dev/.auth/login {"next":"/","provider_hint":"os.iterate.com","login_hint":"pr123@preview.iterate.test"}',
     notes:
-      "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/notes/projects/pr123 {}",
-    docs: "https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/projects/pr123/docs/projects/pr123 {}",
-    admin: 'https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login {"next":"/"}',
+      'https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/login {"next":"/projects/pr123/notes/projects/pr123","provider_hint":"os.iterate.com"}',
+    docs: 'https://pr123-ccccccc-os.iterate-dev-preview.workers.dev/.auth/login {"next":"/projects/pr123/docs/projects/pr123","provider_hint":"os.iterate.com"}',
+    admin:
+      'https://pr123-ccccccc-admin.iterate-dev-preview.workers.dev/.auth/login {"next":"/","provider_hint":"os.iterate.com"}',
   });
 });
 
@@ -248,6 +248,7 @@ test("a proxied app's link needs paths ingress: under subdomains the app is an o
       ingressRouting: { type: "subdomains", hostname: "iterate.app" },
       project: "pr123",
       email: "pr123@preview.iterate.test",
+      providerHint: "os.iterate.com",
     }),
   ).toThrow(/needs paths ingress/);
 });

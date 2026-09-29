@@ -8,7 +8,8 @@ import {
 } from "@iterate-com/ui/components/standalone-page";
 import { CodeSignInForm } from "../components/login/code-sign-in-form.tsx";
 import { EmailSignInForm } from "../components/login/email-sign-in-form.tsx";
-import { SignInProviders } from "../components/login/sign-in-providers.tsx";
+import { signInProvidersOf } from "../components/login/providers.ts";
+import { RecommendedSignIn, SignInProviders } from "../components/login/sign-in-providers.tsx";
 import { SignedIn } from "../components/login/signed-in.tsx";
 import { getLoginState } from "../issuer.functions.ts";
 import { issuerRequestContext } from "../issuer-request-context.server.ts";
@@ -59,12 +60,16 @@ function LoginPage() {
 }
 
 /** Every sign-in this deployment offers: the email form (or, once a code is sent, its entry) and
- *  the OAuth providers. */
+ *  the OAuth providers — or, when the link suggested one of them (`provider_hint`), that one alone
+ *  and the way back to the rest. */
 function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginState>> }) {
+  const providers = signInProvidersOf(state);
+  const recommended = state.codeSentTo
+    ? undefined
+    : providers.find((provider) => provider.key === state.providerHint);
+  if (recommended) return <RecommendedSignIn provider={recommended} everyWay={state.everyWay} />;
   const formEnabled = state.password || state.emailSignIn;
-  const providersEnabled = Boolean(
-    state.google || state.cloudflare || state.github || state.adminIssuer,
-  );
+  const providersEnabled = providers.length > 0;
   if (!formEnabled && !providersEnabled)
     return <p className="text-sm">Sign-in is not configured for this deployment.</p>;
   return (
@@ -85,14 +90,7 @@ function SignInOptions({ state }: { state: Awaited<ReturnType<typeof getLoginSta
           or continue with
         </FieldSeparator>
       ) : null}
-      {providersEnabled ? (
-        <SignInProviders
-          google={state.google}
-          cloudflare={state.cloudflare}
-          github={state.github}
-          adminIssuer={state.adminIssuer}
-        />
-      ) : null}
+      {providersEnabled ? <SignInProviders providers={providers} /> : null}
     </>
   );
 }

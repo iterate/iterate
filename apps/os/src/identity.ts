@@ -336,7 +336,7 @@ export async function identityResponse(request: Request, env: Env) {
     const person = await issuerSessionPersonOf(env, request);
     const here = `${url.pathname}${url.search}`;
     if (!person) {
-      headers.set("Location", signInHref(here));
+      headers.set("Location", signInHref(here, null));
       return new Response(null, { status: 302, headers });
     }
     if (person.id !== url.searchParams.get("link"))
