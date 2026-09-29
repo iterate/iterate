@@ -1,9 +1,7 @@
-// __workers-tests__/edge-platform-failure.test.ts — the worker's answer to a failure no route
-// answered (src/worker.ts `platformFailureAnswer`) and /api's to a token validation that failed
-// (src/api.ts), met in a bearer's validation (its personal access token's index read): a platform
-// failure is a 503 whose Retry-After its kind sets, logged as the platform's; our own defect is the
-// runtime's 500 on a project host and the library's bare 503 on /api, reported. A project's own
-// error on its host stays its 500. The control plane's failures: project-host-control-plane-down.
+// __workers-tests__/edge-platform-failure.test.ts — the answer to a failure met in a bearer's
+// personal-access-token index read, on a project host (src/worker.ts `platformFailureAnswer`) and on
+// /api (src/api.ts), beside a project's own error on its host. Out of scope: the control plane's
+// failures (project-host-control-plane-down.test.ts).
 import { env, exports } from "cloudflare:workers";
 import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";

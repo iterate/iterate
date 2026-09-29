@@ -260,7 +260,9 @@ async function routeRequest(
       ? crossingOneMore(mark, `a request to ${url.host}`)
       : newChain(`a request to ${url.host}`);
   } catch (error) {
-    return new Response(`508: ${(error as Error).message}\n`, { status: 508 });
+    return new Response(`508: ${error instanceof Error ? error.message : String(error)}\n`, {
+      status: 508,
+    });
   }
   // what reads the mark from here on (/api, /mcp) reads it one context further
   if (mark) request = requestCausedBy(request, cause);
