@@ -5,8 +5,8 @@ import { errorCode } from "iterate/lib";
 /** Publish `target` as the project's config worker — what EVERY host of the project reaches, the
  *  routing slug in `x-iterate-routing-slug` — once the project's own creation saga has settled: the
  *  saga publishes the seeded config repo, and an append before it lands would be overwritten. The
- *  wait is a minute of 5 s calls, each fresh: a root instance Cloudflare replaces under one call
- *  costs that call, as it does `configRepoSettled` (packages/agents install.ts). */
+ *  wait is a minute of fresh 5 s calls (src/project/collection.ts `TERMINAL_WAIT_SLICE_MS` says
+ *  why). */
 export async function publishConfigWorker(itx: any, target: unknown) {
   const started = Date.now();
   for (;;) {

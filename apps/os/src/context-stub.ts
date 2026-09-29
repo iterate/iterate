@@ -34,21 +34,33 @@ export function contextStub(
   area: string,
 ) {
   return {
-    async invoke(itxExpression: ItxExpression, args: unknown[], caller: Caller): Promise<unknown> {
+    /** `givenUp`: the caller stopped waiting for this call's answer, so the call left pending is
+     *  released and never repeated. */
+    async invoke(
+      itxExpression: ItxExpression,
+      args: unknown[],
+      caller: Caller,
+      givenUp?: AbortSignal,
+    ): Promise<unknown> {
       let answer: unknown;
       try {
         answer = await retryPlatformFailures(
           async () => {
             const call = namespace.getByName(address.name).invoke(itxExpression, args, caller);
+            // A call that threw, or that its caller gave up on, holds its session, and the context
+            // with it, until its promise is released (context/dispatch.ts
+            // `awaitAnswerReleasedIfRejected` says why).
+            const release = () => releaseRpcSessions([call]);
+            givenUp?.addEventListener("abort", release, { once: true });
             try {
               // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call
               // denotes whatever expression the caller spelled, so `unknown` is the honest contract.
               return (await call) as unknown;
             } catch (error) {
-              // A call that threw holds its session, and the context with it, until its promise is
-              // released (context/dispatch.ts `awaitAnswerReleasedIfRejected` says why).
-              releaseRpcSessions([call]);
+              release();
               throw error;
+            } finally {
+              givenUp?.removeEventListener("abort", release);
             }
           },
           {
@@ -61,6 +73,7 @@ export function contextStub(
               projectId: address.projectId,
               path: address.path,
             }),
+            signal: givenUp,
           },
         );
       } catch (error) {
@@ -81,12 +94,16 @@ export function contextStub(
  *  `projectId`, spelled at the fixed point with no principal — the platform's own read of its own
  *  record, whoever asked for the run — its lines named `itx-run.…`. */
 export function waitForEventOnContext(namespace: IterateContextNamespace, projectId: string) {
-  return async (path: string, filter: WaitForEventFilter): Promise<StreamEvent> => {
+  return async (
+    path: string,
+    filter: WaitForEventFilter,
+    givenUp: AbortSignal,
+  ): Promise<StreamEvent> => {
     const found = await contextStub(
       namespace,
       DurableObjectNameCodec.address({ projectId, path }),
       "itx-run",
-    ).invoke(["itx", "builtins", ["waitForEvent", filter]], [], { principal: null });
+    ).invoke(["itx", "builtins", ["waitForEvent", filter]], [], { principal: null }, givenUp);
     try {
       // The context's own `waitForEvent` answers the event it found: copied out, and the RPC
       // result, which holds the context until released, released.

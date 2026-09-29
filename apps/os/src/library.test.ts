@@ -363,15 +363,14 @@ test("run: REPLACED UNDER THE WAIT — a slice held on the instance Cloudflare r
   expect(vi.getTimerCount()).toBe(0);
 });
 
-test("run: a slice left with NO answer at all — a call on an instance Cloudflare shut down mid-call — is given up after four slices and asked again on a fresh call, logged as the platform failure it heals", async () => {
+test("run: a slice left with NO answer at all — a call on an instance Cloudflare shut down mid-call — is given up after four slices, its reader told to release the call, and asked again on a fresh call, logged as the platform failure it heals", async () => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  onTestFinished(() => warn.mockRestore());
-  let calls = 0;
-  const waitForEventAt = () => {
-    calls += 1;
-    return calls === 1
+  const givenUp: AbortSignal[] = [];
+  const waitForEventAt = (_path: string, _filter: WaitForEventFilter, signal: AbortSignal) => {
+    givenUp.push(signal);
+    return givenUp.length === 1
       ? new Promise<StreamEvent>(() => {})
       : Promise.resolve(settledAt(11, 10, { status: "succeeded", result: "done" }));
   };
@@ -379,8 +378,10 @@ test("run: a slice left with NO answer at all — a call on an instance Cloudfla
   void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).then((r) => (result = r));
   await vi.advanceTimersByTimeAsync(20_000 - 1);
   expect(result).toBeUndefined();
+  expect(givenUp.map((signal) => signal.aborted)).toEqual([false]);
   await vi.advanceTimersByTimeAsync(1);
   expect(result).toBe("done");
+  expect(givenUp.map((signal) => signal.aborted)).toEqual([true, false]);
   expect(warn.mock.calls.map(([line]) => line)).toEqual([
     expect.objectContaining({
       event: "itx-run.platform-failure-wait-unanswered",

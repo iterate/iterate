@@ -22,13 +22,9 @@ import type { AgentState } from "./contract.ts";
 
 /** How long `create` and `delete` wait for the agent's certificate in all. */
 const CERTIFICATE_WAIT_MS = 30_000;
-/** How long ONE call on the agent's context waits before it is asked again. Cloudflare replaces a
- *  Durable Object's instance under the calls running on it, and a wait held on the old instance
- *  never sees what the new one commits
- *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior).
- *  Each slice is a fresh call, which reaches the instance Cloudflare runs now, so a replaced
- *  instance costs one slice, as it does the platform's own entity collection (apps/os
- *  project/collection.ts `TERMINAL_WAIT_SLICE_MS`). */
+/** How long ONE call on the agent's context waits before it is asked again on a fresh call, so an
+ *  instance Cloudflare replaces under the wait costs one slice (apps/os project/collection.ts
+ *  `TERMINAL_WAIT_SLICE_MS` says why). */
 const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
@@ -248,10 +244,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
 }
 
 /** The first of `types` on the agent's log after `afterOffset`, waited for CERTIFICATE_WAIT_MS in
- *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call (the constant says why). The context's
- *  wake record rides along: one found after a slice timed out is an incarnation the timed-out wait
- *  never saw — the object was replaced under it — and is logged as the platform failure it heals;
- *  one already on the log when the wait began is skipped. */
+ *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call: apps/os project/collection.ts
+ *  `#terminalFact`'s wait, whose doc says why the wake record rides along. */
 async function agentCertificate(
   context: { waitForEvent(filter: object): unknown },
   path: string,

@@ -371,14 +371,20 @@ export async function requestScriptRun(
 }
 
 /** THE SETTLEMENT OF A REQUESTED RUN, read where the request landed: the result, or its error with
- *  the failure kind on it. `waitForEventAt(path, filter)` is one `waitForEvent` on a FRESH stub of
- *  the context at `path`, which reaches the instance Cloudflare runs now. The wait is sliced
- *  (SCRIPT_RUN_WAIT_SLICE_MS says why) and re-armed from the last settlement seen — another run's is
- *  skipped, not lost — until a minute past the run's deadline, time for the settlement's own append.
- *  None by then means the runner could not record one (it reports why): the caller is let go. */
+ *  the failure kind on it. `waitForEventAt(path, filter, givenUp)` is one `waitForEvent` on a FRESH
+ *  stub of the context at `path`, which reaches the instance Cloudflare runs now; `givenUp` aborts
+ *  when this wait stops waiting for its answer, and the reader then releases the call it left
+ *  pending. The wait is sliced (SCRIPT_RUN_WAIT_SLICE_MS says why) and re-armed from the last
+ *  settlement seen — another run's is skipped, not lost — until a minute past the run's deadline,
+ *  time for the settlement's own append. None by then means the runner could not record one (it
+ *  reports why): the caller is let go. */
 export async function settlementOfScriptRun(
   requested: ScriptRunRequested,
-  waitForEventAt: (path: string, filter: WaitForEventFilter) => Promise<StreamEvent>,
+  waitForEventAt: (
+    path: string,
+    filter: WaitForEventFilter,
+    givenUp: AbortSignal,
+  ) => Promise<StreamEvent>,
 ): Promise<unknown> {
   const { path, requestOffset } = requested.$itxScriptRunRequested;
   const waitUntil = Date.now() + RUN_DEADLINE_MS + 60_000;
@@ -391,19 +397,25 @@ export async function settlementOfScriptRun(
         `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
       );
     let settled: StreamEvent;
+    const sliceGivenUp = new AbortController();
     try {
       settled = await withTimeout(
-        waitForEventAt(path, {
-          type: "events.iterate.com/itx/run-settled",
-          afterOffset,
-          timeoutMs: Math.min(SCRIPT_RUN_WAIT_SLICE_MS, remainingMs),
-        }),
+        waitForEventAt(
+          path,
+          {
+            type: "events.iterate.com/itx/run-settled",
+            afterOffset,
+            timeoutMs: Math.min(SCRIPT_RUN_WAIT_SLICE_MS, remainingMs),
+          },
+          sliceGivenUp.signal,
+        ),
         SCRIPT_RUN_SLICE_ANSWER_MS,
         `itx.run: the wait for run ${requestOffset} on ${path}`,
       );
     } catch (error) {
       if (errorCode(error) === "WAIT_TIMEOUT") continue;
       if (errorCode(error) !== "TIMEOUT") throw error;
+      sliceGivenUp.abort();
       console.warn({
         event: "itx-run.platform-failure-wait-unanswered",
         kind: "disconnected",

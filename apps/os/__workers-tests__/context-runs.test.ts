@@ -125,13 +125,10 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
 
-// REPLACED MID-RUN. Cloudflare replaces a context's instance under the calls running on it (a
-// runtime update, a move to another host): a call that touches the old instance's storage fails
-// with the words below, and the next call reaches a new instance over the same storage. The run the
-// old instance was executing is lost with it; the new instance's wake record settles it
-// `interrupted`. workerd cannot leave a call running on a replaced instance, as Cloudflare does, so
-// `abort` with Cloudflare's words is the replacement here (`replaceInstance`): every call in flight
-// on the instance fails with them, and the next call boots a new one.
+// REPLACED MID-RUN: Cloudflare replaces the instance running a script (library.ts
+// SCRIPT_RUN_WAIT_SLICE_MS says what the run's caller meets then). workerd cannot leave a call
+// running on a replaced instance, so `replaceInstance` aborts it with Cloudflare's words: every call
+// in flight on it fails with them, and the next call boots a new instance.
 
 /** A script that counts its starts in its context's kv, then parks far longer than any test. */
 const PARKED_SCRIPT =

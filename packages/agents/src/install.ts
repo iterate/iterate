@@ -241,10 +241,9 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
 
 /** How long `configRepoSettled` waits for the project's creation in all. */
 const PROJECT_CREATION_WAIT_MS = 60_000;
-/** How long ONE call of that wait is held on the project's root before it is asked again: each
- *  slice is a fresh call, which reaches the instance Cloudflare runs now, so an instance replaced
- *  under the wait costs one slice
- *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior). */
+/** How long ONE call of that wait is held on the project's root before it is asked again on a
+ *  fresh call, so an instance Cloudflare replaces under the wait costs one slice (apps/os
+ *  project/collection.ts `TERMINAL_WAIT_SLICE_MS` says why). */
 const PROJECT_CREATION_WAIT_SLICE_MS = 5_000;
 
 /** A project created a moment ago may still be seeding its config repo: the project's creation
