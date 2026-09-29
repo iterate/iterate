@@ -9,6 +9,7 @@
 // answer, never followed; a 410 halts the row until an operator's resume. The fan-out semantics:
 // src/stream/subscription-delivery.test.ts.
 import { expect, test, vi } from "vitest";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { readLog, runOn, stub, until } from "./support.ts";
 
 const HOOKS = "https://hooks.test";
@@ -58,6 +59,8 @@ test("a webhook row POSTs every event, signed, from its context: a receiver fail
     expect(request).toMatchObject({
       signature: `v1=${await hmacHex(SIGNING_KEY, `${request.timestamp}.${request.body}`)}`,
     });
+    // our mark, one hand-off deeper than the event: a receiver that feeds us back stops at the limit
+    expect(JSON.parse(request.cause)).toMatchObject({ depth: 1 });
   }
   // a failure held up nothing: an event after the first failed one was acked before that
   // failed event's retry reached the receiver
@@ -249,6 +252,7 @@ function fakeReceiver({ answer }: { answer: (n: number) => number }) {
     id: string;
     timestamp: string;
     signature: string;
+    cause: string;
     body: string;
     status: number;
   }[] = [];
@@ -273,6 +277,7 @@ function fakeReceiver({ answer }: { answer: (n: number) => number }) {
       id,
       timestamp: request.headers.get("iterate-timestamp") ?? "",
       signature: request.headers.get("iterate-signature") ?? "",
+      cause: request.headers.get(ITERATE_CAUSE_HEADER) ?? "",
       body,
       status,
     });
