@@ -7,7 +7,7 @@
 // themselves; anyone else is refused. A PR deployment's admins are prd's (envs.ts
 // `previewDeployment`), so a PR's reviewer signs in with the prd session they already have, then
 // signs an app in as the PR's test person from the consent page ("Sign in as someone else…",
-// consent.ts): what the PR body's `Sign in ↗` links open (scripts/preview.ts).
+// consent.ts): what the PR body's `Sign in ↗` links open (scripts/os/preview.ts).
 //
 // This deployment is the issuer's CIMD client, its metadata document served here
 // (`adminSignInClientMetadata`), so no preview is registered anywhere by hand. The token is read

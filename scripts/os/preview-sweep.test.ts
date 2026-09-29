@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../../envs.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
+import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../envs.ts";
+import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
 import { accountResourceNames, accountWorkerNames, MAIN_ON_DEV } from "./preview-config.ts";
 import {
   groupPreviewDeployments,

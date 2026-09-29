@@ -1,4 +1,4 @@
-// A PR body's `Sign in ↗` (apps/os/scripts/preview.ts `signInLinks`): an app's own sign-in that
+// A PR body's `Sign in ↗` (scripts/os/preview.ts `signInLinks`): an app's own sign-in that
 // names the PR's test person. The link is public and grants nothing. An admin signed in to the
 // issuer opens it, the consent page opens on "Sign in as someone else" with that person filled in,
 // and one confirm signs the Dash in as them, inside their project, for an hour. On a preview a

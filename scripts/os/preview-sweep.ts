@@ -1,4 +1,4 @@
-// scripts/preview-sweep.ts — WHICH PER-COMMIT DEPLOYMENTS GO, pure. scripts/preview.ts lists the
+// scripts/os/preview-sweep.ts — WHICH PER-COMMIT DEPLOYMENTS GO, pure. scripts/os/preview.ts lists the
 // account's workers, KV namespaces, R2 buckets, D1s and Artifacts namespaces; this module groups
 // them into deployments by name and decides; preview-sweep.test.ts is its table.
 //
@@ -47,8 +47,8 @@
 // Cloudflare's: a worker's delete takes its namespaces, and the API deletes no namespace alone. The
 // sweep keeps one #error-pulse page for them while any is still listed at the end of a run
 // (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
-import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
-import { pageText } from "../../../scripts/ci/slack.ts";
+import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
+import { pageText } from "../ci/slack.ts";
 import { FORMER_PARENTS, previewPullRequestNumber } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */

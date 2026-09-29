@@ -6,7 +6,7 @@ How local development, preview environments, and identities work.
 
 Every deployed environment is an entry in the root **`envs.ts`** (hostnames,
 worker names, accounts, resource IDs) plus a Doppler config of the same name
-carrying its secrets. `pnpm --dir apps/os run deploy --env prd` deploys
+carrying its secrets. `pnpm os:deploy --env prd` deploys
 production; `preview` is main on the dev/preview account, whose Doppler config
 every per-commit deployment ships (`pnpm preview deploy`, below); `dev` runs a
 fully-local server and never deploys. Scripts never branch on environment names; envs.ts + the config
@@ -171,11 +171,11 @@ read secrets.
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
   `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test&provider_hint=os.iterate.com`
-  (`signInLinkOf` in `apps/os/scripts/preview-config.ts`). `provider_hint`
+  (`signInLinkOf` in `scripts/os/preview-config.ts`). `provider_hint`
   makes the platform's sign-in page lead with **Sign in with os.iterate.com**,
   the rest one "sign in another way" click away; a hint naming a way the
   deployment does not offer changes nothing. CI seeds that
-  person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
+  person and their project `pr<N>` on every deploy (`scripts/os/preview.ts`
   `seedSignIn`). The PR body is public, so a link grants nothing. The app
   passes `login_hint` on to the issuer, whose consent page opens an admin's
   **Sign in as someone else…** with that person filled in, only for one of our
@@ -415,7 +415,7 @@ Objects, a D1, KV, R2 and an Artifacts namespace of its own. The seven hosted
 clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
 signs in against that apps/os, and every link between them names the same
 deployment's apps. The name decides everything (`previewDeployment` in
-`envs.ts`), and the build and deploy are prd's (`apps/os/scripts/deploy.ts`,
+`envs.ts`), and the build and deploy are prd's (`scripts/os/deploy.ts`,
 `deployApp`). Deployments use workers.dev and have no project hosts: projects
 are paths on the one origin. Commands: `apps/os/README.md`.
 
@@ -428,7 +428,7 @@ are paths on the one origin. Commands: `apps/os/README.md`.
   deployment whose PR closed without a delete, one an hour older than its
   PR's newest, one more than 7 days old, and one with no PR number (a
   hand-picked name, not CI's own) idle for 24 hours. The rules are a pure table in
-  `apps/os/scripts/preview-sweep.ts`. Until none are left, it also deletes the
+  `scripts/os/preview-sweep.ts`. Until none are left, it also deletes the
   Worker Previews each PR used to get, on `os`, `<app>` and the former parents
   (`os-preview`, `<app>-preview`), once idle a day, and each former parent's
   worker, with everything under its name, once no preview is left on it.
@@ -459,7 +459,6 @@ are paths on the one origin. Commands: `apps/os/README.md`.
 
   ```bash
   # What would the nightly sweep delete, and why?
-  cd apps/os
   doppler run --project os --config preview -- pnpm preview sweep --dry-run
   ```
 
@@ -471,7 +470,7 @@ head.
 
 What the push before leaves behind, and what deletes it. A deployment is
 whatever of its members exist, so a half-made one is deleted like a whole one
-(`apps/os/scripts/preview-sweep.test.ts` pins each row).
+(`scripts/os/preview-sweep.test.ts` pins each row).
 
 | The push before                                  | What it left                                                | What deletes it                                                                                                                                       |
 | ------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -568,7 +567,7 @@ WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
 
 # the whole suite N times, tallying every row that did not pass every time
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
-  pnpm e2e:soak --runs 25 --filter session
+  pnpm os:e2e-soak --runs 25 --filter session
 ```
 
 One spec, repeated, from the repo root (`pnpm spec` is the root's script):
@@ -610,7 +609,6 @@ Name a prefix yourself instead of a PR number. That keeps PR runs from
 deleting your work:
 
 ```bash
-cd apps/os
 doppler run --project os --config preview -- pnpm preview deploy --name exp-<you>
 # → https://exp-<you>-<sha7>-os.iterate-dev-preview.workers.dev, for your checkout's commit
 
@@ -638,7 +636,6 @@ A deployment that will not deploy, or whose state is wrong, has two remedies:
   or dispatch creates one anew.
 
 ```bash
-cd apps/os
 doppler run --project os --config preview -- pnpm preview sweep --dry-run  # what is stale, and why
 doppler run --project os --config preview -- pnpm preview delete --pr 1234
 doppler run --project os --config preview -- pnpm preview sweep            # delete stale deployments

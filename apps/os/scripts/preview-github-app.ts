@@ -1,5 +1,5 @@
 // scripts/preview-github-app.ts — the GitHub App every per-PR preview names as iterate's own
-// (scripts/deploy.ts ships it as the APP_CONFIG `integrations.github` secret), in a module of its own so the e2e
+// (scripts/os/deploy.ts ships it as the APP_CONFIG `integrations.github` secret), in a module of its own so the e2e
 // that installs it imports no deploy tooling.
 
 /** A PREVIEW'S GITHUB APP — APP_CONFIG `integrations.github` for every per-PR preview, but its key:

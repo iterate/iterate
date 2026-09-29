@@ -1,13 +1,13 @@
 // What every Docs spec does first: have the fixture's project serve Docs the way a project does,
 // a members-only fetch route from its `docs` routing slug to the Docs Worker under test (the route
-// a PR preview's `pr<N>` gets, apps/os/scripts/preview-config.ts `proxiedAppRoute`), and install
+// a PR preview's `pr<N>` gets, scripts/os/preview-config.ts `proxiedAppRoute`), and install
 // Docs in its config (`docs.ts` and a pin, @iterate-com/docs/install) at this commit's build. Then
 // consent for its host where it is one.
 import { execFileSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
 import { installDocs } from "@iterate-com/docs/install";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
-import { proxiedAppRoute } from "../../apps/os/scripts/preview-config.ts";
+import { proxiedAppRoute } from "../../scripts/os/preview-config.ts";
 
 export async function serveDocs(itx: any, docsWorker: URL) {
   await routeDocs(itx, docsWorker);

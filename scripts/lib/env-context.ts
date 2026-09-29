@@ -144,7 +144,7 @@ export function cloudflareApi(apiToken: string) {
 
 /**
  * Refuse to deploy an env whose resources were never created — the fix is
- * `pnpm ensure-resources --env <name>` followed by pasting the printed IDs
+ * `pnpm os:ensure-resources --env <name>` followed by pasting the printed IDs
  * into envs.ts.
  */
 export function assertProvisioned(name: string, resources: Record<string, string>) {

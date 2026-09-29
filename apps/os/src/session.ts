@@ -498,7 +498,7 @@ export class SessionRpcTarget extends RpcTarget {
       .exportSecretForProjectSeed(this.#input.appConfig.secrets.adminBearer.exposeSecret());
   }
 
-  /** The deploy's readiness gate's (scripts/preview-readiness.ts), the operator's alone: the version
+  /** The deploy's readiness gate's (scripts/os/preview-readiness.ts), the operator's alone: the version
    *  this edge runs and the one each named project's root context runs, at most eight. A project
    *  nobody has touched gets a brand-new context by the asking, which is the point: while Cloudflare
    *  releases a redeploy, a brand-new Durable Object can still start on the previous version. */
@@ -612,7 +612,7 @@ export class SessionRpcTarget extends RpcTarget {
    *  (iterate-context.ts) — and its `secrets` are the deployment's own, lent to projects
    *  (context/built-ins.ts `lend`). For a person holding the `admin` scope (reach `every` only
    *  while `admins` lists them, oauth.ts), and for the operator bearer itself (actor `admin`, no
-   *  person: a script such as scripts/seed-instance-secrets.ts); not for anyone else, whose global
+   *  person: a script such as scripts/os/seed-instance-secrets.ts); not for anyone else, whose global
    *  contexts stay reached by identity (`user`, `organizations.get`). */
   get global(): IterateContextRpcTarget {
     const { principal, reach, scopes } = this.#authority;

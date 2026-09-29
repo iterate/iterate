@@ -1,4 +1,4 @@
-// scripts/preview-config.ts — the pure half of scripts/preview.ts, what preview.test.ts pins: the
+// scripts/os/preview-config.ts — the pure half of scripts/os/preview.ts, what preview.test.ts pins: the
 // name of a run's per-commit deployment (`pr<n>-<sha7>`, or a slug's; envs.ts `previewDeployment`
 // derives every worker, URL and resource from it), the PR body's managed section and its fold into
 // a previous commit's (scripts/ci/pull-request-body.ts writes them), the sign-in and template
@@ -9,18 +9,18 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
-import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
-import { agents } from "../../agents/scripts/app.ts";
-import { dash } from "../../dash/scripts/app.ts";
-import { docs } from "../../docs/scripts/app.ts";
-import { kit } from "../../kit/scripts/app.ts";
-import { notes } from "../../notes/scripts/app.ts";
-import { admin } from "../../admin/scripts/app.ts";
-import { voice } from "../../voice/scripts/app.ts";
-import { markedSection, replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
-import type { StartApp } from "../../../scripts/lib/start-app.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
-import { osResourceNames } from "./os-env.ts";
+import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../envs.ts";
+import { agents } from "../../apps/agents/scripts/app.ts";
+import { dash } from "../../apps/dash/scripts/app.ts";
+import { docs } from "../../apps/docs/scripts/app.ts";
+import { kit } from "../../apps/kit/scripts/app.ts";
+import { notes } from "../../apps/notes/scripts/app.ts";
+import { admin } from "../../apps/admin/scripts/app.ts";
+import { voice } from "../../apps/voice/scripts/app.ts";
+import { markedSection, replaceMarkedSection } from "../ci/markdown-annotator.ts";
+import type { StartApp } from "../lib/start-app.ts";
+import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { osResourceNames } from "../../apps/os/scripts/os-env.ts";
 
 /** MAIN ON THE DEV/PREVIEW ACCOUNT (envs.ts `osEnvs.preview`): the account every per-commit
  *  deployment lives on, whose Doppler config (`os/preview`) holds its Cloudflare credentials and
@@ -36,7 +36,7 @@ export const APPS: StartApp[] = [dash, agents, notes, docs, voice, kit, admin];
 
 /** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names
  *  (main on dev is `os` and `<app>`). The sweep deletes the Worker Previews still hanging
- *  from them, as it does main on dev's (scripts/preview.ts `deleteLegacyWorkerPreviews`), then each
+ *  from them, as it does main on dev's (scripts/os/preview.ts `deleteLegacyWorkerPreviews`), then each
  *  worker with everything under its name (preview-sweep.ts `planFormerParents`): each holds a
  *  Durable Object namespace per class of the account's 500. */
 export const FORMER_PARENTS = [
@@ -105,7 +105,7 @@ export function previewDeploymentUrls(name: string) {
 // ── what on the account is never a preview's ──────────────────────────────────────────────────
 
 /** THE ACCOUNT'S OWN RESOURCES: every OS deployment's in envs.ts (main on dev's `os-parent-files`,
- *  `os-parent-db`, …) and local dev's (wrangler.base.jsonc: `os-dev-repos`, …). The sweep never
+ *  `os-parent-db`, …) and local dev's (apps/os/wrangler.base.jsonc: `os-dev-repos`, …). The sweep never
  *  deletes one (preview-sweep.ts `planFormerParents`). KV is bound by id, so only its titles count. */
 export function accountResourceNames(template = readWranglerBase()) {
   return new Set([
@@ -166,11 +166,11 @@ export function foldPreviewSection(
 
 // ── the PR body's sign-in links ───────────────────────────────────────────────────────────────
 
-/** A `Sign in ↗` link (scripts/preview.ts `signInLinks`): the app's own sign-in
+/** A `Sign in ↗` link (scripts/os/preview.ts `signInLinks`): the app's own sign-in
  *  (iterate/app-server.ts `/.auth/login`), landing at `landing` — a URL on the app's origin — with
  *  its `hints`: `provider_hint`, the way to sign in the platform's sign-in page leads with (the
- *  admin issuer, prd, for a reviewer: src/login.server.ts), and `login_hint`, whom the consent page
- *  pre-fills under "Sign in as someone else" for an admin (src/consent.ts). The admin still confirms
+ *  admin issuer, prd, for a reviewer: apps/os/src/login.server.ts), and `login_hint`, whom the consent page
+ *  pre-fills under "Sign in as someone else" for an admin (apps/os/src/consent.ts). The admin still confirms
  *  it: the link is public, and grants nothing. */
 export function appSignInLink(
   landing: string,
@@ -188,7 +188,7 @@ export function appSignInLink(
  *  the platform's own. */
 export const PROXIED_APPS = new Set(["notes", "docs"]);
 
-/** One app's `Sign in ↗` (scripts/preview.ts `signInLinks`), in the PR's test project `project`.
+/** One app's `Sign in ↗` (scripts/os/preview.ts `signInLinks`), in the PR's test project `project`.
  *  A proxied app's lands on its page for the project,
  *  `<platform>/projects/<project>/<app>/projects/<project>`, through the platform's sign-in when
  *  signed out, where an admin signs in as themselves, a member of the project (the seed adds them).
@@ -227,7 +227,7 @@ export function signInLinkOf(input: {
 }
 
 /** THE FETCH ROUTE the seed sets on the PR's test project for a proxied app the deployment has
- *  (scripts/preview.ts `seedSignIn`), so its `Sign in ↗` lands on the app: the routing slug of the
+ *  (scripts/os/preview.ts `seedSignIn`), so its `Sign in ↗` lands on the app: the routing slug of the
  *  app's name, members only, to a loaded worker that fetches through to `appUrl`, the deployment's
  *  own app Worker, as the app's `config-worker.ts` does for prd's. The project's config worker
  *  (configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
@@ -270,7 +270,7 @@ export function configTemplateNames(repoRoot: string) {
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
  *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
  *  the custom field prefilled), so the project is born from the unmerged template. `default` never
- *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (scripts/build.ts). */
+ *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (apps/os/scripts/build.ts). */
 export function templateQuickLaunches(input: {
   dashUrl: string;
   templates: string[];
@@ -296,7 +296,7 @@ export function templateQuickLaunches(input: {
  *  here. The CI checks carry the deploy's and the suites' verdicts, so it has no status of its own.
  *  One row per worker, apps/os first: its origin, its `Sign in ↗` (`signInLinkOf`: apps/os's into
  *  the Dash's project `pr<N>`, each app's into that app, as the PR's test person, whom a reviewer —
- *  one of prd's admins, signed in through prd (src/admin-sign-in.ts) — confirms signing in as on
+ *  one of prd's admins, signed in through prd (apps/os/src/admin-sign-in.ts) — confirms signing in as on
  *  the consent page; a proxied app's and the admin app's as the reviewer) and its Cloudflare
  *  dashboard page. With the
  *  Dash, one quick-launch link per config template into its New project sheet

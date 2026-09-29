@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
+import { CloudflareApiError } from "../lib/env-context.ts";
 import {
   deleteArtifactsNamespace,
   ensureArtifactsNamespace,

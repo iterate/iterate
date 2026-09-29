@@ -68,7 +68,7 @@ test("E2E_CI_RETRIES is the one retry setting an e2e row has", () => {
   ).toEqual([]);
 });
 
-// A PR that edits a slow row runs it, and changes to other files do not (apps/os/scripts/slow-rows.ts).
+// A PR that edits a slow row runs it, and changes to other files do not (scripts/os/slow-rows.ts).
 test("SLOW_ROW_PATHS is exactly the files with a row tagged slow", () => {
   const slow = files.filter(({ text }) => /\btags:\s*\[[^\]]*["']slow["']/u.test(text));
   expect(slow.length).toBeGreaterThan(0);

@@ -82,7 +82,7 @@ the run's triggering SHA (the merge revision on PR runs), never from expanded
 runner logs. Each test job's suite step, `suite` in E2E tests and the specs shards
 (one definition), is no row of its own. Since the suites start beside the
 deploy, it begins with **Set up the suite** and **Wait for Deploy preview**
-(`runSuite` in `apps/os/scripts/preview.ts`), which sit beside the job's other
+(`runSuite` in `scripts/os/preview.ts`), which sit beside the job's other
 steps, and its tests sit in one **Run tests** row, from the end of that wait to
 the step's exit. The steps before it are coloured as setup and the ones after
 as finish; Set up the suite and the specs' warm-up as setup, and the waits for Deploy preview and

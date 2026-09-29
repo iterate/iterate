@@ -1,7 +1,7 @@
 // scripts/ci/preview-tested-commit.ts — WHICH COMMIT A PULL REQUEST'S PREVIEW TESTS: the pull request
 // merged into main (GitHub's test merge commit, `refs/pull/<n>/merge`), so the preview proves what main
 // will be after the merge, not the branch as it forked. The preview keeps its name and URL per pull
-// request (apps/os/scripts/preview-config.ts); only the commit it is built from changes.
+// request (scripts/os/preview-config.ts); only the commit it is built from changes.
 //
 // The rules (`previewTestedCommit`, preview-tested-commit.test.ts):
 //   1. A merge commit whose second parent is the head this run was started for is what the run tests.

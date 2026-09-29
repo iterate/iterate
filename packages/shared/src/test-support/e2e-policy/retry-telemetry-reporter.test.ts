@@ -33,7 +33,7 @@ test("records the first failed attempt when a retry passes", async () => {
   const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", telemetryDir);
-  // a preview's e2e run (apps/os/scripts/preview.ts)
+  // a preview's e2e run (scripts/os/preview.ts)
   vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
   vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});

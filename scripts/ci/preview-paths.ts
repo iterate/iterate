@@ -65,6 +65,8 @@ export const previewPaths = [
   "pnpm-workspace.yaml",
   "envs.ts",
   "scripts/lib/**",
+  // iterate's apps/os tooling: the preview deploy itself, prd's deploy, provisioning and erase
+  "scripts/os/**",
   // the setup every preview job runs (docs/depot-ci.md#setup-on-depots-stock-image)
   ".depot/actions/**",
   "scripts/ci/toolchain.sh",

@@ -42,7 +42,7 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   {
     file: "specs/dash/sign-in-link.spec.ts",
     match: "only a preview's admins sign in through prd",
-    note: "env-gated: only a preview sets login.adminIssuer (apps/os/scripts/preview-config.ts); app-config.ts refuses it off an https workers.dev or .test origin",
+    note: "env-gated: only a preview sets login.adminIssuer (scripts/os/preview-config.ts); app-config.ts refuses it off an https workers.dev or .test origin",
   },
   {
     file: "specs/notes/pr-body-link.spec.ts",
