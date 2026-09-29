@@ -24,12 +24,10 @@ export function docsFacetSpec(className: "DocDurableObject" | "DocsDurableObject
   return { className, mainModule: docsModule.path, source: ["itx", ["cd", "/"], "config"] };
 }
 
-const ROOT_REPOS = "itx.builtins.cd('/').repos";
-
 /** The context co-editing `doc` (a repo and a path in it), set up: the root's docs processor
- *  (root.ts), the doc marked opened, the doc's context lent the root's repos (a context below `/`
- *  reaches only itself; a rule naming `builtins` is a session's to write), and the doc's processor
- *  (processor.ts). Idempotent: enabling a row again appends nothing. */
+ *  (root.ts), the doc marked opened, and the doc's processor (processor.ts), which reaches the
+ *  doc's repo from its own context (loaded code reaches its whole project). Idempotent: enabling a
+ *  row again appends nothing. */
 export async function ensureDoc(
   project: Pick<IterateContextApi, "cd" | "append" | "processors">,
   doc: DocRef,
@@ -46,11 +44,6 @@ export async function ensureDoc(
     idempotencyKey: `${DOC_OPENED}:${contextPath}`,
   });
   const context = project.cd(contextPath);
-  if ((await context.rewriteRules.get("itx.repos"))?.target !== ROOT_REPOS)
-    await context.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.repos", target: ROOT_REPOS },
-    });
   await context.processors.enable("doc", {
     ...docsFacetSpec("DocDurableObject"),
     consumes: [EDIT_FRAME, COMMIT_NOTICED, DOC_LEFT],

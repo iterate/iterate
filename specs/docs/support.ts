@@ -32,7 +32,17 @@ export async function serveDocs(itx: any, docsWorker: URL) {
       },
     ],
   });
-  await config.waitForPublication(commitOid);
+  // the commit's one outcome on `/`: published, or refused with why
+  const outcome = await itx.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: 0,
+    timeoutMs: 120_000,
+  });
+  expect(outcome).toMatchObject({ type: "events.iterate.com/project/worker-updated" });
 }
 
 /** @iterate-com/docs as this commit published it: CI's head, else the checkout's (pushed). */

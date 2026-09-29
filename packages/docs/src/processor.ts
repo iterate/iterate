@@ -36,8 +36,8 @@ import { mergeText, textEdits } from "./merge.ts";
 
 type DocDeps = {
   sql: SqlStorage;
-  /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc): `itx.repos`
-   *  there is the root's (install.ts lends it by rule). */
+  /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc), from which
+   *  `itx.repos.get` reaches the doc's repo. */
   withItx: WithItx;
   /** Re-project the live state after a change outside a batch (the host's `publishLiveState`). */
   publishLiveState: () => void;
