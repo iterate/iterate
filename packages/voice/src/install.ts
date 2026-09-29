@@ -102,7 +102,9 @@ export async function ensureVoiceAgent(
  *  A failed creation, or the refused publication of `tip`, the commit that pins voice (none while
  *  the repo is not created yet), refuses at once, saying why. */
 async function voiceInstalled(
-  project: Pick<IterateContextApi, "waitForEvent">,
+  project: Pick<IterateContextApi, "waitForEvent"> & {
+    rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
+  },
   tip: string | null | undefined,
 ) {
   const deadline = Date.now() + 60_000;
@@ -137,7 +139,9 @@ async function voiceInstalled(
     if (
       event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
       payload?.target &&
-      canonicalItxExpressionPrefix(payload.match as ItxExpressionInput) === "itx.voice"
+      canonicalItxExpressionPrefix(payload.match as ItxExpressionInput) === "itx.voice" &&
+      // the log keeps every rule the root ever had: one a later write removed is not installed
+      (await project.rewriteRules.get("itx.voice"))?.target
     )
       return;
     afterOffset = event.offset;

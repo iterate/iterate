@@ -66,10 +66,23 @@ test("a project created a moment ago is waited for until its config repo's init 
   const root = project();
   root.land(RULE, { match: ["itx", "agents"], target: ["itx", "facets", ["get", "agents"]] });
   root.land(FAILED, { commitOid: "before-seed", error: "an older commit's refusal" });
+  const ready = ensureVoiceAgent(root);
+  await vi.waitFor(() => expect(root.waitForEvent).toHaveBeenCalledTimes(3));
   root.land(RULE, { match: ["itx", "voice"], target: ["itx", "workers", ["get", published]] });
-  expect(await ensureVoiceAgent(root)).toBe("ready");
+  expect(await ready).toBe("ready");
   expect(root.waitForEvent.mock.calls.map(([filter]) => filter.afterOffset)).toEqual([0, 8, 9]);
   expect(root.voice.health).toHaveBeenCalledOnce();
+});
+
+test("a voice rule the root no longer holds is not installed: readiness waits for the one init writes again", async () => {
+  const root = project();
+  root.land(RULE, { match: ["itx", "voice"], target: ["itx", "workers", ["get", published]] });
+  root.land(RULE, { match: ["itx", "voice"], target: null });
+  const ready = ensureVoiceAgent(root);
+  await vi.waitFor(() => expect(root.waitForEvent).toHaveBeenCalledTimes(3));
+  expect(root.voice.health).not.toHaveBeenCalled();
+  root.land(RULE, { match: ["itx", "voice"], target: ["itx", "workers", ["get", published]] });
+  expect(await ready).toBe("ready");
 });
 
 test("a config whose commit that pins voice was refused is refused at once, saying why", async () => {
@@ -391,11 +404,16 @@ function project({
       set: vi.fn(),
     },
     rewriteRules: {
-      get: vi.fn(async (match: string) =>
-        voice && match === "itx.voice"
-          ? { match, target: "itx.workers.get(…)", context: "/" }
-          : null,
-      ),
+      // the root's rule as it stands: the option, else the last `itx.voice` rule landed on the log
+      get: vi.fn(async (match: string) => {
+        if (match !== "itx.voice") return null;
+        if (voice) return { match, target: "itx.workers.get(…)", context: "/" };
+        const last = log.findLast(
+          (event) =>
+            event.type === RULE && JSON.stringify(event.payload.match) === '["itx","voice"]',
+        );
+        return last?.payload.target ? { match, target: last.payload.target, context: "/" } : null;
+      }),
     },
     kv: {
       values,
