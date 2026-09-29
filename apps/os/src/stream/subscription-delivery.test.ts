@@ -1161,38 +1161,62 @@ test("alarm claim: a HALTED row owes nothing, even if its persisted cursor carri
   expect(second).toMatchObject({ alarms: [] });
 });
 
-// ── a push the row's removal cut off is that outcome, never an issue ──
+// ── a push the row's removal or the platform cut off is that outcome, never an issue ──
 
 test.for([
   {
     name: "a push in flight when its row is removed and its facet deleted (NO_FACET) is logged as the removal, never an issue",
     rejection: codedError("NO_FACET", 'facet "gone" was deleted while this call was in flight'),
     removed: true,
-    expected: { issues: [], removals: ["subscription-delivery.deliver"] },
+    expected: { issues: [], removals: ["subscription-delivery.deliver"], platformFailures: [] },
   },
   {
     name: "control: any other failure of that push is still an issue",
     rejection: new Error("the facet threw"),
     removed: true,
-    expected: { issues: ["subscription-delivery.deliver"], removals: [] },
+    expected: { issues: ["subscription-delivery.deliver"], removals: [], platformFailures: [] },
   },
   {
     name: "control: NO_FACET on a row still in place addresses a facet no longer hosted — neither",
     rejection: codedError("NO_FACET", 'no facet "gone" — load a class into it first'),
     removed: false,
-    expected: { issues: [], removals: [] },
+    expected: { issues: [], removals: [], platformFailures: [] },
+  },
+  {
+    // The facet's own outbound call gave up as the platform's (a hop's UNAVAILABLE): the batch is the
+    // facet's to read from the log at its next push, never pushed or caught up again here.
+    name: "a push the platform failed (a hop's UNAVAILABLE) is logged as the platform's, never an issue, and not repeated",
+    rejection: codedError("UNAVAILABLE", "The repo failed: overloaded", {
+      kind: "overloaded",
+      retryAfterMs: 10_000,
+    }),
+    removed: false,
+    expected: {
+      issues: [],
+      removals: [],
+      platformFailures: [
+        {
+          event: "subscription-delivery.platform-failure-deliver",
+          kind: "overloaded",
+          name: "gone",
+        },
+      ],
+    },
   },
 ])("$name", async ({ rejection, removed, expected }) => {
   const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   const parked: ((reason: unknown) => void)[] = [];
+  const facetMethods: string[] = [];
   const rig = incarnation(
     () =>
-      new FacetHandle(([call]) =>
-        Array.isArray(call) && call[0] === "processEventBatch"
+      new FacetHandle(([call]) => {
+        if (Array.isArray(call)) facetMethods.push(String(call[0]));
+        return Array.isArray(call) && call[0] === "processEventBatch"
           ? new Promise<void>((_, reject) => parked.push(reject))
-          : Promise.resolve(),
-      ),
+          : Promise.resolve();
+      }),
   );
   const gone = (target: ItxExpression | null) =>
     configure(rig, { name: "gone", target, consumes: ["blob"] });
@@ -1201,6 +1225,7 @@ test.for([
   rig.stream.append({ type: "blob", payload: {} });
   await drainDeliveries();
   if (removed) gone(null);
+  const calledBefore = facetMethods.length;
   parked.shift()!(rejection);
   await drainDeliveries();
   const events = (spy: typeof log, event: string) =>
@@ -1211,7 +1236,12 @@ test.for([
   expect({
     issues: events(error, "issue"),
     removals: events(log, "delivery.facet-removed-in-flight"),
-  }).toEqual(expected);
+    platformFailures: warn.mock.calls
+      .map(([line]) => line as { event?: string; kind?: string; name?: string })
+      .filter((line) => line.event?.startsWith("subscription-delivery."))
+      .map(({ event, kind, name }) => ({ event, kind, name })),
+    calledAfter: facetMethods.slice(calledBefore),
+  }).toEqual({ ...expected, calledAfter: [] });
 });
 
 // ── FAN-OUT: one event per call, any order, every event retried and dead-lettered on its own ──
