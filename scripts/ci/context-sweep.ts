@@ -54,7 +54,7 @@ import {
   backupBucketEnvs,
   getDeployTarget,
   osEnvs,
-  type OsDeployTarget,
+  type OsDeployableEnv,
 } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
@@ -466,7 +466,7 @@ function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
 /** The backup bucket of the swept deployment (envs.ts `backupBucketEnvs`), written with the
  *  deployment's own Cloudflare API token: `put` resolves once R2 holds the backup (ci-bucket.ts
  *  `put`). Refused for a deployment without one, and for one whose bucket is on another account. */
-async function backupWriter(ctx: EnvContext<OsDeployTarget>) {
+async function backupWriter(ctx: EnvContext<OsDeployableEnv>) {
   const target = backupBucketEnvs[ctx.env.name];
   if (!target) throw new Error(`${ctx.env.name} has no backup bucket: sweep it without --destroy`);
   if (target.cloudflareAccountId !== ctx.env.cloudflareAccountId)

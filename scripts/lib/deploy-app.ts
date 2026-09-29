@@ -9,7 +9,7 @@ import {
 import {
   assertProvisioned,
   resolveEnvContext,
-  type DeployTarget,
+  type DeployableEnv,
   type EnvContext,
 } from "./env-context.ts";
 
@@ -32,7 +32,7 @@ import {
  * `prepare`/`afterDeploy`.
  */
 export async function deployApp<
-  E extends DeployTarget & {
+  E extends DeployableEnv & {
     workerName: string;
     /** Public origin for the final success line. */
     baseUrl: string;

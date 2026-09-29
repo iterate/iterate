@@ -393,14 +393,14 @@ export function getDeployTarget<E>(name: string, envs: Record<string, E>): E & {
 
 /** An apps/os deployment and the name it was found by (`getOsDeployTarget`): what the deploy,
  *  preview and sweep scripts hold once they have looked their `--env` up. */
-export type OsDeployTarget = OsEnv & { name: string };
+export type OsDeployableEnv = OsEnv & { name: string };
 
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
  *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
  *  it; throws for any other name. What building and deploying apps/os by name look up
  *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
  *  tell the two apart. */
-export function getOsDeployTarget(name: string): OsDeployTarget {
+export function getOsDeployTarget(name: string): OsDeployableEnv {
   const env = osEnvs[name] || previewDeployment(name)?.os;
   if (!env)
     throw new Error(

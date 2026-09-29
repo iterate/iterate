@@ -11,7 +11,7 @@ import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLOUDFLARE_API, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { type DeployTarget, type EnvContext } from "./env-context.ts";
+import { type DeployableEnv, type EnvContext } from "./env-context.ts";
 
 const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
 
@@ -230,7 +230,7 @@ export function appConfigSecretsOf(secrets: Record<string, string>): Record<stri
  * `required` name must be present (throws listing all missing ones at once).
  */
 export function collectSecrets(
-  ctx: { env: DeployTarget; secrets: Record<string, string> },
+  ctx: { env: DeployableEnv; secrets: Record<string, string> },
   required: readonly string[],
 ) {
   const secretValues: Record<string, string> = {};
@@ -257,7 +257,7 @@ export function collectSecrets(
  * record. Warns (does not throw) when no zone in `zones` covers the host.
  */
 export async function ensureProxiedDnsRecord(
-  ctx: Pick<EnvContext, "cfV4">,
+  ctx: Pick<EnvContext<DeployableEnv>, "cfV4">,
   zones: { id: string; name: string }[],
   host: string,
   comment: string,

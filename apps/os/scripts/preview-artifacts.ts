@@ -5,12 +5,13 @@
 // the caller.
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
+import type { OsDeployableEnv } from "../../../envs.ts";
 import { pageText } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
  *  Cloudflare's failures sent again, a truncated listing refused). */
-export type Cf = EnvContext["cf"];
+export type Cf = EnvContext<OsDeployableEnv>["cf"];
 
 export type ArtifactsNamespaceRow = { namespace: string; repo_count?: number; created_at?: string };
 

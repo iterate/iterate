@@ -27,15 +27,15 @@ Every caller passes `env.workerName` and `env.baseUrl`, so those are part of the
 
 ## Shape
 
-- `DeployTarget` (scripts/lib/env-context.ts): an envs.ts entry plus the `name` it was looked up by, with `workerName`, `baseUrl` and optional `resources`. The name has to travel with the object because the vite build runs in another process and looks the env up again by name (`CLOUDFLARE_ENV`).
+- `DeployableEnv` (scripts/lib/env-context.ts) gains `name`: an envs.ts entry plus the name it was looked up by. `deployApp` also needs `workerName`, `baseUrl` and optional `resources`. The name has to travel with the object because the vite build runs in another process and looks the env up again by name (`CLOUDFLARE_ENV`).
 - `getDeployTarget(name, envs)` (envs.ts) returns `{ ...envs[name], name }`, or throws `Unknown environment "x". Known: …`. The name comes first because it's the thing that matters; `envs` is just the collection to look in.
 - `getOsDeployTarget(name)` (envs.ts, was `osEnv`) finds an `osEnvs` entry or a per-commit deployment, named; throws instead of returning `undefined`.
 - `deployApp({ env, dopplerProject, appRoot, appLabel, requiredSecrets?, prepare?, build?, afterDeploy?, smokes, withoutRoutes? })` reads `workerName`, `baseUrl` and `resources` off `env`. `smokes` is a plain array.
-- `resolveEnvContext({ env, dopplerProject })` takes a `DeployTarget`. `EnvContext.name` goes; callers read `ctx.env.name`.
+- `resolveEnvContext({ env, dopplerProject })` takes a `DeployableEnv`. `EnvContext.name` goes; callers read `ctx.env.name`.
 
 ## Checklist
 
-- [x] `DeployTarget` type; `resolveEnvContext` takes one; `EnvContext.name` removed _`DeployTarget<E> = E & { name }` in scripts/lib/env-context.ts; `ctx.name` → `ctx.env.name` in ensure-resources, erase-data, context-sweep_
+- [x] `DeployableEnv` carries `name`; `resolveEnvContext` takes one; `EnvContext.name` removed _in scripts/lib/env-context.ts; `ctx.name` → `ctx.env.name` in ensure-resources, erase-data, context-sweep_
 - [x] `getDeployTarget(name, envs)` and `getOsDeployTarget(name)` in envs.ts; `osEnv` removed _both add the name and throw on an unknown one; generate-wrangler-config and preview.ts lost their own undefined checks_
 - [x] ~~`previewDeployment` names its `os` and `apps` entries~~ _not needed: `getOsDeployTarget` adds the name to whichever entry it finds_
 - [x] `deployApp`: no `envs`, `workerName`, `servingUrl` or `resources`; `smokes` is an array _it reads `workerName`, `baseUrl` and `resources` off `env`_
@@ -59,4 +59,4 @@ Every caller passes `env.workerName` and `env.baseUrl`, so those are part of the
 - `--env nope` on apps/os, dummy-petshop, spa and dash deploy each fails with the lookup's error before touching Doppler. `viteWranglerConfig("pr3144-a1b2c3d")` still derives the per-commit worker.
 - `resolveEnvContext({ env: getDeployTarget("preview", osEnvs), dopplerProject: "os" })` against real Doppler and Cloudflare (read-only): name, secrets and the `os` worker all found.
 - No real deploy run locally. The PR's Preview OS "Deploy preview" runs apps/os `deploy.ts` through the new `deployApp`; the prd start-app, spa, petshop and ci-reports deploys only run after merge.
-- Follow-up from review: `DeployableEnv` folded into `DeployTarget`, now a plain interface (`name`, `cloudflareAccountId`, `dopplerConfig`). `EnvContext` defaults its type argument to it, so `Pick<EnvContext, "cf">` needs none. apps/os scripts hold `EnvContext<OsDeployTarget>` (envs.ts `OsDeployTarget = OsEnv & { name }`), and `StartAppEnv` lists its two fields itself.
+- Follow-up from review: one env type, not two that differed only by `name`. The `DeployTarget` alias went; `DeployableEnv` (the name main already used) gained `name`. apps/os scripts hold `EnvContext<OsDeployableEnv>` (envs.ts `OsDeployableEnv = OsEnv & { name }`), and `StartAppEnv` lists `cloudflareAccountId`/`dopplerConfig` itself, since an envs.ts entry has no `name` of its own. The getters keep the `getDeployTarget`/`getOsDeployTarget` names.

@@ -10,7 +10,13 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, getDeployTarget, osEnvs, osResourceNames } from "../../../envs.ts";
+import {
+  OS_DOPPLER_PROJECT,
+  getDeployTarget,
+  osEnvs,
+  osResourceNames,
+  type OsDeployableEnv,
+} from "../../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import {
   CloudflareApiError,
@@ -289,7 +295,7 @@ async function eraseDataWith(
 
 /** A D1's `/query`: a statement's results per `;`-separated statement. */
 type D1Query = (sql: string) => Promise<Record<string, unknown>[][]>;
-function d1Query(cf: EnvContext["cf"], databaseId: string): D1Query {
+function d1Query(cf: EnvContext<OsDeployableEnv>["cf"], databaseId: string): D1Query {
   return async (sql) =>
     z
       .array(z.object({ results: z.array(z.looseObject({})) }))
