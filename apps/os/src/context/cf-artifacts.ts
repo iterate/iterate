@@ -111,9 +111,8 @@ async function withArtifactRepoHandle<T>(
 export const ARTIFACTS_ANSWER_MS = 20_000;
 
 /** `answer`, the pending answer to `call` on the binding, or — once it has gone ARTIFACTS_ANSWER_MS
- *  unanswered — UNAVAILABLE naming the call. Artifacts sometimes leaves a call unanswered for up to
- *  90 s while it answers the calls around it within seconds (9 of 86 in one minute on the preview
- *  account, 2026-09-28), so the call is lost, not refused: `disconnected`, which
+ *  unanswered — UNAVAILABLE naming the call. A call Artifacts leaves unanswered is lost, not
+ *  refused: it answers the calls around it meanwhile, so the kind is `disconnected`, which
  *  `retryingOnePlatformFailure` asks again once, a second later, as a fresh call. A binding call
  *  cannot be cancelled and may still land: an answer that arrives after the refusal is released on
  *  arrival. */

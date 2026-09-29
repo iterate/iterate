@@ -442,9 +442,8 @@ test("the platform-failure retry is bounded: a second one surfaces, and any othe
   });
 });
 
-// ── a call Artifacts leaves unanswered ── on the preview account on 2026-09-28 Artifacts left 9 of
-// the 86 calls one deployment made in a minute unanswered for up to 90 s (create, list, get,
-// createToken, info alike) while it answered the rest within seconds. A call unanswered after
+// ── a call Artifacts leaves unanswered ── any call (create, list, get, createToken, info) can go
+// unanswered while Artifacts answers the calls around it. A call unanswered after
 // ARTIFACTS_ANSWER_MS is a lost call: asked again once, fresh, a second later; a second one is
 // refused as UNAVAILABLE, naming the call.
 
