@@ -150,10 +150,31 @@ delivery authority, batching, wake behaviour, or retry semantics.
 
 The review caught a proof-of-concept state incompatibility: making `delivery`
 required while leaving `CoreContract` at `17.0.0` silently skipped existing
-birth subscriptions. The working implementation now uses `18.0.0` and rejects
-and reports replayed rows without a delivery contract. It requires fresh
-contexts; it does not migrate existing logs. Backward compatibility is not
-required, but silently stopping config-worker delivery is unacceptable.
+birth subscriptions. The active source direction is `18.0.0` with an explicit
+context-recreation refusal for rows without a delivery contract. It does not
+migrate existing logs. Backward compatibility is not required, but silently
+stopping config-worker delivery is unacceptable.
+
+### Round 4 checkpoint: what is now covered, and what remains open
+
+[The fourth independent Opus review](reviews/opus-implementation-round-4.md)
+was performed against a moving implementation checkpoint. It said not to merge
+or deploy that checkpoint. The table below records later source evidence.
+Focused source runs reported by their owners are named exactly; they are useful
+but do not replace the source PR’s eventual required checks, soak, or preview
+telemetry.
+
+| Round-4 concern                                                                                          | Later source evidence                                                                                                                                                                                                                                                                                                                                   | Status for this findings PR                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| A replay of a delivery-less pre-v18 subscription silently drops a config or processor row                | `core-processor.test.ts` covers a pre-delivery row being rejected/reported; `stream.test.ts` covers a pre-v18 checkpoint refusing the next context operation. The stream constructor has a whole-context removed-shape gate rather than accepting an individual skipped row. Owners report the stream/core focused run **132/132 passing**.             | **Focused test passing.** Fresh state/recreation is an explicit breaking prerequisite; source-PR CI remains required.                       |
+| A loaded-code `provide(stub)` or callback leaves a durable offline shadow after its pager disconnects    | The active source has an ephemeral live overlay and comments that detach reveals the durable row underneath. Existing pager attach/reset/hibernate tests remain relevant, but the pager suite is being rewritten and only **4/17** obsolete assertions currently pass.                                                                                  | **Open.** Do not call lifecycle cleanup green before its replacement tests and source-PR CI pass.                                           |
+| A live attachment can shadow a platform or jailed name without the normal admission and revocation fence | `validateLivePagerRows()` applies loaded-code admission before opening a pager, and the durable object has a snapshot-wait path for attachment replacement. Owners report the warmed child live-shadow fence test **1/1 passing**, and the jailed ordinary-adapter test **1/1 passing** with real confined-worker denial of `fetch`, secrets, and `cd`. | **Partly proven.** A member shadowing platform configuration and the complete stale-snapshot/lifecycle matrix still need explicit coverage. |
+| The SDK durable-delivery runner can replace core delivery                                                | The runner has pending-range-before-call, stable keys, bounded fan-out, and no emitted success event. One new durable-facet Workers happy test for ordered/fan-out delivery passes. A later independent review found fan-out exhaustion incorrectly halts the whole row; owners are fixing it.                                                          | **Open.** It remains unsuitable as a reason to delete the core delivery path.                                                               |
+| The new fixed-step mapping has an ordering/argument semantic bug for fresh rows                          | Round 4’s source review found no fresh-row defect: fixed calls precede caller arguments, a final call can return the value invoked by caller arguments, trailing steps remain, and longest property match is total. Owners report the rewrite focused run **147/147 passing**.                                                                          | **Focused test passing.** Retained-state compatibility is separately refused.                                                               |
+
+This table deliberately does not claim a line reduction, runtime parity, or
+soak result for the in-progress delivery work. It is an audit ledger, not a
+merge decision.
 
 React event-log/live-state hooks keep their current callback and gap-repair
 behaviour. The vanilla Iterate Cap'n Web client remains a vanilla Cap'n Web
@@ -270,5 +291,5 @@ authorized by this audit. Production rollout is not.
 - Current code inventory and test ownership: [`tests-inventory.md`](tests-inventory.md), [`core-userspace.md`](core-userspace.md), [`rpc-subscriptions.md`](rpc-subscriptions.md), and [`facets-loader.md`](facets-loader.md).
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
-- Archived first-pass framework and reviews: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), [`design-capabilities.md`](design-capabilities.md), [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), and [lean-model review](reviews/opus-lean-round-3.md).
+- Archived first-pass framework and reviews: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), [`design-capabilities.md`](design-capabilities.md), [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), and [lean-model review](reviews/opus-lean-round-3.md), and [implementation review, round 4](reviews/opus-implementation-round-4.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
