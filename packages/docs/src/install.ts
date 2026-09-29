@@ -2,8 +2,9 @@
 // the way it installs agents: `docs.ts` re-exports this package's classes and the root package.json
 // pins its build (`docsModule`), so the processors run the build the project chose, and a commit to
 // the pin upgrades every doc on its next call. The Docs app then calls `ensureDoc` from the browser
-// as a doc opens. Nothing here is the runtime.
-import type { FacetSpec, IterateContextApi } from "iterate/api";
+// as a doc opens; `installDocs` is how a project without it gets it. Nothing here is the runtime.
+import type { FacetSpec, IterateContextApi, RepoHandle } from "iterate/api";
+import { z } from "zod";
 // the page imports this: frames.ts and comments.ts only, never contract.ts, whose
 // iterate/stream/processor needs node:async_hooks
 import { commentEvents } from "./comments.ts";
@@ -21,6 +22,54 @@ export const docsModule = {
   path: "docs.ts",
   content: 'export { DocDurableObject, DocsDurableObject } from "@iterate-com/docs";\n',
 };
+
+const RootManifest = z.object({ dependencies: z.record(z.string(), z.string()).optional() });
+
+/** Install Docs in a project's config at `version` (a pkg.pr.new build at its commit, or an npm
+ *  version): `docs.ts` and the root package.json's pin, one commit, then the config's publication
+ *  of it. Resolves once the project runs it; throws with the platform's reason when it refused the
+ *  commit. `upgradeAgents` (@iterate-com/agents/install) does the same for agents. */
+export async function installDocs(
+  project: Pick<IterateContextApi, "waitForEvent"> & {
+    repos: { get(path: string): Pick<RepoHandle, "tip" | "readFile" | "commitFiles"> };
+  },
+  version: string,
+) {
+  const repo = project.repos.get("/repos/config");
+  const tip = await repo.tip();
+  const manifest: Record<string, unknown> = JSON.parse(
+    (await repo.readFile("package.json")) || "{}",
+  );
+  // the pin set in place: every other field and dependency keeps its value and its order
+  const { dependencies } = RootManifest.parse(manifest);
+  manifest.dependencies = { ...dependencies, "@iterate-com/docs": version };
+  const { commitOid } = await repo.commitFiles({
+    message: `Install @iterate-com/docs at ${version}`,
+    parent: tip,
+    changes: [
+      docsModule,
+      { path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
+    ],
+  });
+  // one deadline for the whole wait: a give-up for now does not restart it
+  const deadline = Date.now() + 120_000;
+  for (let afterOffset = 0; ;) {
+    const outcome = await project.waitForEvent({
+      type: [
+        "events.iterate.com/project/worker-updated",
+        "events.iterate.com/project/worker-update-failed",
+      ],
+      payload: { commitOid },
+      afterOffset,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+    });
+    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+    if (!outcome.payload?.unavailable)
+      throw new Error(`Docs was not installed: ${String(outcome.payload?.error)}`);
+    // the platform gave up for now and still owes the commit: its outcome comes after this one
+    afterOffset = outcome.offset;
+  }
+}
 
 /** One of the processors: `className` from `docs.ts` of the project's published config. */
 export function docsFacetSpec(className: "DocDurableObject" | "DocsDurableObject"): FacetSpec {

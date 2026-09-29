@@ -5,11 +5,17 @@
 // consent for its host where it is one.
 import { execFileSync } from "node:child_process";
 import { expect, type Page } from "@playwright/test";
-import { docsModule } from "@iterate-com/docs/install";
+import { installDocs } from "@iterate-com/docs/install";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { proxiedAppRoute } from "../../apps/os/scripts/preview-config.ts";
 
 export async function serveDocs(itx: any, docsWorker: URL) {
+  await routeDocs(itx, docsWorker);
+  await installDocs(itx, await docsBuild());
+}
+
+/** The project serving Docs without installing it: its `docs` fetch route alone. */
+export async function routeDocs(itx: any, docsWorker: URL) {
   // after the project's own saga has published its seed, which would otherwise land after and win
   await itx.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
@@ -17,36 +23,10 @@ export async function serveDocs(itx: any, docsWorker: URL) {
     timeoutMs: 60_000,
   });
   await itx.fetchRoutes.set("docs", proxiedAppRoute("docs", docsWorker.href));
-  const version = await docsBuild();
-  const config = itx.repos.get("/repos/config");
-  const tip = await config.tip();
-  const manifest = JSON.parse(await config.readFile("package.json", { commitOid: tip }));
-  const { commitOid } = await config.commitFiles({
-    message: "Install Docs",
-    parent: tip,
-    changes: [
-      docsModule,
-      {
-        path: "package.json",
-        content: `${JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, "@iterate-com/docs": version } }, null, 2)}\n`,
-      },
-    ],
-  });
-  // the commit's one outcome on `/`: published, or refused with why
-  const outcome = await itx.waitForEvent({
-    type: [
-      "events.iterate.com/project/worker-updated",
-      "events.iterate.com/project/worker-update-failed",
-    ],
-    payload: { commitOid },
-    afterOffset: 0,
-    timeoutMs: 120_000,
-  });
-  expect(outcome).toMatchObject({ type: "events.iterate.com/project/worker-updated" });
 }
 
 /** @iterate-com/docs as this commit published it: CI's head, else the checkout's (pushed). */
-async function docsBuild() {
+export async function docsBuild() {
   const head =
     process.env.TEST_TELEMETRY_HEAD_SHA?.trim() ||
     execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();

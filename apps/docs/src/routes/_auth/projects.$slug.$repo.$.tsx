@@ -1,14 +1,35 @@
-import { createFileRoute, getRouteApi, Link, notFound } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
+import { createFileRoute, getRouteApi, Link, notFound, useRouter } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useMemo } from "react";
 import type { IterateContextApi } from "iterate/api";
 import { docContextPath } from "@iterate-com/docs/frames";
-import { docsModule, ensureDoc } from "@iterate-com/docs/install";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { docsModule, ensureDoc, installDocs } from "@iterate-com/docs/install";
+import { pinPkgPrNewVersion, pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
+import { Button } from "@iterate-com/ui/components/button";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@iterate-com/ui/components/empty";
 import { StreamLink } from "@iterate-com/ui/components/stream-link";
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";
 import { repoPath } from "../../lib/docs-repo.ts";
 import { fileKind } from "../../lib/file-kind.ts";
+
+/** The @iterate-com/docs build this deployment installs in a project (`APP_CONFIG pkgPrNewRef`:
+ *  main's, or a PR preview's), pinned at the commit pkg.pr.new serves for it now. Asked in the
+ *  app's Worker: a page cannot read pkg.pr.new's headers. */
+const docsBuild = createServerFn({ method: "GET" }).handler(async () => {
+  const { env } = await import("cloudflare:workers");
+  const ref = startAppConfigOf(env).pkgPrNewRef;
+  return pinPkgPrNewVersion("@iterate-com/docs", pkgPrNewVersion("@iterate-com/docs", ref));
+});
 
 /** One doc: `/projects/<slug>/<repo name>/<path in the repo>`, read at the repo's tip for the
  *  first paint; the editor goes live on the doc's processor (doc-session.ts), which runs the
@@ -77,7 +98,7 @@ function DocPage() {
     [docRepo, path, kind, text, userName, api, project.id],
   );
   if (kind === "binary") return <Binary path={path} />;
-  if (!data.installed) return <NotInstalled />;
+  if (!data.installed) return <NotInstalled project={project.id} />;
   return (
     <DocEditor
       key={`${docRepo}/${path}`}
@@ -100,18 +121,42 @@ function DocPage() {
   );
 }
 
-/** A project whose config doesn't install Docs: its processors have no code to run. */
-function NotInstalled() {
+/** A project whose config doesn't install Docs, whose processors have no code to run yet: one
+ *  click installs this deployment's build (`installDocs`), and the doc opens once the project runs
+ *  it. */
+function NotInstalled({ project }: { project: string }) {
+  const { api } = Route.useRouteContext();
+  const router = useRouter();
+  const install = useMutation({
+    mutationFn: async () => {
+      const version = await docsBuild();
+      using itx = await api.projects.get(project);
+      await installDocs(itx, version);
+      await router.invalidate();
+    },
+  });
   return (
     <Empty>
       <EmptyHeader>
-        <EmptyTitle>Docs is not installed in this project</EmptyTitle>
+        <EmptyTitle>Docs isn&apos;t installed in this project yet</EmptyTitle>
         <EmptyDescription>
-          Its config repo installs it, as it does agents: a <code>{docsModule.path}</code> that says{" "}
-          <code>{docsModule.content.trim()}</code>, and <code>@iterate-com/docs</code> in the root{" "}
-          <code>package.json</code>&apos;s dependencies.
+          Installing it adds a <code>{docsModule.path}</code> and <code>@iterate-com/docs</code> to
+          the project&apos;s config repo, as agents are installed.
         </EmptyDescription>
       </EmptyHeader>
+      <EmptyContent>
+        <Button disabled={install.isPending} onClick={() => install.mutate()}>
+          {install.isPending ? (
+            <>
+              <Spinner />
+              Installing…
+            </>
+          ) : (
+            "Install Docs in this project"
+          )}
+        </Button>
+        {install.error ? <p className="text-sm text-destructive">{install.error.message}</p> : null}
+      </EmptyContent>
     </Empty>
   );
 }

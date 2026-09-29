@@ -112,7 +112,7 @@ export function ownZones(): string[] {
  *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
 export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
-  const { env, platform, appOrigins } = linkedEnvironment(app, envName);
+  const { env, platform, appOrigins, pkgPrNewRef } = linkedEnvironment(app, envName);
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -123,6 +123,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     },
     denyZones: ownZones(),
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
+    pkgPrNewRef,
   } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName || app.name,
@@ -164,13 +165,20 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,
-): { env: StartAppEnv | undefined; platform: { baseUrl: string }; appOrigins: string[][] } {
+): {
+  env: StartAppEnv | undefined;
+  platform: { baseUrl: string };
+  appOrigins: string[][];
+  pkgPrNewRef: string;
+} {
   const preview = envName ? previewDeployment(envName) : undefined;
   if (preview)
     return {
       env: preview.apps[app.name],
       platform: preview.os,
       appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
+      // a PR's preview (`pr<N>-<sha7>`) goes with the PR's build, any other run's with main's
+      pkgPrNewRef: /^pr(\d+)$/.exec(preview.prefix)?.[1] || "main",
     };
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
@@ -187,7 +195,7 @@ function linkedEnvironment(
       throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
     return [name, other.baseUrl];
   });
-  return { env, platform, appOrigins };
+  return { env, platform, appOrigins, pkgPrNewRef: "main" };
 }
 
 /** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the

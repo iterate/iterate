@@ -288,7 +288,8 @@ itself does only request-native work before TanStack Start sees the request:
 proxy), a health check, and a signed-in redirect off the landing page
 (`appServerEntry`, `packages/ui/src/apps/server.ts`, every app's Start server entry). Each app's
 root route has one `createServerFn`, which reads the PostHog key (and, for an app that links to
-it, the dash's origin) from the Worker's `APP_CONFIG`; there are no others.
+it, the dash's origin) from the Worker's `APP_CONFIG`. The only others ask pkg.pr.new which build
+to install or upgrade a package to, since a page can't read its headers (Agents', Voice' and Docs').
 Don't add a second data path; if a component needs project data, read it in the
 route `loader` or subscribe with `useLiveState`/`useIterateContext` at the leaf.
 

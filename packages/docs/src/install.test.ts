@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { DocContract, DocsContract } from "./contract.ts";
-import { ensureDoc } from "./install.ts";
+import { docsModule, ensureDoc, installDocs } from "./install.ts";
 
 // install.ts spells the processors' consumes itself: the page imports it, and contract.ts pulls in
 // iterate/stream/processor, which a browser can't load
@@ -22,4 +22,52 @@ test("opening a doc enables each processor on everything its contract consumes",
     "/ docs": DocsContract.consumes,
     "/docs/config/plan.md doc": DocContract.consumes,
   });
+});
+
+test("installing Docs commits docs.ts and the pin beside the config's other dependencies, and waits for its publication", async () => {
+  const commits: any[] = [];
+  const project: any = {
+    repos: {
+      get: () => ({
+        tip: async () => "c0",
+        readFile: async () =>
+          JSON.stringify({ name: "config", dependencies: { "@iterate-com/agents": "1.0.0" } }),
+        commitFiles: async (input: any) => {
+          commits.push(input);
+          return { commitOid: "c1" };
+        },
+      }),
+    },
+    waitForEvent: async (input: any) => ({
+      type: "events.iterate.com/project/worker-updated",
+      payload: input.payload,
+      offset: 1,
+    }),
+  };
+
+  expect(
+    await installDocs(project, "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@abc"),
+  ).toBe("c1");
+  expect(commits).toMatchObject([
+    {
+      parent: "c0",
+      changes: [
+        docsModule,
+        {
+          path: "package.json",
+          content: `${JSON.stringify(
+            {
+              name: "config",
+              dependencies: {
+                "@iterate-com/agents": "1.0.0",
+                "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@abc",
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        },
+      ],
+    },
+  ]);
 });

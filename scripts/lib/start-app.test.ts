@@ -26,6 +26,8 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
       dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
     },
+    // what it installs in a project is the PR's build
+    pkgPrNewRef: "3144",
   });
 });
 
@@ -62,6 +64,7 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
       voice: "https://voice.iterate.com",
       kit: "https://k.iterate.com",
     },
+    pkgPrNewRef: "main",
   });
 });
 
