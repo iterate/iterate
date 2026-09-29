@@ -14,10 +14,11 @@
 // head. The destruction (`session.contexts.destroy`, refused for a global context and for any
 // project that still exists) waits for the bucket to hold the backup: an orphan whose backup did not
 // land is left for the next run, and so is one whose newest event is under an hour old (a running
-// test's context, whose project was made up: the nightly crash hunt's). A backup holds the log alone: a context's kv and its
-// facets' storage go with it. Each orphan's read and destruction is asked again when the platform
-// failed it (`retryPlatformFailures`, CI_HTTP): a prd deploy mid-sweep resets every context and may
-// drop the session's socket, which is connected again. Each orphan logs one
+// test's context, whose project was made up: the nightly crash hunt's). A backup holds the log
+// alone: a context's kv and its facets' storage go with it. Each object's identification and each
+// orphan's read and destruction is asked again when the platform failed it (`retryPlatformFailures`,
+// CI_HTTP): a prd deploy mid-sweep resets every context and may drop the session's socket, which is
+// connected again (`identifyEach`, `backUpAndDestroy`). Each orphan logs one
 // `context-sweep.orphan` line as soon as it is done, so a run cut short still says what it destroyed.
 //
 //   node scripts/ci/context-sweep.ts --env prd [--destroy]
@@ -44,6 +45,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   failureKind,
+  isPlatformFailureKind,
   retryPlatformFailures,
   type FailureKind,
 } from "@iterate-com/shared/platform-retry";
@@ -81,6 +83,52 @@ export function classifyContexts(contexts: SweptContext[], liveProjectIds: Reado
     else report.orphans.push(context);
   }
   return report;
+}
+
+/** Who each of `ids` is (`identify`, 50 at a time), each batch asked again while the platform fails
+ *  it (a session whose socket a deploy closed). An object whose answer is a platform failure, a
+ *  deploy's reset of that context above all, is asked again on its own on CI_HTTP's waits, as a read
+ *  or a destruction is: `identify` records no wake, so it is safe to repeat. The answer it gets once
+ *  the waits run out is kept, and the sweep fails on it as unidentified. */
+export async function identifyEach(
+  ids: string[],
+  identify: (ids: string[]) => Promise<SweptContext[]>,
+) {
+  const contexts: SweptContext[] = [];
+  for (let start = 0; start < ids.length; start += 50) {
+    const batch = ids.slice(start, start + 50);
+    const answers = await retryingPlatformFailures(
+      `identify ${batch.length} from ${batch[0]}`,
+      () => identify(batch),
+    );
+    for (const answer of answers)
+      contexts.push(platformFailed(answer) ? await identifyAgain(answer.id, identify) : answer);
+  }
+  return contexts;
+}
+
+/** Whether an object's answer is a failure of the platform's, not of who it is (failureKind reads
+ *  the error the session hands back as text). */
+function platformFailed(answer: SweptContext): answer is { id: string; error: string } {
+  return "error" in answer && isPlatformFailureKind(failureKind(new Error(answer.error)));
+}
+
+async function identifyAgain(
+  id: string,
+  identify: (ids: string[]) => Promise<SweptContext[]>,
+): Promise<SweptContext> {
+  const asked: { last?: SweptContext } = {};
+  try {
+    return await retryingPlatformFailures(`identify ${id}`, async () => {
+      const [answer = { id, error: "identify answered nothing" }] = await identify([id]);
+      asked.last = answer;
+      if (platformFailed(answer)) throw new Error(answer.error);
+      return answer;
+    });
+  } catch (error) {
+    // the waits ran out: the last answer, or why the last ask got none
+    return asked.last || { id, error: String(error).slice(0, 300) };
+  }
 }
 
 /** The largest page Cloudflare's List Objects API answers. The API client hands back no cursor, so
@@ -128,11 +176,12 @@ export default async function contextSweep(options: {
       auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
     }),
   );
-  const session = await connection.session();
-  const contexts: SweptContext[] = [];
-  for (let start = 0; start < stored.length; start += 50)
-    contexts.push(...(await session.contexts.identify(stored.slice(start, start + 50))));
-  const live = new Set((await session.projects.list()).map((project) => project.id));
+  const contexts = await identifyEach(stored, async (ids) =>
+    (await connection.session()).contexts.identify(ids),
+  );
+  const live = new Set(
+    (await (await connection.session()).projects.list()).map((project) => project.id),
+  );
   const classified = classifyContexts(contexts, live);
 
   const backupPrefix = `context-sweep/${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}/`;
@@ -298,8 +347,9 @@ export async function backUpAndDestroy(input: {
 
 /** `call`, asked again on CI_HTTP's waits while the platform fails it: a deploy's reset of the
  *  context, or a session whose socket closed (capnweb's "Peer closed WebSocket", which
- *  `reconnecting` answers with a new connection) or could not be connected again. Both calls are safe to repeat: a read, and a
- *  destruction whose landed try answers EMPTIED. */
+ *  `reconnecting` answers with a new connection) or could not be connected again. Every call is
+ *  safe to repeat: an identification and a read record no wake, and a destruction whose landed try
+ *  answers EMPTIED. */
 const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
   retryPlatformFailures(call, {
     area: "context-sweep",
