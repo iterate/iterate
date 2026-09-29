@@ -412,8 +412,9 @@ export async function prepareConfinedWorker(
         throw error;
       }
       return {
-        // PURE-PLAY: no node:* but `nodejs_als`, which the SDK carries a call's cause in (cause.ts),
-        // so userspace code stays portable across workerd builds.
+        // The Node.js compatibility this date turns on stays off: it adds ~0.7 ms to every cold load
+        // (measured 2026-09-29), and the SDK needs only `nodejs_als`, which carries a call's cause
+        // (cause.ts).
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to

@@ -102,10 +102,6 @@ onlyBuiltDependencies:
 overrides:
   "@codemirror/state": "catalog:"
   wrangler: "catalog:"
-  # Local dev and the Workers tests run the newest workerd release, as production does, rather than
-  # the older one wrangler pins (1.20260926.1). Drop this line once wrangler pins this workerd or a
-  # newer one: until then a wrangler bump leaves workerd here.
-  workerd: 1.20260929.1
   ws: "catalog:"
 patchedDependencies:
   "@cloudflare/vitest-plugin@1.3.2": patches/@cloudflare__vitest-plugin@1.3.2.patch
