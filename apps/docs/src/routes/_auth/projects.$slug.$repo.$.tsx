@@ -132,7 +132,8 @@ function NotInstalled({ project }: { project: string }) {
       const version = await docsBuild();
       using itx = await api.projects.get(project);
       await installDocs(itx, version);
-      await router.invalidate();
+      // the button stays "Installing…" until the page has the doc, so it can't commit twice
+      await router.invalidate({ sync: true });
     },
   });
   return (
