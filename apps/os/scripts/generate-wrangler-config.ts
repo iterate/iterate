@@ -1,11 +1,10 @@
 import { readFileSync } from "node:fs";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import JSON5 from "json5";
-import { PREVIEW_AND_DEV_ACCOUNT_ID, getOsEnv } from "../../../envs.ts";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../src/project/context-birth-events.ts";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
-import { osResourceNames, type OsEnv } from "./os-env.ts";
+import { OsDeployableEnv, osResourceNames, type OsEnv } from "./os-env.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
 import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
@@ -30,11 +29,23 @@ function configVars(env: OsEnv) {
   // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
   // (a fake admits addresses under `testEmailDomain` alone). The GitHub App carries a key, so
   // scripts/deploy.ts ships it as a secret.
-  if (env.petshopIntegrations) {
-    vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify(PREVIEW_SLACK_APP);
-    vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify(PREVIEW_GOOGLE_APP);
-    vars.APP_CONFIG_INTEGRATIONS__X = JSON.stringify(PREVIEW_X_APP);
-    vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify(PREVIEW_CLOUDFLARE_APP);
+  if (env.petshopOrigin) {
+    vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify({
+      ...PREVIEW_SLACK_APP,
+      slackOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify({
+      ...PREVIEW_GOOGLE_APP,
+      googleOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__X = JSON.stringify({
+      ...PREVIEW_X_APP,
+      xOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify({
+      ...PREVIEW_CLOUDFLARE_APP,
+      cloudflareOrigin: env.petshopOrigin,
+    });
     vars.APP_CONFIG_LOGIN__GOOGLE = "{}";
     vars.APP_CONFIG_LOGIN__CLOUDFLARE = JSON.stringify({
       scopes: ["openid", "user-details.read", "offline_access"],
@@ -94,18 +105,17 @@ export function readWranglerBase() {
   return { ...base, compatibility_date: COMPATIBILITY_DATE };
 }
 
-/** Runtime bindings stay with the app; deployed names and IDs come from envs.ts. This is local dev
- *  (projects under `<project>.localhost`, the secrets as plain dev vars — scripts/dev.ts) on the
- *  dev/preview account; `deploymentWranglerConfig` is what a deployment puts on top. */
+/** Runtime bindings stay with the app; deployed names and IDs come from the deployment. This is local dev
+ *  (projects under `<project>.localhost`, the secrets as plain dev vars — scripts/dev.ts);
+ *  `deploymentWranglerConfig` is what a deployment puts on top. */
 function localWranglerConfig() {
   return {
     ...readWranglerBase(),
-    // The account a LOCAL worker (`pnpm dev`, the local e2e run) reaches Cloudflare on: wrangler's
-    // local runtime has no simulator for Artifacts, AI or Browser and proxies those three bindings
-    // to the real products on this account under the developer's `wrangler login` — so a local
-    // run's repos land in the dev/preview account's `os-dev-repos` (wrangler.base.jsonc),
-    // never in a deployment's namespace.
-    account_id: PREVIEW_AND_DEV_ACCOUNT_ID,
+    // No `account_id`: wrangler's local runtime has no simulator for Artifacts, AI or Browser and
+    // proxies those three bindings to the real products on the account wrangler picks,
+    // CLOUDFLARE_ACCOUNT_ID or else the `wrangler login`'s. iterate's root `pnpm dev`
+    // (scripts/os-dev.ts) sets the dev/preview account, so a local run's repos land in its
+    // `os-dev-repos` (wrangler.base.jsonc), never in a deployment's namespace.
     routes: [],
   };
 }
@@ -150,17 +160,37 @@ function deploymentWranglerConfig(env: OsEnv) {
   };
 }
 
-/** The Vite plugin builds one flattened environment at a time: `name` is an envs.ts deployment, a
- *  per-commit deployment (`previewDeployment`, `pr3144-a1b2c3d`) or "self-host"; none is a local
- *  build — `localDev` for `vite dev` (plain dev secrets as vars), else the local build the e2e
- *  suite runs, on `port`. */
+/** THE DEPLOYMENT A BUILD IS FOR, from the environment its caller set (vite.config.ts):
+ *  `CLOUDFLARE_ENV` names it and `OS_DEPLOYMENT` is the deployment itself, as JSON (./build.ts
+ *  `viteBuildOs`, which ./deploy.ts and ./preview.ts call with envs.ts `getOsEnv`).
+ *  "self-host" and no name (a local build) need nothing more. apps/os looks no deployment up by
+ *  name: the list of iterate's is envs.ts's, outside apps/os. */
+export function deploymentFromEnv(env: { CLOUDFLARE_ENV?: string; OS_DEPLOYMENT?: string }) {
+  const name = env.CLOUDFLARE_ENV;
+  if (!name) return undefined;
+  if (name === "self-host") return name;
+  if (!env.OS_DEPLOYMENT)
+    throw new Error(
+      `apps/os: CLOUDFLARE_ENV=${name} needs OS_DEPLOYMENT, the deployment as JSON; build with scripts/build.ts viteBuildOs`,
+    );
+  const deployment = OsDeployableEnv.parse(JSON.parse(env.OS_DEPLOYMENT));
+  if (deployment.name !== name)
+    throw new Error(
+      `apps/os: CLOUDFLARE_ENV=${name} but OS_DEPLOYMENT is ${JSON.stringify(deployment.name)}`,
+    );
+  return deployment;
+}
+
+/** The Vite plugin builds one flattened environment at a time: a deployment (prd, main on dev, a
+ *  per-commit `pr3144-a1b2c3d`), "self-host", or none for a local build — `localDev` for
+ *  `vite dev` (plain dev secrets as vars), else the local build the e2e suite runs, on `port`. */
 export function viteWranglerConfig(
-  name: string | undefined,
+  deployment: OsDeployableEnv | "self-host" | undefined,
   options: { localDev: boolean; port: string },
 ) {
-  if (name === "self-host") return selfHostWranglerConfig();
+  if (deployment === "self-host") return selfHostWranglerConfig();
   const local = localWranglerConfig();
-  if (!name)
+  if (!deployment)
     return {
       ...local,
       name: options.localDev ? local.name : "os-local-build",
@@ -191,7 +221,7 @@ export function viteWranglerConfig(
         }),
       },
     };
-  return { ...local, ...deploymentWranglerConfig(getOsEnv(name)) };
+  return { ...local, ...deploymentWranglerConfig(deployment) };
 }
 
 /** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into

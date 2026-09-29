@@ -32,14 +32,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import {
-  OS_DOPPLER_PROJECT,
-  getEnv,
-  getOsEnv,
-  osEnvs,
-  previewDeployment,
-  type OsDeployableEnv,
-} from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getEnv, getOsEnv, osEnvs, previewDeployment } from "../../../envs.ts";
 import {
   appConfigSecretsOf,
   collectSecrets,
@@ -67,6 +60,7 @@ import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
+import type { OsDeployableEnv } from "./os-env.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   deleteArtifactsNamespace,
@@ -1357,7 +1351,7 @@ async function main(command: Command, options: PreviewOptions) {
   const urls = previewDeploymentUrls(name);
   console.log(`deployment ${name} → ${urls.os}`);
   if (command === "config") {
-    await buildOs(name);
+    await buildOs(getOsEnv(name));
     console.log(`wrote ${findBuiltWranglerConfig(ROOT)}`);
     return;
   }

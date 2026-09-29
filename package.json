@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm --dir apps/os dev",
+    "dev": "node scripts/os-dev.ts",
     "getin": "pnpm --dir apps/os getin",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:specs && pnpm typecheck:configs",
     "typecheck:specs": "tsc --noEmit -p specs/tsconfig.json",

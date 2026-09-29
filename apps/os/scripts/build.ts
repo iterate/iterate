@@ -8,7 +8,8 @@ import path from "node:path";
 import { build as esbuild } from "esbuild";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
-import { viteBuild } from "../../../scripts/lib/deploy-helpers.ts";
+import { viteBuild } from "../../../scripts/lib/vite-build.ts";
+import type { OsDeployableEnv } from "./os-env.ts";
 import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -152,10 +153,20 @@ export async function build() {
   );
 }
 
-/** Build an environment-specific Worker and its TanStack client into dist/. */
-export async function buildOs(env: string) {
+/** `vite build` of one deployment's Worker and its TanStack client into dist/. vite.config.ts gets
+ *  the deployment from `OS_DEPLOYMENT` (generate-wrangler-config.ts `deploymentFromEnv`), never by
+ *  looking its name up. */
+export async function viteBuildOs(deployment: OsDeployableEnv) {
+  await viteBuild(root, {
+    CLOUDFLARE_ENV: deployment.name,
+    OS_DEPLOYMENT: JSON.stringify(deployment),
+  });
+}
+
+/** `build`, then `viteBuildOs`. */
+export async function buildOs(deployment: OsDeployableEnv) {
   await build();
-  await viteBuild(root, env);
+  await viteBuildOs(deployment);
 }
 
 if (isMainModule(import.meta.url)) await build();

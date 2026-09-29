@@ -2,7 +2,7 @@ import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test } from "vitest";
-import { osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
+import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
 import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
@@ -346,7 +346,7 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
 // ── a deployment's wrangler config: the one prd's goes through (generate-wrangler-config.ts) ──
 
 test("a deployment's apps/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
-  const config = viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" });
+  const config = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(config).toMatchObject({
     name: "pr3144-a1b2c3d-os",
     account_id: osEnvs.preview!.cloudflareAccountId,
@@ -368,7 +368,9 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
 });
 
 test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
-  expect(viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" })).toMatchObject({
+  expect(
+    viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" }),
+  ).toMatchObject({
     vars: {
       APP_CONFIG_URLS__OS: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
       APP_CONFIG_URLS__DASH: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
@@ -402,12 +404,12 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
   });
   // the GitHub App carries a key: scripts/deploy.ts ships it as a secret, never a var
   expect(
-    viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" }).vars,
+    viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" }).vars,
   ).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__GITHUB");
 });
 
 test("a deployment's apps/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
-  const { vars } = viteWranglerConfig("pr3144-a1b2c3d", { localDev: false, port: "0" });
+  const { vars } = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(
     parseAppConfig({
       ...vars,
@@ -422,7 +424,7 @@ test("a deployment's apps/os config parses as its worker parses it, with the two
 });
 
 test("an envs.ts deployment's config still names its resources by id, and turns no other issuer, test people or pet shop fakes on", () => {
-  const config = viteWranglerConfig("prd", { localDev: false, port: "0" });
+  const config = viteWranglerConfig(getOsEnv("prd"), { localDev: false, port: "0" });
   const ids = osEnvs.prd!.resources!;
   expect(config).toMatchObject({
     kv_namespaces: [
@@ -434,9 +436,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__ADMIN_ISSUER");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
-  expect(() => viteWranglerConfig("pr3144", { localDev: false, port: "0" })).toThrow(
-    'apps/os: unknown env "pr3144"',
-  );
+  expect(() => getOsEnv("pr3144")).toThrow('apps/os: unknown env "pr3144"');
 });
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then

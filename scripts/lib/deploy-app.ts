@@ -4,7 +4,6 @@ import {
   deployWithSecrets,
   findBuiltWranglerConfig,
   smoke,
-  viteBuild,
 } from "./deploy-helpers.ts";
 import {
   assertProvisioned,
@@ -12,6 +11,7 @@ import {
   type DeployableEnv,
   type EnvContext,
 } from "./env-context.ts";
+import { viteBuild } from "./vite-build.ts";
 
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
@@ -63,7 +63,7 @@ export async function deployApp<
       credentials: Record<string, string>,
     ) => Promise<void> | void;
     /** Writes dist/, whose one `wrangler.json` is what deploys: `vite build` for the env
-     *  (deploy-helpers.ts `viteBuild`) unless the app builds itself, as the SPA's static files do. */
+     *  (vite-build.ts `viteBuild`) unless the app builds itself, as the SPA's static files do. */
     build?: (ctx: EnvContext<E>) => Promise<void>;
     /** Runs after a healthy deploy. */
     afterDeploy?: (
@@ -106,7 +106,9 @@ export async function deployApp<
   };
   const secretValues = collectSecrets(ctx, options.requiredSecrets || []);
   await options.prepare?.(ctx, secretValues, credentials);
-  await (options.build ? options.build(ctx) : viteBuild(options.appRoot, env.name));
+  await (options.build
+    ? options.build(ctx)
+    : viteBuild(options.appRoot, { CLOUDFLARE_ENV: env.name }));
   const builtConfig = findBuiltWranglerConfig(options.appRoot);
   if (options.withoutRoutes) {
     const config = JSON.parse(readFileSync(builtConfig, "utf8"));
