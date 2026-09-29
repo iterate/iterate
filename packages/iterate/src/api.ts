@@ -229,6 +229,14 @@ export type SecretHmacVerification = {
   field?: string;
 };
 
+/** What `secrets.verifyEquals(path, input)` checks: the candidate string a request presented (a
+ *  static header token, say), and which field of a JSON material is the secret (the whole
+ *  material when omitted). */
+export type SecretEqualsVerification = {
+  value: string;
+  field?: string;
+};
+
 /** EVERY PROVIDER AN INTEGRATION CONNECTS, spelled once: a connection to one is the log
  *  `/integrations/<provider>/<connection>` and the secret `/secrets/<provider>-<connection>`. The
  *  kinds below are read off it. */
@@ -764,6 +772,11 @@ export interface IterateContextApi {
      *  constant-time, run in the secret's facet. A secret never set (or a material with no key at
      *  the field) answers false, never a description. */
     verifyHmac(path: string, input: SecretHmacVerification): Promise<boolean>;
+    /** A presented string compared with a secret WITHOUT revealing it, for a credential a caller can
+     *  only send as it is (a webhook's static header token): one bit back, constant-time, run in the
+     *  secret's facet. A secret never set (or no string at the field) answers false. A replayable
+     *  token stays replayable: prefer `verifyHmac` wherever the sender signs. */
+    verifyEquals(path: string, input: SecretEqualsVerification): Promise<boolean>;
     /** The operator's, on the global root (`session.global`): lend the deployment's own secret to
      *  a project, as the project's path `as`, or `to: "every-project"`: every project, one created
      *  later included, borrows it unless its path holds a secret of its own. The project's uses are

@@ -1469,6 +1469,13 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           ["verifyHmac", secretPath, input],
           () => secretFacet(["verifyHmac", input]) as Promise<boolean>,
         ),
+      verifyEquals: (secretPath, input) =>
+        onSecretContext(
+          secretPath,
+          ["verifyEquals", secretPath, input],
+          // the facet call is untyped; the secret facet's verifyEquals answers a boolean
+          () => secretFacet(["verifyEquals", input]) as Promise<boolean>,
+        ),
       // THE OPERATOR'S LEND of the deployment's own secret (`lendFromInstance`). A person's account
       // reaches a project through `integrations.connect(provider, { account })` alone, which the
       // platform carries out on their secret (`connectToProject`).

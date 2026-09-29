@@ -45,6 +45,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "secret", walk: "write({})", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "fetch()", byExpression: "FORBIDDEN" },
   { facet: "secret", walk: "verifyHmac({})", byExpression: "FORBIDDEN" },
+  { facet: "secret", walk: "verifyEquals({})", byExpression: "FORBIDDEN" },
   // 4. A connection's connect and disconnect are `itx.integrations`' alone.
   { facet: "project", walk: "connectIntegration({})", byExpression: "FORBIDDEN" },
   { facet: "project", walk: "disconnectIntegration({})", byExpression: "FORBIDDEN" },

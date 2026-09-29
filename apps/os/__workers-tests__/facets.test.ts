@@ -1373,6 +1373,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "secret", method: "beginOAuth", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "completeOAuth", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "verifyHmac", byExpression: "FORBIDDEN" },
+  { facet: "secret", method: "verifyEquals", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "fetch", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "exportForProjectSeed", byExpression: "FORBIDDEN" },
   { facet: "secret", method: "clientSecretFor", byExpression: "FORBIDDEN" },
