@@ -26,6 +26,8 @@ its processor holds the text as a Yjs `Y.Text` and saves it.
   ([src/anchor.ts](src/anchor.ts)) rather than holding a position, and after each save the
   processor re-anchors a quote that only matches loosely, or marks it detached.
 - **The wire** ([src/frames.ts](src/frames.ts)): event types, payload schemas, the live state.
+- **For agents** ([AGENTS.md](AGENTS.md)): reading, editing and commenting on docs from a script,
+  the moves the page makes. `installDocs` points the project's own `AGENTS.md` at it.
 
 ```ts
 import { ensureDoc } from "@iterate-com/docs/install";

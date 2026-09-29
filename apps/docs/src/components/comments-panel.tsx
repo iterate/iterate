@@ -169,8 +169,10 @@ function CommentItem({
   return (
     <li className="flex flex-col gap-0.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="font-medium" title={comment.author}>
-          {nameOf(comment.author)}
+        <span title={comment.author}>
+          <span className="font-medium">{nameOf(comment.author)}</span>
+          {/* the agent that wrote it for them, as it names itself */}
+          {comment.via ? <span className="text-muted-foreground"> · {comment.via}</span> : null}
         </span>
         <time dateTime={comment.at} className="text-xs text-muted-foreground">
           {when.format(new Date(comment.at))}

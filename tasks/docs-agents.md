@@ -5,8 +5,9 @@ size: small
 
 # Docs: agents work on docs the way the page does
 
-Status: specified, not built. Step 1 of the agents plan from 2026-09-30 (below): an agent guide, a
-pointer to it from the project's own agent instructions, and a comment saying which agent wrote it.
+Status: built, waiting on CI. The guide (`packages/docs/AGENTS.md`), `installDocs`'s pointer to it in
+the config's `AGENTS.md`, and `via` on comments (the panel's `jonas · Claude Code`) are in, with
+unit tests and a spec step. Left: steps 2 and 3, and a real Claude Code session using the guide.
 
 ## Why
 
@@ -24,19 +25,19 @@ Not in this step: an `@agent` in a comment waking a project agent (step 2, the c
 
 ## The plan
 
-- [ ] **The guide**: `packages/docs/AGENTS.md`, for an agent with an `itx` (an MCP `run` script, a
+- [x] **The guide** _(`packages/docs/AGENTS.md`, in the package's `files` too)_: `packages/docs/AGENTS.md`, for an agent with an `itx` (an MCP `run` script, a
       project agent, loaded code). Short, with scripts that work as written: where docs are, reading
       one, editing one (a commit with `parent`, which merges into the open editors), reading a doc's
       comments (the doc processor's live state), commenting, replying, resolving and reopening, and
       saying which agent you are. The events stay the interface: nothing here is a new API.
-- [ ] **Found from the project's own agent instructions**: MCP's instructions already tell an agent
+- [x] **Found from the project's own agent instructions** _(`installDocs`, `docsAgentsSection`)_: MCP's instructions already tell an agent
       to read the config repo's `AGENTS.md`. `installDocs` adds a short "Docs" section there pointing
       at the guide (raw.githubusercontent.com, main), once, and creates the file when the config
       has none.
-- [ ] **Which agent wrote a comment**: comment events take an optional `via` ("Claude Code"), which
+- [x] **Which agent wrote a comment** _(`via` in `comments.ts`, defaulting to null so a newer page reads an older build's threads; `comments-panel.tsx`)_: comment events take an optional `via` ("Claude Code"), which
       the reducer keeps on the comment and the panel shows as `misha · Claude Code`. It's what the
       agent says it is; the event's `source.grant` is the connection it really came through.
-- [ ] Tests: the reducer keeps `via`, `installDocs` adds the section once (and leaves an
+- [x] Tests _(`processor.test.ts`, `install.test.ts`, a reply by script in `specs/docs/comments.spec.ts`)_: the reducer keeps `via`, `installDocs` adds the section once (and leaves an
       `AGENTS.md` that has it alone), and the comments spec shows a reply that says `via`.
 
 ## Assumptions (made without asking; change them if wrong)
@@ -49,3 +50,9 @@ Not in this step: an `@agent` in a comment waking a project agent (step 2, the c
   describes are the same.
 
 ## Implementation log
+
+- 2026-09-30: `via` is `.default(null)` in the `Comment` schema: the Docs page is often newer than
+  a project's pinned processor, and a required field would make the page's live-state parse fail
+  (stuck at "Opening…") on every doc of a project on an older pin.
+- The spec's agent step reads the thread from the doc processor's live state exactly as the guide
+  says, then appends the reply with `via`, so the guide's two central snippets run in CI.

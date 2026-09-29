@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { DocContract, DocsContract } from "./contract.ts";
-import { docsModule, ensureDoc, installDocs } from "./install.ts";
+import { docsAgentsSection, docsModule, ensureDoc, installDocs } from "./install.ts";
 
 // install.ts spells the processors' consumes itself: the page imports it, and contract.ts pulls in
 // iterate/stream/processor, which a browser can't load
@@ -24,14 +24,20 @@ test("opening a doc enables each processor on everything its contract consumes",
   });
 });
 
-test("installing Docs commits docs.ts and the pin beside the config's other dependencies, and waits for its publication", async () => {
+test("installing Docs commits docs.ts, the pin beside the config's other dependencies and the agent guide's pointer, and waits for its publication", async () => {
   const commits: any[] = [];
+  const files: Record<string, string> = {
+    "package.json": JSON.stringify({
+      name: "config",
+      dependencies: { "@iterate-com/agents": "1.0.0" },
+    }),
+    "AGENTS.md": "# Config\n\nThe project's own words.\n",
+  };
   const project: any = {
     repos: {
       get: () => ({
         tip: async () => "c0",
-        readFile: async () =>
-          JSON.stringify({ name: "config", dependencies: { "@iterate-com/agents": "1.0.0" } }),
+        readFile: async (path: string) => files[path] || null,
         commitFiles: async (input: any) => {
           commits.push(input);
           return { commitOid: "c1" };
@@ -67,7 +73,16 @@ test("installing Docs commits docs.ts and the pin beside the config's other depe
             2,
           )}\n`,
         },
+        {
+          path: "AGENTS.md",
+          content: `# Config\n\nThe project's own words.\n\n${docsAgentsSection}`,
+        },
       ],
     },
   ]);
+
+  // installed again: the pointer is there already, and stays as it is
+  files["AGENTS.md"] = commits[0].changes[2].content;
+  await installDocs(project, "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@def");
+  expect(commits[1].changes.map((change: any) => change.path)).toEqual(["docs.ts", "package.json"]);
 });

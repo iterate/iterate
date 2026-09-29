@@ -133,7 +133,7 @@ test("a facet reset loses nothing: the next incarnation has the unsaved text and
   );
 });
 
-test("people comment, reply and resolve; only a comment's author edits or deletes it", async () => {
+test("people comment, reply and resolve, an agent replies for one of them, and only a comment's author edits or deletes it", async () => {
   const doc = openDoc({ "plan.md": "# Plan\n\nWe fly in on Tuesday.\n" });
   const misha = await doc.join("misha@iterate.com");
   const jonas = await doc.join("jonas@iterate.com");
@@ -145,7 +145,13 @@ test("people comment, reply and resolve; only a comment's author edits or delete
     quote: quoteAt(text, at, at + "Tuesday".length),
     body: "Wednesday?",
   });
-  jonas.append(COMMENT_REPLIED, { thread: "t1", comment: "c2", body: "Flights are cheaper." });
+  // Jonas's Claude Code, over MCP as Jonas
+  jonas.append(COMMENT_REPLIED, {
+    thread: "t1",
+    comment: "c2",
+    body: "Flights are cheaper.",
+    via: "Claude Code",
+  });
   // not his comment: ignored
   jonas.append(COMMENT_EDITED, { thread: "t1", comment: "t1", body: "Thursday?" });
   misha.append(COMMENT_EDITED, { thread: "t1", comment: "t1", body: "Wednesday, surely?" });
@@ -162,8 +168,8 @@ test("people comment, reply and resolve; only a comment's author edits or delete
           detached: false,
           resolved: { by: "jonas@iterate.com" },
           comments: [
-            { author: "misha@iterate.com", body: "Wednesday, surely?", edited: true },
-            { author: "jonas@iterate.com", body: "Flights are cheaper.", edited: false },
+            { author: "misha@iterate.com", via: null, body: "Wednesday, surely?", edited: true },
+            { author: "jonas@iterate.com", via: "Claude Code", body: "Flights are cheaper." },
           ],
         },
       ],
