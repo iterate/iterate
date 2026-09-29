@@ -7,6 +7,8 @@
 
 import { inspect } from "node:util";
 import { expect, test, vi } from "vitest";
+import { parse } from "iterate/expression";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../envs.ts";
 // Routing is under test here: the unit project aliases Start's generated server entry to a stand-in
 // page (src/test/start-server-entry-shim.ts); the real entry is exercised by the built-Worker and
 // browser suites, where its Vite virtual modules exist.
@@ -414,6 +416,63 @@ for (const { vars, becomes, throws, warns } of appConfigRows)
     if (warns !== undefined) expect(warn).toHaveBeenCalledTimes(warns);
     else expect(warn).not.toHaveBeenCalled();
   });
+// THE BIRTH EVENTS, checked at boot (the deploy gate) and stored as the append boundary stores each.
+test.for([
+  { name: "unset: none", vars: MINIMAL, becomes: [] },
+  {
+    name: "every deployment's rows, each target parsed as an append stores it",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
+    },
+    becomes: PROJECT_CONTEXT_BIRTH_EVENTS.map((row) => ({
+      ...row,
+      payload: { ...row.payload, target: parse(row.payload.target) },
+    })),
+  },
+  {
+    name: "a record only the platform appends is refused, naming its entry",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS:
+        '[{"type":"test/fine"},{"type":"events.iterate.com/itx/woken"}]',
+    },
+    throws:
+      /^APP_CONFIG contextBirthEvents\[1\]: events\.iterate\.com\/itx\/woken is the platform's own record/,
+  },
+  {
+    name: "a subscription whose target does not parse is refused, naming its entry",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify([
+        {
+          type: "events.iterate.com/itx/subscription-configured",
+          payload: { name: "config", target: "itx.config(" },
+        },
+      ]),
+    },
+    throws: /^APP_CONFIG contextBirthEvents\[0\]:/,
+  },
+  {
+    name: "an event with no type is refused, naming the field",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"payload":{}}]' },
+    throws: /contextBirthEvents/,
+  },
+  {
+    name: "a key an event does not have is refused",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '[{"type":"x/y","offset":3}]' },
+    throws: /contextBirthEvents/,
+  },
+  {
+    name: "not a list is refused",
+    vars: { ...MINIMAL, APP_CONFIG_CONTEXT_BIRTH_EVENTS: '{"type":"x/y"}' },
+    throws: /contextBirthEvents/,
+  },
+])("parseAppConfig contextBirthEvents: $name", ({ vars, becomes, throws }) => {
+  if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+  else expect(parseAppConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
+});
+
 test("parseAppConfig: a secret never prints", () => {
   const { secrets } = parseAppConfig(MINIMAL);
   expect(String(secrets.key)).toBe("REDACTED");

@@ -13,11 +13,12 @@
 
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
-import type { StreamEventInput } from "iterate/stream/processor";
+import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   normalizedItxExpression,
   print,
   type ItxExpression,
+  type ItxExpressionInput,
   type ItxExpressionStep,
   InvokeHandle,
 } from "iterate/expression";
@@ -29,19 +30,38 @@ import type {
   IterateContextApi,
   R2ObjectRecord,
   SecretRefresh,
-  WorkerSource,
 } from "iterate/api";
-import { projectPublicUrlOf, type IngressRouting } from "iterate/project-ingress";
+import {
+  ITERATE_ROUTING_SLUG_HEADER,
+  projectPublicUrlOf,
+  type IngressRouting,
+} from "iterate/project-ingress";
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
+import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { Kept } from "../kept.ts";
+import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
-import { ScheduleKey, ScheduleReceipt, type ScheduledAppend } from "../stream/scheduled-appends.ts";
+import {
+  ScheduleKey,
+  ScheduledAppendInput,
+  ScheduleReceipt,
+  type ScheduledAppend,
+} from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
+import {
+  assertSecretPath,
+  hmacSha256Hex,
+  normalizeSecretRecord,
+  originsOf,
+  sha256Hex,
+} from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
+import { deliverToPlatformHook } from "../platform-hook.ts";
 import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
 import {
   connectionPathOf,
@@ -65,7 +85,15 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
-import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
+import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
+import {
+  FacetHandle,
+  isMissingRpcMethod,
+  RpcStubHandle,
+  materializeItxHandleReference,
+} from "./dispatch.ts";
+import { signedFileUrl } from "./file-urls.ts";
+import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -73,14 +101,15 @@ import {
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
-import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
-  facetSpecOf,
   isWorkerModules,
+  namedWorkerLoad,
   prepareConfinedWorker,
+  type NamedWorker,
 } from "./worker-loader.ts";
 import type { BuiltInRoot } from "./itx-expression-rewriting.ts";
 import { cfBrowser } from "./browser.ts";
@@ -118,9 +147,11 @@ type PlatformSecretsVerbs = {
   /** The platform's, when that move failed: the held token dropped, or the record deleted while it
    *  is still the one the admit stored (`admitted`, with `secret/deleted`). You never call it. */
   dropHeldToken(path: string, input: { nonce: string }): Promise<"held" | "admitted" | "gone">;
-  /** The platform's, from another secret's facet (secret/durable-object.ts `#clientSecretOf`): the
-   *  client secret this secret holds, for that secret's token request to `origin`, which must be in
-   *  this one's pin. You never call it: no value leaves a secret toward a caller. */
+  /** The platform's, from another secret's facet (secret/durable-object.ts `#clientSecretOf`) or a
+   *  webhook's signature (`webhookSigningKey`): the client secret this secret holds, for a request
+   *  to `origin`, which must be in this one's pin. A webhook's key signs for the whole project, so
+   *  loaded code names one only at the project's root (itx-expression-rewriting.ts's app wall). You
+   *  never call it: no value leaves a secret toward a caller. */
   clientSecretFor(path: string, input: { origin: string; field?: string }): Promise<string>;
   revokeLend(
     path: string,
@@ -267,9 +298,9 @@ export interface BuiltInScope extends LibraryRoots {
    *  `list()` is the table; `match({ url, headers })` the first route whose matcher holds — by
    *  priority, highest first, then by name — or null (`routingSlug` against the edge's
    *  `x-iterate-routing-slug`, `url` a `URLPattern` against the URL the app sees, `headers` exact).
-   *  The config worker asks `match`, enforces `authRequirement` itself and forwards a match to
-   *  `route.target` with `x-itx-expression` through `env.ITX.fetch` (configs/default/worker.ts).
-   *  Only on a project's root. */
+   *  The edge matches every request on the project's hosts against the root's snapshot of the
+   *  table, enforces `authRequirement` and serves a match from `route.target`, before the config
+   *  worker's fetch (worker.ts `serveProjectHost`). Only on a project's root. */
   fetchRoutes: IterateContextApi["fetchRoutes"];
   /** THE FIRST BINDINGS ROOT: Workers AI's `run(model, inputs, options?)` and `models()`, through
    *  the stateless `ItxAi` entrypoint (itx-ai.ts), so a rewrite rule can pin a model with `@`
@@ -379,12 +410,24 @@ export interface BuiltInScope extends LibraryRoots {
   /** The stateless host: `get({ source, cacheKey?, className?, props? })` → a `WorkerEntrypoint` in
    *  its own confined isolate (no DO, no storage) — ANY method it exports, reached by name (`run`,
    *  `fetch`, `processEventBatch`, …). `source` is the worker's FILES, literally (`{ "package.json":
-   *  '{"main":"worker.js"}', "worker.js": code, … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them — then `cacheKey` is REQUIRED and the producer runs
+   *  '{"main":"worker.js"}', "worker.js": code, … }`, its entry as module-resolution.ts `readPackage` finds it), OR an itx EXPRESSION that produces them under `cacheKey` — the producer runs
    *  only when no isolate is warm under it and its answer is not kept (a day, per deploy;
-   *  worker-loader.ts: Cloudflare's `get(id, getCode)` contract; the caller owns "same key ⇒ same code"). `className` names the exported class (default:
+   *  worker-loader.ts: Cloudflare's `get(id, getCode)` contract; the caller owns "same key ⇒ same code"),
+   *  OR, an expression with no `cacheKey`, the NAME of another worker, whose code it loads
+   *  (`namedWorkerLoad`: `mainModule` by its published identity). `className` names the exported class (default:
    *  the default export); `props` is Cloudflare's own WorkerStubEntrypointOptions.props, read back as
    *  `this.ctx.props` (a url, a key name, …). No name and no `list`: a stateless worker is its spec. */
   workers: IterateContextApi["workers"];
+  /** THE PLATFORM HOOK (platform-hook.ts): the platform's own subscriber, that a deployment's birth
+   *  events point a fan-out row at (`itx.builtins.platformHook.deliverEvent`). `deliverEvent`
+   *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to the platform's
+   *  code with the bindings every built-in holds. Not in the published API: no one else calls it. */
+  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
+  /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
+   *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
+   *  The signing key is read from the secret's context at most once per SNAPSHOT_TTL_MS per spec,
+   *  never once per event. A context root: a row delivers from where its events happen. */
+  webhooks: IterateContextApi["webhooks"];
 }
 
 // THE ONE LIST: `keyof BuiltInScope` (minus the reserved root itself, which names the record, not a
@@ -398,13 +441,14 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-// THE PUBLISHED LIST: every built-in root is a root of iterate/api's `IterateContextApi`, and every
-// root declared there is a built-in but the edge's own verbs (iterate-context.ts `invoke`,
-// `subscribe`, `provide`) — a root published and never implemented, or implemented and never
-// published, fails to typecheck right here.
+// THE PUBLISHED LIST: every built-in root but the platform's own hook is a root of iterate/api's
+// `IterateContextApi`, and every root declared there is a built-in but the edge's own verbs
+// (iterate-context.ts `invoke`, `subscribe`, `provide`) — a root published and never implemented, or
+// implemented and never published, fails to typecheck right here.
 type EdgeOnlyRoot = "invoke" | "subscribe" | "provide";
-type RootsArePublished = [BuiltInRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
-  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [BuiltInRoot]
+type PublishedRoot = Exclude<BuiltInRoot, "platformHook">;
+type RootsArePublished = [PublishedRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
+  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [PublishedRoot]
     ? true
     : never
   : never;
@@ -468,8 +512,31 @@ function abortReasonOf(reason: unknown, verb: string): string | undefined {
   return parsed.data;
 }
 
+/** A webhook's spec (`webhooks.get`): where it POSTs, over http(s), and the secret that signs it. */
+const WebhookSpec = z.strictObject({
+  url: z.url({ protocol: /^https?$/, error: "a webhook's url is an http(s) URL" }),
+  signingSecret: z.string().transform(assertSecretPath).optional(),
+});
+
+/** How long one webhook POST may take: under the delivery watchdog (20 s), so the request is
+ *  cancelled — and its delivery settles — before the watchdog gives up on it. */
+const WEBHOOK_TIMEOUT_MS = 15_000;
+
+/** `deliverEvent` is the delivery loop's own call, for the one event it carries (caller.ts
+ *  `Caller.delivery`, the SHA-256 of `eventJson`, as the call being made carries it): anyone else —
+ *  loaded code spelling `itx.cd('/').x.deliverEvent(forged)`, a session, a rule or a bound argument
+ *  inside the delivery's own call — could hand a subscriber an event no log holds. */
+async function assertDeliveryCaller(
+  delivery: string | undefined,
+  what: string,
+  eventJson: string,
+): Promise<void> {
+  if (!delivery || delivery !== (await sha256Hex(eventJson)))
+    throw codedError("FORBIDDEN", `${what} is the delivery loop's own call`);
+}
+
 /** What the CONTEXT (the DO) injects: identity, the bindings, and the operations only it can serve. */
-interface BuildBuiltInsDeps {
+export interface BuildBuiltInsDeps {
   projectInfo: () => Promise<{ projectSlug?: string }>;
   /** This project's primary hostname (project/contract.ts `primaryHostname`), or null. */
   primaryHostname: () => Promise<string | null>;
@@ -511,17 +578,14 @@ interface BuildBuiltInsDeps {
    *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
    *  delivery loop, an alarm. */
   platformOrigin: () => string | null;
-  /** A signed file URL on the project host (file-urls.ts `signedFileUrl`, closed over the app
-   *  config's secret and hosts) — `itx.r2.presign`. */
-  signFileUrl: (input: {
-    project: string;
-    key: string;
-    method: "GET" | "PUT";
-    expiresInSeconds?: number;
-  }) => Promise<{ url: string; expiresAt: string }>;
+  /** The key `itx.r2.presign` signs a file URL with (app-config.ts `sessionSigningSecretOf`). */
+  fileUrlSecret: () => Promise<string>;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
+  /** The worker a source expression with no cacheKey names, resolved from this context (the DO's
+   *  `#namedWorker`): what `workers.get` of such a source loads. */
+  namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
   /** A context stream by CANONICAL path — the own-path parent adapter same-isolate, by-name DO
    *  stubs otherwise. Both satisfy ReachableContext (uniform-async, real-typed — see stream/stream.ts). */
   context: (path: string) => ReachableContext;
@@ -534,6 +598,8 @@ interface BuildBuiltInsDeps {
    *  or the edge's stamp), `{ principal: null }` for an anonymous session, a processor, a loaded
    *  worker and the KERNEL's own delivery loop. Carried across permitted sibling `cd` hops. */
   caller: () => Caller;
+  /** `call` through this context's own resolver under `caller` — a `cd` handle's way on. */
+  invokeAs: (caller: Caller, call: ItxExpression) => Promise<unknown>;
   /** The rpcStubs view — closures over the DO's transport table (the pager sockets can never move). */
   rpcStubs: BuiltInScope["rpcStubs"];
   subscriptions: BuiltInScope["subscriptions"];
@@ -580,20 +646,29 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // namespace — the user's or organization's subtree. Every resource key below is prefixed with
   // `owner.id`; the secrets catalog lives in the log at `owner.rootPath`.
   const owner = resourceScope(projectId, path);
-  const kvPrefix = `${owner.id}:`;
-  const r2Prefix = `${owner.id}/`;
   const ownContext = () => deps.context(path);
   /** THE append: every event appended through this scope carries WHO appended it and FROM WHERE —
    *  the DO's own stamp, never a client's (src/caller.ts `stampCaller`): the context the call started
    *  at, and the session's verified principal, or none. */
-  const append = (...events: StreamEventInput[]) => {
+  const append = async (...events: StreamEventInput[]) => {
     const caller = deps.caller();
-    // Loaded code can delegate its scope to descendants through durable rows; child code
-    // keeps its own ceiling. The append boundary validates the rest of each control event.
-    if (caller.app)
-      for (const event of events) admitLoadedCodeRow(event, caller.path || path, path);
+    // Loaded code's rows are walled as they resolve here; the append boundary validates the rest.
+    if (caller.app) for (const event of events) admitLoadedCodeRow(event, path);
     refusePlatformIdempotencyKeys(events, caller, projectId === GLOBAL_PROJECT_ID);
-    return ownContext().append(...events.map((event) => stampCaller(event, caller, path)));
+    // STABLE RETRY EFFECTS (cause.ts): during a delivery, an event without a key of its own is keyed
+    // by the delivery, where it lands and what it is — the same on every attempt
+    const writeKey = caller.cause?.writeKey;
+    const keyed = await Promise.all(
+      events.map(async (event) =>
+        writeKey && !event.idempotencyKey
+          ? {
+              ...event,
+              idempotencyKey: `${writeKey}:append:${path}:${(await sha256Hex(JSON.stringify(event))).slice(0, 16)}`,
+            }
+          : event,
+      ),
+    );
+    return ownContext().append(...keyed.map((event) => stampCaller(event, caller, path)));
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -789,6 +864,26 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     return { authorizationUrl, connection: account.connection };
   };
   /** The platform's verbs (a lend's other side): no caller of theirs ever reaches them. */
+  /** A webhook's SIGNING KEY, by secret and origin, read from the secret's own context — the
+   *  platform's `clientSecretFor`, which answers only for an origin the secret is pinned to — and
+   *  kept as long as a rule snapshot is (SNAPSHOT_TTL_MS, how long an isolate may act on a revoked
+   *  grant): a row delivering 1,000 events a second reads it once per window, not once per event.
+   *  The read in flight is what is kept, so it is shared; a failed one is not kept. */
+  const webhookSigningKeys = new Kept<Promise<string>>(SNAPSHOT_TTL_MS);
+  const webhookSigningKey = (secretPath: string, origin: string): Promise<string> => {
+    const cacheKey = `${secretPath} ${origin}`;
+    const kept = webhookSigningKeys.get(cacheKey);
+    if (kept) return kept;
+    const key = deps
+      .context(resolveContextPath(owner.rootPath, `.${secretPath}`))
+      .invoke(["itx", "builtins", "secrets", ["clientSecretFor", secretPath, { origin }]], [], {
+        principal: null,
+        platform: true,
+      }) as Promise<string>; // the secret facet's own `clientSecretFor` answers the value, a string
+    webhookSigningKeys.set(cacheKey, key);
+    key.catch(() => webhookSigningKeys.delete(cacheKey));
+    return key;
+  };
   const assertPlatformCaller = (verb: string) => {
     if (!deps.caller().platform) throw codedError("FORBIDDEN", `itx.${verb} is the platform's own`);
   };
@@ -1085,110 +1180,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   // Each root implements one member of `BuiltInScope` above (the canonical doc of the surface); the
   // comments here add only the WHY of a code branch.
   return {
-    whoami: async () => {
-      const project = await deps.projectInfo();
-      const platformOrigin = deps.platformOrigin();
-      // the apex, by `itx.url`'s rule, when the caller carries the platform origin to compose it with
-      const url =
-        project.projectSlug && platformOrigin
-          ? projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
-              project: project.projectSlug,
-              primaryHostname: await deps.primaryHostname(),
-            })
-          : null;
-      return { projectId, path, ...project, ...(url && { projectUrl: url.href }) };
-    },
-    url: async (target: { routingSlug?: string; path?: string } = {}) => {
-      const platformOrigin = deps.platformOrigin();
-      if (!platformOrigin)
-        throw codedError(
-          "INVALID_INPUT",
-          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
-        );
-      const slug = (await deps.projectInfo()).projectSlug;
-      if (!slug)
-        throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
-      // on the project's primary hostname when it has one, else under the deployment's ingress
-      const url = projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
-        project: slug,
-        primaryHostname: await deps.primaryHostname(),
-        routingSlug: target.routingSlug || null,
-        path: target.path,
-      });
-      if (!url)
-        throw codedError(
-          "INVALID_INPUT",
-          deps.ingressRouting
-            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (a routing slug is [a-z][a-z0-9-]*; a path starts with "/")`
-            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
-        );
-      return url.href;
-    },
-    kv: {
-      get: (k: string) => env.ITX_KV.get(kvPrefix + k),
-      put: async (k: string, v: string) => {
-        await env.ITX_KV.put(kvPrefix + k, String(v));
-        return { ok: true };
-      },
-      delete: async (k: string) => {
-        await env.ITX_KV.delete(kvPrefix + k);
-        return { ok: true };
-      },
-      list: async (prefix = "") => {
-        // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
-        // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
-        const out: string[] = [];
-        for (let cursor: string | undefined; ;) {
-          const page = await env.ITX_KV.list({
-            prefix: kvPrefix + prefix,
-            cursor,
-          });
-          for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
-          if (page.list_complete) return { keys: out };
-          cursor = page.cursor;
-        }
-      },
-    },
-    r2: {
-      head: async (key) => {
-        const object = await env.FILES.head(r2Prefix + key);
-        return object ? r2ObjectRecord(object, r2Prefix) : null;
-      },
-      get: async (key, options = {}) => {
-        const object = await env.FILES.get(r2Prefix + key, options);
-        if (!object) return null;
-        return {
-          ...r2ObjectRecord(object, r2Prefix),
-          data: new Uint8Array(await object.arrayBuffer()),
-        };
-      },
-      put: async (key, value, options = {}) =>
-        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
-      delete: (keys) =>
-        env.FILES.delete(
-          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
-        ),
-      list: async (options = {}) => {
-        const page = await env.FILES.list({
-          ...options,
-          prefix: r2Prefix + (options.prefix || ""),
-          ...(options.startAfter && { startAfter: r2Prefix + options.startAfter }),
-        });
-        return {
-          objects: page.objects.map((object) => r2ObjectRecord(object, r2Prefix)),
-          delimitedPrefixes: page.delimitedPrefixes.map((prefix) => prefix.slice(r2Prefix.length)),
-          truncated: page.truncated,
-          ...(page.truncated && { cursor: page.cursor }),
-        };
-      },
-      presign: (input) =>
-        deps.signFileUrl({
-          project: owner.id,
-          key: input.key,
-          method: input.method || "GET",
-          expiresInSeconds: input.expiresInSeconds,
-        }),
-    },
+    ...buildPortableBuiltIns(deps),
+    ...buildIdentityRoots(deps),
     secrets: {
       // The fact is appended FIRST: a refused append (a paused stream) leaves no value behind; a
       // facet failure after it leaves a fact whose value egress cannot find — loud ("no stored
@@ -1889,35 +1882,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         });
       },
     },
-    ai: deps.ai,
-    browser: cfBrowser(env.BROWSER),
-    cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
-    email: {
-      send: async (input) => {
-        const domain = emailDomainOf(deps.ingressRouting);
-        const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
-        if (!domain || !slug || !env.EMAIL)
-          throw codedError(
-            "INVALID_CONTEXT",
-            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
-          );
-        const wildcard = deps.projectWildcard;
-        return sendEmail(
-          {
-            EMAIL: env.EMAIL,
-            FILES: env.FILES,
-            filesPrefix: r2Prefix,
-            address: `${slug}@${domain}`,
-            name: slug,
-            ownDomain:
-              wildcard && [slug, projectId].includes(wildcard.project) ? wildcard.hostname : null,
-            emailContext: deps.context(EMAIL_PATH),
-            caller: hopCaller(),
-          },
-          input,
-        );
-      },
-    },
     append,
     abort: async (reasonInput) => {
       const reason = abortReasonOf(reasonInput, "itx.abort");
@@ -1942,6 +1906,19 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       ...deps.schedules,
       get: (key) => deps.schedules.get(ScheduleKey.parse(key)),
       set: async (input, options) => {
+        // An interval set again as it stands keeps its clock: an init case sets it after every
+        // commit. A failed one is set again, which revives it, and so is one set again from
+        // shallower in a chain: it ticks at that depth from now on (cause.ts).
+        const { key, when, events } = ScheduledAppendInput.parse(input);
+        const live = deps.schedules.get(key);
+        if (
+          live &&
+          !live.failure &&
+          "everyMs" in when &&
+          jsonEqual({ when: live.when, events: live.events }, { when, events }) &&
+          (deps.caller().cause?.depth ?? 0) >= (live.source?.cause?.depth ?? 0)
+        )
+          return { key, scheduledAtOffset: live.scheduledAtOffset };
         const [definition] = await append({
           type: "events.iterate.com/itx/schedule-set",
           payload: input,
@@ -1965,61 +1942,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     readEvents: (afterOffset?: number, limit?: number, options?: { includeEphemeral?: boolean }) =>
       ownContext().read(afterOffset, limit, options),
     waitForEvent: deps.waitForEvent,
-    // WHO crosses with the call: a sibling context runs it under the caller's principal (a Workers-RPC
-    // hop, where the ambient store does not reach), so an event appended there is attributed too.
-    cd: (contextPath: string) => {
-      // Captured when the handle is MADE: a handle held by loaded code and called later runs as that
-      // code, never as whoever holds the store then. A relative path resolves against the caller's
-      // ORIGINATING context when the call rode a hop here (`repos.get('./x')` answered at the root is
-      // the caller's `./x`); a row's target should spell an absolute path.
-      const caller = deps.caller();
-      const base = caller.path || path;
-      return new InvokeHandle((itxExpressionSteps) => {
-        const siblingPath = resolveContextPath(base, contextPath);
-        // Global contexts are addressed by identity, never navigated through cd.
-        if (projectId === GLOBAL_PROJECT_ID)
-          throw codedError(
-            "FORBIDDEN",
-            "a global context is reached by identity (session.user, session.organizations), never by path",
-          );
-        // The caller crosses with the call — the sibling runs it under the same Caller, so an event
-        // appended there is attributed too — stamped with the context it originated at (once, at the
-        // first hop) so a relative path there still means the caller's.
-        const hopCaller = { ...caller, path: base };
-        const terminalFetch = terminalFetchOf(["itx", ...itxExpressionSteps], []);
-        if (terminalFetch) {
-          // A socket-bearing Response must cross a native fetch, never Workers RPC.
-          const headers = new Headers(terminalFetch.request.headers);
-          stampCallerHeaders(headers, hopCaller);
-          headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
-          const request = new Request(terminalFetch.request, { headers });
-          // A Request that cannot do anything twice — a GET or HEAD with no body, never an upgrade —
-          // a deploy's reset or a lost connection failed is sent once more, to the sibling's fresh
-          // incarnation on a fresh stub. Anything else fails, and the expression fetch answers a
-          // platform failure 503 (iterate-context-durable-object.ts).
-          return retryPlatformFailures(() => deps.context(siblingPath).fetch(request), {
-            area: "cd",
-            schedule: ONCE_NOW,
-            idempotent:
-              !request.body &&
-              (request.method === "GET" || request.method === "HEAD") &&
-              !request.headers.has("upgrade"),
-            kind: failureKind,
-            describe: () => ({ name: "fetch", path: siblingPath }),
-          });
-        }
-        // The sibling names a handle by expression (dispatch.ts): this context mints its own over the
-        // sibling's stub, so a handle held here is one whole call per verb, never a session held open.
-        const context = deps.context(siblingPath); // a ReachableContext
-        return Promise.resolve(context.invoke(["itx", ...itxExpressionSteps], [], hopCaller)).then(
-          (result) =>
-            materializeItxHandleReference(result, (expression) =>
-              context.invoke(expression, [], hopCaller),
-            ),
-        );
-      });
-    },
-    fetch: (request: Request) => deps.egress(request),
     rpcStubs: deps.rpcStubs,
     facets: {
       get: deps.facets.get,
@@ -2072,14 +1994,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         }
         assertFacetPlacement(name, { projectId, path });
         // IDEMPOTENT (the rule `provide` follows): a row already hosting this facet under
-        // the same spec appends nothing — every entity's `create()` enables its row on every call.
-        const existing = deps.subscriptions.get(name)?.hostedFacet;
+        // the same spec — its marker, as the reduce keeps it — appends nothing: every entity's
+        // `create()` enables its row on every call.
+        const { restarts: _restarts, ...existing } = deps.subscriptions.get(name)?.hostedFacet ?? {
+          restarts: 0,
+        };
+        const requested = firstPartyClassName
+          ? { name, className: firstPartyClassName }
+          : hostedFacetMarkerOf({ name, ...facetSpecOf(loaded!) });
         if (
-          existing &&
-          existing.name === name &&
-          (firstPartyClassName
-            ? existing.className === firstPartyClassName
-            : existing.className === loaded!.className && existing.cacheKey === loaded!.cacheKey) &&
+          jsonEqual(existing, requested) &&
           jsonEqual(deps.subscriptions.get(name)?.consumes ?? null, spec?.consumes || null)
         )
           return { name };
@@ -2109,88 +2033,575 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       claim: async (name, at) => deps.claimFacetAlarm(name, at),
     },
     rewriteRules: deps.rewriteRules,
-    // A genuine InvokeHandle so `workers.get(spec).run()` pipelines over every transport (workerd#6873). A
-    // terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the entrypoint's
-    // fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine, point 4).
-    // Re-resolves per call; the loader caches by key, so a warm isolate is reused and a producer
-    // expression never re-runs.
-    workers: {
-      get: (spec: {
-        source: WorkerSource;
-        cacheKey?: string;
-        className?: string;
-        props?: unknown;
-      }) =>
-        new InvokeHandle(async (methodSteps) => {
-          const [call] = methodSteps;
-          if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
-            throw new Error(
-              `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
-            );
-          const [method, ...args] = call;
-          // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
-          // refused before a source expression runs or anything loads.
-          assertLoadedCodePlacement("workers.get", { projectId, path });
-          // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
-          // names: a cached entry that answers V8's clone-version text answers it to every call
-          // under that loader id, and `itx.abort()` does not change the id (prd, garple.com,
-          // 2026-09-24 20:47Z: every page 500 until a redeploy). A call that meets it retires the
-          // identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is replayed on it
-          // once only when a replay cannot do anything twice: a GET or HEAD with no body. A request
-          // body may have been read and an RPC method may have run, so those still fail, and the
-          // next call heals.
-          const isCloneVersionFailure = (error: unknown): error is Error =>
-            error instanceof Error && error.message.includes("Unable to deserialize cloned data");
-          const attempt = async () => {
-            const { load, retire } = await prepareConfinedWorker({
-              env,
-              deployId: deps.deployId,
-              platformOrigin: deps.platformOrigin(),
-              itxEntrypoint: deps.itxEntrypoint(),
-              kind: "worker",
-              owner: iterateContextName,
-              source: spec.source,
-              cacheKey: spec.cacheKey,
-              invoke: deps.invoke,
-              where: "workers.get",
-            });
-            try {
-              const entrypoint = load().getEntrypoint(
-                spec.className,
-                spec.props === undefined ? undefined : { props: spec.props },
-                // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
-              ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
-              const fn = entrypoint[method];
-              if (typeof fn !== "function")
-                throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
-              return await Reflect.apply(fn, entrypoint, args);
-            } catch (error) {
-              if (isCloneVersionFailure(error)) retire();
-              throw error;
-            }
-          };
-          try {
-            return await attempt();
-          } catch (error) {
-            if (!isCloneVersionFailure(error)) throw error;
-            const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
-            const replayable =
-              request && !request.body && (request.method === "GET" || request.method === "HEAD");
-            console.warn({
-              event: replayable
-                ? "workers.platform-failure-retry"
-                : "workers.platform-failure-retire",
-              namespace: "iterate-context",
-              name: iterateContextName,
-              method,
-              requestMethod: request?.method,
-              message: error.message,
-            });
-            if (!replayable) throw error;
-            return await attempt();
-          }
-        }),
+    workers: workersRoot({
+      env,
+      deployId: deps.deployId,
+      projectId,
+      path,
+      iterateContextName,
+      platformOrigin: deps.platformOrigin,
+      itxEntrypoint: deps.itxEntrypoint,
+      invoke: deps.invoke,
+      caller: deps.caller,
+      delivery: () => deps.caller().delivery,
+      cause: () => deps.caller().cause,
+      namedWorker: deps.namedWorker,
+    }),
+    platformHook: {
+      deliverEvent: async (event) => {
+        await assertDeliveryCaller(
+          deps.caller().delivery,
+          "platformHook.deliverEvent",
+          JSON.stringify(event),
+        );
+        await deliverToPlatformHook(env, event);
+      },
     },
-    ...deps.library, // THE LIBRARY (library.ts), built and owned by the DO
+    webhooks: {
+      // A genuine InvokeHandle, as `workers.get`'s: across a `cd` hop it is the expression that
+      // names it (dispatch.ts), so the delivery's call reaches it whole, its authority carried.
+      get: (spec) => {
+        const { url, signingSecret } = WebhookSpec.parse(spec);
+        return new InvokeHandle(async (methodSteps) => {
+          const [call] = methodSteps;
+          if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] !== "deliverEvent")
+            throw new Error(
+              `webhooks.get(spec).${print(methodSteps)}: a webhook answers deliverEvent(event) alone`,
+            );
+          // Only the delivery loop's call passes `assertDeliveryCaller` below, and it hands the
+          // committed event it delivers.
+          const [, event] = call as [string, StreamEvent];
+          const body = JSON.stringify(event);
+          await assertDeliveryCaller(
+            deps.caller().delivery,
+            "webhooks.get(spec).deliverEvent",
+            body,
+          );
+          const headers = new Headers({
+            "content-type": "application/json",
+            "iterate-event-id": `${projectId}${event.path}@${event.offset}`,
+          });
+          if (signingSecret) {
+            const timestamp = String(Math.floor(Date.now() / 1000));
+            const key = await webhookSigningKey(signingSecret, new URL(url).origin);
+            headers.set("iterate-timestamp", timestamp);
+            headers.set(
+              "iterate-signature",
+              `v1=${await hmacSha256Hex(key, `${timestamp}.${body}`)}`,
+            );
+          }
+          // Through THIS context's own `itx.fetch`, as its rules resolve it: a context that may not
+          // fetch sends nothing (an unresolved fetch dangles the row). `manual`: a redirect is the
+          // receiver's answer, retried like any non-2xx — followed, it would carry the event and its
+          // signature to an origin the secret is not pinned to. The timeout cancels the request
+          // itself, so a slow receiver's call settles and gives its delivery slot back
+          // (subscription-delivery.ts).
+          const request = new Request(url, {
+            method: "POST",
+            headers,
+            body,
+            redirect: "manual",
+            signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+          });
+          // `itx.fetch` answers a Response (BuiltInScope `fetch`); `invoke` types every answer
+          // unknown.
+          const response = (await ownContext().invoke(
+            ["itx", "fetch"],
+            [request],
+            hopCaller(),
+          )) as Response;
+          await response.body?.cancel();
+          if (response.ok) return;
+          if (response.status === 410)
+            throw codedError(
+              "GONE",
+              `webhook ${url} answered 410 Gone: its row halts until an operator resumes it`,
+            );
+          throw new Error(`webhook ${url} answered ${response.status}`);
+        });
+      },
+    },
   } satisfies Omit<BuiltInScope, "builtins">;
+}
+
+/** `itx.whoami` and `itx.url`: who the context at `deps.path` is and where it is reached — one
+ *  builder, so a context's Durable Object and the stateless resolver answer them alike, the
+ *  resolver for its own context without a call to it (itx-expression-rewriting.ts
+ *  `IDENTITY_ROOTS`). */
+export function buildIdentityRoots(
+  deps: Pick<
+    BuildBuiltInsDeps,
+    "projectId" | "path" | "projectInfo" | "platformOrigin" | "primaryHostname" | "ingressRouting"
+  >,
+): Pick<BuiltInScope, "whoami" | "url"> {
+  const { projectId, path } = deps;
+  return {
+    whoami: async () => {
+      const project = await deps.projectInfo();
+      const platformOrigin = deps.platformOrigin();
+      // the apex, by `itx.url`'s rule, when the caller carries the platform origin to compose it with
+      const url =
+        project.projectSlug && platformOrigin
+          ? projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
+              project: project.projectSlug,
+              primaryHostname: await deps.primaryHostname(),
+            })
+          : null;
+      return { projectId, path, ...project, ...(url && { projectUrl: url.href }) };
+    },
+    url: async (target: { routingSlug?: string; path?: string } = {}) => {
+      const platformOrigin = deps.platformOrigin();
+      if (!platformOrigin)
+        throw codedError(
+          "INVALID_INPUT",
+          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
+        );
+      const slug = (await deps.projectInfo()).projectSlug;
+      if (!slug)
+        throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
+      // on the project's primary hostname when it has one, else under the deployment's ingress
+      const url = projectPublicUrlOf(deps.ingressRouting, platformOrigin, {
+        project: slug,
+        primaryHostname: await deps.primaryHostname(),
+        routingSlug: target.routingSlug || null,
+        path: target.path,
+      });
+      if (!url)
+        throw codedError(
+          "INVALID_INPUT",
+          deps.ingressRouting
+            ? `itx.url: ${JSON.stringify(target)} is not an address in this project (a routing slug is [a-z][a-z0-9-]*; a path starts with "/")`
+            : "itx.url: this deployment has no project ingress (APP_CONFIG urls.ingressRouting is unset) — nothing serves a project over HTTP",
+        );
+      return url.href;
+    },
+  };
+}
+
+/** What the built-ins read of the deployment and the project, a context's Durable Object's and
+ *  the stateless resolver's alike. `projectSlug` is the reader's: the Durable Object keeps it in
+ *  its own storage. */
+export function projectConfigDeps(
+  appConfig: AppConfig,
+  projectSlug: () => Promise<string | null | undefined>,
+) {
+  return {
+    projectInfo: async () => {
+      const slug = await projectSlug();
+      return slug ? { projectSlug: slug } : {};
+    },
+    ingressRouting: appConfig.urls.ingressRouting,
+    projectWildcard: appConfig.urls.projectWildcard,
+    fileUrlSecret: () => sessionSigningSecretOf(appConfig),
+  } satisfies Partial<BuildBuiltInsDeps>;
+}
+
+/** What the portable built-ins read of their context: its identity, the bindings, how it is
+ *  reached over HTTP and mail, its egress, a context by path for `cd`, who is calling, and the
+ *  library. */
+type PortableBuiltInsDeps = Pick<
+  BuildBuiltInsDeps,
+  | "projectInfo"
+  | "projectId"
+  | "path"
+  | "ai"
+  | "env"
+  | "ingressRouting"
+  | "projectWildcard"
+  | "fileUrlSecret"
+  | "context"
+  | "egress"
+  | "caller"
+  | "invokeAs"
+  | "library"
+>;
+
+/** THE PORTABLE BUILT-INS (itx-expression-rewriting.ts `PORTABLE_ROOTS`) and `cd`: what answers the
+ *  same from every context of a project, so a context's Durable Object and the stateless entrypoint
+ *  (context/stateless-context.ts) both build them — the project's bindings under its prefixes,
+ *  egress, mail, the library, and `cd`, addressing. */
+export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
+  const { projectId, path, env } = deps;
+  const owner = resourceScope(projectId, path);
+  const kvPrefix = `${owner.id}:`;
+  const r2Prefix = `${owner.id}/`;
+  /** The platform's own hop (`buildBuiltIns`' `hopCaller` says why): the caller without its `app`,
+   *  from the context it originated at — this one, when it named none — so a portable root that
+   *  runs here and writes elsewhere (a mail sent) names its sender. */
+  const hopCaller = (): Caller => {
+    const { app: _loadedCode, ...caller } = deps.caller();
+    return { ...caller, path: caller.path || path };
+  };
+  return {
+    kv: {
+      get: (k: string) => env.ITX_KV.get(kvPrefix + k),
+      put: async (k: string, v: string) => {
+        await env.ITX_KV.put(kvPrefix + k, String(v));
+        return { ok: true };
+      },
+      delete: async (k: string) => {
+        await env.ITX_KV.delete(kvPrefix + k);
+        return { ok: true };
+      },
+      list: async (prefix = "") => {
+        // Paginate on the cursor: Cloudflare KV caps ONE list page at 1000 keys, so a single
+        // `list()` would present page 1 as the whole truth (sweep/GC would orphan key 1001+). Drain.
+        const out: string[] = [];
+        for (let cursor: string | undefined; ;) {
+          const page = await env.ITX_KV.list({
+            prefix: kvPrefix + prefix,
+            cursor,
+          });
+          for (const k of page.keys) out.push(k.name.slice(kvPrefix.length));
+          if (page.list_complete) return { keys: out };
+          cursor = page.cursor;
+        }
+      },
+    },
+    r2: {
+      head: async (key) => {
+        const object = await env.FILES.head(r2Prefix + key);
+        return object ? r2ObjectRecord(object, r2Prefix) : null;
+      },
+      get: async (key, options = {}) => {
+        const object = await env.FILES.get(r2Prefix + key, options);
+        if (!object) return null;
+        return {
+          ...r2ObjectRecord(object, r2Prefix),
+          data: new Uint8Array(await object.arrayBuffer()),
+        };
+      },
+      put: async (key, value, options = {}) =>
+        r2ObjectRecord(await env.FILES.put(r2Prefix + key, value, options), r2Prefix),
+      delete: (keys) =>
+        env.FILES.delete(
+          typeof keys === "string" ? r2Prefix + keys : keys.map((key) => r2Prefix + key),
+        ),
+      list: async (options = {}) => {
+        const page = await env.FILES.list({
+          ...options,
+          prefix: r2Prefix + (options.prefix || ""),
+          ...(options.startAfter && { startAfter: r2Prefix + options.startAfter }),
+        });
+        return {
+          objects: page.objects.map((object) => r2ObjectRecord(object, r2Prefix)),
+          delimitedPrefixes: page.delimitedPrefixes.map((prefix) => prefix.slice(r2Prefix.length)),
+          truncated: page.truncated,
+          ...(page.truncated && { cursor: page.cursor }),
+        };
+      },
+      presign: async (input) => {
+        // the caller's, or the context's own: the deployment's `urls.os`, else the first one learned
+        const { platformOrigin } = deps.caller();
+        if (!platformOrigin)
+          throw new Error(
+            "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
+          );
+        // the URL carries the project's slug (the edge admits a project by it); the claim carries
+        // the id — a global context (a user's, an organization's) has no URL
+        const slug = owner.kind === "project" && (await deps.projectInfo()).projectSlug;
+        if (!slug)
+          throw new Error("files: only a project's context can sign a file URL — it has the host");
+        return signedFileUrl({
+          project: owner.id,
+          key: input.key,
+          method: input.method || "GET",
+          expiresInSeconds: input.expiresInSeconds,
+          host: slug,
+          secret: await deps.fileUrlSecret(),
+          routing: deps.ingressRouting,
+          platformOrigin,
+        });
+      },
+    },
+    ai: deps.ai,
+    browser: cfBrowser(env.BROWSER),
+    cfArtifacts: projectScopedArtifacts({ namespace: env.ARTIFACTS, projectId: owner.id }),
+    email: {
+      send: async (input) => {
+        const domain = emailDomainOf(deps.ingressRouting);
+        const slug = owner.kind === "project" ? (await deps.projectInfo()).projectSlug : undefined;
+        if (!domain || !slug || !env.EMAIL)
+          throw codedError(
+            "INVALID_CONTEXT",
+            "itx.email: only a project has an address, on a deployment whose projects are subdomains and that can send mail",
+          );
+        const wildcard = deps.projectWildcard;
+        return sendEmail(
+          {
+            EMAIL: env.EMAIL,
+            FILES: env.FILES,
+            filesPrefix: r2Prefix,
+            address: `${slug}@${domain}`,
+            name: slug,
+            ownDomain:
+              wildcard && [slug, projectId].includes(wildcard.project) ? wildcard.hostname : null,
+            emailContext: deps.context(EMAIL_PATH),
+            caller: hopCaller(),
+          },
+          input,
+        );
+      },
+    },
+    // A bare `cd` handle's calls are this context's resolver's, at the fixed point (so a jail's
+    // `itx ⇒ null` masks none of them): the one dispatch path, its hop and where each call runs.
+    cd: (contextPath: string) => {
+      // WHO crosses with the call is captured when the handle is MADE: a handle held by loaded code
+      // and called later runs as that code, never as whoever holds the store then — stamped with the
+      // context it originated at, so a relative path means the caller's (`repos.get('./x')`
+      // answered at the root is the caller's `./x`). Its delivery authority and cause are the
+      // call's, read as each call is made (`callContext`).
+      const made = deps.caller();
+      return new InvokeHandle((steps) => {
+        const now = deps.caller();
+        return deps.invokeAs(
+          {
+            ...made,
+            path: made.path || path,
+            delivery: now.delivery,
+            cause: now.cause || made.cause,
+          },
+          ["itx", "builtins", ["cd", contextPath], ...steps],
+        );
+      });
+    },
+    fetch: (request: Request) => deps.egress(request),
+    ...deps.library, // THE LIBRARY (library.ts), built by the context that holds this scope
+  } satisfies Pick<
+    BuiltInScope,
+    "kv" | "r2" | "ai" | "browser" | "cfArtifacts" | "email" | "cd" | "fetch" | keyof LibraryRoots
+  >;
+}
+
+/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
+ *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
+async function callWithItsCause(
+  entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
+  cause: Cause,
+  method: string,
+  args: unknown[],
+): Promise<unknown> {
+  try {
+    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
+  } catch (error) {
+    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
+    return await entrypoint[method]!(...args);
+  }
+}
+
+/** `itx.workers`: stateless loaded code, loaded where the call is and speaking for the context
+ *  `iterateContextName` names — its loader identity, its `env.ITX` (`itxEntrypoint`), the producer
+ *  of a source expression run as its loaded code (`invoke`). A context builds it for itself (the
+ *  record above), and for another context whose rules a call resolved through
+ *  (itx-expression-rewriting.ts `ItxExpressionResolver#route`): the code loads here, with that context's
+ *  authority, and no call reaches that context to run it.
+ *
+ *  A genuine InvokeHandle so `workers.get(spec).run()` pipelines over every transport
+ *  (workerd#6873). A terminal `fetch(request)` is this same call: `entrypoint.fetch(request)` IS the
+ *  entrypoint's fetch channel, socket-bearing Responses included (context/rpc-stubs.ts doctrine,
+ *  point 4). Re-resolves per call; the loader caches by key, so a warm isolate is reused and a
+ *  producer expression never re-runs. */
+export function workersRoot(deps: {
+  env: { LOADER: WorkerLoader; ITX_KV: KVNamespace };
+  deployId: string;
+  projectId: string;
+  path: string;
+  iterateContextName: string;
+  platformOrigin: () => string | null;
+  itxEntrypoint: () => Fetcher;
+  invoke: (call: ItxExpression) => Promise<unknown>;
+  /** Who makes the call: what a loaded worker's `fetch` reads off its Request. */
+  caller: () => Caller;
+  /** The delivery authority of the call being made (caller.ts `Caller.delivery`), read as it is
+   *  made: a context's Durable Object's ambient caller's; the stateless entrypoint has none. */
+  delivery: () => string | undefined;
+  /** The cause of the call being made, which the worker's code runs under (cause.ts). */
+  cause: () => Cause | undefined;
+  /** The worker a source expression with no cacheKey NAMES, resolved from the context `workers`
+   *  speaks for, as a facet's is (facet-host.ts `FacetHostDeps.namedWorker`). */
+  namedWorker: (source: ItxExpressionInput) => Promise<NamedWorker>;
+}): BuiltInScope["workers"] {
+  const { projectId, path, iterateContextName } = deps;
+  return {
+    get: (spec: Parameters<BuiltInScope["workers"]["get"]>[0]) =>
+      new InvokeHandle(async (methodSteps) => {
+        const [call] = methodSteps;
+        if (methodSteps.length !== 1 || !Array.isArray(call) || call[0] === "")
+          throw new Error(
+            `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
+          );
+        const [method, ...callArgs] = call;
+        if (method === "callWithCause")
+          throw codedError(
+            "NOT_A_METHOD",
+            "workers.get(spec).callWithCause: only the platform calls it",
+          );
+        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // which every other method is called through. A loaded worker's `fetch` reads who is
+        // asking off its Request (iterate/principal): the call's own caller, stamped here — never
+        // what the Request says, which `fetch(url, { headers })` would let the code that called it
+        // write.
+        const cause = deps.cause();
+        const args =
+          method === "fetch" ? [callerStampedRequest(callArgs, deps.caller(), cause)] : callArgs;
+        // A handler's one-event hooks are the delivery loop's to call, as a subscriber's
+        // `deliverEvent` is (an IterateConfigEntrypoint's `processEvent` among them).
+        if (method === "deliverEvent" || method === "processEvent")
+          await assertDeliveryCaller(
+            deps.delivery(),
+            `workers.get(spec).${method}`,
+            JSON.stringify(args[0]),
+          );
+        // Loaded code runs only inside a project (first-party-facet-placement.ts rule 6) —
+        // refused before a source expression runs or anything loads.
+        assertLoadedCodePlacement("workers.get", { projectId, path });
+        // A source expression with no cacheKey NAMES a worker (iterate/api `workers.get`): the code
+        // that rule's spec loads, `mainModule` under its published identity — resolved as the call
+        // is, so the call after a publication runs the new code.
+        const named = namesAWorker(spec) ? await deps.namedWorker(spec.source) : undefined;
+        const worker = named
+          ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
+          : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };
+        // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
+        // names: a cached entry that answers V8's clone-version text answers it to every call
+        // under that loader id, and `itx.abort()` does not change the id. A call that meets it
+        // retires the identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is
+        // replayed on it once only when a replay cannot do anything twice: a GET or HEAD with no
+        // body. A request body may have been read and an RPC method may have run, so those still
+        // fail, and the call after them loads fresh.
+        const isCloneVersionFailure = (error: unknown): error is Error =>
+          error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+        const attempt = async () => {
+          const { load, retire } = await prepareConfinedWorker({
+            env: deps.env,
+            deployId: deps.deployId,
+            platformOrigin: deps.platformOrigin(),
+            itxEntrypoint: deps.itxEntrypoint(),
+            kind: "worker",
+            owner: iterateContextName,
+            source: worker.source,
+            cacheKey: worker.cacheKey,
+            mainModule: spec.mainModule,
+            moduleIdentity: worker.moduleIdentity,
+            invoke: worker.invoke,
+            where: "workers.get",
+          });
+          try {
+            const entrypoint = load().getEntrypoint(
+              spec.className,
+              spec.props === undefined ? undefined : { props: spec.props },
+              // A loaded entrypoint's methods are the author's; `fn` is checked to be one below.
+            ) as Fetcher & Record<string, (...a: unknown[]) => Promise<unknown>>;
+            const fn = entrypoint[method];
+            if (typeof fn !== "function")
+              throw new Error(`workers.get(spec): the entrypoint has no method "${method}"`);
+            const called =
+              method === "fetch" || !cause
+                ? Reflect.apply(fn, entrypoint, args)
+                : callWithItsCause(entrypoint, cause, method, args);
+            if (method !== "deliverEvent") return await called;
+            // A handler's own refusal — a name it called that nothing resolves, a verb it may
+            // not call — is its event's failure, retried on that event's ladder: never the
+            // row's, which those codes dangle or halt (subscription-delivery.ts `#fanOutFailed`).
+            return await called.catch((error: unknown) => {
+              const code = errorCode(error);
+              if (code && TARGET_FAILURE_CODES.has(code))
+                throw new Error(error instanceof Error ? error.message : String(error));
+              throw error;
+            });
+          } catch (error) {
+            if (isCloneVersionFailure(error)) retire();
+            throw error;
+          }
+        };
+        try {
+          return await attempt();
+        } catch (error) {
+          if (!isCloneVersionFailure(error)) throw error;
+          const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
+          const replayable =
+            request && !request.body && (request.method === "GET" || request.method === "HEAD");
+          console.warn({
+            event: replayable
+              ? "workers.platform-failure-retry"
+              : "workers.platform-failure-retire",
+            namespace: "iterate-context",
+            name: iterateContextName,
+            method,
+            requestMethod: request?.method,
+            message: error.message,
+          });
+          if (!replayable) throw error;
+          return await attempt();
+        }
+      }),
+  };
+}
+
+/** `fetch`'s arguments — a Request, or a URL and its init — as one Request whose caller stamps are
+ *  `caller`'s identity alone and the call's `cause`, our mark, which the SDK runs its `fetch` under
+ *  (rpc-stubs.ts `stampCallerHeaders`), with no expression, and — for loaded code, never the edge —
+ *  no routing slug: the host a request arrived on is the edge's word (worker.ts). */
+function callerStampedRequest(
+  [input, init]: unknown[],
+  caller: Caller,
+  cause: Cause | undefined,
+): Request {
+  // `fetch`'s own two arguments, as the Fetch standard types them: the constructor checks them.
+  const request = new Request(input as RequestInfo, init as RequestInit | undefined);
+  const headers = new Headers(request.headers);
+  stampCallerHeaders(headers, { principal: caller.principal, grant: caller.grant, cause });
+  if (caller.app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
+  return new Request(request, { headers });
+}
+
+/** ONE CALL TO ANOTHER CONTEXT, where it lives: `expression` on the context's Durable Object under
+ *  `caller`, which resolves it with its live table. Its delivery authority (caller.ts
+ *  `Caller.delivery`) is the CALL's, read from `delivery` as each call is made — this one and each
+ *  on a handle it answers — never the one `caller` carried: the delivery loop evaluates a target
+ *  without it and reuses the handle. A call whose terminal step is `fetch(request)`
+ *  rides the context's native fetch with the expression in `x-itx-expression` — a socket-bearing
+ *  Response crosses a native fetch, never Workers RPC (context/rpc-stubs.ts doctrine, point 4). A
+ *  Request that cannot do anything twice — a GET or HEAD with no body, never an upgrade — that a
+ *  deploy's reset or a lost connection failed is sent once more, to the context's fresh incarnation
+ *  on a fresh stub; anything else fails, and an expression fetch answers a platform failure 503
+ *  (iterate-context-durable-object.ts). A handle the context answers with (by expression,
+ *  dispatch.ts) becomes one of this caller's own, so a handle held here is one whole call per verb,
+ *  never a session held open. The context is acquired PER CALL (`contextOf`): a stub that saw a
+ *  reset replays it on every later call (Cloudflare's Durable Object error handling). */
+export function callContext(
+  contextOf: () => Pick<ReachableContext, "fetch" | "invoke">,
+  expression: ItxExpression,
+  args: unknown[],
+  caller: Caller,
+  path: string,
+  delivery?: () => string | undefined,
+): Promise<unknown> {
+  const { delivery: _made, ...made } = caller;
+  const callerNow = (): Caller => {
+    const now = delivery?.();
+    return now ? { ...made, delivery: now } : made;
+  };
+  const terminalFetch = terminalFetchOf(expression, args);
+  if (terminalFetch) {
+    const headers = new Headers(terminalFetch.request.headers);
+    stampCallerHeaders(headers, made);
+    headers.set(ITX_EXPRESSION_FETCH_HEADER, encodeFetchExpression(terminalFetch.steps));
+    const request = new Request(terminalFetch.request, { headers });
+    return retryPlatformFailures(() => contextOf().fetch(request), {
+      area: "cd",
+      schedule: ONCE_NOW,
+      idempotent:
+        !request.body &&
+        (request.method === "GET" || request.method === "HEAD") &&
+        !request.headers.has("upgrade"),
+      kind: failureKind,
+      describe: () => ({ name: "fetch", path }),
+    });
+  }
+  return Promise.resolve(contextOf().invoke(expression, args, callerNow())).then((result) =>
+    materializeItxHandleReference(result, (handleExpression) =>
+      contextOf().invoke(handleExpression, [], callerNow()),
+    ),
+  );
 }

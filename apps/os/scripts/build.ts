@@ -7,7 +7,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
+import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { viteBuild } from "../../../scripts/lib/deploy-helpers.ts";
+import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -20,6 +22,7 @@ const PLATFORM_ENTRIES = [
   "iterate/sdk",
   "iterate/stream/processor",
   "iterate/stream/run",
+  "iterate/email",
   "iterate/api",
   "iterate/lib",
   "iterate/expression",
@@ -56,8 +59,12 @@ async function platformModules() {
           }));
           pluginBuild.onLoad({ filter: /.*/, namespace: "platform-entry" }, (args) => ({
             contents:
-              `export * from ${JSON.stringify(args.path)};` +
-              (args.path === "zod" ? ` export { default } from "zod";` : ""),
+              // an SDK entry, evaluated before the loaded module that imports it, has its outbound
+              // `fetch` carry the cause it runs under (iterate src/cause.ts)
+              (args.path === "zod"
+                ? `export { default } from "zod";`
+                : `import { carryCauseOnFetch } from "../cause.ts"; carryCauseOnFetch();`) +
+              ` export * from ${JSON.stringify(args.path)};`,
             resolveDir: sdkDir,
             loader: "js",
           }));
@@ -76,7 +83,7 @@ async function platformModules() {
     metafile: true,
     outdir,
     chunkNames: "node_modules/.platform/[name]-[hash]",
-    external: ["cloudflare:workers"],
+    external: ["cloudflare:workers", "node:async_hooks"],
   });
   const moduleName = (file: string) => path.relative(outdir, file).split(path.sep).join("/");
   const modules: Record<string, string> = {};
@@ -99,20 +106,46 @@ export async function build() {
     cwd: root,
     encoding: "utf8",
   }).trim();
+  const packagesCommit = checkoutPublishedPackageCommit(
+    path.resolve(root, "../.."),
+    process.env.PREVIEW_HEAD_SHA,
+  );
+  // A template as this checkout has it: its tracked files alone (not the node_modules/ an `npm
+  // install` for a local `tsc` leaves there), its agents and voice at this checkout's build of each
+  // package (published-package-commit.ts), never `@main`.
+  const filesOf = (name: string) =>
+    execFileSync("git", ["ls-files", "-z"], {
+      cwd: path.join(templatesRoot, name),
+      encoding: "utf8",
+    })
+      .split("\0")
+      .filter(Boolean)
+      .map((file) => {
+        const content = readFileSync(path.join(templatesRoot, name, file), "utf8");
+        const manifest = file === "package.json" ? JSON.parse(content) : undefined;
+        const ours = ["@iterate-com/agents", "@iterate-com/voice"].filter(
+          (dependency) => manifest?.dependencies?.[dependency],
+        );
+        if (!ours.length) return { path: file, content };
+        for (const dependency of ours)
+          manifest.dependencies[dependency] = pkgPrNewVersion(dependency, packagesCommit);
+        return { path: file, content: `${JSON.stringify(manifest, null, 2)}\n` };
+      });
   // `default` is not a named template: a creation that names none gets its files (`defaultFiles`).
-  const templates = readdirSync(templatesRoot, { withFileTypes: true })
+  // A creation naming a preset's reference gets the preset's files from here (`templateFiles`).
+  const named = readdirSync(templatesRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name !== "default")
-    .map((entry) => ({
-      label: entry.name.charAt(0).toUpperCase() + entry.name.slice(1).replaceAll("-", " "),
-      reference: `github:iterate/iterate#${sourceRef}&path:configs/${entry.name}`,
-    }));
-  const defaultFiles = readdirSync(path.join(templatesRoot, "default")).map((file) => ({
-    path: file,
-    content: readFileSync(path.join(templatesRoot, "default", file), "utf8"),
+    .map((entry) => entry.name);
+  const templates = named.map((name) => ({
+    label: name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " "),
+    reference: `github:iterate/iterate#${sourceRef}&path:configs/${name}`,
   }));
+  const templateFiles = Object.fromEntries(
+    named.map((name, index) => [templates[index]!.reference, filesOf(name)]),
+  );
   writeFileSync(
     path.join(root, "src/generated/config-templates.js"),
-    `export const templates = ${JSON.stringify(templates)};\nexport const defaultFiles = ${JSON.stringify(defaultFiles)};\n`,
+    `export const templates = ${JSON.stringify(templates)};\nexport const defaultFiles = ${JSON.stringify(filesOf("default"))};\nexport const templateFiles = ${JSON.stringify(templateFiles)};\n`,
   );
 
   writeFileSync(

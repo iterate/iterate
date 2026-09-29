@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import type { IngressRouting } from "iterate/project-ingress";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
 
 /** The package root (this file lives at e2e/support/). */
 export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -63,6 +64,7 @@ export function e2eWorkerConfig(
       APP_CONFIG_LOGIN__PASSWORD: E2E_LOGIN_PASSWORD,
       APP_CONFIG_SECRETS__KEY: "e2e-secrets-key",
       APP_CONFIG_SECRETS__ADMIN_BEARER: E2E_ADMIN_BEARER,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
     },
   };
 }

@@ -1,30 +1,58 @@
 import { existsSync, globSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { expect, test, vi } from "vitest";
+import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
+import { templates } from "../generated/config-templates.js";
 import { ProjectProcessor } from "./processor.ts";
-import { ProjectContract } from "./contract.ts";
+import { ProjectContract, type ProjectState } from "./contract.ts";
 
 const reference = `github:example/config#${"a".repeat(40)}&path:starter`;
 const worker = "export default {fetch() {return new Response('My project')}}";
 const manifest = '{"main":"worker.ts"}';
+/** This checkout's build of the agents and voice (scripts/published-package-commit.ts), never
+ *  `@main`. */
+const commit = checkoutPublishedPackageCommit(
+  path.resolve(import.meta.dirname, "../../../.."),
+  process.env.PREVIEW_HEAD_SHA,
+);
+const ourBuilds = {
+  "@iterate-com/agents": pkgPrNewVersion("@iterate-com/agents", commit),
+  "@iterate-com/voice": pkgPrNewVersion("@iterate-com/voice", commit),
+};
 
-test("omitting a template seeds the minimal project without an agent or lifecycle subscription", async () => {
+test("omitting a template seeds the default project: the homepage, and the agents and voice apps pinned to one commit's build", async () => {
   const fixture = project();
   await create(fixture);
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
-  expect(fixture.files()?.["agents.js"]).toBeUndefined();
-  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
-  // The seed names no events: its publication removes the config worker's row, if one stood.
-  expect(fixture.append).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ type: "events.iterate.com/itx/ingress-configured" }),
-    expect.objectContaining({ payload: { name: "config-worker", target: null } }),
-    expect.objectContaining({ type: "events.iterate.com/project/created" }),
+  expect(fixture.files()?.["worker.ts"]).toContain("installAgents(itx)");
+  expect(fixture.files()?.["worker.ts"]).toContain("installVoice(itx)");
+  expect(fixture.files()?.["agents.ts"]).toBe(
+    'export { AgentCollectionDurableObject, AgentDurableObject } from "@iterate-com/agents";\n',
   );
+  expect(fixture.files()?.["voice.ts"]).toBe(
+    'export { default, VoiceAgentDurableObject } from "@iterate-com/voice";\n',
+  );
+  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
+    main: "worker.ts",
+    dependencies: ourBuilds,
+  });
+  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  expect(fixture.itx.append).not.toHaveBeenCalled();
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
   // The seed is committed at once: an unborn `main` is its own check (`parent: null`), so no read of
-  // the tip comes first, and the manifest is read from the commit just pushed.
+  // the tip comes first, and nothing is read back.
   expect(fixture.repo.tip).not.toHaveBeenCalled();
-  expect(fixture.repo.readFile).toHaveBeenCalledExactlyOnceWith("iterate.json", {
-    commitOid: "b".repeat(40),
+  expect(fixture.repo.readFile).not.toHaveBeenCalled();
+});
+
+test("a preset is seeded from the build, its agents and voice pinned as the default's are: nothing is downloaded", async () => {
+  const fixture = project();
+  await create(fixture, templates.find(({ label }) => label === "Heartbeat")!.reference);
+  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  expect(fixture.files()?.["worker.ts"]).toContain('key: "heartbeat"');
+  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
+    dependencies: ourBuilds,
   });
 });
 
@@ -35,7 +63,7 @@ test("every package.json under configs/ names its folder's main module", () => {
     exclude: (file) => file.includes("node_modules"),
   });
   expect(manifests).toEqual(
-    expect.arrayContaining(["default/package.json", "with-agents/agents/package.json"]),
+    expect.arrayContaining(["default/package.json", "minimal/package.json"]),
   );
   for (const manifest of manifests) {
     const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
@@ -46,14 +74,10 @@ test("every package.json under configs/ names its folder's main module", () => {
   }
 });
 
-test("copies the pinned subdirectory into a fresh root commit and subscribes before project/created", async () => {
+test("copies the pinned subdirectory into a fresh root commit before project/created", async () => {
   const fixture = project(undefined, async () => [
     { path: "package.json", content: manifest },
     { path: "worker.ts", content: worker },
-    {
-      path: "iterate.json",
-      content: JSON.stringify({ events: ["events.iterate.com/project/created"] }),
-    },
     { path: "custom.txt", content: "owned by this project" },
   ]);
   await create(fixture, reference);
@@ -66,39 +90,12 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
   expect(fixture.files()).toEqual({
     "package.json": manifest,
     "worker.ts": worker,
-    "iterate.json": JSON.stringify({ events: ["events.iterate.com/project/created"] }),
     "custom.txt": "owned by this project",
   });
-  // One append: the apex and the subscription at the seed's commit, then the certificate.
-  expect(fixture.append).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ type: "events.iterate.com/itx/ingress-configured" }),
-    {
-      type: "events.iterate.com/itx/subscription-configured",
-      idempotencyKey: `project/config-worker:${"b".repeat(40)}`,
-      payload: {
-        name: "config-worker",
-        consumes: ["events.iterate.com/project/created"],
-        target: [
-          "itx",
-          "workers",
-          [
-            "get",
-            {
-              source: [
-                "itx",
-                "repos",
-                ["get", "/repos/config"],
-                ["modules", { commitOid: "b".repeat(40) }],
-              ],
-              cacheKey: "b".repeat(40),
-            },
-          ],
-          "processEventBatch",
-        ],
-      },
-    },
-    expect.objectContaining({ type: "events.iterate.com/project/created" }),
-  );
+  expect(fixture).toMatchObject({
+    order: ["events.iterate.com/itx/ingress-configured", "events.iterate.com/project/created"],
+  });
+  expect(fixture.itx.append).not.toHaveBeenCalled();
   expect(fixture.repo.commitFiles).toHaveBeenCalledTimes(1);
   // Recovery after a successful commit lost its acknowledgement must preserve the tree: the born
   // `main` refuses the second seed, and its tip is the project's config.
@@ -239,34 +236,41 @@ test("a commit that lands before the seed is the project's config: the seed is r
     expect.objectContaining({ parent: null }),
   );
   expect(fixture.files()).toEqual({ "worker.ts": "the agent's edit" });
-  expect(fixture.append).toHaveBeenCalledWith(
-    expect.objectContaining({
-      payload: {
-        target: [
-          "itx",
-          "workers",
-          [
-            "get",
-            {
-              source: [
-                "itx",
-                "repos",
-                ["get", "/repos/config"],
-                ["modules", { commitOid: "c".repeat(40) }],
-              ],
-              cacheKey: "c".repeat(40),
-            },
-          ],
-        ],
-      },
-    }),
-    expect.objectContaining({
-      idempotencyKey: `project/config-worker:${"c".repeat(40)}`,
-      payload: { name: "config-worker", target: null },
-    }),
-    expect.objectContaining({ type: "events.iterate.com/project/created" }),
-  );
+  expect(fixture).toMatchObject({
+    order: ["events.iterate.com/itx/ingress-configured", "events.iterate.com/project/created"],
+  });
+  // the hosts answer from whatever the follower publishes, the outside commit first
+  expect(fixture.append).toHaveBeenCalledWith({
+    type: "events.iterate.com/itx/ingress-configured",
+    idempotencyKey: "itx/ingress-configured",
+    payload: { target: ["itx", "config"] },
+  });
 });
+
+test.for([
+  { name: "the seed's publication", fact: 4 },
+  { name: "its refusal or the platform's give-up", fact: 5 },
+])(
+  "the saga seeds and returns: nothing lands while the seed's commit waits for its publication, and $name lands the ingress, then the certificate",
+  async ({ fact }) => {
+    const fixture = project();
+    const requested = {
+      ...ProjectContract.initialState(),
+      creation: { status: "requested" as const, offset: 1 },
+    };
+    await deliverWithPublisher(fixture, requested);
+    expect(fixture.repo.commitFiles).toHaveBeenCalledOnce();
+    expect(fixture).toMatchObject({ order: [] });
+    const seeded = { ...requested, configRepoTip: { commitOid: "b".repeat(40), offset: 3 } };
+    await deliverWithPublisher(fixture, seeded);
+    expect(fixture).toMatchObject({ order: [] });
+    await deliverWithPublisher(fixture, { ...seeded, lastPublicationFactOffset: fact });
+    expect(fixture.repo.commitFiles).toHaveBeenCalledOnce();
+    expect(fixture).toMatchObject({
+      order: ["events.iterate.com/itx/ingress-configured", "events.iterate.com/project/created"],
+    });
+  },
+);
 
 test("a seed that fails and leaves main unborn is one durable failure", async () => {
   const fixture = project();
@@ -310,7 +314,12 @@ function project(
     files = { ...files, ...changed };
     tipOid = "c".repeat(40);
   };
-  const itx = { repos: { create: vi.fn(async () => {}), get: () => repo } };
+  const itx = {
+    repos: { create: vi.fn(async () => {}), get: () => repo },
+    append: vi.fn(async () => {
+      order.push("subscription");
+    }),
+  };
   const append = vi.fn(async (...events: { type: string }[]) => {
     order.push(...events.map((event) => event.type));
   });
@@ -334,6 +343,37 @@ async function create(fixture: ReturnType<typeof project>, template?: string) {
       },
     },
     previousState: ProjectContract.initialState(),
+    delivery: { caughtUp: true },
+    append: fixture.append,
+    runInBackground: (run: () => Promise<unknown>) => {
+      tasks.push(run());
+    },
+  } as never);
+  await Promise.all(tasks);
+}
+
+/** One delivery of `state` at head to a processor that publishes, as a project's does: its
+ *  publisher finds `main` unborn and lands what it appends nowhere — these rows read the saga's own
+ *  appends alone. */
+async function deliverWithPublisher(fixture: ReturnType<typeof project>, state: ProjectState) {
+  const unread = () => Promise.reject(new Error("an unborn main has no files"));
+  const processor = new ProjectProcessor(
+    (call) => Promise.resolve(call(fixture.itx as never)),
+    fixture.downloadTemplate,
+    () => null,
+    () => null,
+    () => ({
+      head: async () => null,
+      files: unread,
+      identityOf: unread,
+      probe: unread,
+      appendAsPlatform: async () => [],
+    }),
+  );
+  const tasks: Promise<unknown>[] = [];
+  processor.processEvent({
+    state,
+    previousState: state,
     delivery: { caughtUp: true },
     append: fixture.append,
     runInBackground: (run: () => Promise<unknown>) => {

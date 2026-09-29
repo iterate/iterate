@@ -11,6 +11,8 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { afterAll, expect, vi } from "vitest";
 import type { StreamPage } from "iterate/api";
+import type { Caller } from "../src/caller.ts";
+import { contextStub } from "../src/context-stub.ts";
 import { DurableObjectNameCodec } from "../src/context/paths.ts";
 import { ControlPlaneDatabase } from "../src/control-plane/catalog.ts";
 import { projectsByHostnames } from "../src/control-plane/db/queries/.generated/hostnames.sql.ts";
@@ -20,6 +22,7 @@ import { ControlPlane } from "../src/control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../envs.ts";
 
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
@@ -29,6 +32,35 @@ export const ORIGIN = "https://control.test";
  *  edge reducing the returns away, plus runInDurableObject over the same instance. */
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
+
+/** A context born as a deployment's are: its birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`,
+ *  the config entrypoint's fan-out row and the platform hook's) appended as its first commit. This
+ *  suite's contexts are born with none: its projects have no published config for a `config` row
+ *  to reach, and a row that finds none probes its root for it (subscription-delivery.ts, the
+ *  dangling row), which every row that pins an alarm would see. */
+export async function bornWithBirthRows(ctx: string): Promise<void> {
+  await stub(ctx).append(...PROJECT_CONTEXT_BIRTH_EVENTS);
+}
+
+/** `events` appended on `ctx` as the platform's own (`source.platform`), as a publication appends
+ *  its pointer (src/project/publication.ts): the one writer of `itx.config`. */
+export async function appendAsPlatform(ctx: string, ...events: unknown[]): Promise<void> {
+  await stub(ctx).invoke(["itx", "builtins", ["append", ...events]], [], {
+    principal: null,
+    platform: true,
+  });
+}
+
+/** `itx.run(script)` on `ctx` as the platform's own callers make it (src/context-stub.ts
+ *  `contextStub`): the context answers with the request, and this reads the run's settlement back,
+ *  so it answers the script's result or throws its error. */
+export function runOn(ctx: string, script: string, caller: Caller = { principal: null }) {
+  return contextStub(env.ITERATE_CONTEXT, DurableObjectNameCodec.parse(ctx), "test").invoke(
+    ["itx", ["run", script]],
+    [],
+    caller,
+  );
+}
 
 /** A context's durable log, its first 500 events: `itx.readEvents` invoked on the context's DO with
  *  no caller. `includeEphemeral` merges in the ephemerals the running incarnation still holds, where

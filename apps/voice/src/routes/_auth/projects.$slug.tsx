@@ -3,6 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
+import type { IterateContextApi } from "iterate/api";
 import { useFacetLiveState } from "iterate/react";
 import { AppBuild } from "@iterate-com/ui/components/app-build";
 import { Button } from "@iterate-com/ui/components/button";
@@ -10,9 +11,8 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
-import { installedVersion } from "@iterate-com/agents/install";
-import { buildStanding, pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
-import { ensureVoiceAgent, upgradeVoice, voiceApp } from "@iterate-com/voice/install";
+import { buildStanding } from "@iterate-com/shared/pkg-pr-new";
+import { ensureVoiceAgent, upgradeVoice, voiceVersion } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
@@ -26,16 +26,6 @@ const VoiceLiveView = z.object({
 });
 type VoiceLiveView = z.infer<typeof VoiceLiveView>;
 
-/** The agents and voice builds an install commits, at one commit (@iterate-com/shared/pkg-pr-new
- *  `publishedCommit`, which says why the app's Worker resolves it). */
-const publishedApps = createServerFn().handler(async () => {
-  const commit = await publishedCommit("@iterate-com/voice", import.meta.env.VITE_SOURCE_COMMIT);
-  return {
-    agents: pkgPrNewVersion("@iterate-com/agents", commit),
-    voice: pkgPrNewVersion("@iterate-com/voice", commit),
-  };
-});
-
 /** Where the project's voice build stands against main's newest (`buildStanding`), asked in the
  *  app's Worker: a page cannot read pkg.pr.new's headers. */
 const voiceBuild = createServerFn({ method: "GET" })
@@ -48,17 +38,19 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     // the URL names the project by slug; one this sign-in lacks → sign in again
     const project = projects.find((item) => item.slug === params.slug);
     if (!project) return context.signInFor(params.slug);
-    // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule. One that
-    // exists but fails is Call's error to report, never a reason to install over it.
+    // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule, which its
+    // config repo's init case writes. One that exists but fails is Call's error to report.
     using itx = await context.api.projects.get(project.id);
     const [rule, secrets, build] = await Promise.all([
       itx.rewriteRules.get("itx.voice"),
       itx.secrets.list(),
-      // the build the project's voice runs (the source its install keeps), for the upgrade
-      installedVersion(itx, voiceApp),
+      // the build of voice the project runs, for the upgrade, none while a project created a moment
+      // ago has no config repo yet: capnweb's stub erases the type of the `project` facet it reads,
+      // as it does every facet's (iterate/api `facets.get`)
+      voiceVersion(itx as unknown as IterateContextApi).catch(() => undefined),
     ]);
     const voice = {
-      installed: Boolean(rule),
+      installed: Boolean(rule?.target),
       build,
       // the project's own key, or one lent to it (the catalog lists a borrowed path too): a key
       // the deployment lends every project counts, and the form never asks for one
@@ -82,7 +74,7 @@ function CallPage() {
       account={info.principal}
       locationKey={href}
     >
-      {voice.installed ? (
+      {voice.installed && voice.hasOpenaiKey ? (
         <>
           <Phone key={project.id} project={project.id} />
           {voice.build ? (
@@ -103,29 +95,31 @@ function CallPage() {
           ) : null}
         </>
       ) : (
-        <InstallVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
+        <SetUpVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
       )}
     </ProjectAppShell>
   );
 }
 
-/** A project with no voice agent: the installer Kit's Prepare runs (@iterate-com/voice/install),
- *  here in the browser, as the signed-in person, against whichever platform this app is connected
- *  to. The key goes from this form to the project's `/secrets/openai`, pinned to OpenAI. */
-function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpenaiKey: boolean }) {
+/** A project whose voice cannot take a call yet: no OpenAI key, or no `itx.voice` while its config
+ *  repo's init case has yet to write it. The check Kit's Prepare runs (@iterate-com/voice/install
+ *  `ensureVoiceAgent`), here in the browser, as the signed-in person, against whichever platform
+ *  this app is connected to: it refuses a project whose config installs no voice, saying so. The key
+ *  goes from this form to the project's `/secrets/openai`, pinned to OpenAI. */
+function SetUpVoice({ project, needsOpenaiKey }: { project: string; needsOpenaiKey: boolean }) {
   const { api } = Route.useRouteContext();
   const router = useRouter();
-  const [error, install, installing] = useActionState(
+  const [error, setUp, settingUp] = useActionState(
     async (_previous: string | undefined, form: FormData) => {
       try {
         using itx = await api.projects.get(project);
         const openaiKey = String(form.get("openai-key") || "");
-        await ensureVoiceAgent(itx, await publishedApps(), openaiKey);
+        await ensureVoiceAgent(itx, openaiKey);
         // "needs-openai-key" too: the key was deleted since the page loaded, and the reload asks.
-        // `sync`: the reload is awaited, so "Installing…" stays up until the page shows what the
-        // install made. Without it the router reloads a route it already has data for in the
-        // background, the action ends at once, and the form comes back empty (the install looks
-        // failed) until the reload lands — seconds on a busy platform.
+        // `sync`: the reload is awaited, so "Setting up…" stays up until the page shows the phone.
+        // Without it the router reloads a route it already has data for in the background, the
+        // action ends at once, and the form comes back empty (the set-up looks failed) until the
+        // reload lands — seconds on a busy platform.
         await router.invalidate({ sync: true });
         return undefined;
       } catch (e: unknown) {
@@ -135,12 +129,13 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
     undefined,
   );
   return (
-    <form action={install} className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4 md:p-8">
+    <form action={setUp} className="mx-auto flex w-full max-w-xl flex-col gap-6 p-4 md:p-8">
       <div className="flex flex-col gap-2">
-        <p className="text-2xl font-semibold">Install voice</p>
+        <p className="text-2xl font-semibold">Set up voice</p>
         <p className="text-sm text-muted-foreground">
-          This project has no voice agent yet. Installing one adds it to the project, then you can
-          call it from here.
+          {needsOpenaiKey
+            ? "Voice talks to OpenAI's live model with your key. Add it, then call your project from here."
+            : "Your project's config installs voice. Once it has, you can call it from here."}
         </p>
       </div>
       {needsOpenaiKey ? (
@@ -159,8 +154,8 @@ function InstallVoice({ project, needsOpenaiKey }: { project: string; needsOpena
         </Field>
       ) : null}
       <div>
-        <Button type="submit" size="lg" className="rounded-full px-8" disabled={installing}>
-          {installing ? "Installing…" : "Install voice"}
+        <Button type="submit" size="lg" className="rounded-full px-8" disabled={settingUp}>
+          {settingUp ? "Setting up…" : "Set up voice"}
         </Button>
       </div>
       {error ? (

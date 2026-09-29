@@ -23,10 +23,12 @@
 // WHAT THESE ROWS ASSERT is what the platform code decides: a wake, a reset named on a wake record,
 // and a careless facet no longer running once its quiet minute is up. What CLOUDFLARE decides — how
 // long a facet the context no longer holds keeps running, whether a context stays resident under
-// traffic — each row prints, and the opt-in perf/context-residency.perf.test.ts times alone. Here
-// those numbers sampled the platform: a facet the platform stopped 0 s and 20 s after its call
-// (#2939, #2899), a claimed facet stopped mid-attempt (#2921), a context evicted mid-traffic while
-// the control plane stalled 12.8 s (#2899) — each green on its retry, in 3 of 124 e2e jobs.
+// traffic — varies from run to run: each row prints it, and the opt-in
+// perf/context-residency.perf.test.ts times it alone.
+//
+// Every project context is born with its birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`), and
+// each row's project has its config published, as every created project does
+// (`withPublishedConfig`): its rows deliver there instead of probing the root for a config it lacks.
 //
 // The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow`
 // (docs/testing.md#slow-rows): every main push runs them, and a PR runs them when it turns them on or
@@ -45,6 +47,7 @@ import {
   session,
   sleep,
   until,
+  withPublishedConfig,
 } from "./support/client.ts";
 import {
   deployedOnly,
@@ -63,13 +66,13 @@ import {
 import { SOURCES } from "./support/sources.ts";
 
 test("control: a session holding only the context handle is evicted between idle reads", async () => {
-  const itx = openItx(freshCtx("residency_control"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_control")));
   await itx.whoami();
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
 
 test("a held repos.get(path) handle does not keep the context resident", async () => {
-  const itx = openItx(freshCtx("residency_repo"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_repo")));
   await itx.whoami();
   const repo = await itx.repos.get("/repos/residency");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
@@ -79,7 +82,7 @@ test("a held repos.get(path) handle does not keep the context resident", async (
 }, 90_000);
 
 test("a held workspaces.get(path) handle does not keep the context resident", async () => {
-  const itx = openItx(freshCtx("residency_workspace"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_workspace")));
   await itx.whoami();
   const workspace = await itx.workspaces.get("/workspaces/residency");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
@@ -91,7 +94,7 @@ test("a held workspaces.get(path) handle does not keep the context resident", as
 // `cd` is already answered at the edge with a path wrapper (iterate-context.ts): the guard that
 // keeps it so.
 test("a held cd(path) handle does not keep the context resident", async () => {
-  const itx = openItx(freshCtx("residency_cd"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_cd")));
   await itx.whoami();
   const child = await itx.cd("/residency");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
@@ -104,7 +107,7 @@ test("a held cd(path) handle does not keep the context resident", async () => {
 // value in it (a function) arrives as a stub. The runner releases it once serialized (library.ts
 // `runSettlementOf`); dropped undisposed, it held the context (__workers-tests__/context-runs.test.ts).
 test("a run whose script returned a live value does not keep its context resident", async () => {
-  const itx = openItx(freshCtx("residency_run_result"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_run_result")));
   expect(await itx.run("async () => ({ n: 1, f: () => 1 })")).toEqual({ n: 1 });
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
@@ -142,6 +145,7 @@ test("creating a repo does not keep the project root resident", async () => {
 
 test("listing repos does not keep the project root resident", async () => {
   const ctx = freshCtx("residency_list");
+  await withPublishedConfig(openItx(ctx));
   expect(await openItx(ctx).repos.list()).toEqual(expect.any(Array));
   disposeSessions();
   expect(await wakesAcrossIdles(openItx(ctx))).toBeGreaterThanOrEqual(EVICTION_IDLES);
@@ -208,7 +212,7 @@ export class CarelessHolderDurableObject extends FacetDurableObject {
 }`,
 };
 test("a facet keeping a loaded worker's data answer its context handed through keeps neither the context nor itself running", async () => {
-  const itx = openItx(freshCtx("residency_careless_data"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_careless_data")));
   expect(await carelessHolder(itx, "keepData", DATA_WORKER_SOURCE)).toBe('{"a":1}');
   const started = await carelessHolder(itx, "started");
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
@@ -216,7 +220,7 @@ test("a facet keeping a loaded worker's data answer its context handed through k
 }, 90_000);
 
 test("a facet keeping a loaded worker's live RpcTarget keeps neither the context nor itself running", async () => {
-  const itx = openItx(freshCtx("residency_careless_live"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_careless_live")));
   // A live answer leaves the context as the expression that made it: every verb re-runs `make()`
   // (the risk the rule accepts — identity per verb), so the ping answers from a fresh `Made`.
   expect(await carelessHolder(itx, "keepLiveAndPing", LIVE_WORKER_SOURCE)).toMatch(/^pong-\d+$/);
@@ -230,7 +234,7 @@ test("a facet keeping a loaded worker's live RpcTarget keeps neither the context
 // invokes the sibling, whose answer is data from that hop; forwarded as it arrived, it kept the
 // root resident (sessions 142–2424 s) — and the sibling with it.
 test("a facet keeping a sibling's data answer, handed through the root's cd, keeps neither context nor itself running", async () => {
-  const itx = openItx(freshCtx("residency_careless_sibling"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_careless_sibling")));
   expect(await carelessHolder(itx, "keepSiblingSnapshot", "/residency-sibling")).toBe("object");
   const started = await carelessHolder(itx, "started");
   const [root, sibling] = await Promise.all([
@@ -248,7 +252,7 @@ test("a facet keeping a sibling's data answer, handed through the root's cd, kee
 // CARELESS_CHATROOM_SOURCE). The chatroom's live state is built with it, so its revision (`rev`, the
 // start time × 4096) names the instance.
 test("the LiveState sink that never releases env.ITX keeps neither the context nor its facet running", async () => {
-  const itx = openItx(freshCtx("residency_live_state_sink"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_live_state_sink")));
   const chatroom = (method: string, ...args: unknown[]) =>
     itx.invoke([
       "itx",
@@ -267,7 +271,7 @@ test("the LiveState sink that never releases env.ITX keeps neither the context n
 // The Keeper (support/sources.ts) stashes its `env.ITX` in its own storage and calls through the
 // restored one without releasing what it answers.
 test("a facet calling through a stashed env.ITX does not outlive its context", async () => {
-  const itx = openItx(freshCtx("residency_keeper"));
+  const itx = await withPublishedConfig(openItx(freshCtx("residency_keeper")));
   const keeper = (method: string) =>
     itx.invoke([
       "itx",
@@ -287,7 +291,7 @@ test("a facet calling through a stashed env.ITX does not outlive its context", a
 deployedOnly(
   "a client holding itx.cfArtifacts.get(path) does not keep the context resident",
   async () => {
-    const itx = openItx(freshCtx("residency_cfartifacts"));
+    const itx = await withPublishedConfig(openItx(freshCtx("residency_cfartifacts")));
     const path = freshRepoPath("residency");
     expect(await itx.cfArtifacts.create(path)).toEqual({ created: true });
     try {
@@ -378,6 +382,7 @@ export class ReacherDurableObject extends StreamProcessorDurableObject {
 
 test("an SDK facet that reached its context through withItx does not outlive the context", async () => {
   const ctx = freshCtx("residency_sdk_facet");
+  await withPublishedConfig(openItx(ctx));
   const reacher = (itx: any) =>
     itx.facets.get("reacher", { source: REACHER_SOURCE, className: "ReacherDurableObject" });
   const itx = openItx(ctx);
@@ -404,6 +409,7 @@ test(
   { tags: ["slow"], timeout: 180_000 },
   async () => {
     const ctx = freshCtx("residency_sweep");
+    await withPublishedConfig(openItx(ctx));
     const heartbeat = (method: string) =>
       openItx(ctx).invoke([
         "itx",
@@ -442,6 +448,7 @@ test(
   { tags: ["slow"], timeout: 180_000 },
   async () => {
     const ctx = freshCtx("residency_chatty");
+    await withPublishedConfig(openItx(ctx));
     expect(
       await openItx(ctx).invoke([
         "itx",
@@ -476,6 +483,7 @@ test(
   { tags: ["slow"], timeout: 270_000 },
   async () => {
     const ctx = freshCtx("residency_released");
+    await withPublishedConfig(openItx(ctx));
     const releaser = (method: string, ...args: unknown[]) =>
       openItx(ctx).invoke([
         "itx",
@@ -508,6 +516,7 @@ test(
   { timeout: 75_000 },
   async () => {
     const ctx = freshCtx("residency_claimed");
+    await withPublishedConfig(openItx(ctx));
     const itx = openItx(ctx);
     await itx.processors.enable("sleeper", {
       source: SLEEPER_SOURCE,
@@ -531,7 +540,7 @@ test(
         e.offset < slept.offset,
     );
     console.log(
-      `[residency] ${woken.length} wake(s) mid-sleep (${woken.map((e: any) => e.payload.reason).join(", ")}); slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
+      `[residency] ${woken.length} wake(s) mid-sleep (${woken.map((e: any) => e.payload.cause).join(", ")}); slept on the instance started ${slept.payload.startedAt - started} ms after the first`,
     );
     // The claim's alarm woke the context mid-sleep (20 s in, the context idle since the append), and
     // every birth mid-sleep spared the claimed facet — a birth names what it reset on its wake record.
@@ -554,6 +563,7 @@ test(
 
 test("a deleted workspace's refusal keeps neither its context nor its facet resident", async () => {
   const ctx = freshCtx("residency_refused_verb");
+  await withPublishedConfig(openItx(ctx));
   const path = "/workspaces/gone";
   const itx = openItx(ctx);
   expect(await itx.workspaces.create(path)).toEqual({ path });
@@ -570,6 +580,7 @@ test("a deleted workspace's refusal keeps neither its context nor its facet resi
 
 test("a collection's refusal keeps neither the project root nor its project facet resident", async () => {
   const ctx = freshCtx("residency_refused_collection");
+  await withPublishedConfig(openItx(ctx));
   const itx = openItx(ctx);
   // the collection stub the project facet answers `workspaces()` with refuses: the resolver's walk
   expect((await rejection(itx.workspaces.delete("/workspaces/never"))).message).toMatch(
@@ -599,7 +610,7 @@ const stillAnswers = (call: () => Promise<unknown>) =>
 async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: string }> {
   const ctx = freshCtx(prefix);
   const path = freshRepoPath("residency");
-  const itx = openItx(ctx);
+  const itx = await withPublishedConfig(openItx(ctx));
   expect(await itx.repos.create(path)).toEqual({ path });
   expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
   disposeSessions();

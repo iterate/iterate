@@ -110,8 +110,9 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
         contexts: {},
         secrets: {},
         configRepoTip: null,
-        publishedCommitOid: null,
-        publishedAt: null,
+        unpublishedCommits: [],
+        lastPublicationFactOffset: null,
+        publishedCommit: null,
         hostnames: {},
         integrations: {},
         primaryHostname: null,
@@ -589,12 +590,12 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(await runDurableObjectAlarm(s)).toBe(true);
   expect(await alarmOf(ctx)).toBe(later);
   // The wake appended nothing: the one new event is the wake record of the read below — this
-  // incarnation's first inbound call, so its reason is "request" — naming the facet its birth reset.
+  // incarnation's first inbound call, so its cause is that call — naming the facet its birth reset.
   const appended = (await readLog(ctx)).slice(before.length);
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
-      { incarnation: incarnation + 1, reason: "request", facetsReset: ["plain"] },
+      { incarnation: incarnation + 1, cause: "call", caller: "other", facetsReset: ["plain"] },
     ],
   ]);
 });
@@ -720,14 +721,14 @@ test("a claim on the ladder of failed revives keeps its backoff across a birth",
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   // A claim put back after a revive threw once (FacetHost `reviveDueClaims`), as its rows stand.
   await runInDurableObject(stub(ctx), (_instance, state) => {
-    state.storage.kv.put("facet-claim:repo", at);
+    state.storage.kv.put("facet-claim:repo", { at });
     state.storage.kv.put("facet-claim-failures:repo", 1);
   });
   await evictDurableObject(stub(ctx));
 
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   await runDurableObjectAlarm(stub(ctx)); // whatever the birth armed: the claim is not due
-  expect(await kv(ctx, "facet-claim:repo")).toBe(at);
+  expect(await kv(ctx, "facet-claim:repo")).toEqual({ at });
 });
 
 test("a loaded facet's claim keeps its time across a birth: its author's revive-by, never sooner", async () => {
@@ -741,7 +742,7 @@ test("a loaded facet's claim keeps its time across a birth: its author's revive-
   await stub(ctx).invoke(["itx", ["readEvents", 0, 1]]);
   await runDurableObjectAlarm(stub(ctx));
   expect(await probe(ctx)).toMatchObject({ revives: [] });
-  expect(await kv(ctx, "facet-claim:counter")).toBe(at);
+  expect(await kv(ctx, "facet-claim:counter")).toMatchObject({ at });
 });
 
 // ── the platform's facet-start defect ──
@@ -1470,6 +1471,31 @@ test("`processors.enable` with changed code configures the new code, and with th
   expect(await configured()).toBe(2);
   await enable(changed);
   expect(await configured()).toBe(2);
+});
+
+test("`processors.enable` naming another worker, or another module of it, configures it; the same name again appends nothing", async () => {
+  const ctx = `prj_enable_names_${crypto.randomUUID().slice(0, 8)}`;
+  const enable = (source: unknown, mainModule = "agents.ts") =>
+    stub(ctx).invoke([
+      "itx",
+      "processors",
+      ["enable", "tally", { className: "Tally", mainModule, source }],
+    ]);
+  const configured = async () =>
+    (await readLog(ctx)).filter(
+      (event) =>
+        event.type === "events.iterate.com/itx/subscription-configured" &&
+        (event.payload as { name?: string }).name === "tally",
+    ).length;
+  await enable(["itx", ["cd", "/"], "config"]);
+  await enable(["itx", ["cd", "/"], "config"]);
+  expect(await configured()).toBe(1);
+  await enable(["itx", ["cd", "/"], "staging"]);
+  expect(await configured()).toBe(2);
+  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
+  expect(await configured()).toBe(3);
+  await enable(["itx", ["cd", "/"], "staging"], "tally.ts");
+  expect(await configured()).toBe(3);
 });
 
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {

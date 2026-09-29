@@ -1,5 +1,5 @@
-// The voice package as this checkout has it, mounted exactly as the installer mounts it, on a call
-// whose agent is the agents app's. Only the provider URL is replaced: a real deployed WebSocket
+// The voice package as this checkout has it, installed as a project's config installs it (its
+// `voice.ts`, published, then `installVoice`), on a call whose agent is the agents app's. Only the provider URL is replaced: a real deployed WebSocket
 // fixture speaks the small GPT-Live protocol below. It delegates when it hears a question frame,
 // and speaks back (transcribes as its own speech) every commentary the relay sends it. The agent's
 // model is a fake `itx.ai` lent to the call's context, except in the REAL row.
@@ -7,8 +7,7 @@
 // hand-over to the agent, its sandbox scripts, its answer reaching the live model, and audio in both
 // directions. It does not test the live model, microphones or speakers.
 import { expect } from "vitest";
-import { installAgents } from "@iterate-com/agents/install";
-import { installVoice } from "@iterate-com/voice/install";
+
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system-prompt.ts";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse } from "../../os/e2e/support/fake-ai.ts";
@@ -21,8 +20,7 @@ import {
   realModelOnly,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
-import { agentsWorkspaceSource } from "./agents-source.ts";
-import { voiceWorkspaceSource } from "./support.ts";
+import { installWorkspaceVoice, voiceWorkspaceBundle } from "./support.ts";
 
 const CLOCK = "What time is it in London?";
 const WEBSITE = "Add a horse joke to the website and verify it is live.";
@@ -31,21 +29,27 @@ const TWO_PLUS_TWO = "What is two plus two?";
 deployedOnly(
   "a delegated question reaches the call's agent as the person's words, and its answer is what the live model speaks",
   async () => {
+    // A config entrypoint, as publication admits one (packages/agents system-prompt.ts)
     const candidateSource =
-      'export default {fetch() { return new Response("Because it had bad stable manners!"); }};';
+      'import { IterateConfigEntrypoint } from "iterate/sdk"; export default class extends IterateConfigEntrypoint { fetch() { return new Response("Because it had bad stable manners!"); } }';
     // Execute the exact candidate-probe example taught to the agent. A stale module
     // name in that prompt consumed a recovery step in the real Satellite call.
     const candidateProbe = DEFAULT_AGENT_SYSTEM_PROMPT.match(
       /`(await itx\.workers\.get\(\{ source: .*?candidateSource.*?\}\)\.fetch\(new Request\(projectUrl\)\))`/,
     )?.[1];
     expect(candidateProbe).toBeTruthy();
+    // …and the wait for a commit's outcome it is taught, so a refused commit reaches the model
+    const outcomeWait = DEFAULT_AGENT_SYSTEM_PROMPT.match(
+      /`(await itx\.cd\("\/"\)\.waitForEvent\(.*?\))`/,
+    )?.[1];
+    expect(outcomeWait).toBeTruthy();
     const call = await voiceCall(({ websiteUrl }) => {
       const websiteScripts = [
         "return await itx.whoami();",
         'return await itx.repos.get("/repos/config").listFiles();',
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
         `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
-        `return await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)});`,
+        `const { commitOid } = await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)}); const outcome = ${outcomeWait}; if (outcome.payload.error) throw new Error(outcome.payload.error); return commitOid;`,
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
         `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
       ];
@@ -312,13 +316,12 @@ export default class extends WorkerEntrypoint {
     ],
   ]);
 
-  const { "index.js": voice } = await voiceWorkspaceSource();
+  const voice = await voiceWorkspaceBundle();
   const liveUrl = "https://api.openai.com/v1/live/sessions";
   expect(voice.split(liveUrl)).toHaveLength(2);
   // Voice makes no model call of its own: every delegation is the agent's.
   expect(voice).not.toContain("https://api.openai.com/v1/responses");
-  await installAgents(root, agentsWorkspaceSource);
-  await installVoice(root, { "index.js": voice.replace(liveUrl, providerUrl) });
+  await installWorkspaceVoice(root, voice.replace(liveUrl, providerUrl));
   expect(await root.voice.health()).toMatchObject({ ok: true, projectId });
 
   const streamPath = "/agents/voice/zectrix_note4/2026-09-28-101500-e2e";

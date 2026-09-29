@@ -17,11 +17,11 @@
 // session end); the raw event — `itx.append({ type: "…/rewrite-rule-configured", payload: { match, target } })` — is the verb
 // minus the handle and outlives the session. A client reaches a root context through session.ts and
 // the rest with `cd(path)`.
-//   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, both addressing the DO
+//   ItxEntrypoint        — a loaded worker's WHOLE WORLD: `env.ITX.get()` and `globalOutbound`, resolved here and sent straight to the context each call lives in
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
 import { z } from "zod";
-import { codedError, resolveContextPath } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER, loopLimitOf, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
@@ -33,7 +33,9 @@ import {
 } from "iterate/expression";
 import type { FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
+import { newChain, parseCause, type Cause } from "./cause.ts";
 import {
+  itxAnswerDetachedFromSession,
   materializeItxHandleReference,
   registerPipelinedRpcBrand,
   registerRpcSessionBrand,
@@ -43,6 +45,8 @@ import type { IterateContextDurableObject, Env } from "./iterate-context-durable
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
+  parseFetchExpression,
+  itxExpressionEndingInFetch,
   stampCallerHeaders,
   terminalFetchOf,
 } from "./context/rpc-stubs.ts";
@@ -51,9 +55,13 @@ import {
   type ClientRpcStub,
   type IterateContextDurableObjectStub,
 } from "./context/rpc-stub-relay.ts";
-import { normalizeRewriteRuleConfigured } from "./context/itx-expression-rewriting.ts";
+import {
+  normalizeRewriteRuleConfigured,
+  type ItxExpressionResolver,
+} from "./context/itx-expression-rewriting.ts";
 import { FetchRouteConfiguredPayload } from "./fetch-routes.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
+import { statelessResolverFor } from "./context/stateless-context.ts";
 import {
   DurableObjectNameCodec,
   GLOBAL_PROJECT_ID,
@@ -61,6 +69,7 @@ import {
 } from "./context/paths.ts";
 import { SessionTeardown } from "./session.ts";
 import { contextStub } from "./context-stub.ts";
+import { expressionFetchErrorAnswer } from "./unavailable.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -134,6 +143,12 @@ export class IterateContextRpcTarget extends RpcTarget {
   /** A platform admin's handle on the global namespace (session.ts `global`): its `cd` walks it,
    *  as a project's walks the project. */
   readonly #globalPaths: boolean;
+  /** THE STATELESS REACH (`ItxEntrypoint`'s, context/stateless-context.ts): a resolver of the
+   *  context at an address for a caller. Absent for a session's handle, whose calls go to the
+   *  context it names. */
+  readonly #statelessResolverOf:
+    | ((address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver)
+    | undefined;
 
   constructor(
     contextNamespace: IterateContextNamespace,
@@ -142,6 +157,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     waitUntil: WaitUntil,
     caller: Caller,
     globalPaths = false,
+    statelessResolverOf?: (address: DurableObjectAddress, caller: Caller) => ItxExpressionResolver,
   ) {
     super();
     this.#globalPaths = globalPaths;
@@ -150,6 +166,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     this.#sessionTeardown = sessionTeardown;
     this.#waitUntil = waitUntil;
     this.#caller = caller;
+    this.#statelessResolverOf = statelessResolverOf;
   }
 
   /** The context DO's stub, minted PER CALL (a stub is a cheap handle onto one shared connection):
@@ -204,7 +221,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     }
     // LOADED CODE's `cd` is an expression through THIS context's table (`itx.cd ⇒ null` is a wall,
     // and the resolver's app wall says where it may go) — the dotted surface of the handle it gets
-    // back accumulates onto one `invoke`, exactly as the built-in `cd` root answers.
+    // back accumulates onto one `invoke`, which the stateless resolver sends straight to the context
+    // the call lives in.
     if (this.#caller.app)
       return new InvokeHandle(
         (steps) =>
@@ -230,6 +248,7 @@ export class IterateContextRpcTarget extends RpcTarget {
       this.#waitUntil,
       this.#caller,
       this.#globalPaths,
+      this.#statelessResolverOf,
     );
   }
 
@@ -241,10 +260,40 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  ONE routing fork: a call whose TERMINAL step is `fetch(request)` carrying a live Request rides
    *  the DO's FETCH CHANNEL with the expression in the `x-itx-expression` header, not `invoke` — the
    *  fetch channel is the only hop kind that carries a socket-bearing Response back (a 101 from a
-   *  tunnel or a WS-serving worker; context/rpc-stubs.ts doctrine, points 1 & 4). */
-  invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+   *  tunnel or a WS-serving worker; context/rpc-stubs.ts doctrine, points 1 & 4).
+   *
+   *  THE STATELESS REACH (`ItxEntrypoint`'s): one call through its resolver
+   *  (context/stateless-context.ts), whose own dispatch picks the fetch channel for a terminal
+   *  fetch. */
+  async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
+    const answer = await this.#dispatch(call, args);
+    // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
+    const refused = answer instanceof Response ? await loopLimitOf(answer) : undefined;
+    if (refused) throw refused;
+    return answer;
+  }
+
+  async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {
+    const resolver = this.#statelessResolverOf?.(this.#durableObjectAddress, this.#caller);
     const itxExpression = normalizedItxExpression(call);
     const terminalFetch = terminalFetchOf(itxExpression, args);
+    if (resolver && terminalFetch)
+      return statelessExpressionFetch(
+        resolver,
+        () => terminalFetch.steps,
+        terminalFetch.request,
+        encodeFetchExpression(terminalFetch.steps),
+      );
+    if (resolver) {
+      const result = await resolver.invoke(itxExpression, ...args);
+      // As a context's own `invoke` answers (context/dispatch.ts): a live answer becomes the
+      // expression that names it — a handle of THIS edge object, one whole call per verb — and
+      // data a hop below answered with is copied and released.
+      return materializeItxHandleReference(
+        itxAnswerDetachedFromSession(result, itxExpression, args),
+        (expression) => this.invoke(expression),
+      );
+    }
     if (terminalFetch) {
       const headers = new Headers(terminalFetch.request.headers);
       stampCallerHeaders(headers, this.#caller); // the stamp is this session's, never the Request's own
@@ -375,6 +424,8 @@ export class IterateContextRpcTarget extends RpcTarget {
     consumes?: string[];
     /** Where the cursor starts (0 = the whole log); absent = from now. A push target ignores it. */
     afterOffset?: number;
+    /** `false`: fan-out delivery (stream/subscription-delivery.ts). A push target ignores it. */
+    ordered?: false;
   }): Promise<SubscriptionHandleRpcTarget> {
     // LOADED CODE may lend a live callback (its own, fed its own context's events); an expression
     // target is a ROW the delivery loop runs as the kernel — that is `itx.append`'s business, through
@@ -394,6 +445,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     const delivery = {
       consumes: input.consumes,
       afterOffset: input.afterOffset,
+      ordered: input.ordered,
     };
     if (input.target && typeof input.target !== "string" && !Array.isArray(input.target)) {
       // A LIVE callback: the row rides the pager upgrade exactly as `provide`'s rule does (built
@@ -518,8 +570,9 @@ registerPipelinedRpcBrand(CapnwebRpcStub as unknown as abstract new () => unknow
 // { iterateContextName } })` — never a raw `env.ITERATE_CONTEXT.getByName` DO stub — so the context it forwards
 // to is a PROP of the stub, not a binding the loaded code could reach around.
 //
-// TWO methods, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — both addressing
-// the DO through `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
+// TWO methods, nothing else — `get()` (the itx scope) and `fetch` (`globalOutbound`) — each call
+// resolved and dispatched HERE by the stateless resolver (context/stateless-context.ts) through
+// `env.ITERATE_CONTEXT`, this worker's own binding to its namespace.
 
 /** The itx scope as `env.ITX.get()` types it — the Workers-RPC stub of a context, every dotted step
  *  pipelined. The platform's own facets extend the SDK's host with THIS scope, so they spell every
@@ -536,7 +589,8 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
    *  SessionTeardown per call: this hop lends nothing session-long (a loaded worker's callbacks ride
    *  as Workers-RPC stubs through the call args, never the pager). Re-resolved per call — never a
    *  stub held across calls (the back-channel rule). */
-  get(): IterateContextRpcTarget {
+  get(cause?: unknown): IterateContextRpcTarget {
+    // `cause`: the SDK's word for why the loaded code runs (cause.ts); none begins a chain.
     // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
     // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's
     // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
@@ -551,53 +605,88 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
       address,
       new SessionTeardown(),
       (p) => this.ctx.waitUntil(p),
-      {
-        principal: null,
-        platformOrigin: this.ctx.props.platformOrigin,
-        ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
-      },
+      this.#caller(address, parseCause(cause)),
+      false,
+      (at, caller) =>
+        statelessResolverFor({
+          env: this.env,
+          namespace: this.env.ITERATE_CONTEXT,
+          address: at,
+          caller,
+          ctx: this.ctx,
+        }),
     );
   }
 
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a
-   *  fetch it addressed itself with `x-itx-expression` — goes to the context DO's `fetch` unchanged,
-   *  because THAT is where raw Requests are sorted. Not `get().invoke(["itx",["fetch",…]])`: the
-   *  edge's terminal-fetch fork would overwrite an `x-itx-*` header the loaded worker already set. */
-  override fetch(request: Request): Promise<Response> {
-    // A loaded worker speaks for the project, never for a person: the principal and grant headers
-    // are the edge's stamp (worker.ts, iterate-context.ts), stripped here so loaded code cannot forge one.
-    const headers = new Headers(request.headers);
-    stampCallerHeaders(headers, {
-      principal: null,
-      ...(!this.ctx.props.platform && { app: true as const }),
-    });
-    // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
-    // table (no `itx.fetch` row below the owner root, no egress); a self-addressed `env.ITX.fetch`
-    // keeps its expression and runs as app code like any other.
-    if (!this.ctx.props.platform && !headers.has(ITX_EXPRESSION_FETCH_HEADER))
-      headers.set(ITX_EXPRESSION_FETCH_HEADER, "itx.fetch");
-    return this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName).fetch(
-      new Request(request, { headers }),
+   *  fetch it addressed itself with `x-itx-expression` — is one terminal-fetch call through the
+   *  stateless resolver, run as the context's own expression fetch would run it: the headers it
+   *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). */
+  override async fetch(request: Request): Promise<Response> {
+    const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    // why, as the loaded code's `fetch` said it (cause.ts)
+    const caller = this.#caller(address, parseCause(request.headers.get(ITERATE_CAUSE_HEADER)));
+    // A raw `fetch(url)` IS `itx.fetch(request)` at its context: loaded code's through the table (no
+    // `itx.fetch` row below the owner root, no egress), the platform's (a first-party facet's) its
+    // own egress.
+    const expression =
+      request.headers.get(ITX_EXPRESSION_FETCH_HEADER) ??
+      (caller.app ? "itx.fetch" : "itx.builtins.fetch");
+    return statelessExpressionFetch(
+      statelessResolverFor({
+        env: this.env,
+        namespace: this.env.ITERATE_CONTEXT,
+        address,
+        caller,
+        ctx: this.ctx,
+      }),
+      () => parseFetchExpression(expression),
+      request,
+      expression,
     );
+  }
+
+  /** Who this entrypoint's calls are: loaded code (`Caller.app`), or — minted `platform: true` by a
+   *  class of THIS worker — the platform at its own context (`Caller.path`). Either speaks for the
+   *  project, at the origin the context was minted with, for the cause the code runs under, or one
+   *  of its own. */
+  #caller(address: DurableObjectAddress, cause: Cause | undefined): Caller {
+    return {
+      principal: null,
+      platformOrigin: this.ctx.props.platformOrigin,
+      cause: cause || newChain("loaded code"),
+      ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
+    };
   }
 }
 
-/** Mint the loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on the DO's own
- *  state (workers-types puts the worker's export table on it). `Cloudflare.Exports` is `{}` without a
- *  generated `GlobalProps`, hence the cast. */
-export function itxEntrypointFor(
-  ctx: DurableObjectState,
-  iterateContextName: string,
-  platformOrigin: string | null,
-): Fetcher {
-  const { exports } = ctx as unknown as {
-    exports: {
-      ItxEntrypoint(opts: {
-        props: { iterateContextName: string; platformOrigin: string | null };
-      }): Fetcher;
-    };
-  };
-  return exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
+/** A TERMINAL FETCH THROUGH THE STATELESS RESOLVER, its entry points' (`invoke`,
+ *  `ItxEntrypoint.fetch`, and the edge's fetch route: worker.ts `serveProjectHost`): the Request
+ *  stripped of what the context's own expression fetch strips —
+ *  every caller stamp, the expression, the routing slug — since loaded code may have forged any of
+ *  them, and a call that lands in a context carries the resolver's own caller
+ *  (built-ins.ts `callContext`); a failure answered as a Response, as the context answers one.
+ *  `steps` is read inside, so an expression that does not parse is answered too. Not in the
+ *  resolver itself: the context's fetch channel hands the edge's principal on to the app. */
+export async function statelessExpressionFetch(
+  resolver: ItxExpressionResolver,
+  steps: () => ItxExpression,
+  request: Request,
+  label: string,
+): Promise<Response> {
+  const headers = new Headers(request.headers);
+  stampCallerHeaders(headers, null);
+  try {
+    const result = await resolver.invoke(
+      itxExpressionEndingInFetch(steps()),
+      new Request(request, { headers }),
+    );
+    return result instanceof Response
+      ? result
+      : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
+  } catch (error) {
+    return expressionFetchErrorAnswer(error, label);
+  }
 }
 
 /** THE PUBLISHED API IS DECLARED, NOT GENERATED (iterate/api): an edge context IS one — its own

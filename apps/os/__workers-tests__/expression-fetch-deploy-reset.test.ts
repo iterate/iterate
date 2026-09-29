@@ -1,15 +1,15 @@
 // __workers-tests__/expression-fetch-deploy-reset.test.ts — a deploy resets every context, and an
 // expression fetch that dialed another context meets the reset as "Durable Object reset because its
-// code was updated.". prd os-prd, 2026-09-25 14:45:21Z (the deploy of #3155): the first requests to
-// two tunnels' hosts found the config worker's loader cold, its producer's read of `/repos/config`
-// met that context's reset, and each answered an uncoded 500 the prd fault alarm paged on. The
+// code was updated." — a cold config worker's producer reading `/repos/config` among them. The
 // expected outcome: the read the cacheKey names is read again (context/worker-loader.ts); a
-// terminal fetch through `cd` is sent again when it cannot do anything twice, a GET or HEAD with no
-// body (context/built-ins.ts `cd`); anything else is a 503 with `Retry-After: 1`, logged
-// `expression-fetch.deploy-reset` at info and never reported (iterate-context-durable-object.ts).
-// The reset is the test's: `state.abort` with the deploy's words, mid-call, on the context dialed.
+// terminal fetch to what lives in another context is sent again when it cannot do anything twice,
+// a GET or HEAD with no body (context/built-ins.ts `callContext`); anything else is a 503 with
+// `Retry-After: 1`, logged `expression-fetch.deploy-reset` at info and never reported
+// (iterate-context-durable-object.ts). The reset is the test's: `state.abort` with the deploy's
+// words, mid-call, on the context dialed — whose facet the call is.
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
+import type { FacetSpec } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
 import { stub } from "./support.ts";
 
@@ -31,12 +31,9 @@ test.for([
 ])("$name", async ({ init, answer, logs }) => {
   const project = `prj_deploy_reset_fetch_${init.method.toLowerCase()}`;
   const events = logEvents();
-  const served = fetchOf(project, [
-    "itx",
-    ["cd", "/site"],
-    "workers",
-    ["get", { source: { "package.json": '{"main":"worker.js"}', "worker.js": slowSite } }],
-  ])(init);
+  const served = fetchOf(project, ["itx", ["cd", "/site"], "facets", ["get", "site", SLOW_SITE]])(
+    init,
+  );
   await resetMidCall(`${project}.iterate/site`);
   expect(await served).toEqual(answer);
   expect(events()).toEqual(logs);
@@ -54,11 +51,8 @@ test("a cold loader's producer read that meets the deploy is read again, and the
         source: [
           "itx",
           ["cd", "/repos/config"],
-          "workers",
-          [
-            "get",
-            { source: { "package.json": '{"main":"worker.js"}', "worker.js": slowProducer } },
-          ],
+          "facets",
+          ["get", "producer", SLOW_PRODUCER],
           ["modules"],
         ],
         cacheKey: "site@1",
@@ -109,23 +103,36 @@ function logEvents() {
 }
 
 /** A site that takes a second to answer: long enough for the reset to land mid-call. */
-const slowSite = `
-import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Site extends WorkerEntrypoint {
+const SLOW_SITE: FacetSpec = {
+  source: {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
+export class Site extends FacetDurableObject {
   async fetch(request) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     return new Response(request.method + " served");
   }
-}`;
+}`,
+  },
+  className: "Site",
+};
 
 /** The config repo's stand-in: its modules take a second to read. */
-const slowProducer = `
-import { WorkerEntrypoint } from "cloudflare:workers";
-export default class Producer extends WorkerEntrypoint {
+const SLOW_PRODUCER: FacetSpec = {
+  source: {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": `
+import { FacetDurableObject } from "iterate/sdk";
+export class Producer extends FacetDurableObject {
+  static publicMethods = [...super.publicMethods, "modules"];
   async modules() {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     return {
       "package.json": '{"main":"worker.js"}', "worker.js": "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class Site extends WorkerEntrypoint { fetch(request) { return new Response(request.method + ' served'); } }",
     };
   }
-}`;
+}`,
+  },
+  className: "Producer",
+};

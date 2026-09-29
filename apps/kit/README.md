@@ -27,15 +27,14 @@ iterate's own zones, and its discovery document names it), then the selector's b
 **Log in with &lt;its host&gt;** and consent happens there. The board is flashed with that
 platform's address. **Set up another device** keeps the platform.
 
-Preparing installs voice when missing. The form asks for an OpenAI API key as soon as the
-picked project turns out to have none. It verifies voice health before minting a token with no expiry, scoped to the
-chosen project, under the same OAuth client that was authorized. Existing voice
-services, secrets and project websites are preserved. Voice is the npm package
-`@iterate-com/voice`, on the agents app `@iterate-com/agents`: the project's config repo
-gets an `agents/` and a `voice/` folder that pin the builds of the commit Kit was built
-from and re-export them, and both are installed from those folders. The installer is
-`@iterate-com/voice/install`, shared with voice.iterate.com, which installs voice
-without a device.
+Preparing checks the project's voice. The form asks for an OpenAI API key as soon as the
+picked project turns out to have none. It verifies voice health before minting a token with no
+expiry, scoped to the chosen project, under the same OAuth client that was authorized. Existing
+voice services, secrets and project websites are preserved. Voice is the npm package
+`@iterate-com/voice`, on the agents app `@iterate-com/agents`, and the project's config repo
+installs both itself (configs/default does): a project whose config installs no voice is
+refused. The check is `ensureVoiceAgent` (`@iterate-com/voice/install`), shared with
+voice.iterate.com, which sets voice up without a device.
 
 Client metadata lives at `k.iterate.com/devices/<model>/clients/<uuid>.json`. The
 flashed token appears as `Kit <board> <date>` with kind **Device** in your sessions

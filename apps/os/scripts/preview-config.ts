@@ -146,18 +146,21 @@ export const PREVIEW_SECTION = "os-preview";
 /** The heading of a section this module writes, `### Preview \`<deployment>\``. */
 const SECTION_HEADING = /^### Preview `([^`]+)`\n*/;
 
-/** A deploy starts by folding the section it will replace into a `<details>`, so the links read as
- *  a previous commit's at a glance, and a deploy that fails leaves them folded; the next deploy
- *  that lands writes the section unfolded. Once change detection lands
- *  (tasks/ci-change-detection.md), fold only after it has decided to deploy: a push that reuses the
- *  deployment leaves it current. A body with no section, or one already folded, stays as it is. */
-export function foldPreviousPreviewSection(body: string) {
+/** A deploy starts by folding the section it will replace into a `<details>` ("Previous commit's
+ *  deployment"), so the links read as a previous commit's at a glance, and a deploy that fails
+ *  leaves them folded; the next deploy that lands writes the section unfolded. A closed PR's delete
+ *  folds it too ("Deleted deployment"), and nothing replaces it: its links are dead. Once change
+ *  detection lands (tasks/ci-change-detection.md), fold only after it has decided to deploy: a push
+ *  that reuses the deployment leaves it current. A body with no section, or one already folded,
+ *  stays as it is. */
+export function foldPreviewSection(
+  body: string,
+  label: "Previous commit's deployment" | "Deleted deployment",
+) {
   const inner = markedSection(body, PREVIEW_SECTION);
   if (!inner || inner.startsWith("<details>")) return body;
   const heading = SECTION_HEADING.exec(inner);
-  const summary = heading
-    ? `Previous commit's deployment: <code>${heading[1]}</code>`
-    : "Previous commit's deployment";
+  const summary = heading ? `${label}: <code>${heading[1]}</code>` : label;
   return replaceMarkedSection(
     body,
     PREVIEW_SECTION,
@@ -270,7 +273,8 @@ export function configTemplateNames(repoRoot: string) {
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
  *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
- *  the custom field prefilled), so the project is born from the unmerged template. */
+ *  the custom field prefilled), so the project is born from the unmerged template. `default` never
+ *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (scripts/build.ts). */
 export function templateQuickLaunches(input: {
   dashUrl: string;
   templates: string[];
@@ -278,7 +282,8 @@ export function templateQuickLaunches(input: {
   headSha: string;
 }) {
   return input.templates.map((name) => {
-    const changed = input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
+    const changed =
+      name !== "default" && input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
     const template = changed
       ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
       : name;

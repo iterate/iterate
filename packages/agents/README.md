@@ -6,33 +6,36 @@ Userspace: a project installs this package; the platform ships none of it.
 
 ## Install
 
-A project installs the app from a folder of its config repo:
+A project's config repo depends on the package, re-exports its two classes from `agents.ts`, and
+installs the app from its init case (configs/default does all three):
 
 ```text
-agents/package.json   { "main": "index.ts", "dependencies": { "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>" } }
-agents/index.ts       export { AgentCollectionDurableObject, AgentDurableObject } from "@iterate-com/agents";
+package.json   "dependencies": { "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>" }
+agents.ts      export { AgentCollectionDurableObject, AgentDurableObject } from "@iterate-com/agents";
 ```
-
-and its config worker mounts that folder, on `project/created` and again on each commit that changes
-it (configs/with-agents does both):
 
 ```ts
 import { installAgents } from "@iterate-com/agents/install";
 
-await installAgents(
-  itx,
-  await itx.repos.get("/repos/config").modules({ dir: "agents", commitOid }),
-);
+// in processEvent, the init case
+case "events.iterate.com/project/worker-updated":
+  await installAgents(itx);
 ```
 
-`installAgents` enables the catalog processor on `/`, writes the `itx.agents` rewrite rule to the
-collection facet, and rebinds every existing agent to the source; `ensureAgents` commits the folder
-first when the repo has none (the Agents app's **Install agents**). The loader resolves the pinned
-build through esm.sh once and keeps it, and refuses a branch or PR ref (`…@main`), so the folder
-names a full commit and an upgrade commits a newer one. `upgradeApp` is that upgrade for any app
-held this way (the Agents and Voice apps' **Upgrade to the newest**): the folder as the app has it
-at the newer build, in one commit on the tip it read, then the app's install from that commit.
-`installedVersion` reads the build a project runs from the source its install keeps in KV.
+`installAgents` enables the catalog processor on `/` and writes the `itx.agents` rewrite rule to the
+collection facet; it does the same every time. Every facet of the app, the collection's and each
+agent's, names its class in `agents.ts` of the project's published config
+(`{ className, mainModule: "agents.ts", source: itx.cd('/').config }`, `agentsFacetSpec`), so
+nothing is copied into the project: a commit that changes what `agents.ts` bundles, such as a new
+pin of the package, restarts the agents on their next call, and a commit that only changes the
+website leaves them running. The loader loads a pkg.pr.new build only at a full commit; the
+platform pins a template's `…@main` to one as it seeds the project.
+
+An upgrade commits a newer pin (the Agents app's **Upgrade to the newest**): `upgradeAgents`
+writes it into the root package.json in one commit on the tip it read, then waits for that commit's
+publication, or main's head's when main moved on, and throws why when the platform refuses it.
+`agentsVersion` reads the build the project runs: the pin of its published commit, which a refused
+upgrade leaves where it was.
 
 Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.

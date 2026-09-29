@@ -5,8 +5,7 @@
 // once, as it writes, the way npm's lockfile holds a git dependency at its commit
 // (https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#packages). The writers: the
 // platform's seed of a config repo from a template (apps/os/src/project/processor.ts), the apps
-// that install agents and voice (`publishedCommit`) and upgrade them to main's newest build
-// (`buildStanding`), and the e2e rows.
+// that upgrade agents and voice to main's newest build (`buildStanding`), and the e2e rows.
 import { z } from "zod";
 import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";
 
@@ -107,26 +106,6 @@ export async function buildStanding(
     newest: newest.commit,
     version: pkgPrNewVersion(name, newest.commit),
   };
-}
-
-/**
- * THE COMMIT AN APP INSTALLS this repository's packages at (`@iterate-com/agents`,
- * `@iterate-com/voice`, each as `pkgPrNewVersion(name, commit)`): the app's own `commit` when
- * pkg.pr.new has published package `name` there, else the commit main's builds are at now. One
- * commit for every package, since voice's build runs on the agents of its own commit. An app's
- * Worker resolves it (a server function), never its page: pkg.pr.new sends no
- * `Access-Control-Expose-Headers`, so a browser cannot read `x-commit-key`.
- */
-export async function publishedCommit(
-  name: string,
-  commit: string,
-  fetchFn: typeof fetch = globalThis.fetch,
-) {
-  if (isPkgPrNewCommit(commit) && (await headPkgPrNew(pkgPrNewVersion(name, commit), fetchFn)).ok)
-    return commit;
-  const main = await pinPkgPrNewVersion(name, pkgPrNewVersion(name, "main"), fetchFn);
-  // pinPkgPrNewVersion answers a pkg.pr.new version of `name` at a commit, or throws
-  return pkgPrNewVersionOf(name, main)!.ref;
 }
 
 /**

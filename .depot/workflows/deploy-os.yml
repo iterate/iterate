@@ -29,6 +29,8 @@ on:
       - "!apps/os/scripts/preview*.ts"
       - "!apps/os/scripts/e2e-soak.ts"
       - configs/**
+      # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
+      - packages/agents/**
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**

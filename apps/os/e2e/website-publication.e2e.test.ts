@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { adminCredentials, readAll, session, until } from "./support/client.ts";
+import { adminCredentials, markedSession, readAll, session, until } from "./support/client.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
@@ -21,13 +21,18 @@ localOnly(
     await until("the project's certificate", async () =>
       (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
     );
-    expect((await fetchProjectUrl(apex)).text.trim()).toBe(`Homepage of project ${slug}`);
+    await until("the seed's homepage", async () =>
+      (await fetchProjectUrl(apex)).text.trim() === `Homepage of project ${slug}`
+        ? true
+        : undefined,
+    );
     {
       const repo = root.repos.get("/repos/config");
       const source = (joke: string) =>
-        `import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { fetch() { return new Response(${JSON.stringify(joke)}); } }`;
+        `import { IterateConfigEntrypoint } from "iterate/sdk"; export default class extends IterateConfigEntrypoint { fetch() { return new Response(${JSON.stringify(joke)}); } }`;
       // A COMMIT IS THE PUBLICATION: the repo facet cross-posts `repo/commit-completed` to `/`, and the
-      // project processor points the apex at the new commit (project/processor.ts).
+      // project processor moves `itx.config`, which the apex names, to the new commit
+      // (project/processor.ts).
       const first = await repo.writeFile("worker.ts", source("Elephants fear the mouse."));
       await until("the first commit published", async () =>
         (await fetchProjectUrl(apex)).text === "Elephants fear the mouse." ? true : undefined,
@@ -37,8 +42,8 @@ localOnly(
         (await fetchProjectUrl(apex)).text === "Elephants pack their trunks." ? true : undefined,
       );
       // THE WHOLE TREE IS THE WORKER: a commit whose `worker.ts` imports a sibling by its relative
-      // path publishes too — the platform's target is the repo's modules at the commit, not one file
-      // (a `.md` beside them is not a module and changes nothing).
+      // path publishes too — the platform's pointer names the repo's modules at the commit, not one
+      // file (a `.md` beside them is not a module and changes nothing).
       const third = await repo.commitFiles({
         message: "a site in two modules",
         changes: [
@@ -50,7 +55,7 @@ localOnly(
           {
             path: "worker.ts",
             content:
-              "import { WorkerEntrypoint } from 'cloudflare:workers'; import { joke } from './lib/joke.js'; export default class extends WorkerEntrypoint { fetch() { return new Response(joke); } }",
+              "import { IterateConfigEntrypoint } from 'iterate/sdk'; import { joke } from './lib/joke.js'; export default class extends IterateConfigEntrypoint { fetch() { return new Response(joke); } }",
           },
         ],
       });
@@ -59,31 +64,41 @@ localOnly(
           ? true
           : undefined,
       );
-      // The processor's ingress facts are keyed by the commit: exactly one per commit on `/`, each
-      // loading the repo's modules at that commit.
-      const published = (await readAll(root)).filter(
-        (e) => e.type === "events.iterate.com/itx/ingress-configured",
-      );
-      expect(published.map((e) => e.payload.target[2][1].cacheKey)).toEqual([
+      // One publication per commit on `/`, each as the generation of its commit's fact there, so
+      // each later than the last; the pointer names the last. The site serves a pointer a moment
+      // before its outcome lands: the third's, waited for by its oid.
+      await root.waitForEvent({
+        type: "events.iterate.com/project/worker-updated",
+        payload: { commitOid: third.commitOid },
+        afterOffset: 0,
+        timeoutMs: 20_000,
+      });
+      const log = await readAll(root);
+      const published = log.filter((e) => e.type === "events.iterate.com/project/worker-updated");
+      expect(published.map((e) => e.payload.commitOid)).toEqual([
         expect.any(String), // the seed's
         first.commitOid,
         second.commitOid,
         third.commitOid,
       ]);
-      expect(published.at(-1)!.payload.target[2][1]).toMatchObject({
-        source: [
-          "itx",
-          "repos",
-          ["get", "/repos/config"],
-          ["modules", { commitOid: third.commitOid }],
-        ],
-      });
+      const factOffsets = published.map(
+        (e) =>
+          log.find(
+            (fact) =>
+              fact.type === "events.iterate.com/repo/commit-completed" &&
+              fact.payload.commitOid === e.payload.commitOid,
+          )?.offset,
+      );
+      const generations = published.map((e) => e.payload.generation);
+      expect(generations).toEqual(factOffsets);
+      expect(generations).toEqual([...new Set(generations)].sort((a, b) => a - b));
+      expect((await root.rewriteRules.get("itx.config"))?.target).toContain(third.commitOid);
       // First cold load happens AFTER main advanced: the cache key still loads its exact commit.
       expect(await repo.readFile("worker.ts", { commitOid: first.commitOid })).toBe(
         source("Elephants fear the mouse."),
       );
-      // An explicit publication from the root still works — the apex goes where it is pointed, until
-      // the next commit moves it again.
+      // An explicit ingress from the root still works — the apex goes where it is pointed; a commit
+      // moves `itx.config`, never the ingress.
       await root.append({
         type: "events.iterate.com/itx/ingress-configured",
         payload: {
@@ -108,5 +123,55 @@ localOnly(
       const live = await fetchProjectUrl(apex);
       expect(live).toMatchObject({ status: 200, text: "Elephants fear the mouse." });
     }
+  },
+);
+
+localOnly(
+  "a commit made deep in a chain is published at the commit's depth, and the init it sets off runs one deeper: a commit at 7 runs init at 8",
+  async () => {
+    const slug = freshDnsSafeProjectSlug("deep-commit");
+    const root = session().authenticate(adminCredentials()).projects.create({ project: slug });
+    await until("the project's certificate", async () =>
+      (await readAll(root)).find((e) => e.type === "events.iterate.com/project/created"),
+    );
+    // Our own code calling the platform back seven hand-offs into a chain (src/cause.ts): the
+    // commit is its act, and the publication it sets off keeps the commit's depth.
+    const chain = `a deep chain of ${slug}`;
+    const deep = markedSession({ chain, depth: 7 })
+      .authenticate(adminCredentials())
+      .projects.get(slug);
+    // A config of its own, whose init says it ran: no module of the default template's is left,
+    // so the publication does not wait on the agents package's build.
+    const { commitOid } = await deep.repos.get("/repos/config").commitFiles({
+      message: "an init that says it ran",
+      changes: [
+        { path: "agents.ts", delete: true },
+        { path: "voice.ts", delete: true },
+        {
+          path: "worker.ts",
+          content: `import { IterateConfigEntrypoint } from "iterate/sdk";
+export default class extends IterateConfigEntrypoint {
+  async processEvent({ event, itx }) {
+    if (event.type === "events.iterate.com/project/worker-updated")
+      await itx.append({ type: "test/init-ran", payload: { generation: event.payload.generation } });
+  }
+}`,
+        },
+      ],
+    });
+    const { published, initRan } = await until("the deep commit's init", async () => {
+      const log = await readAll(root);
+      const published = log.find(
+        (e) =>
+          e.type === "events.iterate.com/project/worker-updated" &&
+          e.payload.commitOid === commitOid,
+      );
+      const initRan = log.find(
+        (e) => e.type === "test/init-ran" && e.payload.generation === published?.payload.generation,
+      );
+      return initRan && { published, initRan };
+    });
+    expect(published.source.cause).toMatchObject({ chain, depth: 7 });
+    expect(initRan.source.cause).toMatchObject({ chain, depth: 8 });
   },
 );

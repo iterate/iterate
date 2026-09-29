@@ -28,8 +28,12 @@ import { codedError } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
-import { readPackage, resolveModules, sha256 } from "./module-resolution.ts";
+import { sha256Hex } from "../caller.ts";
+import { WorkerManifest } from "./worker-manifest.ts";
+import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
+import { readPackage, resolveModules, type ResolveOptions } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
@@ -41,35 +45,75 @@ const PRODUCED_MODULES_TTL_SECONDS = 24 * 60 * 60;
 /** The most one KV value may be (Cloudflare's limit). A repo's whole tree can pass it while the
  *  modules the entry reaches do not, so an answer over it is simply not kept. */
 const KV_VALUE_MAX_BYTES = 25 * 1024 * 1024;
-/** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
- *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
- *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
- *  producer EXPRESSION is small by nature and is not measured. */
-export const FACET_SOURCE_MAX_CHARS = 1 << 20;
-/** Refuse a spec whose literal source is over the ceiling — the one check both entry points
- *  (`itx.processors.enable`, the DO's `itx.facets.get`) make, so the refusal is atomic: nothing appended, no memo. */
+/** Refuse a spec whose LITERAL source is over the ceiling (itx-expression-rewriting.ts
+ *  `SOURCE_MAX_CHARS`) — the startup memo is one kv cell in the DO (re-read on every post-eviction
+ *  wake) and the hosting event one log row under the 8 MiB event ceiling, so an oversize source
+ *  fails where it is handed in, coded, not late at materialization; a producer EXPRESSION is small by
+ *  nature and is not measured. The one check both entry points (`itx.processors.enable`, the DO's
+ *  `itx.facets.get`) make, so the refusal is atomic: nothing appended, no memo. */
 export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): void {
   if (typeof spec.source === "string" || Array.isArray(spec.source)) return; // a producer expression
   const chars = JSON.stringify(spec.source).length;
-  if (chars > FACET_SOURCE_MAX_CHARS)
+  if (chars > SOURCE_MAX_CHARS)
     throw codedError(
       "FACET_SOURCE_TOO_LARGE",
-      `${where}: the facet's source is ${chars} chars, over the ${FACET_SOURCE_MAX_CHARS}-char ceiling — build it smaller, or load it from a producer expression with a cacheKey`,
+      `${where}: the facet's source is ${chars} chars, over the ${SOURCE_MAX_CHARS}-char ceiling — build it smaller, or load it from a producer expression with a cacheKey`,
     );
 }
-
-/** The same spec with an absent `cacheKey` left OUT (never `cacheKey: undefined`) — the one shape a
- *  memo, an event or a compare sees. */
-export const facetSpecOf = ({ source, cacheKey, className }: FacetSpec): FacetSpec => ({
-  source,
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- the canonical shape deliberately OMITS an absent cacheKey (never `cacheKey: undefined`, per the docstring): it is the one shape the kv-stored memo, the hosting event and the JSON.stringify compares all see, so a present-but-undefined key must never enter it
-  ...(cacheKey !== undefined && { cacheKey }),
-  className,
-});
 
 export const isWorkerModules = (source: unknown): source is WorkerModules =>
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `source` is untrusted `unknown`; the null check is the standard non-null-object runtime guard and keeps this a boolean type predicate
   typeof source === "object" && source !== null && !Array.isArray(source);
+
+/** A `workers.get` spec as a rule names a worker, with its manifest when the platform published it
+ *  (worker-manifest.ts): anyone may write such a rule, so its shape is checked where a name is read. */
+const NamedWorkerSpec = z.object({
+  // the loader checks the files, or the expression, as it loads them
+  source: z.custom<WorkerSource>(
+    (value) => isWorkerModules(value) || typeof value === "string" || Array.isArray(value),
+    "a worker's source is its files or an itx expression that produces them",
+  ),
+  cacheKey: z.string().optional(),
+  // read only from a rule the platform wrote (`vouched`)
+  manifest: z.unknown().optional(),
+});
+
+/** A worker's NAME resolved (the resolver's `namedWorker`): the `workers.get` spec of the rule it
+ *  names, whether the platform wrote that rule (`vouched`), and the dispatch its producer runs
+ *  through — with the authority of the context whose rule it is. */
+export type NamedWorker = {
+  spec: unknown;
+  vouched: boolean;
+  invoke: (call: ItxExpression) => Promise<unknown>;
+};
+
+/** WHAT A WORKER'S NAME LOADS for its entry `mainModule` — a source expression with no cacheKey
+ *  (iterate/api `FacetSpec`, `workers.get`), resolved to the spec of the rule it names (the
+ *  resolver's `namedWorker`): that spec's source under its cacheKey, and — only when the platform
+ *  wrote the rule (`vouched`: its publication) — under `mainModule`'s identity in its manifest, with
+ *  the manifest's generation. A publication may have dropped the module, or the Durable Object class
+ *  a facet names (`className`): refused, naming it. A manifest anyone else wrote is ignored: its
+ *  worker loads under its own cacheKey or content, as any source does. */
+export function namedWorkerLoad(
+  named: { spec: unknown; vouched: boolean },
+  mainModule: string | undefined,
+  where: string,
+  className?: string,
+): { source: WorkerSource; cacheKey?: string; moduleIdentity?: string; generation?: number } {
+  const { source, cacheKey, manifest: given } = NamedWorkerSpec.parse(named.spec);
+  const manifest = named.vouched && given !== undefined ? WorkerManifest.parse(given) : undefined;
+  if (!manifest || !mainModule) return { source, cacheKey, generation: manifest?.generation };
+  const published = manifest.modules[mainModule];
+  if (!published)
+    throw new Error(
+      `${where}: the worker its source names publishes no module ${JSON.stringify(mainModule)}`,
+    );
+  if (className && !published.classes.includes(className))
+    throw new Error(
+      `${where}: the worker its source names publishes no Durable Object class ${JSON.stringify(className)} in ${JSON.stringify(mainModule)}`,
+    );
+  return { source, cacheKey, moduleIdentity: published.identity, generation: manifest.generation };
+}
 
 /** WORKAROUND — workerd keeps a named isolate whose startup FAILED (a `getCode` that threw) in its
  *  isolate map for the process's life, so every later `LOADER.get(id)` replays the failure: server.c++
@@ -149,6 +193,15 @@ type PrepareConfinedWorkerOptions = {
   owner: string | readonly [iterateContextName: string, className: string];
   source: WorkerSource;
   cacheKey?: string;
+  /** The module of `source` loaded as the entry (`resolveModules`'s `mainModule`), package.json's
+   *  `main` when absent. One more element of the loader id when given: two entries of one source
+   *  are two workers. */
+  mainModule?: string;
+  /** What names the code in the loader id in place of `cacheKey` or the content hash: the entry's
+   *  own identity (`moduleIdentityOf`), from the manifest of the worker a facet is named by
+   *  (FacetHost). A producer then runs under it: every source that answers one identity loads the
+   *  same code for that entry. */
+  moduleIdentity?: string;
   /** Evaluate a producer expression through the owning context's dispatch — inside `getCode`, so
    *  only on a cold isolate. */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -182,30 +235,38 @@ type PrepareConfinedWorkerOptions = {
 export async function prepareConfinedWorker(
   opts: PrepareConfinedWorkerOptions,
 ): Promise<{ loaderId: string; load: () => WorkerStub; retire: () => void }> {
-  const { where, source, cacheKey } = opts;
+  const { where, source, cacheKey, mainModule } = opts;
   const requireFiles = (files: unknown): WorkerModules => {
     if (!isWorkerModules(files)) throw new Error(`${where}: a source is its files, path → code`);
     return files;
   };
-  // 1. the key's last component — and how the modules will be obtained.
+  // 1. the key's last component, tagged with what names the code — a published module's identity,
+  // the caller's cacheKey, or the content — so no cacheKey takes the id a module identity names;
+  // and how the modules will be obtained.
+  const named = opts.moduleIdentity
+    ? `module:${opts.moduleIdentity}`
+    : cacheKey
+      ? `key:${cacheKey}`
+      : undefined;
   let sourceVersion: string;
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireFiles(source);
     readPackage(modules, where); // refused where it is handed in, not late in a cold load
-    sourceVersion = cacheKey || contentHashOfWorkerModules(modules);
+    sourceVersion = named || `content:${contentHashOfWorkerModules(modules)}`;
     getModules = () => modules;
   } else {
-    if (!cacheKey)
+    if (!named)
       throw new Error(
         `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it and no answer of its is kept (a day, per deploy), so the key must change whenever the code does`,
       );
-    sourceVersion = cacheKey;
+    sourceVersion = named;
     // A producer's modules are kept in `ITX_KV` under its whole input — the deploy (the loader id
     // folds it in too, and a deploy can change how a producer answers), the owner, the caller's key
-    // and the expression — so a cold isolate reads them there instead of waking the context that
-    // produces them. For the site ingress that context is `/repos/config`, and a commit's tree
-    // never changes. A KV failure is a miss: the producer runs, as it always did.
+    // (else the published module identity it loads under) and the expression — so a cold isolate
+    // reads them there instead of waking the context that produces them. For the site ingress
+    // that context is `/repos/config`, and a commit's tree never changes. A KV failure is a miss:
+    // the producer runs, as it always did.
     const cacheFailed = (action: "get" | "put") => (error: unknown) => {
       console.warn({
         event: "worker-loader.platform-failure-module-cache",
@@ -228,8 +289,13 @@ export async function prepareConfinedWorker(
     };
     getModules = async () => {
       const producer = normalizedItxExpression(source);
-      const kvKey = `produced-modules-1/${await sha256(
-        JSON.stringify([opts.deployId, opts.owner, cacheKey, producer]),
+      const kvKey = `produced-modules-1/${await sha256Hex(
+        JSON.stringify([
+          opts.deployId,
+          opts.owner,
+          cacheKey || `module:${opts.moduleIdentity}`,
+          producer,
+        ]),
       )}`;
       const stored: unknown = await opts.env.ITX_KV.get(kvKey, "json").catch(cacheFailed("get"));
       if (loadable(stored)) return stored;
@@ -271,6 +337,7 @@ export async function prepareConfinedWorker(
     opts.platformOrigin,
     opts.owner,
     sourceVersion,
+    ...(mainModule ? [mainModule] : []),
   ]);
   const state = loaderIdGenerations.get(loaderIdBase) ?? { generation: 0, dead: false };
   let { generation } = state;
@@ -278,14 +345,7 @@ export async function prepareConfinedWorker(
   // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
   // failure that persists mints no billed identity per retry.
   const produce = async (): Promise<ResolvedWorker> =>
-    resolveModules(await getModules(), {
-      platform: PLATFORM_MODULES,
-      store: opts.env.ITX_KV,
-      // A wrapper, never the bare global: workerd refuses `fetch` called as another object's
-      // method ("Illegal invocation"), which `opts.fetch(...)` in the resolver would be.
-      fetch: (input, init) => fetch(input, init),
-      where,
-    });
+    resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule));
   let workerForCode = produce;
   if (state.dead) {
     // Outside the loader, so a throw here poisons nothing; one run for every caller while it lasts.
@@ -327,7 +387,8 @@ export async function prepareConfinedWorker(
         throw error;
       }
       return {
-        // PURE-PLAY: no node:*, so userspace code stays portable across workerd builds.
+        // PURE-PLAY: no node:* but `nodejs_als`, which the SDK carries a call's cause in (cause.ts),
+        // so userspace code stays portable across workerd builds.
         // `allow_irrevocable_stub_storage` (experimental) lets loaded code store its `env.ITX` stub
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
@@ -336,6 +397,7 @@ export async function prepareConfinedWorker(
         compatibilityFlags: [
           "no_nodejs_compat",
           "no_nodejs_compat_v2",
+          "nodejs_als",
           "allow_irrevocable_stub_storage",
         ],
         mainModule: resolved.mainModule,
@@ -358,4 +420,43 @@ export async function prepareConfinedWorker(
         loaderIdGenerations.set(loaderIdBase, { generation, dead: true });
     },
   };
+}
+
+/** How the loader resolves a source (module-resolution.ts): this deployment's platform packages,
+ *  the npm locks in ITX_KV, and the network for a dependency set no lock holds yet. */
+function resolveOptions(
+  env: { ITX_KV: KVNamespace },
+  where: string,
+  mainModule: string | undefined,
+): ResolveOptions {
+  return {
+    platform: PLATFORM_MODULES,
+    store: env.ITX_KV,
+    // A wrapper, never the bare global: workerd refuses `fetch` called as another object's
+    // method ("Illegal invocation"), which `opts.fetch(...)` in the resolver would be.
+    fetch: (input, init) => fetch(input, init),
+    where,
+    mainModule,
+  };
+}
+
+/**
+ * THE IDENTITY OF ONE MODULE OF A SOURCE: the SHA-256 of what the loader loads with it as the main
+ * module — its resolved graph, its npm dependencies as their locks have them — less this
+ * deployment's platform packages, which the deploy id in every loader id names already. Two sources
+ * whose `mainModule` answers one identity load the same code for it, so a facet whose class lives
+ * there keeps running across a commit that changes only the rest of the source (a worker's
+ * manifest, FacetHost). A module that does not resolve throws, as its load would.
+ */
+export async function moduleIdentityOf(
+  files: WorkerModules,
+  mainModule: string,
+  env: { ITX_KV: KVNamespace },
+  where: string,
+): Promise<string> {
+  const resolved = await resolveModules(files, resolveOptions(env, where, mainModule));
+  const graph = Object.entries(resolved.modules)
+    .filter(([name]) => !Object.hasOwn(PLATFORM_MODULES.modules, name))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return sha256Hex(JSON.stringify([resolved.mainModule, graph]));
 }

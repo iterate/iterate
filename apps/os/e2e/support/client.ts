@@ -7,8 +7,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
+import { SNAPSHOT_TTL_MS } from "../../src/context/rule-snapshots.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -201,6 +204,20 @@ export function publicSession(token: string) {
   return transport.authenticate({ type: "bearer", token });
 }
 
+/** A session our own code opens to call the platform back: its `/api` upgrade carries our mark
+ *  (iterate/lib `ITERATE_CAUSE_HEADER`), so every call it makes resumes `cause`'s chain at its
+ *  depth. */
+export function markedSession(cause: { chain: string; depth: number }): any {
+  const ws = new UndiciWebSocket(wsApi(), {
+    headers: { [ITERATE_CAUSE_HEADER]: JSON.stringify(cause) },
+  });
+  const transport = newWebSocketRpcSession(ws as unknown as WebSocket);
+  const open = openTransports();
+  open.sessions.push(transport);
+  open.sockets.push(ws as unknown as WebSocket);
+  return transport;
+}
+
 /** A browser's session: its issuer cookie (a sign-in's `__Host-itx-session`) on the upgrade, from
  *  the platform's own origin, as the Dash's page opens `/api`. */
 export function cookieSession(cookie: string) {
@@ -318,7 +335,81 @@ export const readHead = async (itx: any): Promise<number> => {
  *  cursor is present only for a target the stream delivers at-least-once (one that cannot own its
  *  progress); a processor's row has none (its facet keeps its own checkpoint). */
 export async function subscriptions(itx: any): Promise<any[]> {
-  return (await itx.subscriptions.list()) as any[];
+  return ((await itx.subscriptions.list()) as any[]).filter(
+    (row) => !BIRTH_ROW_NAMES.has(row.name),
+  );
+}
+
+/** The rows every project context is born with (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`), which
+ *  `subscriptions` and `configuredRows` leave out: a row counts the rows its own test configured. */
+export const BIRTH_ROW_NAMES: ReadonlySet<string> = new Set(
+  PROJECT_CONTEXT_BIRTH_EVENTS.map((event) => event.payload.name),
+);
+
+/** A log's `itx/subscription-configured` facts, the birth rows' left out. */
+export const configuredRows = (log: any[]): any[] =>
+  log.filter(
+    (event) =>
+      event.type === "events.iterate.com/itx/subscription-configured" &&
+      !BIRTH_ROW_NAMES.has(event.payload?.name),
+  );
+
+/** `files` published as the project's config the one way there is (apps/os
+ *  src/project/publication.ts): `itx`, the project's root, follows its config repo (the `project`
+ *  processor a created project has), the files are committed to `/repos/config`, and the platform
+ *  publishes the commit — `itx.config` points at it — whose outcome is waited for
+ *  (`publicationOf`). */
+export async function publishConfig(
+  itx: any,
+  files: Record<string, string>,
+): Promise<{ commitOid: string }> {
+  await itx.processors.enable("project");
+  await itx.repos.create("/repos/config");
+  const repo = itx.repos.get("/repos/config");
+  const { commitOid } = await repo.commitFiles({
+    message: "config",
+    changes: Object.entries(files).map(([path, content]) => ({ path, content })),
+    parent: await repo.tip(),
+  });
+  await publicationOf(itx, commitOid);
+  return { commitOid };
+}
+
+/** The outcome of commit `commitOid` of `/repos/config` on `root`, the project's root: every commit
+ *  fact gets one (src/project/processor.ts), found by its oid; a failure is thrown with why. */
+async function publicationOf(root: any, commitOid: string): Promise<any> {
+  const outcome = await root.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  if (outcome.type === "events.iterate.com/project/worker-update-failed")
+    throw new Error(`the publication of ${commitOid} failed: ${outcome.payload.error}`);
+  return outcome;
+}
+
+/** Until every snapshot of a context's rules read before now has expired (src/context/
+ *  rule-snapshots.ts): a name a member's or loaded code's row added then answers everywhere. */
+export const olderSnapshotsExpired = () => sleep(SNAPSHOT_TTL_MS);
+
+/** The config a row publishes when it only needs one (`withPublishedConfig`): an entrypoint that
+ *  does nothing with what it is handed. */
+const QUIET_CONFIG = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js":
+    'import { IterateConfigEntrypoint } from "iterate/sdk";\nexport default class extends IterateConfigEntrypoint {}\n',
+};
+
+/** `itx`, a project root, with its config published, as a created project's is: its contexts'
+ *  birth rows then deliver there, as a live project's do, instead of probing the root for a config
+ *  it lacks — what a row that counts wakes, evictions or alarms needs. */
+export async function withPublishedConfig<Itx>(itx: Itx): Promise<Itx> {
+  await publishConfig(itx, QUIET_CONFIG);
+  return itx;
 }
 
 /** PRESENCE — the registry keys with an open transport RIGHT NOW (`itx.rpcStubs.list()`, the

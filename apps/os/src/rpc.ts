@@ -1,4 +1,5 @@
 import { newWorkersRpcResponse, RpcSession, WebSocketTransport } from "capnweb";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import type { Env } from "./env.ts";
 import { ConsentRpcTarget } from "./consent.ts";
 import { GrantsRpcTarget } from "./grants.ts";
@@ -12,6 +13,7 @@ import {
   type SessionInput,
 } from "./session.ts";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
+import { parseCause } from "./cause.ts";
 
 /** Cap’n Web always terminates at /api in the stateless edge. Its root holds what the upgrade's
  * credential resolved — nothing, on a socket opened BARE (api.ts). `authenticate({ type: "bearer",
@@ -57,6 +59,7 @@ export async function rpcResponse(
     controlPlane: new ControlPlane(env, { readDeadlineMs: 5_000 }),
     appConfig: appConfigOf(env),
     platformOrigin,
+    cause: parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     onProjectAccess: (projectId) => projects.add(projectId),
     resolveBearer: async (token) => {
       // Claimed BEFORE the gate is awaited: two tokens racing on one socket cannot both bind.

@@ -12,6 +12,7 @@ import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
 import {
+  configuredRows,
   disposeSessions,
   freshCtx,
   openItx,
@@ -110,11 +111,7 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   );
   expect(operatorPrompt).toEqual({ role: "system", content: "Be terse." });
   // One explicit processor row for the agent; no automatic config subscription.
-  expect(
-    own
-      .filter((e) => e.type === "events.iterate.com/itx/subscription-configured")
-      .map((e) => e.payload.name),
-  ).toEqual(["agent"]);
+  expect(configuredRows(own).map((e) => e.payload.name)).toEqual(["agent"]);
   // only the certificate crosses to /, stamped with the agent it names (after the one from `/`)
   const rootLog = await readAll(itx);
   expect(short(rootLog)).toEqual(["agent/created", "agent/created"]);
@@ -133,7 +130,10 @@ test("itx.agents.create(path) births the agent — the processor row, the reques
   ]);
   await itx.agents.create("/agents/support"); // created once: answers at once, appends nothing
   expect(await readAll(itx.cd("/agents/support"))).toHaveLength(own.length);
-  expect(await itx.repos.list()).toEqual([]);
+  // an agent is no repo: the project's one repo is the config it was published from
+  expect(await itx.repos.list()).toEqual([
+    { path: "/repos/config", createdAt: expect.any(String) },
+  ]);
 });
 
 test("the loop: a person's words → the model → a script run against itx → its result → the model → prose, then idle; the script's write is real", async () => {
@@ -659,6 +659,13 @@ test("the model is shown the SANDBOX's rewriteRules.list() every turn: a capabil
   await itx.agents.create("/agents/support");
   await operatorPrompt(support);
   await configureModel(support);
+  // a name the root grants reaches its other contexts within a rule snapshot's lifetime
+  // (apps/os/src/context/rule-snapshots.ts)
+  await until("the root's grant reaches the sandbox's list", async () =>
+    ((await itx.cd("/agents/support/sandbox").rewriteRules.list()) as { match: string }[]).some(
+      (row) => row.match === "itx.tool",
+    ),
+  );
   await agent.message("hello");
   await until("the model was asked", () => (ai.calls.length > 0 ? true : undefined));
   const system = ai.calls[0]!.inputs.messages.filter((m) => m.role === "system").map(
@@ -749,6 +756,11 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       payload: { match: "itx.agents", target: null },
     },
   );
+  // the root's grant reaches the sandbox within a rule snapshot's lifetime
+  // (apps/os/src/context/rule-snapshots.ts)
+  await until("the root's catalogue answers through the jail's grant", () =>
+    itx.cd(`${agentPath}/sandbox`).catalogue.search({ q: "ready" }),
+  );
   const rootRulesBefore = await itx.rewriteRules.list();
   const sandboxRulesBefore = await itx.cd(`${agentPath}/sandbox`).builtins.rewriteRules.list();
   // The agent never outlives the test: a turn a failure cut short would otherwise run on after the
@@ -797,7 +809,7 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
       "failed",
     ]);
     expect(settled[0]!.error).toMatch(/is masked/); // kv: the bare null
-    expect(settled[1]!.error).toMatch(/masked|goes down only/); // cd('/'): the wall, or the app rule
+    expect(settled[1]!.error).toMatch(/is masked/); // cd('/'): the bare null masks `cd`
     expect(settled[2]!.error).toMatch(/not a loaded worker's word/); // itx.builtins
     expect(settled[3]).toMatchObject({ result: 404 }); // raw fetch: the expression fetch found no `itx.fetch` row
     expect(settled[4]!.error).toMatch(/is masked/); // the self-grant: append is masked
@@ -805,7 +817,10 @@ test("THE JAIL: a bare null on the agent's sandbox plus one grant — an injecte
     expect(settled[6]!.error).toMatch(/is masked/); // a live lend over the grant: its row is an append, masked
     expect(settled[7]!.error).toMatch(/is masked/); // a live subscription: its row likewise
     expect(settled[8]).toMatchObject({ result: [{ name: "ship.com", price: 42 }] }); // the one grant, still the owner's
-    expect(settled[9]).toMatchObject({ result: [] }); // the library root granted physically: its hops are the platform's
+    // the library root granted physically: its hops are the platform's, and list the project's one repo, its config
+    expect(settled[9]).toMatchObject({
+      result: [{ path: "/repos/config", createdAt: expect.any(String) }],
+    });
     expect(settled[10]!.error).toMatch(/is masked/); // …but for its typed append, the script's own write: through the table
     // nothing moved: the root's table and the sandbox's are what the owner wrote
     expect(await itx.rewriteRules.list()).toEqual(rootRulesBefore);

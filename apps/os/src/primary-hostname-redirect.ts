@@ -7,7 +7,7 @@
 // routing, which shares the platform's origin and has no custom hostnames. Pure; the primary
 // hostname rides the project's row that admitted the request (worker.ts).
 import { projectAddressOf, type IngressRouting } from "iterate/project-ingress";
-import { FILES_ROUTING_SLUG } from "./context/file-urls.ts";
+import { FILES_ROUTING_SLUG } from "./fetch-routes.ts";
 
 /** The routing slug (null ⇒ the apex) a request would keep on the project's primary hostname, or
  *  undefined when the edge never redirects it. */

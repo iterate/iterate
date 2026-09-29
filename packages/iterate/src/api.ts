@@ -34,9 +34,13 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+/** `waitForEvent`'s filter: an event type (or one of a list), payload fields the event must carry
+ *  with exactly these values (each a JSON primitive, compared with `===`), a floor, a timeout. With
+ *  an explicit `afterOffset` the log after it is searched first, so a match that already landed
+ *  answers at once. */
 export type WaitForEventFilter = {
   type?: string | string[];
+  payload?: Record<string, string | number | boolean | null>;
   afterOffset?: number;
   timeoutMs?: number;
 };
@@ -68,10 +72,26 @@ export type SubscriptionListEntry = {
   consumes?: string[];
   configuredAtOffset: number;
   afterOffset?: number;
+  /** `false`: a FAN-OUT row — one event per call, in any order, each event retried on its own and
+   *  dead-lettered alone (`itx/subscription-delivery-failed`). Its `cursor` is how far it has
+   *  admitted events, `pending` how many events wait for a retry, and `paused` whether new events
+   *  wait for the receiver (it failed the last few distinct events: one new event is let through at
+   *  each rung of the row's own probe). */
+  ordered?: false;
+  pending?: number;
+  paused?: boolean;
   /** Set when this row hosts a facet (a processor). `restarts`: how many times the platform failed
    *  the facet at its start and the context restarted it under a fresh loaded identity (a platform
    *  defect the context works around; the count is the cheap way to ask "how often, here"). */
-  hostedFacet?: { name: string; className: string; cacheKey?: string; restarts: number };
+  hostedFacet?: {
+    name: string;
+    className: string;
+    cacheKey?: string;
+    mainModule?: string;
+    /** The worker's name when the source is one (`FacetSpec`): any other source is not listed. */
+    source?: unknown;
+    restarts: number;
+  };
   /** Set for a row the context delivers at-least-once (an itx expression target; a facet and a lent
    *  stub own their progress): the offset the last acked call confirmed, the retry ladder's attempt
    *  and when the next attempt is due. */
@@ -84,8 +104,22 @@ export type SubscriptionListEntry = {
  *  `cacheKey` names the build, and the caller owns "same key ⇒ same code"). */
 export type WorkerSource = Record<string, string> | ItxExpressionInput;
 
-/** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`. */
-export type FacetSpec = { source: WorkerSource; cacheKey?: string; className: string };
+/** What hosts a class as a durable facet — `facets.get(name, spec)`, `processors.enable(name, spec)`.
+ *  `source` is the code (its modules, or an expression that produces them under `cacheKey`), or —
+ *  an expression with NO `cacheKey` — the NAME of a loaded worker: one that resolves, as a call
+ *  would, to `itx.builtins.workers.get(spec)` in the table of the context whose rule it is
+ *  (`itx.cd('/').config`, the project's published config). The facet loads that worker's source,
+ *  its producer run with that context's authority. `mainModule` names the module of the source that
+ *  exports `className` when it is not the source's entry (`agents.ts` of a config repo whose entry
+ *  is `worker.ts`): the facet runs that module's own graph, and — named by the project's published
+ *  config — restarts in place, storage kept, only when that module's identity changes, never onto
+ *  an older publication. */
+export type FacetSpec = {
+  source: WorkerSource;
+  cacheKey?: string;
+  className: string;
+  mainModule?: string;
+};
 
 /** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
 export type ScheduleReceipt = { key: string; scheduledAtOffset: number };
@@ -636,7 +670,8 @@ export interface IterateContextApi {
   /** Another context of this project, by path (`..` and `/` allowed; the global namespace is not). */
   cd(path: string): IterateContextApi;
   /** Durable batches appended after a deadline (`afterMs`), at an instant (`at`) or on an interval
-   *  (`everyMs`); a key set again is replaced; a receipt cancels exactly the definition it names. */
+   *  (`everyMs`); a key set again is replaced, but an interval set again as it stands keeps its
+   *  clock (a failed one is revived); a receipt cancels exactly the definition it names. */
   schedules: {
     set(
       input: ScheduledAppendInput,
@@ -830,8 +865,9 @@ export interface IterateContextApi {
   };
   /** The project's fetch routes, on its root `/`: which itx expression, the route's `target`, a
    *  request on its hosts goes to. `set` appends one `itx/fetch-route-configured` fact (`null`
-   *  deletes the route); `match` answers the route a request takes, which the config worker forwards
-   *  to `route.target` with `x-itx-expression` through `env.ITX.fetch` (a WebSocket upgrade included). */
+   *  deletes the route); `match` answers the route a request takes. The platform serves a request a
+   *  route takes from `route.target` (a WebSocket upgrade included), before the config worker's
+   *  fetch; a write answers once no host is served from the routes before it. */
   fetchRoutes: {
     set(fetchRouteName: string, route: FetchRouteInput | null): Promise<{ fetchRouteName: string }>;
     list(): Promise<FetchRouteEntry[]>;
@@ -885,12 +921,29 @@ export interface IterateContextApi {
     claim(name: string, at: number | null): Promise<void>;
   };
   workers: {
+    /** A stateless worker loaded from `spec`: `mainModule` loads that module of the source as its
+     *  entry in place of package.json's `main`. `source` is as `FacetSpec`'s: an expression with no
+     *  `cacheKey` is the NAME of a loaded worker (`itx.cd('/').config`), whose code each call loads,
+     *  `mainModule` as the project's publication of it recorded it. */
     get(spec: {
       source: WorkerSource;
       cacheKey?: string;
+      mainModule?: string;
       className?: string;
       props?: unknown;
     }): InvokeHandle;
+  };
+  /** HTTP WEBHOOKS, the target of a fan-out row that sends each event to another server, Stripe's
+   *  way: `webhooks.get({ url, signingSecret? }).deliverEvent` POSTs the event as JSON from this
+   *  context through its own `itx.fetch` (a context that may not fetch sends nothing), with
+   *  `iterate-event-id: <projectId><path>@<offset>` (repeats share it) and, given a signing secret (a secret
+   *  path pinned to `url`'s origin), `iterate-timestamp` and `iterate-signature: v1=<hex
+   *  HMAC-SHA256 of "<timestamp>.<body>">`. A 2xx acks; any other status retries on the event's own
+   *  ladder (~44 h); a 410 halts the row until a resume. `deliverEvent` is the delivery loop's call
+   *  alone. A signature vouches for the PROJECT, not a context: a receiver checks the body's `path`,
+   *  and loaded code names a signing secret only at the project's root. */
+  webhooks: {
+    get(spec: { url: string; signingSecret?: string }): InvokeHandle;
   };
   /** A subscription: a pure itx expression, or a live callback lent to the registry (what live state
    *  uses); `null` removes the row. The handle's dispose removes it too. */
@@ -899,6 +952,10 @@ export interface IterateContextApi {
     target: ItxExpressionInput | ((events: unknown[], range: unknown) => void) | null;
     consumes?: string[];
     afterOffset?: number;
+    /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
+     *  retried and dead-lettered on its own. Absent: the ordered queue, the one that may take a
+     *  dead letter (`itx/subscription-delivery-failed`): alert on dead letters from an ordered row. */
+    ordered?: false;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`
    *  mean `target`, an expression, a live stub, or null to deny. `description` is the one line a

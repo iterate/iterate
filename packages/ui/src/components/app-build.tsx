@@ -26,7 +26,7 @@ export function AppBuild({
 }: {
   /** the app's name, which titles the section: "Agents", "Voice" */
   app: string;
-  /** the version the project's installed source pins */
+  /** the version the project runs: its published config's pin, which a refused upgrade leaves */
   installed: string;
   check: (installed: string) => Promise<BuildStanding>;
   /** Upgrades the project to `version` and reloads the page's data; throws what failed. */

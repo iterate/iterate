@@ -29,6 +29,7 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import type { RepoFileChange, RepoLogEntry, RepoSyncResult } from "iterate/api";
 import { codedError } from "iterate/lib";
 import type { EventInput, ReduceArgs } from "iterate/stream/processor";
+import { refuseActPastLimit, runningCause } from "../cause.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { assertCreated, EntityLifecycleProcessor } from "../project/entity-lifecycle.ts";
@@ -343,6 +344,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     author?: { name: string; email: string };
     parent?: string | null;
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
+    // A commit is an act: past the loop limit nothing is pushed (../cause.ts).
+    refuseActPastLimit(runningCause(), "a commit");
     return this.#serialized(() => this.#commitFiles(input));
   }
   async #commitFiles(input: {

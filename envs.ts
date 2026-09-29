@@ -39,6 +39,31 @@ export const OS_DOPPLER_PROJECT = "os";
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
 
+/** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment (a change reaches the contexts
+ *  born after it): two fan-out rows from the context's birth on. `config` delivers every durable
+ *  event to the project's published config entrypoint, `itx.config` on `/` (apps/os
+ *  src/project/publication.ts); `platform` to the platform's own hook (apps/os src/platform-hook.ts). */
+export const PROJECT_CONTEXT_BIRTH_EVENTS = [
+  {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "config",
+      target: "itx.cd('/').config.deliverEvent",
+      afterOffset: 0,
+      ordered: false,
+    },
+  },
+  {
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "platform",
+      target: "itx.builtins.platformHook.deliverEvent",
+      afterOffset: 0,
+      ordered: false,
+    },
+  },
+] as const;
+
 /** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
  *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
  *  Cloudflare resources. */

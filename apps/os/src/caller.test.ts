@@ -1,11 +1,14 @@
 // caller.test.ts — the signed-claims codec as a table: what verifies, what does not; the digest and
 // the secrets' compare; and `stampCaller`, the attribution an event is stored with.
 import { createHash } from "node:crypto";
+import { INTEGRATION_PROVIDERS } from "iterate/api";
 import { expect, test } from "vitest";
 import {
   secretsEqual,
   sha256Hex,
   signClaims,
+  PLATFORM_FACT_TYPES,
+  refuseNonPlatformWrites,
   refusePlatformIdempotencyKeys,
   stampCaller,
   verifyAdminSecret,
@@ -143,6 +146,56 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
   });
 });
 
+// ── the platform's writes — its facts and the config pointer: no one else appends or schedules one ──
+test.for<{ name: string; who: keyof typeof writers; refused?: true }>([
+  { name: "a person", who: "a person", refused: true },
+  { name: "loaded code", who: "loaded code", refused: true },
+  { name: "a first-party processor", who: "a first-party processor", refused: true },
+  { name: "the platform", who: "the platform for a person" },
+])(
+  "every platform fact and config pointer row, appended or scheduled by $name",
+  ({ who, refused }) => {
+    const platformWrites = [
+      ...[...PLATFORM_FACT_TYPES].map((type) => ({ type, payload: {} })),
+      pointerRow(["itx", "config"], ["itx", ["cd", "/x"], "w"]),
+      pointerRow(["itx", "config"], null),
+      pointerRow(["itx", "config"], null, { ifTarget: ["itx", "w"] }),
+      pointerRow(["itx", "config", "deliverEvent"], ["itx", "w"]),
+    ];
+    for (const write of platformWrites)
+      for (const event of [
+        write,
+        {
+          type: "events.iterate.com/itx/schedule-set",
+          payload: { key: "k", when: { afterMs: 1 }, events: [{ type: "note" }, write] },
+        },
+      ]) {
+        const refuse = () => refuseNonPlatformWrites([event], writers[who]);
+        if (refused)
+          expect(refuse, JSON.stringify(write)).toThrow(
+            /is the platform's own fact|only the platform's publication writes it/,
+          );
+        else expect(refuse, JSON.stringify(write)).not.toThrow();
+      }
+    // a row beside the pointer is anyone's
+    for (const event of [{ type: "note" }, pointerRow(["itx", "configs"], ["itx", "w"])])
+      expect(() => refuseNonPlatformWrites([event], writers[who])).not.toThrow();
+  },
+);
+
+test("the platform's facts are every provider's connection facts and the webhooks a processor trusts, besides the project's own", () => {
+  expect([...PLATFORM_FACT_TYPES]).toEqual(
+    expect.arrayContaining([
+      "events.iterate.com/github/webhook-received",
+      "events.iterate.com/slack/webhook-received",
+      ...INTEGRATION_PROVIDERS.flatMap((provider) => [
+        `events.iterate.com/${provider}/connected`,
+        `events.iterate.com/${provider}/disconnected`,
+      ]),
+    ]),
+  );
+});
+
 // ── the platform's idempotency keys — no other writer takes one first ──
 const writers = {
   "loaded code": { principal: null, app: true },
@@ -175,3 +228,11 @@ test.for<{ key: string; who: keyof typeof writers; on: "a project" | "a global";
     else expect(refuse).not.toThrow();
   },
 );
+
+/** A rewrite rule's row, as the append boundary has normalized it. */
+function pointerRow(match: string[], target: unknown, extra: { ifTarget?: unknown } = {}) {
+  return {
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match, target, ...extra },
+  };
+}

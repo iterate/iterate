@@ -25,19 +25,19 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   codedError,
   errorCode,
+  ITERATE_CAUSE_HEADER,
   releaseRpcSessions,
   reportIssue,
-  resolveContextPath,
 } from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
-  parse,
   print,
   type ItxExpression,
   type ItxExpressionInput,
+  type ItxExpressionPrefix,
   InvokeHandle,
   normalizedItxExpression,
 } from "iterate/expression";
@@ -50,26 +50,29 @@ import {
   isPlatformFailureKind,
   logPlatformFailure,
 } from "@iterate-com/shared/platform-retry";
+import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
+  refuseNonPlatformWrites,
+  sha256Hex,
   stampCaller,
   type Caller,
 } from "./caller.ts";
 import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
-import { normalizeControlEvent } from "./stream/core-processor.ts";
+import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  parseFetchExpression,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
-  stampCallerHeaders,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
-import { FETCH_UPGRADE_RESUMABLE_HEADER, RpcStubFetchServer } from "./context/fetch-upgrade.ts";
+import { RpcStubFetchServer } from "./context/fetch-upgrade.ts";
 import {
   buildLibrary,
   executeScript,
@@ -81,7 +84,6 @@ import {
 import { waitForEventOnContext } from "./context-stub.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
-import { itxEntrypointFor } from "./iterate-context.ts";
 import { itxAiFor } from "./itx-ai.ts";
 import {
   ancestorPathsOf,
@@ -92,13 +94,8 @@ import {
   PROJECT_DELETED,
   resourceScope,
 } from "./context/paths.ts";
-import {
-  LEND_USE_HEADER,
-  LENT_AS_HEADER,
-  secretPathsReferenced,
-  verifyLendUse,
-} from "./secrets.ts";
-import { unavailableAnswer } from "./unavailable.ts";
+import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
+import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import {
   appConfigOf,
   iterateAppScopesOf,
@@ -112,15 +109,20 @@ import {
   refuseLiftingAJail,
   rpcStubKeysNamed,
   implicitRootsAt,
+  namesTakenAway,
+  rulesChangeNeedsCommitWait,
   type ItxExpressionRewriteRule,
 } from "./context/itx-expression-rewriting.ts";
-import { signedFileUrl } from "./context/file-urls.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
-import { buildBuiltIns } from "./context/built-ins.ts";
+import { buildBuiltIns, projectConfigDeps } from "./context/built-ins.ts";
+import { contextReach, itxEntrypointFor } from "./context/stateless-context.ts";
 import { FacetHost } from "./context/facet-host.ts";
+import type { NamedWorker } from "./context/worker-loader.ts";
 import { firstPartyFacetClassOf } from "./first-party-facets.ts";
 import type { ArtifactsNamespace } from "./context/cf-artifacts.ts";
 import { Residency } from "./context/residency.ts";
+import { egress } from "./context/egress.ts";
+import { SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./context/rule-snapshots.ts";
 import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscription-delivery.ts";
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
@@ -228,6 +230,21 @@ export interface Env extends AppConfigEnv {
   EMAIL?: SendEmail;
 }
 
+/** How far the clock of the machine a context wakes on may be from the one it last ran on: a wake
+ *  takes the lease of everything the last incarnation served as ending this much later. */
+const SNAPSHOT_CLOCK_SLACK_MS = 250;
+
+/** A revocation fence (`#takeRevocationFence`): until when a rule write waits, on this context's
+ *  clock, and the names the commits behind it took away. */
+type RevocationFence = { until: number; takenAway: ItxExpressionPrefix[] };
+
+/** The events that write what a rule snapshot carries: a repeat of one waits a pending fence out. */
+const SNAPSHOT_ROW_TYPES: ReadonlySet<string> = new Set([
+  "events.iterate.com/itx/rewrite-rule-configured",
+  "events.iterate.com/itx/fetch-route-configured",
+  "events.iterate.com/itx/ingress-configured",
+]);
+
 export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operator RPC only. Bypass every project rewrite so no project code can observe
    * the admin credential. The first-party secret facet independently verifies it. */
@@ -270,6 +287,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
+  /** This context's reach into its project (context/stateless-context.ts `contextReach`). */
+  readonly #reach = contextReach({
+    env: this.env,
+    namespace: this.env.ITERATE_CONTEXT,
+    projectId: this.#durableObjectAddress.projectId,
+    platformOrigin: () => this.#platformOrigin,
+    ctx: this.ctx,
+    ambient: () => this.#caller,
+    // a run this context sends on is its caller's to read, or its runner's (`#scriptExecution`)
+    readsRunSettlements: false,
+  });
   /** context/fetch-upgrade.ts — wired to `fetch` and the two WebSocket handlers below. */
   readonly #rpcStubFetch = new RpcStubFetchServer(this.ctx, {
     deployId: this.#appConfig.deployId,
@@ -318,23 +346,32 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       rpcStubKey,
       ...this.#rowsForRpcStubCensus(),
     });
+    // Each commits in this turn and answers no one, so it waits out no fence: the owner's live table
+    // refuses the stub's name from the commit on, and no timer keeps this context resident.
+    const unset = (event: StreamEventInput) => {
+      try {
+        this.#appendAndRunCommittedEffects([event]);
+      } catch {
+        // refused (a paused stream): the next wake's census un-sets it (`#unsetWhatNamesDeadRpcStubs`)
+      }
+    };
     // Compare-and-set: each removal carries `ifTarget` (the target the census saw), so a `provide` that
     // re-claims the same match during this detach window is not clobbered — the reduce skips a stale undo.
     for (const { match, ifTarget } of ruleUnsets)
-      void this.append({
+      unset({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         payload: { match, target: null, ifTarget },
-      }).catch(() => undefined);
+      });
     for (const name of subscriptionNames)
-      void this.append({
+      unset({
         type: "events.iterate.com/itx/subscription-configured",
         payload: { name, target: null },
-      }).catch(() => undefined);
+      });
     for (const fetchRouteName of fetchRouteNames)
-      void this.append({
+      unset({
         type: "events.iterate.com/itx/fetch-route-configured",
         payload: { fetchRouteName, requestMatcher: null },
-      }).catch(() => undefined);
+      });
   }
 
   /** The three tables as the pure census functions read them: every rule, every subscription's
@@ -401,8 +438,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // The stored alarm is read BEFORE the first commit can reconcile: the coordinator's dedupe seed
     // (alarm-coordinator.ts — every reason to wake is derived again below, so a due one is armed at
     // the same time, no write, and a stale one is superseded). Null while an alarm is being
-    // delivered (workerd hides a firing alarm for the whole run), so the wake record is NOT written
-    // here: the first entry point to run names the wake (`appendWakeRecord` — `alarm()` says "alarm").
+    // delivered (workerd hides a firing alarm for the whole run), so the wake record — and a birth —
+    // is NOT written here: the first entry point to run names the wake and its cause
+    // (`appendWakeRecord` — `alarm()` says "alarm"), and a call past the loop limit wakes nothing.
     // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
       if (await this.#refuseBirthOfDeletedProjectRoot()) return;
@@ -417,7 +455,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
       await this.#residency.resetUnclaimedFacetsAtBirth();
       this.#stream.storage.countIncarnation();
-      this.#stream.appendBirthRecord();
+      if (this.#stream.highestDurableOffset() > 0)
+        this.#snapshotLeaseUntil = Date.now() + SNAPSHOT_TTL_MS + SNAPSHOT_CLOCK_SLACK_MS;
       // THE OVERDUE WATCH at birth (alarm-coordinator.ts): a stored alarm well past its time that a
       // source still wants is one the runtime held — an idle actor has no timer watching it; one no
       // source wants (the last incarnation's sweep) is superseded instead.
@@ -492,10 +531,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
+    deployId: this.#appConfig.deployId,
     incarnationCountedByHost: true,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
+    // the deployment's stack of what every PROJECT context is born with; a global one, none
+    birthEvents:
+      this.#durableObjectAddress.projectId === GLOBAL_PROJECT_ID
+        ? []
+        : this.#appConfig.contextBirthEvents,
     wakeRecordDetail: () => this.#residency.wakeRecordDetail(),
+    cause: () => this.#callerStorage.getStore()?.cause,
     onCommit: (freshEvents, afterOffset, throughOffset) => {
       // An alarm trace answers waitForEvent, never a subscription (AlarmTrace says why).
       const events = freshEvents.filter(
@@ -506,8 +552,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
-      if (events.some((event) => event.type === "events.iterate.com/itx/woken"))
-        this.#announceToAncestors();
+      const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
+      if (woken) this.#announceToAncestors(woken.source?.cause);
       this.#unsetWhatNamesDeadRpcStubs(events);
       this.#alarmCoordinator.reconcile();
     },
@@ -517,18 +563,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  every ancestor has it (the `ancestors-announced` kv flag), so a failed announcement heals on the
    *  next wake and a landed one is never sent again (a context that wakes often would otherwise wake
    *  its ancestors each time). Keyed per child, so a repeat lands nothing. Fire-and-forget: a parent
-   *  may be mid-call into this child, so waiting on its answer here could deadlock. */
-  #announceToAncestors(): void {
+   *  may be mid-call into this child, so waiting on its answer here could deadlock. A receipt of the
+   *  wake: caused by what woke this context. */
+  #announceToAncestors(cause: Cause | undefined): void {
     const { path } = this.#durableObjectAddress;
     const ancestorPaths = ancestorPathsOf(path);
     if (ancestorPaths.length === 0 || this.ctx.storage.kv.get("ancestors-announced")) return;
     const announced = Promise.all(
       ancestorPaths.map((ancestorPath) =>
-        this.#sibling(ancestorPath).append({
+        this.#reach.contextOf(ancestorPath).append({
           type: "events.iterate.com/itx/child-created",
           idempotencyKey: `itx/child-created:${path}`,
           payload: { childPath: path },
-          source: { origin: path },
+          source: { origin: path, cause },
         }),
       ),
     ).then(
@@ -589,27 +636,133 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Inbound append: an inbound call and a `request` wake, then the commit and the committed-event
+  /** Inbound append: an inbound call and a `call` wake, then the commit and the committed-event
    *  effects. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
-    this.#inboundRequestInOneTurn();
-    return this.#appendAndRunCommittedEffects(events);
+    this.#inboundRequestInOneTurn(deepestCause(events.map((event) => event.source?.cause)));
+    return this.#appendWaitingOutOlderSnapshots(events);
+  }
+
+  /** An append whose writer is answered by the fence rule of context/rule-snapshots.ts. */
+  async #appendWaitingOutOlderSnapshots(events: StreamEventInput[]): Promise<StreamEvent[]> {
+    const before = this.#stream.coreReducedState;
+    const committed = this.#appendAndRunCommittedEffects(events);
+    await this.#waitOutOlderSnapshots(
+      before,
+      events.some((event) => SNAPSHOT_ROW_TYPES.has(event.type)),
+    );
+    return committed;
+  }
+
+  /** A write of what a snapshot carries answers its writer once the fence it must wait out has
+   *  passed on this clock: the one its commit took (`#takeRevocationFence`), or — for a write that
+   *  changes nothing (a repeat, an idempotent replay of a commit a reset interrupted) — the one
+   *  still pending. One that only adds a name does not wait. */
+  async #waitOutOlderSnapshots(before: CoreState, writesSnapshotRows: boolean): Promise<void> {
+    const after = this.#stream.coreReducedState;
+    const fence = this.#pendingFence();
+    if (!fence) return;
+    const waits =
+      before.snapshotVersion === after.snapshotVersion
+        ? writesSnapshotRows
+        : this.#snapshotChangeNeedsCommitWait(before, after, fence.takenAway);
+    for (let wait; waits && (wait = fence.until - Date.now()) > 0;)
+      await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+
+  /** THE REVOCATION FENCE (context/rule-snapshots.ts), taken in the commit's own turn by every
+   *  commit alike, a schedule's too: the lease as it finds it, with the names it took away — a new
+   *  row judged against what the pending fence took away as well. */
+  #takeRevocationFence(before: CoreState): void {
+    const after = this.#stream.coreReducedState;
+    const pending = this.#pendingFence();
+    if (!this.#snapshotChangeNeedsCommitWait(before, after, pending?.takenAway)) return;
+    const until = Math.max(pending?.until ?? 0, this.#snapshotLeaseUntil);
+    if (until <= Date.now()) return; // nothing served that could still be used
+    this.ctx.storage.kv.put<RevocationFence>("rule-revocation-fence", {
+      until,
+      takenAway: [
+        ...(pending?.takenAway || []),
+        ...namesTakenAway(before.itxExpressionRewriteRules, after.itxExpressionRewriteRules),
+      ],
+    });
+  }
+
+  /** Does a commit change a snapshot in a way that waits (context/rule-snapshots.ts)? A rule change
+   *  that takes a name away, any routing change, and any rule the platform writes. */
+  #snapshotChangeNeedsCommitWait(
+    before: CoreState,
+    after: CoreState,
+    takenAway: readonly ItxExpressionPrefix[] | undefined,
+  ): boolean {
+    return (
+      before.fetchRoutes !== after.fetchRoutes ||
+      before.ingressTarget !== after.ingressTarget ||
+      (!!this.#caller.platform &&
+        before.itxExpressionRewriteRules !== after.itxExpressionRewriteRules) ||
+      rulesChangeNeedsCommitWait(
+        before.itxExpressionRewriteRules,
+        after.itxExpressionRewriteRules,
+        this.#implicitRoots,
+        takenAway,
+      )
+    );
+  }
+
+  /** The fence a commit took that has not passed yet. */
+  #pendingFence(): RevocationFence | undefined {
+    const fence = this.ctx.storage.kv.get<RevocationFence>("rule-revocation-fence");
+    return fence && fence.until > Date.now() ? fence : undefined;
+  }
+
+  /** THE LEASE on this context's rule snapshots (context/rule-snapshots.ts), in memory: none at a
+   *  birth. */
+  #snapshotLeaseUntil = 0;
+
+  /** THE SNAPSHOT another context resolves through (context/rule-snapshots.ts): this table's
+   *  version, and its rows unless the reader holds that version. A version is this life's and the
+   *  table's offset in it — a context destroyed and born again counts its offsets from 1, and no
+   *  reader of its last life holds a version of this one. Each read extends the lease a write that
+   *  takes something away waits out. A DO-only Workers-RPC verb, off the itx surface: the rows are
+   *  the addressing every context of the project may already resolve through. A READ RECORDS
+   *  NOTHING (cause.ts): no wake of a context that slept, no birth of one never born, which answers
+   *  its empty table as `unborn`. */
+  rulesSnapshot(ifVersion?: string): RulesSnapshotAnswer {
+    // A read of this context's rules on another's behalf: counted, and no wake of this context's —
+    // the root is read by every context of the project, and a wake is an event delivered to each
+    // of its rows.
+    if (this.#unborn) throw this.#unborn;
+    this.#residency.inboundCallInOneTurn();
+    this.#snapshotLeaseUntil = Math.max(this.#snapshotLeaseUntil, Date.now() + SNAPSHOT_TTL_MS);
+    const { snapshotVersion, itxExpressionRewriteRules, fetchRoutes, ingressTarget } =
+      this.#stream.coreReducedState;
+    let life = this.ctx.storage.kv.get<string>("life"); // `destroy`'s `deleteAll` takes it
+    if (!life && this.#stream.highestDurableOffset() > 0)
+      this.ctx.storage.kv.put("life", (life = crypto.randomUUID()));
+    const version = `${life || "unborn"}:${snapshotVersion}`;
+    if (ifVersion === version) return { version };
+    return {
+      version,
+      rules: Object.values(itxExpressionRewriteRules),
+      routing: { fetchRoutes, ingressTarget },
+    };
   }
 
   /** The bookkeeping of an entry point that runs in ONE synchronous turn (`append`, `read`, a lend,
    *  a socket event): an inbound call begun and ended (context/residency.ts), then the incarnation's
-   *  `request` wake record. */
-  #inboundRequestInOneTurn(): void {
+   *  `call` wake record, of the census's kind, caused by `cause` when the call names one. */
+  #inboundRequestInOneTurn(cause?: Cause): void {
     if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
-    this.#stream.appendWakeRecord("request");
+    this.#stream.appendWakeRecord({ cause: "call", caller: "other" }, cause);
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
    *  callers: `append`, and the pager attach (rpc-stubs.ts), which needs the refusal in the same
    *  turn it accepted the socket. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
-    const subscriptionsBeforeCommit = this.#stream.coreReducedState.subscriptions;
+    const stateBeforeCommit = this.#stream.coreReducedState;
+    const { subscriptions: subscriptionsBeforeCommit } = stateBeforeCommit;
     const headBeforeCommit = this.#stream.highestAssignedOffset();
     // THE APPEND BOUNDARY: every event is validated + normalized here (core-processor's
     // `normalizeControlEvent`), so a control command's itx-expression fields are checked and stored
@@ -622,7 +775,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#stream.coreReducedState.itxExpressionRewriteRules,
       this.#caller,
     );
+    refuseNonPlatformWrites(normalized, this.#caller);
     const committedEvents = this.#stream.append(...normalized);
+    this.#takeRevocationFence(stateBeforeCommit);
     // Effects run on FRESH commits only. An idempotency retry ECHOES the historical event (its offset
     // is <= the pre-append head), and re-running an effect on an echo could revert state a later event
     // already moved on — configure A, replace with B, retry A would restore A's facet startup memo.
@@ -645,19 +800,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
-  /** THE EFFECTIVE table, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`); the hop
-   *  behind a bare link is the sibling's own `list`. Addressing, so read under no principal. */
-  #rewriteRuleList(depth: number): Promise<RewriteRuleListEntry[]> {
+  /** THE EFFECTIVE table at `path`, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`):
+   *  this context's own rows live, and the table behind a bare link, hop by hop, from its snapshot
+   *  (context/rule-snapshots.ts) — a list calls no other context. */
+  async #rewriteRuleListAt(
+    depth: number,
+    path = this.#durableObjectAddress.path,
+  ): Promise<RewriteRuleListEntry[]> {
     return describeRewriteRules({
-      rules: Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
-      implicitRoots: this.#implicitRoots,
-      path: this.#durableObjectAddress.path,
+      rules: await this.#rulesAt(path),
+      implicitRoots: implicitRootsAt(this.#durableObjectAddress.projectId, path),
+      path,
       depth,
-      inherit: (path, depth) =>
-        this.#sibling(path).invoke(["itx", "builtins", "rewriteRules", ["list", depth]], [], {
-          principal: null,
-        }) as Promise<RewriteRuleListEntry[]>, // `invoke` is untyped over Workers RPC; the sibling is this same class answering this same method, so its rows are this method's return shape
+      inherit: (there, hopsLeft) => this.#rewriteRuleListAt(hopsLeft, there),
     });
+  }
+
+  /** The rule table of this project's context at `path`: this context's own live, any other's its
+   *  snapshot. */
+  async #rulesAt(path: string): Promise<readonly ItxExpressionRewriteRule[]> {
+    if (path === this.#durableObjectAddress.path)
+      return Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules);
+    return (await this.#reach.snapshotOf(path)).rules;
   }
 
   /** THE LIBRARY's itx (library.ts): a genuine InvokeHandle over `invoke`, so a library call's
@@ -748,17 +912,24 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #executeRun(requestOffset: number, code: string): Promise<void> {
-    // The platform's own record (core-processor.ts `PLATFORM_ONLY_EVENT_TYPES`), straight onto the
+    // WHY IT RUNS: the request's cause; the script one deeper, its settlement a receipt (cause.ts).
+    const cause = this.#stream.coreReducedState.scriptRuns[requestOffset]?.cause;
+    // The platform's own record (core-processor.ts `STREAM_RECORD_TYPES`), straight onto the
     // stream as the wake record's `interrupted` settlements are: no writer can append one.
     const settle = (settlement: RunSettlement) =>
       this.#stream.append({
         type: "events.iterate.com/itx/run-settled",
         idempotencyKey: `itx/run-settled:${requestOffset}`,
         payload: { requestOffset, settlement },
+        source: cause && { cause },
       });
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
-      const settlement = await runSettlementOf(this.#scriptExecution(code));
+      const settlement = await runSettlementOf(
+        this.#callerStorage.run(this.#withPlatformOrigin({ principal: null, cause }), () =>
+          this.#scriptExecution(code),
+        ),
+      );
       try {
         settle(settlement);
       } catch (error) {
@@ -805,7 +976,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     } catch (error) {
       if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
     }
-    if (!redirect) return executeScript(this.#libraryItx, code);
+    // code run because of its request: one hand-off deeper (cause.ts)
+    if (!redirect) {
+      const cause = causeOfDelivery([{ source: { cause: this.#caller.cause } }]);
+      return this.#callerStorage.run({ ...this.#caller, cause }, () =>
+        executeScript(this.#libraryItx, code),
+      );
+    }
     // The row's context answers with the request (library.ts `ScriptRunRequested`); its settlement
     // is read from here, in slices of fresh calls, so an instance of that context Cloudflare
     // replaces mid-run costs a slice and settles the run `interrupted`, never a call held on it.
@@ -826,8 +1003,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  appends stay attributed. */
   readonly #localContext: ReachableContext = {
     fetch: (request) => this.#serveFetch(request),
-    append: async (...events) => this.#appendAndRunCommittedEffects(events),
+    append: (...events) => this.#appendWaitingOutOlderSnapshots(events),
     read: async (afterOffset, limit, options) => this.#stream.read(afterOffset, limit, options),
+    reserveSend: async (key) => this.reserveSend(key),
+    releaseSend: async (key) => this.releaseSend(key),
     invoke: (call, args = [], caller = this.#caller) =>
       this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
         this.#itxExpressionResolver.invoke(call, ...args),
@@ -855,10 +1034,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** `itx.builtins` — the physical scope this context resolves against (context/built-ins.ts). */
   readonly #builtIns = buildBuiltIns({
-    projectInfo: async () => {
-      const slug = await this.#projectSlug();
-      return slug ? { projectSlug: slug } : {};
-    },
+    ...projectConfigDeps(this.#appConfig, () => this.#projectSlug()),
     primaryHostname: async () =>
       (await this.#controlPlane.getProject(this.#durableObjectAddress.projectId))
         ?.primaryHostname ?? null,
@@ -869,41 +1045,23 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
     deployId: this.#appConfig.deployId,
-    ingressRouting: this.#appConfig.urls.ingressRouting,
-    projectWildcard: this.#appConfig.urls.projectWildcard,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
     iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
     platformOrigin: () => this.#platformOrigin,
-    signFileUrl: async (input) => {
-      const platformOrigin = this.#platformOrigin;
-      if (!platformOrigin)
-        throw new Error(
-          "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
-        );
-      // the URL carries the project's slug (the edge admits a project by it); the claim carries
-      // the id — a global context (a user's, an organization's) has no URL
-      const slug =
-        input.project === this.#durableObjectAddress.projectId && (await this.#projectSlug());
-      if (!slug)
-        throw new Error("files: only a project's context can sign a file URL — it has the host");
-      return signedFileUrl({
-        ...input,
-        host: slug,
-        secret: await sessionSigningSecretOf(this.#appConfig),
-        routing: this.#appConfig.urls.ingressRouting,
-        platformOrigin,
-      });
-    },
     // A producer is loaded code's word: walled on its input and on every row it appends.
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
+    invoke: (call) =>
+      this.#invokeInProcess(call, [], { principal: null, app: true, cause: this.#caller.cause }),
+    namedWorker: (source) => this.#namedWorker(source),
     // a sibling context by path; the own path is this DO itself — a ReachableContext structurally (stream.ts)
-    context: (p) => (p === this.#durableObjectAddress.path ? this.#localContext : this.#sibling(p)),
+    context: (p) =>
+      p === this.#durableObjectAddress.path ? this.#localContext : this.#reach.contextOf(p),
     egress: (request) => this.#egress(request),
     // The caller a hop hands a sibling (`cd`, a fan-out): the store's, or nobody — either way with
     // this context's origin filled in, so the sibling composes URLs at the origin the people use even
     // when the store did not survive to the step (a pipelined chain resolved outside the run scope).
     caller: () => this.#withPlatformOrigin(this.#caller),
+    invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
     // `.hello()` over every transport (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
     // for the delivery loop.
@@ -924,7 +1082,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // processor makes on this context's alarm.
     claimFacetAlarm: (name, at) => {
       this.#residency.outsideActivityEnded(); // a claim restarts the sweep's quiet clock
-      this.#facetHost.claim(name, at);
+      this.#facetHost.claim(name, at, this.#caller.cause);
       // A RELEASE is the last thing the facet's work did: its instance is unclaimed from here, and
       // the sweep may have run (and disarmed) while the claim held it — so a loaded facet's release
       // arms it. The sweep never resets a first-party facet, so that release arms nothing.
@@ -947,7 +1105,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
     fetchRoutes: () => this.#stream.coreReducedState.fetchRoutes,
     rewriteRules: {
-      list: (depth = 3) => this.#rewriteRuleList(depth),
+      list: (depth = 3) => this.#rewriteRuleListAt(depth),
       // Canonicalized the same way `provide` canonicalized the match; an unparseable one is no row.
       get: async (match) => {
         let key: string;
@@ -958,7 +1116,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         // THIS context's table — its own rows and the implicit rows here — never a hop: `get` asks
         // what this context says about a name, `list()` what it can spell.
-        return (await this.#rewriteRuleList(0)).find((row) => row.match === key) ?? null;
+        return (await this.#rewriteRuleListAt(0)).find((row) => row.match === key) ?? null;
       },
       // PURE: the chain of rewrites, printed — nothing dispatched, nothing noted as activity.
       resolve: (call) => this.#itxExpressionResolver.resolve(call).map((step) => print(step)),
@@ -981,9 +1139,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  class field initializes in order. Every built-in closes over this context's identity, so
    *  cross-project access is unspellable. */
   readonly #itxExpressionResolver = new ItxExpressionResolver({
+    // a refusal met here: the chain's one fact on this log (cause.ts)
+    reach: {
+      ...this.#reach,
+      recordLoopLimit: (_path, cause, message) => this.#stream.recordLoopLimit(cause, message),
+    },
     rewriteRules: () => Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
     builtIns: this.#builtIns,
-    implicitRoots: this.#implicitRoots,
     path: this.#durableObjectAddress.path,
     caller: () => this.#caller,
   });
@@ -1009,14 +1171,29 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   readonly #subscriptionDelivery = new SubscriptionDelivery({
     stream: this.#stream,
-    // The RESOLVER's `invoke`, not this class's: the loop's evaluation is the kernel's own call.
-    evaluateItxExpression: (itxExpression) => this.#itxExpressionResolver.invoke(itxExpression),
+    // The RESOLVER's `evaluate`, not this class's `invoke`: the loop's evaluation is the kernel's own
+    // call — never with delivery authority, whatever the store holds (`runAsDelivery` below).
+    evaluateItxExpression: (itxExpression) =>
+      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () =>
+        this.#itxExpressionResolver.evaluate(itxExpression),
+      ),
     // A facet row's push and catch-up: the facet host's platform entries, past the facet's list.
     pushEventBatchToFacet: (facetHandle, events, range) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [["processEventBatch", events, range]]),
-    catchUpFacetFromLog: (facetHandle) =>
-      this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]]),
+    catchUpFacetFromLog: (facetHandle, cause) =>
+      this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]], cause),
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
+    // A delivery runs one hand-off deeper than what it delivers (cause.ts), and a fan-out call as
+    // the delivery loop's own caller for its one event (caller.ts `Caller.delivery`).
+    runAsDelivery: async (events, call, delivery) => {
+      const caller: Caller = { principal: null, cause: causeOfDelivery(events) };
+      if (delivery) {
+        caller.cause = { ...caller.cause!, writeKey: delivery };
+        caller.delivery = await sha256Hex(JSON.stringify(events[0]));
+      }
+      return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
+    },
+    abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
@@ -1082,12 +1259,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
     // A producer is loaded code's word: walled on its input and on every row it appends.
-    invoke: (call) => this.#invokeInProcess(call, [], { principal: null, app: true }),
+    invoke: (call) =>
+      this.#invokeInProcess(call, [], { principal: null, app: true, cause: this.#caller.cause }),
+    namedWorker: (source) => this.#namedWorker(source),
     resolveItxExpression: (expression) => this.#itxExpressionResolver.resolve(expression),
     stream: this.#stream,
     reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
     loadedFacetMaterialized: () => this.#residency.armUnclaimedFacetSweep(),
     deliveriesQueuedFor: (name) => this.#subscriptionDelivery.deliveriesQueuedFor(name),
+    cause: () => this.#caller.cause,
   });
 
   // ── RESIDENCY (context/residency.ts): the pins' release, the sweep, the birth reset ──
@@ -1171,6 +1351,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         configuredAtOffset: s.configuredAtOffset,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
+        ...(s.ordered === false && { ordered: false as const }),
+        ...this.#subscriptionDelivery.fanOutView(name),
         // an absent facet stays ABSENT on the wire, like the fields around it
         ...(s.hostedFacet && {
           hostedFacet: { ...s.hostedFacet, restarts: this.#facetHost.restarts(s.hostedFacet.name) },
@@ -1210,10 +1392,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const wakeRecordSettlesARun =
       !this.#stream.wakeRecorded() &&
       Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
+    const [schedule, delivery, facetClaim] = this.#durableAlarmDeadlines().map(
+      (at) => at !== null && at <= wokeAt,
+    );
     if (
       this.#runsOwedToTheAlarm.size === 0 &&
       !wakeRecordSettlesARun &&
-      !this.#durableAlarmDeadlines().some((at) => at !== null && at <= wokeAt)
+      !(schedule || delivery || facetClaim)
     ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
@@ -1222,9 +1407,31 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       await this.#alarmCoordinator.pass(async () => {
         await this.#residency.alarmPassStarted(wokeAt);
         // An incarnation the alarm woke records its wake HERE, inside the hold — the one entry point
-        // that knows the reason. Its delivery (every "*" row's) runs and acks within this pass, so an
-        // alarm wake that finds nothing else owed ends with no alarm and no alarm write at all.
-        this.#stream.appendWakeRecord("alarm");
+        // that knows the reason, and what it came back for. Its delivery (every "*" row's) runs and
+        // acks within this pass, so an alarm wake that finds nothing else owed ends with no alarm and
+        // no alarm write at all. Its cause is the deepest of what is due as it fires (cause.ts).
+        const { schedules, scriptRuns } = this.#stream.coreReducedState;
+        this.#stream.appendWakeRecord(
+          {
+            cause: "alarm",
+            due: [
+              ...(schedule ? ["schedule" as const] : []),
+              ...(delivery ? ["retry" as const] : []),
+              ...(facetClaim ? ["claim" as const] : []),
+              ...(this.#runsOwedToTheAlarm.size > 0 || wakeRecordSettlesARun
+                ? ["run" as const]
+                : []),
+            ],
+          },
+          deepestCause([
+            ...Object.values(schedules)
+              .filter((row) => !row.failure && Date.parse(row.nextAt) <= wokeAt)
+              .map((row) => row.source?.cause),
+            this.#subscriptionDelivery.owedCause(wokeAt),
+            this.#facetHost.owedCause(wokeAt),
+            ...Object.values(scriptRuns).map((run) => run.cause),
+          ]),
+        );
         const runs = this.#startRunsOwedToTheAlarm();
         // Append each occurrence locally before awaiting subscriber RPC. A completion in the SAME
         // transaction removes the obligation, so eviction or duplicate alarm delivery cannot repeat it.
@@ -1250,11 +1457,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             scheduledAtOffset: row.scheduledAtOffset,
             at: row.nextAt,
           };
+          // A firing is caused by what set its schedule, at that depth, every time (cause.ts).
+          const cause = row.source?.cause;
           try {
             this.#appendAndRunCommittedEffects([
               ...row.events.map((event) => ({
                 ...event,
                 source: {
+                  cause,
                   // Where the definition came from: a schedule set here from another context
                   // fires as that context's words, never as this one's.
                   ...(row.source?.origin && { origin: row.source.origin }),
@@ -1269,7 +1479,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
                   },
                 },
               })),
-              { type: "events.iterate.com/itx/schedule-fired", payload },
+              { type: "events.iterate.com/itx/schedule-fired", payload, source: { cause } },
             ]);
             console.log({
               event: "scheduled-append.completed",
@@ -1293,6 +1503,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
               {
                 type: "events.iterate.com/itx/schedule-failed",
                 payload: { ...payload, error: String(error).slice(0, 2000) },
+                source: { cause },
               },
             ]);
             reportIssue("scheduled-append.failed", error, payload);
@@ -1349,8 +1560,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: Caller = { principal: null },
   ): Promise<unknown> {
     if (this.#unborn) throw await this.#unbornStill(this.#unborn);
-    this.#residency.inboundCallStarted();
-    this.#stream.appendWakeRecord("request");
+    const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
+    // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
+    if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
+    this.#stream.appendWakeRecord({ cause: "call", caller: kind }, caller.cause);
+    this.#residency.inboundCallStarted(kind);
     const result = await this.#invokeInProcess(call, args, caller).finally(() =>
       this.#residency.inboundCallEnded(caller.app === true),
     );
@@ -1362,8 +1576,64 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return itxAnswerDetachedFromSession(result, normalizedItxExpression(call), args);
   }
 
+  /** A DELIVERY'S SEND, AT MOST ONCE (integrations/email.ts): the event this log already recorded
+   *  under `key` — what the send came to — or whether this attempt reserved it now; neither when an
+   *  earlier attempt reserved it and recorded nothing. A DO-only verb. */
+  reserveSend(key: string): { recorded?: StreamEvent; reserved: boolean } {
+    const row = this.#stream.storage.readEventByIdempotencyKey(key);
+    if (row)
+      return {
+        recorded: {
+          ...(JSON.parse(row.body) as object),
+          offset: row.offset,
+          path: this.#durableObjectAddress.path,
+        } as StreamEvent,
+        reserved: false,
+      };
+    if (this.ctx.storage.kv.get(`send:${key}`)) return { reserved: false };
+    this.ctx.storage.kv.put(`send:${key}`, true);
+    return { reserved: true };
+  }
+  /** A reservation's release: its send was refused, so nothing went out (`reserveSend`). */
+  releaseSend(key: string): void {
+    this.ctx.storage.kv.delete(`send:${key}`);
+  }
+
+  /** THE ONE REFUSAL HANDLER's reach from where this context's loaded code runs statelessly
+   *  (iterate-context.ts `ItxEntrypoint`, cause.ts `recordRefusal`): the chain's one fact here. A
+   *  DO-only Workers-RPC verb; a context never born records nothing. */
+  recordLoopLimit(cause: unknown, message: string): void {
+    const refused = parseCause(cause);
+    if (!refused || this.#stream.highestDurableOffset() === 0) return;
+    this.#inboundRequestInOneTurn();
+    this.#stream.recordLoopLimit(refused, String(message));
+  }
+
   /** The same call for THIS isolate's own callers — the library's itx, a facet's or a loaded worker's
    *  deps — who hold a handle in process, where it pins nothing and its liveness is the point. */
+  /** THE WORKER A NAME PUBLISHES, from this context: what a facet's source or a `workers.get`
+   *  source with no cacheKey loads. A name is resolved as the platform: it only reads the project's
+   *  rules. Its producer runs as the loaded code of the context whose rule named it, as
+   *  `workers.get` reached through another context's rule loads (built-ins.ts `workersRoot`) —
+   *  resolved here, so a portable root it reads is walked in this isolate and the cold load relays
+   *  nothing through that context. The contexts its route crosses count toward the call's hops
+   *  (cause.ts). */
+  async #namedWorker(source: ItxExpressionInput): Promise<NamedWorker> {
+    const { at, spec, vouched } = await this.#callerStorage.run(
+      this.#withPlatformOrigin({ principal: null, cause: this.#caller.cause }),
+      () => this.#itxExpressionResolver.namedWorker(source),
+    );
+    const { cause } = this.#caller;
+    return {
+      spec,
+      vouched,
+      invoke: (call) =>
+        at === this.#durableObjectAddress.path
+          ? this.#invokeInProcess(call, [], { principal: null, app: true, cause })
+          : this.#reach.loadedCodeAt(at, cause)(call),
+    };
+  }
+
   #invokeInProcess(call: ItxExpressionInput, args: unknown[], caller: Caller): Promise<unknown> {
     return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
       this.#itxExpressionResolver.invoke(call, ...args),
@@ -1374,12 +1644,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  commit's fan-out, a loaded worker). */
   get #caller(): Caller {
     return this.#callerStorage.getStore() ?? { principal: null };
-  }
-  /** A sibling context of this project, by path. */
-  #sibling(path: string) {
-    return this.env.ITERATE_CONTEXT.getByName(
-      DurableObjectNameCodec.stringify({ projectId: this.#durableObjectAddress.projectId, path }),
-    );
   }
   /** THE CALLER THIS CALL RUNS UNDER: what arrived, its origin kept when it names one, else the
    *  persisted origin filled in — so the caller in ALS ALWAYS carries the effective origin and a hop to
@@ -1405,14 +1669,21 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const { message } = await this.#unbornStill(this.#unborn);
       return new Response(`421: ${message}\n`, { status: 421 });
     }
-    this.#residency.inboundCallStarted();
+    const fromLoadedCode = request.headers.get(ITX_APP_HEADER) !== null;
+    const kind = fromLoadedCode ? "loaded" : "other";
+    this.#stream.appendWakeRecord(
+      { cause: "call", caller: kind },
+      parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
+    );
+    this.#residency.inboundCallStarted(kind);
     return this.#serveFetch(request).finally(() =>
-      this.#residency.inboundCallEnded(request.headers.get(ITX_APP_HEADER) !== null),
+      this.#residency.inboundCallEnded(fromLoadedCode),
     );
   }
 
+  /** Every fetch this context serves — an inbound one (`fetch`, which recorded the wake) or its own
+   *  loopback (`#localContext`, inside an incarnation already woken). */
   async #serveFetch(request: Request): Promise<Response> {
-    this.#stream.appendWakeRecord("request");
     // A BORROWED SECRET'S USE (secret/durable-object.ts `fetch`): the lend, signed by the
     // borrower's facet; anything else carrying the header is refused, never served as egress.
     const lendUse = request.headers.get(LEND_USE_HEADER);
@@ -1430,7 +1701,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     // The handlers, in order — each answers or declines: the rpc-stub pager and the rpc-stub fetch
     // upgrade leg; AN ITX-EXPRESSION FETCH (`x-itx-expression` names an itx expression — JSON from a session's
-    // terminal `fetch(request)`, "" from a project host (the project's ingress target) or dotted text
+    // terminal `fetch(request)` or a located hop, "" for the project's ingress target, or dotted text
     // or JSON from a loaded worker's own `env.ITX.fetch` — resolved as a terminal-fetch call with the live Request
     // as its one runtime arg (`itxExpressionEndingInFetch`); the routing header is stripped so it never reaches the capability or
     // egress); everything else is EGRESS.
@@ -1439,8 +1710,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // expression runs as app code.
     const app = request.headers.get(ITX_APP_HEADER) !== null;
     if (!app) {
+      // A lend's row rides its pager: the attach is answered like a rule write (a re-dial's rule is
+      // a repeat, and a lent callback's row waits a pending fence out with it — at most once).
+      const before = this.#stream.coreReducedState;
       const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
-      if (pager) return pager;
+      if (pager) {
+        await this.#waitOutOlderSnapshots(before, true);
+        return pager;
+      }
       const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
       if (upgradeLeg) return upgradeLeg;
     }
@@ -1448,31 +1725,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects an itx-expression fetch, absent (null) routes to egress — that distinction must not collapse
     if (itxExpressionHeader !== null) {
       try {
-        // The header is UNTRUSTED. Its JSON form comes from a session's terminal fetch
-        // (`encodeFetchExpression`) or from loaded code's self-addressed `env.ITX.fetch`, which
-        // `ItxEntrypoint.fetch` forwards unchanged; the edge (worker.ts) only sets "".
-        // The resolver's `normalizedItxExpression` shape-checks it, and for loaded code the app wall
-        // (`admitLoadedCodeExpression`) admits it, before anything runs.
-        if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
-          return new Response(
-            "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
-            { status: 404 },
-          );
-        const itxExpression =
-          itxExpressionHeader === ""
-            ? this.#stream.coreReducedState.ingressTarget!
-            : itxExpressionHeader.trimStart().startsWith("[")
-              ? (JSON.parse(itxExpressionHeader) as ItxExpression) // untrusted: see above
-              : parse(itxExpressionHeader);
+        // The header is UNTRUSTED (rpc-stubs.ts `parseFetchExpression`); the edge serves a
+        // project's hosts itself (worker.ts `serveProjectHost`).
+        const itxExpression = parseFetchExpression(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);
-        // THE ROUTING SLUG (`x-iterate-routing-slug`) is the EDGE's alone: it rides only a
-        // project-host Request — the empty expression from outside loaded code, which only the edge
-        // sends (worker.ts sets or deletes the header there) — and is deleted from every other
-        // expression fetch (a session's terminal fetch, a loaded worker's `env.ITX.fetch`, even one
-        // spelling ""), so loaded code can never forge one.
-        if (itxExpressionHeader !== "" || app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
+        // THE ROUTING SLUG (`x-iterate-routing-slug`) is the EDGE's alone: it rides only the Request
+        // the edge hands the project's config worker (worker.ts `serveProjectHost`), which never
+        // comes here, so it is deleted from every expression fetch — loaded code can never forge
+        // one.
+        headers.delete(ITERATE_ROUTING_SLUG_HEADER);
         // The edge's stamp (ingress after the cookie check, a session's terminal fetch): the call runs
         // under that principal, and the header stays on the Request the app receives. Trusted here —
         // the edge sets it and ItxEntrypoint strips a loaded worker's, so it is the edge's JSON or absent.
@@ -1489,6 +1752,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
+        // WHY: the cause the forwarding hop carried, or a request's own new chain (cause.ts).
+        const cause = parseCause(headers.get(ITERATE_CAUSE_HEADER)) ?? newChain("a request");
+        headers.delete(ITERATE_CAUSE_HEADER);
         const forwarded = new Request(request, {
           headers,
           body: this.#expressionFetchBody(request),
@@ -1498,6 +1764,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           grant,
           path: callerPath,
           platformOrigin,
+          cause,
           ...(app && { app: true as const }),
         });
         const result = await this.#callerStorage.run(caller, () =>
@@ -1507,53 +1774,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ? result
           : new Response(`expression fetch: ${JSON.stringify(result)}\n`);
       } catch (error) {
-        // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
-        // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
-        // a lent stub offline or a platform failure the edge's one answer (`unavailableAnswer`: a 502,
-        // a 503 with its Retry-After), anything else a 500 — the message alone every way, the stack
-        // REPORTED, never served.
-        const code = errorCode(error);
-        const unavailable = unavailableAnswer(error);
-        const status =
-          code === "NO_ITX_EXPRESSION_MATCH"
-            ? 404
-            : code === "FACET_NO_UPGRADE"
-              ? 400
-              : (unavailable?.status ?? 500);
-        if (status === 500)
-          reportIssue("iterate-context.expression-fetch", error, {
-            itxExpression: itxExpressionHeader,
-          });
-        // A lent stub offline (a tunnel killed or asleep, before its rule is un-set) is the
-        // upstream's absence: a 502, logged at info and never reported, its header naming the
-        // expression to a client. A deploy that reset a context the fetch dialed, where the hop could
-        // not send it again (a request with a body, an upgrade; built-ins.ts `cd`), is a 503 the
-        // visitor retries in a second, logged at info and never reported. The prd fault alarm
-        // (scripts/ci/prd-fault-alarm.ts) drops the 502 and 503 summaries in these lines' rays. Any
-        // other platform failure is a 503 the alarm counts: a lost connection, an overload.
-        const kind = failureKind(error);
-        if (status === 502 || kind === "deploy-reset")
-          console.info({
-            event:
-              status === 502
-                ? "expression-fetch.rpc-stub-offline"
-                : "expression-fetch.deploy-reset",
-            itxExpression: itxExpressionHeader,
-          });
-        else if (isPlatformFailureKind(kind))
-          logPlatformFailure("expression-fetch", "answered", kind, {
-            name: "expression-fetch",
-            itxExpression: itxExpressionHeader,
-            message: String(error),
-          });
-        const message = error instanceof Error ? error.message : String(error);
-        return new Response(`expression fetch error: ${message}\n`, {
-          status,
-          headers: {
-            ...unavailable?.headers,
-            ...(status === 502 && { "x-iterate-rpc-stub-offline": itxExpressionHeader }),
-          },
-        });
+        return expressionFetchErrorAnswer(error, itxExpressionHeader);
       }
     }
     // Bare egress is the PLATFORM's (a first-party facet's raw `fetch(url)`); loaded code's fetch
@@ -1594,49 +1815,33 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#rpcStubs.rpcStubTransportState();
   }
 
-  /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers —
-   *  is FORWARDED to the context at that path under the RESOURCE OWNER's root (iterate-context.ts
-   *  `resourceScope`: a project's `/secrets/NAME`, a user's `/users/<id>/secrets/NAME` — so a user's
-   *  placeholder reaches the user's own secret, never a shared one), and there to its `secret` facet
-   *  (secret/durable-object.ts), which substitutes, pins, dispatches, and refreshes on a 401; one
-   *  request, one secret (a second name is a 502 — no cross-secret chaining). A request naming none
-   *  goes straight to the terminal fetch. Either way the platform's own headers never leave: the
-   *  principal stamp (actor + email) and the expression would ride whatever an app forwards
-   *  outbound. The hop counter stays — the edge's re-entry guard reads it when an app fetches its
-   *  own host. WS-safe: only the headers are rewritten, and every hop is a fetch channel — the
-   *  other context's `fetch`, then `ctx.facets.get(name).fetch` — so a 101 flows straight back
-   *  either way (measured: __workers-tests__/facets.test.ts). */
+  /** THE CENSUS: this incarnation's inbound calls by kind (context/residency.ts), and which
+   *  incarnation counted them — a DO-only Workers-RPC verb, off the itx surface. A reader compares
+   *  two reads of the same incarnation: a fresh one counts from zero. */
+  inboundCallCensus(): { incarnation: number; calls: ReturnType<Residency["inboundCalls"]> } {
+    return { incarnation: this.#stream.storage.incarnation, calls: this.#residency.inboundCalls() };
+  }
+
+  /** EGRESS (context/egress.ts), from this context: a secret that is this context's own is its
+   *  `secret` facet's to dial — hosted on demand, row or no row: a secret never set refuses inside
+   *  the facet ("no stored project secret"), a 502 — and another context's is that context's
+   *  `fetch`, which lands in ITS egress, here. */
   #egress(request: Request): Promise<Response> {
-    const headers = new Headers(request.headers);
-    stampCallerHeaders(headers, null);
-    headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-    headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
-    // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
-    for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);
-    // A browser cannot set User-Agent on a Request it builds (Chromium drops it), and GitHub's API
-    // refuses a request without one: a caller that names none is sent as `iterate`.
-    if (!headers.has("user-agent")) headers.set("user-agent", "iterate");
-    const outbound = new Request(request, { headers });
-    const paths = secretPathsReferenced(outbound);
-    if (paths.length === 0) return fetch(outbound);
-    if (paths.length > 1)
-      return Promise.resolve(
-        new Response(
-          `itx.fetch: one request, one secret — this one names ${paths.map((path) => JSON.stringify(path)).join(", ")}\n`,
-          { status: 502 },
-        ),
-      );
     const { projectId, path } = this.#durableObjectAddress;
-    const secretPath = resolveContextPath(resourceScope(projectId, path).rootPath, `.${paths[0]}`);
-    // This context IS the secret's: its facet dials. Hosted on demand, row or no row — a secret
-    // never set refuses inside the facet ("no stored project secret"), the same 502 as before.
-    if (secretPath === path)
-      // A facet call answers `unknown`; the secret facet's `fetch` answers its Response.
-      return this.#facetHost.callFacetAsPlatform("secret", [
-        ["fetch", outbound],
-      ]) as Promise<Response>;
-    // Another context's: its own `fetch` lands in ITS `#egress`, the branch above.
-    return this.#sibling(secretPath).fetch(outbound);
+    // why it is sent: the caller's, or the mark a context forwarding it here stamped (a secret's)
+    const cause = this.#caller.cause ?? parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
+    return egress(request, {
+      projectId,
+      path,
+      cause,
+      secretFetch: (secretPath, outbound) =>
+        secretPath === path
+          ? // A facet call answers `unknown`; the secret facet's `fetch` answers its Response.
+            (this.#facetHost.callFacetAsPlatform("secret", [
+              ["fetch", outbound],
+            ]) as Promise<Response>)
+          : this.#reach.contextOf(secretPath).fetch(outbound),
+    });
   }
 
   /** A BORROWED SECRET'S USE, from the borrower's `secret` facet (secret/durable-object.ts `fetch`)

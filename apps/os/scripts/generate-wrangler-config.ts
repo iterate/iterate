@@ -4,6 +4,7 @@ import {
   osEnvs,
   PREVIEW_AND_DEV_ACCOUNT_ID,
   getOsEnv,
+  PROJECT_CONTEXT_BIRTH_EVENTS,
   osResourceNames,
   type OsEnv,
 } from "../../../envs.ts";
@@ -32,6 +33,7 @@ function configVars(env: OsEnv) {
   if (env.adminIssuer) vars.APP_CONFIG_LOGIN__ADMIN_ISSUER = env.adminIssuer;
   if (env.testEmailDomain) vars.APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN = env.testEmailDomain;
   if (env.posthogProjectKey) vars.APP_CONFIG_POSTHOG_PROJECT_KEY = env.posthogProjectKey;
+  vars.APP_CONFIG_CONTEXT_BIRTH_EVENTS = JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS);
   // THE PET SHOP'S FAKES as iterate's Slack app and Google and Cloudflare clients, and sign-in with
   // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
   // (a fake admits addresses under `testEmailDomain` alone). The GitHub App carries a key, so
@@ -176,6 +178,7 @@ export function viteWranglerConfig(
           type: "subdomains",
           hostname: "localhost",
         }),
+        APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
         ...(options.localDev && {
           APP_CONFIG: JSON.stringify({
             login: {
@@ -232,6 +235,7 @@ function selfHostWranglerConfig() {
     ],
     vars: {
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
       ...(osEnvs.prd!.dashBaseUrl && { APP_CONFIG_URLS__DASH: osEnvs.prd!.dashBaseUrl }),
     },
   };

@@ -595,8 +595,8 @@ hosted clients the root `package.json` and `pnpm-workspace.yaml`. `scripts/ci/de
 pins the exceptions:
 
 - No client deploy runs for `apps/os`: no client imports it.
-- Deploy Kit and Deploy Voice run for `packages/agents` and `packages/voice`: their pages run the
-  installer (`@iterate-com/voice/install`).
+- Deploy Kit and Deploy Voice run for `packages/voice`: their pages run its voice check
+  (`@iterate-com/voice/install`).
 - Deploy OS skips what never reaches the Worker: the markdown at the app root, `apps/os/docs`,
   `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`, `apps/os/bench`, and the preview and
   soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`

@@ -190,11 +190,11 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // caller's read of ITS settlement in slices of fresh calls (`settlementOfScriptRun`), the execution
 // being the context's runner's
 // (`executeScript`, over `itx.workers.get`): the module the loader would get (the script spliced
-// verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script bakes its own
+// verbatim, the smallest WorkerEntrypoint around it), run with its cause alone (a script bakes its own
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone, with a callWithCause of its own", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
   expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
   expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
@@ -202,6 +202,9 @@ test("run: the source: package.json naming worker.js its main, the script splice
     "const script =\nasync (itx) => (await itx.whoami()).path\n;",
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
+  expect(module["worker.js"]).toContain(
+    "callWithCause(cause) {\n    return carrier.run(cause, () => this.run());\n  }",
+  );
   expect(module["worker.js"]).toContain("async run() {");
   expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
   expect(module["worker.js"]).toContain("script(itx),");
@@ -296,9 +299,16 @@ test("run: the module's run() releases a handle the script awaited, and the call
   expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
-test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with no arguments", async () => {
+test("run: the module's callWithCause runs the script under the cause it is handed: its one withItx round trip names it", async () => {
+  const { callWithCause, causes } = await loadedRun("async () => 1");
+  const cause = { chain: "a request's chain", depth: 3 };
+  expect(await callWithCause(cause)).toBe(1);
+  expect(causes).toEqual([cause]);
+});
+
+test("run: executeScript (the runner's call) loads that module through itx.workers.get and calls run() with nothing: the cause is the call's", async () => {
   const { itx, loaded, runs } = host();
-  await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: 0 });
+  await expect(executeScript(itx, "async (itx) => 1")).resolves.toEqual({ calledWith: [] });
   expect(loaded).toEqual([{ source: runScriptModule("async (itx) => 1") }]);
   expect(runs()).toBe(1);
 });
@@ -1222,7 +1232,7 @@ function host(): {
       return {
         run: async (...args: unknown[]) => {
           ran += 1;
-          return { calledWith: args.length }; // run() is called with NO arguments
+          return { calledWith: args };
         },
       };
     },
@@ -1277,7 +1287,12 @@ function contextLog(settlements: (StreamEvent | "timeout")[]) {
 async function loadedRun(
   script: string,
   itx: object = {},
-): Promise<{ run: () => Promise<unknown>; disposals: () => number }> {
+): Promise<{
+  run: () => Promise<unknown>;
+  callWithCause: (cause: unknown) => Promise<unknown>;
+  causes: unknown[];
+  disposals: () => number;
+}> {
   let disposals = 0;
   const module = runScriptModule(script);
   (globalThis as { withItxForLoadedRun?: unknown }).withItxForLoadedRun =
@@ -1301,8 +1316,18 @@ async function loadedRun(
       disposeScope?.();
     },
   });
-  const entrypoint = new Entrypoint({}, { ITX: { get: () => scope } });
-  return { run: () => entrypoint.run(), disposals: () => disposals };
+  const causes: unknown[] = [];
+  const get = (cause: unknown) => {
+    causes.push(cause);
+    return scope;
+  };
+  const entrypoint = new Entrypoint({}, { ITX: { get } });
+  return {
+    run: () => entrypoint.run(),
+    callWithCause: (cause) => entrypoint.callWithCause(cause, [["run"]]),
+    causes,
+    disposals: () => disposals,
+  };
 }
 
 /** A value carrying a disposer, as a Workers-RPC result or stub does; `releases()` counts calls. */

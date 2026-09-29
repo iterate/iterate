@@ -52,11 +52,6 @@ test.for([
     ],
     threads: { 1: { subject: "Hi", messageOffsets: [1, 2, 3] } },
   },
-  {
-    row: "a message's own append by a member threads nothing",
-    events: [{ ...received({ messageId: "a@x" }), source: {} }],
-    threads: {},
-  },
 ])("the email threads — $row", ({ events, threads }) =>
   expect(reduceProcessor(new EmailProcessor(), events)).toEqual({
     threads,
@@ -70,7 +65,7 @@ function received(message: MessageInput) {
     payload: {
       ...messageOf(message),
       envelope: { from: "ann@x", to: "acme@iterate.app" },
-      sender: { verified: true, member: false },
+      sender: { verified: true, member: false, direct: true },
       automated: false,
       authentication: { spf: "pass", dkim: "pass", dmarc: "pass" },
     },

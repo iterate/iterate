@@ -10,14 +10,10 @@ facet, not a platform built-in. This folder is the web app and the tests that dr
 - `scripts/` — the voice call and device tools.
 - `e2e/` and `__workers-tests__/` — integration tests using apps/os's generic worker harness.
 
-A project installs the app from a folder of its config repo: `agents/package.json` pins
-`@iterate-com/agents`, `agents/index.ts` re-exports its two classes, and `installAgents` from
-`@iterate-com/agents/install` mounts that folder's files (configs/with-agents does it on
-`project/created` and on every commit that changes `agents/`). Choose **With agents** when creating
-a project, or open this app on a minimal project and click **Install agents**, which commits the
-folder pinned to this app's build. Installation stores the source in project KV, enables the
-catalog processor, and writes the `itx.agents` rewrite. `itx.agents.create(path)` installs an agent
-at that context; `get(path).message(text)` sends a message. The project owns the pin and its data.
+A project's config repo installs the app ([packages/agents/README.md](../../packages/agents/README.md#install);
+configs/default does). This app installs nothing: on a project without `itx.agents` it says so and
+links to the config repo. `itx.agents.create(path)` installs an agent at that context;
+`get(path).message(text)` sends a message. The project owns the pin and its data.
 
 The collection delegates capabilities to each agent and its script context. Restrict scripts by
 narrowing the sandbox's rewrite rules. A fully masked sandbox can still receive prose replies;
@@ -25,15 +21,12 @@ denied capability introspection advertises no tools to the model. To allow scrip
 explicit `run` grant and grant `rewriteRules.list` so the model can inspect its allowed capabilities.
 Mask the sandbox's specific `itx.agents` grant too when denying access to the collection.
 
-The loader resolves the pinned package through esm.sh and locks it. Installation also rebinds
-existing normal agents to the current runtime; their grants and history are retained. Reinstalling
-is safe. A platform deployment upgrades no project: a project upgrades by committing a newer pin to
-its `agents/` folder and installing from that commit. The sidebar's **Agents build** does both: it
-shows the build the project runs and, when main has published a newer one (`buildStanding` from
-`@iterate-com/shared/pkg-pr-new`, asked in this app's Worker), **Upgrade to the newest** commits
-that build's folder and installs it (`upgradeApp` from `@iterate-com/agents/install`). A
-with-agents project's config worker also installs every commit that changes `agents/`
-(configs/with-agents/worker.ts).
+A platform deployment upgrades no project: a project upgrades by committing a newer pin, which
+restarts its agents on their next call with their grants and history kept. The sidebar's **Agents
+build** does it: it shows the build the project runs and, when main has published a newer
+one (`buildStanding` from `@iterate-com/shared/pkg-pr-new`, asked in this app's Worker), **Upgrade
+to the newest** commits that pin and waits for the commit's publication (`upgradeAgents` from
+`@iterate-com/agents/install`).
 
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 

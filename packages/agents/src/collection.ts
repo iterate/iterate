@@ -19,6 +19,7 @@ import type { FacetSpec } from "iterate/api";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
+import { agentsFacetSpec } from "./install.ts";
 
 /** How long `create` and `delete` wait for the agent's certificate in all. */
 const CERTIFICATE_WAIT_MS = 30_000;
@@ -32,35 +33,13 @@ const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   private readonly withItx: WithItx;
   private readonly catalog: () => Promise<AgentCatalogState>;
-  private readonly spec: () => Promise<FacetSpec>;
   private readonly base: string;
 
-  constructor(
-    withItx: WithItx,
-    catalog: () => Promise<AgentCatalogState>,
-    spec: () => Promise<FacetSpec>,
-    base = "/",
-  ) {
+  constructor(withItx: WithItx, catalog: () => Promise<AgentCatalogState>, base = "/") {
     super();
     this.withItx = withItx;
     this.catalog = catalog;
-    this.spec = spec;
     this.base = base;
-  }
-
-  /** Rebind every listed agent's `agent` row to this build when the app is installed or updated. A
-   * context whose row is off keeps it off; grants, sandbox rules and conversation history are
-   * untouched. */
-  async upgrade() {
-    const spec = await this.spec();
-    for (const { path } of await this.list()) {
-      await this.withItx(async (itx) => {
-        const context = itx.cd(path);
-        const rows = await context.processors.list();
-        if (rows.some((row) => row.name === "agent"))
-          await context.processors.enable("agent", spec);
-      });
-    }
   }
 
   get(path: string) {
@@ -99,7 +78,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       const dead = new Error(`agent ${path}: deleted — not re-creatable`);
       if ((await this.catalog()).deleted[path]) throw dead;
       const context = itx.cd(path);
-      const spec = await this.spec();
+      const spec = agentsFacetSpec("AgentDurableObject");
       // The facet is this app's AgentDurableObject and `snapshot()` the engine's
       // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
       const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
@@ -118,7 +97,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         ({ state } = await snapshot(["get", "agent", spec]));
       }
       if (state.deletion) throw dead;
-      // Rebind existing agents after an app upgrade without changing their grants or history.
+      // The agent's row: its birth enables it, and enabling it again appends nothing.
       await context.processors.enable("agent", spec);
       if (state.creation?.status === "created") return { path };
       let requestedAtOffset: number;

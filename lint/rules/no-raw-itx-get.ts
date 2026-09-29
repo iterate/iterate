@@ -10,7 +10,7 @@ import { getPropertyName } from "./ast.ts";
 type AstNode = { type: string; parent?: AstNode; [key: string]: any };
 
 const MESSAGE =
-  "Reach the context through withItx: `withItx(this.env.ITX, (itx) => …)` from iterate/with-itx, or `this.withItx(fn)` on an SDK host (ConfigWorker, StreamProcessorDurableObject); an object that needs reach takes a `WithItx` accessor. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
+  "Reach the context through withItx: `withItx(this.env.ITX, (itx) => …)` from iterate/with-itx, or `this.withItx(fn)` on an SDK host (IterateConfigEntrypoint, StreamProcessorDurableObject); an object that needs reach takes a `WithItx` accessor. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
 
 const LIVE_ANSWER =
   "This withItx callback answers a live value (the scope, a property of it, or an `itx.cd(path)` handle), and withItx releases it before the caller gets it. Answer data (`(await itx.cd(path).whoami()).path`); an object that needs reach takes a `WithItx` accessor and makes its own round trips.";

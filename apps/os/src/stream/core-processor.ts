@@ -7,10 +7,10 @@
 //   which incarnation runs    itx/woken { incarnation } → incarnation
 //   what reset it             itx/aborted, then itx/woken → wokenAfterContextAbortedOffset
 //   may appends land          itx/paused { reason } · itx/resumed → paused (one `if` in Stream.append)
-//   where the project apex goes itx/ingress-configured { target|null } → ingressTarget
-//   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`)
-//   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke)
-//   who is sent each commit   itx/subscription-configured { name, target|null, ifConfiguredAtOffset? }
+//   where the project apex goes itx/ingress-configured { target|null } → ingressTarget · snapshotVersion
+//   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`) · snapshotVersion
+//   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke) · snapshotVersion
+//   who is sent each commit   itx/subscription-configured { name, target|null, ordered?, ifConfiguredAtOffset? }
 //                             | -delivery-halted | -delivery-resumed → subscriptions (the delivery loop)
 //   which scripts are running itx/run-requested { code } · run-settled { requestOffset, settlement } → scriptRuns, by the request's offset (the DO's runner; the wake record settles what a restart interrupted)
 //
@@ -27,7 +27,7 @@
 //
 // ONE VALIDATION BOUNDARY: every append through the DO passes `normalizeControlEvent` (below),
 // which zod-parses each control event's payload and stores the normalized form, so the fold CASTS what
-// it reads and never re-parses. The stream's own records (`PLATFORM_ONLY_EVENT_TYPES`: birth, wake,
+// it reads and never re-parses. The stream's own records (`STREAM_RECORD_TYPES`: birth, wake,
 // the halted fact, the alarm trace) are well-formed by construction: the platform appends them past
 // validation, and `append` refuses them. The route fold parses what it reads all the same
 // (src/fetch-routes.ts): one route that does not compile must never break every request's `match`.
@@ -43,8 +43,9 @@ import {
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
-import type { RewriteRuleConfigured } from "iterate/api";
+import type { FacetSpec, RewriteRuleConfigured } from "iterate/api";
 import { RunEventCatalog, RunRequested } from "iterate/stream/run";
+import type { Cause } from "../cause.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   FetchRouteConfiguredPayload,
@@ -57,6 +58,7 @@ import {
   implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
+  namesAWorker,
   refuseSelfLoopRow,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -77,6 +79,8 @@ type HostingFacetSpec = {
   source?: unknown;
   className: string;
   cacheKey?: string;
+  /** The module of the source its class lives in (iterate/api `FacetSpec`). */
+  mainModule?: string;
 };
 
 /** The hosting spec inside a target RESOLVED to the fixed point
@@ -93,19 +97,33 @@ export function facetSpecFromHostingTarget(
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
     return { name: getStep[1], className: firstPartyClassName };
-  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null) {
+  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null)
     // The spec is caller-authored and only its object-ness is checked here: a malformed one is
     // copied as it is and fails where the facet host loads it (FacetHost `#facetStartupMemoFor`).
-    const spec = getStep[2] as { source: unknown; className: string; cacheKey?: string };
-    return {
-      name: getStep[1],
-      source: spec.source,
-      className: spec.className,
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical facet spec: cacheKey feeds the loader's identity-keyed memo (facetSpecOf); an absent cacheKey must stay absent, not `cacheKey: undefined`
-      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-    };
-  }
+    return { name: getStep[1], ...facetSpecOf(getStep[2] as FacetSpec) };
   return undefined;
+}
+
+/** The same spec with an absent `cacheKey` or `mainModule` left OUT (never `cacheKey: undefined`)
+ *  — the one shape a memo, an event or a compare sees. */
+export const facetSpecOf = ({ source, cacheKey, className, mainModule }: FacetSpec): FacetSpec => ({
+  source,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- the canonical shape deliberately OMITS an absent cacheKey (never `cacheKey: undefined`, per the docstring): it is the one shape the kv-stored memo, the hosting event and the JSON.stringify compares all see, so a present-but-undefined key must never enter it
+  ...(cacheKey !== undefined && { cacheKey }),
+  className,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical shape
+  ...(mainModule !== undefined && { mainModule }),
+});
+
+/** THE MARKER a hosting row keeps (`Subscription["hostedFacet"]`): the spec less its source — a
+ *  100 KB processor must not ride the checkpoint — but for a worker's NAME (a source expression
+ *  with no cacheKey, iterate/api `FacetSpec`), which is short and is what says which code the facet
+ *  runs. One function, so the reduce and `processors.enable`'s compare read a spec alike. */
+export function hostedFacetMarkerOf(
+  spec: HostingFacetSpec,
+): NonNullable<Subscription["hostedFacet"]> {
+  const { source, ...marker } = spec;
+  return namesAWorker(spec) ? { ...marker, source } : marker;
 }
 
 /** Resolve a target through THIS state's rules to the fixed point — or undefined when it cannot be
@@ -132,12 +150,11 @@ function elideHostedFacetSource(
   resolvedTarget: ItxExpression | undefined,
 ): {
   target: ItxExpression;
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  hostedFacet?: Subscription["hostedFacet"];
 } {
   const spec = resolvedTarget && facetSpecFromHostingTarget(resolvedTarget);
   if (!spec) return { target };
-  // The marker is the spec minus its source (a 100 KB processor must not ride the checkpoint).
-  const { source: _source, ...hostedFacet } = spec;
+  const hostedFacet = hostedFacetMarkerOf(spec);
   // The spec rides the ORIGINAL target's `get` call step, wherever a rule of the caller's put it.
   const specStepIndex = target.findIndex(
     (step) =>
@@ -173,6 +190,14 @@ export function targetOwnsProgress(state: CoreState, row: Subscription): boolean
   const resolved = resolveThroughState(state, row.target);
   if (!resolved) return false;
   return !!(builtInsGetStep(resolved, "facets") || builtInsGetStep(resolved, "rpcStubs"));
+}
+
+/** Does a row's target resolve, through the rules alone, to an HTTP webhook
+ *  (`itx.builtins.webhooks.get(…)`, context/built-ins.ts)? Its fan-out events climb a longer ladder
+ *  (subscription-delivery.ts). */
+export function targetIsWebhook(state: CoreState, row: Subscription): boolean {
+  const resolved = resolveThroughState(state, row.target);
+  return resolved?.[1] === "builtins" && resolved[2] === "webhooks";
 }
 
 /** The names of the live rows that PUSH this context's facet `facetName` every commit they consume —
@@ -228,10 +253,8 @@ function withHostedFacetMarkersFollowingRules(
     if (!resolved) continue;
     const spec = facetSpecFromHostingTarget(resolved);
     let next: Subscription["hostedFacet"];
-    if (spec) {
-      const { source: _source, ...hostedFacet } = spec;
-      next = hostedFacet;
-    } else if (builtInsGetStep(resolved, "facets")?.[1] === row.hostedFacet?.name) {
+    if (spec) next = hostedFacetMarkerOf(spec);
+    else if (builtInsGetStep(resolved, "facets")?.[1] === row.hostedFacet?.name) {
       next = row.hostedFacet; // an ADDRESS of the facet it is marked with: its own spec was elided
     }
     if (jsonEqual(next || null, row.hostedFacet || null)) continue;
@@ -254,14 +277,27 @@ export type Subscription = {
    *  whole log); absent = `configuredAtOffset`, "from now". A target that owns its progress (a
    *  facet, a lent stub) ignores it. */
   afterOffset?: number;
-  /** Set when this row HOSTS a facet (M1): the facet's name, class and cacheKey, but NOT the source —
-   *  that stays in the durable log event and the `facet:<name>` kv memo, so a 100 KB processor never
-   *  bloats the checkpoint blob rewritten on every core change. An address-only row has none. */
-  hostedFacet?: { name: string; className: string; cacheKey?: string };
+  /** `false`: FAN-OUT delivery (subscription-delivery.ts) — one event per call, in any order, each
+   *  event retried on its own ladder and dead-lettered alone, never a halt for a failing event.
+   *  Absent: the ordered queue. A target that owns its progress (a facet, a lent stub) is pushed
+   *  either way and ignores it. */
+  ordered?: false;
+  /** Set when this row HOSTS a facet (M1, `hostedFacetMarkerOf`): the facet's name, class, cacheKey
+   *  and mainModule, but NOT the source — that stays in the durable log event and the
+   *  `facet:<name>` kv memo, so a 100 KB processor never bloats the checkpoint blob rewritten on
+   *  every core change — unless the source is a worker's name. An address-only row has none. */
+  hostedFacet?: {
+    name: string;
+    className: string;
+    cacheKey?: string;
+    mainModule?: string;
+    source?: unknown;
+  };
   /** A CURSOR target that exhausted its retries (the loop appended the halted fact). */
   halted?: { afterOffset: number; attempts: number; error?: string };
-  /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt). */
-  resumed?: { afterOffset?: number; atOffset: number };
+  /** The newest delivery-resumed: the loop applies it once (a seek, an un-halt, or — on a fan-out
+   *  row — one event delivered again from attempt 0: `offset`, a dead letter's). */
+  resumed?: { afterOffset?: number; offset?: number; atOffset: number };
 };
 
 /** THE CORE STATE — the context's own state, reduced inline at the commit point. A hand-written
@@ -290,6 +326,12 @@ export type CoreState = {
    *  a target equal to the implicit row it would restate deletes (the default said as much), the
    *  same spelling elsewhere is a grant and is stored. */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
+  /** THE SNAPSHOT'S VERSION: the offset of the last commit that changed what a snapshot of this
+   *  context carries — its rule table, its fetch routes, its ingress — 0 before any did. A snapshot
+   *  another context or the edge reads is named by it (context/rule-snapshots.ts), so a re-read
+   *  answers "unchanged" in one number. A write that changes nothing (the same target again, a
+   *  double delete) leaves it where it was. */
+  snapshotVersion: number;
   /** THE SUBSCRIPTIONS TABLE, by name. */
   subscriptions: Record<string, Subscription>;
   /** Explicit fetch target for the project apex; null until configured. */
@@ -305,8 +347,9 @@ export type CoreState = {
   scriptRuns: Record<number, OpenScriptRun>;
 };
 
-/** One open script run: when it was asked for (its identity is its key, the request's offset). */
-type OpenScriptRun = { requestedAt: string };
+/** One open script run: when it was asked for and why — its settlement is a receipt at that cause
+ *  (its identity is its key, the request's offset). */
+type OpenScriptRun = { requestedAt: string; cause?: Cause };
 
 /** A subscription name is ONE segment, [A-Za-z0-9_-] — and never a key of `Object.prototype`: the
  *  tables are plain records indexed by name, so such a name would read or write the prototype
@@ -332,7 +375,7 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "15.0.0",
+  version: "17.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
    *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
    *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
@@ -341,6 +384,7 @@ export const CoreContract = {
   initialState: (): CoreState => ({
     paused: null,
     itxExpressionRewriteRules: {},
+    snapshotVersion: 0,
     subscriptions: {},
     ingressTarget: null,
     fetchRoutes: {},
@@ -392,13 +436,13 @@ export function reduceCoreEvent(
       const target = payload.target as ItxExpression | null;
       return jsonEqual(state.ingressTarget, target)
         ? undefined
-        : { ...state, ingressTarget: target };
+        : { ...state, ingressTarget: target, snapshotVersion: event.offset };
     }
     case "events.iterate.com/itx/fetch-route-configured": {
       const fetchRoutes = reduceFetchRouteConfigured(state.fetchRoutes, event, (table) =>
         draftOf(table, draftTables),
       );
-      return fetchRoutes && { ...state, fetchRoutes };
+      return fetchRoutes && { ...state, fetchRoutes, snapshotVersion: event.offset };
     }
     case "events.iterate.com/itx/schedule-set":
     case "events.iterate.com/itx/schedule-cancelled":
@@ -411,7 +455,7 @@ export function reduceCoreEvent(
       // the code is the event's to keep; the row is its offset's
       if (state.scriptRuns[event.offset]) return undefined;
       const scriptRuns = draftOf(state.scriptRuns, draftTables);
-      scriptRuns[event.offset] = { requestedAt: event.createdAt };
+      scriptRuns[event.offset] = { requestedAt: event.createdAt, cause: event.source?.cause };
       return { ...state, scriptRuns };
     }
     case "events.iterate.com/itx/run-settled": {
@@ -461,7 +505,7 @@ export function reduceCoreEvent(
         if (rule) rules[matchString] = rule; // a match string is `itx…`, never a prototype key
         else delete rules[matchString];
         return withHostedFacetMarkersFollowingRules(
-          { ...state, itxExpressionRewriteRules: rules },
+          { ...state, itxExpressionRewriteRules: rules, snapshotVersion: event.offset },
           draftTables,
         );
       };
@@ -514,6 +558,14 @@ export function reduceCoreEvent(
             implicitRoots.has(matchPrefix[1]);
       if (!wall && isImplicitRow && jsonEqual(target, ["itx", "builtins", ...matchPrefix.slice(1)]))
         return existing ? withRule(undefined) : undefined;
+      // THE SAME ROW AGAIN is no change: a reinstall that restates its rules moves no version, so
+      // no snapshot another context holds is invalidated by it (context/rule-snapshots.ts).
+      if (
+        existing &&
+        jsonEqual(existing.target, target) &&
+        existing.description === description.description
+      )
+        return undefined;
       return withRule({ match: matchPrefix, target, ...description });
     }
 
@@ -531,6 +583,7 @@ export function reduceCoreEvent(
       }
       const consumes = payload.consumes as string[] | undefined;
       const afterOffset = payload.afterOffset as number | undefined;
+      const ordered = payload.ordered as false | undefined;
       // M1: a hosting target keeps its spelling but sheds its SOURCE here (`hostedFacet` says why).
       const configuredTarget = normalizedItxExpression(payload.target as ItxExpressionInput); // stored as the parsed form
       const { target, hostedFacet } = elideHostedFacetSource(
@@ -544,6 +597,7 @@ export function reduceCoreEvent(
         configuredAtOffset: event.offset,
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(afterOffset !== undefined && { afterOffset }),
+        ...(ordered === false && { ordered }),
         // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical subscription row (serialized to the JSON checkpoint, compared with jsonEqual which counts keys): an absent optional field must stay absent, not `field: undefined`
         ...(hostedFacet && { hostedFacet }),
       });
@@ -570,6 +624,7 @@ export function reduceCoreEvent(
           ...(payload.afterOffset !== undefined && {
             afterOffset: payload.afterOffset as number,
           }),
+          ...(payload.offset !== undefined && { offset: payload.offset as number }),
           atOffset: event.offset,
         },
       });
@@ -581,9 +636,10 @@ export function reduceCoreEvent(
 
 // ── subscriptions ── THE SUBSCRIPTIONS TABLE's one COMMAND (the rows are core state; the reader is
 // subscription-delivery.ts). A subscription is pure data — a NAME, a TARGET expression whose
-// terminal is callable with `(events, range)`, an optional `consumes` filter, and an optional
-// `afterOffset` (where cursor delivery starts: 0 = the whole log; absent = from the configure
-// offset). `configured` REPLACES a same-named row; a `null` target REMOVES it. The halted fact is
+// terminal is callable with `(events, range)` (a fan-out row's with one `(event)`), an optional
+// `consumes` filter, an optional `afterOffset` (where cursor delivery starts: 0 = the whole log;
+// absent = from the configure offset) and `ordered: false` for fan-out delivery. `configured`
+// REPLACES a same-named row; a `null` target REMOVES it. The halted and dead-letter facts are
 // appended by the delivery loop; the resumed fact by an operator's plain `itx.append`.
 
 /** The `subscription-configured` event for `input.name`. `ifConfiguredAtOffset` (with a null
@@ -594,6 +650,7 @@ function normalizeSubscriptionConfigured(input: {
   target: ItxExpressionInput | null;
   consumes?: string[];
   afterOffset?: number;
+  ordered?: boolean;
   ifConfiguredAtOffset?: number;
 }): Record<string, unknown> {
   const name = parseSubscriptionName(input.name);
@@ -602,6 +659,10 @@ function normalizeSubscriptionConfigured(input: {
     throw new Error(
       `a subscription's afterOffset is a non-negative integer offset (got ${JSON.stringify(afterOffset)})`,
     );
+  const ordered = z
+    .boolean({ error: "a subscription's `ordered` is a boolean: false for fan-out delivery" })
+    .optional()
+    .parse(input.ordered);
   // Through the codec (`normalizedItxExpression`), so a target the reduce could not read fails LOUD
   // here, in the parser's words. STORED AS THE PARSED FORM: a target carries a facet's whole source as data, and
   // the reduce must never re-parse that through the string codec (its 2 KiB cap).
@@ -616,6 +677,8 @@ function normalizeSubscriptionConfigured(input: {
     target,
     ...(target && input.consumes && { consumes: input.consumes }),
     ...(target && afterOffset !== undefined && { afterOffset }),
+    // `true` is the default, the ordered queue: only the fan-out's `false` is stored
+    ...(target && ordered === false && { ordered }),
     ...(!target &&
       input.ifConfiguredAtOffset !== undefined && {
         ifConfiguredAtOffset: input.ifConfiguredAtOffset,
@@ -640,32 +703,38 @@ function normalizeIngressConfigured(input: unknown): { target: ItxExpression | n
   return { target: expression };
 }
 
-/** THE PLATFORM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
- *  loop (the halted fact), the DO's alarm (the trace) and its runner (a run's settlement) straight
- *  through `Stream.append`. `normalizeControlEvent` refuses them, so no caller rewrites who a context
- *  is (`created` feeds `implicitRootsAt`), which incarnation runs, halts a subscription row it does
- *  not own, or settles a run it did not run (`itx.run` would answer the forgery, and an agent read it
- *  as its own script's result). */
-export const PLATFORM_ONLY_EVENT_TYPES = new Set<string>([
+/** THE STREAM'S OWN RECORDS: appended by the Stream (the birth and wake records), the delivery
+ *  loop (the halted fact and a fan-out row's dead letter), the DO's alarm (the trace) and its runner
+ *  (a run's settlement) straight through `Stream.append`. `normalizeControlEvent` refuses them, so
+ *  no caller rewrites who a context is (`created` feeds `implicitRootsAt`), which incarnation runs
+ *  or why it woke, halts a subscription row it does not own, reports a delivery that never failed,
+ *  or settles a run it did not run (`itx.run` would answer the forgery, and an agent read it as its
+ *  own script's result). Each is a receipt, so it lands past the loop limit too (stream.ts). */
+export const STREAM_RECORD_TYPES = new Set<string>([
   "events.iterate.com/itx/created",
   "events.iterate.com/itx/woken",
   "events.iterate.com/itx/subscription-delivery-halted",
+  "events.iterate.com/itx/subscription-delivery-failed",
   "events.iterate.com/itx/alarm-trace",
   "events.iterate.com/itx/run-settled",
+  // a chain refused past the loop limit, once per chain (stream.ts `recordLoopLimit`)
+  "events.iterate.com/itx/loop-limit",
+  // a processor's work in flight that died with its host five times (context/facet-host.ts)
+  "events.iterate.com/itx/work-failed",
 ]);
 
 /** THE APPEND BOUNDARY for core CONTROL events: validate + normalize a LITERAL control event so call
  *  sites write `itx.append({ type, payload })` with NO event-builder helper. A subscription/rewrite
  *  target is validated and normalized STRING→array before storage (the reduce must never string-parse
  *  a facet source — the codec's 2 KiB cap), and a malformed control event throws HERE instead of
- *  committing a durable no-op. A platform-only record (`PLATFORM_ONLY_EVENT_TYPES`) is refused. Every
+ *  committing a durable no-op. A stream record (`STREAM_RECORD_TYPES`) is refused. Every
  *  other event passes through untouched. The DO runs this on every append
  *  (iterate-context-durable-object.ts). */
 export function normalizeControlEvent(event: StreamEventInput, ownPath: string): StreamEventInput {
   // A fixed type list isolates the platform's own records. Who may append anything else is not this
   // boundary's question: every event carries the platform's stamp of where it came from
   // (caller.ts `stampCaller`), and a processor that cares decides whom it trusts from that.
-  if (PLATFORM_ONLY_EVENT_TYPES.has(event.type))
+  if (STREAM_RECORD_TYPES.has(event.type))
     throw new Error(`${event.type} is the platform's own record: it cannot be appended`);
   // The operator's control events: checked, never rewritten — strict, so an unknown key throws
   // instead of being dropped, and the event is stored as sent (an idempotent retry compares the
@@ -679,10 +748,17 @@ export function normalizeControlEvent(event: StreamEventInput, ownPath: string):
     return event;
   }
   if (event.type === "events.iterate.com/itx/subscription-delivery-resumed") {
+    // `afterOffset` seeks an ordered row; `offset` delivers one event of a fan-out row again from
+    // attempt 0 (a dead letter's `offset`) — never both.
     z.strictObject({
       name: z.string().transform(parseSubscriptionName),
       afterOffset: z.number().int().nonnegative().optional(),
-    }).parse(event.payload);
+      offset: z.number().int().positive().optional(),
+    })
+      .refine((payload) => payload.afterOffset === undefined || payload.offset === undefined, {
+        message: "a resume seeks (afterOffset) or delivers one event again (offset), not both",
+      })
+      .parse(event.payload);
     return event;
   }
   if (event.type === "events.iterate.com/itx/ingress-configured") {

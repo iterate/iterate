@@ -132,6 +132,23 @@ test.for([
   expect(Object.keys(resolved.modules)).toEqual([mainModule]);
 });
 
+test("a main module named by the caller is the entry in place of package.json's main, its own graph alone; one that is not a file is refused", async () => {
+  const source = {
+    "package.json": '{"main":"worker.ts"}',
+    "worker.ts": 'import "./site.ts"; export default 1;',
+    "site.ts": "export const site = 1;",
+    "agents.ts": 'export { helper } from "./lib/helper.ts";',
+    "lib/helper.ts": "export const helper = 1;",
+  };
+  const options = { platform, store: memoryStore(), fetch: offline, where: "test" };
+  const resolved = await resolveModules(source, { ...options, mainModule: "agents.ts" });
+  expect(resolved).toMatchObject({ mainModule: "agents.js" });
+  expect(Object.keys(resolved.modules).sort()).toEqual(["agents.js", "lib/helper.js"]);
+  await expect(resolveModules(source, { ...options, mainModule: "nope.ts" })).rejects.toThrow(
+    /no module "nope\.ts" to load as the main module/,
+  );
+});
+
 test("iterate/* and zod link this deployment's modules, and only the chunks they reach", async () => {
   const modules = await resolve({
     "package.json": '{"main":"worker.js"}',
@@ -199,6 +216,39 @@ test.for([
   ).rejects.toThrow(message);
 });
 
+test.for<{ name: string; answer: () => Promise<Response>; failure: object }>([
+  {
+    name: "esm.sh answering 503 is the platform's failure: UNAVAILABLE, disconnected",
+    answer: async () => new Response("busy", { status: 503 }),
+    failure: { code: "UNAVAILABLE", data: { kind: "disconnected" } },
+  },
+  {
+    name: "esm.sh asking for a slower pace is the platform's failure: UNAVAILABLE, overloaded",
+    answer: async () => new Response("slow down", { status: 429 }),
+    failure: { code: "UNAVAILABLE", data: { kind: "overloaded" } },
+  },
+  {
+    name: "esm.sh out of reach is the platform's failure: UNAVAILABLE, disconnected",
+    answer: () => Promise.reject(new TypeError("fetch failed")),
+    failure: { code: "UNAVAILABLE", data: { kind: "disconnected" } },
+  },
+  {
+    name: "a package esm.sh does not have is the source's: no code",
+    answer: async () => new Response("not found", { status: 404 }),
+    failure: { message: expect.stringMatching(/answered 404/) },
+  },
+])("$name", async ({ answer, failure }) => {
+  const rejection = await resolve(
+    {
+      "worker.js": `import "lib-a";`,
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { "lib-a": "1" } }),
+    },
+    { fetch: answer as typeof globalThis.fetch },
+  ).catch((error: unknown) => error);
+  expect(rejection).toMatchObject(failure);
+  if (!("code" in failure)) expect(rejection).not.toHaveProperty("code");
+});
+
 test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules", async () => {
   const esm = fakeEsm({
     "/uses-buffer@1": `import "/node/buffer.mjs"; export const b = 1;`,
@@ -244,6 +294,29 @@ test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath 
     resolve(sdkSource(`https://pkg.pr.new/acme/shop/other-sdk@${sdkCommit}`), esm),
   ).rejects.toThrow(
     /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop\/other-sdk@9f8e7d6c5b4a\w+; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
+  );
+});
+
+test("a source that imports a package and a subpath the package imports of itself loads that subpath once, under both names (a config's probe imports agents.ts and worker.ts: @iterate-com/agents and its /install)", async () => {
+  const esm = fakeEsm({
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs`]: `import { name } from "acme/shop/@acme/sdk/contract"; export const connect = () => name;`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/contract`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/contract.mjs"; export { default } from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/contract.mjs";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/contract.mjs`]: `export const name = "shop"; export default name;`,
+  });
+  const source = {
+    ...sdkSource(`https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}`),
+    "worker.ts": `import { connect } from "@acme/sdk"; import shop, { name } from "@acme/sdk/contract"; export default { fetch: () => new Response(connect() + shop + name) };`,
+  };
+  const modules = await resolve(source, { fetch: esm.fetch });
+  expectLinked(modules);
+  // fetched once: one module instance, whose classes are the same classes under either name
+  expect(
+    esm.fetched.filter((path) => path.startsWith(`/pr/acme/shop/@acme/sdk@${sdkCommit}/contract`)),
+  ).toHaveLength(1);
+  const selfImported = Object.keys(modules).find((name) => name.includes("/contract~"))!;
+  expect(modules[selfImported]).toBe(
+    'export * from "../../../../../../@acme/sdk/contract.js"; export { default } from "../../../../../../@acme/sdk/contract.js";\n',
   );
 });
 

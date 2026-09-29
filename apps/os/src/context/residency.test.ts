@@ -110,7 +110,7 @@ test.for<{
   {
     name: "sweep: a call from outside ended midway — re-armed a window after it",
     midway: ({ residency }) => {
-      residency.inboundCallStarted();
+      residency.inboundCallStarted("other");
       residency.inboundCallEnded(false);
     },
     expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + SWEEP / 2 + SWEEP } },
@@ -118,7 +118,7 @@ test.for<{
   {
     name: "sweep: a call from loaded code ended midway — reset anyway (#2922)",
     midway: ({ residency }) => {
-      residency.inboundCallStarted();
+      residency.inboundCallStarted("other");
       residency.inboundCallEnded(true);
     },
     expected: { resets: 1, deadlines: { unclaimedFacetSweep: null } },
@@ -130,7 +130,7 @@ test.for<{
   },
   {
     name: "sweep: an inbound call still in flight — a whole window from the pass",
-    midway: ({ residency }) => residency.inboundCallStarted(),
+    midway: ({ residency }) => residency.inboundCallStarted("other"),
     expected: { resets: 0, deadlines: { unclaimedFacetSweep: T + 2 * SWEEP } },
   },
   {
@@ -173,8 +173,8 @@ test("sweep: armed when a loaded facet is materialized, one alarm write per quie
 
 test("the alarm's overdue watch hears when the first inbound call starts and the last one settles, never between", () => {
   const fixture = residencyFixture();
-  fixture.residency.inboundCallStarted();
-  fixture.residency.inboundCallStarted();
+  fixture.residency.inboundCallStarted("other");
+  fixture.residency.inboundCallStarted("other");
   fixture.residency.inboundCallEnded(false);
   expect(fixture.residency.holdsResident()).toBe(true);
   fixture.residency.inboundCallEnded(true);

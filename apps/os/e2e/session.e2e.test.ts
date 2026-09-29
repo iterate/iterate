@@ -15,6 +15,7 @@ import {
   rejection,
   session,
   sleep,
+  until,
   untilValue,
   workerUrl,
 } from "./support/client.ts";
@@ -164,7 +165,7 @@ test("revoking a grant closes its live public socket and held capability within 
   }
 }, 75_000);
 
-test("projects.create({ project }) writes the catalog row on global:/ and opens a saga on /: the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, publishes it and lands `project/created` — the catalog and the apex say so; the same slug again is the same project and one more request, a harmless fact after the certificate", async () => {
+test("projects.create({ project }) writes the catalog row on global:/ and opens a saga on /: the `project` processor row, `project/create-requested` under the caller, then the processor seeds /repos/config, points the apex at its published config and lands `project/created`, and publishes the seed — the catalog and the apex say so; the same slug again is the same project and one more request, a harmless fact after the certificate", async () => {
   const slug = freshDnsSafeProjectSlug("create-saga");
   const api = session().authenticate(adminCredentials());
   // returns once the control plane holds the slug (its catalog on `global:/`, which a client
@@ -176,24 +177,28 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   const projectFacts = async () =>
     (await readAll(itx)).filter(
       (e) =>
-        e.type.startsWith("events.iterate.com/project/") ||
-        e.type === "events.iterate.com/itx/ingress-configured",
+        /\/project\/create/.test(e.type) || e.type === "events.iterate.com/itx/ingress-configured",
     );
   // the saga SETTLES on `created` or `create-failed`: a failed birth fails here with its own fact,
   // and a wait that runs out names the facts it had (which step the saga was on)
-  const settled = await untilValue("project/created on /", projectFacts, (facts) =>
-    facts.some((e) => /\/project\/create(d|-failed)$/.test(e.type)),
+  const settled = await untilValue(
+    "project/created on /",
+    projectFacts,
+    (facts) => facts.some((e) => /\/project\/create(d|-failed)$/.test(e.type)),
+    // the seed's first publication resolves the agents and voice builds cold from esm.sh
+    { timeoutMs: 45_000 },
   );
   const created = settled.find((e) => e.type === "events.iterate.com/project/created");
   if (!created)
     throw new Error(`the project's birth failed on /: ${JSON.stringify(settled.at(-1))}`);
   const [requested, ...rest] = await projectFacts();
-  // the saga's own facts on /: the request, the apex pointed at the seeded commit, the certificate
+  // the saga's own facts on /: the request, the apex pointed at the published config, the certificate
   expect([requested, ...rest].map((e) => e.type)).toEqual([
     "events.iterate.com/project/create-requested",
     "events.iterate.com/itx/ingress-configured",
     "events.iterate.com/project/created",
   ]);
+  expect(rest[0]).toMatchObject({ payload: { target: ["itx", "config"] } });
   // the request's facts, as the edge spelled them: the slug, and the organization it landed in —
   // the deployment's own for the admin secret
   expect(requested).toMatchObject({ payload: { slug, orgId: "org_admin" } });
@@ -205,11 +210,31 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // the seed: the config repo in the catalog (its certificate crossed to /), its files on main
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
-    paths: ["AGENTS.md", "package.json", "tsconfig.json", "worker.ts"],
+    paths: ["AGENTS.md", "agents.ts", "package.json", "tsconfig.json", "voice.ts", "worker.ts"],
   });
-  // published: the apex answers the seeded homepage worker (subdomain routing under the test's base)
-  expect((await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim()).toBe(
-    `Homepage of project ${slug}`,
+  // published: the seed is the first publication, as the generation of its commit's fact on `/`,
+  // and the apex answers its homepage (subdomain routing under the test's base) — within a
+  // snapshot's lifetime of the pointer's landing
+  const [seed] = await untilValue(
+    "the seed published",
+    async () =>
+      (await readAll(itx)).filter((e) => e.type === "events.iterate.com/project/worker-updated"),
+    (published) => published.length > 0,
+  );
+  const seedFact = (await readAll(itx)).find(
+    (e) =>
+      e.type === "events.iterate.com/repo/commit-completed" &&
+      e.payload.commitOid === seed.payload.commitOid,
+  );
+  expect(seed).toMatchObject({
+    payload: { generation: seedFact?.offset },
+    source: { platform: true },
+  });
+  await until("the apex answers the seed", async () =>
+    (await fetchProjectUrl(projectUrl({ project: slug, path: "/" }))).text.trim() ===
+    `Homepage of project ${slug}`
+      ? true
+      : undefined,
   );
   // the facet reduces its own certificate: the state the dash renders
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
@@ -222,7 +247,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // own, not the create's, so they are left out)
   const rows = async () =>
     (await readAll(itx))
-      .filter((e) => !/\/itx\/(woken|alarm-trace)$/.test(e.type))
+      .filter((e) => !/\/itx\/(woken|alarm-trace|subscription-delivery-failed)$/.test(e.type))
       .map((e) => ({ offset: e.offset, type: e.type }));
   const before = await rows();
   using again = await api.projects.create({ project: slug });
@@ -235,7 +260,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   expect(await itx.facets.get("project").liveSnapshot()).toMatchObject({
     state: { creation: { status: "created", offset: created.offset } },
   });
-});
+}, 90_000);
 
 test("the built-in cd carries the OAuth principal to a sibling context", async () => {
   const slug = freshDnsSafeProjectSlug("cd-who");

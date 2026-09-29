@@ -1,20 +1,18 @@
-import { expect, test } from "vitest";
 import { installAgents } from "@iterate-com/agents/install";
-import { freshCtx, openItx, readAll, until } from "../../os/e2e/support/client.ts";
+import { expect, test } from "vitest";
+import { freshCtx, openItx, publishConfig, readAll, until } from "../../os/e2e/support/client.ts";
 import { FakeAi } from "../../os/e2e/support/fake-ai.ts";
-import { agentsWorkspaceSource } from "./agents-source.ts";
+import { facetStartedAt } from "../../os/e2e/support/residency-facets.ts";
+import { installWorkspaceAgents } from "./agents-source.ts";
+import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 
-test("install and reinstall preserve existing agents, sandbox grants and conversation history", async () => {
+test("installing again, as the init case does after every commit, keeps agents, sandbox grants and conversation history", async () => {
   const itx = openItx(freshCtx("agents-install"));
-  const source = agentsWorkspaceSource;
-  const oldSource = {
-    ...source,
-    "index.ts": `${source["index.ts"]}\n// previous release\n`,
-  };
   expect((await itx.rewriteRules.get("itx.agents"))?.target).toBeFalsy();
-  await installAgents(itx, oldSource);
-  const oldRule = await itx.rewriteRules.get("itx.agents");
+  await installWorkspaceAgents(itx);
+  const rule = await itx.rewriteRules.get("itx.agents");
+  const rootRows = await itx.processors.list();
   await itx.agents.create("/agents/support");
   const context = itx.cd("/agents/support");
   const sandbox = context.cd("sandbox");
@@ -22,43 +20,97 @@ test("install and reinstall preserve existing agents, sandbox grants and convers
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.secrets", target: null },
   });
-  await context.provide("itx.ai", new FakeAi(["Before upgrade.", "After upgrade."]));
+  await context.provide("itx.ai", new FakeAi(["Before reinstall.", "After reinstall."]));
   await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);
   const grants = await sandbox.rewriteRules.list();
   const history = await readAll(context);
-  const previous = await context.processors.list();
+  const agentRows = await context.processors.list();
 
-  await installAgents(itx, source);
+  await installWorkspaceAgents(itx);
+  expect(await itx.rewriteRules.get("itx.agents")).toEqual(rule);
+  expect(await itx.processors.list()).toEqual(rootRows);
   expect(await itx.agents.list()).toEqual([
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
+  expect(await context.processors.list()).toEqual(agentRows);
   expect(await sandbox.rewriteRules.list()).toEqual(grants);
   expect((await readAll(context)).slice(0, history.length)).toEqual(history);
-  expect(await context.processors.list()).not.toEqual(previous);
-  await itx.agents.get("/agents/support").message("Continue after the upgrade.");
+  await itx.agents.get("/agents/support").message("Continue after the reinstall.");
   await until("second reply", async () => assistantWords(await readAll(context)).length === 2);
-  expect(assistantWords(await readAll(context))).toEqual(["Before upgrade.", "After upgrade."]);
-
-  const installedRows = await context.processors.list();
-  await installAgents(itx, source);
-  expect(await context.processors.list()).toEqual(installedRows);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
-  await installAgents(itx, oldSource);
-  expect(await itx.rewriteRules.get("itx.agents")).toEqual(oldRule);
+  expect(assistantWords(await readAll(context))).toEqual(["Before reinstall.", "After reinstall."]);
 });
 
-test("a removed agents rewrite can be installed again with the same runtime", async () => {
+// Three publications, each landing only once no context can resolve through a snapshot of the
+// root older than its pointer (the 5 s snapshot TTL), and a rule lent on a context the agent read,
+// which waits out the same TTL: about 20 s locally and up to a minute on a preview, all real
+// platform time, so the row is tagged `slow` (docs/testing.md#slow-rows).
+test(
+  "through publication: a commit that changes only the website keeps the agent running as it booted; one that changes the agents' code restarts it on its next call, its conversation kept",
+  { tags: ["slow"], timeout: 120_000 },
+  async () => {
+    const itx = openItx(freshCtx("agents-publication"));
+    await publishConfig(itx, agentsWorkspaceConfig);
+    await installAgents(itx);
+    await itx.agents.create("/agents/support");
+    const context = itx.cd("/agents/support");
+    await context.provide("itx.ai", new FakeAi(["First.", "Second.", "Third."]));
+    await configureModel(context);
+    const agent = context.facets.get("agent");
+    const replies = async (n: number) =>
+      until(`reply ${n}`, async () => assistantWords(await readAll(context)).length === n);
+    await itx.agents.get("/agents/support").message("One.");
+    await replies(1);
+    const booted = await facetStartedAt(agent);
+
+    // the website changes, the agents' module does not: the same boot answers
+    await publishConfig(itx, {
+      ...agentsWorkspaceConfig,
+      "worker.ts": `${agentsWorkspaceConfig["worker.ts"]}export const homepage = "v2";\n`,
+    });
+    await itx.agents.get("/agents/support").message("Two.");
+    await replies(2);
+    expect(await facetStartedAt(agent)).toBe(booted);
+
+    // the agents' own code changes: its next call boots the new code, the conversation kept
+    await publishConfig(itx, {
+      ...agentsWorkspaceConfig,
+      "index.ts": `${agentsWorkspaceConfig["index.ts"]}\n// the next version\n`,
+    });
+    await itx.agents.get("/agents/support").message("Three.");
+    await replies(3);
+    expect(await facetStartedAt(agent)).toBeGreaterThan(booted);
+    expect(assistantWords(await readAll(context))).toEqual(["First.", "Second.", "Third."]);
+  },
+);
+
+test("an event on an agent's context settles through its birth subscription to the fixture's config entrypoint, with no failed delivery", async () => {
+  const itx = openItx(freshCtx("agents-birth-row"));
+  await installWorkspaceAgents(itx);
+  await itx.agents.create("/agents/support");
+  const context = itx.cd("/agents/support");
+  const [pinged] = await context.append({ type: "events.iterate.com/test/ping-sent" });
+  await until("the ping settled", async () => {
+    const row = await context.subscriptions.get("config");
+    return row?.cursor && row.cursor.confirmedOffset >= pinged.offset;
+  });
+  expect(
+    (await readAll(context)).filter(
+      (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
+    ),
+  ).toEqual([]);
+});
+
+test("a removed agents rewrite is put back by the next install", async () => {
   const itx = openItx(freshCtx("agents-reinstall"));
-  const source = agentsWorkspaceSource;
-  await installAgents(itx, source);
+  await installWorkspaceAgents(itx);
   const installed = await itx.rewriteRules.get("itx.agents");
   await itx.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.agents", target: null },
   });
-  await installAgents(itx, source);
+  await installWorkspaceAgents(itx);
   expect(await itx.rewriteRules.get("itx.agents")).toEqual(installed);
   expect(await itx.agents.list()).toEqual([]);
 });

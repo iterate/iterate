@@ -67,7 +67,7 @@ test("a client's capnweb session: its itx.append under a key that names another 
 
 test("appendPlatformFact: a fact under a key that names another body is refused coded", async () => {
   const fact = (v: number) => ({
-    type: "events.iterate.com/test/fact",
+    type: "events.iterate.com/github/webhook-received" as const,
     idempotencyKey: "fact-key",
     payload: { v },
   });

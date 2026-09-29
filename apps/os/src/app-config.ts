@@ -21,6 +21,7 @@
 //       github: { appId, appSlug, oauthClientId, oauthClientSecret, privateKey, webhookSecret, githubOrigin },
 //     },
 //     secrets: { key, previousKey, adminBearer },
+//     contextBirthEvents,
 //   }
 //
 // Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
@@ -47,9 +48,10 @@ import {
   type ProjectAddress,
 } from "iterate/project-ingress";
 import type { OAuthIntegrationProvider } from "iterate/api";
-import { sha256Hex } from "./caller.ts";
+import { refuseNonPlatformWrites, sha256Hex } from "./caller.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { OAUTH_INTEGRATION_PROVIDERS } from "./integrations/contract.ts";
+import { normalizeControlEvent } from "./stream/core-processor.ts";
 
 /** A secret config value: `exposeSecret()` hands it over; printing, logging or serialising it shows
  *  only "REDACTED", so a config dump can never leak it. */
@@ -389,6 +391,33 @@ export const AppConfig = z.object({
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
     .prefault({ key: "" }),
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`, written
+   *  as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`), appended unread in the birth's own batch (stream/stream.ts
+   *  `appendBirthRecord`). Each is checked here, at boot, as the append boundary checks one at `/`,
+   *  so a malformed one fails the deploy, not every project context. Unset ⇒ none. */
+  contextBirthEvents: z
+    .array(
+      z.strictObject({
+        type: z.string().trim().min(1, REQUIRED),
+        payload: z.record(z.string(), z.unknown()).optional(),
+        idempotencyKey: z.string().trim().min(1, REQUIRED).optional(),
+      }),
+      { error: 'expected a JSON array of events, like [{ "type": "…", "payload": {…} }]' },
+    )
+    .default([])
+    .transform((events) =>
+      events.map((event, index) => {
+        try {
+          const normalized = normalizeControlEvent(event, "/");
+          refuseNonPlatformWrites([normalized], { principal: null });
+          return normalized;
+        } catch (error) {
+          throw new Error(
+            `APP_CONFIG contextBirthEvents[${index}]: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }),
+    ),
 });
 
 /** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing

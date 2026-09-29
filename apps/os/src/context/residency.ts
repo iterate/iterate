@@ -52,6 +52,11 @@ export function decideQuietDeadline(input: {
   return { action: "due", idleSince };
 }
 
+/** Who an inbound call came from, as the census counts it: loaded code (`caller.app`, a loaded
+ *  worker's fetch), another context's hop (`caller.path`), or anyone else (an edge session, HTTP, a
+ *  one-turn append or read). */
+export type InboundCallKind = "loaded" | "context" | "other";
+
 type ResidencyDeps = {
   /** The DO's name, on every log line. */
   name: string;
@@ -93,7 +98,13 @@ export class Residency {
    *  reset. */
   #lastOutsideActivityEndedAt: number | null = null;
 
-  inboundCallStarted(): void {
+  /** THE CENSUS: every inbound call this incarnation served, by kind. In memory on purpose: it is
+   *  what a test reads to prove a context is not on another context's hot path (no relay through
+   *  it), so it counts calls, never persists them. */
+  readonly #inboundCalls: Record<InboundCallKind, number> = { loaded: 0, context: 0, other: 0 };
+
+  inboundCallStarted(kind: InboundCallKind): void {
+    this.#inboundCalls[kind] += 1;
     this.#inboundCallsInFlight += 1;
     if (this.#inboundCallsInFlight === 1) this.#deps.inboundCallsHeldChanged();
   }
@@ -112,8 +123,13 @@ export class Residency {
   /** An inbound call that runs in ONE synchronous turn (`append`, `read`, a lend, a socket event):
    *  begun and ended at once — the clock does not move inside a turn. */
   inboundCallInOneTurn(): void {
-    this.inboundCallStarted();
+    this.inboundCallStarted("other");
     this.inboundCallEnded(false);
+  }
+
+  /** The census so far: this incarnation's inbound calls by kind. */
+  inboundCalls(): Record<InboundCallKind, number> {
+    return { ...this.#inboundCalls };
   }
 
   /** Activity that is no inbound call but restarts the sweep's quiet clock: a claim, an alarm pass

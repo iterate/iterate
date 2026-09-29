@@ -37,6 +37,11 @@ test.for([0, 1, 2, 3, 4])(
   },
 );
 
+test("health answers the project the service runs in", async () => {
+  const { worker } = await harness();
+  expect(await worker.health()).toEqual({ ok: true, projectId: "prj_voice" });
+});
+
 test("a null image uses the same setter without rendering", async () => {
   const { worker, quickAction, setImage } = await harness();
   expect(await worker.setImage({ device: "waveshare_rlcd_4_2", image: null })).toMatchObject({
@@ -81,7 +86,15 @@ test.for(["waveshare_rlcd_4_2", "zectrix_note4", "home_assistant_voice_preview_e
         target: [
           "itx",
           "facets",
-          ["get", "voice-agent", { ...JSON.parse(RUNTIME), className: "VoiceAgentDurableObject" }],
+          [
+            "get",
+            "voice-agent",
+            {
+              className: "VoiceAgentDurableObject",
+              mainModule: "voice.ts",
+              source: ["itx", ["cd", "/"], "config"],
+            },
+          ],
           "processEventBatch",
         ],
         consumes: expect.arrayContaining(["*"]),
@@ -225,14 +238,11 @@ test("an abandoned refresh times out", async () => {
   );
 });
 
-/** The installed voice source as install.ts stores it; the press's relay facet loads it. */
-const RUNTIME = JSON.stringify({ cacheKey: "c".repeat(64), source: { "worker.ts": "voice" } });
-
 let voiceWorker: Promise<any> | undefined;
 
 /**
  * Deployed, `iterate/sdk` links to the platform's SDK build. Supply just the
- * ConfigWorker environment here and exercise the actual bundled worker, built
+ * IterateConfigEntrypoint environment here and exercise the actual bundled worker, built
  * once per file on first use.
  */
 function loadVoiceWorker(): Promise<any> {
@@ -258,7 +268,7 @@ function loadVoiceWorker(): Promise<any> {
             builder.onLoad({ filter: /.*/, namespace: "test-runtime" }, () => ({
               contents: [
                 `import { withItx } from ${JSON.stringify(withItxModule)};`,
-                "export class ConfigWorker { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
+                "export class IterateConfigEntrypoint { constructor(env) { this.env = env; } withItx(call) { return withItx(this.env.ITX, call); } }",
               ].join("\n"),
               resolveDir: new URL(".", import.meta.url).pathname,
             }));
@@ -341,12 +351,11 @@ async function harness(image = png(3, 0), infoOverride = {}) {
   });
   const screen = { setImage, info: vi.fn(async () => info) };
   const append = vi.fn(async (...events: any[]) => {
-    for (const event of events)
-      admitLoadedCodeRow(event, "/agents/voice/test", "/agents/voice/test");
+    for (const event of events) admitLoadedCodeRow(event, "/agents/voice/test");
     return [];
   });
   const itx = {
-    kv: { get: vi.fn(async (key: string) => (key === "voice/runtime" ? RUNTIME : null)) },
+    whoami: vi.fn(async () => ({ projectId: "prj_voice", path: "/" })),
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },

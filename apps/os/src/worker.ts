@@ -1,20 +1,22 @@
 // worker.ts — the one worker's fetch entry: the request is sorted top to bottom — a project host
-// (the files host, else the project's config worker), the MCP origin, then the platform origin's
+// (the files host, else its fetch routes and the project's config worker, served here from the
+// root's snapshot: `serveProjectHost`), the MCP origin, then the platform origin's
 // own paths (`/version`, a preview's admin sign-in through prd, local dev's one click, the secret-OAuth callback, the
 // integrations' callbacks and webhooks, Google identity, `/mcp`, the browser adapter's `/api` and `/.auth/*`) and, last, the OAuth provider with
 // the issuer's pages as its catch-all.
-// Cap’n Web terminates at `/api`; a project host's request rides into the context DO.
+// Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import { forwardIssues } from "iterate/lib";
+import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
   ITERATE_BASE_PATH_HEADER,
   ITERATE_ROUTING_SLUG_HEADER,
   primaryHostnameUrlOf,
 } from "iterate/project-ingress";
+import { parseCause, crossingOneMore, newChain, requestCausedBy, type Cause } from "./cause.ts";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
-import { ITX_GRANT_HEADER } from "./caller.ts";
+import { ITX_GRANT_HEADER, type Caller } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
 import type { Env as WorkerEnv } from "./env.ts";
 import { identityResponse } from "./identity.ts";
@@ -39,20 +41,20 @@ import {
 import { localSignInResponse } from "./local-sign-in.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "./app-config.ts";
 import { captureIssueInPosthog } from "./posthog.ts";
-import { FILES_ROUTING_SLUG, serveProjectFileRequest } from "./context/file-urls.ts";
+import { serveProjectFileRequest } from "./context/file-urls.ts";
+import { FILES_ROUTING_SLUG } from "./fetch-routes.ts";
 import { appCookies, browserAuthorization, browserClient } from "./browser-client.ts";
-import { ITX_EXPRESSION_FETCH_HEADER, ITX_PLATFORM_ORIGIN_HEADER } from "./context/rpc-stubs.ts";
+import { itxExpressionEndingInFetch } from "./context/rpc-stubs.ts";
+import { implicitRootsAt, resolveItxExpression } from "./context/itx-expression-rewriting.ts";
+import { contextReach, statelessResolverFor } from "./context/stateless-context.ts";
+import { matchFetchRoute } from "./fetch-routes.ts";
+import { statelessExpressionFetch } from "./iterate-context.ts";
+import { expressionFetchErrorAnswer } from "./unavailable.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, spliceEyeballAnswer } from "./context/fetch-upgrade.ts";
 import { DurableObjectNameCodec, resourceScope } from "./context/paths.ts";
 import { authorizationForToken, recordGrantUse } from "./oauth.ts";
 import { leasedProjectHostAnswer } from "./project-host-lease.ts";
 import { projectHostCallerOf, projectHostSignInAnswerOf } from "./project-host-sign-in.ts";
-
-/** A project host's re-entry count — THE COUNT THE APP FORWARDS: an app that fetches its own host
- *  and forwards the headers it was handed re-enters with the count on them, each pass adds one, and
- *  the edge refuses past a few. A fresh Request starts at zero — an app looping its own project
- *  with fresh Requests is its own cost. */
-const PROJECT_HOST_HOPS_HEADER = "x-itx-expression-hops";
 
 /** The Request without its base path (paths ingress): the same method, body and upgrade, the URL
  *  starting at the app's root. */
@@ -99,27 +101,23 @@ function withoutPlatformHeaders(answer: Response): Response {
  *  (oauth.ts `authorizationForToken`). */
 type ProjectHostIdentity = { principal: Principal | null; grant?: string; platformBearer: boolean };
 
-/** The Request a project host hands the context DO — the same Request, its URL, method, body and a
- *  WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*` gone (a
- *  pager or fetch-upgrade header from outside would enter the DO's internal protocol), the cookie
- *  header replaced by `appCookies` (null ⇒ none — what the capability may see), a platform bearer
- *  (an OAuth access token, a personal access token) removed (a site's own bearer scheme passes
- *  through untouched), then THE PROJECT'S INGRESS TARGET — the empty expression, which the DO resolves to
- *  the config worker stored on the root context, for every host of the project — the routing slug
- *  the host names in `x-iterate-routing-slug` (deleted for the apex, so a visitor's copy never
- *  survives), the hop count and the principal's stamp. The edge picks the project only; the config
- *  worker's `fetch` routes on the routing slug in plain code. */
+/** The Request a project host serves (`serveProjectHost`) — the same Request, its URL, method, body
+ *  and a WebSocket upgrade intact, with the headers made the platform's: every inbound `x-itx-*`
+ *  gone (a pager or fetch-upgrade header from outside would enter a context's internal protocol),
+ *  the cookie header replaced by `appCookies` (null ⇒ none — what the capability may see), a
+ *  platform bearer (an OAuth access token, a personal access token) removed (a site's own bearer
+ *  scheme passes through untouched), then the routing slug the host names in
+ *  `x-iterate-routing-slug` (deleted for the apex, so a visitor's copy never survives) and the
+ *  principal's stamp; our mark (cause.ts) is the app's to receive with its call. The edge picks the project only; the config worker's `fetch`
+ *  routes on the routing slug in plain code. */
 function projectHostRequestTo(
   request: Request,
   routing: {
     routingSlug: string | null;
-    hops: number;
     appCookies: string | null;
     identity: ProjectHostIdentity;
     /** paths ingress: the prefix stripped from the URL and said in `x-iterate-base-path` */
     basePath: string;
-    /** the platform origin this request reached the platform on (app-config.ts `platformAddressesOf`) */
-    platformOrigin: string;
   },
 ): Request {
   const headers = new Headers(request.headers);
@@ -127,11 +125,8 @@ function projectHostRequestTo(
   if (routing.appCookies) headers.set("cookie", routing.appCookies);
   else headers.delete("cookie");
   if (routing.identity.platformBearer) headers.delete("authorization");
-  headers.set(ITX_EXPRESSION_FETCH_HEADER, "");
   if (routing.routingSlug) headers.set(ITERATE_ROUTING_SLUG_HEADER, routing.routingSlug);
   else headers.delete(ITERATE_ROUTING_SLUG_HEADER);
-  headers.set(PROJECT_HOST_HOPS_HEADER, String(routing.hops));
-  headers.set(ITX_PLATFORM_ORIGIN_HEADER, routing.platformOrigin);
   if (routing.basePath) headers.set(ITERATE_BASE_PATH_HEADER, routing.basePath);
   else headers.delete(ITERATE_BASE_PATH_HEADER);
   if (routing.identity.principal)
@@ -141,6 +136,79 @@ function projectHostRequestTo(
   if (request.headers.get("upgrade")?.toLowerCase() === "websocket")
     headers.set(FETCH_UPGRADE_RESUMABLE_HEADER, "1");
   return new Request(withoutBasePath(request, routing.basePath), { headers });
+}
+
+/** A PROJECT HOST'S REQUEST, SERVED WHERE IT ARRIVED, never through the root's Durable Object: the
+ *  root's snapshot (context/rule-snapshots.ts — at most one read per isolate per SNAPSHOT_TTL_MS)
+ *  says where it goes. A fetch route that matches runs its target as a config worker's forward of
+ *  it ran, loaded code at `/` with the request's caller stamps stripped (iterate-context.ts
+ *  `statelessExpressionFetch`), behind the route's sign-in; any other request goes to the project's
+ *  ingress under the visitor's caller — its published config, `itx.config`, loaded HERE with the
+ *  root's authority. A target that lives in a context (a tunnel's lent stub) is one call there. A
+ *  routing change answers its writer once no snapshot of the old routing can still be served
+ *  (iterate-context-durable-object.ts `#snapshotChangeNeedsCommitWait`). */
+async function serveProjectHost(args: {
+  env: WorkerEnv;
+  ctx: ExecutionContext;
+  projectId: string;
+  request: Request;
+  caller: Caller;
+}): Promise<Response> {
+  const { env, ctx, projectId, request, caller } = args;
+  const resolverUnder = (callerThere: Caller) =>
+    statelessResolverFor({
+      env,
+      namespace: env.ITERATE_CONTEXT,
+      address: DurableObjectNameCodec.address({ projectId, path: "/" }),
+      caller: callerThere,
+      ctx,
+    });
+  let label = "";
+  try {
+    const { routing, rules } = await contextReach({
+      env,
+      namespace: env.ITERATE_CONTEXT,
+      projectId,
+      platformOrigin: () => caller.platformOrigin || null,
+      ctx,
+    }).snapshotOf("/");
+    const route = matchFetchRoute(routing.fetchRoutes, request);
+    if (route?.authRequirement && !caller.principal)
+      return new Response("Sign in\n", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Bearer realm="iterate"' },
+      });
+    if (route)
+      return await statelessExpressionFetch(
+        resolverUnder({
+          principal: null,
+          app: true,
+          platformOrigin: caller.platformOrigin,
+          cause: caller.cause,
+        }),
+        () => route.target,
+        request,
+        JSON.stringify(route.target),
+      );
+    if (!routing.ingressTarget)
+      return new Response(
+        "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
+        { status: 404 },
+      );
+    label = JSON.stringify(routing.ingressTarget);
+    const ingress = itxExpressionEndingInFetch(routing.ingressTarget);
+    // AN INGRESS THE SNAPSHOT DOES NOT RESOLVE IS ANSWERED HERE, never by a call to the root: a
+    // project before its first publication would otherwise cost the root a call a request. A rule
+    // the platform lands answers its writer only once no older snapshot is in use
+    // (iterate-context-durable-object.ts `#snapshotChangeNeedsCommitWait`).
+    resolveItxExpression(() => rules, ingress, implicitRootsAt(projectId, "/"));
+    const answer = await resolverUnder(caller).invoke(ingress, request);
+    return answer instanceof Response
+      ? answer
+      : new Response(`expression fetch: ${JSON.stringify(answer)}\n`);
+  } catch (error) {
+    return expressionFetchErrorAnswer(error, label);
+  }
 }
 
 // Every `reportIssue` in this script — edge and Durable Objects share the module graph — also goes
@@ -169,17 +237,18 @@ export { PinnedOutbound } from "./secret/exchange-jail.ts";
 export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    // THE HOP COUNT — what the app forwards: a request carrying the count it was handed re-enters
-    // here with it, each pass adds one, more than four is a loop; a fresh Request carries none and
-    // starts at zero. The edge writes digits; anything else (an app spelling "NaN" to defeat the
-    // budget — `NaN > 4` is never true) is over budget by definition.
-    const hopsHeader = request.headers.get(PROJECT_HOST_HOPS_HEADER) ?? "0";
-    const hops = /^\d{1,3}$/.test(hopsHeader) ? Number(hopsHeader) + 1 : Infinity;
-    if (hops > 4)
-      return new Response(
-        `the request re-entered itself ${Number.isFinite(hops) ? hops : `"${hopsHeader}"`} times (an app fetching its own host)\n`,
-        { status: 508 },
-      );
+    // OUR MARK (cause.ts): a request our own code sent resumes its chain, one context further.
+    const mark = parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
+    let cause: Cause;
+    try {
+      cause = mark
+        ? crossingOneMore(mark, `a request to ${url.host}`)
+        : newChain(`a request to ${url.host}`);
+    } catch (error) {
+      return new Response(`508: ${(error as Error).message}\n`, { status: 508 });
+    }
+    // what reads the mark from here on (/api, /mcp) reads it one context further
+    if (mark) request = requestCausedBy(request, cause);
 
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;
@@ -298,25 +367,30 @@ export default {
       const stamped = caller === "member" ? authorization : null;
       if (stamped?.grant) ctx.waitUntil(recordGrantUse(env, stamped.grant));
       // the visitor's own cookies reach the app; the platform's cookie and bearer never do
-      const contextOf = (path: string) =>
-        env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path }));
+      const identity = {
+        principal: stamped?.principal || null,
+        grant: stamped?.grant?.grantId,
+        platformBearer: Boolean(bearer && authorization),
+      };
       // A lent stub's WebSocket (a tunnel's) is held HERE, not by the context: it survives the
       // context's sockets dropping — every deploy resets them (context/fetch-upgrade-splice.ts).
-      const served = await contextOf("/").fetch(
-        projectHostRequestTo(request, {
+      const served = await serveProjectHost({
+        env,
+        ctx,
+        projectId,
+        request: projectHostRequestTo(request, {
           routingSlug: projectHost.routingSlug,
-          hops,
           appCookies: appCookies(request.headers.get("cookie")) || null,
-          identity: {
-            principal: stamped?.principal || null,
-            grant: stamped?.grant?.grantId,
-            platformBearer: Boolean(bearer && authorization),
-          },
+          identity,
           basePath: projectHost.basePath,
-          platformOrigin,
         }),
+        caller: { principal: identity.principal, grant: identity.grant, platformOrigin, cause },
+      });
+      const answer = withoutPlatformHeaders(
+        spliceEyeballAnswer(served, (path) =>
+          env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path })),
+        ),
       );
-      const answer = withoutPlatformHeaders(spliceEyeballAnswer(served, contextOf));
       // The app's `401 Bearer realm="iterate"` becomes the sign-in (project-host-sign-in.ts), at the
       // browser adapter serving this host: the host's own under subdomains, the platform's under paths.
       const signIn = projectHostSignInAnswerOf({

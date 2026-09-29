@@ -62,13 +62,24 @@ test("the Notes app works through a project config worker, keeps a note, and end
     timeoutMs: 60_000,
   });
   // Notes writes to this same repo. Store the worker there so each note's commit keeps publishing
-  // it, rather than replacing a one-off ingress override with the seeded worker.
-  await fixture.itx.invoke([
+  // it, rather than replacing a one-off ingress override with the seeded worker. The commit is
+  // published in the background: the app is served once its publication has landed.
+  const { commitOid } = (await fixture.itx.invoke([
     "itx",
     "repos",
     ["get", "/repos/config"],
     ["writeFile", "worker.ts", source],
-  ]);
+  ])) as { commitOid: string };
+  const outcome = await fixture.itx.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  expect(outcome.payload).not.toHaveProperty("error");
   await page.goto(proxied("/projects").href);
   if (ownOrigin) await consent(page, proxiedClient);
   await saveNote(page, note);

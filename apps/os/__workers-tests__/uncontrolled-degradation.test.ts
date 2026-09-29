@@ -87,16 +87,8 @@ test("A1 — core state over the checkpoint ceiling: the configure is refused co
   captureIssueLines();
   const ctx = "prj_ud_corecap_message";
   const s = stub(ctx);
-  await s.append({
-    type: "events.iterate.com/itx/rewrite-rule-configured",
-    payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
-  }); // state ≈ 1 MiB: lands
-  const err = await rejectionOf(() =>
-    s.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
-    }),
-  ); // state ≈ 2.5 MiB: over the 2 MB cell
+  await s.append(bigRule("A"), bigRule("B")); // state ≈ 1.8 MiB: lands
+  const err = await rejectionOf(() => s.append(bigRule("C"))); // state ≈ 2.7 MiB: over the 2 MB cell
   expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
   expect(err?.message).toMatch(/checkpoint "core".*over the .*ceiling.*nothing was written/);
 });
@@ -108,32 +100,23 @@ test("A2 — CONTROL: the refused configure leaves memory and the log consistent
   captureIssueLines();
   const ctx = "prj_ud_corecap_consistent";
   const s = stub(ctx);
-  const a = offsetOf(
-    await s.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.bigA", target: bigWorkerRuleTarget("A", 1 * MiB) },
-    }),
-  );
-  const err = await rejectionOf(() =>
-    s.append({
-      type: "events.iterate.com/itx/rewrite-rule-configured",
-      payload: { match: "itx.bigB", target: bigWorkerRuleTarget("B", 1.5 * MiB) },
-    }),
-  );
+  const a = offsetOf(await s.append(bigRule("A")));
+  const b = offsetOf(await s.append(bigRule("B")));
+  const err = await rejectionOf(() => s.append(bigRule("C")));
   expect(errorCode(err)).toBe("REDUCE_CHECKPOINT_TOO_LARGE");
   const core = await snapshot<{ itxExpressionRewriteRules: Record<string, unknown> }>(ctx, "core");
-  expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA"]);
-  expect(core).toMatchObject({ offset: a }); // reduced through rule A, not a phantom B
-  // The refused batch's offset was never burnt: the next durable event lands at a+1 — exactly
-  // where B would have.
+  expect(Object.keys(core.state.itxExpressionRewriteRules)).toEqual(["itx.bigA", "itx.bigB"]);
+  expect(core).toMatchObject({ offset: b }); // reduced through rule B, not a phantom C
+  // The refused batch's offset was never burnt: the next durable event lands at b+1 — exactly
+  // where C would have.
   const c = offsetOf(
     await s.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
       payload: { match: "itx.small", target: "itx.whoami" },
     }),
   );
-  expect(c).toBe(a + 1);
-  expect((await readLog(ctx)).map((e) => e.offset)).toEqual([1, 2, a, c]);
+  expect(c).toBe(b + 1);
+  expect((await readLog(ctx)).map((e) => e.offset)).toEqual([1, 2, a, b, c]);
   expect(drainIssues()).toEqual([]);
 });
 
@@ -661,24 +644,16 @@ function offsetOf(appended: unknown): number {
 
 // ── A. the cell cap ──
 
-/** A rewrite-rule target that carries a `workers.get({ source })` spec inline: a HOSTED facet's
- *  source is elided from core state, but a `workers.get` source is not — so
- *  each such rule adds its whole source to the core checkpoint's state cell. */
-function bigWorkerRuleTarget(tag: string, chars: number): ItxExpression {
-  return [
-    "itx",
-    "workers",
-    [
-      "get",
-      {
-        source: {
-          "package.json": '{"main":"worker.js"}',
-          "worker.js": `// ${tag}\n` + "x".repeat(chars),
-        },
-      },
-    ],
-    "hello",
-  ];
+/** `itx.big<tag>` ⇒ a `workers.get({ source })` spec inline, 0.9 MiB, under a rule target's 1 MiB
+ *  ceiling: a HOSTED facet's source is elided from core state, but a `workers.get` source is not —
+ *  so each such rule adds its whole source to the core checkpoint's state cell. */
+function bigRule(tag: string) {
+  const source = { "package.json": '{"main":"worker.js"}', "worker.js": "x".repeat(0.9 * MiB) };
+  const target: ItxExpression = ["itx", "workers", ["get", { source }], "hello"];
+  return {
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: `itx.big${tag}`, target },
+  };
 }
 
 // ── B. a source that cannot start ──

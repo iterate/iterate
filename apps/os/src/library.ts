@@ -202,8 +202,10 @@ export function buildLibrary(
 
 // ── run ── `itx.run(script)`: a request on the log, its settlement read back by the caller.
 // `requestScriptRun` appends `itx/run-requested` and answers where it landed; the caller's side of
-// the hop — the edge (iterate-context.ts), /mcp, a runner whose row sends its scripts elsewhere —
-// reads the `run-settled` naming that request's offset (`settlementOfScriptRun`). The EXECUTION is
+// the hop where the call began — the edge, /mcp and loaded code's `env.ITX` (context-stub.ts
+// `contextStub`), a runner whose row sends its scripts elsewhere — reads the `run-settled` naming
+// that request's offset (`settlementOfScriptRun`); a context sending on the call it was made
+// answers the request up as it came. The EXECUTION is
 // the context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
 // `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
 // so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
@@ -212,9 +214,10 @@ export function buildLibrary(
 // caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
 // one function expression fails at load, in the loader's words. It takes no arguments: a script is
 // an agent's whole output (an alternative to a tool call), its values baked in. The template is the
-// smallest WorkerEntrypoint that hosts it: `run()` hands it the scope of ONE `withItx` round trip,
-// as the SDK's ConfigWorker does, so the scope and every call the script made through it are
-// released when it settles — its unawaited ones and its deadline's included.
+// smallest WorkerEntrypoint that hosts it: `run(cause)` hands it the scope of ONE `withItx` round
+// trip, as the SDK's IterateConfigEntrypoint does, so the scope and every call the script made
+// through it are released when it settles — its unawaited ones and its deadline's included — all
+// of it under the cause its run was handed (cause.ts).
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -238,7 +241,13 @@ export function runScriptModule(script: string) {
       // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
+      // the SDK's carrier, which `iterate/with-itx` shares by name (cause.ts runningCause)
+      'const carrier = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
+      "  // the platform runs the script under the cause of its request (cause.ts)",
+      "  callWithCause(cause) {",
+      "    return carrier.run(cause, () => this.run());",
+      "  }",
       "  async run() {",
       "    let deadline;",
       "    try {",
@@ -263,7 +272,8 @@ export function runScriptModule(script: string) {
 }
 
 /** THE EXECUTION: the script's one call in its confined isolate — what the context's runner does
- *  with a requested run. Same text, same module: the loader's content hash reuses the warm isolate. */
+ *  with a requested run, under the cause it runs `itx` with (`run` is called through
+ *  `callWithCause`). Same text, same module: the loader's content hash reuses the warm isolate. */
 export async function executeScript(itx: LibraryItx, code: string): Promise<unknown> {
   // TWO dotted calls, never one chain: the handle's dotted surface dispatches at the first call, and
   // in-process the record hands the worker's handle back as a VALUE (a genuine RpcTarget), so `run`

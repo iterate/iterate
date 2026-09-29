@@ -51,6 +51,7 @@
 import type { SqlStorageValue } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
+import { runCausedBy } from "../cause.ts";
 import type { Principal } from "../principal.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
@@ -92,6 +93,19 @@ export type ProcessorStream = {
  *  the attempt still in flight claims again with the delay doubled, up to `REVIVE_AFTER_MAX_MS`. */
 export const REVIVE_AFTER_MS = 20_000;
 export const REVIVE_AFTER_MAX_MS = 30 * 60_000;
+/** How many times work in flight may die with its host before a revive no longer starts it again. */
+const MAX_DEATHS = 5;
+/** The started marker's key and value (rule 3): work is in flight, how often it died so far, and
+ *  on what code. */
+const STARTED = "processor-work-started";
+type Started = { deaths: number; codeId?: string };
+/** What the engine keeps of its own beside the checkpoint: a Durable Object's `ctx.storage.kv`
+ *  (spelled here: the CLI compiles the engine without Cloudflare's types). */
+export type EngineKv = {
+  get<T>(key: string): T | undefined;
+  put(key: string, value: unknown): void;
+  delete(key: string): unknown;
+};
 
 /** The contiguity proof a delivery carries: the half-open offset window `(after, through]`. A chain
  *  of these (each `after` === the previous `through`) is how a subscriber proves it missed nothing. */
@@ -135,6 +149,14 @@ export function consumesEvent(
   if (event.ephemeral) return consumes?.includes(event.type) ?? false;
   return !consumes || consumes.includes("*") || consumes.includes(event.type);
 }
+
+/** A failure that is a LOOP_LIMIT refusal the platform recorded (apps/os src/cause.ts
+ *  `recordRefusal`) settles as done: the loop ends there, with its one fact, and nothing is retried
+ *  or reported. Any other — an unrecorded one too — is rethrown. */
+const unlessLoopLimit = (error: unknown): void => {
+  const recorded = (error as { data?: { recorded?: boolean } } | undefined)?.data?.recorded;
+  if (errorCode(error) !== "LOOP_LIMIT" || !recorded) throw error;
+};
 
 /** What the ENGINE reduces: the contract's consumes, minus the one type no processor may ever reduce or
  *  react to — a live-state delta. Deltas are notifications ABOUT state; letting one feed a reduce is
@@ -225,6 +247,10 @@ export class ProcessorEngine<State> {
   /** Whether the last batch this engine ran carried the at-head pass (rule 5) — what `revive()`
    *  reads to know if its catch-up already ran one. */
   #lastBatchAtHead = false;
+  readonly #kv: EngineKv | undefined;
+  readonly #codeId: string | undefined;
+  /** The cause of the newest event this engine processed: what an eventless at-head pass runs under. */
+  #headCause: EventCause | undefined;
 
   constructor(
     processor: StreamProcessor<State>,
@@ -235,6 +261,12 @@ export class ProcessorEngine<State> {
        *  (`processEventBatch`). The read verbs then trust the head a catch-up read until a push shows
        *  a later one; absent, only a push's head is trusted, so an unpushed processor reads each time. */
       fedByPushes?: boolean;
+      /** The host's durable key-value storage, where work in flight keeps its started marker and
+       *  its deaths (rule 3). Absent (a unit test): no death is counted. */
+      kv?: EngineKv;
+      /** The code the host runs, as its parent names it (iterate/sdk FacetProps): work that died
+       *  with a host restarted onto other code died of no fault of its own, and is no death. */
+      codeId?: string;
     },
   ) {
     this.processor = processor;
@@ -242,6 +274,8 @@ export class ProcessorEngine<State> {
     this.#stream = deps.stream;
     this.#storage = deps.storage;
     this.#fedByPushes = deps.fedByPushes === true;
+    this.#kv = deps.kv;
+    this.#codeId = deps.codeId;
     // ONE row, so cursor and state never disagree; one written under another contract version is
     // kept as #staleCheckpoint for the chain's first work.
     const { slug, version } = this.#contract;
@@ -531,13 +565,22 @@ export class ProcessorEngine<State> {
    *  the last to settle releases the claim. */
   #runInBackground(work: () => Promise<unknown>): void {
     this.#backgroundWorkInFlight += 1;
-    if (this.#backgroundWorkInFlight === 1) this.#claim(REVIVE_AFTER_MS);
+    if (this.#backgroundWorkInFlight === 1) {
+      // THE STARTED MARKER: what tells a revive that this host died with work in flight.
+      this.#kv?.put(STARTED, {
+        deaths: this.#kv.get<Started>(STARTED)?.deaths ?? 0,
+        codeId: this.#codeId,
+      });
+      this.#claim(REVIVE_AFTER_MS);
+    }
     void work()
+      .catch(unlessLoopLimit)
       .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
       .finally(() => {
         this.#backgroundWorkInFlight -= 1;
         if (this.#backgroundWorkInFlight === 0) {
           this.#revivesWhileBusy = 0;
+          this.#kv?.delete(STARTED); // settled: the deaths start over
           this.#claim(null);
         }
       });
@@ -555,6 +598,20 @@ export class ProcessorEngine<State> {
    *  (rule 3). A fresh incarnation finds nothing in flight and starts it; an attempt still in flight
    *  here claims again, later each time (20 s, 40 s, … `REVIVE_AFTER_MAX_MS`). */
   async revive(): Promise<void> {
+    // A revive that finds nothing in flight where work was started is a DEATH, counted across
+    // restarts — but not one onto other code (the host's own commit, a deploy), which starts the
+    // count over. At MAX_DEATHS the work is failed: the revive throws PERMANENT_FAILURE, the host
+    // records it, and only what the processor next receives starts the work again.
+    const started = this.#kv?.get<Started>(STARTED);
+    if (started && this.#backgroundWorkInFlight === 0) {
+      const deaths = started.codeId === this.#codeId ? started.deaths + 1 : 0;
+      this.#kv!.put(STARTED, { deaths, codeId: this.#codeId });
+      if (deaths >= MAX_DEATHS)
+        throw codedError(
+          "PERMANENT_FAILURE",
+          `processor "${this.#contract.slug}": its work in flight died with its host ${deaths} times, so it is not started again until the processor receives an event`,
+        );
+    }
     this.#lastBatchAtHead = false;
     await this.catchUpFromLog();
     // A catch-up that reached the head already ran the at-head pass (rule 5); one that found
@@ -660,17 +717,28 @@ export class ProcessorEngine<State> {
       }
       return emittedEvents;
     };
-    this.processor.processEvent({
-      event,
-      state,
-      previousState,
-      append: async (...emittedEvents) => await this.#stream.append(...stamped(emittedEvents)),
-      blockProcessorWhile: (work) => {
-        blockers = blockers.then(() => work());
-      },
-      runInBackground: (work) => this.#runInBackground(work),
-      delivery: { caughtUp },
-    });
+    // A PROCESSOR'S EFFECTS (apps/os src/cause.ts), each bound to its event's cause — an eventless
+    // pass, the newest one's: what it appends to its own log keeps that depth, so an agent's own
+    // turns stay flat, and anything else it does is code reacting to code, one hand-off deeper.
+    if (event?.source?.cause) this.#headCause = event.source.cause;
+    const own = this.#headCause;
+    const beyond = own && { chain: own.chain, depth: own.depth + 1 };
+    const under = <T>(cause: EventCause | undefined, work: () => T): T => runCausedBy(cause, work);
+    under(beyond, () =>
+      this.processor.processEvent({
+        event,
+        state,
+        previousState,
+        append: async (...emittedEvents) =>
+          await under(own, () => this.#stream.append(...stamped(emittedEvents))),
+        blockProcessorWhile: (work) => {
+          // An act refused as a loop is the loop's end, never this event's failure.
+          blockers = blockers.then(() => under(beyond, work)).catch(unlessLoopLimit);
+        },
+        runInBackground: (work) => this.#runInBackground(() => under(beyond, work)),
+        delivery: { caughtUp },
+      }),
+    );
     // STRICT PER-EVENT ORDERING (rule 2): drain the blocker chain to a FIXED POINT. A
     // blockProcessorWhile called from INSIDE a running blocker extends the chain (still THIS event's
     // blocking work), so re-await until it stops growing — latching the pre-nesting snapshot would
@@ -710,6 +778,9 @@ export class ProcessorEngine<State> {
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
 // runtime validator (the processor contract section below has the zod half).
 
+/** Why an event happened (`source.cause`). */
+type EventCause = { chain: string; depth: number };
+
 /** What `append` accepts: the event body, before the stream assigns its committed identity. The
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
@@ -726,6 +797,10 @@ export type StreamEventInput = {
      *  the platform's own records of a context (its birth, a wake, a run's settlement) carry the
      *  context's own path. */
     origin?: string;
+    /** WHY IT HAPPENED, stamped by the platform (a writer's own is dropped): the chain of reactions
+     *  it belongs to — when and where that began — and how many hand-offs deep in it. Past 8, code
+     *  reacting to code may read but not act, and the `itx/loop-limit` fact says where it stopped. */
+    cause?: EventCause;
     /** The durable schedule definition responsible for this occurrence. */
     schedule?: {
       key: string;

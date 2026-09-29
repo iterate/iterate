@@ -3,9 +3,12 @@
 // stored with), and the token crypto, WebCrypto only: the signed-claims codec, `sha256Hex` and
 // `secretsEqual`. Only this worker sets or reads any of it; what user code sees of a caller is the
 // SDK's `Principal` and `ITX_PRINCIPAL_HEADER` (iterate/principal).
+import { INTEGRATION_PROVIDERS } from "iterate/api";
+import { itxExpressionStepName, type ItxExpressionPrefix } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
+import { storedCause, type Cause } from "./cause.ts";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -27,8 +30,7 @@ export type Caller = {
   path?: string;
   /** Set when the caller is LOADED CODE — a worker, a facet, a script — holding a context through
    *  `env.ITX`. Under it the resolver walls the INPUT expression (itx-expression-rewriting.ts
-   *  `#admit`: no fixed point, `cd` down only but for `itx.cd(path).append(…)`); rewrites the owner
-   *  wrote are never subject. */
+   *  `#admit`: no fixed point); rewrites the owner wrote are never subject. */
   app?: true;
   /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
    *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
@@ -41,6 +43,14 @@ export type Caller = {
    *  those facts require; the fixed point is what no rewrite rule redirects, so nothing else runs
    *  under it. */
   platform?: true;
+  /** Set ONLY by the delivery loop, on the call a fan-out row makes to deliver one event (the
+   *  context DO's `runAsDelivery`): the SHA-256 of that event's JSON. A target's `deliverEvent`
+   *  answers only the event it names, so nothing the call reaches can hand a subscriber an event its
+   *  log never held. It rides the delivery's own hops alone (context/built-ins.ts `callContext`). */
+  delivery?: string;
+  /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
+   *  a chain: the context it reaches begins one. */
+  cause?: Cause;
   /** THE PERSON THEMSELVES, managing their own account: the principal's own OAuth grant holds the
    *  `account` scope and nobody acts as them (session.ts `#caller`). Absent for a grant bound to
    *  projects or without `account`, an admin's sign-in as someone, the admin secret (with or without
@@ -59,7 +69,7 @@ export const ITX_CALLER_PATH_HEADER = "x-itx-caller-path";
 
 /** THE PROVENANCE STAMP: the event as the log stores it, its `source` the platform's. `origin` is
  *  the context the call started at (`Caller.path`, set at the first hop, else `here`, where the call
- *  runs); `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
+ *  runs); `cause`, `principal`, `grant` and `platform` are the admitted caller's. A writer's own `source` is
  *  dropped, all but `processor`, the SDK engine's label for which processor wrote it: the writer's
  *  word, filed under the stamped `origin`. `origin` names the context whose code ran, not who asked
  *  it to run: a `run-requested` anyone appends runs at the context it lands on, and what that script
@@ -70,6 +80,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   here: string,
 ): E & { source: NonNullable<StreamEventInput["source"]> } {
   const source: NonNullable<StreamEventInput["source"]> = { origin: caller.path || here };
+  if (caller.cause) source.cause = storedCause(caller.cause);
   if (event.source?.processor) source.processor = event.source.processor;
   if (caller.principal) source.principal = caller.principal;
   if (caller.principal && caller.grant) source.grant = caller.grant;
@@ -100,6 +111,70 @@ export function refusePlatformIdempotencyKeys(
         `idempotency key ${JSON.stringify(idempotencyKey)} is the platform's`,
       );
 }
+
+/** THE PLATFORM'S FACTS: the types only the platform appends, each stamped `source.platform` —
+ *  whoever reads one trusts it by its type alone (a config repo's `processEvent` switches on it) —
+ *  so the append boundary refuses anyone else's (`refuseNonPlatformWrites`), on every context. The
+ *  account's, the organization's and the instance's facts on the global contexts are not here:
+ *  their processors fold only the platform's stamp, and a person's own append of one stays on their
+ *  log as theirs. */
+const PLATFORM_FACT_TYPE_LIST = [
+  "events.iterate.com/project/worker-updated",
+  "events.iterate.com/project/worker-update-failed",
+  "events.iterate.com/project/delete-requested",
+  "events.iterate.com/email/received",
+  "events.iterate.com/email/sent",
+  "events.iterate.com/github/webhook-received",
+  "events.iterate.com/slack/webhook-received",
+  // every provider's connection facts, typed from the provider by the one mechanism that lands them
+  // (integrations/connections.ts `appendConnected`, verbs.ts `disconnectIntegration`)
+  ...INTEGRATION_PROVIDERS.flatMap(
+    (provider) =>
+      [
+        `events.iterate.com/${provider}/connected`,
+        `events.iterate.com/${provider}/disconnected`,
+      ] as const,
+  ),
+] as const;
+
+/** A platform fact's type: what integrations/connections.ts `appendPlatformFact` appends. */
+export type PlatformFactType = (typeof PLATFORM_FACT_TYPE_LIST)[number];
+
+export const PLATFORM_FACT_TYPES: ReadonlySet<string> = new Set(PLATFORM_FACT_TYPE_LIST);
+
+/** Whether a rewrite rule's match is on the project's config pointer, `itx.config…`: what every
+ *  birth row delivers to and every facet named by `itx.cd('/').config` loads — the platform's
+ *  publication alone writes it (project/publication.ts), so its manifest is vouched for. */
+export const isConfigPointerMatch = (match: ItxExpressionPrefix) =>
+  itxExpressionStepName(match[1]) === "config";
+
+/** THE PLATFORM'S WRITES FROM ANYONE BUT THE PLATFORM ARE REFUSED, on every context: a platform
+ *  fact (`PLATFORM_FACT_TYPES`) and a row on the config pointer (`isConfigPointerMatch`: a target, a
+ *  mask, a removal), appended or scheduled — an occurrence fires under its schedule's stamp, so what
+ *  one may not append it may not schedule. Runs on the normalized batch at the append boundary
+ *  (iterate-context-durable-object.ts), and on a deployment's birth events (app-config.ts), which
+ *  never pass it. */
+export function refuseNonPlatformWrites(events: readonly StreamEventInput[], caller: Caller): void {
+  if (caller.platform) return;
+  for (const event of events) {
+    if (event.type === "events.iterate.com/itx/schedule-set")
+      refuseNonPlatformWrites((event.payload as { events: StreamEventInput[] }).events, caller);
+    if (PLATFORM_FACT_TYPES.has(event.type))
+      throw codedError(
+        "FORBIDDEN",
+        `${event.type} is the platform's own fact: no one else appends or schedules it`,
+      );
+    if (
+      event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+      isConfigPointerMatch((event.payload as { match: ItxExpressionPrefix }).match)
+    )
+      throw codedError(
+        "FORBIDDEN",
+        "`itx.config` is the project's published config: only the platform's publication writes it (commit to /repos/config)",
+      );
+  }
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 /** Bytes as base64url, unpadded. */
