@@ -133,8 +133,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
             `agent-collection:${sandbox}`,
           ),
         );
-      // Over the loopback stub an append's answer types as an RPC result, not the array the context
-      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+      // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
+      // rationale.
       const [requested] = (await context.append({
         type: "events.iterate.com/agent/create-requested",
         payload: {},
@@ -198,8 +198,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       let requestedAtOffset: number;
       if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
       else {
-        // Over the loopback stub an append's answer types as an RPC result, not the array the context
-        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
+        // rationale.
         const [requested] = (await context.append({
           type: "events.iterate.com/agent/delete-requested",
           payload: {},
@@ -213,7 +213,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         requestedAtOffset,
       );
     }
-    // Disable last, including on retries; see apps/os/src/project/collection.ts for the deletion-order rationale.
+    // Disable last, including on retries; see apps/os/src/project/collection.ts for the
+    // deletion-order rationale.
     if ((await rows()).some((row) => row.name === "agent"))
       await context.processors.disable("agent");
     return { path };

@@ -38,7 +38,8 @@ function newCarrier(): Carrier {
   };
   return {
     run(cause, code) {
-      // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not kept
+      // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not
+      // kept; the cause is carried unread (`unknown`), so only the fields kept are named
       const { chain, depth, parent } = (cause ?? {}) as {
         chain?: unknown;
         depth?: unknown;

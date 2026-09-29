@@ -564,6 +564,7 @@ export class ProjectProcessor extends StreamProcessor<
         "The config template",
       );
       using itx = this.getItx();
+      // Over the loopback stub the commit's answer types as an RPC result; the wire copied it.
       const seeded = (await config(itx).commitFiles({
         message: reference ? `seed: ${reference}` : "seed: minimal project config",
         changes,

@@ -15,11 +15,10 @@
 // drop the `createFailing` wrapper and the quoted observation, and keep its assertions.
 //
 // Two cell-cap facts these rows lean on: a SQLite-backed DO's
-// storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH, in bytes: 8 MiB in
-// local workerd, 2 MB in production (docs). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is
-// 8 Mi chars, so a body can be small enough to append and too big to checkpoint or memo. Locally
-// that takes a kv value whose V8 serialization outgrows its text: a string with any character
-// outside Latin-1 is written at two bytes per char.
+// storage cell — a kv value, a TEXT column — is capped by SQLITE_LIMIT_LENGTH, in bytes (8 MiB in
+// workerd, 2 MB in production). The append ceiling (stream.ts EVENT_BODY_MAX_CHARS) is 8 Mi chars,
+// so a body can be small enough to append and too big to checkpoint or memo: a string with any
+// character outside Latin-1 serializes at two bytes per char.
 //
 // The CONTROL rows (plain `test`) pin the half that is handled well beside each red half, so a
 // change to either shows up. The rows, by theme:

@@ -212,6 +212,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
     // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
     // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
     // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
+    // Over the loopback stub the list's answer types as an RPC result; the wire copied it.
     const rows = (await context.processors.list()) as unknown as { name: string }[];
     if (rows.some((row) => row.name === this.slug)) await context.processors.disable(this.slug);
     return { path };
