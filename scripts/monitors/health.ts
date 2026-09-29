@@ -331,7 +331,9 @@ export async function awaitOlderRuns(options: {
  *  AWAIT_OLDER_RUNS.pollMs and logging one line per change of what it waits for. It then reads the
  *  state the run before it kept and judges after it. After AWAIT_OLDER_RUNS.boundMs it throws: this
  *  run's page is then the next run's page job's, which judges it after the older ones. Runs created
- *  in the same second take turns by workflow id. */
+ *  in the same second take turns by workflow id, so they never share a state; `judgedAt` counts
+ *  whole seconds, so the later one's page job then judges nothing, as a re-run's does (./e2e.ts
+ *  `judgeEachRun`). No two of the 191 push runs of 2026-09-25 to 09-29 came within 5 s. */
 export async function awaitOlderMainE2eRuns(input: {
   depot: DepotApi;
   workflowId: string;
