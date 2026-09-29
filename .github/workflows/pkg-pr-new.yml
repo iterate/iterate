@@ -8,6 +8,10 @@ on:
   push:
     branches:
       - main
+      # The Copybara experiment's stand-in for main (tasks/copybara0929-experiment.md): a copy's
+      # self-host build pins agents and voice at the commit it was copied from, so every commit
+      # of this branch needs a build, as every main commit has.
+      - copybara0929
   # A PR publishes only when a published package's inputs change: packages/iterate imports nothing
   # outside itself, packages/cli only the SDK, packages/petshop-sdk only capnweb, packages/agents,
   # packages/github-sync and packages/ai-linter only the SDK (and npm), packages/voice the SDK, the
