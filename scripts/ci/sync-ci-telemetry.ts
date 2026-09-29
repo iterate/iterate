@@ -283,7 +283,7 @@ export function testEvidenceAttemptIds(runs: RunMetrics[], window: { start: numb
   return runs.flatMap(({ workflows }) =>
     workflows.flatMap(({ jobs }) =>
       jobs
-        .filter(({ job }) => testEvidenceJobs.includes(job.jobKey))
+        .filter(({ job }) => testEvidenceJobs.includes(job.jobKey.replace(/:matrix-\d+$/u, "")))
         .flatMap(({ attempts }) =>
           attempts
             .filter(({ attempt }) => finishedIn(window, attempt.finishedAt))

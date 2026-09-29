@@ -57,6 +57,7 @@ type WorkflowJob = {
   /** A Depot stock image's label (`depot-ubuntu-24.04-8`); anything else fails a test. */
   "runs-on": string | Record<string, unknown>;
   "timeout-minutes"?: number;
+  strategy?: { "fail-fast"?: boolean; matrix?: unknown };
   steps?: WorkflowStep[];
 };
 
@@ -875,9 +876,9 @@ test("only main writes Depot Cache, main restores exact keys, and no production 
   }
   expect(saves.map(({ name }) => name).toSorted()).toEqual([
     ".depot/workflows/kit-firmware.yml build-firmware: Save ESP-IDF",
-    // one definition, which saves in the specs job alone (`env.SUITE == 'specs'`)
+    // one definition, which saves in the first specs shard alone (`env.SPECS_SHARD == '1'`)
     ".depot/workflows/main-os-e2e.yml e2e: Save Playwright's browser",
-    ".depot/workflows/main-os-e2e.yml specs: Save Playwright's browser",
+    ".depot/workflows/main-os-e2e.yml specs-shard: Save Playwright's browser",
     ".depot/workflows/test.yml test: Save pnpm's store",
   ]);
   for (const { name, job, step } of saves) {
@@ -1104,7 +1105,7 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
     ),
   });
 
-  for (const job of ["deploy", "e2e", "specs", "trace"])
+  for (const job of ["deploy", "e2e", "specs", "specs-shard", "trace"])
     expect(main.jobs[job]?.name, job).toBe(preview.jobs[job]?.name);
   expect(trace(main)).toEqual(trace(preview));
   // it only reports: nothing that follows the suites waits for it
@@ -1114,11 +1115,11 @@ test("Main OS e2e names its checks as Preview OS does and traces them the same w
 });
 
 // Why the page is a job of the run it judges: .depot/workflows/main-os-e2e.yml (THE PAGE).
-test("Main OS e2e pages from its own alert job once its deploy and both suites have ended, on a push only", () => {
+test("Main OS e2e pages from its own alert job once its deploy and every suite job have ended, on a push only", () => {
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const alert = main.jobs.alert!;
   expect(alert).toMatchObject({
-    needs: ["deploy", "e2e", "specs"],
+    needs: ["deploy", "e2e", "specs", "specs-shard"],
     // a run cancelled by hand is left out, a timed-out job is red, and a dispatch pages nothing
     if: "${{ !cancelled() && github.event_name == 'push' }}",
   });
@@ -1129,36 +1130,39 @@ test("Main OS e2e pages from its own alert job once its deploy and both suites h
 });
 
 // Why the two suite jobs share one definition: .depot/workflows/main-os-e2e.yml.
-test("Main OS e2e's two suite jobs are one definition, a PR preview's suite steps on its runners", () => {
+test("Main OS e2e's suite jobs are one definition, a PR preview's suite steps on its runners", () => {
   const source = readFileSync(resolve(repoRoot, ".depot/workflows/main-os-e2e.yml"), "utf8");
   const main = loadWorkflow(".depot/workflows/main-os-e2e.yml");
   const preview = loadWorkflow(".depot/workflows/preview-os.yml");
-  const [e2e, specs] = [main.jobs.e2e!, main.jobs.specs!];
-  expect(specs).toMatchObject({
-    steps: e2e.steps,
-    "timeout-minutes": e2e["timeout-minutes"],
-  });
+  const [e2e, specs, shard] = [main.jobs.e2e!, main.jobs.specs!, main.jobs["specs-shard"]!];
+  // the specs shards run the suite steps; Browser specs, their verdict, steps of its own
+  expect(shard).toMatchObject({ steps: e2e.steps });
   expect(source.match(/^ {4}steps: \*suite-steps$/gmu)).toHaveLength(1);
-  // each on a PR preview's runner for its suite, so main's specs run as a PR's do
-  for (const job of ["e2e", "specs"])
+  // each on a PR preview's runner for its suite, so main's specs run as a PR's do, in its shards
+  for (const job of ["e2e", "specs", "specs-shard"])
     expect(main.jobs[job], job).toMatchObject({
       "runs-on": preview.jobs[job]?.["runs-on"],
       "timeout-minutes": preview.jobs[job]?.["timeout-minutes"],
     });
-  // each suite as a PR preview names it; E2E tests runs every row, the slow ones too, which the
-  // alert job pages under their own name
-  for (const job of ["e2e", "specs"])
-    for (const name of ["SUITE", "FLAKE_SUITE", "TEST_TELEMETRY_EXPECTED_WORKSPACES"])
+  expect(shard).toMatchObject({ strategy: preview.jobs["specs-shard"]?.strategy });
+  // each suite and shard as a PR preview names it; E2E tests runs every row, the slow ones too,
+  // which the alert job pages under their own name
+  for (const job of ["e2e", "specs-shard"])
+    for (const name of [
+      "SUITE",
+      "FLAKE_SUITE",
+      "TEST_TELEMETRY_EXPECTED_WORKSPACES",
+      "SPECS_SHARD",
+      "SPECS_SHARDS",
+    ])
       expect(main.jobs[job]?.env?.[name], `${job} ${name}`).toBe(preview.jobs[job]?.env?.[name]);
   expect(e2e.env).toMatchObject({ SLOW_ROWS: "run" });
   // started with the run, each waits in its suite step for the deploy every main run makes
-  for (const job of [e2e, specs]) expect(job.needs).toBeUndefined();
+  for (const job of [e2e, specs, shard]) expect(job.needs).toBeUndefined();
   expect(e2e.steps?.find((step) => step.id === "suite")?.env).toMatchObject({
     PREVIEW_AWAIT_DEPLOY_JOB: "deploy",
   });
 
-  const mainSteps = e2e.steps || [];
-  const previewSteps = preview.jobs.e2e?.steps || [];
   const prOnly = [
     "Require a preview to test",
     "Decide whether the PR changes a preview path",
@@ -1167,23 +1171,29 @@ test("Main OS e2e's two suite jobs are one definition, a PR preview's suite step
   ];
   // main saves the specs' browser for the next runs, PRs' included (docs/depot-ci.md#depot-cache)
   const mainOnly = ["Save Playwright's browser"];
-  const expected = previewSteps
-    .map((step) => step.name!)
-    .filter((name) => !prOnly.includes(name))
-    .map((name) => (name === "Checkout the PR head" ? "Checkout main" : name));
-  expect(mainSteps.map((step) => step.name).filter((name) => !mainOnly.includes(name!))).toEqual(
-    expected,
-  );
-  for (const step of mainSteps) {
-    const twin = previewSteps.find((candidate) => candidate.name === step.name);
-    if (twin?.run) expect(step, step.name).toMatchObject({ run: twin.run });
-    // the same uploads, their artifacts named for main instead of a preview
-    if (twin?.uses)
-      expect(
-        step.with?.name === undefined
-          ? step.with
-          : { ...step.with, name: String(step.with.name).replace(/^main-/u, "preview-") },
-      ).toEqual(twin.with);
+  // the suite steps, and Browser specs', each a PR preview's less the PR's own
+  for (const job of ["e2e", "specs"]) {
+    const mainSteps = main.jobs[job]?.steps || [];
+    const previewSteps = preview.jobs[job]?.steps || [];
+    const expected = previewSteps
+      .map((step) => step.name!)
+      .filter((name) => !prOnly.includes(name))
+      .map((name) => (name === "Checkout the PR head" ? "Checkout main" : name));
+    expect(
+      mainSteps.map((step) => step.name).filter((name) => !mainOnly.includes(name!)),
+      job,
+    ).toEqual(expected);
+    for (const step of mainSteps) {
+      const twin = previewSteps.find((candidate) => candidate.name === step.name);
+      if (twin?.run) expect(step, step.name).toMatchObject({ run: twin.run });
+      // the same uploads, their artifacts named for main instead of a preview
+      if (twin?.uses)
+        expect(
+          step.with?.name === undefined
+            ? step.with
+            : { ...step.with, name: String(step.with.name).replace(/^main-/u, "preview-") },
+        ).toEqual(twin.with);
+    }
   }
 });
 
@@ -1259,9 +1269,9 @@ test("every unit-test workspace writes the canonical telemetry artifact", () => 
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test", suite: "unit" },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e", suite: "preview-e2e" },
-  { file: ".depot/workflows/preview-os.yml", jobId: "specs", suite: "specs" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs-shard", suite: "specs" },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", suite: "preview-e2e" },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", suite: "specs" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs-shard", suite: "specs" },
 ])("$file $jobId always finalizes and retains $suite test telemetry", ({ file, jobId, suite }) => {
   const steps = stepsAsRun(file, jobId);
   const finalizer = steps.find((step) =>
@@ -1299,9 +1309,9 @@ test.each([
 test.each([
   { file: ".depot/workflows/test.yml", jobId: "test" },
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e" },
-  { file: ".depot/workflows/preview-os.yml", jobId: "specs" },
+  { file: ".depot/workflows/preview-os.yml", jobId: "specs-shard" },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e" },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs" },
+  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs-shard" },
 ])(
   "the $jobId job of $file names its evidence per job attempt and never overwrites it",
   ({ file, jobId }) => {
@@ -1333,9 +1343,19 @@ test.each([
   { file: ".depot/workflows/test.yml", jobId: "test", testSteps: ["tests", "kit-host-tests"] },
   // the suite jobs' one step, `suite`, recorded under the suite its job names
   { file: ".depot/workflows/preview-os.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
-  { file: ".depot/workflows/preview-os.yml", jobId: "specs", testSteps: ["suite"], as: ["specs"] },
+  {
+    file: ".depot/workflows/preview-os.yml",
+    jobId: "specs-shard",
+    testSteps: ["suite"],
+    as: ["specs"],
+  },
   { file: ".depot/workflows/main-os-e2e.yml", jobId: "e2e", testSteps: ["suite"], as: ["e2e"] },
-  { file: ".depot/workflows/main-os-e2e.yml", jobId: "specs", testSteps: ["suite"], as: ["specs"] },
+  {
+    file: ".depot/workflows/main-os-e2e.yml",
+    jobId: "specs-shard",
+    testSteps: ["suite"],
+    as: ["specs"],
+  },
 ])(
   "the $jobId job of $file finalizes its telemetry and writes its test evidence manifest in one step, then puts the folder in R2, the evidence deciding nothing and never failing unseen",
   ({ file, jobId, testSteps, as }) => {
@@ -1618,27 +1638,30 @@ test.for([
   },
   { file: ".depot/workflows/main-os-e2e.yml", results: `main-os-test-artifacts${attemptSuffix}` },
 ])(
-  "$file's Browser specs job keeps the browser evidence, whatever the suite's outcome",
+  "$file's specs shards keep the browser evidence, and Browser specs the merged report, whatever the suite's outcome",
   ({ file, results: name }) => {
-    const steps = stepsAsRun(file, "specs");
-    const suite = steps.find((step) => step.run?.includes("pnpm preview specs"));
-    const results = steps.find((step) => step.with?.name === name);
-    const report = steps.find((step) => step.with?.name === "public-playwright-report");
+    const shard = stepsAsRun(file, "specs-shard");
+    const suite = shard.find((step) => step.run?.includes("pnpm preview specs"));
+    const results = shard.find((step) => step.with?.name === name);
+    const verdict = stepsAsRun(file, "specs");
+    const collect = verdict.find((step) => step.id === "collect");
+    const report = verdict.find((step) => step.with?.name === "public-playwright-report");
 
-    // the root config writes per-test output and the HTML report into the test evidence folder
+    // the root config writes per-test output and each shard's blob report into the test evidence folder
     expect(results).toMatchObject({
       if: afterTheFinalizer,
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.root }),
     });
-    // once the finalizer found the HTML report in the folder (its `playwright-report` output)
+    expect(shard.indexOf(suite!)).toBeLessThan(shard.indexOf(results!));
+    // once the collection merged the shards' reports (its `playwright-report` output), a red shard's too
+    expect(collect?.run).toBe("node scripts/ci/specs-shards.ts collect");
     expect(report).toMatchObject({
-      if: "${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}",
+      if: "${{ always() && steps.collect.outputs.playwright-report == 'written' }}",
       uses: "actions/upload-artifact@v4",
       with: expect.objectContaining({ path: testEvidencePaths.playwrightReport }),
     });
-    expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(results!));
-    expect(steps.indexOf(suite!)).toBeLessThan(steps.indexOf(report!));
+    expect(verdict.indexOf(collect!)).toBeLessThan(verdict.indexOf(report!));
   },
 );
 

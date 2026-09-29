@@ -255,8 +255,8 @@
       <h1 id="title">Preview CI trace</h1>
       <p id="subtitle"></p>
       <p>
-        Expand a job’s phases, then a step, to see individual tests and retries. Click any bar for
-        its timing and evidence.
+        Expand a job, then a step, to see individual tests and retries. Click any bar for its timing
+        and evidence.
       </p>
       <div class="stats" id="stats"></div>
       <p id="outcome-note"></p>
@@ -268,7 +268,7 @@
           placeholder="Find a test, step or file…"
           aria-label="Filter trace"
         />
-        <button id="phases">Show phases</button><button id="expand">Expand all</button>
+        <button id="phases">Show steps</button><button id="expand">Expand all</button>
         <button id="zoom">Zoom to selection</button><button id="reset">Full run</button>
         <button id="download">Download OTLP JSON</button>
       </div>
@@ -335,6 +335,7 @@
         }));
       const root = spans.find((s) => !s.parentSpanId);
       const byId = new Map(spans.map((span) => [span.spanId, span]));
+      const emitted = new Map(spans.map((span, index) => [span.spanId, index]));
       const rows = new Map();
       function spanLabel(span) {
         let job = span;
@@ -347,30 +348,37 @@
           spans
             .filter((c) => c.parentSpanId === s.spanId)
             .sort((a, b) => {
-              if (s === root) {
-                const rank = (span) =>
-                  span.a["ci.kind"] === "queue"
-                    ? -1
-                    : span.a["ci.job.key"]?.endsWith(":plan")
-                      ? 0
-                      : span.name === "Prepare"
-                        ? 1
-                        : span.name === "App tests"
-                          ? 2
-                          : span.name.startsWith("Playwright ")
-                            ? 3
-                            : 4;
+              // the queue, then the jobs in the order the trace job names them (tracing.ts)
+              if (s === root)
                 return (
-                  rank(a) - rank(b) || a.name.localeCompare(b.name, undefined, { numeric: true })
+                  (b.a["ci.kind"] === "queue") - (a.a["ci.kind"] === "queue") ||
+                  emitted.get(a.spanId) - emitted.get(b.spanId)
                 );
-              }
-              return a.start - b.start;
+              // a job's own rows by their start, then its nested jobs, the Browser specs shards, by
+              // their number
+              const nested = (span) => span.a["ci.kind"] === "job";
+              return (
+                nested(a) - nested(b) ||
+                (nested(a)
+                  ? a.name.localeCompare(b.name, undefined, { numeric: true })
+                  : a.start - b.start)
+              );
             }),
         ]),
       );
-      let open = new Set(
-        spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-      );
+      // Opened at first and by "Show steps": the workflow and each job's steps, but a nested job
+      // (a Browser specs shard) one row until opened.
+      const stepsOpen = () =>
+        new Set(
+          spans
+            .filter(
+              (s) =>
+                s.a["ci.kind"] === "workflow" ||
+                (s.a["ci.kind"] === "job" && s.parentSpanId === root.spanId),
+            )
+            .map((s) => s.spanId),
+        );
+      let open = stepsOpen();
       // Cancellation can finish the workflow before its cleanup markers stop.
       const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
@@ -566,9 +574,7 @@
         render();
       };
       document.getElementById("phases").onclick = () => {
-        open = new Set(
-          spans.filter((s) => ["workflow", "job"].includes(s.a["ci.kind"])).map((s) => s.spanId),
-        );
+        open = stepsOpen();
         document.getElementById("search").value = "";
         render();
       };

@@ -144,8 +144,9 @@ export function summary(
 }
 
 /** A push run of Main OS e2e: its jobs' statuses (finished unless named) and the suite summary each
- *  suite job's attempts uploaded in their test results. A `running` one is the run whose page
- *  job judges it: its deploy and suites have ended, its trace and page jobs have not. */
+ *  suite job's attempts uploaded in their test results. Its specs run in one shard, the one leg of
+ *  `specs-shard`, Browser specs 1/1, whose verdict is Browser specs'. A `running` one is the run
+ *  whose page job judges it: its deploy and suites have ended, its trace and page jobs have not. */
 export function mainRun(
   id: string,
   createdAt: string,
@@ -156,11 +157,14 @@ export function mainRun(
     e2eTests?: SummaryTest[];
     /** The E2E tests summary's status and diagnostics, complete unless given. */
     e2eSummary?: { status: "incomplete"; diagnostics: string[] };
+    /** The specs shard's rows, and its status. */
     specsTests?: SummaryTest[];
+    shard?: string;
     running?: boolean;
   },
 ) {
   const last = input.running ? "running" : "finished";
+  // a matrix leg's key ends `:matrix-<n>`, which its attempts' ids leave out
   const job = (key: string, displayName: string, status = "finished") => ({
     jobKey: `main-os-e2e.yml:${key}`,
     jobDisplayName: displayName,
@@ -170,8 +174,8 @@ export function mainRun(
       status === "skipped" || status === "queued"
         ? []
         : [
-            { attemptId: `${id}-${key}-1`, attempt: 1 },
-            { attemptId: `${id}-${key}-2`, attempt: 2 },
+            { attemptId: `${id}-${key.split(":")[0]}-1`, attempt: 1 },
+            { attemptId: `${id}-${key.split(":")[0]}-2`, attempt: 2 },
           ],
   });
   const records = (
@@ -203,6 +207,7 @@ export function mainRun(
       job("deploy", "Deploy preview", input.deploy),
       job("e2e", "E2E tests", input.e2e),
       job("specs", "Browser specs", input.specs),
+      job("specs-shard:matrix-0", "Browser specs 1/1", input.shard),
       job("trace", "CI trace", last),
       job("alert", "Page a change of state", last),
     ],
@@ -216,7 +221,7 @@ export function mainRun(
               input.e2eTests || [{ name: "a slow row", tags: ["slow"] }],
               input.e2eSummary,
             ),
-            ...records("specs", "specs", input.specsTests || [{ name: "sends a message" }]),
+            ...records("specs", "specs-shard", input.specsTests || [{ name: "sends a message" }]),
           },
   };
 }

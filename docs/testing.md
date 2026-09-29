@@ -142,8 +142,10 @@ the new version, `apps/os/scripts/preview-readiness.ts`) and every client
 answers `/healthz`, and the `e2e` job only
 starts after a successful deploy. This shared readiness time belongs to
 CI setup, not individual test durations. Both suites run concurrently once
-ready; browser installation overlaps the Vitest run. Playwright's worker count
-and sharding are measured ([reliability defaults](depot-ci.md#reliability-defaults)): measure the
+ready; browser installation overlaps the Vitest run. The specs run in enough
+shards that every spec has a worker from the start
+([Browser specs in shards](depot-ci.md#browser-specs-in-shards)). Playwright's worker count and
+sharding are measured ([reliability defaults](depot-ci.md#reliability-defaults)): measure the
 retries as well as the time before changing either.
 
 Each runner derives the deployed target itself, once, from the deployment's
