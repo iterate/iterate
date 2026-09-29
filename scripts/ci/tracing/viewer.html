@@ -147,6 +147,24 @@
         border-radius: 3px;
         background: #6486b9;
         min-width: 3px;
+        overflow: hidden;
+      }
+      .segment {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+      }
+      /* a failed or unfinished row keeps its colour as an outline where its children's show */
+      .adopted.failed::after,
+      .adopted.incomplete::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        box-shadow: inset 0 0 0 2px #f17982;
+      }
+      .adopted.incomplete::after {
+        box-shadow: inset 0 0 0 2px #788498;
       }
       .axis {
         height: 32px;
@@ -173,8 +191,7 @@
           #5e4c2e 8px
         );
       }
-      .phase-test,
-      .passed {
+      .phase-test {
         background: #56bc98;
       }
       .phase-finish {
@@ -256,7 +273,7 @@
       <p id="subtitle"></p>
       <p>
         Expand a job, then a step, to see individual tests and retries. Click any bar for its timing
-        and evidence.
+        and evidence. A bar takes its children's colour wherever every child running then shares it.
       </p>
       <div class="stats" id="stats"></div>
       <p id="outcome-note"></p>
@@ -312,6 +329,12 @@
           Grey stripes mean a span has no completion marker; its end is bounded by the runner’s
           finish and is not an exact observed duration. This report does not include request tracing
           inside deployed workers.
+        </p>
+        <p>
+          A bar takes its children's colour for any stretch where every child running then has that
+          colour, so a job waiting on nothing but the deploy is striped for that wait. Where
+          children running side by side differ, or none runs, the bar keeps its own colour. A failed
+          or unfinished bar that takes its children's colours keeps a red or grey outline.
         </p>
         <p>
           The download is an OpenTelemetry ExportTraceServiceRequest JSON object: one trace, stable
@@ -461,6 +484,53 @@
         document.getElementById("source").href = span.a["ci.url"] || root.a["ci.url"];
         markSelected();
       }
+      /** A span's own colour: a class of the legend, or "" for none. */
+      function colorOf(span) {
+        const state = span.a["ci.status"];
+        if (state === "incomplete" || state === "cancelled") return "incomplete";
+        if (span.status.code === 2) return "failed";
+        if (span.a["ci.kind"] === "test" && state === "passed") return "phase-test";
+        return span.a["ci.phase"] ? `phase-${span.a["ci.phase"]}` : "";
+      }
+      const segmentsBySpan = new Map();
+      /** A span's bar as coloured stretches from its start to its end: where every child running at
+       *  that moment has one colour (each child's own bar worked out this way first), that colour;
+       *  where children running side by side differ, none runs, or they have none, the span's own. */
+      function segments(span) {
+        if (segmentsBySpan.has(span.spanId)) return segmentsBySpan.get(span.spanId);
+        const own = colorOf(span);
+        // a step can end just after its job (docs/ci-traces.md#timing-limits)
+        const parts = children
+          .get(span.spanId)
+          .flatMap(segments)
+          .map((part) => ({
+            ...part,
+            start: Math.max(part.start, span.start),
+            end: Math.min(part.end, span.end),
+          }))
+          .filter((part) => part.end > part.start);
+        const cuts = [
+          ...new Set([span.start, span.end, ...parts.flatMap((part) => [part.start, part.end])]),
+        ].sort((a, b) => a - b);
+        const stretches = [];
+        for (let i = 0; i < cuts.length - 1; i++) {
+          const [start, end] = [cuts[i], cuts[i + 1]];
+          const colors = new Set(
+            parts
+              .filter((part) => part.start <= start && part.end >= end)
+              .map((part) => part.color),
+          );
+          const [shared] = colors;
+          const color = colors.size === 1 && shared ? shared : own;
+          const last = stretches.at(-1);
+          if (last?.color === color) last.end = end;
+          else stretches.push({ start, end, color });
+        }
+        // a span with no duration
+        if (!stretches.length) stretches.push({ start: span.start, end: span.end, color: own });
+        segmentsBySpan.set(span.spanId, stretches);
+        return stretches;
+      }
       function render() {
         const container = document.getElementById("trace");
         container.replaceChildren();
@@ -550,11 +620,22 @@
             }
           };
           const bar = document.createElement("div");
-          const state = span.a["ci.status"];
-          bar.className = `bar phase-${span.a["ci.phase"] || ""} ${span.a["ci.kind"] === "test" && state === "passed" ? "passed" : ""} ${span.status.code === 2 ? "failed" : ""} ${state === "incomplete" || state === "cancelled" ? "incomplete" : ""}`;
+          const own = colorOf(span);
+          bar.className = `bar ${own}`;
           if (span.end >= range[0] && span.start <= range[1]) {
-            bar.style.left = `${Math.max(0, ((span.start - range[0]) / (range[1] - range[0])) * 100)}%`;
-            bar.style.width = `${Math.max(0, ((Math.min(span.end, range[1]) - Math.max(span.start, range[0])) / (range[1] - range[0])) * 100)}%`;
+            const [start, end] = [Math.max(span.start, range[0]), Math.min(span.end, range[1])];
+            bar.style.left = `${Math.max(0, ((start - range[0]) / (range[1] - range[0])) * 100)}%`;
+            bar.style.width = `${Math.max(0, ((end - start) / (range[1] - range[0])) * 100)}%`;
+            for (const part of segments(span)) {
+              const [from, to] = [Math.max(part.start, start), Math.min(part.end, end)];
+              if (part.color === own || to <= from) continue;
+              const piece = document.createElement("div");
+              piece.className = `segment ${part.color}`;
+              piece.style.left = `${((from - start) / (end - start)) * 100}%`;
+              piece.style.width = `${((to - from) / (end - start)) * 100}%`;
+              bar.append(piece);
+              bar.classList.add("adopted");
+            }
             timeline.append(bar);
           }
           row.append(label, timeline);

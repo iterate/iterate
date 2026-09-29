@@ -54,28 +54,30 @@ export async function collectShards(input: {
   const { depot, workflowId, job, out, log = console.log } = input;
   let reported = "";
   // Each part a row of the step in the CI trace (docs/ci-traces.md#steps): the wait is most of it.
-  const { runId, legs, waitedMs } = await traceOperation("Wait for the shards", () =>
-    pollWorkflow({
-      ...input,
-      tag: "specs-shards",
-      waitingFor: `the ${job} legs`,
-      boundMs: COLLECT_BOUND_MS,
-      settled: ({ runId, jobs }, waitedMs) => {
-        // `<file>:<job id>:matrix-<n>`
-        const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
-        if (!legs.length)
-          throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
-        const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
-        const state = waiting.length
-          ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
-          : `all ${legs.length} settled`;
-        if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
-        reported = state;
-        return waiting.length && waitedMs < COLLECT_BOUND_MS
-          ? undefined
-          : { runId, legs, waitedMs };
-      },
-    }),
+  const { runId, legs, waitedMs } = await traceOperation(
+    { name: "Wait for the shards", phase: "wait" },
+    () =>
+      pollWorkflow({
+        ...input,
+        tag: "specs-shards",
+        waitingFor: `the ${job} legs`,
+        boundMs: COLLECT_BOUND_MS,
+        settled: ({ runId, jobs }, waitedMs) => {
+          // `<file>:<job id>:matrix-<n>`
+          const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
+          if (!legs.length)
+            throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
+          const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
+          const state = waiting.length
+            ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
+            : `all ${legs.length} settled`;
+          if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
+          reported = state;
+          return waiting.length && waitedMs < COLLECT_BOUND_MS
+            ? undefined
+            : { runId, legs, waitedMs };
+        },
+      }),
   );
   await mkdir(out, { recursive: true });
   const problems = await traceOperation("Download their blob reports", () =>
