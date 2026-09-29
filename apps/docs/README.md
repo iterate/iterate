@@ -12,24 +12,33 @@ host's `/api`, both the platform's; Docs has no OAuth client, no secrets and no 
 The base path handling is Notes', shared in
 [packages/ui/src/apps/base-path.ts](../../packages/ui/src/apps/base-path.ts).
 
-- The sidebar picks one of the project's repos and shows every `.md` in it as a tree, following
-  the repo's commits ([src/lib/doc-list.ts](src/lib/doc-list.ts)); ⌘K finds a doc by name.
+- The sidebar picks one of the project's repos and shows its files as a tree (@pierre/trees,
+  [src/components/doc-tree.ts](src/components/doc-tree.ts)), following the repo's commits
+  ([src/lib/doc-list.ts](src/lib/doc-list.ts)); right-click makes a new doc, ⌘K finds a file by
+  name.
   `/projects/<slug>/<repo>` lists them too and starts new ones (`folder/title` makes one in a
   folder); `/projects/<slug>` opens `config`.
 - `/projects/<slug>/<repo>/<path>` edits one: CodeMirror over the file's markdown with Atomic's live
   preview (`@atomic-editor/editor`), a formatting bar, Cmd/Ctrl-B, -I, -E, -K and -Shift-X, and a
   Rich / Markdown switch that turns the preview off. Frontmatter shows as page properties in Rich
-  mode.
-- Co-editing: opening a doc installs its processor from
-  [`@iterate-com/docs`](../../packages/docs/README.md) (`ensureDoc`, pinned to the package build of
-  this app's commit). The editor is bound to the doc's shared Y.Text (y-codemirror.next); edits and
+  mode. Any other text file opens in a code editor, an html file on a sandboxed Preview beside its
+  Source.
+- Co-editing: opening a doc enables its processor (`ensureDoc`) from the
+  [`@iterate-com/docs`](../../packages/docs/README.md) build the project's config pins; a project
+  without one gets an "Install Docs in this project" button (`installDocs`, this deployment's
+  build: `APP_CONFIG pkgPrNewRef`). The editor is bound to the doc's shared Y.Text (y-codemirror.next); edits and
   cursors go to the other tabs as ephemeral events on the doc's context
   ([src/editor/collab.ts](src/editor/collab.ts)). The processor commits a minute after the first
   unsaved edit, or once the last tab has left, and merges in commits made elsewhere; the status
   line is its live state
   ([src/editor/doc-session.ts](src/editor/doc-session.ts)).
+- Comments: threads in a right-hand panel, events on the doc's context
+  ([`@iterate-com/docs/comments`](../../packages/docs/src/comments.ts)), each highlighted on the text
+  its quote finds ([src/editor/comment-marks.ts](src/editor/comment-marks.ts)). `Stream ↗` beside
+  the doc's path opens its context in the dash.
 
-What's next (comments, docs.iterate.com): [tasks/docs-app.md](../../tasks/docs-app.md).
+What's next (docs.iterate.com, and the rest):
+[tasks/complete/2026-09-30-docs-app.md](../../tasks/complete/2026-09-30-docs-app.md), "Later".
 
 Local dev is Notes': `pnpm dev`, reached through a project behind `iterate tunnel`
 ([Notes' README](../notes/README.md)). The browser proof is [specs/docs](../../specs/docs).

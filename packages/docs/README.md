@@ -18,8 +18,13 @@ its processor holds the text as a Yjs `Y.Text` and saves it.
 - **Installing it** ([src/install.ts](src/install.ts)): a project's config repo does, as it does
   agents: `docs.ts` re-exports the processors (`docsModule`) and the root `package.json` pins
   `@iterate-com/docs`. The processors load from that published config (`docsFacetSpec`), so a
-  commit to the pin upgrades them. `ensureDoc(project, { repo, path })` is what the Docs page calls
+  commit to the pin upgrades them. `installDocs(project, version)` writes both in one commit and
+  waits for the project to run it. `ensureDoc(project, { repo, path })` is what the Docs page calls
   as a doc opens: it enables both processors. Idempotent.
+- **Comments** ([src/comments.ts](src/comments.ts)): durable events on the doc's context, reduced
+  by the doc's processor into its state and live state. A thread quotes its text
+  ([src/anchor.ts](src/anchor.ts)) rather than holding a position, and after each save the
+  processor re-anchors a quote that only matches loosely, or marks it detached.
 - **The wire** ([src/frames.ts](src/frames.ts)): event types, payload schemas, the live state.
 
 ```ts
