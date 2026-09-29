@@ -12,9 +12,11 @@ import {
   type LibraryItx,
   type LibraryRoots,
   executeScript,
-  runScript,
+  requestScriptRun,
   runScriptModule,
   runSettlementOf,
+  settlementOfScriptRun,
+  type ScriptRunRequested,
 } from "./library.ts";
 import { connectToCapnweb } from "./library/capnweb.ts";
 import { connectToMcp, type McpConnectionRpcTarget } from "./library/mcp.ts";
@@ -184,8 +186,9 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
   expect(initializes(seen)).toBe(2);
 });
 
-// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and a
-// wait for ITS settlement (`itx.waitForEvent`), the execution being the context's runner's
+// ── run ── `itx.run(script)` over a fake itx: `run` is a REQUEST on the log (`itx.append`) and the
+// caller's read of ITS settlement in slices of fresh calls (`settlementOfScriptRun`), the execution
+// being the context's runner's
 // (`executeScript`, over `itx.workers.get`): the module the loader would get (the script spliced
 // verbatim, the smallest WorkerEntrypoint around it), run with NO arguments (a script bakes its own
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
@@ -300,73 +303,125 @@ test("run: executeScript (the runner's call) loads that module through itx.worke
   expect(runs()).toBe(1);
 });
 
-test("run: run(script) appends run-requested { code } — the request's offset IS the run — and waits for ITS run-settled after it: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result; it loads nothing itself", async () => {
+test("run: on the context, run(script) appends run-requested { code } — the request's offset IS the run — and answers the request where it landed, never its settlement; it loads nothing itself", async () => {
   const script = "async (itx) => 1";
-  const { itx, loaded, appended, waits, runs } = host([
-    settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
-    "timeout",
-    settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
-  ]);
+  const { itx, loaded, appended, waits, runs } = host();
   await expect(
-    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(script),
-  ).resolves.toEqual({ n: 1 });
+    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/a" }).roots.run(script),
+  ).resolves.toEqual({ $itxScriptRunRequested: { path: "/a", requestOffset: 10 } });
   expect(appended).toEqual([
     { type: "events.iterate.com/itx/run-requested", payload: { code: script } },
   ]);
-  expect(waits.map((w) => [w.type, w.afterOffset])).toEqual([
-    ["events.iterate.com/itx/run-settled", 10], // after the request (offset 10)
-    ["events.iterate.com/itx/run-settled", 11], // the other run's was the last seen
-    ["events.iterate.com/itx/run-settled", 11], // a timeout re-arms from the same place
-  ]);
+  expect(waits).toEqual([]); // the caller's side of the hop reads the settlement
   expect(loaded).toEqual([]); // the execution is the runner's, never the caller's
   expect(runs()).toBe(0);
 });
 
-test("run: the wait is bounded: no settlement a minute past the deadline gives up with WAIT_TIMEOUT, so the caller's call — and the context it holds — is not held open", async () => {
+test("run: the caller reads ITS run-settled after the request, each slice one fresh call on the context the request landed on: another run's settlement is skipped, a WAIT_TIMEOUT re-arms from the last event seen; resolves with the result", async () => {
+  const { waitForEventAt, waits } = contextLog([
+    settledAt(11, 9, { status: "succeeded", result: 0 }), // another run's (its request at 9)
+    "timeout",
+    settledAt(13, 10, { status: "succeeded", result: { n: 1 } }), // ours: the request landed at 10
+  ]);
+  await expect(settlementOfScriptRun(requestedAt("/a", 10), waitForEventAt)).resolves.toEqual({
+    n: 1,
+  });
+  const slice = { type: "events.iterate.com/itx/run-settled", timeoutMs: 5_000 };
+  expect(waits).toEqual([
+    ["/a", { ...slice, afterOffset: 10 }], // after the request (offset 10)
+    ["/a", { ...slice, afterOffset: 11 }], // the other run's was the last seen
+    ["/a", { ...slice, afterOffset: 11 }], // a timeout re-arms from the same place
+  ]);
+});
+
+test("run: REPLACED UNDER THE WAIT — a slice held on the instance Cloudflare replaced never sees what the new instance writes, and that instance's wake record settles the lost run `interrupted`: the next slice, a fresh call, reads it, so the caller learns within one slice, never at the deadline", async () => {
   vi.useFakeTimers();
-  try {
-    const timeouts: number[] = [];
-    const itx = fakeItx({
-      builtins: {
-        append: async (...events: StreamEventInput[]) =>
-          events.map((event, i) => ({ ...event, offset: 10 + i, createdAt: "t", path: "/" })),
-        // A log where no settlement ever lands: every wait times out, on its own timeout.
-        waitForEvent: (filter: WaitForEventFilter) => {
-          timeouts.push(filter.timeoutMs!);
-          return new Promise((_, reject) =>
-            setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
-          );
-        },
-      },
-    });
-    let outcome: unknown;
-    void runScript(itx, "async () => new Promise(() => {})").catch(
-      (error: unknown) => (outcome = error),
+  onTestFinished(() => void vi.useRealTimers());
+  const interrupted = {
+    status: "failed",
+    error: "the context restarted before the script's result was recorded",
+    failureKind: "interrupted",
+  };
+  let calls = 0;
+  const waitForEventAt = (_path: string, filter: WaitForEventFilter) => {
+    calls += 1;
+    // the first call is held on the replaced instance: it only ever times out, on its own clock
+    if (calls === 1)
+      return new Promise<StreamEvent>((_, reject) =>
+        setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
+      );
+    // a fresh call reaches the instance that replaced it, whose log has the settlement
+    return Promise.resolve(settledAt(12, 10, interrupted));
+  };
+  let outcome: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).catch(
+    (error: unknown) => (outcome = error),
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(outcome).toMatchObject({ message: interrupted.error, failureKind: "interrupted" });
+  expect(calls).toBe(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+test("run: a slice left with NO answer at all — a call on an instance Cloudflare shut down mid-call — is given up after four slices and asked again on a fresh call, logged as the platform failure it heals", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  onTestFinished(() => warn.mockRestore());
+  let calls = 0;
+  const waitForEventAt = () => {
+    calls += 1;
+    return calls === 1
+      ? new Promise<StreamEvent>(() => {})
+      : Promise.resolve(settledAt(11, 10, { status: "succeeded", result: "done" }));
+  };
+  let result: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).then((r) => (result = r));
+  await vi.advanceTimersByTimeAsync(20_000 - 1);
+  expect(result).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(result).toBe("done");
+  expect(warn.mock.calls.map(([line]) => line)).toEqual([
+    expect.objectContaining({
+      event: "itx-run.platform-failure-wait-unanswered",
+      kind: "disconnected",
+      path: "/",
+      requestOffset: 10,
+    }),
+  ]);
+});
+
+test("run: the wait is bounded: no settlement a minute past the deadline gives up with WAIT_TIMEOUT, so the caller is let go", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const timeouts: number[] = [];
+  // A log where no settlement ever lands: every slice times out, on its own timeout.
+  const waitForEventAt = (_path: string, filter: WaitForEventFilter) => {
+    timeouts.push(filter.timeoutMs!);
+    return new Promise<StreamEvent>((_, reject) =>
+      setTimeout(() => reject(codedError("WAIT_TIMEOUT", "no event")), filter.timeoutMs),
     );
-    await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 60_000 - 1);
-    expect(outcome).toBeUndefined();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(outcome).toMatchObject({
-      code: "WAIT_TIMEOUT",
-      message: "itx.run: no settlement of run 10 within 11 minutes",
-    });
-    // re-armed at the cap, the last wait only for what was left
-    expect(timeouts).toEqual([120_000, 120_000, 120_000, 120_000, 120_000, 60_000]);
-    expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    vi.useRealTimers();
-  }
+  };
+  let outcome: unknown;
+  void settlementOfScriptRun(requestedAt("/", 10), waitForEventAt).catch(
+    (error: unknown) => (outcome = error),
+  );
+  await vi.advanceTimersByTimeAsync(RUN_DEADLINE_MS + 60_000 - 1);
+  expect(outcome).toBeUndefined();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(outcome).toMatchObject({
+    code: "WAIT_TIMEOUT",
+    message: "itx.run: no settlement of run 10 within 11 minutes",
+  });
+  expect(timeouts).toEqual(Array.from({ length: 132 }, () => 5_000)); // 11 minutes of 5 s slices
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 test("run: a failed settlement rejects with its error, the failure kind on the rejection", async () => {
-  const { itx } = host([
+  const { waitForEventAt } = contextLog([
     settledAt(11, 10, { status: "failed", error: "boom", failureKind: "interrupted" }),
   ]);
-  await expect(
-    buildLibrary(itx, { caller: () => ({ principal: null }), path: "/" }).roots.run(
-      "async () => 1",
-    ),
-  ).rejects.toMatchObject({
+  await expect(settlementOfScriptRun(requestedAt("/", 10), waitForEventAt)).rejects.toMatchObject({
     message: "boom",
     failureKind: "interrupted",
   });
@@ -375,11 +430,11 @@ test("run: a failed settlement rejects with its error, the failure kind on the r
 test("run: the same text is the same module (byte-equal: the loader's content hash keys ONE isolate); a blank script is refused before any request", async () => {
   expect(runScriptModule("async (itx) => 1")).toEqual(runScriptModule("async (itx) => 1"));
   const { itx, loaded, appended } = host();
-  await expect(runScript(itx, "   ")).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", "   ")).rejects.toThrow(/itx\.run\(script/);
   // wire-fed: a non-string (the array-form expression carries no argument validation) is refused
   // with the same usage error, never a TypeError from `.trim`
-  await expect(runScript(itx, 42)).rejects.toThrow(/itx\.run\(script/);
-  await expect(runScript(itx, undefined)).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", 42)).rejects.toThrow(/itx\.run\(script/);
+  await expect(requestScriptRun(itx, "/", undefined)).rejects.toThrow(/itx\.run\(script/);
   expect(loaded).toEqual([]);
   expect(appended).toEqual([]);
 });
@@ -481,6 +536,19 @@ test("the runner's settlement: the loaded run() giving up on its own clock (or a
     failureKind: "deadline",
   });
   expect(await before).toEqual({ status: "failed", error: "gave up", failureKind: "runtime" });
+});
+
+test("the runner's settlement: a run its row sent to another context fails with that run's kind — `interrupted` when that context restarted — never `runtime`", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => void vi.useRealTimers());
+  const elsewhere = Object.assign(new Error("the context restarted"), {
+    failureKind: "interrupted",
+  });
+  expect(await runSettlementOf(Promise.reject(elsewhere))).toEqual({
+    status: "failed",
+    error: "the context restarted",
+    failureKind: "interrupted",
+  });
 });
 
 test("the runner's settlement: a value that lands after the deadline is still released", async () => {
@@ -1131,9 +1199,9 @@ function remotes(): { itx: LibraryItx; seen: string[] } {
 
 const initializes = (seen: string[]) => seen.filter((m) => m === "initialize").length;
 
-/** A fake itx: `append` lands at offsets from 10, `waitForEvent` answers `settlements` in order
- *  (an event, or "timeout" = a WAIT_TIMEOUT rejection). */
-function host(settlements: (StreamEvent | "timeout")[] = []): {
+/** A fake itx: `append` lands at offsets from 10; `waitForEvent` records a wait the library must
+ *  never make on the context (the run's caller reads the settlement, `contextLog`). */
+function host(): {
   itx: LibraryItx;
   loaded: unknown[];
   appended: StreamEventInput[];
@@ -1170,10 +1238,7 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
   };
   const waitForEvent = async (filter: WaitForEventFilter) => {
     waits.push(filter);
-    const next = settlements.shift();
-    if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
-    if (!next) throw new Error("the test scripted no more settlements");
-    return next;
+    throw new Error("the library waits for nothing on the context");
   };
   const itx = fakeItx({
     fetch: async () => new Response(null),
@@ -1184,6 +1249,25 @@ function host(settlements: (StreamEvent | "timeout")[] = []): {
 
 const settledAt = (offset: number, requestOffset: number, settlement: unknown) =>
   committedEvent(offset, "events.iterate.com/itx/run-settled", { requestOffset, settlement });
+
+/** What a context's `run` answers: the request at `requestOffset` on the context at `path`. */
+const requestedAt = (path: string, requestOffset: number): ScriptRunRequested => ({
+  $itxScriptRunRequested: { path, requestOffset },
+});
+
+/** A context's log as the run's caller reads it: each `waitForEventAt` call answers the next of
+ *  `settlements` (an event, or "timeout" = a WAIT_TIMEOUT rejection); `waits` records each call. */
+function contextLog(settlements: (StreamEvent | "timeout")[]) {
+  const waits: [string, WaitForEventFilter][] = [];
+  const waitForEventAt = async (path: string, filter: WaitForEventFilter) => {
+    waits.push([path, filter]);
+    const next = settlements.shift();
+    if (next === "timeout") throw codedError("WAIT_TIMEOUT", "no event");
+    if (!next) throw new Error("the test scripted no more settlements");
+    return next;
+  };
+  return { waitForEventAt, waits };
+}
 
 /** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
  *  for (`WorkerEntrypoint`, which only hands `env` over; `iterate/with-itx`, the real module), so

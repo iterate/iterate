@@ -81,7 +81,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
  *  awake for the wait's duration, and a reset (`ctx.abort`, a storage reset) fails the call. An
  *  instance the PLATFORM replaces under the call is the exception: the call stays on the old
  *  instance, whose waiters never see the new one's appends and time out — a caller that must not
- *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS). */
+ *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS,
+ *  library.ts SCRIPT_RUN_WAIT_SLICE_MS). */
 type WaitForEventWaiter = {
   /** The types that resolve it; empty = any. */
   types: string[];
@@ -235,8 +236,9 @@ export class Stream {
    *  hibernated socket). The first arrival appends it, before its own work; the ones after find it done.
    *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
    *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
-   *  incarnation (for a processor's request still owed to the alarm, the pass that would have
-   *  started it), and whoever asked reads the settlement, not a second attempt. */
+   *  incarnation, or runs on in an instance Cloudflare replaced, which can no longer write (for a
+   *  processor's request still owed to the alarm, the pass that would have started it), and
+   *  whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(reason: "alarm" | "request"): void {
     if (this.#wakeRecorded) return;
     const interrupted = Object.keys(this.#coreReducedState.scriptRuns).map(
@@ -247,7 +249,8 @@ export class Stream {
           requestOffset: Number(requestOffset),
           settlement: {
             status: "failed",
-            error: "the context restarted before the script finished; it is not run again",
+            error:
+              "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
             failureKind: "interrupted",
           },
         },

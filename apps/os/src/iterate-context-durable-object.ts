@@ -22,7 +22,13 @@
 // resumed stream finds dead.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { codedError, errorCode, reportIssue, resolveContextPath } from "iterate/lib";
+import {
+  codedError,
+  errorCode,
+  releaseRpcSessions,
+  reportIssue,
+  resolveContextPath,
+} from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -64,7 +70,15 @@ import {
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER, RpcStubFetchServer } from "./context/fetch-upgrade.ts";
-import { buildLibrary, executeScript, runSettlementOf, type LibraryItx } from "./library.ts";
+import {
+  buildLibrary,
+  executeScript,
+  runSettlementOf,
+  ScriptRunRequested,
+  settlementOfScriptRun,
+  type LibraryItx,
+} from "./library.ts";
+import { waitForEventOnContext } from "./context-stub.ts";
 import { Stream, type ReachableContext } from "./stream/stream.ts";
 import { ALARM_MAX_REARMS, AlarmCoordinator } from "./alarm-coordinator.ts";
 import { itxEntrypointFor } from "./iterate-context.ts";
@@ -757,7 +771,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         });
       }
     } catch (error) {
-      reportIssue("iterate-context.run-settle", error, { requestOffset });
+      // An instance Cloudflare replaced mid-run can no longer write. The instance that replaced it
+      // settles the run `interrupted` at its wake (stream.ts `appendWakeRecord`), and a caller's
+      // next read of the settlement is a call that wakes it.
+      const kind = failureKind(error);
+      if (isPlatformFailureKind(kind))
+        logPlatformFailure("iterate-context", "run-settle", kind, {
+          name: "run-settled",
+          message: String(error),
+          requestOffset,
+        });
+      else reportIssue("iterate-context.run-settle", error, { requestOffset });
     } finally {
       this.#scriptRunsInFlight.delete(requestOffset);
     }
@@ -781,9 +805,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     } catch (error) {
       if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
     }
-    return redirect
-      ? this.#itxExpressionResolver.invoke(redirect)
-      : executeScript(this.#libraryItx, code);
+    if (!redirect) return executeScript(this.#libraryItx, code);
+    // The row's context answers with the request (library.ts `ScriptRunRequested`); its settlement
+    // is read from here, in slices of fresh calls, so an instance of that context Cloudflare
+    // replaces mid-run costs a slice and settles the run `interrupted`, never a call held on it.
+    const answer = await this.#itxExpressionResolver.invoke(redirect);
+    const requested = ScriptRunRequested.safeParse(answer);
+    if (!requested.success) return answer;
+    releaseRpcSessions([answer]); // parsed into a copy of its own
+    return settlementOfScriptRun(
+      requested.data,
+      waitForEventOnContext(this.env.ITERATE_CONTEXT, this.#durableObjectAddress.projectId),
+    );
   }
 
   /** The own-context adapter used by built-ins: a loopback (`itx.cd(<own path>)`, the config

@@ -17,8 +17,19 @@ import { z } from "zod";
 import { keySortedForPrint, InvokeHandle, print, type ItxExpression } from "iterate/expression";
 import { codedError, errorCode, resolveContextPath, withTimeout } from "iterate/lib";
 import type { EventInput, ProcessorContract, StreamEvent } from "iterate/stream/processor";
-import { RUN_DEADLINE_MS, type RunSettled, type RunSettlement } from "iterate/stream/run";
-import type { EntityCollectionApi, FileHandle, FileRecord, IterateContextApi } from "iterate/api";
+import {
+  RUN_DEADLINE_MS,
+  RunFailure,
+  type RunSettled,
+  type RunSettlement,
+} from "iterate/stream/run";
+import type {
+  EntityCollectionApi,
+  FileHandle,
+  FileRecord,
+  IterateContextApi,
+  WaitForEventFilter,
+} from "iterate/api";
 import type { Caller } from "./caller.ts";
 import type { BuiltInScope } from "./context/built-ins.ts";
 import { RepoContract } from "./repo/contract.ts";
@@ -42,12 +53,14 @@ export interface LibraryRoots {
   /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
    *  `run` appends `itx/run-requested { code }` (attributed to the caller), the context's
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
-   *  whose `run` hands the script the scope of one `withItx` round trip), and `run` resolves with
-   *  the `run-settled` event's result — or rejects with its error. So every script that ever ran is
-   *  a pair of events on the context it ran against, and a run the context's restart interrupted —
-   *  or that was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such,
-   *  never re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole
-   *  (an alternative to a tool call), so `run` takes no arguments. */
+   *  whose `run` hands the script the scope of one `withItx` round trip), and the caller gets
+   *  the `run-settled` event's result — or its error. So every script that ever ran is a pair of
+   *  events on the context it ran against, and a run the context's restart interrupted — or that
+   *  was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such, never
+   *  re-run. JSON in, JSON out. A script bakes in its own values — an agent writes it whole (an
+   *  alternative to a tool call), so `run` takes no arguments. HERE, on the context, `run` answers
+   *  the request (`ScriptRunRequested`); the caller's side of the hop reads the settlement
+   *  (`settlementOfScriptRun`), so no call is held on the context for the run's length. */
   run: IterateContextApi["run"];
   /** An MCP server over Streamable HTTP: `callTool(name, args)`, `listTools()`, and one method per
    *  tool whose name is a legal identifier. */
@@ -137,7 +150,7 @@ export function buildLibrary(
   };
   return {
     roots: {
-      run: (script) => runScript(itx, script),
+      run: (script) => requestScriptRun(itx, deps.path, script),
       connectToMcp: (url, options) =>
         memoized(["mcp", url, options], false, () => connectToMcp(itx, url, options)),
       connectToOpenApi: (specOrUrl, options) =>
@@ -187,9 +200,11 @@ export function buildLibrary(
   };
 }
 
-// ── run ── `itx.run(script)`: a request on the log, its settlement awaited. `runScript` appends
-// `itx/run-requested` and waits for the `run-settled` naming that request's offset; the EXECUTION is the
-// context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
+// ── run ── `itx.run(script)`: a request on the log, its settlement read back by the caller.
+// `requestScriptRun` appends `itx/run-requested` and answers where it landed; the caller's side of
+// the hop — the edge (iterate-context.ts), /mcp, a runner whose row sends its scripts elsewhere —
+// reads the `run-settled` naming that request's offset (`settlementOfScriptRun`). The EXECUTION is
+// the context DO's runner (iterate-context-durable-object.ts `#startRequestedRuns`), which calls
 // `executeScript` below at the request's commit, or a processor's request in the next alarm pass —
 // so a literal `run-requested` appended by anyone (a client over /api, the agent's loop, a schedule)
 // runs exactly as `itx.run` does, and both leave the same pair of events. The script is the text of
@@ -263,7 +278,8 @@ export async function executeScript(itx: LibraryItx, code: string): Promise<unkn
  *  value through THE JSON BOUNDARY — a round trip keeps what the log carries (undefined and functions
  *  drop; a bigint or a cycle throws, a runtime failure like any other) — or how it failed: `deadline`
  *  once RUN_DEADLINE_MS has passed, whichever side gave up first (this wait, the loaded `run()`, or a
- *  redirect's own runner), else `runtime`. The value is RELEASED once serialized, whenever it lands:
+ *  redirect's own runner), else the kind a redirected run failed with (`RunFailure`: its context
+ *  restarted, `interrupted`), else `runtime`. The value is RELEASED once serialized, whenever it lands:
  *  a Workers-RPC result holds its callee open until disposed, and a returned live value (a function,
  *  a handle) holds this context with it. The value only, never also its promise: they share one
  *  disposer, and a second call throws. */
@@ -298,56 +314,109 @@ export async function runSettlementOf(execution: Promise<unknown>): Promise<RunS
         error: `itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes; it may have partly run, and it is not run again`,
         failureKind: "deadline",
       };
+    const redirected = RunFailure.safeParse(error);
     return {
       status: "failed",
       error: String(error instanceof Error ? error.message : error).slice(0, 8_000),
-      failureKind: "runtime",
+      failureKind: redirected.success ? redirected.data.failureKind : "runtime",
     };
   }
 }
 
+/** How long ONE read of a run's settlement is held on its context before it is asked again on a
+ *  fresh stub. Cloudflare replaces a Durable Object's instance under the calls running on it (a
+ *  runtime update, a move to another host;
+ *  https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior):
+ *  a wait held there never sees what the instance that replaced it commits, and the run that
+ *  instance was executing can no longer be settled there. A fresh call reaches the new instance,
+ *  whose wake record settles that run `interrupted` (stream.ts `appendWakeRecord`), so a replaced
+ *  instance costs a waiter one slice, as it costs the entity collection's (project/collection.ts). */
+const SCRIPT_RUN_WAIT_SLICE_MS = 5_000;
+/** How long a slice may go unanswered before it is given up and asked again: a call whose instance
+ *  Cloudflare shut down mid-call can be left with no answer at all. A healthy slice answers within
+ *  its own wait, a cold context's wake and the one repeat its stub makes (context-stub.ts), well
+ *  inside four slices. */
+const SCRIPT_RUN_SLICE_ANSWER_MS = 4 * SCRIPT_RUN_WAIT_SLICE_MS;
+
+/** WHAT A CONTEXT'S `run` ANSWERS: the request, by the context it landed on (a path of the caller's
+ *  project; a row may send `run` to another context, `itx.run ⇒ itx.cd(sandbox).run`) and its
+ *  offset, the run's identity. Plain data under one key, so it crosses every hop as it is
+ *  (context/dispatch.ts copies an answer a hop below gave). */
+export const ScriptRunRequested = z.object({
+  $itxScriptRunRequested: z.object({
+    path: z.string().startsWith("/"),
+    requestOffset: z.number().int().positive(),
+  }),
+});
+export type ScriptRunRequested = z.infer<typeof ScriptRunRequested>;
+
 /** `script` is wire-fed (`itx.run` over capnweb; the array-form expression carries no argument
  *  validation), so it is typed `unknown` here and the runtime check IS the contract — `LibraryRoots.run`
- *  keeps the `string` signature callers see. */
-export async function runScript(itx: LibraryItx, script: unknown): Promise<unknown> {
+ *  keeps the `string` signature callers see. `path` is this context's. */
+export async function requestScriptRun(
+  itx: LibraryItx,
+  path: string,
+  script: unknown,
+): Promise<ScriptRunRequested> {
   if (typeof script !== "string" || !script.trim())
     throw new Error("itx.run(script): script is the text of a function, `async (itx) => { … }`");
-  // The request and the wait are the KERNEL's own log traffic, spelled at the fixed point: a context's
-  // rows say what its code may spell, never whether the runner may write its request (a jail's bare
-  // null must not wall the platform's own plumbing).
+  // The request is the KERNEL's own log traffic, spelled at the fixed point: a context's rows say
+  // what its code may spell, never whether the runner may write its request (a jail's bare null
+  // must not wall the platform's own plumbing).
   const [requested] = await itx.builtins.append({
     type: "events.iterate.com/itx/run-requested",
     payload: { code: script },
   });
-  const requestOffset = requested!.offset; // the run's identity: its settlement names it
-  // The runner started at that commit and settles by the deadline. Wait for ITS settlement: each
-  // wait is capped (stream.ts), so re-arm on timeout from the last event seen — a settlement of
-  // another run in between is skipped, not lost — until a minute past the deadline, time for the
-  // settlement's own append. None by then means the runner could not record one (it reports why):
-  // give up rather than hold the caller's call, and this context with it, open.
+  return { $itxScriptRunRequested: { path, requestOffset: requested!.offset } };
+}
+
+/** THE SETTLEMENT OF A REQUESTED RUN, read where the request landed: the result, or its error with
+ *  the failure kind on it. `waitForEventAt(path, filter)` is one `waitForEvent` on a FRESH stub of
+ *  the context at `path`, which reaches the instance Cloudflare runs now. The wait is sliced
+ *  (SCRIPT_RUN_WAIT_SLICE_MS says why) and re-armed from the last settlement seen — another run's is
+ *  skipped, not lost — until a minute past the run's deadline, time for the settlement's own append.
+ *  None by then means the runner could not record one (it reports why): the caller is let go. */
+export async function settlementOfScriptRun(
+  requested: ScriptRunRequested,
+  waitForEventAt: (path: string, filter: WaitForEventFilter) => Promise<StreamEvent>,
+): Promise<unknown> {
+  const { path, requestOffset } = requested.$itxScriptRunRequested;
   const waitUntil = Date.now() + RUN_DEADLINE_MS + 60_000;
   let afterOffset = requestOffset;
   for (;;) {
-    let settled;
+    const remainingMs = waitUntil - Date.now();
+    if (remainingMs <= 0)
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
+      );
+    let settled: StreamEvent;
     try {
-      settled = await itx.builtins.waitForEvent({
-        type: "events.iterate.com/itx/run-settled",
-        afterOffset,
-        timeoutMs: Math.min(120_000, Math.max(0, waitUntil - Date.now())),
-      });
+      settled = await withTimeout(
+        waitForEventAt(path, {
+          type: "events.iterate.com/itx/run-settled",
+          afterOffset,
+          timeoutMs: Math.min(SCRIPT_RUN_WAIT_SLICE_MS, remainingMs),
+        }),
+        SCRIPT_RUN_SLICE_ANSWER_MS,
+        `itx.run: the wait for run ${requestOffset} on ${path}`,
+      );
     } catch (error) {
-      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
-      if (Date.now() >= waitUntil)
-        throw codedError(
-          "WAIT_TIMEOUT",
-          `itx.run: no settlement of run ${requestOffset} within ${(RUN_DEADLINE_MS + 60_000) / 60_000} minutes`,
-        );
+      if (errorCode(error) === "WAIT_TIMEOUT") continue;
+      if (errorCode(error) !== "TIMEOUT") throw error;
+      console.warn({
+        event: "itx-run.platform-failure-wait-unanswered",
+        kind: "disconnected",
+        message: "a wait for a run's settlement got no answer: asked again on a fresh stub",
+        name: "waitForEvent",
+        path,
+        requestOffset,
+      });
       continue;
     }
     afterOffset = settled.offset;
-    // Validated at the append boundary against CoreContract's schema (core-processor.ts), so the
-    // payload IS a RunSettled: read as such, never re-parsed — the library takes only itx, and the
-    // contract's TYPE is free to import where its runtime is not (the library rule, above).
+    // Validated at the append boundary against CoreContract's schema (core-processor.ts), and read
+    // back as the log's own data: the payload IS a RunSettled.
     const { requestOffset: settledOffset, settlement } = settled.payload as RunSettled;
     if (settledOffset !== requestOffset) continue;
     if (settlement.status === "succeeded") return settlement.result;

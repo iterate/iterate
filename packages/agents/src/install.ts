@@ -6,6 +6,7 @@
 // newer build and installs it again. Nothing here is the runtime, so a config worker imports
 // `@iterate-com/agents/install` without loading it.
 import type { IterateContextApi, RepoHandle } from "iterate/api";
+import { errorCode } from "iterate/lib";
 import { z } from "zod";
 
 /** What `installAgents` needs of the project's root. */
@@ -238,20 +239,41 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
   await upgradeAgents(itx);
 }
 
+/** How long `configRepoSettled` waits for the project's creation in all. */
+const PROJECT_CREATION_WAIT_MS = 60_000;
+/** How long ONE call of that wait is held on the project's root before it is asked again: each
+ *  slice is a fresh call, which reaches the instance Cloudflare runs now, so an instance replaced
+ *  under the wait costs one slice
+ *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior). */
+const PROJECT_CREATION_WAIT_SLICE_MS = 5_000;
+
 /** A project created a moment ago may still be seeding its config repo: the project's creation
  *  creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
  *  seed. Resolves once creation has settled (at once for a project created earlier); a failed
  *  creation throws, saying why it failed. */
 export async function configRepoSettled(project: Pick<IterateContextApi, "waitForEvent">) {
-  const settled = await project.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 60_000,
-  });
-  if (settled.type !== "events.iterate.com/project/created")
-    throw new Error(
-      `The project's creation failed, so there is no config repo to install into: ${String(settled.payload?.error)}`,
-    );
+  const started = Date.now();
+  for (;;) {
+    const remainingMs = started + PROJECT_CREATION_WAIT_MS - Date.now();
+    let settled: Awaited<ReturnType<IterateContextApi["waitForEvent"]>>;
+    try {
+      settled = await project.waitForEvent({
+        type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+        afterOffset: 0,
+        timeoutMs: Math.min(PROJECT_CREATION_WAIT_SLICE_MS, remainingMs),
+      });
+    } catch (error) {
+      // the last slice's timeout is the whole wait's
+      if (errorCode(error) !== "WAIT_TIMEOUT" || remainingMs <= PROJECT_CREATION_WAIT_SLICE_MS)
+        throw error;
+      continue;
+    }
+    if (settled.type !== "events.iterate.com/project/created")
+      throw new Error(
+        `The project's creation failed, so there is no config repo to install into: ${String(settled.payload?.error)}`,
+      );
+    return;
+  }
 }
 
 /** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or

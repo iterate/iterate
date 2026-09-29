@@ -348,7 +348,8 @@ test("the wake record settles what the last incarnation left open: every core `s
         requestOffset: 4,
         settlement: {
           status: "failed",
-          error: "the context restarted before the script finished; it is not run again",
+          error:
+            "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
           failureKind: "interrupted",
         },
       },

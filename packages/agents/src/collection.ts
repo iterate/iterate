@@ -20,6 +20,17 @@ import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
 
+/** How long `create` and `delete` wait for the agent's certificate in all. */
+const CERTIFICATE_WAIT_MS = 30_000;
+/** How long ONE call on the agent's context waits before it is asked again. Cloudflare replaces a
+ *  Durable Object's instance under the calls running on it, and a wait held on the old instance
+ *  never sees what the new one commits
+ *  (https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/#shutdown-behavior).
+ *  Each slice is a fresh call, which reaches the instance Cloudflare runs now, so a replaced
+ *  instance costs one slice, as it does the platform's own entity collection (apps/os
+ *  project/collection.ts `TERMINAL_WAIT_SLICE_MS`). */
+const CERTIFICATE_WAIT_SLICE_MS = 5_000;
+
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
@@ -152,10 +163,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         })) as unknown as StreamEvent[];
         requestedAtOffset = requested!.offset;
       }
-      const settled = (await context.waitForEvent({
-        type: ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
-        afterOffset: requestedAtOffset,
-      })) as unknown as StreamEvent;
+      const settled = await agentCertificate(
+        context,
+        path,
+        ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
+        requestedAtOffset,
+      );
       if (settled.type === "events.iterate.com/agent/create-failed")
         throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);
       return { path };
@@ -216,10 +229,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
           })) as unknown as StreamEvent[];
           requestedAtOffset = requested!.offset;
         }
-        await context.waitForEvent({
-          type: "events.iterate.com/agent/deleted",
-          afterOffset: requestedAtOffset,
-        });
+        await agentCertificate(
+          context,
+          path,
+          ["events.iterate.com/agent/deleted"],
+          requestedAtOffset,
+        );
       }
       // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
       // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
@@ -229,6 +244,55 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
         await context.processors.disable("agent");
       return { path };
     });
+  }
+}
+
+/** The first of `types` on the agent's log after `afterOffset`, waited for CERTIFICATE_WAIT_MS in
+ *  slices of CERTIFICATE_WAIT_SLICE_MS, each a fresh call (the constant says why). The context's
+ *  wake record rides along: one found after a slice timed out is an incarnation the timed-out wait
+ *  never saw — the object was replaced under it — and is logged as the platform failure it heals;
+ *  one already on the log when the wait began is skipped. */
+async function agentCertificate(
+  context: { waitForEvent(filter: object): unknown },
+  path: string,
+  types: string[],
+  afterOffset: number,
+): Promise<StreamEvent> {
+  const started = Date.now();
+  let after = afterOffset;
+  let slicesTimedOut = 0;
+  for (;;) {
+    const remainingMs = started + CERTIFICATE_WAIT_MS - Date.now();
+    if (remainingMs <= 0)
+      throw codedError(
+        "WAIT_TIMEOUT",
+        `agent ${path}: no ${types.join(" or ")} after offset ${afterOffset} within ${CERTIFICATE_WAIT_MS}ms`,
+      );
+    let event: StreamEvent;
+    try {
+      // Over the loopback stub a wait's answer types as an RPC result; the wire copied it.
+      event = (await context.waitForEvent({
+        type: [...types, "events.iterate.com/itx/woken"],
+        afterOffset: after,
+        timeoutMs: Math.min(CERTIFICATE_WAIT_SLICE_MS, remainingMs),
+      })) as StreamEvent;
+    } catch (error) {
+      if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      slicesTimedOut += 1;
+      continue;
+    }
+    if (event.type !== "events.iterate.com/itx/woken") return event;
+    if (slicesTimedOut > 0)
+      console.warn({
+        event: "agent-collection.platform-failure-wait-moved",
+        message:
+          "the agent's context was reborn under a wait that never saw it: waited again on the active instance",
+        path,
+        types: types.join(","),
+        waitedMs: Date.now() - started,
+        slicesTimedOut,
+      });
+    after = event.offset;
   }
 }
 

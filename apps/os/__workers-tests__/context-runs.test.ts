@@ -125,6 +125,71 @@ test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; th
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
 
+// REPLACED MID-RUN. Cloudflare replaces a context's instance under the calls running on it (a
+// runtime update, a move to another host): a call that touches the old instance's storage fails
+// with the words below, and the next call reaches a new instance over the same storage. The run the
+// old instance was executing is lost with it; the new instance's wake record settles it
+// `interrupted`. workerd cannot leave a call running on a replaced instance, as Cloudflare does, so
+// `abort` with Cloudflare's words is the replacement here (`replaceInstance`): every call in flight
+// on the instance fails with them, and the next call boots a new one.
+
+/** A script that counts its starts in its context's kv, then parks far longer than any test. */
+const PARKED_SCRIPT =
+  "async (itx) => { const n = Number(await itx.kv.get('starts')) || 0; await itx.kv.put('starts', String(n + 1)); await new Promise((r) => setTimeout(r, 60_000)); return 'never' }";
+
+test("REPLACED MID-RUN: the platform replaces the instance running a script — the caller of itx.run gets the run's settlement, `interrupted` by the instance that replaced it, and the script is never run again", async () => {
+  const project = "prj_run_replaced_mid_run";
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(project);
+  const running = itx.run(PARKED_SCRIPT);
+  running.catch(() => undefined);
+  await until("the script started", async () => (await itx.kv.get("starts")) === "1");
+  await replaceInstance(`${project}.iterate/`);
+  await expect(running).rejects.toMatchObject({
+    message: expect.stringContaining(
+      "the context restarted before the script's result was recorded",
+    ),
+    failureKind: "interrupted",
+  });
+  await new Promise((r) => setTimeout(r, 500));
+  expect(await itx.kv.get("starts")).toBe("1"); // not run again
+});
+
+test("REPLACED MID-RUN, REDIRECTED: a run its context sends to a sandbox (the agents app's `itx.run ⇒ itx.cd(sandbox).run`) whose instance the platform replaces while the script runs settles `interrupted` where it was requested — never the replacement's transport error as the script's own failure — and never runs again", async () => {
+  const project = "prj_run_redirect_replaced";
+  const root = `${project}.iterate/`;
+  const sandbox = `${project}.iterate/sandbox`;
+  // The agents app's two rows: the context's scripts run in its sandbox, and the sandbox's `itx` is
+  // its parent's, so the script counts its starts in the root's kv.
+  await stub(root).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.run", target: "itx.cd('/sandbox').run" },
+  });
+  await stub(sandbox).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx", target: "itx.cd('/')" },
+  });
+  // A literal request, as the agent's loop appends its scripts: the root's runner redirects it.
+  const [requested] = (await stub(root).append({
+    type: "events.iterate.com/itx/run-requested",
+    payload: { code: PARKED_SCRIPT },
+  })) as [StreamEvent];
+  const starts = async () => stub(root).invoke(["itx", "kv", ["get", "starts"]]);
+  await until("the script started in the sandbox", async () => (await starts()) === "1");
+  await replaceInstance(sandbox);
+  const settled = await until("the run is settled where it was requested", async () =>
+    (await runEvents(root)).find(
+      (e) =>
+        e.type === "events.iterate.com/itx/run-settled" &&
+        (e.payload as { requestOffset: number }).requestOffset === requested.offset,
+    ),
+  );
+  expect(settled.payload).toMatchObject({
+    settlement: { status: "failed", failureKind: "interrupted" },
+  });
+  await new Promise((r) => setTimeout(r, 500));
+  expect(await starts()).toBe("1"); // not run again
+});
+
 // THE RESULT IS RELEASED (library.ts `runSettlementOf`): what a script returns crosses Workers RPC
 // from its loaded isolate, and a LIVE value in it — a function, an object carrying one, a handle —
 // arrives as a stub. Serialized and dropped undisposed, that stub held the context: workerd refused
@@ -191,4 +256,13 @@ async function runEvents(ctx: string) {
 
 async function openScriptRuns(ctx: string) {
   return (await snapshot<{ scriptRuns: Record<string, unknown> }>(ctx, "core")).state.scriptRuns;
+}
+
+/** The platform replaces the context's instance (the REPLACED MID-RUN rows say how). */
+async function replaceInstance(ctx: string) {
+  await runInDurableObject(stub(ctx), (_instance, state) => {
+    state.abort(
+      "Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.",
+    );
+  }).catch(() => undefined); // abort() throws by design: nothing after it runs
 }
