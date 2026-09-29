@@ -450,6 +450,28 @@ test("uses only GitHub's job-scoped token for GitHub API calls", () => {
   expect([...new Set(tokenAssignments)]).toEqual(["${{ github.token }}"]);
 });
 
+// The agents rows install the published build of the tested commit's merge base with main
+// (apps/agents/e2e/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
+// shallow checkout has no origin/main to find it in. (Preview OS names its tested head at run time.)
+test.for([
+  {
+    file: ".depot/workflows/main-os-e2e.yml",
+    job: "e2e",
+    step: "Run the suite against the preview",
+  },
+  { file: ".depot/workflows/os-e2e-soak.yml", job: "soak", step: "Soak" },
+])(
+  "$file's $job job names its commit and a GitHub token to the e2e suite",
+  ({ file, job, step }) => {
+    const suiteJob = loadWorkflow(file).jobs[job];
+    const suite = suiteJob?.steps?.find((candidate) => candidate.name === step);
+    expect({ ...suiteJob?.env, ...suite?.env }).toMatchObject({
+      TEST_TELEMETRY_HEAD_SHA: "${{ github.sha }}",
+      GITHUB_TOKEN: "${{ github.token }}",
+    });
+  },
+);
+
 test.each([
   {
     file: ".depot/workflows/ci-telemetry.yml",
