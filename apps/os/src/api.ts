@@ -1,4 +1,9 @@
 import { insufficientScope, OAuthResourceServer } from "@cloudflare/workers-oauth-provider";
+import {
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
 import { reportIssue } from "iterate/lib";
 import { platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";
@@ -13,6 +18,7 @@ import {
 } from "./oauth.ts";
 import { rpcResponse } from "./rpc.ts";
 import { mcpResponse } from "./mcp.ts";
+import { unavailableAnswer } from "./unavailable.ts";
 
 /** The authorization server's own endpoints (oauth.ts), on the platform origin. */
 const AUTHORIZATION_SERVER_PATHS = new Set([
@@ -74,19 +80,30 @@ function resourceServer(
     authorization: Authorization,
   ) => Promise<Response>,
 ) {
-  return new OAuthResourceServer<Env, Authorization>({
+  /** What failed this request's token validation, when the platform did. */
+  let platformFailure: unknown;
+  const server = new OAuthResourceServer<Env, Authorization>({
     resourceMetadata: {
       resource,
       authorization_servers: [addresses.platformOrigin],
       scopes_supported: ["iterate"],
     },
     // The library calls it with this server's own canonical resource, and answers a throw with a
-    // bare 503 that names no cause: the cause is reported here.
+    // bare 503 that names no cause: a platform failure is logged here as the platform's, and
+    // anything else reported.
     validateToken: (env) => async (canonical, token) => {
       try {
         return await validateToken(env, addresses, canonical, token);
       } catch (error) {
-        reportIssue("oauth.token-validation-failed", error, { resource: canonical });
+        const kind = failureKind(error);
+        if (isPlatformFailureKind(kind)) {
+          platformFailure = error;
+          logPlatformFailure("oauth", "token-validation", kind, {
+            name: "token-validation",
+            resource: canonical,
+            message: String(error),
+          });
+        } else reportIssue("oauth.token-validation-failed", error, { resource: canonical });
         throw error;
       }
     },
@@ -101,6 +118,16 @@ function resourceServer(
       },
     },
   });
+  return {
+    // The library's 503 for a validation the platform failed carries the edge's one answer's
+    // headers (unavailable.ts `unavailableAnswer`): its kind's Retry-After.
+    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+      const answer = await server.fetch(request, env, ctx);
+      for (const [name, value] of Object.entries(unavailableAnswer(platformFailure)?.headers ?? {}))
+        answer.headers.set(name, value);
+      return answer;
+    },
+  };
 }
 
 /** Whether `url` is `resource`'s: the resource itself, a path below it, or its RFC 9728 metadata
