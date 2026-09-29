@@ -9,12 +9,36 @@
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
-import { adminCredentials, openSession, readLog, stub, until } from "./support.ts";
+import { adminCredentials, openSession, PERSON, readLog, refused, stub, until } from "./support.ts";
 
 const HOOKS = "https://hooks.test";
 
 /** An event the target's author wrote, not the log. */
 const FORGED = { type: "test/forged", offset: 999, path: "/x", payload: { from: "the target" } };
+
+test("deliverEvent and processEvent answer the delivery loop alone: loaded code, a session and a principal-less caller are FORBIDDEN", async () => {
+  const project = freshProject();
+  const worker = ["itx", "workers", ["get", { source: recordingWorker() }]];
+  for (const target of [
+    [...worker, ["deliverEvent", FORGED]],
+    [...worker, ["processEvent", FORGED]],
+    ["itx", "webhooks", ["get", { url: `${HOOKS}/in` }], ["deliverEvent", FORGED]],
+    ["itx", "builtins", "platformHook", ["deliverEvent", FORGED]],
+  ])
+    for (const caller of [
+      { principal: null, app: true as const },
+      { principal: PERSON },
+      { principal: null },
+    ])
+      // loaded code may not spell itx.builtins at all, a wall of its own
+      if (!("app" in caller && target[1] === "builtins"))
+        await refused(
+          () => stub(project).invoke(target as ItxExpression, [], caller),
+          "FORBIDDEN",
+          /is the delivery loop's own call/,
+        );
+  expect(await recorded(project)).toEqual([]);
+});
 
 test.for([
   {
