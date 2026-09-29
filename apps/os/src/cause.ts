@@ -87,9 +87,9 @@ export function causeOfDelivery(
 }
 
 /** A cause as an event stores it: the chain, the depth and the parent, never what only a call
- *  needs. */
+ *  needs — and no `parent` key at all without one, so an event reads the same live as stored. */
 export function storedCause({ chain, depth, parent }: Cause): Cause {
-  return { chain, depth, parent };
+  return parent ? { chain, depth, parent } : { chain, depth };
 }
 
 /** THE REFUSAL of an act past the limit — an append, a send, egress, a commit, waking a sleeping

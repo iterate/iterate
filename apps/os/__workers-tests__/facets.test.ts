@@ -598,7 +598,13 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
-      { incarnation: incarnation + 1, cause: "call", caller: "other", facetsReset: ["plain"] },
+      {
+        incarnation: incarnation + 1,
+        cause: "call",
+        caller: "other",
+        call: "itx.readEvents",
+        facetsReset: ["plain"],
+      },
     ],
   ]);
 });
