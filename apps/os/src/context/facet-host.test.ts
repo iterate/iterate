@@ -35,14 +35,34 @@ test("a live facet outlasts a name it cannot read right now: the platform failed
   expect(facets).toMatchObject({ started: ["agents-v1"] });
 });
 
+test("a call cut off by `itx.facets.abort` rejects FACET_ABORTED with its own abort's reason, even once a second abort ended the next instance before the first cut-off arrived", async () => {
+  const facets = namedFacets();
+  facets.publish(1);
+  await facets.boot();
+  const cutOff = facets.work();
+  await settle();
+  await facets.abort("first");
+  await facets.abort("second");
+  facets.failHeldWork(new Error("the runtime's abort"));
+  await expect(cutOff).rejects.toMatchObject({
+    code: "FACET_ABORTED",
+    message: expect.stringContaining("aborted: first"),
+  });
+});
+
 /** A context's facet host with one facet, `tally`, named by the root's published worker: `publish`
  *  sets the generation the name resolves to (agents.ts's identity `agents-v<generation>`), `boot` is
  *  one call on it answering the identity its class was minted under, and `started` every class the
- *  host minted, in order. */
+ *  host minted, in order. `work` is a call the facet holds until `failHeldWork`: the fake's abort
+ *  cuts off nothing by itself, so a test says when the runtime's rejection arrives. */
 function namedFacets() {
   const kv = new Map<string, unknown>();
   const started: string[] = [];
-  const instances = new Map<string, { boot(): string; listPublicMethods(): string[] }>();
+  const instances = new Map<
+    string,
+    { boot(): string; listPublicMethods(): string[]; work(): Promise<never> }
+  >();
+  const heldWork: ((error: unknown) => void)[] = [];
   let generation = 0;
   let holdNext = false;
   let answerHeld = (_generation: number) => {};
@@ -85,7 +105,11 @@ function namedFacets() {
           if (!instance) {
             const { identity } = startup().class;
             started.push(identity);
-            instance = { boot: () => identity, listPublicMethods: () => ["boot"] };
+            instance = {
+              boot: () => identity,
+              listPublicMethods: () => ["boot"],
+              work: () => new Promise<never>((_, reject) => heldWork.push(reject)),
+            };
             instances.set(name, instance);
           }
           return instance;
@@ -132,6 +156,11 @@ function namedFacets() {
     started,
     publish: (next: number) => void (generation = next),
     boot: () => host.callFacetAsPlatform(tally, [["boot"]]),
+    work: () => host.callFacetAsPlatform(tally, [["work"]]),
+    abort: (reason: string) => host.abort("tally", reason),
+    failHeldWork: (error: unknown) => {
+      for (const reject of heldWork.splice(0)) reject(error);
+    },
     holdNextResolution: () => {
       holdNext = true;
       return { answer: (at: number) => answerHeld(at) };
