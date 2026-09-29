@@ -106,7 +106,23 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ] as const;
 
-export const DEFAULT_X_SCOPES = ["tweet.read", "users.read", "offline.access"];
+/** What a Connect X asks for unless told otherwise: read and post, bookmarks, likes, follows, lists
+ *  and DMs, so an agent can use the account without a second consent. X grants only what the app's
+ *  own permissions allow; the granted set is what the connection records. */
+export const DEFAULT_X_SCOPES = [
+  "tweet.read",
+  "users.read",
+  "offline.access",
+  "tweet.write",
+  "media.write",
+  "bookmark.read",
+  "bookmark.write",
+  "like.read",
+  "follows.read",
+  "list.read",
+  "dm.read",
+  "dm.write",
+];
 
 /** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
  *  client's consent screen is verified for. */
