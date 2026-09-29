@@ -1,11 +1,12 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
 # The PR body's Notes link signs an admin in, as themselves, to the PR's project
 
-**Status:** spec'd, implementation starting.
+**Status:** done (iterate/iterate#3401). The seed serves the proxied apps in `pr<N>` and makes the
+deployment's admins members; the Notes link opens Notes there. Docs follows when #3384 merges.
 
 ## Why
 
@@ -38,13 +39,15 @@ person. That needed new sign-in code in apps/os/src; nobody needs to be the test
 
 ## Checklist
 
-- [ ] preview-config: `PROXIED_APPS`, the proxied link, the route; one function for each row's link
-- [ ] preview.ts: `signInLinks` uses it; `seedSignIn` sets the routes and adds the admins
-- [ ] unit rows in preview.test.ts
-- [ ] spec: an admin signs in as themselves through the Notes link and lands on the project's note
-- [ ] docs: dev-environments.md PR sign-in links, apps/os README, testing.md
-- [ ] close #3393 pointing here
+- [x] preview-config: `PROXIED_APPS`, the proxied link, the route; one function for each row's link _`signInLinkOf`, `proxiedAppRoute`_
+- [x] preview.ts: `signInLinks` uses it; `seedSignIn` sets the routes and adds the admins
+- [x] unit rows in preview.test.ts
+- [x] spec: an admin signs in as themselves through the Notes link and lands on the project's note _`specs/notes/pr-body-link.spec.ts`, preview-only_
+- [x] docs: dev-environments.md PR sign-in links, apps/os README, testing.md
+- [x] close #3393 pointing here
 
 ## Implementation notes
 
-(log goes here)
+- `users.create` needs the operator's own session (reach `every`), so the seed opens a second
+  connection without `as` for the memberships.
+- Follow-up: iterate/iterate#3409 (`provider_hint`, the sign-in page leading with os.iterate.com).
