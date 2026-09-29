@@ -39,7 +39,12 @@
 
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, jsonEqual, reportIssue, withTimeout } from "iterate/lib";
-import { durableLadderDelayMs } from "@iterate-com/shared/platform-retry";
+import {
+  durableLadderDelayMs,
+  failureKind,
+  isPlatformFailureKind,
+  logPlatformFailure,
+} from "@iterate-com/shared/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";
@@ -429,9 +434,7 @@ export class SubscriptionDelivery {
             targetOwnsProgress(state, row)
               ? this.#catchUpFacetRow(name, row)
               : this.#deliverFromCursor(name)
-          ).catch((error) =>
-            this.#reportFacetRowFailure("subscription-delivery.resume", name, row, error),
-          );
+          ).catch((error) => this.#reportFacetRowFailure("resume", name, row, error));
           break;
         }
         case "events.iterate.com/itx/subscription-configured": {
@@ -454,7 +457,7 @@ export class SubscriptionDelivery {
                 // NO_FACET on the row still in place addresses a facet no longer hosted, as a push
                 // into it does (below).
                 if (errorCode(error) === "NO_FACET" && this.#isStillTheRow(name, row)) return;
-                this.#reportFacetRowFailure("subscription-delivery.configured", name, row, error);
+                this.#reportFacetRowFailure("configured", name, row, error);
               },
             );
           else if (row.afterOffset !== undefined && !isFanOutRow(state, row))
@@ -802,19 +805,25 @@ export class SubscriptionDelivery {
         return;
       }
       if (code === "NO_FACET" && this.#isStillTheRow(name, row)) return;
-      this.#reportFacetRowFailure("subscription-delivery.deliver", name, row, error);
+      this.#reportFacetRowFailure("deliver", name, row, error);
     }
   }
 
   /** A facet row's delivery that failed: NO_FACET once the row is gone or replaced is the removal it
    *  raced — a disable, a delete, the facet taken with its row (`ctx.facets.delete` fails a call in
-   *  flight, FacetHost `#call`) — an outcome, logged; anything else is an issue. */
+   *  flight, FacetHost `#call`) — an outcome, logged. A platform failure (`failureKind`: a hop's
+   *  UNAVAILABLE, the facet call's own lost connection) is the platform's, logged
+   *  `subscription-delivery.platform-failure-<action>` and not repeated here: a failure that stood is
+   *  the caller's to wait out (docs/engineering-invariants.md#failures-and-retries), and the facet
+   *  reads what it missed from the log at its next push (iterate/stream/processor.ts gap repair), as
+   *  after a dropped push. Anything else is an issue. */
   #reportFacetRowFailure(
-    failureSite: string,
+    action: "resume" | "configured" | "deliver" | "catch-up-after-timeout",
     name: string,
     row: Subscription,
     error: unknown,
   ): void {
+    const failureSite = `subscription-delivery.${action}`;
     if (errorCode(error) === "NO_FACET" && !this.#isStillTheRow(name, row)) {
       console.log({
         event: "delivery.facet-removed-in-flight",
@@ -823,6 +832,11 @@ export class SubscriptionDelivery {
         name,
         message: error instanceof Error ? error.message : String(error),
       });
+      return;
+    }
+    const kind = failureKind(error);
+    if (isPlatformFailureKind(kind)) {
+      logPlatformFailure("subscription-delivery", action, kind, { name, message: String(error) });
       return;
     }
     reportIssue(failureSite, error, { name });
@@ -843,12 +857,7 @@ export class SubscriptionDelivery {
     const record = this.#deliveryRecordFor(name);
     record.deliveryChain = record.deliveryChain.then(() =>
       this.#catchUpFacetRow(name, row).catch((error) =>
-        this.#reportFacetRowFailure(
-          "subscription-delivery.catch-up-after-timeout",
-          name,
-          row,
-          error,
-        ),
+        this.#reportFacetRowFailure("catch-up-after-timeout", name, row, error),
       ),
     );
   }

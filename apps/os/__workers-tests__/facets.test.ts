@@ -804,11 +804,13 @@ test.for([
 );
 
 // A facet whose own outbound call gave up (an overloaded hop) rejects with that hop's UNAVAILABLE,
-// workerd's opaque text for its message: the facet-start defect's text, coded.
-test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try", async () => {
+// workerd's opaque text for its message: the facet-start defect's text, coded. Its push is the
+// platform's failure (src/stream/subscription-delivery.ts `#reportFacetRowFailure`), never an issue.
+test("a facet call that rejects with a hop below's coded platform failure, workerd's opaque text for its message, is that failure: no restart, the loaded identity kept, one try, logged as the platform's", async () => {
   const ctx = "prj_facet_coded_internal_error";
   const s = stub(ctx);
   const errors = vi.spyOn(console, "error");
+  const warns = vi.spyOn(console, "warn");
   const failure = { code: "UNAVAILABLE", data: { kind: "overloaded", retryAfterMs: 10_000 } };
   await s.append({
     type: "events.iterate.com/itx/subscription-configured",
@@ -830,17 +832,29 @@ test("a facet call that rejects with a hop below's coded platform failure, worke
   const loaderId = await until("the facet materialized at configure", () =>
     kv<string>(ctx, "facet:flaky:loader-id"),
   );
-  await until("the push's failure is reported", async () =>
-    issueLines(errors).some((line) => JSON.stringify(line).includes("cn4da7sq5qdv4vobadb1tse3")),
-  );
+  const pushFailed = await logged(warns, "subscription-delivery.platform-failure-deliver");
   const rows = (await s.invoke("itx.processors.list()")) as {
     hostedFacet: { restarts: number };
   }[];
   expect({
+    pushFailed,
+    issues: issueLines(errors).filter((line) =>
+      JSON.stringify(line).includes("cn4da7sq5qdv4vobadb1tse3"),
+    ),
     loaderId: await kv<string>(ctx, "facet:flaky:loader-id"),
     restarts: rows.map((row) => row.hostedFacet.restarts),
     tries: ((await s.invoke("itx.facets.get('flaky').tries()")) as unknown[]).length,
-  }).toEqual({ loaderId, restarts: [0], tries: 1 });
+  }).toMatchObject({
+    pushFailed: {
+      kind: "overloaded",
+      name: "flaky",
+      message: expect.stringContaining("cn4da7sq5qdv4vobadb1tse3"),
+    },
+    issues: [],
+    loaderId,
+    restarts: [0],
+    tries: 1,
+  });
 });
 
 test("a platform start that rejects with the platform's clone-version text restarts once under a fresh loaded identity, and the facet answers", async () => {
