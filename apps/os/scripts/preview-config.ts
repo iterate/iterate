@@ -9,13 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
-import {
-  ciReportsEnvs,
-  osEnvs,
-  osResourceNames,
-  previewDeployment,
-  spaEnvs,
-} from "../../../envs.ts";
+import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../../envs.ts";
 import { agents } from "../../agents/scripts/app.ts";
 import { dash } from "../../dash/scripts/app.ts";
 import { kit } from "../../kit/scripts/app.ts";
@@ -24,7 +18,6 @@ import { admin } from "../../admin/scripts/app.ts";
 import { voice } from "../../voice/scripts/app.ts";
 import { markedSection, replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
 import type { StartApp } from "../../../scripts/lib/start-app.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
 
 /** MAIN ON THE DEV/PREVIEW ACCOUNT (envs.ts `osEnvs.preview`): the account every per-commit
  *  deployment lives on, whose Doppler config (`os/preview`) holds its Cloudflare credentials and
@@ -37,20 +30,6 @@ export const MAX_PREVIEW_PREFIX_LENGTH = 28;
 
 /** The apps on top, each deployed beside apps/os as `<deployment>-<app>`. */
 export const APPS: StartApp[] = [dash, agents, notes, voice, kit, admin];
-
-/** THE FORMER PARENTS: `os-preview` and the apps' `<app>-preview` workers, which no deploy names
- *  (main on dev is `os` and `<app>`). The sweep deletes the Worker Previews still hanging
- *  from them, as it does main on dev's (scripts/preview.ts `deleteLegacyWorkerPreviews`), then each
- *  worker with everything under its name (preview-sweep.ts `planFormerParents`): each holds a
- *  Durable Object namespace per class of the account's 500. */
-export const FORMER_PARENTS = [
-  "os-preview",
-  "dash-preview",
-  "agents-preview",
-  "notes-preview",
-  "voice-preview",
-  "kit-preview",
-];
 
 // ── naming ─────────────────────────────────────────────────────────────────────────────────────
 
@@ -107,22 +86,6 @@ export function previewDeploymentUrls(name: string) {
 }
 
 // ── what on the account is never a preview's ──────────────────────────────────────────────────
-
-/** THE ACCOUNT'S OWN RESOURCES: every OS deployment's in envs.ts (main on dev's `os-parent-files`,
- *  `os-parent-db`, …) and local dev's (wrangler.base.jsonc: `os-dev-repos`, …). The sweep never
- *  deletes one (preview-sweep.ts `planFormerParents`). KV is bound by id, so only its titles count. */
-export function accountResourceNames(template = readWranglerBase()) {
-  return new Set([
-    ...Object.values(osEnvs).flatMap((env) => [
-      `${env.resourceNamePrefix}-oauth`,
-      `${env.resourceNamePrefix}-itx`,
-      ...Object.values(osResourceNames(env.resourceNamePrefix)),
-    ]),
-    ...template.r2_buckets.map((bucket: { bucket_name: string }) => bucket.bucket_name),
-    ...template.d1_databases.map((database: { database_name: string }) => database.database_name),
-    ...template.artifacts.map((artifacts: { namespace: string }) => artifacts.namespace),
-  ]);
-}
 
 /** envs.ts's workers on the dev/preview account: main on dev (`os`, each app's) and every other
  *  deployment there (the CI reports viewer, the SPA example). The sweep never deletes one. */
