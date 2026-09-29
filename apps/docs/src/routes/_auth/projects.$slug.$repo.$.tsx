@@ -38,13 +38,16 @@ function DocPage() {
   const data = Route.useLoaderData();
   const { api, project, info } = Route.useRouteContext();
   const { slug, repo } = Route.useParams();
-  // one session per load: another doc is a new editor
+  const { repo: docRepo, path, text } = data;
+  const userName = info.principal.email || info.principal.actor;
+  // One session per doc and person, keyed on values: a new session is a new editor and a new tab
+  // on the doc, so a context object or loader result that's only a new copy mustn't make one.
   const session = useMemo(
     () =>
       new DocSession({
-        path: data.path,
-        text: data.text,
-        user: { name: info.principal.email || info.principal.actor },
+        path,
+        text,
+        user: { name: userName },
         open: async () => {
           const itx = await api.projects.get(project.id);
           try {
@@ -52,7 +55,7 @@ function DocPage() {
             // methods, and disposes
             const context = await ensureDoc(
               itx as unknown as IterateContextApi,
-              { repo: repoPath(data.repo), path: data.path },
+              { repo: repoPath(docRepo), path },
               await publishedDocs(),
             );
             return {
@@ -68,13 +71,13 @@ function DocPage() {
           }
         },
       }),
-    [data, api, project.id, info.principal],
+    [docRepo, path, text, userName, api, project.id],
   );
   return (
     <DocEditor
-      key={`${data.repo}/${data.path}`}
+      key={`${docRepo}/${path}`}
       session={session}
-      path={data.path}
+      path={path}
       back={
         <Link to="/projects/$slug/$repo" params={{ slug, repo }} className="hover:text-foreground">
           {repo}

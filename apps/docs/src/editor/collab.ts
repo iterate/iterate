@@ -45,6 +45,8 @@ export class DocCollab {
   /** The edits being sent now, if any: what closing waits for before it says `docs/left`. */
   #flushing = Promise.resolve();
   #syncing: Promise<void> | null = null;
+  /** `open()` while it runs: closing waits for it, so the goodbye can't overtake the hello. */
+  #opening: Promise<void> | null = null;
   #syncAgain = false;
   #disposed = false;
   #subscription: Disposable | null = null;
@@ -76,7 +78,12 @@ export class DocCollab {
 
   /** Subscribe, then take the processor's text: a frame racing the first sync waits in Yjs until
    *  the update it builds on arrives. */
-  async open() {
+  open() {
+    this.#opening = this.#open();
+    return this.#opening;
+  }
+
+  async #open() {
     this.#subscription = await this.#context.subscribe({
       consumes: [EDIT_FRAME, AWARENESS_FRAME],
       target: (events) => {
@@ -125,6 +132,10 @@ export class DocCollab {
     if (this.#disposed) return;
     this.#disposed = true;
     removeAwarenessStates(this.awareness, [this.doc.clientID], "left");
+    // A sync still on its way would say this tab is here after its goodbye, and the processor
+    // would wait on it until its minute is up; a subscription still being made would outlive it.
+    await this.#opening?.catch(() => {});
+    await this.#syncing;
     this.#subscription?.[Symbol.dispose]();
     this.awareness.destroy();
     await this.#flushing;
