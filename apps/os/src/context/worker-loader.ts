@@ -426,12 +426,12 @@ export async function prepareConfinedWorker(
  *  (facet-host.ts `isFacetStartPlatformFailure` names it; `retire` above is the recovery). The
  *  runtime reports it either as V8's clone-version text or as the opaque
  *  `internal error; reference = …`: its detail goes only to Cloudflare's own runtime log (workerd
- *  jsg/ser.c++), and the reference is logged nowhere, so it looks nothing up. The opaque text counts only when
- *  the runtime raised it: an internal failure inside the loaded worker reaches the caller
- *  unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`), while an error the loaded
- *  code threw itself, the same text rethrown included, arrives with `remote` set and is the code's
- *  own. Retiring on that would mint a new billed identity for every request. An overload is its own
- *  kind of platform failure (platform-retry.ts `failureKind`), answered 503, and never a bad
+ *  jsg/ser.c++), and the reference is logged nowhere, so it looks nothing up. The opaque text
+ *  counts only when the runtime raised it: an internal failure inside the loaded worker reaches the
+ *  caller unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`), while an error the
+ *  loaded code threw itself, the same text rethrown included, arrives with `remote` set and is the
+ *  code's own. Retiring on that would mint a new billed identity for every request. An overload is
+ *  its own kind of platform failure (platform-retry.ts `failureKind`), answered 503, and never a bad
  *  isolate. */
 export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
   if (!(error instanceof Error) || errorCode(error) !== undefined) return false;
