@@ -14,8 +14,9 @@ from the platform). The worker extends `ConfigWorker` from `iterate/sdk` and rea
 through `this.withItx((itx) => …)`, which releases everything the call reached; lint refuses a raw
 `env.ITX.get()` (`iterate/no-raw-itx-get`). Optional `iterate.json` declares an `events` array; the
 platform subscribes the config worker's `processEventBatch(events, range)` before emitting
-`project/created`, and `ConfigWorker` hands each event to `processEvent({ event, itx })`.
-Templates without that manifest have no lifecycle subscription.
+`project/created`, every later commit moves the subscription to that commit's worker and manifest,
+and `ConfigWorker` hands each event to `processEvent({ event, itx })`. Templates without that
+manifest have no lifecycle subscription.
 
 A template may list a pkg.pr.new dependency at a branch (`@iterate-com/agents@main` in
 `with-agents/`): the seed writes it at the commit pkg.pr.new names for it then, because the loader

@@ -4,18 +4,20 @@
 // row — and a death certificate drops the entry; the config repo's commits, whose latest is the tip
 // the apex follows), and TWO EFFECTS, each run from state at head. THE CREATION SAGA: the config repo
 // (`itx.repos.create("/repos/config")`, the same collection a caller uses), its seed committed when
-// `main` is unborn (the homepage worker and an AGENTS.md, below), the project's ingress pointed at
-// that commit (`itx/ingress-configured`, the core's), then the certificate. THE APEX FOLLOWING
-// THE CONFIG REPO: every `repo/commit-completed` from `/repos/config` re-points the ingress at that
-// commit — publishing a config-repo website needs a commit, not a manual ingress event.
+// `main` is unborn (the homepage worker and an AGENTS.md, below), that commit published, then the
+// certificate. THE CONFIG WORKER FOLLOWING THE CONFIG REPO: every `repo/commit-completed` from
+// `/repos/config` publishes that commit — the ingress (`itx/ingress-configured`, the core's) and
+// the config worker's subscription (`itx/subscription-configured`) both re-pointed at it in one
+// append — so publishing a config-repo website or processEvent needs a commit, nothing by hand.
 // Subscribed to `/` (the row `session.projects.create` enables), it runs again after every eviction:
 // an attempt lost with an incarnation is simply run again by the next — the repo tolerates existing,
-// a born `main` refuses the seed, every ingress append is keyed by the commit it points at (a
-// return to a commit published before, by that commit's fact), the certificate is keyed. The host's `withItx` and the template download are its constructor
+// a born `main` refuses the seed, every publication is keyed (the saga's by its commit, every
+// later one by the commit's fact), the certificate is keyed. The host's `withItx` and the template download are its constructor
 // arguments; a unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or
 // hands it a fake download (templates.test.ts); the effects are proven on
 // the worker (e2e/session.e2e.test.ts: the catalog, the apex answering the seed;
-// e2e/website-publication.e2e.test.ts: a commit publishes).
+// e2e/website-publication.e2e.test.ts: a commit publishes; e2e/config-worker.e2e.test.ts: a commit
+// moves processEvent with fetch).
 
 import { z } from "zod";
 import { jsonEqual, resolveContextPath } from "iterate/lib";
@@ -72,6 +74,43 @@ const ConfigRepoIngressTarget = z.tuple([
 function configRepoCommitOf(target: unknown): string | null {
   const commitOid = ConfigRepoIngressTarget.safeParse(target).data?.[2][1].cacheKey;
   return commitOid && jsonEqual(target, configRepoIngressTarget(commitOid)) ? commitOid : null;
+}
+
+/** What a config repo's `iterate.json` declares: the events its worker's `processEventBatch` is
+ *  handed. */
+const ConfigRepoManifest = z.object({ events: z.array(z.string().min(1)).default([]) });
+
+/** THE PUBLICATION of the config repo at `commitOid`, one append: the apex points at the worker at
+ *  that commit, and the `config-worker` subscription hands that same worker the `events` its
+ *  `iterate.json` names (a commit that names none removes the row), so fetch and processEvent run
+ *  one version of the config worker at a time. Keyed by `key`, so a publication run again lands
+ *  nothing twice. A replaced row's cursor starts again (stream/subscription-delivery.ts): at
+ *  `afterOffset` when given, else at the publication (the append boundary drops an undefined one). */
+function configRepoPublication(
+  commitOid: string,
+  events: string[],
+  { key, afterOffset }: { key: string; afterOffset?: number },
+) {
+  const target = configRepoIngressTarget(commitOid);
+  return [
+    {
+      type: "events.iterate.com/itx/ingress-configured" as const,
+      idempotencyKey: `itx/ingress-configured:${key}`,
+      payload: { target },
+    },
+    {
+      type: "events.iterate.com/itx/subscription-configured" as const,
+      idempotencyKey: `project/config-worker:${key}`,
+      payload: events.length
+        ? {
+            name: "config-worker",
+            consumes: events,
+            target: [...target, "processEventBatch"],
+            afterOffset,
+          }
+        : { name: "config-worker", target: null },
+    },
+  ];
 }
 
 /** The files of a config-repo template, which seed a project created from one: the host passes
@@ -447,14 +486,16 @@ export class ProjectProcessor extends StreamProcessor<
         }
       });
     }
-    // THE APEX FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the latest commit
-    // of `/repos/config` (its fact cross-posted here by the repo facet) is published by pointing the
-    // ingress at it, keyed by the commit, so this and the seed's own append in the saga below land
-    // ONE event, and an attempt lost with an incarnation is run again by the next; a return to a
-    // commit published before is published again under its fact's own key. A tip the state holds
-    // published AFTER its fact is owed nothing: no append, and no background work to claim the
-    // context's alarm for. The target is `configRepoIngressTarget`, the same one the saga writes
-    // for the seed.
+    // THE CONFIG WORKER FOLLOWS THE CONFIG REPO — state-derived, at head, in the background: the
+    // latest commit of `/repos/config` (its fact cross-posted here by the repo facet) is published
+    // (`configRepoPublication`), keyed by that fact, so an attempt lost with an incarnation is run
+    // again by the next and lands nothing twice, and a return to a commit published before is a new
+    // fact, published again. The worker at the commit is handed its own commit's fact onwards: the
+    // previous version may have been handed it too (every delivery is at least once), never neither.
+    // While the project is being created its saga publishes, the certificate in the same append;
+    // a commit that lands meanwhile is published here once it has. A tip the state holds published
+    // AFTER its fact is owed nothing: no append, and no background work to claim the context's
+    // alarm for.
     if (state.configRepoTip) {
       this.#newestTip = state.configRepoTip;
       if (
@@ -463,7 +504,12 @@ export class ProjectProcessor extends StreamProcessor<
       )
         this.#published = state.configRepoTip.offset;
     }
-    if (this.#newestTip && this.#published !== this.#newestTip.offset && !this.#publishing) {
+    if (
+      state.creation?.status !== "requested" &&
+      this.#newestTip &&
+      this.#published !== this.#newestTip.offset &&
+      !this.#publishing
+    ) {
       this.#publishing = true;
       runInBackground(async () => {
         try {
@@ -473,20 +519,13 @@ export class ProjectProcessor extends StreamProcessor<
             tip && this.#published !== tip.offset;
             tip = this.#newestTip
           ) {
-            const payload = { target: configRepoIngressTarget(tip.commitOid) };
-            const [landed] = await append({
-              type: "events.iterate.com/itx/ingress-configured",
-              idempotencyKey: `itx/ingress-configured:${tip.commitOid}`,
-              payload,
-            });
-            // A pull can return main to a commit published before (B, C, then B again): the key
-            // answers that older publication, so this fact publishes it again under its own.
-            if (landed && landed.offset < tip.offset)
-              await append({
-                type: "events.iterate.com/itx/ingress-configured",
-                idempotencyKey: `itx/ingress-configured:${tip.commitOid}@${tip.offset}`,
-                payload,
-              });
+            await append(
+              ...configRepoPublication(
+                tip.commitOid,
+                await this.#configWorkerEventsAt(tip.commitOid),
+                { key: `${tip.commitOid}@${tip.offset}`, afterOffset: tip.offset - 1 },
+              ),
+            );
             this.#published = tip.offset;
           }
         } finally {
@@ -498,8 +537,9 @@ export class ProjectProcessor extends StreamProcessor<
     // later delivery over the same state runs it again, so an attempt lost to an eviction costs
     // nothing (the engine revives the host while an attempt is in flight). Every step is idempotent
     // on its own: the config repo's create answers at once for a created repo, the seed is committed
-    // only onto an unborn `main`, the ingress append is keyed by the commit it points at, the
-    // certificate is keyed.
+    // only onto an unborn `main`, the publication is keyed by the commit it publishes, the
+    // certificate is keyed. The certificate rides the publication's append: the config worker is
+    // subscribed, and the apex answers, before `project/created`.
     if (state.creation?.status !== "requested" || this.#creating) return;
     this.#creating = true;
     runInBackground(async () => {
@@ -552,31 +592,10 @@ export class ProjectProcessor extends StreamProcessor<
           });
         }
         if (!commitOid) throw new Error("the config repo's seed left main unborn");
-        const manifestText = await this.withItx((itx) =>
-          config(itx).readFile("iterate.json", { commitOid: commitOid! }),
-        );
-        const manifest = z
-          .object({ events: z.array(z.string().min(1)).default([]) })
-          .parse(manifestText ? JSON.parse(manifestText) : {});
-        if (manifest.events.length) {
-          await this.withItx((itx) =>
-            itx.append({
-              type: "events.iterate.com/itx/subscription-configured",
-              idempotencyKey: `project/config-worker:${commitOid}`,
-              payload: {
-                name: "config-worker",
-                consumes: manifest.events,
-                target: [...configRepoIngressTarget(commitOid), "processEventBatch"],
-              },
-            }),
-          );
-        }
         await append(
-          {
-            type: "events.iterate.com/itx/ingress-configured",
-            idempotencyKey: `itx/ingress-configured:${commitOid}`,
-            payload: { target: configRepoIngressTarget(commitOid) },
-          },
+          ...configRepoPublication(commitOid, await this.#configWorkerEventsAt(commitOid), {
+            key: commitOid,
+          }),
           {
             type: "events.iterate.com/project/created",
             payload: {},
@@ -592,6 +611,33 @@ export class ProjectProcessor extends StreamProcessor<
         this.#creating = false;
       }
     });
+  }
+
+  /** The events the config repo's `iterate.json` names at `commitOid`: none without one. A manifest
+   *  that is not `{ "events": [string] }` names none either, and the log says why: its commit is
+   *  published all the same, its worker handed nothing, never the previous commit's worker. */
+  async #configWorkerEventsAt(commitOid: string): Promise<string[]> {
+    const text = await this.withItx((itx) =>
+      itx.repos.get("/repos/config").readFile("iterate.json", { commitOid }),
+    );
+    let manifest: unknown = {};
+    let error: unknown = null;
+    try {
+      if (text) manifest = JSON.parse(text);
+    } catch (caught) {
+      error = caught;
+    }
+    const parsed = ConfigRepoManifest.safeParse(manifest);
+    if (!error && parsed.success) return parsed.data.events;
+    console.info({
+      event: "project.config-manifest-invalid",
+      namespace: "project",
+      message:
+        "the config repo's iterate.json is not { events: [string] }: its commit's config worker is handed no events",
+      commitOid,
+      error: String(error ?? parsed.error),
+    });
+    return [];
   }
 
   /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
