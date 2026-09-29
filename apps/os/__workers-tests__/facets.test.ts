@@ -24,6 +24,7 @@ import {
   APP_FACET,
   CLONE_VERSION_TEXT,
   CLONE_VERSION_WORKER,
+  OPAQUE_TEXT_WORKER,
   COUNTING_TALLY,
   flakyCounter,
   FRAGILE,
@@ -1089,6 +1090,39 @@ test.for([
     ]);
   },
 );
+
+// The opaque spelling of the same defect counts only when the runtime raised it: a loaded worker
+// whose OWN code throws that text reaches the caller marked `remote` (workerd
+// `exceptionToPropagate`), so its identity is kept and nothing is replayed.
+test("a loaded worker whose own code throws workerd's opaque text keeps its identity: no retire, no replay", async () => {
+  const s = stub("prj_worker_throws_opaque_text");
+  const warns = vi.spyOn(console, "warn");
+  const page = async () => {
+    const response = await s.fetch(
+      new Request("https://site.test/", {
+        headers: {
+          "x-itx-expression": JSON.stringify([
+            "itx",
+            "workers",
+            ["get", { source: OPAQUE_TEXT_WORKER }],
+          ]),
+        },
+      }),
+    );
+    return { status: response.status, text: await response.text() };
+  };
+  const first = await page();
+  expect(first).toMatchObject({ status: 500 });
+  expect(first.text).toContain("internal error; reference = thrown-by-code");
+  // the same isolate answers again: its load counter says so
+  expect(await page()).toMatchObject({
+    status: 500,
+    text: expect.stringContaining("load 1, call 2"),
+  });
+  expect(
+    warns.mock.calls.filter(([line]) => String(line?.event).startsWith("workers.platform-failure")),
+  ).toEqual([]);
+});
 
 test("a burst of 20 concurrent callers after a loaded worker's failed cold load runs the producer once, and every caller gets the site", async () => {
   const s = stub("prj_loader_recovers_once");

@@ -106,6 +106,7 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./path
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
+  isLoadedWorkerPlatformFailure,
   isWorkerModules,
   namedWorkerLoad,
   prepareConfinedWorker,
@@ -2462,17 +2463,15 @@ export function workersRoot(deps: {
         const worker = named
           ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };
-        // WORKAROUND for the Worker Loader defect facet-host.ts `isFacetStartPlatformFailure`
-        // names: a cached entry that answers V8's clone-version text answers it to every call
-        // under that loader id, and `itx.abort()` does not change the id. A call that meets it
-        // retires the identity, so the next call loads fresh under `<id>#<n+1>`; THIS call is
-        // replayed on it once only when a replay cannot do anything twice: a GET or HEAD with no
-        // body. A request body may have been read and an RPC method may have run, so those still
-        // fail, and the call after them loads fresh.
-        const isCloneVersionFailure = (error: unknown): error is Error =>
-          error instanceof Error && error.message.includes("Unable to deserialize cloned data");
+        // WORKAROUND for the Worker Loader defect `isLoadedWorkerPlatformFailure` names: a cached
+        // entry that meets it answers it to every call under that loader id, and `itx.abort()`
+        // does not change the id. A call that meets it retires the identity, so the next call
+        // loads fresh under `<id>#<n+1>`; THIS call is replayed on it once only when a replay
+        // cannot do anything twice: a GET or HEAD with no body. A request body may have been read
+        // and an RPC method may have run, so those still fail, and the call after them loads fresh.
+        let loaderId: string | undefined;
         const attempt = async () => {
-          const { load, retire } = await prepareConfinedWorker({
+          const prepared = await prepareConfinedWorker({
             env: deps.env,
             deployId: deps.deployId,
             platformOrigin: deps.platformOrigin(),
@@ -2486,6 +2485,8 @@ export function workersRoot(deps: {
             invoke: worker.invoke,
             where: "workers.get",
           });
+          const { load, retire } = prepared;
+          loaderId = prepared.loaderId;
           try {
             const entrypoint = load().getEntrypoint(
               spec.className,
@@ -2510,14 +2511,14 @@ export function workersRoot(deps: {
               throw error;
             });
           } catch (error) {
-            if (isCloneVersionFailure(error)) retire();
+            if (isLoadedWorkerPlatformFailure(error)) retire();
             throw error;
           }
         };
         try {
           return await attempt();
         } catch (error) {
-          if (!isCloneVersionFailure(error)) throw error;
+          if (!isLoadedWorkerPlatformFailure(error)) throw error;
           const request = method === "fetch" && args[0] instanceof Request ? args[0] : undefined;
           const replayable =
             request && !request.body && (request.method === "GET" || request.method === "HEAD");
@@ -2529,6 +2530,7 @@ export function workersRoot(deps: {
             name: iterateContextName,
             method,
             requestMethod: request?.method,
+            loaderId,
             message: error.message,
           });
           if (!replayable) throw error;
