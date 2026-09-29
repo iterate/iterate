@@ -142,7 +142,8 @@ async function checkAccountActiveTime(input: {
 /**
  * The trailing 60 minutes' five biggest DO namespaces by active time, named
  * as the account's namespace listing names them: `<script>_<class>`
- * (`pr2828-a1b2c3d-os_IterateContextDurableObject` for a per-commit deployment).
+ * (`pr2828-a1b2c3d-os_IterateContextDurableObject` for a per-commit deployment;
+ * a legacy Worker Preview's had its slug in between, `os_pr2828_…`).
  * DO-hours in the trailing hour are DO-hours per hour, so the alert can put
  * a $/h on each.
  */

@@ -206,7 +206,7 @@ async function eraseDataWith(
 
   if (new Set(namespaces.map((namespace) => namespace.className)).size !== namespaces.length)
     throw new Error(
-      "Two of the worker's own Durable Object namespaces share a class name, and a retirement goes by class: refusing to guess which to erase.",
+      "Two of the worker's own Durable Object namespaces share a class name, and a retirement goes by class: refusing to guess which to erase. (Its Worker Previews' namespaces are not its own: getWorkerDoNamespaces leaves them out, and the erase leaves them alone.)",
     );
   const { compatibility_date: compatibilityDate } = z
     .object({ compatibility_date: z.string() })
