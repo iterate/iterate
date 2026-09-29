@@ -72,7 +72,7 @@ export const commentMarks = StateField.define<Marks>({
 });
 
 /** The thread under `pos`, the shortest when several overlap. */
-export function threadAt(ranges: Map<string, MarkRange>, pos: number) {
+function threadAt(ranges: Map<string, MarkRange>, pos: number) {
   let found: [string, MarkRange] | null = null;
   for (const entry of ranges) {
     const [, range] = entry;
