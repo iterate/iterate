@@ -192,7 +192,15 @@ test.sequential(
     expect(errorCode(error)).toBe("EVENT_TOO_LARGE");
     expect(error.message).toMatch(/32 ?MiB/); // the message says WHY: the platform's RPC ceiling
     const [next] = await itx.append({ type: "after" });
-    expect(next).toMatchObject({ offset: marker.offset + 1 }); // the refused batch burned no offset, wrote nothing
+    // the refused batch burned no offset and wrote nothing: every offset since the marker is an event
+    // the log holds (the root's dangling `config` birth row probes about 1 s after the marker, and
+    // each alarm pass writes ephemeral traces into the same offset sequence)
+    const { events } = await itx.readEvents(marker.offset - 1, 500, { includeEphemeral: true });
+    const since = events.filter((event: { offset: number }) => event.offset <= next.offset);
+    expect(since.map((event: { offset: number }) => event.offset)).toEqual(
+      Array.from({ length: next.offset - marker.offset + 1 }, (_, i) => marker.offset + i),
+    );
+    expect(since.map((event: { type: string }) => event.type)).not.toContain("blob");
   },
 );
 

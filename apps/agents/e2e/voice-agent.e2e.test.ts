@@ -23,8 +23,10 @@ const CLOCK = "What time is it in London?";
 const WEBSITE = "Add a horse joke to the website and verify it is live.";
 const TWO_PLUS_TWO = "What is two plus two?";
 
+// 90 s: the install and the call took about 57 s on a healthy preview, the default timeout's edge
 deployedOnly(
   "a delegated question reaches the call's agent as the person's words, and its answer is what the live model speaks",
+  { timeout: 90_000 },
   async () => {
     const candidateSource =
       'import { IterateConfigEntrypoint } from "iterate/sdk"; export default class extends IterateConfigEntrypoint { fetch() { return new Response("Because it had bad stable manners!"); } }';
