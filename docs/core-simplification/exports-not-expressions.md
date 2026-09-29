@@ -110,12 +110,12 @@ visible. The existing routing snapshot travels with the scope snapshot. This
 is necessary for fetch routes and ingress and must not be split into another
 cache.
 
-`context` targets perform the destination lookup late. In particular the root
-`config` capability is an explicit platform-written context target; a
-publication changes its target once, while all descendant birth subscriptions,
-ingress and loaded sources follow it. The resulting unavailable configuration
-is a typed outcome, replacing the current rewrite-specific unpublished-config
-refusal.
+`context` targets perform the destination lookup late. The root `config`
+capability is a typed, platform-written Worker identity, not a self-context
+pointer. A publication changes that one worker identity, while all descendant
+birth subscriptions, ingress, loaded sources, and target configuration names
+resolve the current head. The resulting unavailable configuration is a typed
+outcome, replacing the current rewrite-specific unpublished-config refusal.
 
 ## Authority axes
 
@@ -200,3 +200,63 @@ letter, concurrency, idempotency and webhook behavior before such a deletion.
 No implementation agent should start the deletion pass until this matrix has a
 named replacement test for every ported rule/jail/routing property and the
 concurrent capability-manifest work has settled.
+
+## Amendments from independent review round 2
+
+The initial design was not sufficient for handoff. The following additions are
+part of the proposal, not optional follow-up work.
+
+1. Add a platform/principal-only head:
+
+   ```ts
+   | { kind: "builtin"; name: TrustedBuiltInCapabilityName; steps?: ItxExpressionStep[] }
+   ```
+
+   It is the only way to grant a local built-in through a jail. A `context`
+   target never means a destination's `builtins`, because that would allow a
+   destination export to shadow a platform operation.
+
+2. Make export admission a first-class pure function keyed by the stamped
+   writer class: platform, principal, loaded code, or schedule. In a jail,
+   non-principal writers may only write an allowed provider for their own key,
+   a structurally valid facet, or a deny. A loaded-code context target is valid
+   only if its own facade can already resolve `cd`; it cannot write `builtin`.
+   Worker/facet source and fixed steps retain the existing loaded-code source,
+   `builtins`, `cd`, signing-secret and scheduled-batch admission checks. The
+   platform alone writes `config*`; a principal alone lifts a jail.
+3. Model root `config` as a platform-written **worker head**, with a typed
+   platform source `(repository path, commit OID, manifest/cache identity)`.
+   It replaces the self-referential `config.modules` producer. `namedWorker`
+   must recognize that stamped head as vouched. Its unavailable result carries
+   `validUntil`, so delivery can distinguish unpublished configuration from a
+   stale snapshot.
+4. Specify matched-call behavior: an invocation at the final matched segment
+   applies its arguments after the target's fixed steps. Fixed steps never pin
+   or transform caller arguments. This preserves a provider function call
+   without restoring prefix-argument matching.
+5. Add compare-and-set cleanup:
+
+   ```ts
+   ifTarget?: CapabilityTarget
+   ```
+
+   or the narrower `ifProviderKey` for provider removal. The last pager close
+   removes only still-matching provider exports and associated routes/
+   subscriptions, so a re-lend wins over a delayed close.
+
+6. Scope fencing matches the existing contract: platform writes always fence;
+   an addition fences when it shadows anything currently resolving; parent or
+   jail changes fence; removals and repoints fence. Do not reduce this to
+   reachability of an own row.
+7. Scope all claims precisely: durable _exports_ are typed. Subscription,
+   ingress and fetch-route invocation targets remain expressions during this
+   phase, but resolve through typed exports and are never rewritten. Port their
+   hosted-facet, push and webhook classification structurally before deleting
+   the old resolver helpers.
+
+Implementation details also fixed by the review: key the table by canonical
+dotted string, not segment-array identity; paths in `context` targets are
+absolute; provider names retain the `itx.` wire prefix; types use the existing
+`declaration` field consistently and are excluded/capped from resolver
+snapshots; `writtenBy` derives from the stamped caller source; and parent-chain
+reads consume the normal context-hop budget.

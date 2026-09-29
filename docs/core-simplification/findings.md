@@ -38,6 +38,76 @@ is roughly 900–1,600 production lines and about 3,100 obsolete test lines
 after ported tests; it is valuable semantic concentration, not evidence for a
 50k-to-20k reduction.
 
+## The first slice prevents specific difficult states
+
+The current implementation slice is architectural rather than a broad cleanup:
+it introduces the trusted built-in capability manifest, makes subscription
+delivery mode a durable declaration, and bounds provider calls. Its value is
+that several formerly representable contradictory states no longer exist. It
+does not delete the pager, relay, generic durable runner, snapshot fence,
+cross-context resolver, built-in factories, or facet lifecycle machinery.
+
+| Earlier representable state                                                                                                           | Mechanism now removed or constrained                      | State that is now impossible                                                                                         | Boundary retained                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A subscription row is syntactically classified as push/cursor from a rewrite, then its evaluated target has a different runtime brand | delivery is required as live, processor, or durable       | Alias resolution cannot silently change the acknowledgement/progress owner                                           | Durable targets retain arbitrary callable RPC, ordered/fan-out retry state and alarms                                                                                                                                                       |
+| A live callback is configured with durable-only cursor options that the implementation silently ignores                               | Live delivery is a distinct declared mode                 | A callback cannot appear to own afterOffset or ordered semantics it will not receive                                 | The existing dotted live-provider `provide` wire shape remains for firmware, browser extension and tunnel clients; callback `subscribe` remains its own wire operation                                                                      |
+| A row declared live resolves to a non-provider, or a processor row resolves to the wrong endpoint shape                               | Target-kind validation at delivery                        | The platform does not reinterpret a mismatch as another delivery protocol                                            | Mismatch is a coded input failure; it does not delete or mutate the durable runner                                                                                                                                                          |
+| A resumed live subscription has an implicit cursor/checkpoint whose replay meaning depends on target re-resolution                    | Live mode owns no stream cursor                           | A resumed live row cannot replay an invented durable range; it waits for the next matching append                    | A client that requires durable recovery still uses a processor/durable consumer and readEvents                                                                                                                                              |
+| A provider answers liveness probes while its actual call never settles, retaining a borrowed answer/pin without an end                | Per-call lease with an explicit deadline                  | The caller's borrowed RPC invocation cannot remain retained indefinitely                                             | A long call can declare a bounded larger deadline; expiry releases the borrowed answer and does not cancel arbitrary provider-side internal work. Streaming response-body ownership is unchanged                                            |
+| Root descriptions, availability, placement and dispatch are copied across root-description/root-set/factory authorities               | Trusted capability manifest is the shared metadata source | Description, placement, availability and dispatch projections cannot disagree through independently maintained lists | Factory code remains manually assembled. A separate compile-time key-conformity check verifies physical factory keys against the manifest; the slice deletes redundant name-uniqueness/filter-copy unit rows rather than deriving factories |
+
+This slice retains the durable runner and existing provider/callback wire APIs,
+but deliberately changes two contracts: ambiguous delivery configuration is
+rejected, and a provider invocation has a configurable bounded lease instead
+of arbitrary pending duration. The default is five minutes, with declared
+20-second to 30-minute leases where the operation requires it. Timeout releases
+the caller's borrowed invocation; it does not cancel arbitrary provider-side
+execution. Streaming response-body ownership is unchanged. The source record is
+[delivery-transport-slice.md](delivery-transport-slice.md); its focused unit
+evidence is 24 relay tests and 277 subscription-delivery tests. Broader
+Workers/e2e, redial, raw configured-event, React/SDK and processor
+checkpoint/catch-up evidence remains required before the implementation slice
+can be considered complete.
+
+### A parked facet experiment is the anti-pattern
+
+A compact facet control/identity-row experiment was deliberately parked. Its
+source change is not part of this production diff: it introduced 26 additional
+hazards and did not reduce the lifecycle branch count. Treat it as evidence
+against storage consolidation by itself. A design that moves the same
+cross-generation, delete/recreate, migration, recovery and birth-order states
+into a smaller record has moved complexity without removing it.
+
+The existing facet memo and the deployed abort/start platform pin remain the
+reference constraints. Any later replacement must show fewer state transitions,
+an explicit recovery proof, and a failure matrix before it replaces source.
+
+### The next boundary is exports, not an expanded manifest
+
+The manifest describes trusted built-ins. It does not yet replace dynamic
+rewrite rows, parent scope, provider-name census, late-bound configuration
+pointer, jailed inheritance or route snapshots. The planned exports phase
+therefore adds one typed dotted-name table for dynamic scope entries; it must
+not add a second general descriptor system or turn the manifest into mutable
+project configuration.
+
+The export lookup remains an explicit resolver, not a JavaScript prototype
+chain: longest matching own export; deny if jailed; implicit built-in at this
+location; then parent snapshot. This ordering preserves current own-name
+shadowing, prevents a parent link from capturing context-local append/read
+operations, and keeps narrowing/repointing behind the existing bounded
+cross-isolate revocation fence. The root configuration head is a typed,
+platform-written Worker identity, not a self-context pointer, and is resolved
+late. A publication changes that one identity while descendant workers,
+ingress and subscriptions, and every target configuration name, resolve the
+current head.
+
+App adapters are ordinary untrusted Worker exports with fixed props and an
+attenuated env.ITX facade. Only platform-deployed trusted entries receive
+declared environment bindings. This is the intended replacement for a rewrite
+template; introducing a generic trusted published module would create a
+secret/binding escape and is outside this architecture.
+
 The second and third rows are not first implementation work. Transparent
 WebSocket forwarding may be important to existing routes, and dynamic rewrites
 may encode product policy that needs an adapter. The direct resolver count is
@@ -345,7 +415,7 @@ credibly.
 ## Source trail
 
 - Current code baseline and reproducible inventory: [`tests-inventory.md`](tests-inventory.md), [`core-userspace.md`](core-userspace.md), [`rpc-subscriptions.md`](rpc-subscriptions.md), [`facets-loader.md`](facets-loader.md).
-- Supporting decision appendices: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), [Claude Opus facet review](reviews/facets-plan-opus.md), and [`validation-plan.md`](validation-plan.md).
+- Supporting decision appendices: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), [Claude Opus facet review](reviews/facets-plan-opus.md), [parked facet control experiment](reviews/facets-control-experiment.md), [Claude Opus exports review, round 2](reviews/opus-exports-round-2.md), and [`validation-plan.md`](validation-plan.md).
 - Cloudflare/workerd/Cap'n Web research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md).
 - Primary-source research notes selected for the issues in this report: [Cap'n Web](../../research_notes/Iterate%20core%20runtime%20review/capnweb.md), [Cloudflare Workers](../../research_notes/Iterate%20core%20runtime%20review/cloudflare.md), [Cloudflare OS](../../research_notes/Iterate%20core%20runtime%20review/cloudflare-os.md), and [Kenton Varda capability principles](../../research_notes/Iterate%20core%20runtime%20review/kenton-varda.md). They are targeted architecture sources, not a claim of exhaustive reading of either author's corpus.
 - Cloudflare primary documentation: [Durable Objects rules](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/), [RPC](https://developers.cloudflare.com/workers/runtime-apis/rpc/), [RPC lifecycle](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/), [WebSocket hibernation](https://developers.cloudflare.com/durable-objects/best-practices/websockets/), [Facets](https://developers.cloudflare.com/dynamic-workers/usage/durable-object-facets/), [Dynamic Workers](https://developers.cloudflare.com/dynamic-workers/api-reference/).
