@@ -27,6 +27,7 @@ import {
   matchItxExpressionPrefix,
   resolveItxExpression,
   rowsNamingRpcStub,
+  rpcStubKeysNamed,
   BUILT_IN_ROOTS,
   BUILT_IN_ROOT_DESCRIPTIONS,
   CONTEXT_ROOTS,
@@ -856,6 +857,19 @@ for (const [order, rules] of [
     expect(fetchRouteNames.sort()).toEqual(["via-own-registry", "via-short-spelling"]);
   });
 
+test("rowsNamingRpcStub — every row the wake's census counts for a key goes with its stub: a lend spelled with arguments after the key is named by it too", () => {
+  const rows = {
+    rules: [rule("itx.cam ⇒ itx.builtins.rpcStubs.get('cam', 'extra')")],
+    subscriptionTargets: { viaArguments: parse("itx.rpcStubs.get('cam', 'extra').notify") },
+    fetchRouteTargets: {},
+    implicitRoots: ROOT,
+  };
+  expect(rpcStubKeysNamed(rows)).toEqual(new Set(["cam"]));
+  const { ruleUnsets, subscriptionNames } = rowsNamingRpcStub({ rpcStubKey: "cam", ...rows });
+  expect(ruleUnsets.map((unset) => print(unset.match))).toEqual(["itx.cam"]);
+  expect(subscriptionNames).toEqual(["viaArguments"]);
+});
+
 // ───────────────────────────── the resolver, over the reduce as the DO runs it ─────────────────────────────
 
 test("built-in resolution + default-deny: built-ins resolve directly (no rule, no config) — through the implicit platform row, or at the fixed point", async () => {
@@ -1212,6 +1226,10 @@ test("the app wall (`Caller.app`): a ROW loaded code appends is walled on its ta
   expect(
     row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.rpcStubs.get('itx.x')"),
   ).not.toThrow();
+  // a lend is named by its key: a row whose caller picks the key is no lend of the code's own
+  expect(
+    row("events.iterate.com/itx/rewrite-rule-configured", "itx.builtins.rpcStubs.get(@)"),
+  ).toThrow(/not a loaded worker's word/);
   expect(
     row("events.iterate.com/itx/subscription-configured", [
       "itx",
