@@ -13,6 +13,7 @@ import type { SessionCredentials } from "iterate/api";
 import { isCodingAgent } from "./coding-agent.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
 import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
+import { importProvidedFile, nameOfFile, runProvide } from "./provide.ts";
 import { runTunnel } from "./tunnel.ts";
 import { shareMyComputer } from "./use-my-computer.ts";
 import {
@@ -567,6 +568,49 @@ const launcherProcedures = {
         public: input.public,
       });
     }),
+  provide: os
+    .input(
+      z.object({
+        file: z
+          .string()
+          .meta({ positional: true })
+          .describe(
+            "A .ts, .mjs or .js file whose default export, ({ itx }) => ({ someFunction() {} }), answers the functions to lend",
+          ),
+        name: z
+          .string()
+          .optional()
+          .describe(
+            "The capability's name, itx.<name> (default: the file's, whatsapp.ts → whatsapp)",
+          ),
+        project: z.string().optional().describe("Project id or slug"),
+      }),
+    )
+    .meta({
+      description:
+        "Lend a local file's functions to a project as itx.<name> until Ctrl-C; the file's folder installs its own dependencies",
+    })
+    .handler(async ({ input }) => {
+      // the file first: a missing dependency is the answer before any sign-in
+      const file = await importProvidedFile(input.file);
+      const name = input.name || nameOfFile(input.file);
+      const { resolved, connection } = await connectConfigured();
+      let project: string;
+      try {
+        project = await selectProject(connection, input.project || resolved.config.defaultProject);
+      } catch (error) {
+        connection[Symbol.dispose]();
+        throw error;
+      }
+      // runProvide owns the connection from here, and every one `reconnect` opens
+      await runProvide({
+        connection,
+        reconnect: async () => (await connectConfigured()).connection,
+        project,
+        file,
+        name,
+      });
+    }),
   config: {
     get: os
       .input(z.object({}))
@@ -706,7 +750,8 @@ const getCli = async () => {
   const cli = createCli({
     router: launcherProcedures,
     name: "iterate",
-    description: "Iterate CLI. Run itx scripts, authenticate, and share your computer.",
+    description:
+      "Iterate CLI. Run itx scripts, authenticate, share your computer, and provide local code.",
   });
   return {
     cli,

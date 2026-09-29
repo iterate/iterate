@@ -1,6 +1,6 @@
 # @iterate-com/cli
 
-The `iterate` command for Iterate (`apps/os`). Requires Node >=22.15; no Bun runtime. It is
+The `iterate` command for Iterate (`apps/os`). Requires Node >=22.18; no Bun runtime. It is
 built on the SDK, [`iterate`](../iterate/README.md). `npm install -g @iterate-com/cli` installs
 the `iterate` command the examples below use.
 
@@ -18,6 +18,7 @@ npx @iterate-com/cli tokens revoke pat_…
 npx @iterate-com/cli mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
 npx @iterate-com/cli use-my-computer --project my-project --name myComputer
 npx @iterate-com/cli tunnel 5173 --project my-project --name blog  # a local port on a project host
+npx @iterate-com/cli provide ./whatsapp.ts --project my-project  # a local file's functions as itx.whatsapp
 npx @iterate-com/cli menubar --project my-project  # macOS app
 npx @iterate-com/cli logout
 ```
@@ -131,6 +132,61 @@ await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
 });
 console.log(await project.url({ routingSlug }));
 ```
+
+## Provide
+
+`provide <file>` lends a local file's functions to a project as `itx.<name>` until Ctrl-C, for
+code that has to run on this computer: a device on its network, a session tied to its IP, local
+state. The file is `.ts`, `.mts`, `.mjs` or `.js` alike, imported by Node itself (which strips a
+TypeScript file's types), and its default export answers the functions:
+
+```ts
+// whatsapp.ts
+import makeWASocket from "baileys"; // from this file's own folder's node_modules
+
+export const description = "My WhatsApp: sendMessage(jid, content) …"; // the line a model reads
+
+let socket; // module scope lives as long as the process, across reconnects
+export default function provide({ itx }) {
+  // called on every connection with that connection's project
+  socket ??= makeWASocket({/* … */});
+  return {
+    sendMessage: (jid, content) => socket.sendMessage(jid, content),
+    async note(text) {
+      await itx.append({ type: "whatsapp/note-added", payload: { text } });
+    },
+  };
+}
+```
+
+```sh
+iterate provide ./whatsapp.ts --project my-project           # itx.whatsapp (the file's name)
+iterate provide ./dummy.ts --name whatsappDummy --project my-project
+```
+
+`itx.<name>` alone goes to stdout once it is live; everything else goes to stderr. The project's
+scripts and agents call it like any capability (`await itx.whatsapp.sendMessage(…)`); the file
+reaches the project through the `itx` it was handed.
+
+- **Dependencies are the file's folder's.** Node resolves the file's bare imports from its own
+  folder's `node_modules`, never the CLI's: install them there first (`npm install`, `pnpm
+install`). A missing one is refused before any sign-in, naming the folder to install in. The CLI
+  installs nothing.
+- **Plain functions, no capnweb.** The CLI wraps the functions in its own `RpcTarget`: capnweb lends
+  only its own copy's, which a file's own `capnweb` install is not. A plain object's own functions
+  are lent, or a class instance's methods (never its fields). Arguments and answers cross as they
+  are, so they must be plain data, bytes or stubs.
+- **Every connection calls it again.** The CLI reconnects when its connection closes or the lend
+  ends under it (for about five minutes, as `tunnel` does), calls the default export with the new
+  connection's project, and lends the answer at the same name. Keep long-lived state in module
+  scope and reach the project through the newest `itx`.
+- **Share only with a project you trust.** Its callers run the file's functions with this
+  computer's authority. A killed or stopped `provide` takes the name with it: the project's calls
+  answer `NO_ITX_EXPRESSION_MATCH`, as before it was lent.
+
+For a machine that stays up, give it a key of its own rather than the stored login (whose grant
+lasts 30 days at most): `ITERATE_BEARER_TOKEN` from `iterate tokens create --name whatsapp
+--project my-project --never-expires`.
 
 ## Configs
 

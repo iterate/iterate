@@ -23,6 +23,7 @@ test("bare invocation and all command help work offline", { timeout: 20_000 }, a
     ["itx", "run", "--help"],
     ["use-my-computer", "--help"],
     ["tunnel", "--help"],
+    ["provide", "--help"],
     ["menubar", "--help"],
     ["repl", "--help"],
   ]) {
