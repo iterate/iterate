@@ -8,8 +8,10 @@ size: large
 Status: parts 1 and 2 built. Part 1: a docs app you can write in. Part 2: live co-editing through
 a per-doc processor from `@iterate-com/docs`, which also autosaves and takes in commits made
 elsewhere. The browser spec (two people, an agent's commit) runs on the PR preview only; locally the
-package has unit tests and the page was checked in a harness. Not done: docs.iterate.com,
-comments. The iterate project already routes `docs--iterate.iterate.app` to the prd Worker, which
+package has unit tests and the page was checked in a harness. Comments (v1) are built and
+committed locally, not pushed yet: events on the doc's context, a right-hand panel, quotes that
+follow their text; their spec runs on the next preview. Not done: docs.iterate.com. The iterate
+project already routes `docs--iterate.iterate.app` to the prd Worker, which
 the merge deploys.
 
 ## Goal
@@ -132,10 +134,22 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 - [x] An html file opens on Preview (its live text in a sandboxed frame) and edits in Source _(`DocSession` `previewText`, `doc-editor.tsx`)_
 - [x] Docs installs like agents after main's #3425: `docs.ts` and a pin in the project's config; the page enables the processors from it, and says how to install when a project hasn't _(`@iterate-com/docs/install`)_
 
+## Comments (asked for 2026-09-29, for the v1 that merges)
+
+- [x] Comments are durable events on the doc's context `/docs/<repo>/<path>`, not text in the file: added, replied, edited, deleted, resolved, reopened _(`@iterate-com/docs/comments`)_
+- [x] The author is the event's source (the person's email, or the agent's context); only the author edits or deletes a comment, anyone resolves or reopens _(`reduceComments`)_
+- [x] A thread points at its text by a quote (the text, and 32 characters either side), found again exactly, or by its surroundings when the text under it changed, or not at all (detached) _(`@iterate-com/docs/anchor`)_
+- [x] The doc's processor reduces the threads into its state and live state, and after each save and catch-up appends `docs/comment-reanchored` for a quote that matched loosely (a typo fixed), matched nothing, or matches again _(`DocProcessor.#reanchor`)_
+- [x] Right-hand panel: threads in the order their text comes, whole-doc ones first, "On text that's gone", resolved folded away; reply on the selected thread; edit and delete your own _(`src/components/comments-panel.tsx`)_
+- [x] The editor highlights each open thread's text and keeps it on the text through every edit, typed or remote; an undo brings a lost one back _(`src/editor/comment-marks.ts`)_
+- [x] Comment on the selection from the toolbar or ⌘⌥M; with nothing selected, on the whole doc
+- [x] Spec: two people, a reply live, an agent's typo fix keeps the comment on the word, resolve _(`specs/docs/comments.spec.ts`, runs on a preview)_
+- [ ] ~~Old CriticMarkup comments in files~~ _left for an agent to convert later, per Misha_
+
 ## Later
 
 - docs.iterate.com (Host rule in the iterate project's config worker)
-- Comments (design above; the prototype has a working version)
+- Comments: mentions and notifications; comments in an html file's Preview; markdown in comment bodies
 - Tree: rename (copies comments), delete, move (drag), from the sidebar's rows
 - Images: paste/drop → `itx.files`
 - `/` menu over the formatting bar's commands
@@ -272,3 +286,12 @@ source: itx.cd('/').config }`. Docs follows agents: `docs.ts` + a pin, no versio
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.
+- 2026-09-29, comments: moved to the root worktree (commit locally, no push until Misha says).
+  Should comments emit events when they're orphaned or moved? Only to refresh the stored quote:
+  the processor appends `docs/comment-reanchored` after a save when the quote matched loosely or
+  not at all, so the thread's quote never drifts far from the text and agents reading the events
+  see a thread as detached. An exact match (the text moved, or edits elsewhere) needs nothing: the
+  quote finds it again. The browser never waits on it: it maps each highlight through edits itself.
+  Checked in the local harness (two tabs, the real reducer): comment, reply, edit, the typo fix
+  moving the quote to "hotel", a deleted line detaching its thread, undo re-attaching it, resolve
+  and reopen. `pnpm add cn@catalog:` rewrote pnpm-workspace.yaml (comments stripped); restored.
