@@ -21,7 +21,7 @@ logic are ordinary code above the context.
 
 ```ts
 await itx.append({
-  type: "events.iterate.com/example/task-created",
+  type: "tasks.example.com/task-created",
   payload: { id: "task-1" },
 });
 
