@@ -499,8 +499,8 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   expect(again).toMatchObject({ loaderId: after.loaderId });
 });
 
-// The Worker Loader defect's two spellings (workerd #7486 moved it to the opaque one on
-// 2026-09-27), and every look-alike that is not it: code's own error, an overload, a coded hop.
+// The Worker Loader defect's two spellings, and every look-alike that is not it: code's own error,
+// an overload, a coded hop.
 test.for([
   {
     name: "V8's clone-version text",

@@ -424,14 +424,14 @@ export async function prepareConfinedWorker(
 
 /** WHETHER A CALL INTO A LOADED WORKER MET THE WORKER LOADER DEFECT that poisons a cached entry
  *  (facet-host.ts `isFacetStartPlatformFailure` names it; `retire` above is the recovery). The
- *  runtime spelled it with V8's clone-version text until workerd #7486, and since then (in
- *  production from 2026-09-27) spells it `internal error; reference = …`, its detail logged nowhere.
- *  That bare text counts only when the runtime raised it: an internal failure inside the loaded
- *  worker reaches the caller unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`),
- *  while an error the loaded code threw itself, the same text rethrown included, arrives with
- *  `remote` set and is the code's own. Retiring on that would mint a new billed identity for every
- *  request. An overload is its own kind of platform failure (platform-retry.ts `failureKind`),
- *  answered 503, and never a bad isolate. */
+ *  runtime reports it either as V8's clone-version text or as the opaque
+ *  `internal error; reference = …`, whose detail it logs nowhere. The opaque text counts only when
+ *  the runtime raised it: an internal failure inside the loaded worker reaches the caller
+ *  unprefixed (workerd io/worker-entrypoint.c++ `exceptionToPropagate`), while an error the loaded
+ *  code threw itself, the same text rethrown included, arrives with `remote` set and is the code's
+ *  own. Retiring on that would mint a new billed identity for every request. An overload is its own
+ *  kind of platform failure (platform-retry.ts `failureKind`), answered 503, and never a bad
+ *  isolate. */
 export function isLoadedWorkerPlatformFailure(error: unknown): error is Error {
   if (!(error instanceof Error) || errorCode(error) !== undefined) return false;
   if (error.message.includes("Unable to deserialize cloned data")) return true;
