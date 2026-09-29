@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 import {
   adminEnvs,
@@ -31,7 +32,7 @@ import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext } from "./env-context.ts";
 import { viteBuild } from "./vite-build.ts";
-import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
+import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
  *  project named for the app), the worker and its origin. */

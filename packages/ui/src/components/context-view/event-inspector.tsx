@@ -1,8 +1,7 @@
 // The inspector: one event, whole, in a right-edge sheet (full width on a phone), paged through the
-// loaded log — the old platform's raw-event inspector (apps/os `raw-event-inspector-panel.tsx`,
-// removed in #2837) over the view's sorted array instead of a SQLite mirror.
+// loaded log, over the view's sorted array.
 // - PAGING: Prev / Next and ← → move to the neighbouring event of the whole loaded log (not the
-//   filter's — the old one paged the log too), each a `state.event` patch, so the URL follows and
+//   filter's), each a `state.event` patch, so the URL follows and
 //   every step is a link. The keys are heard on the window in the capture phase: Base UI's popup
 //   (our Sheet) stops ← → on bubble for its nested composites. A field or editor with focus keeps
 //   its arrows; a modifier (⌘←, ⇧→) is never a page. ← on the oldest loaded event reads the page

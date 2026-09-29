@@ -3,5 +3,5 @@ import { StreamProcessorDurableObject } from "iterate/sdk";
 import { AiLinterProcessor, type AiLinterState } from "./processor.ts";
 
 export class AiLinterDurableObject extends StreamProcessorDurableObject<AiLinterState> {
-  processor = new AiLinterProcessor((call) => this.withItx(call), this.ctx.storage);
+  processor = new AiLinterProcessor(() => this.getItx(), this.ctx.storage);
 }

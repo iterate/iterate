@@ -479,14 +479,12 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
  *  Throws while kv `flaky-mode` is "fail"; otherwise tallies the batch into kv `flaky-digested`. */
 const FLAKY_SRC = /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Flaky extends WorkerEntrypoint {
-  processEventBatch(events, range) {
-    return withItx(this.env.ITX, async (itx) => {
-      if ((await itx.kv.get("flaky-mode")) === "fail") throw new Error("flaky: refusing this batch");
-      const n = Number((await itx.kv.get("flaky-digested")) ?? 0) + events.length;
-      await itx.kv.put("flaky-digested", String(n));
-    });
+  async processEventBatch(events, range) {
+    using itx = this.getItx();
+    if ((await itx.kv.get("flaky-mode")) === "fail") throw new Error("flaky: refusing this batch");
+    const n = Number((await itx.kv.get("flaky-digested")) ?? 0) + events.length;
+    await itx.kv.put("flaky-digested", String(n));
   }
 }
 `;

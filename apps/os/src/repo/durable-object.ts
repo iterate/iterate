@@ -144,11 +144,17 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
    *  (one that exists is fine) and tear it down (false when already gone). */
   processor = new RepoProcessor(
     RepoContract,
-    (call) => this.withItx(call),
+    () => this.getItx(),
     () => this.#path,
     {
-      provision: (path) => this.withItx((itx) => itx.cfArtifacts.create(path)),
-      teardown: (path) => this.withItx((itx) => itx.cfArtifacts.delete(path)),
+      provision: async (path) => {
+        using itx = this.getItx();
+        return await itx.cfArtifacts.create(path);
+      },
+      teardown: async (path) => {
+        using itx = this.getItx();
+        return await itx.cfArtifacts.delete(path);
+      },
     },
   );
 
@@ -174,7 +180,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     this.#remoteRead ||= await this.ctx.storage.get<string>("git-remote");
     if (this.#remoteRead) return this.#remoteRead;
     const path = this.#path;
-    const remote = await this.withItx((itx) => itx.cfArtifacts.get(path).remote());
+    using itx = this.getItx();
+    const remote = await itx.cfArtifacts.get(path).remote();
     await this.ctx.storage.put("git-remote", remote, { allowUnconfirmed: true });
     return (this.#remoteRead = remote);
   }
@@ -196,9 +203,10 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       });
     const path = this.#path;
     const asked = Date.now();
+    using itx = this.getItx();
     const [remote, minted] = await Promise.all([
       this.#remote(),
-      this.withItx((itx) => itx.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS)),
+      itx.cfArtifacts.get(path).createToken(scope, TOKEN_TTL_SECONDS),
     ]);
     const token = { token: minted.plaintext, until: asked + TOKEN_TTL_SECONDS * 1000 };
     this.#tokens[scope] = token;
@@ -477,8 +485,9 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       // A debt stored before facts had keys of their own is keyed as it was then.
       idempotencyKey: key || `repo/commit-completed:${payload.path}:${payload.commitOid}`,
     };
-    await this.withItx((itx) => itx.cd("/").append(committed));
-    await this.withItx((itx) => itx.append(committed));
+    using itx = this.getItx();
+    await itx.cd("/").append(committed);
+    await itx.append(committed);
     await this.ctx.storage.delete("commit-fact");
   }
 
@@ -520,9 +529,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const origin = z.string().min(1).nullable().parse(url);
     const refused = origin && originRefusal(origin);
     if (refused) throw codedError("INVALID_INPUT", `repo ${path}: ${refused}`);
-    await this.withItx((itx) =>
-      itx.append({ type: "events.iterate.com/repo/origin-set", payload: { origin } }),
-    );
+    using itx = this.getItx();
+    await itx.append({ type: "events.iterate.com/repo/origin-set", payload: { origin } });
     return { origin };
   }
 

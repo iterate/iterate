@@ -522,17 +522,15 @@ test("beginOAuth, public client (RFC 7591 registration, PKCE alone, client_id in
 const WEBHOOK_RECEIVER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class WebhookReceiver extends WorkerEntrypoint {
   async fetch(request) {
     const payload = await request.text();
     const signature = (request.headers.get("x-hub-signature-256") || "").replace(/^sha256=/, "");
-    return withItx(this.env.ITX, async (itx) => {
-      if (!(await itx.secrets.verifyHmac("/secrets/github-webhook", { payload, signature })))
-        return new Response("bad signature", { status: 401 });
-      await itx.append({ type: "webhook-received", payload: JSON.parse(payload) });
-      return new Response(null, { status: 204 });
-    });
+    using itx = this.getItx();
+    if (!(await itx.secrets.verifyHmac("/secrets/github-webhook", { payload, signature })))
+      return new Response("bad signature", { status: 401 });
+    await itx.append({ type: "webhook-received", payload: JSON.parse(payload) });
+    return new Response(null, { status: 204 });
   }
 }`,
 };

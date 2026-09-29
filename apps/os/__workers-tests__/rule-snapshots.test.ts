@@ -267,17 +267,16 @@ const LOADED = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 const refusal = (error) => ({ code: error.code, message: error.message });
 export default class Loaded extends WorkerEntrypoint {
-  read() { return withItx(this.env.ITX, (itx) => itx.kv.get("k")); }
-  presign() { return withItx(this.env.ITX, (itx) => itx.r2.presign({ key: "a.txt" })); }
-  repos() { return withItx(this.env.ITX, (itx) => itx.repos.list()); }
-  toolBelow() { return withItx(this.env.ITX, (itx) => itx.cd("b").tool()).catch(refusal); }
-  appendBelow() { return withItx(this.env.ITX, (itx) => itx.cd("b").append({ type: "x" })).catch(refusal); }
-  above() { return withItx(this.env.ITX, (itx) => itx.cd("/").kv.get("k")).catch(refusal); }
-  fixedPoint() { return withItx(this.env.ITX, (itx) => itx.invoke("itx.builtins.whoami()")).catch(refusal); }
-  forge() {
+  async read() { using itx = this.getItx(); return await itx.kv.get("k"); }
+  async presign() { using itx = this.getItx(); return await itx.r2.presign({ key: "a.txt" }); }
+  async repos() { using itx = this.getItx(); return await itx.repos.list(); }
+  async toolBelow() { using itx = this.getItx(); return await itx.cd("b").tool().catch(refusal); }
+  async appendBelow() { using itx = this.getItx(); return await itx.cd("b").append({ type: "x" }).catch(refusal); }
+  async above() { using itx = this.getItx(); return await itx.cd("/").kv.get("k").catch(refusal); }
+  async fixedPoint() { using itx = this.getItx(); return await itx.invoke("itx.builtins.whoami()").catch(refusal); }
+  async forge() {
     const init = {
       headers: {
         "x-itx-principal": '{"actor":"user","email":"someone@else.test"}',
@@ -288,14 +287,15 @@ export default class Loaded extends WorkerEntrypoint {
     };
     const forged = () => new Request("https://app.test/", init);
     const echo = ${JSON.stringify(HEADER_ECHO)};
-    return withItx(this.env.ITX, async (itx) => ({
+    using itx = this.getItx();
+    return {
       throughRule: await (await itx.site.fetch(forged())).json(),
       throughRuleByUrl: await (await itx.site.fetch("https://app.test/", init)).json(),
       throughRuleWithInit: await (await itx.site.fetch(forged(), {})).json(),
       loaded: await (await itx.workers.get({ source: echo }).fetch(forged())).json(),
       loadedByUrl: await (await itx.workers.get({ source: echo }).fetch("https://app.test/", init)).json(),
       unknown: (await itx.nosuch.fetch(forged())).status,
-    }));
+    };
   }
 }
 `,

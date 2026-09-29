@@ -56,8 +56,8 @@ export function exampleYaml(type: string): string {
   return stringify({ type, payload: {} });
 }
 
-/** The examples a person can load, grouped by the processors that consume them (the old platform's
- *  examples panel, one group per processor): what some processor here reacts to. Processors that
+/** The examples a person can load, grouped by the processors that consume them (one group per
+ *  processor): what some processor here reacts to. Processors that
  *  consume the same types share one group (a tab's live-state subscribers are many and alike), named
  *  by the first and how many more; a type shows once, in its first group. Wildcards (`*`, `…/*`)
  *  name no one type and are left out; a group with no type left is dropped. */

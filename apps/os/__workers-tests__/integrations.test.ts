@@ -1733,7 +1733,9 @@ function githubScopeWithoutUrlsOs(): IntegrationScope {
     },
     projectId: "prj_selfhost",
     rootPath: "/",
-    withItx: () => Promise.reject(new Error("no itx in this test")),
+    getItx: () => {
+      throw new Error("no itx in this test");
+    },
     storage,
   };
 }

@@ -68,7 +68,8 @@ export default class extends IterateConfigEntrypoint {
   async fetch(request: Request) {
     const routingSlug = request.headers.get("x-iterate-routing-slug");
     if (!routingSlug) {
-      const { projectSlug } = await this.withItx((itx) => itx.whoami());
+      using itx = this.getItx();
+      const { projectSlug } = await itx.whoami();
       return new Response("Homepage of project " + projectSlug + "\n", {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });

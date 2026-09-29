@@ -65,7 +65,7 @@ test.for([
   },
 ])("$when", async ({ event, calls, synced, refuse }) => {
   const repos = fakeRepos({ origin, refuse });
-  const processor = new GithubSyncProcessor((call) => Promise.resolve(call({ repos } as never)));
+  const processor = new GithubSyncProcessor(() => fakeItx(repos));
   const appended = await processEvent(processor, event, { repo: "/repos/config" });
   expect(repos).toMatchObject({ calls });
   expect(appended.map((input) => input.payload)).toEqual(synced ? [{ ...synced, trigger: 5 }] : []);
@@ -73,7 +73,7 @@ test.for([
 
 test("before the install marker, and on a repo with no origin, nothing is synced", async () => {
   const repos = fakeRepos({ origin: null });
-  const processor = new GithubSyncProcessor((call) => Promise.resolve(call({ repos } as never)));
+  const processor = new GithubSyncProcessor(() => fakeItx(repos));
   expect(await processEvent(processor, pushTo("acme/config"), { repo: null })).toEqual([]);
   expect(
     await processEvent(processor, committedTo("/repos/config"), { repo: "/repos/config" }),
@@ -114,6 +114,11 @@ function pushTo(repository: string, ref = "refs/heads/main") {
 
 function committedTo(path: string) {
   return committedEvent(5, "events.iterate.com/repo/commit-completed", { path });
+}
+
+/** A scope whose only reach is `repos`, released by nothing. */
+function fakeItx(repos: ReturnType<typeof fakeRepos>) {
+  return { repos, [Symbol.dispose]: () => {} } as never;
 }
 
 /** `itx.repos` as the sync calls it: `get(path)`'s origin, pull and push, each call recorded. */

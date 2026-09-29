@@ -1,6 +1,5 @@
 // Filtering the log, as pure functions: by type (the set left ticked), by a text query over the
-// type and the payload's JSON, by the actor who appended, by an offset range (the old platform's
-// `from`/`to`). Plus the two short forms every row uses.
+// type and the payload's JSON, by the actor who appended, by an offset range (`from`/`to`). Plus the two short forms every row uses.
 // `refilter` and `recount` follow a log that grows at either end without passing over all of it
 // again (folds.tsx `growthOf`): a JSON.stringify per event per append is too slow at 100,000.
 import { growthOf } from "./folds.tsx";
@@ -128,7 +127,7 @@ export function sortedCounts(counts: Map<string, number>): [type: string, count:
 
 /** The type chips of the filter row: the log's counts, then every ticked type the loaded log does
  *  not hold (a link's `types`, a type only in older pages) with a count of 0 — so a selection that
- *  hides everything can still be seen and unticked (the old platform's stale selections). */
+ *  hides everything can still be seen and unticked. */
 export function typeChips(
   counts: readonly [type: string, count: number][],
   ticked: ReadonlySet<string>,

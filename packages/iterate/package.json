@@ -39,7 +39,6 @@
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
-    "./with-itx": "./src/sdk/with-itx.ts",
     "./node": "./src/node.ts"
   },
   "publishConfig": {
@@ -114,11 +113,6 @@
         "types": "./dist/email.d.mts",
         "import": "./dist/email.mjs",
         "default": "./dist/email.mjs"
-      },
-      "./with-itx": {
-        "types": "./dist/with-itx.d.mts",
-        "import": "./dist/with-itx.mjs",
-        "default": "./dist/with-itx.mjs"
       },
       "./node": {
         "types": "./dist/node.d.mts",

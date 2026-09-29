@@ -1,37 +1,33 @@
-// sdk/with-itx.ts — `withItx`, THE one way code reaches its context: ONE round trip on
-// `env.ITX`, then RELEASE a Workers-RPC round trip completely — the scope and every call it made, not
-// only the last. Code imports it from "iterate/with-itx" (`withItx(this.env.ITX, (itx) => …)`),
-// this module alone, so code that must not load the SDK's hosts (a script's isolate, the agents' AI
-// transport) never does. The SDK's hosts (`StreamProcessorDurableObject.withItx`,
-// `IterateConfigEntrypoint.withItx`) delegate to it. No workerd import, so the unit tests run it in node
-// (with-itx.test.ts) and the platform bundles it alone for a script's isolate (apps/os
-// `runScriptModule`); on native RpcPromises it is proven by every apps/os e2e row that reaches a
-// facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …": a facet
-// that kept one value from its context stayed running, billed). Lint refuses the raw
-// `env.ITX.get()` (iterate/no-raw-itx-get).
+// sdk/itx-scope.ts — `itxScope`, what every `getItx` is: the SDK's hosts' (index.ts) and every
+// loaded entrypoint's (loaded-worker.ts). THE one way code reaches its context is
+// `using itx = this.getItx()` in the smallest block that holds its calls: the `using` releases a
+// Workers-RPC scope completely when the block ends — the scope and every call made through it, not
+// only the last. A value code keeps from its context past that — an undisposed call, a handle, a
+// stub — keeps the context, and any facet holding it, running and billed: pinned by
+// apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …"). No workerd import, so the
+// unit tests run it in node (itx-scope.test.ts). Lint refuses the raw `env.ITX.get()`, and a
+// `getItx()` no `using` binds (iterate/no-raw-itx-get).
 
 import { currentCause } from "../cause.ts";
 import { releaseRpcSessions } from "../lib.ts";
 
-/** ONE round trip on `entrypoint.get()`, then RELEASE EVERYTHING IT REACHED: the scope and every call
- *  `call` made through it or through a handle it awaited, the last first. A release that throws is reported and the rest still run
- *  (lib.ts `releaseRpcSessions`), so the call's answer stands. Data it answers stays usable; a stub or
- *  handle it answers is released with the rest, so return data.
+/** ONE get on `entrypoint`, under the running cause, for a `using` declaration: its
+ *  `[Symbol.dispose]` releases the scope and every call made through it or through a handle it
+ *  awaited, the last first. A release that throws is reported and the rest still run (lib.ts
+ *  `releaseRpcSessions`), so an answer already awaited stands. Data stays usable after the block;
+ *  a stub or handle is released with the rest, so a block hands out data. Await every call before
+ *  the block ends: `return await itx.whoami()`, never `return itx.whoami()`.
  *
- *    const { projectSlug } = await withItx(this.env.ITX, (itx) => itx.whoami());
+ *    using itx = this.getItx();
+ *    const { projectSlug } = await itx.whoami();
  */
-export async function withItx<Scope, T>(
-  entrypoint: { get(): Scope },
-  call: (itx: Scope) => T,
-): Promise<Awaited<T>> {
+export function itxScope<Scope>(entrypoint: { get(): Scope }): Scope & Disposable {
   const steps: unknown[] = [];
   // …and hands the platform why the code runs (../cause.ts): a word on no signature
   const itx = (entrypoint as { get(cause: unknown): Scope }).get(currentCause());
-  try {
-    return await call(recordPipelinedSteps(itx, steps));
-  } finally {
-    releaseRpcSessions([itx, ...steps]);
-  }
+  const scope = recordPipelinedSteps(itx, steps, () => releaseRpcSessions([itx, ...steps]));
+  // the root answers `[Symbol.dispose]` with the release handed to `recordPipelinedSteps`
+  return scope as Scope & Disposable;
 }
 
 /** `stub` as the caller sees it, except that every CALL made through it — at any depth, on the stub,
@@ -40,15 +36,17 @@ export async function withItx<Scope, T>(
  *  that keeps its session open until disposed, awaited or not. Awaiting hands back a handle (a stub
  *  is callable, in workerd and capnweb alike) recorded and pushed too, and plain data untouched, so
  *  data still copies across RPC. `catch`/`finally` and symbol members (`Symbol.dispose`) are the
- *  value's own, bound to it, so disposing behaves exactly as on the bare stub; an argument that is
+ *  value's own, bound to it, so disposing behaves exactly as on the bare stub — but for `stub`'s own
+ *  `[Symbol.dispose]`, which is `release` when one is given (`itxScope`); an argument that is
  *  itself a recorded value crosses the wire as the stub it wraps. */
-export function recordPipelinedSteps<T>(stub: T, steps: unknown[]): T {
+export function recordPipelinedSteps<T>(stub: T, steps: unknown[], release?: () => void): T {
   const wrapped = new WeakMap<object, object>();
   const record = (value: unknown, receiver: unknown): unknown => {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- a Proxy target must be an object or a function: a call may answer any value, and only those two can be wrapped
     if (!value || (typeof value !== "object" && typeof value !== "function")) return value;
     const proxy = new Proxy(value, {
       get(target, key) {
+        if (release && key === Symbol.dispose && target === stub) return release;
         const member: unknown = Reflect.get(target, key);
         if (key === "then" && typeof member === "function")
           // `const repo = await itx.repos.get(p); await repo.whoami()`: disposing the step releases

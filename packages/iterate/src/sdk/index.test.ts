@@ -40,10 +40,22 @@ test("the defaults: an event is ignored and every request is not found", async (
   });
 });
 
-test("callWithCause refuses withItx: it is no method Workers RPC would reach", async () => {
-  await expect(
-    configEntrypoint([]).callWithCause(undefined, [["withItx", () => {}]]),
-  ).rejects.toThrow(/withItx is no method Workers RPC would reach/);
+test("`using itx = this.getItx()` releases the scope and every call made through it as its block ends", async () => {
+  const log: string[] = [];
+  await configEntrypoint(log).appendThroughGetItx("/child");
+  expect(log).toEqual([
+    "get",
+    "cd(/child).append",
+    "dispose cd(/child).append",
+    "dispose cd(/child)",
+    "dispose root",
+  ]);
+});
+
+test("callWithCause refuses getItx: no caller gets the scope", async () => {
+  await expect(configEntrypoint([]).callWithCause(undefined, [["getItx"]])).rejects.toMatchObject({
+    code: "NOT_A_METHOD",
+  });
 });
 
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`
@@ -78,6 +90,10 @@ function configEntrypoint(
   const entrypoint = new (class extends IterateConfigEntrypoint {
     override processEvent(args: IterateConfigProcessEventArgs) {
       return handler?.(args);
+    }
+    async appendThroughGetItx(path: string) {
+      using itx = this.getItx();
+      await itx.cd(path).append({ type: "events.iterate.com/test/pong-sent" });
     }
   })({} as never, env as never);
   // the shim's base class keeps no constructor arguments; the runtime's sets `env` from them

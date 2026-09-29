@@ -106,11 +106,11 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
     return warm.get(loaderId);
   };
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(producer.produced()).toBe(1);
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(producer.produced()).toBe(1);
 });
@@ -162,7 +162,7 @@ test("a KV that cannot be read or written costs the producer's run and a logged 
     ...producer,
   });
   await expect(warm.get(loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
     { event: "worker-loader.platform-failure-module-cache", action: "get" },
@@ -185,7 +185,7 @@ test("an answer that cannot load is never kept or believed: the dead-id recovery
   expect(shared).toMatchObject({ puts: [] });
   const recovered = await load();
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(produced).toBe(2);
   expect(shared.puts).toHaveLength(1);
@@ -212,7 +212,7 @@ test("an answer over KV's value limit is not kept, and costs no warning: the wor
     invoke,
   });
   await expect(warm.get(loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(shared).toMatchObject({ puts: [] });
   expect(warn).not.toHaveBeenCalled();
@@ -294,7 +294,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
     ),
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Built {}" },
+    modules: { "worker.js": loaded("export default class Built {}") },
   });
   expect(produced).toBe(4);
   // 4. …and from here the generation is warm: no producer run, no new id
@@ -379,7 +379,7 @@ test("a producer that loses its connection once inside getCode is read once more
     });
   const first = await load();
   await expect(warm.get(first.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(produced).toBe(2);
   // warm under the same id: the lost connection marked nothing dead
@@ -805,3 +805,6 @@ const settle = (call: unknown) =>
       },
     }),
   );
+
+/** An author's main module as the loader starts it: the platform's module imported first. */
+const loaded = (code: string) => `import "./node_modules/.platform/loaded-worker.js"; ${code}`;

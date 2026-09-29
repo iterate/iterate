@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { resetWorkerDurableObjects } from "./do-reset.ts";
@@ -45,7 +46,7 @@ test.for([
     workerName,
     cwd: wrangler.dir,
     credentials: { CLOUDFLARE_API_TOKEN: "test-token", CLOUDFLARE_ACCOUNT_ID: "test-account" },
-    compatibilityDate: "2026-09-01",
+    compatibilityDate: COMPATIBILITY_DATE,
   });
   expect(wrangler.deployed()).toEqual(
     exports && {
@@ -57,7 +58,7 @@ test.for([
       config: {
         name: workerName,
         main: "worker.js",
-        compatibility_date: "2026-09-01",
+        compatibility_date: COMPATIBILITY_DATE,
         workers_dev: false,
         preview_urls: true,
         exports,

@@ -1,14 +1,15 @@
 // github-sync/processor.ts — when to pull and when to push (contract.ts says why). The calls go
-// through `withItx`: `itx.repos` on `/`, and on the connection's log by the rows install.ts writes
-// (`itx.repos ⇒ itx.builtins.cd('/').repos`, and `itx.fetch` the same, for a pull's git exchange).
+// through the host's `getItx`: `itx.repos` on `/`, and on the connection's log by the rows
+// install.ts writes (`itx.repos ⇒ itx.builtins.cd('/').repos`, and `itx.fetch` the same, for a
+// pull's git exchange).
 import { z } from "zod";
+import type { IterateContextApi } from "iterate/api";
 import {
   StreamProcessor,
   type ProcessEventArgs,
   type ProcessorState,
   type ReduceArgs,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
 import { GithubSyncContract } from "./contract.ts";
 import { githubRepositoryOf } from "./github-repository.ts";
 
@@ -26,10 +27,10 @@ const GithubSyncInstalled = z.object({ repo: z.string().startsWith("/repos/") })
 
 export class GithubSyncProcessor extends StreamProcessor<GithubSyncState> {
   contract = GithubSyncContract;
-  readonly #withItx: WithItx;
-  constructor(withItx: WithItx) {
+  readonly #getItx: () => IterateContextApi & Disposable;
+  constructor(getItx: () => IterateContextApi & Disposable) {
     super();
-    this.#withItx = withItx;
+    this.#getItx = getItx;
   }
 
   reduce({ event }: ReduceArgs<GithubSyncState>): GithubSyncState | undefined {
@@ -56,31 +57,34 @@ export class GithubSyncProcessor extends StreamProcessor<GithubSyncState> {
       CommitCompleted.safeParse(event.payload).data?.path === repo;
     if (!pushedRepository && !committed) return;
     blockProcessorWhile(async () => {
-      const outcome = await this.#withItx(async (itx) => {
+      let outcome;
+      {
+        using itx = this.#getItx();
         const handle = itx.repos.get(repo);
         const origin = await handle.origin();
         // Not linked to GitHub, or a push to another repository of the installation: not this
         // repo's to sync.
-        if (!origin) return null;
-        if (pushedRepository && githubRepositoryOf(origin) !== pushedRepository) return null;
+        if (!origin) return;
+        if (pushedRepository && githubRepositoryOf(origin) !== pushedRepository) return;
         try {
-          return pushedRepository ? { pull: await handle.pull() } : { push: await handle.push() };
+          outcome = pushedRepository
+            ? { pull: await handle.pull() }
+            : { push: await handle.push() };
         } catch (error) {
           // A refusal crosses the RPC hop as an Error with its `code` kept; both fields are checked.
           const { code, message } = error as { code?: unknown; message?: unknown };
-          return {
+          outcome = {
             [pushedRepository ? "pull" : "push"]:
               code === "NOT_FAST_FORWARD" ? "not-fast-forward" : "failed",
             error: String(message),
           };
         }
+      }
+      await append({
+        type: "github-sync/synced",
+        payload: { repo, trigger: event.offset, ...outcome },
+        idempotencyKey: this.idempotencyKey("synced", event),
       });
-      if (outcome)
-        await append({
-          type: "github-sync/synced",
-          payload: { repo, trigger: event.offset, ...outcome },
-          idempotencyKey: this.idempotencyKey("synced", event),
-        });
     });
   }
 }
