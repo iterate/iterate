@@ -111,14 +111,6 @@ export const freshRepoPath = (prefix: string): string =>
   // Per run and per worker process, never random: a collision would delete a sibling's repo.
   `/e2e/${prefix}-${runId()}-${workerSlot()}-${repoCounter++}`;
 
-/** CLOUDFLARE ARTIFACTS' OWN FAULTS, in the words the platform refuses them with
- *  (src/context/cf-artifacts.ts): a call Artifacts left unanswered past `ARTIFACTS_ANSWER_MS`, and a
- *  name that a failed create or an unfinished deletion still holds past the taken-name wait. A row
- *  that exists to exercise Artifacts records them as its known flake (`createFlake`); any other
- *  failure is the row's own. */
-export const ARTIFACTS_FAULT =
-  /Cloudflare Artifacts did not answer|the Artifacts repo name \S+ is taken, yet no repo by that name has read/;
-
 let counter = 0;
 /** A unique project ctx per call, so tests never collide on a Durable Object (each ctx is its own):
  *  `prj_<prefix>_<run>_<worker>_<n>` — unique across runs, across worker processes, and within one. */

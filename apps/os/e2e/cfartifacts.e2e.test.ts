@@ -23,51 +23,42 @@
 //     write and a delete onto the tip's tree, a commit that changes nothing commits nothing, `log` is
 //     newest-first with parents
 
-import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { expect, test } from "vitest";
 import type { RepoLogEntry } from "iterate/api";
 import { repoArtifactName } from "../src/context/cf-artifacts.ts";
-import { ARTIFACTS_FAULT, freshCtx, freshRepoPath, openItx } from "./support/client.ts";
+import { freshCtx, freshRepoPath, openItx } from "./support/client.ts";
 
-// KNOWN FLAKE, CLOUDFLARE ARTIFACTS': these rows exist to call the binding, so a fault of Artifacts'
-// own that the platform refuses by name (ARTIFACTS_FAULT) is recorded as the flake, never retried.
-// 59 s: the rows' 60 s, less the second the wrapper adds.
-const artifactsFlake = createFlake(test, ARTIFACTS_FAULT, { timeoutMs: 59_000 });
+test("cfArtifacts create/get/list/delete against the real binding, by path, project-scoped", async () => {
+  const a = openItx(freshCtx("cfa"));
+  const path = freshRepoPath("smoke");
 
-artifactsFlake(
-  "cfArtifacts create/get/list/delete against the real binding, by path, project-scoped",
-  async () => {
-    const a = openItx(freshCtx("cfa"));
-    const path = freshRepoPath("smoke");
+  // create → a real repo, main unborn; idempotent — the second create finds it.
+  expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
+  try {
+    expect(await a.cfArtifacts.create(path)).toEqual({ created: false });
 
-    // create → a real repo, main unborn; idempotent — the second create finds it.
-    expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
-    try {
-      expect(await a.cfArtifacts.create(path)).toEqual({ created: false });
+    // list (all pages) → THIS project's repos, as paths.
+    expect(await allRepoPaths(a)).toContain(path);
 
-      // list (all pages) → THIS project's repos, as paths.
-      expect(await allRepoPaths(a)).toContain(path);
+    // get(path).createToken(...) pipelined server-side → a real git credential; no closure on the wire.
+    const tok = await a.cfArtifacts.get(path).createToken("read", 300);
+    expect(typeof tok.plaintext).toBe("string");
+    expect(tok.plaintext.length).toBeGreaterThan(0);
 
-      // get(path).createToken(...) pipelined server-side → a real git credential; no closure on the wire.
-      const tok = await a.cfArtifacts.get(path).createToken("read", 300);
-      expect(typeof tok.plaintext).toBe("string");
-      expect(tok.plaintext.length).toBeGreaterThan(0);
+    // get(path).remote() → the git-over-HTTPS URL of THAT repo: the account's Artifacts host, the
+    // namespace, and `<project>.<name>.git` — the name the proxy derives from the path.
+    const remote = await a.cfArtifacts.get(path).remote();
+    expect(remote).toMatch(/^https:\/\/[^/]+\.artifacts\.cloudflare\.net\/git\/[^/]+\/.+\.git$/);
+    expect(remote.endsWith(`.${repoArtifactName(path)}.git`)).toBe(true);
+  } finally {
+    expect(await a.cfArtifacts.delete(path)).toBe(true);
+  }
 
-      // get(path).remote() → the git-over-HTTPS URL of THAT repo: the account's Artifacts host, the
-      // namespace, and `<project>.<name>.git` — the name the proxy derives from the path.
-      const remote = await a.cfArtifacts.get(path).remote();
-      expect(remote).toMatch(/^https:\/\/[^/]+\.artifacts\.cloudflare\.net\/git\/[^/]+\/.+\.git$/);
-      expect(remote.endsWith(`.${repoArtifactName(path)}.git`)).toBe(true);
-    } finally {
-      expect(await a.cfArtifacts.delete(path)).toBe(true);
-    }
+  // after delete, the repo is gone from this project's list (checked across all pages).
+  expect(await allRepoPaths(a)).not.toContain(path);
+});
 
-    // after delete, the repo is gone from this project's list (checked across all pages).
-    expect(await allRepoPaths(a)).not.toContain(path);
-  },
-);
-
-artifactsFlake("cfArtifacts isolation: one project never sees another's repos", async () => {
+test("cfArtifacts isolation: one project never sees another's repos", async () => {
   const a = openItx(freshCtx("cfaIsoA"));
   const b = openItx(freshCtx("cfaIsoB"));
   const path = freshRepoPath("iso");
@@ -81,25 +72,22 @@ artifactsFlake("cfArtifacts isolation: one project never sees another's repos", 
   }
 });
 
-artifactsFlake(
-  "cfArtifacts: a create right after a delete of the same path ends with a live repo",
-  async () => {
-    const a = openItx(freshCtx("cfaRecreate"));
-    const path = freshRepoPath("recreate");
+test("cfArtifacts: a create right after a delete of the same path ends with a live repo", async () => {
+  const a = openItx(freshCtx("cfaRecreate"));
+  const path = freshRepoPath("recreate");
 
+  expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
+  try {
+    expect(await a.cfArtifacts.delete(path)).toBe(true);
+    // at once: the name may still be taken by the deletion in flight, which create waits out
     expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
-    try {
-      expect(await a.cfArtifacts.delete(path)).toBe(true);
-      // at once: the name may still be taken by the deletion in flight, which create waits out
-      expect(await a.cfArtifacts.create(path)).toEqual({ created: true });
-      const tok = await a.cfArtifacts.get(path).createToken("read", 60);
-      expect(tok.plaintext.length).toBeGreaterThan(0);
-      expect(await allRepoPaths(a)).toContain(path);
-    } finally {
-      await a.cfArtifacts.delete(path);
-    }
-  },
-);
+    const tok = await a.cfArtifacts.get(path).createToken("read", 60);
+    expect(tok.plaintext.length).toBeGreaterThan(0);
+    expect(await allRepoPaths(a)).toContain(path);
+  } finally {
+    await a.cfArtifacts.delete(path);
+  }
+});
 
 // ── the git half: the repo facet against the real remote, through real git-over-HTTPS ──
 

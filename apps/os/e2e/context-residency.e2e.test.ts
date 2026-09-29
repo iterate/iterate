@@ -31,10 +31,8 @@
 // The three careless rows wait out real quiet minutes (110–180 s), so they are tagged `slow`
 // (docs/testing.md#slow-rows): every main push runs them, and a PR runs them when it turns them on or
 // edits this file. The claimed-work row waits out one claim's alarm (20 s) and runs on every PR.
-import { createFlake } from "@iterate-com/shared/test-support/flake-test";
 import { expect, test } from "vitest";
 import {
-  ARTIFACTS_FAULT,
   adminCredentials,
   disposeSessions,
   EVICTION_IDLES,
@@ -285,10 +283,8 @@ test("a facet calling through a stashed env.ITX does not outlive its context", a
 }, 90_000);
 
 // A CLIENT is careless the same way: a held `cfArtifacts.get(path)` was the scoped repo RpcTarget,
-// live across /api for as long as the socket lived. The repo it holds is a real Artifacts repo, so a
-// fault of Artifacts' own (ARTIFACTS_FAULT) is recorded as this row's known flake; 89 s: the row's
-// 90 s, less the second the wrapper adds.
-createFlake(deployedOnly, ARTIFACTS_FAULT, { timeoutMs: 89_000 })(
+// live across /api for as long as the socket lived.
+deployedOnly(
   "a client holding itx.cfArtifacts.get(path) does not keep the context resident",
   async () => {
     const itx = openItx(freshCtx("residency_cfartifacts"));
@@ -302,6 +298,7 @@ createFlake(deployedOnly, ARTIFACTS_FAULT, { timeoutMs: 89_000 })(
       await itx.cfArtifacts.delete(path);
     }
   },
+  90_000,
 );
 
 // ── A FACET DOES NOT OUTLIVE ITS CONTEXT ──
