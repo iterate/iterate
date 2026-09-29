@@ -8,8 +8,9 @@ size: large
 Status: parts 1 and 2 built. Part 1: a docs app you can write in. Part 2: live co-editing through
 a per-doc processor from `@iterate-com/docs`, which also autosaves and takes in commits made
 elsewhere. The browser spec (two people, an agent's commit) runs on the PR preview only; locally the
-package has unit tests and the page was checked in a harness. Not done: routing the iterate
-project's `docs` slug to the prd Worker, docs.iterate.com, comments.
+package has unit tests and the page was checked in a harness. Not done: docs.iterate.com,
+comments. The iterate project already routes `docs--iterate.iterate.app` to the prd Worker, which
+the merge deploys.
 
 ## Goal
 
@@ -241,6 +242,12 @@ set of CodeMirror extensions, so switching later is cheap.
   last edit frame (and on `pagehide`, best effort). A crashed tab never leaves; the minute covers
   it. The spec now checks the saved file after both people leave, which is also its check of the
   save-on-leave.
+- 2026-09-29: the iterate project's config worker (`iterate/config` `worker.ts`) doesn't consult
+  fetch routes, unlike the default template's, so the route is a `docs` case beside `pebble`:
+  members only, through to `docs.iterate.workers.dev`. Committed on prd as iterate/config `d8628b1`
+  (the GitHub sync pushed it) before this merges, with Misha's OK: until the prd Worker exists the
+  address shows Cloudflare's "nothing here" to a signed-in member. Checked: the address answers
+  `401 Sign in` to an anonymous request, the project's apex still serves the setup prompt.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.
