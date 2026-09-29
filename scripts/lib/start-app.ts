@@ -28,8 +28,9 @@ import {
   voiceEnvs,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
-import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
+import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext } from "./env-context.ts";
+import { viteBuild } from "./vite-build.ts";
 import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
@@ -307,7 +308,7 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
  *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. */
 export function buildStartApp(app: StartApp, env: string) {
-  return viteBuild(fileURLToPath(app.root), env);
+  return viteBuild(fileURLToPath(app.root), { CLOUDFLARE_ENV: env });
 }
 
 /**

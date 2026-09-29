@@ -21,7 +21,7 @@ Today apps/os reaches `envs.ts` in two ways:
 Plan ("split the difference"): move (1) into apps/os now and invert (2), so apps/os builds
 self-host and local dev by itself and iterate's deploy tooling hands it every other deployment.
 
-Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, stacked on it) in progress. Open question: where local dev's Cloudflare account comes from (below).
+Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Open question: where local dev's Cloudflare account comes from (below).
 
 ## PR 1: the moves (no behaviour change)
 
@@ -34,21 +34,24 @@ Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config i
 
 ## PR 2: the lookup (stacked on PR 1)
 
-- [ ] `viteWranglerConfig` takes the deployment, not its name: an `OsDeployment` (an `OsEnv` plus
+- [x] `viteWranglerConfig` takes the deployment, not its name: an `OsDeployment` (an `OsEnv` plus
       `name`), "self-host", or none for local. vite.config.ts reads it from the environment:
       `CLOUDFLARE_ENV` names it and `OS_DEPLOYMENT` is its JSON, parsed with zod. A name with no
-      `OS_DEPLOYMENT` throws.
-- [ ] `buildOs(deployment)` takes the looked-up deployment and sets `OS_DEPLOYMENT`; the callers
-      (scripts/deploy.ts through `deployApp`, scripts/preview.ts) pass `getOsEnv(name)`
+      `OS_DEPLOYMENT` throws. _generate-wrangler-config.ts `deploymentFromEnv`; `OsEnv` is a zod schema in scripts/os-env.ts_
+- [x] `buildOs(deployment)` takes the looked-up deployment and sets `OS_DEPLOYMENT`; the callers
+      (scripts/deploy.ts through `deployApp`, scripts/preview.ts) pass `getOsEnv(name)` _build.ts
+      `viteBuildOs`; deploy.ts passes it as deployApp's `build`_
 - [ ] ~~local dev's `account_id` comes from the caller (`CLOUDFLARE_ACCOUNT_ID`, which iterate's dev
       tooling sets) instead of `PREVIEW_AND_DEV_ACCOUNT_ID`~~ _deferred to an open question: nothing
       sets it today. `pnpm dev`, the Playwright web server and `pnpm e2e` run without Doppler._
-- [ ] the build path stops reaching envs.ts through scripts/lib: build.ts imports `viteBuild` from
+- [x] the build path stops reaching envs.ts through scripts/lib: build.ts imports `viteBuild` from
       deploy-helpers.ts, which reaches envs.ts through env-context.ts `UNPROVISIONED`. `viteBuild`
       moves to a module of its own that imports nothing, as scripts/lib/wrangler-config.ts already
-      does. Moving either into apps/os waits for the core/ move.
-- [ ] a test that lists every file outside apps/os and packages/ the build path reaches (esbuild's
-      metafile), so a new one shows up in review
+      does. Moving either into apps/os waits for the core/ move. _scripts/lib/vite-build.ts; its
+      `env` argument replaces the name, so apps/os passes `OS_DEPLOYMENT` too_
+- [x] a test that lists every file outside apps/os and packages/ the build path reaches (esbuild's
+      metafile), so a new one shows up in review _apps/os/scripts/build.test.ts: envs.ts (local
+      dev's account only), scripts/lib/vite-build.ts, scripts/lib/wrangler-config.ts_
 
 ## Assumptions (made without asking)
 
@@ -85,3 +88,13 @@ local dev wants their own account. Options:
   `PREVIEW_AND_DEV_ACCOUNT_ID` (generate-wrangler-config.ts) and `UNPROVISIONED` (build.ts →
   scripts/lib/deploy-helpers.ts → env-context.ts). Those are PR 2.
 - PR 1 checks: lint, oxfmt, `pnpm typecheck`, knip, `pnpm --filter os test` (147 files) all pass.
+- PR 2: `OsEnv` as a zod schema rewrites objects in the schema's key order, and `projectWildcard`
+  goes into a var as JSON, so its fields follow envs.ts's order (the diff caught prd's
+  `APP_CONFIG_URLS__PROJECT_WILDCARD` reordering).
+- PR 2 proof: `viteWranglerConfig` through `deploymentFromEnv` (the JSON round trip `viteBuildOs`
+  makes) for all six configs is byte-identical to main's. A real `vite build` of prd, by main's
+  `CLOUDFLARE_ENV=prd` and by this branch's `buildOs(getOsEnv("prd"))`, writes the same
+  wrangler.json. A bare `CLOUDFLARE_ENV=prd vite build` fails naming `OS_DEPLOYMENT`, and
+  `CLOUDFLARE_ENV=self-host pnpm --filter os build` (the recipe's) still builds.
+- PR 2 checks: lint, oxfmt, `pnpm typecheck`, knip, `pnpm --filter os test` (148 files),
+  scripts/lib and context-sweep tests all pass.

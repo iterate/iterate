@@ -5,9 +5,9 @@
 // the caller.
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
-import type { OsDeployableEnv } from "../../../envs.ts";
 import { pageText } from "../../../scripts/ci/slack.ts";
 import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
+import type { OsDeployableEnv } from "./os-env.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
  *  Cloudflare's failures sent again, a truncated listing refused). */

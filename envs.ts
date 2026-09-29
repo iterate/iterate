@@ -1,7 +1,7 @@
 /** Deployment configuration for OS and its first-party apps. Secrets live in Doppler. */
 
 import { TEST_EMAIL_DOMAIN } from "./apps/os/src/test-email-domain.ts";
-import type { OsEnv } from "./apps/os/scripts/os-env.ts";
+import type { OsDeployableEnv, OsEnv } from "./apps/os/scripts/os-env.ts";
 
 /** The two Cloudflare accounts, and the Doppler config whose CLOUDFLARE_API_TOKEN and
  * CLOUDFLARE_ACCOUNT_ID reach each one for account-wide tooling (scripts/monitors/do-cost.ts).
@@ -319,15 +319,11 @@ export function getEnv<E>(name: string, envs: Record<string, E>): E & { name: st
   return { ...env, name };
 }
 
-/** An apps/os deployment and the name it was found by (`getOsEnv`): what the deploy,
- *  preview and sweep scripts hold once they have looked their `--env` up. */
-export type OsDeployableEnv = OsEnv & { name: string };
-
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
  *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
- *  it; throws for any other name. What building and deploying apps/os by name look up
- *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
- *  tell the two apart. */
+ *  it; throws for any other name. What deploying and previewing apps/os by name look up
+ *  (apps/os/scripts/deploy.ts, preview.ts), so neither needs to tell the two apart; each hands the
+ *  result to the build (apps/os/scripts/build.ts `viteBuildOs`), which looks nothing up. */
 export function getOsEnv(name: string): OsDeployableEnv {
   const env = osEnvs[name] || previewDeployment(name)?.os;
   if (!env)

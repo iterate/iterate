@@ -1,14 +1,14 @@
 import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, getOsEnv, type OsDeployableEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getOsEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { appConfigSecretsOf } from "../../../scripts/lib/deploy-helpers.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
-import { build } from "./build.ts";
+import { build, viteBuildOs } from "./build.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
-import { osResourceNames } from "./os-env.ts";
+import { osResourceNames, type OsDeployableEnv } from "./os-env.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
@@ -47,7 +47,7 @@ export default async function deploy(options: {
           privateKey: previewGithubAppPrivateKey(),
         });
       parseAppConfig({
-        ...viteWranglerConfig(env.name, { localDev: false, port: "" }).vars,
+        ...viteWranglerConfig(env, { localDev: false, port: "" }).vars,
         ...secretValues,
       });
       const [, databaseId] = await Promise.all([
@@ -63,6 +63,8 @@ export default async function deploy(options: {
         },
       });
     },
+    // the deployment itself, not its name: apps/os looks none up (build.ts `viteBuildOs`)
+    build: () => viteBuildOs(env),
     smokes: [
       {
         url: "/version",
