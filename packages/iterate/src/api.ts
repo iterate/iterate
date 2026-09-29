@@ -964,7 +964,8 @@ export interface IterateContextApi {
     consumes?: string[];
     afterOffset?: number;
     /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
-     *  retried and dead-lettered on its own. Absent: the ordered queue. */
+     *  retried and dead-lettered on its own. Absent: the ordered queue, the one that may take a
+     *  dead letter (`itx/subscription-delivery-failed`): alert on dead letters from an ordered row. */
     ordered?: false;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`

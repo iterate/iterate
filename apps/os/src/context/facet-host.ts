@@ -110,6 +110,11 @@ const FACET_CALL_WATCHDOG_MS = 60_000;
  *  for the next birth or sweep. Remove when that file's pin, a `createFailing` tagged `slow`,
  *  goes red because the raw fault no longer reproduces. */
 const FACET_START_WATCHDOG_MS = 10_000;
+/** A hosted processor's claim on its context's alarm (`processors.claim`), one kv row
+ *  (`facet-claim:<name>`): when a revive is owed by, and why — the cause of the attempt it covers
+ *  (cause.ts). */
+type FacetClaim = { at: number; cause?: Cause };
+
 /** What a call's watchdog does to a facet that never answered: every call but a platform start
  *  restarts it; a platform start leaves it alone — the start gave up under its own bound and
  *  logged, and an abort then would stop the facet outside the start's `blockConcurrencyWhile`. */
@@ -269,7 +274,7 @@ export class FacetHost {
   /** THE CLAIMS of hosted processors on this context's alarm (`processors.claim`): name → the time
    *  a `revive()` is owed by. A kv row each, so a claim outlives the incarnation that made it —
    *  that is the whole point. Restored in the constructor; spent by the pass that serves it. */
-  readonly #facetClaims = new Map<string, number>();
+  readonly #facetClaims = new Map<string, FacetClaim>();
   /** Consecutive revives of a facet that THREW (a load failure, a timeout): the backoff of the
    *  claim the pass puts back. A kv row beside the claim (`facet-claim-failures:<name>`), so the
    *  backoff survives the eviction between two passes — else every fresh incarnation would start
@@ -301,7 +306,7 @@ export class FacetHost {
     // The revive-failure ladder (`#facetReviveFailed` wrote each rung as a number).
     for (const [key, n] of deps.ctx.storage.kv.list({ prefix: "facet-claim-failures:" }))
       this.#facetReviveFailures.set(key.slice("facet-claim-failures:".length), n as number);
-    // A claim row's value is the epoch-ms `at` this host wrote in `#claimFacetAlarm` (kv types it as
+    // A claim row's value is the claim this host wrote in `#claimFacetAlarm` (kv types it as
     // unknown). A FIRST-PARTY facet's claim the last incarnation left is DUE AT THIS BIRTH: those
     // facets are SDK engines, whose claim always covers an attempt in flight, and that attempt ran in
     // an incarnation that is over — evicted, or replaced under its calls by the platform
@@ -313,17 +318,23 @@ export class FacetHost {
     // its backoff. In memory only: the birth writes nothing before it has started its facets, and
     // its first reconcile arms the alarm.
     const bornAt = Date.now();
-    for (const [key, at] of deps.ctx.storage.kv.list({ prefix: "facet-claim:" })) {
+    for (const [key, row] of deps.ctx.storage.kv.list({ prefix: "facet-claim:" })) {
       const name = key.slice("facet-claim:".length);
+      const claim = row as FacetClaim;
       const dueAtBirth = firstPartyFacetClassOf(name) && !this.#facetReviveFailures.has(name);
-      this.#facetClaims.set(name, dueAtBirth ? Math.min(at as number, bornAt) : (at as number));
+      this.#facetClaims.set(
+        name,
+        dueAtBirth ? { ...claim, at: Math.min(claim.at, bornAt) } : claim,
+      );
     }
   }
 
   /** The claims on the context's alarm, earliest first: the coordinator's third deadline source
    *  and the alarm trace's `claims`. */
   deadlines(): { name: string; at: number }[] {
-    return [...this.#facetClaims].map(([name, at]) => ({ name, at })).sort((a, b) => a.at - b.at);
+    return [...this.#facetClaims]
+      .map(([name, { at }]) => ({ name, at }))
+      .sort((a, b) => a.at - b.at);
   }
 
   /** The alarm trace's facts about the facets this incarnation holds. */
@@ -362,10 +373,9 @@ export class FacetHost {
    *  caught up, its at-head pass run. Awaited by the pass, so the claim a revive makes is the one
    *  the next deadline is derived from. */
   async reviveDueClaims(): Promise<void> {
-    for (const [name, at] of [...this.#facetClaims]) {
+    for (const [name, { at, cause }] of [...this.#facetClaims]) {
       if (at > Date.now()) continue;
       // A revive keeps the cause of the claim it serves (cause.ts: repeating work is no new work).
-      const cause = this.#claimCause(name);
       this.#claimFacetAlarm(name, null);
       try {
         await this.callFacetAsPlatform(name, [["revive"]], cause);
@@ -379,8 +389,9 @@ export class FacetHost {
           this.#claimFacetAlarm(name, Date.now(), cause);
           continue;
         }
-        // Its work died with its host too often: failed, owed no revive, and one fact says so.
-        if (code === "WORK_FAILED") {
+        // Its work cannot succeed on a revive (its host died with it too often): failed, owed no
+        // revive, and one fact says so.
+        if (code === "PERMANENT_FAILURE") {
           this.#deps.stream.append({
             type: "events.iterate.com/itx/work-failed",
             payload: { facet: name, error: (error as Error).message },
@@ -605,32 +616,28 @@ export class FacetHost {
     this.#facetReviveFailures.delete(name);
     this.#deps.ctx.storage.kv.delete(`facet-claim-failures:${name}`);
   }
-  #claimFacetAlarm(name: string, at: number | null, cause = this.#claimCause(name)): void {
+  #claimFacetAlarm(
+    name: string,
+    at: number | null,
+    cause = this.#facetClaims.get(name)?.cause,
+  ): void {
     // null releases a claim; epoch 0 is a valid due alarm
     if (at === null) {
       this.#facetClaims.delete(name);
       this.#deps.ctx.storage.kv.delete(`facet-claim:${name}`);
-      this.#deps.ctx.storage.kv.delete(`facet-claim-cause:${name}`);
     } else {
-      this.#facetClaims.set(name, at);
-      this.#deps.ctx.storage.kv.put(`facet-claim:${name}`, at);
-      if (cause) this.#deps.ctx.storage.kv.put(`facet-claim-cause:${name}`, cause);
+      const claim: FacetClaim = cause ? { at, cause } : { at };
+      this.#facetClaims.set(name, claim);
+      this.#deps.ctx.storage.kv.put(`facet-claim:${name}`, claim);
     }
     this.#deps.reconcileAlarm();
-  }
-
-  /** Why a facet's claim was made — the cause of the attempt it covers (cause.ts), kept beside it. */
-  #claimCause(name: string): Cause | undefined {
-    return this.#deps.ctx.storage.kv.get<Cause>(`facet-claim-cause:${name}`);
   }
 
   /** The deepest cause among the claims due by `dueBy`: what an alarm that comes back for them is
    *  caused by. */
   owedCause(dueBy: number): Cause | undefined {
     return deepestCause(
-      [...this.#facetClaims]
-        .filter(([, at]) => at <= dueBy)
-        .map(([name]) => this.#claimCause(name)),
+      [...this.#facetClaims.values()].filter(({ at }) => at <= dueBy).map(({ cause }) => cause),
     );
   }
 
@@ -1015,12 +1022,12 @@ export class FacetHost {
     // or re-pointed by a rule leaves it running unpushed, trusting what it last read — as a facet
     // pushed once already trusts its last push, word or no word.
     // the code it starts on: this deploy's class, or the loaded identity resolved below
-    let generation = this.#deps.deployId;
+    let codeId = this.#deps.deployId;
     const propsAtStart = () =>
       ({
         iterateContextName: this.#deps.iterateContextName,
         name,
-        generation,
+        codeId,
         ...(rowsPushingFacet(this.#deps.stream.coreReducedState, name).length > 0 && {
           fedByPushes: true,
         }),
@@ -1067,7 +1074,7 @@ export class FacetHost {
         invoke: worker.invoke,
         where: `facet "${name}"`,
       });
-      generation = loaderId;
+      codeId = loaderId;
       // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
       // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
       // stale call must neither resurrect a deleted facet as an orphan this actor never releases, nor

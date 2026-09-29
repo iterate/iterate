@@ -277,7 +277,7 @@ test("cause-table: a revive keeps the cause of the claim it serves — one that 
   }
 });
 
-test("work that died with its host too often is failed: its revive is refused WORK_FAILED, the context records one `itx/work-failed` fact and owes it no revive", async () => {
+test("work that died with its host too often is failed: its revive is refused PERMANENT_FAILURE, the context records one `itx/work-failed` fact and owes it no revive", async () => {
   const start = Date.parse("2035-01-01T00:00:00Z");
   vi.useFakeTimers({ now: start, toFake: ["Date"] });
   try {
@@ -1204,7 +1204,7 @@ export default class extends IterateConfigEntrypoint {
 };
 
 /** A loaded facet that claims a revive due in an hour (`claimNow`) and whose work, revived, has died
- *  with its host too often: its revive is refused WORK_FAILED, as the SDK's engine refuses it. */
+ *  with its host too often: its revive is refused PERMANENT_FAILURE, as the SDK's engine refuses it. */
 const DOOMED = {
   source: {
     "package.json": '{"main":"worker.js"}',
@@ -1218,7 +1218,7 @@ export class Doomed extends FacetDurableObject {
   }
   revive() {
     throw Object.assign(new Error("its work in flight died with its host 5 times"), {
-      code: "WORK_FAILED",
+      code: "PERMANENT_FAILURE",
     });
   }
 }

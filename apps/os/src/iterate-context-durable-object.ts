@@ -531,6 +531,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  schedules or queued a delivery. */
   readonly #stream = new Stream({
     storage: this.ctx.storage,
+    deployId: this.#appConfig.deployId,
     incarnationCountedByHost: true,
     path: this.#durableObjectAddress.path,
     projectId: this.#durableObjectAddress.projectId,
@@ -794,10 +795,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     afterOffset = 0,
     limit = 500,
     options: { includeEphemeral?: boolean } = {},
-    cause?: Cause,
   ): Promise<StreamPage> {
-    // a read that wakes a sleeping context is caused by its caller, refused past the limit (cause.ts)
-    this.#inboundRequestInOneTurn(cause && parseCause(cause));
+    this.#inboundRequestInOneTurn();
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 

@@ -127,6 +127,16 @@ const deterministicFailure = (error: unknown): boolean =>
     "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
   ].includes(errorCode(error) ?? "");
 
+/** A TARGET's own refusal of a call — a name nothing resolves, a verb it may not call, one it
+ *  refuses, a receiver gone — which dangles or halts a fan-out row (`#fanOutFailed`); a handler's
+ *  refusal of its own is its event's failure instead (built-ins.ts `workers.get`'s recoding). */
+export const TARGET_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "NO_ITX_EXPRESSION_MATCH",
+  "NOT_A_METHOD",
+  "FORBIDDEN",
+  "GONE",
+]);
+
 /** One row's push waiting behind its in-flight delivery — later commits fold into it; `chars` is
  *  measured only once something has folded in (a push the closure takes at once costs no stringify). */
 type PendingPush = {
@@ -158,8 +168,6 @@ type FanOutRow = {
   /** When the snapshot of another context's rules that refused the dangling target expires (the
    *  refusal's `validUntil`): the row probes again then, as a fresh read may name it. */
   refusedUntil: number | undefined;
-  /** Probes since the last success while parked (the cursor's `parkedProbes`). */
-  parkedProbes: number;
   /** The pump is running; a kick meanwhile runs it once more after. */
   pumping: boolean;
   pumpAgain: boolean;
@@ -1329,9 +1337,8 @@ export class SubscriptionDelivery {
   // SETTLES, so the receiver never has more than FAN_OUT_CALLS_IN_FLIGHT from one row. Every record
   // not in a slot has a time, or waits for the target (null). THE WAKE RULE: an `itx/woken` is
   // handed to the target at most once — no record, no retry, no dead letter — so handling a wake
-  // leaves nothing owed. THE LOOP RULE (`fanOutAdmits`): ephemerals never; a `subscription-delivery-*`
-  // fact only for a row that names its type, and one it fails for good is dropped, never
-  // dead-lettered. Only the call carrying the log's event runs with delivery authority
+  // leaves nothing owed. THE LOOP RULE (`fanOutAdmits`): ephemerals and `subscription-delivery-*`
+  // facts never — an ordered row alerts on dead letters. Only the call carrying the log's event runs with delivery authority
   // (`runAsDelivery`): evaluating the target never does.
 
   /** A fan-out row's state for `row`, made on first touch in this incarnation. */
@@ -1348,7 +1355,6 @@ export class SubscriptionDelivery {
       aloneOffset: undefined,
       dangling: false,
       refusedUntil: undefined,
-      parkedProbes: cursor?.parkedProbes ?? 0,
       pumping: false,
       pumpAgain: false,
       waitingForRoom: false,
@@ -1400,7 +1406,9 @@ export class SubscriptionDelivery {
         resumed.offset !== undefined &&
         resumed.offset <= this.#stream.highestDurableOffset() &&
         !record.deliveries.has(resumed.offset) &&
-        !this.#readFanOutEvent(resumed.offset).some(isWake)
+        !this.#readFanOutEvent(resumed.offset).some(
+          (event) => isWake(event) || isDeliveryFact(event),
+        )
       )
         this.#writeFanOutDelivery(name, {
           offset: resumed.offset,
@@ -1653,8 +1661,11 @@ export class SubscriptionDelivery {
     const record = this.#deliveryRecordFor(name);
     if (record.deliveries.delete(call.event.offset))
       this.#stream.storage.deleteSubscriptionDelivery(name, call.event.offset);
-    fanOut.parkedProbes = 0;
-    const { failingOffsets: _lifted, ...cursor } = this.#fanOutCursor(name, fanOut);
+    const {
+      failingOffsets: _lifted,
+      parkedProbes: _startOver,
+      ...cursor
+    } = this.#fanOutCursor(name, fanOut);
     if (!jsonEqual(cursor, record.cursor || null)) this.#adoptCursor(name, cursor, true);
     this.#pumpFanOut(name);
   }
@@ -1673,12 +1684,7 @@ export class SubscriptionDelivery {
     const delivery = record.deliveries.get(event.offset);
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
-    if (
-      code === "NO_ITX_EXPRESSION_MATCH" ||
-      code === "NOT_A_METHOD" ||
-      code === "FORBIDDEN" ||
-      code === "GONE"
-    ) {
+    if (code && TARGET_FAILURE_CODES.has(code)) {
       this.#writeFanOutDelivery(name, {
         ...delivery,
         attempt: attempt - 1,
@@ -1697,12 +1703,8 @@ export class SubscriptionDelivery {
       return this.#pumpFanOut(name);
     }
     this.#noteFanOutFailure(name, fanOut, event.offset);
-    const permanent =
-      code === "PERMANENT_FAILURE" ||
-      code === "EVENT_TOO_LARGE" ||
-      code === "REDUCE_CHECKPOINT_TOO_LARGE";
     const ladder = this.#fanOutLadder(row);
-    if (permanent || attempt >= ladder.maxAttempts)
+    if (deterministicFailure(error) || attempt >= ladder.maxAttempts)
       this.#deadLetter(name, row, {
         type: event.type,
         offset: event.offset,
@@ -1755,22 +1757,11 @@ export class SubscriptionDelivery {
 
   /** THE DEAD LETTER, once per event, row and resume (keyed by the row's generation, the operator's
    *  last resume and the offset, so a replay after a death appends nothing and the first failure
-   *  stands, while an event a resume delivers again is dead-lettered again), then its record goes. A
-   *  `subscription-delivery-*` fact that fails for good is dropped with a warning instead. */
-  #deadLetter(name: string, row: Subscription, { type, offset, attempts, error }: FanOutFailure) {
+   *  stands, while an event a resume delivers again is dead-lettered again), then its record goes. */
+  #deadLetter(name: string, row: Subscription, { offset, attempts, error }: FanOutFailure) {
     if (!this.#isStillTheRow(name, row)) return;
     const idempotencyKey = `itx/subscription-delivery-failed:${name}:${row.configuredAtOffset}:${row.resumed?.atOffset ?? 0}:${offset}`;
-    if (type.startsWith("events.iterate.com/itx/subscription-delivery-"))
-      console.warn({
-        event: "delivery.fan-out.outcome-dropped",
-        namespace: "subscription-delivery",
-        message: "a delivery outcome this row could not deliver is dropped, never dead-lettered",
-        name,
-        offset,
-        attempts,
-        error: errorMessage(error),
-      });
-    else if (!this.#stream.storage.readEventByIdempotencyKey(idempotencyKey))
+    if (!this.#stream.storage.readEventByIdempotencyKey(idempotencyKey))
       this.#stream.append({
         type: "events.iterate.com/itx/subscription-delivery-failed",
         idempotencyKey,
@@ -1806,18 +1797,16 @@ export class SubscriptionDelivery {
       fanOut.admittedThroughOffset < this.#stream.highestDurableOffset() ||
       [...record.deliveries.values()].some((delivery) => delivery.nextAttemptAtMs === null);
     let nextAttemptAtMs: number | undefined;
+    let probes = record.cursor?.parkedProbes ?? 0;
     if ((fanOut.dangling || fanOutPaused(record.cursor)) && backlog) {
       const standing = record.cursor?.nextAttemptAtMs;
       if (standing !== undefined && standing > now) nextAttemptAtMs = standing;
       else if (fanOut.dangling && fanOut.refusedUntil) {
-        fanOut.parkedProbes = Math.min(fanOut.parkedProbes + 1, DELIVERY_MAX_ATTEMPTS);
-        nextAttemptAtMs = Math.max(
-          now + durableLadderDelayMs(fanOut.parkedProbes),
-          fanOut.refusedUntil,
-        );
-      } else if (fanOut.parkedProbes < DELIVERY_MAX_ATTEMPTS) {
-        fanOut.parkedProbes += 1;
-        nextAttemptAtMs = now + durableLadderDelayMs(fanOut.parkedProbes);
+        probes = Math.min(probes + 1, DELIVERY_MAX_ATTEMPTS);
+        nextAttemptAtMs = Math.max(now + durableLadderDelayMs(probes), fanOut.refusedUntil);
+      } else if (probes < DELIVERY_MAX_ATTEMPTS) {
+        probes += 1;
+        nextAttemptAtMs = now + durableLadderDelayMs(probes);
       }
     }
     const {
@@ -1829,7 +1818,7 @@ export class SubscriptionDelivery {
       ...kept,
       // oxlint-disable-next-line iterate/simple-truthiness-check -- the cursor row is compared with jsonEqual, which counts keys: an absent time must stay absent, not `nextAttemptAtMs: undefined`
       ...(nextAttemptAtMs !== undefined && { nextAttemptAtMs }),
-      ...(fanOut.parkedProbes > 0 && { parkedProbes: fanOut.parkedProbes }),
+      ...(probes > 0 && { parkedProbes: probes }),
     };
     if (!jsonEqual(cursor, record.cursor || null)) this.#adoptCursor(name, cursor, true);
   }
@@ -1851,11 +1840,8 @@ export class SubscriptionDelivery {
 
   /** A FAN-OUT ROW'S PENDING DELIVERIES, DUE NOW: its target resolves elsewhere than when they
    *  failed (`#evaluateTargetHeadForRow`), so a fix is tried at once instead of at each event's
-   *  next rung. A webhook row is left on its rungs: a config commit re-points no receiver. The
-   *  attempts stand; a call out is left alone. */
+   *  next rung. The attempts stand; a call out is left alone. */
   #retryPendingNow(name: string, row: Subscription): void {
-    const state = this.#stream.coreReducedState;
-    if (targetIsWebhook(state, row)) return;
     const now = Date.now();
     const record = this.#deliveryRecordFor(name);
     const fanOut = this.#fanOutRowFor(name, row);
@@ -1894,15 +1880,19 @@ function fanOutPaused(cursor: SubscriptionCursor | undefined): boolean {
 }
 
 /** THE LOOP RULE at a fan-out row's admission: a durable event it consumes — never an ephemeral,
- *  which nothing could deliver again after an eviction — a `subscription-delivery-*` fact only
- *  when the row names its type, never through `*`, and a wake only in the incarnation it names: a
- *  row that could not take it then (paused, full) is not told of it later, when the wakes a
- *  handler's work caused would pile up behind it, each one more chance to make more. */
+ *  which nothing could deliver again after an eviction, never a delivery fact (`isDeliveryFact`),
+ *  and a wake only in the incarnation it names: a row that could not take it then (paused, full) is
+ *  not told of it later, when the wakes a handler's work caused would pile up behind it, each one
+ *  more chance to make more. */
 function fanOutAdmits(row: Subscription, event: StreamEvent, incarnation: number): boolean {
-  if (event.ephemeral || !consumesEvent(row.consumes, event)) return false;
-  if (event.type.startsWith("events.iterate.com/itx/subscription-delivery-"))
-    return row.consumes?.includes(event.type) ?? false;
+  if (event.ephemeral || isDeliveryFact(event) || !consumesEvent(row.consumes, event)) return false;
   return !isWake(event) || (event.payload as { incarnation?: number }).incarnation === incarnation;
+}
+
+/** A delivery's own outcome (`itx/subscription-delivery-*`): a fan-out row never takes one, even
+ *  one it names, so a dead letter never has a dead letter of its own. */
+function isDeliveryFact(event: StreamEvent): boolean {
+  return event.type.startsWith("events.iterate.com/itx/subscription-delivery-");
 }
 
 /** A wake record: delivered at most once (the fan-out section's WAKE RULE). */

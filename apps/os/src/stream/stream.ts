@@ -129,6 +129,9 @@ interface StreamDeps {
   /** The cause the running append runs under (the DO: its caller's), stamped on every event that
    *  names none (cause.ts). Absent or none: a chain of this context's own. */
   cause?: () => Cause | undefined;
+  /** The deploy this code runs as: a fan-out delivery's lease names it, so a lease a restart onto
+   *  other code finds is no death of its call (`FanOutDeliveryRecord.leased`). */
+  deployId?: string;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
@@ -165,7 +168,7 @@ export class Stream {
   #coreReducedThroughOffset: number;
 
   constructor(deps: StreamDeps) {
-    this.storage = new StreamStorage(deps.storage);
+    this.storage = new StreamStorage(deps.storage, deps.deployId || "this deploy");
     if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
     this.#path = deps.path;
     this.#projectId = deps.projectId;
@@ -744,9 +747,10 @@ export type SubscriptionCursor = {
 };
 
 /** One event a fan-out row admitted and still owes (subscription-delivery.ts): the attempts made,
- *  when it is due — its lease's end while `leased` (a call under this attempt began and has not
- *  reported), its next rung after a failure, null while the row's target resolves to nothing — and
- *  the last error. */
+ *  when it is due — its lease's end while `leased` (a call under this attempt began under this
+ *  deploy and has not reported: stored as the deploy, so a lease another deploy left is none), its
+ *  next rung after a failure, null while the row's target resolves to nothing — and the last
+ *  error. */
 export type FanOutDeliveryRecord = {
   offset: number;
   attempt: number;
@@ -767,7 +771,9 @@ class StreamStorage {
    *  `countIncarnation`: an incarnation starting. Growth across idle ⇒ the actor hibernated. */
   readonly incarnation: number;
 
-  constructor(storage: DurableObjectStorageSlice) {
+  readonly #deployId: string;
+  constructor(storage: DurableObjectStorageSlice, deployId: string) {
+    this.#deployId = deployId;
     this.#storage = storage;
     this.#sql = storage.sql;
     // The tables ONLY on a virgin store: a store with an incarnation was opened by a prior one and
@@ -804,7 +810,7 @@ class StreamStorage {
            offset INTEGER NOT NULL,
            attempt INTEGER NOT NULL,
            next_attempt_at_ms INTEGER,
-           leased INTEGER NOT NULL,
+           leased TEXT NOT NULL,
            error TEXT,
            PRIMARY KEY (name, offset)
          )`,
@@ -942,7 +948,7 @@ class StreamStorage {
         offset: number;
         attempt: number;
         next_attempt_at_ms: number | null;
-        leased: number;
+        leased: string;
         error: string | null;
       }>(
         "SELECT name, offset, attempt, next_attempt_at_ms, leased, error FROM subscription_deliveries",
@@ -954,7 +960,7 @@ class StreamStorage {
           offset: Number(row.offset),
           attempt: Number(row.attempt),
           nextAttemptAtMs: row.next_attempt_at_ms === null ? null : Number(row.next_attempt_at_ms),
-          leased: Number(row.leased) === 1,
+          leased: String(row.leased) === this.#deployId,
           error: row.error || null,
         },
       ]);
@@ -967,7 +973,7 @@ class StreamStorage {
       record.offset,
       record.attempt,
       record.nextAttemptAtMs,
-      record.leased ? 1 : 0,
+      record.leased ? this.#deployId : "",
       record.error,
     );
   }
@@ -1011,8 +1017,6 @@ export interface ReachableContext {
     afterOffset?: number,
     limit?: number,
     options?: { includeEphemeral?: boolean },
-    /** Why it is read: what a wake it makes is caused by (cause.ts). */
-    cause?: Cause,
   ): Promise<StreamPage>;
   /** A delivery's write reserved at most once (integrations/email.ts): the event already recorded
    *  under `key`, or whether this attempt reserved it now. */

@@ -41,6 +41,8 @@ import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/share
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
+import { Kept } from "../kept.ts";
+import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
   ScheduleKey,
@@ -91,6 +93,7 @@ import {
   materializeItxHandleReference,
 } from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
+import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -423,8 +426,8 @@ export interface BuiltInScope extends LibraryRoots {
   platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
    *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
-   *  The signing key is read from the secret's context at most once per WEBHOOK_SIGNING_KEY_TTL_MS
-   *  per spec, never once per event. A context root: a row delivers from where its events happen. */
+   *  The signing key is read from the secret's context at most once per SNAPSHOT_TTL_MS per spec,
+   *  never once per event. A context root: a row delivers from where its events happen. */
   webhooks: IterateContextApi["webhooks"];
 }
 
@@ -516,9 +519,6 @@ const WebhookSpec = z.strictObject({
   signingSecret: z.string().transform(assertSecretPath).optional(),
 });
 
-/** How long a webhook's signing key is kept before it is read from its secret again: a key rotated
- *  there signs within this long, and the secret's context sees one read per window per spec. */
-const WEBHOOK_SIGNING_KEY_TTL_MS = 5_000;
 /** How long one webhook POST may take: under the delivery watchdog (20 s), so the request is
  *  cancelled — and its delivery settles — before the watchdog gives up on it. */
 const WEBHOOK_TIMEOUT_MS = 15_000;
@@ -867,20 +867,21 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   /** The platform's verbs (a lend's other side): no caller of theirs ever reaches them. */
   /** A webhook's SIGNING KEY, by secret and origin, read from the secret's own context — the
    *  platform's `clientSecretFor`, which answers only for an origin the secret is pinned to — and
-   *  kept WEBHOOK_SIGNING_KEY_TTL_MS: a row delivering 1,000 events a second reads it once per
-   *  window, not once per event. The read in flight is shared; a failed one is not kept. */
-  const webhookSigningKeys = new Map<string, { key: Promise<string>; readAt: number }>();
+   *  kept as long as a rule snapshot is (SNAPSHOT_TTL_MS, how long an isolate may act on a revoked
+   *  grant): a row delivering 1,000 events a second reads it once per window, not once per event.
+   *  The read in flight is what is kept, so it is shared; a failed one is not kept. */
+  const webhookSigningKeys = new Kept<Promise<string>>(SNAPSHOT_TTL_MS);
   const webhookSigningKey = (secretPath: string, origin: string): Promise<string> => {
     const cacheKey = `${secretPath} ${origin}`;
     const kept = webhookSigningKeys.get(cacheKey);
-    if (kept && Date.now() - kept.readAt < WEBHOOK_SIGNING_KEY_TTL_MS) return kept.key;
+    if (kept) return kept;
     const key = deps
       .context(resolveContextPath(owner.rootPath, `.${secretPath}`))
       .invoke(["itx", "builtins", "secrets", ["clientSecretFor", secretPath, { origin }]], [], {
         principal: null,
         platform: true,
       }) as Promise<string>; // the secret facet's own `clientSecretFor` answers the value, a string
-    webhookSigningKeys.set(cacheKey, { key, readAt: Date.now() });
+    webhookSigningKeys.set(cacheKey, key);
     key.catch(() => webhookSigningKeys.delete(cacheKey));
     return key;
   };
@@ -2501,13 +2502,7 @@ export function workersRoot(deps: {
             // row's, which those codes dangle or halt (subscription-delivery.ts `#fanOutFailed`).
             return await called.catch((error: unknown) => {
               const code = errorCode(error);
-              if (
-                code === "NO_ITX_EXPRESSION_MATCH" ||
-                code === "NOT_A_METHOD" ||
-                code === "FORBIDDEN" ||
-                code === "GONE"
-              )
-                throw new Error((error as Error).message);
+              if (code && TARGET_FAILURE_CODES.has(code)) throw new Error((error as Error).message);
               throw error;
             });
           } catch (error) {

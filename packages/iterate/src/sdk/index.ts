@@ -87,7 +87,7 @@ export type FacetProps = {
   fedByPushes?: true;
   /** The code it was started on, as the parent names it (its loaded identity, or the deploy): work
    *  in flight that died with a restart onto other code is no death of that work (stream/processor.ts). */
-  generation?: string;
+  codeId?: string;
 };
 
 /** THE FACET SHELL: a `DurableObject` a context hosts as a facet — `itx.facets.get(name, { source,
@@ -299,7 +299,7 @@ export abstract class StreamProcessorDurableObject<
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
       fedByPushes: this.ctx.props.fedByPushes === true,
       kv: this.ctx.storage.kv,
-      generation: this.ctx.props.generation,
+      codeId: this.ctx.props.codeId,
     }));
   }
 
