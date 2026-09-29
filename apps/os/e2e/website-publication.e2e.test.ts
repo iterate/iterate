@@ -65,7 +65,14 @@ localOnly(
           : undefined,
       );
       // One publication per commit on `/`, each as the generation of its commit's fact there, so
-      // each later than the last; the pointer names the last.
+      // each later than the last; the pointer names the last. The site serves a pointer a moment
+      // before its outcome lands: the third's, waited for by its oid.
+      await root.waitForEvent({
+        type: "events.iterate.com/project/worker-updated",
+        payload: { commitOid: third.commitOid },
+        afterOffset: 0,
+        timeoutMs: 20_000,
+      });
       const log = await readAll(root);
       const published = log.filter((e) => e.type === "events.iterate.com/project/worker-updated");
       expect(published.map((e) => e.payload.commitOid)).toEqual([
@@ -133,11 +140,13 @@ localOnly(
     const deep = markedSession({ chain, depth: 7 })
       .authenticate(adminCredentials())
       .projects.get(slug);
-    // A worker of its own, whose init says it ran. `agents.ts` stays: a publication keeps every
-    // class the last one exported (src/project/publication.ts), and the seed's exported the agents'.
+    // A config of its own, whose init says it ran: no module of the default template's is left,
+    // so the publication does not wait on the agents package's build.
     const { commitOid } = await deep.repos.get("/repos/config").commitFiles({
       message: "an init that says it ran",
       changes: [
+        { path: "agents.ts", delete: true },
+        { path: "voice.ts", delete: true },
         {
           path: "worker.ts",
           content: `import { IterateConfigEntrypoint } from "iterate/sdk";

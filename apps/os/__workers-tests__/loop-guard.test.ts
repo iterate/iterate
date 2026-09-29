@@ -1,12 +1,13 @@
 // __workers-tests__/loop-guard.test.ts — THE LOOP GUARD on the worker (src/cause.ts): every event
 // carries the cause of the chain of reactions it belongs to, stamped by the platform and carried
-// through loaded code by the SDK's doors — no user code names one. First the accounting, one row
-// per line (`cause-table`); then the normal flows it must leave alone; then the loops it stops, each
-// at the depth limit with one `itx/loop-limit` fact. The delivery loop's own rows, the wake loop
-// among them: src/stream/subscription-delivery.test.ts.
+// through loaded code by the SDK (`callWithCause`, a Request's mark) — no user code names one.
+// First the accounting, one row per line (`cause-table`); then the normal flows it must leave alone;
+// then the loops it stops, each at the depth limit with one `itx/loop-limit` fact. The delivery
+// loop's own rows, the wake loop among them: src/stream/subscription-delivery.test.ts.
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { newWebSocketRpcSession } from "capnweb";
 import { runningCause, type Cause } from "../src/cause.ts";
@@ -14,6 +15,7 @@ import { receiveEmail } from "../src/integrations/email.ts";
 import type { Env } from "../src/env.ts";
 import {
   adminCredentials,
+  openSession,
   ORIGIN,
   projectWithMember,
   readLog,
@@ -75,6 +77,24 @@ test("cause-table: a script runs one deeper than its request, and its settlement
   expect(ofType(log, "events.iterate.com/itx/run-settled").map(causeOf)).toEqual([
     { chain, depth: 0 },
   ]);
+});
+
+test("cause-table: a run its context's `itx.run` row sends elsewhere runs one deeper than its request all the same, where the row sends it", async () => {
+  const ctx = freshProject();
+  const asPerson = (event: unknown) =>
+    stub(ctx).invoke(["itx", ["append", event]], [], { principal: PERSON }) as Promise<
+      StreamEvent[]
+    >;
+  await asPerson({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.run", target: "itx.builtins.cd('/sandbox').builtins.run" },
+  });
+  const [requested] = await asPerson({
+    type: "events.iterate.com/itx/run-requested",
+    payload: { code: "async (itx) => { await itx.append({ type: 'test/by-script' }); }" },
+  });
+  const byScript = await eventually(at(ctx, "/sandbox"), "test/by-script");
+  expect(causeOf(byScript)).toEqual({ chain: causeOf(requested!).chain, depth: 1 });
 });
 
 test("cause-table: a schedule's firing — and its receipt — keep the depth it was set at, and the alarm's wake is caused by the deepest work the context owes", async () => {
@@ -257,7 +277,7 @@ test("cause-table: a revive keeps the cause of the claim it serves — one that 
   }
 });
 
-test("work that died with its host too often is failed: its revive is refused WORK_FAILED, the context records one `itx/work-failed` fact and owes it no revive", async () => {
+test("work that died with its host too often is failed: its revive is refused PERMANENT_FAILURE, the context records one `itx/work-failed` fact and owes it no revive", async () => {
   const start = Date.parse("2035-01-01T00:00:00Z");
   vi.useFakeTimers({ now: start, toFake: ["Date"] });
   try {
@@ -660,7 +680,7 @@ test("a session opened with our mark — our own code calling the platform back 
     const opened = await exports.default.fetch(`${ORIGIN}/api`, {
       headers: {
         Upgrade: "websocket",
-        "iterate-cause": JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
       },
     });
     opened.webSocket!.accept();
@@ -681,11 +701,39 @@ test("a session opened with our mark — our own code calling the platform back 
   }
 });
 
+test("a session opened with our mark counts the hop its request made: at 14 hops its call through a `cd` lands, at 15 that `cd` is one context too many", async () => {
+  const project = freshProject();
+  const outcomes = [];
+  for (const hops of [14, 15]) {
+    const opened = await exports.default.fetch(`${ORIGIN}/api`, {
+      headers: {
+        Upgrade: "websocket",
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 1, hops }),
+      },
+    });
+    opened.webSocket!.accept();
+    const session = newWebSocketRpcSession(opened.webSocket as unknown as WebSocket) as any;
+    outcomes.push(
+      await session
+        .authenticate(adminCredentials())
+        .projects.get(project)
+        .invoke("itx.cd('/x').append({ type: 'test/hopped' })")
+        .then(
+          () => "landed",
+          (error: unknown) => String(error),
+        ),
+    );
+    session[Symbol.dispose]();
+  }
+  expect(outcomes[0]).toBe("landed");
+  expect(outcomes[1]).toMatch(/crossed more than 16 contexts/);
+});
+
 test("hop-16-throws: a request re-entering the platform carries its hops, and the one that would cross a seventeenth context is refused 508, naming its chain", async () => {
   const request = (hops: number) =>
     exports.default.fetch(
       new Request("https://control.test/version", {
-        headers: { "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 1, hops }) },
+        headers: { [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 1, hops }) },
       }),
     );
   expect(await request(15)).toMatchObject({ status: 200 });
@@ -723,7 +771,7 @@ test.for([
             ["get", { source: config("", code) }],
             "fetch",
           ]),
-          "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
+          [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
         },
       }),
     );
@@ -742,6 +790,24 @@ test.for([
     issues.mockRestore();
   },
 );
+
+test("an edge fetch route's act past the limit is refused 508 and recorded once, at the project's root: a request marked past it, routed to `itx.fetch`", async () => {
+  const slug = "loop-guard-route";
+  const itx = (await openSession())
+    .authenticate(adminCredentials())
+    .projects.create({ project: slug });
+  const { projectId } = await itx.whoami();
+  await itx.fetchRoutes.set("out", { requestMatcher: { routingSlug: "out" }, target: "itx.fetch" });
+  const answer = await exports.default.fetch(`https://out--${slug}.projects.test/`, {
+    headers: { [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }) },
+  });
+  expect(answer).toMatchObject({ status: 508 });
+  await answer.body?.cancel();
+  await until("the fact", async () => ofType(await sweep(projectId), LOOP_LIMIT_FACT)[0]);
+  expect(ofType(await readLog(projectId), LOOP_LIMIT_FACT)).toMatchObject([
+    { payload: { chain: CHAIN, depth: 9 } },
+  ]);
+});
 
 test("a `fetch` loaded code took hold of on its module's first line carries the cause all the same: past the limit it is refused, and nothing leaves", async () => {
   const sent = spyOnElsewhere();
@@ -764,7 +830,7 @@ export default class extends IterateConfigEntrypoint {
     new Request("https://project.test/", {
       headers: {
         "x-itx-expression": JSON.stringify(["itx", "workers", ["get", { source: early }], "fetch"]),
-        "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
       },
     }),
   );
@@ -860,13 +926,13 @@ test("a read records nothing: a context read for its table while it sleeps — o
   expect(await sweep(at(project, "/unborn"))).toEqual([]);
 });
 
-test("the facet door walks only as far as Workers RPC would — a method an RpcTarget's class declares, an own member of plain data — never a target's own field or a method of data the facet holds live, and a collection's verbs still act under the call's cause", async () => {
+test("a facet's callWithCause walks only as far as Workers RPC would — a method an RpcTarget's class declares, an own member of plain data — never a target's own field or a method of data the facet holds live, and a collection's verbs still act under the call's cause", async () => {
   const ctx = freshProject();
-  // the rest of an expression past a facet is one walk on it, through its door
+  // the rest of an expression past a facet is one walk on it, through its callWithCause
   const walled = (...steps: (string | unknown[])[]) =>
     stub(ctx).invoke(["itx", "facets", ["get", "walled", WALLED], ...steps], [], caller(1));
-  expect(await walled(["door"], ["open"])).toBe("opened");
-  await refused(() => walled(["door"], ["secret"]), "NOT_A_METHOD");
+  expect(await walled(["target"], ["open"])).toBe("opened");
+  await refused(() => walled(["target"], ["secret"]), "NOT_A_METHOD");
   await refused(() => walled(["state"], "list", ["push", "x"]), "NOT_A_METHOD");
   expect(await walled(["count"])).toBe(0);
   const { projectId } = await projectWithMember("loopwalls");
@@ -895,7 +961,7 @@ test("facet-fetch-keeps-depth: a Request a call hands a facet carries the call's
       new Request("https://project.test/", {
         headers: {
           "x-itx-expression": JSON.stringify(["itx", "facets", ["get", "acting", ACTING], "fetch"]),
-          "iterate-cause": JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
+          [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
         },
       }),
     );
@@ -906,7 +972,7 @@ test("facet-fetch-keeps-depth: a Request a call hands a facet carries the call's
   expect(ofType(log, LOOP_LIMIT_FACT)).toMatchObject([{ payload: { chain: CHAIN, depth: 9 } }]);
 });
 
-test("a row to a worker's own method delivers through the SDK's door, under the delivery's cause, so a method that appends what it is handed climbs one hand-off a lap and stops at the limit: one fact", async () => {
+test("a row to a worker's own method delivers through the SDK's callWithCause, under the delivery's cause, so a method that appends what it is handed climbs one hand-off a lap and stops at the limit: one fact", async () => {
   const ctx = freshProject();
   await stub(ctx).append({
     type: "events.iterate.com/itx/subscription-configured",
@@ -926,9 +992,38 @@ test("a row to a worker's own method delivers through the SDK's door, under the 
   expect(ofType(log, LOOP_LIMIT_FACT)).toHaveLength(1);
 });
 
-test("the platform's own isolate, which every project shares, keeps no cause outside a door: the chain one project's call ran under reaches no code another runs", async () => {
+test("a loaded isolate's code that no callWithCause runs — a class that is no SDK host — acts under the newest cause the isolate saw, never a chain of its own, which would escape the limit", async () => {
+  const ctx = freshProject();
+  const source = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+import { IterateConfigEntrypoint } from "iterate/sdk";
+import { withItx } from "iterate/with-itx";
+export default class extends IterateConfigEntrypoint {
+  async touch() {}
+}
+export class NoSdkHost extends WorkerEntrypoint {
+  async act() {
+    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/no-sdk-host" }));
+  }
+}
+`,
+  };
+  await stub(ctx).invoke(["itx", "workers", ["get", { source }], ["touch"]], [], caller(5));
+  await stub(ctx).invoke(
+    ["itx", "workers", ["get", { source, className: "NoSdkHost" }], ["act"]],
+    [],
+    caller(1),
+  );
+  expect(ofType(await readLog(ctx), "test/no-sdk-host").map(causeOf)).toEqual([
+    { chain: CHAIN, depth: 5 },
+  ]);
+});
+
+test("the platform's own isolate, which every project shares, keeps no cause outside callWithCause: the chain one project's call ran under reaches no code another runs", async () => {
   const { projectId } = await projectWithMember("loopshared");
-  // a first-party facet's door runs here, in this isolate, in a chain of project A's
+  // a first-party facet's callWithCause runs here, in this isolate, in a chain of project A's
   await stub(projectId).invoke(["itx", "facets", ["get", "project"], ["repos"], ["list"]], [], {
     principal: null,
     cause: { chain: "project A's chain", depth: 5 },
@@ -1023,7 +1118,7 @@ const SET_ONE_SHOT = (type: string, afterMs: number) => /* js */ `
 
 /** A loaded config entrypoint (iterate/sdk): its `processEvent` runs `onEvent` (with `event` and
  *  `itx`, the context that loaded it), its `fetch` runs `onRequest` (with `request` and `itx`), and
- *  `later()`, a method of its own no door runs, appends `test/later`. */
+ *  `later()`, a method of its own that is no hook, appends `test/later`. */
 function config(onEvent: string, onRequest = "") {
   return {
     "package.json": '{"main":"worker.js"}',
@@ -1109,7 +1204,7 @@ export default class extends IterateConfigEntrypoint {
 };
 
 /** A loaded facet that claims a revive due in an hour (`claimNow`) and whose work, revived, has died
- *  with its host too often: its revive is refused WORK_FAILED, as the SDK's engine refuses it. */
+ *  with its host too often: its revive is refused PERMANENT_FAILURE, as the SDK's engine refuses it. */
 const DOOMED = {
   source: {
     "package.json": '{"main":"worker.js"}',
@@ -1123,7 +1218,7 @@ export class Doomed extends FacetDurableObject {
   }
   revive() {
     throw Object.assign(new Error("its work in flight died with its host 5 times"), {
-      code: "WORK_FAILED",
+      code: "PERMANENT_FAILURE",
     });
   }
 }
@@ -1132,7 +1227,7 @@ export class Doomed extends FacetDurableObject {
   className: "Doomed",
 };
 
-/** A loaded facet that hands out an RpcTarget with a field of its own (`door()`) and the list it
+/** A loaded facet that hands out an RpcTarget with a field of its own (`target()`) and the list it
  *  keeps, live (`state()`), and counts that list (`count()`). */
 const WALLED = {
   source: {
@@ -1140,14 +1235,14 @@ const WALLED = {
     "worker.js": /* js */ `
 import { RpcTarget } from "cloudflare:workers";
 import { FacetDurableObject } from "iterate/sdk";
-class Door extends RpcTarget {
+class Target extends RpcTarget {
   constructor(secret) { super(); this.secret = secret; }
   open() { return "opened"; }
 }
 export class Walled extends FacetDurableObject {
-  static publicMethods = [...super.publicMethods, "door", "state", "count"];
+  static publicMethods = [...super.publicMethods, "target", "state", "count"];
   #list = [];
-  door() { return new Door(() => "the facet's own"); }
+  target() { return new Target(() => "the facet's own"); }
   state() { return { list: this.#list }; }
   count() { return this.#list.length; }
 }
@@ -1200,7 +1295,8 @@ export class Reviver extends FacetDurableObject {
   className: "Reviver",
 };
 
-/** Loaded code outside every SDK host: `act()` appends `test/raw` from an isolate no door ran. */
+/** Loaded code outside every SDK host: `act()` appends `test/raw` from an isolate no
+ *  `callWithCause` ran. */
 const RAW_WORKER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
@@ -1354,7 +1450,7 @@ function relayHooks(routes: Record<string, string>) {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== HOOKS) return through(request);
-    const mark = request.headers.get("iterate-cause");
+    const mark = request.headers.get(ITERATE_CAUSE_HEADER);
     await stub(routes[url.pathname]!)
       .fetch(
         new Request("https://project.test/", {
@@ -1366,7 +1462,7 @@ function relayHooks(routes: Record<string, string>) {
               ["get", { source: RELAY }],
               "fetch",
             ]),
-            "iterate-cause": mark || "",
+            [ITERATE_CAUSE_HEADER]: mark || "",
           },
           body: await request.text(),
         }),

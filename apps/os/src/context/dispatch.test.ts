@@ -174,7 +174,7 @@ test("the resolver releases what its walk stepped past once the answer is in; th
     rewriteRules: () => [],
     path: "/",
     caller: () => ({ principal: null }),
-    ...oneContextReach().reach,
+    reach: oneContextReach().reach,
   });
   expect(await resolver.invoke("itx.facets.get('project').repos().list()")).toEqual(["/repos/a"]);
   expect(order).toEqual(["answer settled", "collection released"]);
@@ -211,7 +211,7 @@ test("the resolver releases a walk's answer that REJECTS — its caller gets the
     rewriteRules: () => [],
     path: "/",
     caller: () => ({ principal: null }),
-    ...oneContextReach().reach,
+    reach: oneContextReach().reach,
   });
   await expect(
     resolver.invoke("itx.facets.get('project').workspaces().delete('/never')"),
@@ -404,7 +404,7 @@ const resolverOver = (s: ReturnType<typeof scope>, ...rewriteRules: ItxExpressio
     rewriteRules: () => rewriteRules,
     path: "/",
     caller: () => ({ principal: null }),
-    ...oneContextReach().reach,
+    reach: oneContextReach().reach,
   });
 
 /** A Workers-RPC stub a hop below answered with — registered as iterate-context.ts registers the

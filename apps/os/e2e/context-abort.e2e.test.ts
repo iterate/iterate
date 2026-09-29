@@ -184,20 +184,19 @@ test("scope: a user's session aborts only the projects it reaches — another pr
   ).toBe(false);
 });
 
-test("scope: loaded code aborts its own context and those below it, never above — cd goes down only, itx.builtins is not its word", async () => {
+test("scope: loaded code aborts any context of its project, below it and above it, and the fact says loaded code asked and from where — itx.builtins is not its word", async () => {
   const root = openItx(freshCtx("abort_app"));
   const worker = () => root.cd("/x").workers.get({ source: SAY });
-  for (const up of ["itx.cd('/').abort('up')", "itx.cd('..').abort('up')"])
-    expect(await worker().say(up)).toMatchObject({
-      error: expect.stringMatching(/goes down only/),
-    });
-  expect(await worker().say("itx.cd('/').facets.abort('project')")).toMatchObject({
-    error: expect.stringMatching(/goes down only/),
+  expect(await worker().say("itx.cd('..').abort('up')")).toMatchObject({
+    ok: {
+      type: "events.iterate.com/itx/aborted",
+      path: "/",
+      payload: { reason: "up", callerPath: "/x", app: true },
+    },
   });
   expect(await worker().say("itx.builtins.abort('fixed point')")).toMatchObject({
     error: expect.stringMatching(/not a loaded worker's word/),
   });
-  // Below its own context it may: the fact says loaded code asked, and from where.
   expect(await worker().say("itx.cd('./y').abort('down')")).toMatchObject({
     ok: {
       type: "events.iterate.com/itx/aborted",
@@ -205,10 +204,10 @@ test("scope: loaded code aborts its own context and those below it, never above 
       payload: { reason: "down", callerPath: "/x", app: true },
     },
   });
-  for (const itx of [root, root.cd("/x")])
-    expect(
-      (await readAll(itx)).some((event) => event.type === "events.iterate.com/itx/aborted"),
-    ).toBe(false);
+  // the caller's own context was never aborted
+  expect(
+    (await readAll(root.cd("/x"))).some((event) => event.type === "events.iterate.com/itx/aborted"),
+  ).toBe(false);
 });
 
 test("itx.facets.abort(name) resets that facet from the host: a call hung on it rejects FACET_ABORTED, the next call starts it fresh with its storage, and the context's incarnation is the same", async () => {

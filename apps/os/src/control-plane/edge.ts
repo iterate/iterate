@@ -23,6 +23,7 @@ import {
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { Env } from "../env.ts";
+import { Kept } from "../kept.ts";
 import type { OrganizationRole } from "../organization/contract.ts";
 import { unavailableError } from "../unavailable.ts";
 import {
@@ -55,35 +56,8 @@ export const describeReach = (reach: Reach): string =>
  *  9–30 ms from Europe, 80–310 ms from the US, Asia and Oceania (measured 2026-09-27). */
 const KEPT_MS = 5_000;
 
-/** Answers an isolate keeps `KEPT_MS`, oldest first: a key is deleted before it is set again, so a
- *  sweep from the front stops at the first answer still kept, and the table holds only what came in
- *  the last `KEPT_MS` — however many hostnames a scanner makes up. */
-class Kept<V> {
-  readonly #answers = new Map<string, { at: number; value: V }>();
-  /** The answer set under `key` within the last `KEPT_MS`, else undefined. */
-  get(key: string) {
-    const now = Date.now();
-    for (const [oldest, { at }] of this.#answers) {
-      if (now - at < KEPT_MS) break;
-      this.#answers.delete(oldest);
-    }
-    const kept = this.#answers.get(key);
-    return kept && now - kept.at < KEPT_MS ? kept.value : undefined;
-  }
-  set(key: string, value: V) {
-    this.#answers.delete(key);
-    this.#answers.set(key, { at: Date.now(), value });
-  }
-  delete(key: string) {
-    this.#answers.delete(key);
-  }
-  clear() {
-    this.#answers.clear();
-  }
-}
-
 /** Projects' rows, each under its id and its slug (`keep`), their primary hostnames with them. */
-const projects = new Kept<ProjectRow>();
+const projects = new Kept<ProjectRow>(KEPT_MS);
 const keep = (project: ProjectRow) => {
   for (const ref of [project.id, project.slug]) projects.set(ref, project);
 };
@@ -93,9 +67,9 @@ const keep = (project: ProjectRow) => {
  *  before (an erase leaves custom hostnames in place), and then for `KEPT_MS` at most. A removed
  *  hostname stops routing within `KEPT_MS`, and Cloudflare stops sending it sooner (`#removeHostname`
  *  deletes the custom hostname first). */
-const hosts = new Kept<{ address: ProjectAddress | null }>();
+const hosts = new Kept<{ address: ProjectAddress | null }>(KEPT_MS);
 /** People's access, by user id: dropped at once here for the person a command was made by or for. */
-const access = new Kept<AccessibleRecord>();
+const access = new Kept<AccessibleRecord>(KEPT_MS);
 
 /** Who asked, as the control plane records it: the caller's principal and its connection. */
 const callerOf = (caller: Caller) => ({ principal: caller.principal, grant: caller.grant });

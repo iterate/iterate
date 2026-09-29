@@ -353,7 +353,7 @@ test("a signed file URL answers alike from a context and from its loaded code, o
   expect(place(loaded)).toBe(place(direct));
 });
 
-test("loaded code's cd reaches the context it names, which honours its owner's rows; the app wall refuses at the entrypoint what it refused at the context", async () => {
+test("loaded code's cd reaches the context it names, above it too, which honours its owner's rows; the app wall refuses the fixed point at the entrypoint as at the context", async () => {
   const root = project();
   const a = `${root}.iterate/a`;
   const b = `${root}.iterate/a/b`;
@@ -361,8 +361,9 @@ test("loaded code's cd reaches the context it names, which honours its owner's r
   await stub(b).append(rule("itx.tool", "itx.builtins.whoami"));
   const loaded = (method: string) => ["itx", "workers", ["get", { source: LOADED }], [method]];
   expect(await stub(a).invoke(loaded("toolBelow"))).toMatchObject({ path: "/a/b" });
-  // the wall: no `cd` above the context, no fixed point
-  expect(await stub(a).invoke(loaded("above"))).toMatchObject({ code: "FORBIDDEN" });
+  // a cd above the context reads there; the wall is the fixed point alone
+  await stub(root).invoke("itx.kv.put('k', 'v')");
+  expect(await stub(a).invoke(loaded("above"))).toBe("v");
   expect(await stub(a).invoke(loaded("fixedPoint"))).toMatchObject({ code: "FORBIDDEN" });
   // a jail's own table — its code granted `workers` alone — refuses the cd, live, in the jail
   const jail = `${root}.iterate/jail`;
@@ -370,6 +371,13 @@ test("loaded code's cd reaches the context it names, which honours its owner's r
   expect(await stub(jail).invoke(loaded("toolBelow"))).toMatchObject({
     code: "NO_ITX_EXPRESSION_MATCH",
   });
+});
+
+test("a partial jail — its bare `itx ⇒ null` beside the grant `itx.repos ⇒ itx.builtins.repos` — still reads what it was granted: the library's hops to the catalog are addressing, never its table's", async () => {
+  const jail = `${project()}.iterate/jail`;
+  await stub(jail).append(rule("itx", null), rule("itx.repos", "itx.builtins.repos"));
+  expect(await stub(jail).invoke("itx.repos.list()")).toEqual([]);
+  await refused(() => stub(jail).invoke("itx.kv.get('k')"), "NO_ITX_EXPRESSION_MATCH");
 });
 
 test("loaded code reads its own context's table as a snapshot, and a narrowing holds for it once the write answers: a warm worker in a context just jailed is refused its next read and its next cd append", async () => {
@@ -429,7 +437,7 @@ async function agentUnderRoot() {
 
 /** A loaded worker reaching its context through `env.ITX`: `read()` a portable root, `presign()` a
  *  file URL, `repos()` the library's collection, `toolBelow()` a name its child `./b` defines,
- *  `appendBelow()` an append there, `above()` a `cd` above its context, `fixedPoint()` the reserved
+ *  `appendBelow()` an append there, `above()` a read above its context, `fixedPoint()` the reserved
  *  root. A refusal answers as its code. */
 const LOADED = {
   "package.json": '{"main":"worker.js"}',

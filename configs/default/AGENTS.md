@@ -28,10 +28,8 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
 The agents app is the npm package `@iterate-com/agents`. `agents.ts` re-exports its two classes,
 and every agent runs from that file's own bundle: a commit that only changes `worker.ts` leaves the
 agents running, and pinning another build of the package in `package.json` restarts them on their
-next call. The loader loads a pkg.pr.new build only at a full commit (`…/@iterate-com/agents@<sha>`);
-the platform pinned the template's `@main` to one as it seeded this repository. To upgrade, commit
-a newer one, which a HEAD of the `@main` URL names in `x-commit-key`, or use the Agents app's
-**Upgrade to the newest**, which commits main's newest build.
+next call. A pkg.pr.new build loads only at a full commit (`…/@iterate-com/agents@<sha>`); the
+Agents app's **Upgrade to the newest** commits main's newest build.
 
 Voice is the npm package `@iterate-com/voice`, installed the same way beside the agents app, which
 every call runs on: `voice.ts` re-exports the `itx.voice` service and each call's relay class, the

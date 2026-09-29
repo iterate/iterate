@@ -37,7 +37,7 @@ import type { InboundCallKind } from "../context/residency.ts";
 import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,
-  PLATFORM_ONLY_EVENT_TYPES,
+  STREAM_RECORD_TYPES,
   reduceCoreEventBatch,
   type CoreState,
 } from "./core-processor.ts";
@@ -68,7 +68,7 @@ export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
  *  still closes) and the pause/resume
  *  pair itself (it must always accept its own resume). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
-  ...PLATFORM_ONLY_EVENT_TYPES,
+  ...STREAM_RECORD_TYPES,
   "events.iterate.com/itx/paused",
   "events.iterate.com/itx/resumed",
   // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
@@ -86,8 +86,8 @@ const PAUSE_EXEMPT_EVENT_TYPES = new Set([
  *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS,
  *  library.ts SCRIPT_RUN_WAIT_SLICE_MS). */
 type WaitForEventWaiter = {
-  /** The types that resolve it; empty = any. */
-  types: string[];
+  /** Whether an event resolves it: its type and payload (`matchesWaitFilter`). */
+  matches: (event: StreamEvent) => boolean;
   afterOffset: number;
   resolve: (event: StreamEvent) => void;
   reject: (error: Error) => void;
@@ -129,6 +129,9 @@ interface StreamDeps {
   /** The cause the running append runs under (the DO: its caller's), stamped on every event that
    *  names none (cause.ts). Absent or none: a chain of this context's own. */
   cause?: () => Cause | undefined;
+  /** The deploy this code runs as: a fan-out delivery's lease names it, so a lease a restart onto
+   *  other code finds is no death of its call (`FanOutDeliveryRecord.leased`). */
+  deployId?: string;
 }
 
 /** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
@@ -165,7 +168,7 @@ export class Stream {
   #coreReducedThroughOffset: number;
 
   constructor(deps: StreamDeps) {
-    this.storage = new StreamStorage(deps.storage);
+    this.storage = new StreamStorage(deps.storage, deps.deployId || "this deploy");
     if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
     this.#path = deps.path;
     this.#projectId = deps.projectId;
@@ -460,7 +463,7 @@ export class Stream {
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // THE LOOP GUARD (cause.ts): past the limit, code's own events are refused — the platform's
       // records (a receipt, this very fact) still land.
-      if (!PLATFORM_ONLY_EVENT_TYPES.has(eventInput.type))
+      if (!STREAM_RECORD_TYPES.has(eventInput.type))
         this.#refusePastLoopLimit(cause, `an append of ${eventInput.type} to ${this.#path}`);
       // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
       // "nothing has happened since I last looked".
@@ -620,27 +623,32 @@ export class Stream {
   }
 
   /** Resolve with the next event matching `filter` (`type`: one exact type or one of a list; absent =
-   *  any) — or the first COMMITTED durable match already in the log after an explicit
-   *  `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
+   *  any; `payload`: fields it carries with exactly these values) — or the first COMMITTED durable
+   *  match already in the log after an explicit `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
    *  codedError("WAIT_TIMEOUT", …). CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero
    *  awaits between the log scan and waiter registration (an await there would lose a racing commit
    *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
     const types = filter.type ? [filter.type].flat() : [];
+    const payload = Object.entries(filter.payload || {});
+    const matches = (event: StreamEvent) =>
+      (types.length === 0 || types.includes(event.type)) &&
+      payload.every(
+        ([field, value]) => (event.payload as Record<string, unknown>)?.[field] === value,
+      );
     const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
     const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
     let cursor = afterOffset;
     for (;;) {
       const page = this.read(cursor, 500);
-      for (const event of page.events)
-        if (types.length === 0 || types.includes(event.type)) return Promise.resolve(event);
+      for (const event of page.events) if (matches(event)) return Promise.resolve(event);
       if (page.atHead) break;
       cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
     }
     return new Promise<StreamEvent>((resolve, reject) => {
       const waiter: WaitForEventWaiter = {
-        types,
+        matches,
         afterOffset,
         resolve,
         reject,
@@ -659,7 +667,7 @@ export class Stream {
     });
   }
 
-  /** A waiter matches on `type` AND `offset > afterOffset`. The default afterOffset is the head at
+  /** A waiter matches on its filter AND `offset > afterOffset`. The default afterOffset is the head at
    *  call time, so a default wait settles on the next event; but an explicit afterOffset ahead of
    *  head (a caller waiting for the stream to REACH an offset), or one left behind by an ephemeral
    *  offset rewind after eviction, must not be satisfied by an earlier fresh event — the filter's
@@ -668,8 +676,7 @@ export class Stream {
     for (const event of freshEvents) {
       if (this.#waitForEventWaiters.length === 0) return;
       for (const w of [...this.#waitForEventWaiters]) {
-        if (w.types.length > 0 && !w.types.includes(event.type)) continue;
-        if (event.offset <= w.afterOffset) continue;
+        if (!w.matches(event) || event.offset <= w.afterOffset) continue;
         this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
         clearTimeout(w.timer);
         w.resolve(event);
@@ -740,9 +747,10 @@ export type SubscriptionCursor = {
 };
 
 /** One event a fan-out row admitted and still owes (subscription-delivery.ts): the attempts made,
- *  when it is due — its lease's end while `leased` (a call under this attempt began and has not
- *  reported), its next rung after a failure, null while the row's target resolves to nothing — and
- *  the last error. */
+ *  when it is due — its lease's end while `leased` (a call under this attempt began under this
+ *  deploy and has not reported: stored as the deploy, so a lease another deploy left is none), its
+ *  next rung after a failure, null while the row's target resolves to nothing — and the last
+ *  error. */
 export type FanOutDeliveryRecord = {
   offset: number;
   attempt: number;
@@ -763,7 +771,9 @@ class StreamStorage {
    *  `countIncarnation`: an incarnation starting. Growth across idle ⇒ the actor hibernated. */
   readonly incarnation: number;
 
-  constructor(storage: DurableObjectStorageSlice) {
+  readonly #deployId: string;
+  constructor(storage: DurableObjectStorageSlice, deployId: string) {
+    this.#deployId = deployId;
     this.#storage = storage;
     this.#sql = storage.sql;
     // The tables ONLY on a virgin store: a store with an incarnation was opened by a prior one and
@@ -800,7 +810,7 @@ class StreamStorage {
            offset INTEGER NOT NULL,
            attempt INTEGER NOT NULL,
            next_attempt_at_ms INTEGER,
-           leased INTEGER NOT NULL,
+           leased TEXT NOT NULL,
            error TEXT,
            PRIMARY KEY (name, offset)
          )`,
@@ -938,7 +948,7 @@ class StreamStorage {
         offset: number;
         attempt: number;
         next_attempt_at_ms: number | null;
-        leased: number;
+        leased: string;
         error: string | null;
       }>(
         "SELECT name, offset, attempt, next_attempt_at_ms, leased, error FROM subscription_deliveries",
@@ -950,7 +960,7 @@ class StreamStorage {
           offset: Number(row.offset),
           attempt: Number(row.attempt),
           nextAttemptAtMs: row.next_attempt_at_ms === null ? null : Number(row.next_attempt_at_ms),
-          leased: Number(row.leased) === 1,
+          leased: String(row.leased) === this.#deployId,
           error: row.error || null,
         },
       ]);
@@ -963,7 +973,7 @@ class StreamStorage {
       record.offset,
       record.attempt,
       record.nextAttemptAtMs,
-      record.leased ? 1 : 0,
+      record.leased ? this.#deployId : "",
       record.error,
     );
   }
@@ -1007,8 +1017,6 @@ export interface ReachableContext {
     afterOffset?: number,
     limit?: number,
     options?: { includeEphemeral?: boolean },
-    /** Why it is read: what a wake it makes is caused by (cause.ts). */
-    cause?: Cause,
   ): Promise<StreamPage>;
   /** A delivery's write reserved at most once (integrations/email.ts): the event already recorded
    *  under `key`, or whether this attempt reserved it now. */

@@ -17,6 +17,11 @@ test("a mark never keys writes, and a bad write key is dropped alone", () => {
   expect(parseCause("not json")).toBeUndefined();
 });
 
+test("a chain is printable ASCII, so our mark is plain JSON on any header: one begun from other text keeps its shape, and a mark whose chain is not is forged, no mark", () => {
+  expect(newChain("a request to élise.example").chain).toMatch(/^[\x20-\x7e]+$/);
+  expect(parseCause('{"chain":"café","depth":0}')).toBeUndefined();
+});
+
 test("a mark whose hop count is not a whole number is no mark, so a forged count cannot defeat the hop budget", () => {
   for (const hops of ['"NaN"', "-1", "1.5", "1e400"])
     expect(parseCause(`{"chain":"c","depth":0,"hops":${hops}}`), hops).toBeUndefined();

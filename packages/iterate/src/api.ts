@@ -34,9 +34,13 @@ export interface StreamPage {
   atHead: boolean;
 }
 
-/** `waitForEvent`'s filter: an event type (or one of a list), a floor, a timeout. */
+/** `waitForEvent`'s filter: an event type (or one of a list), payload fields the event must carry
+ *  with exactly these values (each a JSON primitive, compared with `===`), a floor, a timeout. With
+ *  an explicit `afterOffset` the log after it is searched first, so a match that already landed
+ *  answers at once. */
 export type WaitForEventFilter = {
   type?: string | string[];
+  payload?: Record<string, string | number | boolean | null>;
   afterOffset?: number;
   timeoutMs?: number;
 };
@@ -107,23 +111,14 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
  *  (`itx.cd('/').config`, the project's published config). The facet loads that worker's source,
  *  its producer run with that context's authority. `mainModule` names the module of the source that
  *  exports `className` when it is not the source's entry (`agents.ts` of a config repo whose entry
- *  is `worker.ts`): the facet runs that module's own graph, and — named by a worker whose
- *  `manifest` has it — restarts in place, storage kept, only when that module's identity changes,
- *  never onto an older generation. */
+ *  is `worker.ts`): the facet runs that module's own graph, and — named by the project's published
+ *  config — restarts in place, storage kept, only when that module's identity changes, never onto
+ *  an older publication. */
 export type FacetSpec = {
   source: WorkerSource;
   cacheKey?: string;
   className: string;
   mainModule?: string;
-};
-
-/** What a worker's publisher records of its source: each top-level module's `identity` (the hash
- *  of what the loader loads with it as the main module, npm dependencies included) and the classes
- *  it exports that a loader hosts by name, and the publication's `generation`, which only grows.
- *  The project's config pointer carries one for every published commit of `/repos/config`. */
-export type WorkerManifest = {
-  generation: number;
-  modules: Record<string, { identity: string; classes: string[] }>;
 };
 
 /** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
@@ -593,11 +588,6 @@ export type RepoHandle = InvokeHandle & {
     parent?: string | null;
   }): Promise<RepoCommitResult>;
   writeFile(path: string, content: string): Promise<RepoCommitResult>;
-  /** `/repos/config` only: until commit `commitOid` (a commit's answer) is the project's published
-   *  config, which the website and every context then run — its publication's generation — or a
-   *  throw with why it is not published: its publication was refused, or main moved past it. The
-   *  platform publishes each commit in the background, a few seconds after it lands. */
-  waitForPublication(commitOid: string): Promise<{ commitOid: string; generation: number }>;
   log(options?: { limit?: number }): Promise<RepoLogEntry[]>;
   /** The one remote the repo remembers, as git's `origin`: a git URL over HTTP(S) whose userinfo may
    *  hold a secret placeholder (`https://x-access-token:getSecret("/secrets/github-acme", { field:
@@ -932,23 +922,17 @@ export interface IterateContextApi {
   };
   workers: {
     /** A stateless worker loaded from `spec`: `mainModule` loads that module of the source as its
-     *  entry in place of package.json's `main`; `manifest` is its publisher's record, which a facet
-     *  or a worker named by this worker reads. `source` is as `FacetSpec`'s: an expression with no
+     *  entry in place of package.json's `main`. `source` is as `FacetSpec`'s: an expression with no
      *  `cacheKey` is the NAME of a loaded worker (`itx.cd('/').config`), whose code each call loads,
-     *  `mainModule` by its identity in that worker's manifest. */
+     *  `mainModule` as the project's publication of it recorded it. */
     get(spec: {
       source: WorkerSource;
       cacheKey?: string;
       mainModule?: string;
-      manifest?: WorkerManifest;
       className?: string;
       props?: unknown;
     }): InvokeHandle;
   };
-  /** THE PLATFORM'S OWN SUBSCRIBER, the target of a fan-out row a deployment's birth events give
-   *  every project context: `deliverEvent` is the delivery loop's call alone (FORBIDDEN to anyone
-   *  else). */
-  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS, the target of a fan-out row that sends each event to another server, Stripe's
    *  way: `webhooks.get({ url, signingSecret? }).deliverEvent` POSTs the event as JSON from this
    *  context through its own `itx.fetch` (a context that may not fetch sends nothing), with
@@ -969,7 +953,8 @@ export interface IterateContextApi {
     consumes?: string[];
     afterOffset?: number;
     /** `false`: FAN-OUT delivery — one event per call (`deliverEvent(event)`), in any order, each
-     *  retried and dead-lettered on its own. Absent: the ordered queue. */
+     *  retried and dead-lettered on its own. Absent: the ordered queue, the one that may take a
+     *  dead letter (`itx/subscription-delivery-failed`): alert on dead letters from an ordered row. */
     ordered?: false;
   }): Promise<{ [Symbol.dispose](): void }>;
   /** A rewrite rule of this context, session-scoped (the handle's dispose removes it): make `match`

@@ -55,6 +55,22 @@ test("waitForEvent: an explicit afterOffset resolves from history immediately â€
   expect(got).toMatchObject({ offset: first.offset, payload: { which: "first" } });
 });
 
+test("waitForEvent: a payload filter matches its fields by value, in the log after an explicit afterOffset and in what commits later", async () => {
+  const stream = bareStream();
+  stream.append({ type: "outcome", payload: { commitOid: "aaa", generation: 1 } });
+  const [landed] = stream.append({ type: "outcome", payload: { commitOid: "bbb", generation: 2 } });
+  // already in the log: the scan passes over the other payload and answers at once
+  const found = { type: "outcome", payload: { commitOid: "bbb" }, afterOffset: 0 } as const;
+  expect(await stream.waitForEvent({ ...found, timeoutMs: 5_000 })).toMatchObject({
+    offset: landed.offset,
+  });
+  // not yet in the log: a commit of another payload leaves the waiter waiting
+  const pending = stream.waitForEvent({ payload: { commitOid: "ccc" }, timeoutMs: 5_000 });
+  stream.append({ type: "outcome", payload: { commitOid: "ddd" } });
+  const [wanted] = stream.append({ type: "outcome", payload: { commitOid: "ccc", n: 3 } });
+  expect(await pending).toMatchObject({ offset: wanted.offset });
+});
+
 test("waitForEvent: the default afterOffset means the NEXT occurrence â€” history does not resolve it", async () => {
   const stream = bareStream();
   const [past] = stream.append({ type: "ping" });

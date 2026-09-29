@@ -8,19 +8,13 @@
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
-import { forwardIssues } from "iterate/lib";
+import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
   ITERATE_BASE_PATH_HEADER,
   ITERATE_ROUTING_SLUG_HEADER,
   primaryHostnameUrlOf,
 } from "iterate/project-ingress";
-import {
-  parseCause,
-  crossingOneMore,
-  ITERATE_CAUSE_HEADER,
-  newChain,
-  type Cause,
-} from "./cause.ts";
+import { parseCause, crossingOneMore, newChain, requestCausedBy, type Cause } from "./cause.ts";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER, type Caller } from "./caller.ts";
 import { IterateContextDurableObject } from "./iterate-context-durable-object.ts";
@@ -253,6 +247,8 @@ export default {
     } catch (error) {
       return new Response(`508: ${(error as Error).message}\n`, { status: 508 });
     }
+    // what reads the mark from here on (/api, /mcp) reads it one context further
+    if (mark) request = requestCausedBy(request, cause);
 
     const appConfig = appConfigOf(env);
     const { deployId } = appConfig;

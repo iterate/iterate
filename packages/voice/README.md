@@ -33,11 +33,14 @@ case "events.iterate.com/project/worker-updated":
 export (`{ mainModule: "voice.ts", source: itx.cd('/').config }`), and each press's relay facet is
 that module's class (`voiceAgentFacetSpec`), so nothing is copied into the project: a commit that
 changes what `voice.ts` bundles, such as a new pin, is the next press's code, and one that only
-changes the website leaves the relay running. The OpenAI key (the live model's) is needed only once
+changes the website leaves the relay running. A commit that changes `voice.ts` ends every call in
+progress: its relay restarts on the new build and the call ends as interrupted. The OpenAI key (the live model's) is needed only once
 a call starts: `ensureVoiceAgent`, which Kit's Prepare and voice.iterate.com run, stores it when the
 project has none, waits for `itx.voice` and asks it for `health()`, and refuses a project whose
-config installs no voice. An upgrade commits a newer pin (the Voice app's **Upgrade to the newest**,
-`upgradeVoice`) and waits for that commit's publication; `voiceVersion` reads the pin. A device's
+config installs no voice or whose publication was refused, saying why. An upgrade commits a newer
+pin (the Voice app's **Upgrade to the newest**, `upgradeVoice`) and waits for that commit's
+publication, or main's head's when main moved on; `voiceVersion` reads the build the project runs,
+the pin of its published commit, which a refused upgrade leaves where it was. A device's
 press is the same call either way, so no Kit board needs a reflash for an upgrade.
 
 The backend is the project's normal agent: its system prompt, capability tree and codemode loop.
@@ -69,7 +72,7 @@ elements. The agent's rendering instructions live in [screen-context.md](src/scr
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/voice-agent.ts`                 | `VoiceAgentDurableObject`: the GPT-Live relay and the call fold. Dials `wss://api.openai.com/v1/live/sessions` through egress with `getSecret("/secrets/openai")`, forwards `mic-frame`s, appends `speaker-frame`s and transcripts, hands the live model's delegations to the agent on the context, and forwards the agent's replies to the live model to speak. |
 | `src/worker.ts`                      | The voice service at `itx.voice`. `setupVoiceAgent({ streamPath, activation })` creates the agent, then ONE append on the fresh context: the relay's subscription row (`voice.ts`'s class of the published config), `call-started`, so the relay dials at boot, and the agent's instructions.                                                                    |
-| `src/install.ts`                     | `installVoice`, the init case's; `ensureVoiceAgent`, the key and the wait Kit and voice.iterate.com run in the browser, preserving existing services and secrets; `voiceVersion` and `upgradeVoice`, the pin and its upgrade.                                                                                                                                    |
+| `src/install.ts`                     | `installVoice`, the init case's; `ensureVoiceAgent`, the key and the wait Kit and voice.iterate.com run in the browser, preserving existing services and secrets; `voiceVersion` and `upgradeVoice`, the running build and its upgrade.                                                                                                                          |
 | `src/screen-font.ts`                 | The screen font's CSS with its font embedded (`assets/`), stored at `voice/screen-font.css`.                                                                                                                                                                                                                                                                     |
 | `src/call-client.ts`                 | `startVoiceCall(project, { client, onSpeakerFrame, onFact })` (`@iterate-com/voice/call`): one call as a client makes it — the activation, the path `/agents/voice/<client>/<UTC yyyymmddHHMMSS>-<activation>`, the press, the subscription, `mic-frame` appends, the keepalive and `call-ended`. voice.iterate.com and `voice-call.ts` run it.                  |
 | `apps/agents/scripts/voice-call.ts`  | One conversation from Node through the call client: a WAV in, the answer's WAV out, the press timeline printed.                                                                                                                                                                                                                                                  |

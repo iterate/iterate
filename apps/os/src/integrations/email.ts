@@ -25,19 +25,17 @@
 // Both record their fact through `recordEmail`, as the platform: the `email` facet folds only
 // those (email/processor.ts).
 import PostalMime, { type Address } from "postal-mime";
-import { codedError } from "iterate/lib";
-import type { EmailSendInput } from "iterate/api";
+import { codedError, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import type { EmailSendInput, StreamPage } from "iterate/api";
 import { EmailContract } from "iterate/email";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import {
   causeHeader,
-  ITERATE_CAUSE_MAIL_HEADER,
   LOOP_DEPTH_LIMIT,
   newChain,
   parseCause,
   refuseActPastLimit,
-  type Cause,
 } from "../cause.ts";
 import { appConfigOf } from "../app-config.ts";
 import type { Caller } from "../caller.ts";
@@ -91,7 +89,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   // Mail we sent resumes the chain it carries (sendEmail's mark); any other begins one. Mail is
   // always recorded, so one past the loop limit lands at it: what reacts to it can only read.
   const mark = parseCause(
-    email.headers.find(({ key }) => key === ITERATE_CAUSE_MAIL_HEADER.toLowerCase())?.value,
+    email.headers.find(({ key }) => key === ITERATE_CAUSE_HEADER.toLowerCase())?.value,
   );
   await recordEmail(
     env.ITERATE_CONTEXT.getByName(
@@ -159,7 +157,7 @@ export async function sendEmail(
     address: string;
     name: string;
     ownDomain: string | null;
-    emailContext: Pick<ReachableContext, "invoke" | "read" | "reserveSend" | "releaseSend">;
+    emailContext: Pick<ReachableContext, "invoke" | "reserveSend" | "releaseSend">;
     caller: Caller;
   },
   input: EmailSendInput,
@@ -170,7 +168,7 @@ export async function sendEmail(
   if (!parsed.success) throw codedError("INVALID_INPUT", `itx.email.send: ${parsed.error.message}`);
   const request = parsed.data;
   const answered = request.inReplyToOffset
-    ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset, scope.caller.cause)
+    ? await answeredMessageOf(scope.emailContext, request.inReplyToOffset, scope.caller)
     : null;
   const to = request.to ? [request.to].flat() : answered?.to || [];
   const cc = request.cc ? [request.cc].flat() : answered?.cc || [];
@@ -237,7 +235,7 @@ export async function sendEmail(
       // OUR MARK (cause.ts): mail that comes back resumes the chain.
       "Auto-Submitted": "auto-generated",
       ...(scope.caller.cause && {
-        [ITERATE_CAUSE_MAIL_HEADER]: causeHeader(scope.caller.cause),
+        [ITERATE_CAUSE_HEADER]: causeHeader(scope.caller.cause),
       }),
       ...(answered?.inReplyTo && {
         "In-Reply-To": `<${answered.inReplyTo}>`,
@@ -297,11 +295,17 @@ async function recordEmail(
  *  address it reached us at (for our own message, the one we sent it from), its subject, and the
  *  threading ids. */
 async function answeredMessageOf(
-  emailContext: Pick<ReachableContext, "read">,
+  emailContext: Pick<ReachableContext, "invoke">,
   offset: number,
-  cause: Cause | undefined,
+  caller: Caller,
 ) {
-  const [event] = (await emailContext.read(offset - 1, 1, {}, cause)).events;
+  // read under the sender's caller, so a read that wakes /integrations/email is caused by its chain
+  const page = (await emailContext.invoke(
+    ["itx", "builtins", ["readEvents", offset - 1, 1]],
+    [],
+    caller,
+  )) as StreamPage;
+  const [event] = page.events;
   const found = event?.offset === offset ? event : undefined;
   const { events } = EmailContract;
   const received =

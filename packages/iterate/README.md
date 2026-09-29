@@ -113,12 +113,10 @@ Words from `/` (a member's session, the dash) read as a person's, with no sender
 context whose code ran, not who asked it to run (apps/os `caller.ts` `stampCaller` says why that
 makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
 
-Every event also says why it happened, `source.cause`: the chain of reactions it belongs to and
-how many hand-offs deep it is, which no user code sets. Past depth 8, code that reacts to code may
-still read, but every act it tries is refused `LOOP_LIMIT`, naming where the chain began, and the
-context records one `itx/loop-limit` fact per chain (apps/os `src/cause.ts` has the rules). A
-message one agent's processor sends another's context is one hand-off deeper, so two agents that
-answer each other exchange eight messages, four round trips, before the next is refused.
+Runaway reactions stop on their own: code that reacts to other code's output round after round —
+two agents answering each other, a handler that appends what it handles — is stopped after a few
+rounds with one error naming where the chain of reactions began, and the context records one
+`itx/loop-limit` fact. Reading still works.
 
 The exception is a jail, a context with a bare `itx ⇒ null` row plus the grants beside it. A bare
 jail is closed both ways: its code appends nowhere, and no code appends into it. Grant it

@@ -5,33 +5,16 @@
 // that call is what actually runs (dispatch.ts's `walkSteps` walks it). The rules THEMSELVES are `core` state —
 // stream/core-processor.ts reduces `itx/rewrite-rule-configured` into `state.itxExpressionRewriteRules`,
 // a MAP by canonical match (set replaces; `null` MASKS a name that has a platform row beneath it and
-// deletes any other). This module is the rules of matching, the ONE event that writes the table, and
-// the resolver that reads it. Every matching rule is one table row in itx-expression-rewriting.test.ts.
-//   built-in roots — `BUILT_IN_ROOT_DESCRIPTIONS`: THE RESERVED ROOT'S KEYS, each described once
+// deletes any other). This module is the rules of matching (each on the code it governs, each one row
+// of the table in itx-expression-rewriting.test.ts), the ONE event that writes the table, the app
+// wall on loaded code's calls and rows, and the resolver that reads the table.
 //
-// THE RULES live on the code they govern — read the docstrings, and the table in
-// itx-expression-rewriting.test.ts: matching and rewriting (`resolveItxExpression`: the most specific
-// row of THIS context's table wins, the fixed point `itx.builtins` ends the chain, a bare `itx` row
-// with a target yields to the implicit rows and a bare `null` denies all), the implicit rows
-// (`implicitRootsAt`), the check every row passes at the append boundary
-// (`normalizeRewriteRuleConfigured`), `@` as the caller's input (expression.ts), the app wall on a
-// loaded worker's calls and rows (`admitLoadedCodeExpression`, `admitLoadedCodeRow`), and un-setting
-// — a `null` kept as a mask only where something beneath would answer, `ifTarget` as a compare-and-set
-// delete (stream/core-processor.ts `CoreState.itxExpressionRewriteRules`).
-//
-// THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins`: every target it writes — a lent stub's
-// rule (`match ⇒ itx.builtins.rpcStubs.get('<match>')`), a processor's row
-// (`itx.builtins.facets.get(name, spec).processEventBatch`), a parent link, the sandbox rows — and
-// its own log plumbing (the runner's request and wait, library.ts), so a user's row at `itx.facets`
-// or `itx.rpcStubs` redirects the user's calls and nothing else. A hosted processor's ENGINE speaks
-// the context roots (`append`, `readEvents`, `processors.claim` — implicit everywhere, sdk/index.ts):
-// a loaded processor may not spell the fixed point, and a row at a context root is the owner's
-// deliberate wall. A LENT RPC
-// STUB is no exception: `itx.provide(match, stub)` lends the stub to the `itx.builtins.rpcStubs`
-// registry (physical) under the key = the canonical match and configures that pure-data rule — the log
-// records the rule, never the socket. AT REST (`normalizeRewriteRuleConfigured`, below): the event stores
-// the match as its canonical STRING (the table's key) and the target in the PARSED form; the core
-// reduce parses the match once and takes the target as it is.
+// THE PLATFORM'S OWN SPELLINGS ARE ROOTED AT `itx.builtins` — a lent stub's rule, a processor's
+// row, a parent link, its own log plumbing (library.ts) — so a user's row at `itx.facets` or
+// `itx.rpcStubs` redirects the user's calls and nothing else. A hosted processor's ENGINE speaks the
+// context roots (sdk/index.ts), so a row at a context root is the owner's deliberate wall. AT REST
+// (`normalizeRewriteRuleConfigured`, below) an event stores the match as its canonical STRING (the
+// table's key) and the target PARSED; the core reduce parses the match once.
 
 import {
   codedError,
@@ -55,12 +38,12 @@ import {
   type ItxExpressionPrefix,
 } from "iterate/expression";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { crossingOneMore, newChain } from "../cause.ts";
-import type { Caller } from "../caller.ts";
+import { crossingOneMore, newChain, recordRefusal, type Cause } from "../cause.ts";
+import { isConfigPointerMatch, type Caller } from "../caller.ts";
 import { ScheduledAppendInput } from "../stream/scheduled-appends.ts";
 import { unavailableError } from "../unavailable.ts";
 import { callOn, walkSteps, awaitAnswerReleasedIfRejected } from "./dispatch.ts";
-import type { UsableSnapshot } from "./rule-snapshots.ts";
+import { SNAPSHOT_REREADS, type RuleSnapshot } from "./rule-snapshots.ts";
 import { GLOBAL_PROJECT_ID } from "./paths.ts";
 
 // ── built-in roots ── THE RESERVED ROOT'S KEYS, each with the one line `rewriteRules.list()` says
@@ -89,7 +72,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "another context: `itx.cd('./sandbox')` goes below this one; `itx.cd(path).append({ type, payload })` writes to any context of the project",
+  cd: "any context of the project, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./sandbox').append({ type, payload })`; a jail's bare null refuses what reaches in",
   fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
@@ -111,7 +94,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "a live OpenAPI handle: one method per operationId, `call(operationId, input)` too",
   connectToCapnweb: "a live capnweb handle: `itx.connectToCapnweb(url)`, dotted calls pipelined",
   repos:
-    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes, parent? })` with whole files (edit the text in your script: `replace`, a regex) · `waitForPublication(commitOid)` once a config commit is live, or throws why not · `repos.list()`",
+    "git on Artifacts; `/repos/config` is the project's code: `repos.get(path).readFile(f)` · `commitFiles({ message, changes, parent? })` with whole files (edit the text in your script: `replace`, a regex) · `repos.list()`",
   workspaces:
     "a private overlay over the repos: `workspaces.get(path).writeFile(f, text)` · `gitCommit({ message, scope })`",
   files:
@@ -197,16 +180,12 @@ export type ItxExpressionRewriteRule = {
   target: ItxExpression | null;
   /** The one line a model reads for `match` here (`normalizeRewriteRuleConfigured`). */
   description?: string;
-  /** Written by the platform (the event's `source.platform`): only such a row vouches for the
-   *  manifest of the worker it names (`ItxExpressionResolver#namedWorker`). */
-  platform?: true;
 };
 
-/** The most a rule's target may be, serialized: a target may carry a worker's whole source as
- *  data, and every context that resolves through the table reads it in a snapshot
- *  (context/rule-snapshots.ts). The ceiling of a facet's literal source (worker-loader.ts
- *  `FACET_SOURCE_MAX_CHARS`), spelled again because the reduce may not import the loader. */
-const REWRITE_RULE_TARGET_MAX_CHARS = 1 << 20;
+/** The most a worker's literal source may be, serialized: in a rule's target, which every context
+ *  that resolves through the table reads in a snapshot (context/rule-snapshots.ts), and in a
+ *  facet's spec (worker-loader.ts `assertFacetSourceWithinCeiling`). */
+export const SOURCE_MAX_CHARS = 1 << 20;
 
 /** The proxy's own verbs — a match may not start with one (`normalizeRewriteRuleConfigured`). */
 const PROXY_VERBS: readonly string[] = ["invoke", "provide", "subscribe"];
@@ -388,10 +367,6 @@ export function resolveItxExpression(
  *  never by a call to the context. */
 const IDENTITY_ROOTS: ReadonlySet<string> = new Set(["whoami", "url"]);
 
-/** How many times one call is resolved again when the snapshots it resolved through expired
- *  before it could run (`ItxExpressionResolver#dispatch`). */
-const MAX_ROUTES_PER_CALL = 3;
-
 /** Does a call entering another context name one of that context's own roots — one that is neither
  *  portable nor more addressing (`cd`) nor loaded code with an authority (`workers`) nor who the
  *  context is (`IDENTITY_ROOTS`)? Then it runs there, and that context resolves it. */
@@ -466,10 +441,10 @@ export function normalizeRewriteRuleConfigured(
       `\`@\` (the caller's input) is legal only in the target's FINAL step — ${JSON.stringify(print(targetExpression, { holes: true }))} holds it earlier`,
     );
   const chars = targetExpression ? JSON.stringify(targetExpression).length : 0;
-  if (chars > REWRITE_RULE_TARGET_MAX_CHARS)
+  if (chars > SOURCE_MAX_CHARS)
     throw codedError(
       "FACET_SOURCE_TOO_LARGE",
-      `a rewrite rule's target is ${chars} chars, over the ${REWRITE_RULE_TARGET_MAX_CHARS}-char ceiling — every context that resolves through this table reads it in a snapshot: load the source from a producer expression with a cacheKey`,
+      `a rewrite rule's target is ${chars} chars, over the ${SOURCE_MAX_CHARS}-char ceiling — every context that resolves through this table reads it in a snapshot: load the source from a producer expression with a cacheKey`,
     );
   // The match is the PARSED prefix, never re-stringified: a target may carry a whole source as data,
   // and a canonical match can itself exceed the string codec's cap even when the input did not — the
@@ -636,19 +611,20 @@ export function rowsNamingRpcStub(args: {
 }
 
 /** THE APP WALL, as one check over an expression loaded code hands in (the resolver's INPUT, or the
- *  TARGET of a row it appends): never the fixed point, never a `cd` above `base` (self and descendants
- *  only, resolved step by step), and a webhook's `signingSecret` only from the project's root. A row's target resolves where the row lands (`from`), so its first
- *  relative `cd` is resolved there and must still stay beneath `base`. A spec's PRODUCER — a source
- *  expression with its `cacheKey` in a call's arguments (`workers.get`, `facets.get`,
- *  `processors.enable`) — is walled too, at the context the walk has reached, so the call fails where
- *  it is made; the producer also runs there as loaded code when the code loads (the DO's `invoke`).
+ *  TARGET of a row it appends), starting at the context `at` it runs at (where a row lands): never
+ *  the fixed point, and a webhook's `signingSecret` only at the project's root, `cd` steps resolved
+ *  on the way. A `cd` goes anywhere in the project, with every verb: the project is the boundary,
+ *  and a jail's bare null the only one inside it, which a hop into it resolves through. A spec's
+ *  PRODUCER — a source expression with its `cacheKey` in a call's arguments (`workers.get`,
+ *  `facets.get`, `processors.enable`) — is walled too, at the context the walk has reached, so the
+ *  call fails where it is made; the producer also runs there as loaded code when the code loads (the
+ *  DO's `invoke`).
  *  A source expression with no `cacheKey` is a worker's NAME (iterate/api `FacetSpec`): it may name
  *  a worker anywhere in the project, and only reads rules (`admitWorkerName`) — the worker it names
  *  loads with the authority of the context whose rule that is, and the facet it hosts speaks for its
  *  own context. Codec-style — nothing here is policy: the rows a call rewrites through are the
  *  owner's and are never checked. */
-function admitLoadedCodeExpression(expression: ItxExpression, base: string, from = base): void {
-  let ceiling = base; // what no `cd` may leave
+function admitLoadedCodeExpression(expression: ItxExpression, from: string): void {
   let at = from; // what the next relative `cd` resolves against
   for (const step of expression) {
     const name = typeof step === "string" ? step : step[0];
@@ -660,31 +636,47 @@ function admitLoadedCodeExpression(expression: ItxExpression, base: string, from
     if (Array.isArray(step))
       for (const arg of step.slice(1)) {
         // A webhook's signing secret is the PROJECT's: a receiver that verifies a signature trusts
-        // the event as the whole project's, so only code at the project's root names one.
-        if (base !== "/" && typeof arg === "object" && arg && "signingSecret" in arg)
+        // the event as the whole project's, so only a call at the project's root names one.
+        if (at !== "/" && namesASigningSecret(arg))
           throw codedError(
             "FORBIDDEN",
-            `a webhook's signing secret is named only by code at the project's root, and ${JSON.stringify(base)} is below it`,
+            `a webhook's signing secret is named only at the project's root, and ${JSON.stringify(at)} is below it`,
           );
-        const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
-        if (typeof source === "string" || Array.isArray(source)) {
-          const sourceExpression = normalizedItxExpression(source);
-          if (typeof arg === "object" && arg && "cacheKey" in arg)
-            admitLoadedCodeExpression(sourceExpression, ceiling, at);
-          else admitWorkerName(sourceExpression);
+        if (isSourceSpec(arg)) {
+          const sourceExpression = normalizedItxExpression(arg.source);
+          if (namesAWorker(arg)) admitWorkerName(sourceExpression);
+          else admitLoadedCodeExpression(sourceExpression, at);
         }
       }
-    if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string") {
-      const to = resolveContextPath(at, step[1]);
-      if (to !== ceiling && !to.startsWith(ceiling === "/" ? "/" : `${ceiling}/`))
-        throw codedError(
-          "FORBIDDEN",
-          `cd goes down only for loaded code: ${JSON.stringify(step[1])} from ${JSON.stringify(at)} would leave ${JSON.stringify(ceiling)}`,
-        );
-      at = ceiling = to;
-    }
+    if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string")
+      at = resolveContextPath(at, step[1]);
   }
 }
+
+/** What a `workers.get` or facet spec carries that decides whether it names a worker. */
+type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
+
+/** Whether a call's argument is a webhook's spec naming its signing secret (iterate/api
+ *  `webhooks.get`), which only a call at the project's root may do. */
+const namesASigningSecret = (arg: unknown): boolean =>
+  typeof arg === "object" && !!arg && "signingSecret" in arg;
+
+/** Whether a call's argument is a spec with a source expression — `workers.get`, `facets.get`,
+ *  `processors.enable` — whose source the app wall walks: a worker's name, or a producer. */
+const isSourceSpec = (arg: unknown): arg is WorkerSpecShape & { source: ItxExpressionInput } =>
+  typeof arg === "object" &&
+  !!arg &&
+  "source" in arg &&
+  (typeof arg.source === "string" || Array.isArray(arg.source));
+
+/** Whether a `workers.get` or facet spec NAMES a worker (iterate/api `FacetSpec`): a source
+ *  expression with no cacheKey — an empty one is none — which only reads rules (`admitWorkerName`);
+ *  anything else is code, a producer walled as the loaded code it is. The wall and every host read a
+ *  spec by this alone. */
+export const namesAWorker = <Spec extends WorkerSpecShape>(
+  spec: Spec,
+): spec is Spec & { source: ItxExpressionInput } =>
+  !spec.cacheKey && (typeof spec.source === "string" || Array.isArray(spec.source));
 
 /** A WORKER'S NAME (a source expression with no `cacheKey`, iterate/api `FacetSpec`) only READS
  *  RULES: property steps and `cd(path)`, never `builtins` and never another call. So the worker it
@@ -705,22 +697,10 @@ function admitWorkerName(name: ItxExpression): void {
   }
 }
 
-/** Does `expression` name code to load: a `workers` step, or an argument that carries a `source`
- *  (`workers.get`, `facets.get`, `processors.enable`)? */
-function namesCodeToLoad(expression: ItxExpression): boolean {
-  return expression.some((step) =>
-    typeof step === "string"
-      ? step === "workers"
-      : step[0] === "workers" ||
-        step.slice(1).some((arg) => typeof arg === "object" && !!arg && "source" in arg),
-  );
-}
-
 /** THE APP WALL ON A ROW: a rewrite rule or a subscription loaded code appends is walled on its
- *  TARGET like a call is on its input, against the context the call started at (`base`) and as it
- *  will resolve where it lands (`landsAt`) — else a jail granted `itx.append` would write itself
- *  `itx.x ⇒ itx.builtins.cd('/').x`, a row's `./x` would mean another context's `./x`, and a
- *  subscription target runs as the kernel. The one fixed-point target it may write is its OWN lend,
+ *  TARGET like a call is on its input, as it will resolve where it lands (`landsAt`) — else a jail
+ *  granted `itx.append` would write itself `itx.x ⇒ itx.builtins.cd('/').x`, and a subscription
+ *  target runs as the kernel. The one fixed-point target it may write is its OWN lend,
  *  `itx.builtins.rpcStubs.get(<key>)`: the registry is this context's, so the row grants nothing the
  *  code does not already hold. A `null` (a mask, an un-set) says nothing and passes. Nothing gets
  *  round the wall:
@@ -728,34 +708,16 @@ function namesCodeToLoad(expression: ItxExpression): boolean {
  *      to what lies beneath it, a jail's bare null or a parent link. Loaded code never needs one:
  *      `provide` lends it live stubs only, whose rows the DO removes when the last pager closes;
  *    • a SCHEDULED batch (`schedule-set`) is walled event by event as it is scheduled: the alarm
- *      appends it later as the kernel;
- *    • a FETCH ROUTE and the project's INGRESS are set only from the project's root: the config
- *      worker serves them at `/`, so one set from below would publish the root's reach on the
- *      project's hosts. `match` and `list` only read, and answer from below;
- *    • a row that lands OUTSIDE its writer's own subtree (`itx.cd('/').append(…)` from a child)
- *      names no code to load (`namesCodeToLoad`): its producer would run, and its worker load, with
- *      the authority of where it lands.
+ *      appends it later as the kernel.
  *  A jail's own null is the append boundary's (`refuseLiftingAJail`). Any other event passes
  *  untouched. */
 export function admitLoadedCodeRow(
   event: { type: string; payload?: unknown },
-  base: string,
   landsAt: string,
 ): void {
   if (event.type === "events.iterate.com/itx/schedule-set") {
     for (const occurrence of ScheduledAppendInput.parse(event.payload).events)
-      admitLoadedCodeRow(occurrence, base, landsAt);
-    return;
-  }
-  if (
-    event.type === "events.iterate.com/itx/fetch-route-configured" ||
-    event.type === "events.iterate.com/itx/ingress-configured"
-  ) {
-    if (base !== "/")
-      throw codedError(
-        "FORBIDDEN",
-        `a project's fetch routes and ingress are set only from the project's root: the config worker serves them at "/", and ${JSON.stringify(base)} is below it`,
-      );
+      admitLoadedCodeRow(occurrence, landsAt);
     return;
   }
   if (
@@ -781,32 +743,7 @@ export function admitLoadedCodeRow(
   const [, root, registry, lend] = expression;
   if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
     return;
-  const withinWriter = landsAt === base || landsAt.startsWith(base === "/" ? "/" : `${base}/`);
-  if (!withinWriter && namesCodeToLoad(expression))
-    throw codedError(
-      "FORBIDDEN",
-      `a row loaded code at ${JSON.stringify(base)} writes at ${JSON.stringify(landsAt)} names code to load, which would load with ${JSON.stringify(landsAt)}'s authority`,
-    );
-  admitLoadedCodeExpression(expression, base, landsAt);
-}
-
-/** THE PROJECT'S CONFIG POINTER IS THE PLATFORM'S: a row on `itx.config…` — a target, a mask, a
- *  removal — lands only from the platform's publication (project/publication.ts), on any context,
- *  so what every birth row delivers to and every facet named by `itx.cd('/').config` loads is a
- *  published commit. Runs at the append boundary on the normalized batch, beside
- *  `refuseLiftingAJail`. */
-export function refuseConfigPointerRows(events: readonly StreamEventInput[], caller: Caller): void {
-  if (caller.platform) return;
-  for (const event of events) {
-    if (event.type !== "events.iterate.com/itx/rewrite-rule-configured") continue;
-    // Normalized at the append boundary: the match is the parsed prefix.
-    const { match } = event.payload as { match: ItxExpressionPrefix };
-    if (itxExpressionStepName(match[1]) === "config")
-      throw codedError(
-        "FORBIDDEN",
-        "`itx.config` is the project's published config: only the platform's publication writes it (commit to /repos/config)",
-      );
-  }
+  admitLoadedCodeExpression(expression, landsAt);
 }
 
 /** A JAIL IS LIFTED ONLY BY A PERSON. While a context's table holds its bare `itx ⇒ null`, a row that
@@ -834,19 +771,6 @@ export function refuseLiftingAJail(
         "this context is a jail (a bare `itx ⇒ null`): only a member's session re-points or removes it, never code",
       );
   }
-}
-
-/** `itx.cd(path).append(…)` exactly (`ItxExpressionResolver#admit` says why it goes anywhere). */
-function isCdAppend(expression: ItxExpression): boolean {
-  const [, cd, append] = expression;
-  return (
-    expression.length === 3 &&
-    Array.isArray(cd) &&
-    cd[0] === "cd" &&
-    typeof cd[1] === "string" &&
-    Array.isArray(append) &&
-    append[0] === "append"
-  );
 }
 
 /** A bare `itx` row whose target is `cd` of THIS context is a loop no depth budget can see — every
@@ -1003,6 +927,25 @@ export async function describeRewriteRules(args: {
 
 // ── THE RESOLVER (parent-constructed over the physical built-ins and a reader of the CURRENT rules) ──
 
+/** A resolver's reach beyond its own context (context/stateless-context.ts `contextReach`): its
+ *  project, another context's table as this isolate holds it (context/rule-snapshots.ts), ONE call
+ *  to the context at `path` where it lives (built-ins.ts `callContext`), and `itx.workers` with the
+ *  authority of the context at `path` (built-ins.ts `workersRoot`), for a call `caller` makes that
+ *  crossed `hops` contexts to get there; and where an act one of its calls was refused past the loop
+ *  limit is recorded: the chain's one fact at the resolver's own context (cause.ts). */
+export type ResolverReach = {
+  projectId: string;
+  recordLoopLimit: (path: string, cause: Cause, message: string) => void;
+  snapshotOf: (path: string) => Promise<Pick<RuleSnapshot, "rules" | "expiresAt">>;
+  located: (
+    path: string,
+    expression: ItxExpression,
+    args: unknown[],
+    caller: Caller,
+  ) => Promise<unknown>;
+  workersOf: (path: string, caller: Caller, hops: number) => unknown;
+};
+
 export class ItxExpressionResolver {
   /** The built-ins: a plain record whose keys (kv, append, readEvents, cd, …) are the physical-layer
    *  roots — `itx.builtins.<root>` reaches them directly; `itx.<root>` reaches them through an implicit
@@ -1010,60 +953,32 @@ export class ItxExpressionResolver {
   readonly #builtIns: Record<string, unknown>;
   readonly #rewriteRules: (() => readonly ItxExpressionRewriteRule[]) | undefined;
   readonly #path: string;
-  readonly #projectId: string;
   readonly #caller: () => Caller;
-  readonly #snapshotOf: (path: string) => Promise<Pick<UsableSnapshot, "rules" | "expiresAt">>;
-  readonly #workersOf: (path: string, caller: Caller, hops: number) => unknown;
-  readonly #located: (
-    path: string,
-    expression: ItxExpression,
-    args: unknown[],
-    caller: Caller,
-  ) => Promise<unknown>;
+  readonly #reach: ResolverReach;
 
   constructor(args: {
     builtIns: Record<string, unknown>;
-    /** This context's own table, read live — absent where there is none to read live (the
-     *  stateless entrypoint, iterate-context.ts `ItxEntrypoint`): it resolves through a snapshot of
-     *  its context's table too, and what lives in the context runs there, which reads it live. */
+    /** This context's own table, read live — absent for the stateless entrypoint, which resolves
+     *  through its snapshot (context/rule-snapshots.ts). */
     rewriteRules?: () => readonly ItxExpressionRewriteRule[];
-    /** This context's canonical path: the base of loaded code's `cd`, and its ceiling. */
+    /** This context's canonical path: where loaded code's relative `cd` starts. */
     path: string;
-    projectId: string;
     /** WHO is calling right now — the DO's ambient caller. */
     caller: () => Caller;
-    /** Another context's table, as this isolate holds it (context/rule-snapshots.ts). */
-    snapshotOf: (path: string) => Promise<Pick<UsableSnapshot, "rules" | "expiresAt">>;
-    /** `itx.workers` with the authority of the context at `path` (built-ins.ts `workersRoot`), for
-     *  a call `caller` makes that crossed `hops` contexts to get there. */
-    workersOf: (path: string, caller: Caller, hops: number) => unknown;
-    /** ONE call to the context at `path`, where it lives (built-ins.ts `callContext`). */
-    located: (
-      path: string,
-      expression: ItxExpression,
-      args: unknown[],
-      caller: Caller,
-    ) => Promise<unknown>;
+    reach: ResolverReach;
   }) {
     this.#builtIns = args.builtIns;
     this.#rewriteRules = args.rewriteRules;
     this.#path = args.path;
-    this.#projectId = args.projectId;
     this.#caller = args.caller;
-    this.#snapshotOf = args.snapshotOf;
-    this.#workersOf = args.workersOf;
-    this.#located = args.located;
+    this.#reach = args.reach;
   }
 
-  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and nothing else —
-   *  never the fixed point, never a `cd` above its own context (self and descendants only, resolved
-   *  step by step). ONE SHAPE goes anywhere in the project: `itx.cd(path).append(…)`, nothing before
-   *  the `cd` and nothing after the `append`, because anyone may append anywhere and the stamp says
-   *  who did (src/caller.ts `stampCaller`). The destination resolves the append through its own
-   *  table, so a jail's bare null refuses it there, and a row it carries is walled against where the
-   *  call started (`admitLoadedCodeRow`). On the INPUT only: the rows a call rewrites through are the
-   *  owner's grants and are never checked, so a parent link `itx ⇒ itx.builtins.cd('/agents/x')`
-   *  carries a script up exactly as far as its owner said. Codec-style, kin to the reserved names
+  /** THE APP WALL (`admitLoadedCodeExpression`): loaded code hands in short names and never the
+   *  fixed point. Its `cd` goes anywhere in the project, every verb after it: the destination
+   *  resolves the rest through its own table, so a jail's bare null refuses it there, and the stamp
+   *  says who called (src/caller.ts `stampCaller`). On the INPUT only: the rows a call rewrites
+   *  through are the owner's grants and are never checked. Codec-style, kin to the reserved names
    *  `parse` refuses — nothing here is policy. */
   #admit(expression: ItxExpression): void {
     const caller = this.#caller();
@@ -1071,8 +986,7 @@ export class ItxExpressionResolver {
     // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
     // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
-    if (caller.app && !caller.path && !isCdAppend(expression))
-      admitLoadedCodeExpression(expression, this.#path);
+    if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }
 
   /** PURE: the chain of rewrites from `call` to the builtins-rooted call that would run through
@@ -1085,7 +999,7 @@ export class ItxExpressionResolver {
     return resolveItxExpression(
       this.#rewriteRules,
       expression,
-      implicitRootsAt(this.#projectId, this.#path),
+      implicitRootsAt(this.#reach.projectId, this.#path),
     );
   }
 
@@ -1106,7 +1020,14 @@ export class ItxExpressionResolver {
    *  mask refuses exactly as the dotted call would; when it ends in a call they apply to the value
    *  the expression denotes. */
   async invoke(call: ItxExpressionInput, ...extraArgs: unknown[]): Promise<unknown> {
-    return (await this.#dispatch(call, extraArgs)).value;
+    try {
+      return (await this.#dispatch(call, extraArgs)).value;
+    } catch (error) {
+      recordRefusal(error, (cause, message) =>
+        this.#reach.recordLoopLimit(this.#path, cause, message),
+      );
+      throw error;
+    }
   }
 
   /** The delivery loop's evaluation of a row's target (subscription-delivery.ts): `invoke`, how
@@ -1124,8 +1045,9 @@ export class ItxExpressionResolver {
   /** THE WORKER A NAME PUBLISHES, not loaded: `name` (`admitWorkerName`: it only reads rules)
    *  routed as `invoke` would route it, to a RULE of the context `at` whose target is exactly
    *  `itx.builtins.workers.get(spec)` — the spec, that context (the authority its producer runs
-   *  with), whether the platform wrote that rule (`vouched`: only then does its manifest count) and
-   *  how long the answer stands. A facet whose source is a worker's name loads from it
+   *  with), whether that rule is the config pointer, which the platform alone writes (`vouched`:
+   *  only then does its manifest count, caller.ts `isConfigPointerMatch`) and how long the answer
+   *  stands. A facet whose source is a worker's name loads from it
    *  (context/facet-host.ts). A name that ends anywhere else names no worker:
    *  NO_ITX_EXPRESSION_MATCH. */
   async namedWorker(
@@ -1158,7 +1080,7 @@ export class ItxExpressionResolver {
     return {
       at: route.at,
       spec: getStep[1],
-      vouched: publishing.some((rule) => rule.platform),
+      vouched: publishing.some((rule) => isConfigPointerMatch(rule.match)),
       validUntil,
     };
   }
@@ -1166,39 +1088,32 @@ export class ItxExpressionResolver {
   /** A route runs only while every snapshot it was assembled from lasts — one may expire while the
    *  next is read: it is resolved again, a bounded number of times, then UNAVAILABLE. */
   async #dispatch(call: ItxExpressionInput, extraArgs: unknown[]) {
-    for (let routes = 0; routes < MAX_ROUTES_PER_CALL; routes++) {
+    for (let routes = 0; routes < SNAPSHOT_REREADS; routes++) {
       const { route, validUntil } = await this.#route(call, extraArgs);
       if (Date.now() >= validUntil) continue;
       const value =
         route.kind === "located"
-          ? await this.#located(route.at, route.expression, route.extraArgs, route.caller)
+          ? await this.#reach.located(route.at, route.expression, route.extraArgs, route.caller)
           : await this.#walk(route.builtIns, route.fixedPoint, route.extraArgs);
       return { value, validUntil, route };
     }
     throw unavailableError(
       "overloaded",
-      `${JSON.stringify(print(normalizedItxExpression(call)))}: the rule snapshots it resolves through expired ${MAX_ROUTES_PER_CALL} times before it could run`,
+      `${JSON.stringify(print(normalizedItxExpression(call)))}: the rule snapshots it resolves through expired ${SNAPSHOT_REREADS} times before it could run`,
     );
   }
 
   /** THE ONE DISPATCH BOUNDARY (`invoke` has the contract): the call folded and ADMITTED here,
    *  whole, as its caller made it (`#admit`), then resolved through every context its chain crosses
    *  without calling any of them — this context's own table live where it has one, and, where the
-   *  chain meets `itx.builtins.cd(P)…`, P's snapshot with P's implicit rows: the rules a forwarded
-   *  call would meet there, the same pure walls. A relative `cd` means the caller's origin, as the
-   *  built-in `cd` has it. The walk ends at the fixed point of one context's table, or early where
-   *  a call enters a context without a live table here naming one of that context's own roots
+   *  chain meets `itx.builtins.cd(P)…`, P's snapshot with P's implicit rows. A relative `cd` means
+   *  the caller's origin. The walk ends at the fixed point of one context's table, or early where a
+   *  call enters a context without a live table here naming one of that context's own roots
    *  (`entersOwnRoot`): that context resolves it, so its snapshot is not read. A refusal a snapshot
-   *  gives stands like any answer until the snapshot expires — except this context's own, which
-   *  the context decides live.
-   *
-   *  WALKED against built-ins (dispatch.ts `walkSteps`): this context's own, a portable root this
-   *  resolver holds, a bare `cd` handle, or `workers` speaking for `at`. LOCATED: a call that
-   *  crossed a `cd` carries the caller stamped with where it came from (`Caller.path`) — the
-   *  trusted mark that its input was admitted at the boundary it entered by, so the context it
-   *  lands in resolves it with its live table, the owner's rows included, and walls it no more
-   *  (`#admit`): the built-in `cd`'s hop, without the context in between. Anything else goes to
-   *  this context as it was made, under the caller as it came, and the context admits it itself. */
+   *  gives stands until the snapshot expires — except this context's own, decided live. A LOCATED
+   *  call carries the caller stamped with where it came from (`Caller.path`), the trusted mark that
+   *  its input was admitted here, so the context it lands in resolves it live and walls it no
+   *  more. */
   async #route(call: ItxExpressionInput, extraArgs: unknown[]) {
     let expression = normalizedItxExpression(call);
     const last = expression.at(-1);
@@ -1227,7 +1142,7 @@ export class ItxExpressionResolver {
       if (liveRules || !entersOwnRoot(entered)) {
         if (liveRules) rules = liveRules();
         else if (!isBuiltInsRooted(entered)) {
-          const snapshot = await this.#snapshotOf(at);
+          const snapshot = await this.#reach.snapshotOf(at);
           validUntil = Math.min(validUntil, snapshot.expiresAt);
           rules = snapshot.rules;
         }
@@ -1235,7 +1150,7 @@ export class ItxExpressionResolver {
           fixedPoint = resolveItxExpression(
             () => rules,
             entered,
-            implicitRootsAt(this.#projectId, at),
+            implicitRootsAt(this.#reach.projectId, at),
           ).at(-1)!;
         } catch (error) {
           if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
@@ -1247,7 +1162,7 @@ export class ItxExpressionResolver {
         }
         const cdStep = fixedPoint[2];
         if (fixedPoint.length > 3 && Array.isArray(cdStep) && cdStep[0] === "cd") {
-          if (this.#projectId === GLOBAL_PROJECT_ID)
+          if (this.#reach.projectId === GLOBAL_PROJECT_ID)
             throw codedError(
               "FORBIDDEN",
               "a global context is reached by identity (session.user, session.organizations), never by path",
@@ -1267,7 +1182,7 @@ export class ItxExpressionResolver {
       // A worker runs under the hops the call made to reach it, its own `cd`s back here included.
       const route =
         root === "workers" && !(liveRules && hops === 0)
-          ? walked({ workers: this.#workersOf(at, caller, hops) }, fixedPoint, at)
+          ? walked({ workers: this.#reach.workersOf(at, caller, hops) }, fixedPoint, at)
           : liveRules ||
               (portable && Object.hasOwn(this.#builtIns, root)) ||
               root === "cd" ||
@@ -1283,10 +1198,9 @@ export class ItxExpressionResolver {
   /** Walk a fixed point `itx.builtins.<root>…` against `builtIns`. What the walk steps PAST that
    *  holds a Workers-RPC session — the collection stub a facet answered `repos()` with, walked on for
    *  `.list()`; a loaded worker's `make()` walked on for `.ping()` — is this actor's to release once
-   *  the answer is in: kept, it held the facet or the worker, and so this actor, open until the next
-   *  deploy (a project's root after every `repos.create`, 2026-09-23). The answer itself is the
-   *  caller's — unless it REJECTS (that collection refusing a `delete`): then nobody else holds it,
-   *  and it is released here. */
+   *  the answer is in: kept, it would hold the facet or the worker, and so this actor, open until
+   *  the next deploy. The answer itself is the caller's — unless it REJECTS (that collection
+   *  refusing a `delete`): then nobody else holds it, and it is released here. */
   async #walk(
     builtIns: Record<string, unknown>,
     fixedPoint: ItxExpression,

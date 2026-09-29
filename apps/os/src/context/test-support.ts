@@ -40,6 +40,7 @@ export function oneContextReach(rulesOf: Record<string, ItxExpressionRewriteRule
     located,
     reach: {
       projectId: "prj_unit",
+      recordLoopLimit: () => {},
       snapshotOf: async (path: string) => ({ rules: rulesOf[path] || [], expiresAt: Infinity }),
       workersOf: (path: string) => ({
         get: (spec: unknown) => new InvokeHandle((steps) => ({ workersOf: path, spec, steps })),

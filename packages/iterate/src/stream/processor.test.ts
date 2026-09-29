@@ -1311,7 +1311,7 @@ test("rule 3 claim: A REVIVE catches up and runs the at-head pass; an attempt st
   }
 });
 
-test("five-deaths-then-failed: work in flight that dies with its host is started again by each revive, its deaths counted across hosts; the fifth revive is refused WORK_FAILED, a restart onto other code is no death, and an attempt that settles starts the count over", async () => {
+test("five-deaths-then-failed: work in flight that dies with its host is started again by each revive, its deaths counted across hosts; the fifth revive is refused PERMANENT_FAILURE, a restart onto other code is no death, and an attempt that settles starts the count over", async () => {
   const mem = memoryStream();
   const storage = memoryStorage();
   const stored = new Map<string, unknown>();
@@ -1322,7 +1322,7 @@ test("five-deaths-then-failed: work in flight that dies with its host is started
   };
   let settles = false;
   /** One host of the processor: its at-head pass starts the work its state owes (here: always). */
-  const host = (generation = "g1") => {
+  const host = (codeId = "g1") => {
     const work = new (class extends StreamProcessor<object> {
       readonly contract = AttemptsContract;
       started = 0;
@@ -1334,7 +1334,7 @@ test("five-deaths-then-failed: work in flight that dies with its host is started
     })();
     return {
       work,
-      engine: new ProcessorEngine(work, { stream: mem.stream, storage, kv, generation }),
+      engine: new ProcessorEngine(work, { stream: mem.stream, storage, kv, codeId }),
     };
   };
   commit(mem, { type: "e" });
@@ -1352,13 +1352,13 @@ test("five-deaths-then-failed: work in flight that dies with its host is started
       ),
     );
   }
-  expect(restarted).toEqual([1, 1, 1, 1, "WORK_FAILED", "WORK_FAILED"]);
-  expect(stored.get("processor-work-started")).toEqual({ deaths: 6, generation: "g1" });
+  expect(restarted).toEqual([1, 1, 1, 1, "PERMANENT_FAILURE", "PERMANENT_FAILURE"]);
+  expect(stored.get("processor-work-started")).toEqual({ deaths: 6, codeId: "g1" });
   // a host restarted onto other code (its own commit, a deploy) is no death: the count starts over
   const moved = host("g2");
   await moved.engine.revive();
   expect(moved.work).toMatchObject({ started: 1 });
-  expect(stored.get("processor-work-started")).toEqual({ deaths: 0, generation: "g2" });
+  expect(stored.get("processor-work-started")).toEqual({ deaths: 0, codeId: "g2" });
   // what it receives next starts it again, and an attempt that settles starts the count over
   settles = true;
   const later = host();

@@ -14,9 +14,7 @@ export class EmailProcessor extends StreamProcessor<
     event,
     state,
   }: ReduceArgs<EmailState, ConsumedEvent<typeof EmailContract>>): EmailState | undefined {
-    // Only the platform records mail (integrations/email.ts): a member's own append of these types
-    // stays on the log and threads nothing.
-    if (event.source?.platform !== true) return undefined;
+    // Only the platform records mail (integrations/email.ts, caller.ts `PLATFORM_FACT_TYPES`).
     switch (event.type) {
       case "events.iterate.com/email/received":
       case "events.iterate.com/email/sent": {

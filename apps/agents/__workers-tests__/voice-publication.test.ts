@@ -1,11 +1,7 @@
-// __workers-tests__/voice-publication.test.ts — VOICE RUNS FROM THE PUBLISHED CONFIG, on the real
-// platform: `installVoice` (@iterate-com/voice install.ts) writes `itx.voice` to `voice.ts` of the
-// project's config pointer, and each press's relay facet is that module's class
-// (`voiceAgentFacetSpec`). A publication that leaves `voice.ts`'s bundle as it was — the website
-// changed — leaves the service answering as it did and the relay running; one that changes it, as a
-// new pin of the package does, is the service's next call and restarts the relay on its next one,
-// storage kept. The pointer is written by hand as the platform, its manifest naming each module by
-// a version, and `voice.ts` stands in for the package: its relay counts its calls.
+// __workers-tests__/voice-publication.test.ts — VOICE RUNS FROM THE PUBLISHED CONFIG: checks
+// `installVoice` and `voiceAgentFacetSpec` (@iterate-com/voice/install) against the real platform.
+// For publication and restart semantics, see apps/os/__workers-tests__/named-facets.test.ts.
+// Here `voice.ts` stands in for the package, with a relay that counts its calls.
 import { expect, test } from "vitest";
 import { installVoice, voiceAgentFacetSpec } from "@iterate-com/voice/install";
 import {

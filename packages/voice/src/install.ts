@@ -6,6 +6,7 @@
 // loads none.
 import type {} from "./api.ts"; // registers `itx.voice` on InstalledAppRoots
 import type { FacetSpec, IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
+import { canonicalItxExpressionPrefix, type ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { z } from "zod";
 import { SCREEN_FONT_CSS } from "./screen-font.ts";
@@ -43,31 +44,39 @@ export async function installVoice(
 
 const VoiceHealth = z.object({ ok: z.literal(true) });
 
+/** The config repo's part the voice checks read and the upgrade writes. */
+type ConfigRepo = Pick<RepoHandle, "tip" | "readFile">;
+
 /** What Kit's Prepare and the voice app run for a project: the OpenAI key (the live model's) stored
  *  when the project has none — `needs-openai-key` without one — then `itx.voice`, which the
- *  project's init case installs (`installVoice`), waited for up to a minute, and asked for
- *  `health()`. A project whose config repo neither has `itx.voice` nor pins this package never gets
- *  one: refused at once, before a key is stored. */
+ *  project's init case installs (`installVoice`), waited for (`voiceInstalled`), and asked for
+ *  `health()`. A project whose config repo neither has `itx.voice` nor pins this package at its tip
+ *  never gets one: refused at once, before a key is stored. */
 export async function ensureVoiceAgent(
   project: Pick<IterateContextApi, "waitForEvent"> & {
     secrets: Pick<IterateContextApi["secrets"], "list" | "set">;
     rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
-    repos: { get(path: string): Pick<RepoHandle, "readFile"> };
+    repos: { get(path: string): ConfigRepo };
   },
   openaiKey?: string,
 ): Promise<"ready" | "needs-openai-key"> {
-  const [secrets, rule] = await Promise.all([
+  const repo = project.repos.get("/repos/config");
+  const [secrets, rule, config] = await Promise.all([
     project.secrets.list(),
     project.rewriteRules.get("itx.voice"),
-  ]);
-  // A project created a moment ago may not have its config repo yet: wait for voice as below.
-  const pinned = rule?.target
-    ? undefined
-    : await voiceVersion(project).catch((error: unknown) => {
-        if (/: not created —/.test(String(error))) return "pending";
+    // the config repo's tip, or none while a project created a moment ago has no config repo yet:
+    // voice is then waited for below
+    repo.tip().then(
+      (tip) => ({ tip }),
+      (error: unknown) => {
+        if (/: not created —/.test(String(error))) return undefined;
         throw error;
-      });
-  if (!rule?.target && !pinned)
+      },
+    ),
+  ]);
+  const tip = config?.tip;
+  // a config repo not created yet, or created but not yet seeded (no tip), is waited for below
+  if (!rule?.target && tip && !voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
     throw new Error(
       `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/default does`,
     );
@@ -77,7 +86,7 @@ export async function ensureVoiceAgent(
       urls: ["https://api.openai.com"],
     });
   }
-  if (!rule?.target) await voiceInstalled(project);
+  if (!rule?.target) await voiceInstalled(project, tip);
   // The rule is there, so the handle answers `voice`: the project's own service is still parsed,
   // since only ours is typed by VoiceApi.
   const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
@@ -85,50 +94,67 @@ export async function ensureVoiceAgent(
   return "ready";
 }
 
-/** The project's `itx.voice` rule, waited for up to a minute: a project created a moment ago gets
- *  it from its config repo's first init case. A failed creation refuses at once. */
-async function voiceInstalled(project: Pick<IterateContextApi, "waitForEvent">) {
+/** The project's `itx.voice` rule, as the root stores its match (parsed), waited for until one
+ *  minute from now: a project created a moment ago gets it from its config repo's first init case.
+ *  A failed creation, or the refused publication of `tip`, the commit that pins voice (none while
+ *  the repo is not created yet), refuses at once, saying why. */
+async function voiceInstalled(
+  project: Pick<IterateContextApi, "waitForEvent"> & {
+    rewriteRules: Pick<IterateContextApi["rewriteRules"], "get">;
+  },
+  tip: string | null | undefined,
+) {
   const deadline = Date.now() + 60_000;
-  for (let afterOffset = 0; ;) {
+  for (let afterOffset = 0; Date.now() < deadline;) {
     const event = await project
       .waitForEvent({
         type: [
           "events.iterate.com/itx/rewrite-rule-configured",
           "events.iterate.com/project/create-failed",
+          "events.iterate.com/project/worker-update-failed",
         ],
         afterOffset,
-        timeoutMs: Math.max(1, deadline - Date.now()),
+        timeoutMs: deadline - Date.now(),
       })
       .catch((error: unknown) => {
         if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
-        throw new Error(
-          "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as configs/default does",
-        );
       });
+    if (!event) break;
+    const { payload } = event;
     if (event.type === "events.iterate.com/project/create-failed")
       throw new Error(
-        `The project's creation failed, so its config repo installs no voice: ${String(event.payload?.error)}`,
+        `The project's creation failed, so its config repo installs no voice: ${String(payload?.error)}`,
       );
-    // the root stores a rule's match normalized, as its steps (["itx", "voice"])
-    const match = event.payload?.match;
-    if ((Array.isArray(match) ? match.join(".") : match) === "itx.voice" && event.payload?.target)
+    if (
+      event.type === "events.iterate.com/project/worker-update-failed" &&
+      tip &&
+      payload?.commitOid === tip
+    )
+      throw new Error(
+        `The project's config (commit ${tip.slice(0, 7)}) was not published, so it installs no voice: ${String(payload.error)}`,
+      );
+    if (
+      event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+      payload?.target &&
+      canonicalItxExpressionPrefix(payload.match as ItxExpressionInput) === "itx.voice" &&
+      // the log keeps every rule the root ever had: one a later write removed is not installed
+      (await project.rewriteRules.get("itx.voice"))?.target
+    )
       return;
     afterOffset = event.offset;
   }
+  throw new Error(
+    "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as configs/default does",
+  );
 }
 
 /** The part of a config repo's root package.json an upgrade reads and rewrites; every other field
  *  is carried through untouched. */
 type RootManifest = { dependencies?: Record<string, string> };
 
-/** The build of voice the project's config pins: `@iterate-com/voice` among the dependencies of the
- *  root package.json at `main`'s tip of `/repos/config`, which `voice.ts` re-exports and the project
- *  runs once that commit's publication has landed. Undefined when the config pins no such package,
- *  or its package.json is not JSON. */
-export async function voiceVersion(project: {
-  repos: { get(path: string): Pick<RepoHandle, "readFile"> };
-}): Promise<string | undefined> {
-  const text = await project.repos.get("/repos/config").readFile("package.json");
+/** The `@iterate-com/voice` a root package.json's `text` lists among its dependencies: undefined for
+ *  none, no file, or one that is not JSON. */
+function voicePinIn(text: string | null): string | undefined {
   try {
     return (JSON.parse(text || "{}") as RootManifest).dependencies?.["@iterate-com/voice"];
   } catch {
@@ -136,62 +162,81 @@ export async function voiceVersion(project: {
   }
 }
 
+/** The build of voice the project RUNS: what the root package.json pins at the commit of
+ *  `/repos/config` the platform last published (the `project` facet's `publishedCommit`), which
+ *  the tip is not while an upgrade's publication is owed or after it was refused. Undefined before
+ *  the first publication, or when that commit pins no such package. */
+export async function voiceVersion(project: {
+  facets: {
+    get(name: "project"): { snapshot(): Promise<{ state: { publishedCommit: string | null } }> };
+  };
+  repos: { get(path: string): Pick<RepoHandle, "readFile"> };
+}): Promise<string | undefined> {
+  const { state } = await project.facets.get("project").snapshot();
+  if (!state.publishedCommit) return undefined;
+  const repo = project.repos.get("/repos/config");
+  return voicePinIn(await repo.readFile("package.json", { commitOid: state.publishedCommit }));
+}
+
 /**
  * AN UPGRADE of the project's voice to `version`, a newer build of `@iterate-com/voice`: the root
- * package.json's pin, in ONE commit on the tip it read (refused if `main` moved meanwhile), then that
- * commit's publication awaited — the platform moves `itx.config` to it, and the next press loads the
- * new build (`voiceAgentFacetSpec`). A publication the platform refuses (the probe, a module that
- * does not resolve) throws why, with the pin committed. A config already at `version` commits
- * nothing. The agents app keeps its build: the config pins it too. Answers the commit the project
- * runs.
+ * package.json's pin, in ONE commit on the tip it read (refused if `main` moved meanwhile), or the
+ * tip as it stands when it pins `version` already (an upgrade before, refused or still owed). Then
+ * that commit's one outcome on `/`, waited for until two minutes from now: published, the platform
+ * moved `itx.config` to it and the next press loads the new build (`voiceAgentFacetSpec`); refused
+ * (the probe, a module that does not resolve), it throws why, with the pin committed. A commit main
+ * moved on from is followed to main's head, which holds the pin too: main is linear. The agents app
+ * keeps its build: the config pins it too. Answers the commit the project runs.
  */
 export async function upgradeVoice(
   project: Pick<IterateContextApi, "readEvents" | "waitForEvent"> & {
-    repos: { get(path: string): Pick<RepoHandle, "tip" | "readFile" | "commitFiles"> };
+    repos: { get(path: string): ConfigRepo & Pick<RepoHandle, "commitFiles"> };
   },
   version: string,
 ): Promise<string> {
+  const deadline = Date.now() + 120_000;
   const repo = project.repos.get("/repos/config");
-  const tip = await repo.tip();
-  if (!tip) throw new Error("The project's config repo has no commit to upgrade");
-  const manifest = JSON.parse(
-    (await repo.readFile("package.json", { commitOid: tip })) || "{}",
-  ) as RootManifest;
-  if (manifest.dependencies?.["@iterate-com/voice"] === version) return tip;
-  // the head of `/` before the commit: its publication lands after it
-  const { scannedThroughOffset } = await project.readEvents(Number.MAX_SAFE_INTEGER, 1);
-  const { commitOid } = await repo.commitFiles({
-    message: `Upgrade @iterate-com/voice to ${version}`,
-    parent: tip,
-    changes: [
-      {
-        path: "package.json",
-        content: `${JSON.stringify(
-          {
-            ...manifest,
-            dependencies: { ...manifest.dependencies, "@iterate-com/voice": version },
-          },
-          null,
-          2,
-        )}\n`,
-      },
-    ],
-  });
-  if (!commitOid) throw new Error("The upgrade's commit left the config repo's main unborn");
-  for (let afterOffset = scannedThroughOffset; ;) {
-    const outcome = await project.waitForEvent({
-      type: [
-        "events.iterate.com/project/worker-updated",
-        "events.iterate.com/project/worker-update-failed",
-      ],
-      afterOffset,
-      timeoutMs: 120_000,
-    });
-    afterOffset = outcome.offset;
-    if (outcome.payload?.commitOid !== commitOid) continue;
-    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
-    throw new Error(
-      `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,
-    );
+  let commitOid = await repo.tip();
+  if (!commitOid) throw new Error("The project's config repo has no commit to upgrade");
+  const text = await repo.readFile("package.json", { commitOid });
+  // a tip that pins the build already: its outcome is in the root's history
+  let afterOffset = 0;
+  if (voicePinIn(text) !== version) {
+    // the head of `/` before the commit: its outcome lands after it
+    ({ scannedThroughOffset: afterOffset } = await project.readEvents(Number.MAX_SAFE_INTEGER, 1));
+    const manifest = JSON.parse(text || "{}") as RootManifest;
+    (manifest.dependencies ||= {})["@iterate-com/voice"] = version;
+    ({ commitOid } = await repo.commitFiles({
+      message: `Upgrade @iterate-com/voice to ${version}`,
+      parent: commitOid,
+      changes: [{ path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` }],
+    }));
+    if (!commitOid) throw new Error("The upgrade's commit left the config repo's main unborn");
   }
+  while (Date.now() < deadline) {
+    const outcome = await project
+      .waitForEvent({
+        type: [
+          "events.iterate.com/project/worker-updated",
+          "events.iterate.com/project/worker-update-failed",
+        ],
+        payload: { commitOid },
+        afterOffset,
+        timeoutMs: deadline - Date.now(),
+      })
+      .catch((error: unknown) => {
+        if (errorCode(error) !== "WAIT_TIMEOUT") throw error;
+      });
+    if (!outcome) break;
+    if (outcome.type === "events.iterate.com/project/worker-updated") return commitOid;
+    const head = await repo.tip();
+    if (!head || head === commitOid)
+      throw new Error(
+        `package.json pins the new build (config commit ${commitOid.slice(0, 7)}), but its publication failed, so the project still runs the old one: ${String(outcome.payload?.error)}`,
+      );
+    commitOid = head;
+  }
+  throw new Error(
+    `The platform has not published config commit ${commitOid.slice(0, 7)}, which pins the new build, within two minutes: the project still runs the old build until it does`,
+  );
 }

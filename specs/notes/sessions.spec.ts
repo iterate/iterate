@@ -70,12 +70,16 @@ test("the Notes app works through a project config worker, keeps a note, and end
     ["get", "/repos/config"],
     ["writeFile", "worker.ts", source],
   ])) as { commitOid: string };
-  await fixture.itx.invoke([
-    "itx",
-    "repos",
-    ["get", "/repos/config"],
-    ["waitForPublication", commitOid],
-  ]);
+  const outcome = await fixture.itx.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  expect(outcome.payload).not.toHaveProperty("error");
   await page.goto(proxied("/projects").href);
   if (ownOrigin) await consent(page, proxiedClient);
   await saveNote(page, note);

@@ -1,8 +1,8 @@
 // cause.ts — THE LOOP GUARD, explained here and nowhere else; user code never sees it until it saves
 // it. Every event and every call carries its CAUSE: the chain of reactions it belongs to (when and
 // where that chain began) and how many hand-offs deep in it it is. The platform stamps it on events
-// and calls; the SDK's doors carry it through loaded code unread (iterate src/cause.ts). Three
-// guarantees rest on it:
+// and calls; the SDK carries it through loaded code unread, from a host's `callWithCause` or a
+// Request's mark (iterate src/cause.ts). Three guarantees rest on it:
 //
 // 1. BOUNDED CAUSAL DEPTH. A person's call, an outside request and inbound mail without our mark
 //    begin a chain at depth 0. Depth goes up by one only where code runs BECAUSE of an event or of
@@ -20,7 +20,8 @@
 //    is: the same on every attempt, so a retry never repeats what an attempt before it did, and the
 //    same write twice in one delivery lands once.
 
-import { codedError, errorCode } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { z } from "zod";
 
 /** The chain a piece of work belongs to and how deep in it the work is — as an event stores it
  *  (`source.cause`), and as a call carries it, with what only the call needs. */
@@ -40,19 +41,14 @@ export type Cause = {
 export const LOOP_DEPTH_LIMIT = 8;
 /** The most contexts one call crosses. */
 const MAX_CONTEXT_HOPS = 16;
-/** OUR MARK on what we send (egress, webhooks, secret dispatch): the cause as JSON. Unsigned:
- *  forging it can only make the forger's own request deeper. The SDK's doors read it by name. */
-export const ITERATE_CAUSE_HEADER = "iterate-cause";
-/** The same mark on mail we send, beside `Auto-Submitted: auto-generated` (a mail header of ours
- *  must be an `X-` one). */
-export const ITERATE_CAUSE_MAIL_HEADER = "X-Iterate-Cause";
-
 /** A new chain, at depth 0, beginning now `with` its origin: the kind of thing that began it ("a
- *  call", "inbound mail", "a request to <host>"), never who — no path, no address. */
+ *  call", "inbound mail", "a request to <host>"), never who — no path, no address. Printable ASCII
+ *  only, so our mark (iterate/lib `ITERATE_CAUSE_HEADER`, unsigned: forging it can only make the
+ *  forger's own request deeper) is plain JSON on any header. */
 export function newChain(origin: string): Cause {
   const nonce = Math.random().toString(36).slice(2, 7);
   return {
-    chain: `${new Date().toISOString()} with ${origin.slice(0, 200)} ~${nonce}`,
+    chain: `${new Date().toISOString()} with ${origin.slice(0, 200).replace(/[^\x20-\x7e]/g, "?")} ~${nonce}`,
     depth: 0,
   };
 }
@@ -101,23 +97,25 @@ export function recordRefusal(
   error: unknown,
   record: (cause: Cause, message: string) => void,
 ): void {
-  const refusal = (error as { data?: Refusal } | undefined)?.data;
-  // a hop past MAX_CONTEXT_HOPS is no depth refusal: it carries no chain to record
-  if (errorCode(error) !== "LOOP_LIMIT" || !refusal?.chain || refusal.recorded) return;
-  record({ chain: refusal.chain, depth: refusal.depth }, (error as Error).message);
+  if (errorCode(error) !== "LOOP_LIMIT") return;
+  // A LOOP_LIMIT carries the Refusal `refuseActPastLimit` put on it, marked here in place, so the
+  // same error met again is recorded no more; the SDK's (a 508 its fetch met) was recorded where it
+  // was met, and carries no chain.
+  const refusal = (error as { data?: Refusal }).data;
+  if (!refusal?.chain || refusal.recorded) return;
+  record(
+    { chain: refusal.chain, depth: refusal.depth },
+    error instanceof Error ? error.message : String(error),
+  );
   refusal.recorded = true;
 }
 
-/** What marks a fetch's answer as a refusal past the limit (unavailable.ts
- *  `expressionFetchErrorAnswer`), so the SDK's `fetch` and `itx.fetch` throw it as one again. */
-export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
-
-/** THE HOP COUNT: the call `cause` rides crosses one more context — a `cd`, a located call, a parent
+/** THE HOP COUNT: the call `cause` rides crosses `contexts` more — a `cd`, a located call, a parent
  *  link, a request re-entering the platform — refused past MAX_CONTEXT_HOPS. A plain failure, not the
  *  loop's end: rules that lead into each other are the owner's to fix, and a delivery through them
  *  is tried again, and lands once they are. */
-export function crossingOneMore(cause: Cause, into: string): Cause {
-  const hops = (cause.hops ?? 0) + 1;
+export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause {
+  const hops = (cause.hops ?? 0) + contexts;
   if (hops > MAX_CONTEXT_HOPS)
     throw new Error(
       `${into} refused: one call crossed more than ${MAX_CONTEXT_HOPS} contexts in the chain that began ${cause.chain} — rules, rows or requests that lead back into each other`,
@@ -125,20 +123,31 @@ export function crossingOneMore(cause: Cause, into: string): Cause {
   return { ...cause, hops };
 }
 
-/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII only (a header is bytes). */
+/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII (a header is bytes; `newChain`). */
 export function causeHeader(cause: Cause): string {
-  return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 }).replace(
-    /[\u0080-\uffff]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
+  return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 });
 }
 
-/** `request` carrying `cause` as our mark: how a Request hands it to the SDK's request door. */
+/** `request` carrying `cause` as our mark: how a Request hands it to the SDK host serving it. */
 export function requestCausedBy(request: Request, cause: Cause): Request {
   const headers = new Headers(request.headers);
   headers.set(ITERATE_CAUSE_HEADER, causeHeader(cause));
   return new Request(request, { headers });
 }
+
+/** A count a cause carries: a safe whole number, never below 0. */
+const CauseCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+/** A cause as anyone may write it (`parseCause`). A chain the platform mints is printable ASCII
+ *  (`newChain`), so any other is forged; a malformed write key is dropped alone. */
+const WrittenCause = z.object({
+  chain: z
+    .string()
+    .max(512)
+    .regex(/^[\x20-\x7e]*$/),
+  depth: CauseCount,
+  hops: CauseCount.nullish(),
+  writeKey: z.string().max(512).optional().catch(undefined),
+});
 
 /** `value` as a cause — loaded code's word for its own over RPC, or a mark's text, the JSON
  *  ITERATE_CAUSE_HEADER carries — or none when it is not one: either is anyone's to write, so a
@@ -152,16 +161,10 @@ export function parseCause(value: unknown): Cause | undefined {
     } catch {
       return undefined;
     }
-  const { chain, depth, hops, writeKey } = (fields ?? {}) as Record<string, unknown>;
-  const count = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
-  const text = (s: unknown): s is string => typeof s === "string" && s.length <= 512;
-  if (!text(chain) || !count(depth) || !count(hops || 0)) return undefined;
-  return {
-    chain,
-    depth,
-    hops: (hops as number | undefined) || 0,
-    ...(!mark && text(writeKey) && { writeKey }),
-  };
+  const written = WrittenCause.safeParse(fields);
+  if (!written.success) return undefined;
+  const { chain, depth, hops, writeKey } = written.data;
+  return { chain, depth, hops: hops || 0, ...(!mark && writeKey && { writeKey }) };
 }
 
 /** The SDK's carrier of the running cause in this isolate (iterate src/cause.ts), by the name it
@@ -170,13 +173,14 @@ const sdkCarrier = () =>
   (globalThis as Record<symbol, SdkCarrier | undefined>)[Symbol.for("iterate.cause")];
 type SdkCarrier = { run<T>(cause: unknown, code: () => T): T; current(): unknown };
 
-/** The cause the SDK's door runs this isolate's current code under: what the platform's own facets —
- *  a repo, a project — act under. */
+/** The cause the SDK's carrier runs this isolate's current code under: what the platform's own
+ *  facets — a repo, a project — act under. */
 export function runningCause(): Cause | undefined {
   return parseCause(sdkCarrier()?.current());
 }
 
-/** Run the platform's own facet code under `cause`, as the SDK's door runs what it is handed. */
+/** Run the platform's own facet code under `cause`, as the SDK's `callWithCause` runs what it is
+ *  handed. */
 export function runningUnder<T>(cause: Cause | undefined, work: () => T): T {
   const carrier = sdkCarrier();
   return carrier ? carrier.run(cause, work) : work();

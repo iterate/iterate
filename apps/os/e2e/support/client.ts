@@ -7,9 +7,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
-import { ITERATE_CAUSE_HEADER } from "../../src/cause.ts";
 import { SNAPSHOT_TTL_MS } from "../../src/context/rule-snapshots.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
 
@@ -205,7 +205,7 @@ export function publicSession(token: string) {
 }
 
 /** A session our own code opens to call the platform back: its `/api` upgrade carries our mark
- *  (src/cause.ts `ITERATE_CAUSE_HEADER`), so every call it makes resumes `cause`'s chain at its
+ *  (iterate/lib `ITERATE_CAUSE_HEADER`), so every call it makes resumes `cause`'s chain at its
  *  depth. */
 export function markedSession(cause: { chain: string; depth: number }): any {
   const ws = new UndiciWebSocket(wsApi(), {
@@ -357,8 +357,8 @@ export const configuredRows = (log: any[]): any[] =>
 /** `files` published as the project's config the one way there is (apps/os
  *  src/project/publication.ts): `itx`, the project's root, follows its config repo (the `project`
  *  processor a created project has), the files are committed to `/repos/config`, and the platform
- *  publishes the commit — `itx.config` points at it — which `waitForPublication` waits for. Why
- *  the commit is not published is thrown. */
+ *  publishes the commit — `itx.config` points at it — whose outcome is waited for
+ *  (`publicationOf`). */
 export async function publishConfig(
   itx: any,
   files: Record<string, string>,
@@ -371,8 +371,25 @@ export async function publishConfig(
     changes: Object.entries(files).map(([path, content]) => ({ path, content })),
     parent: await repo.tip(),
   });
-  await repo.waitForPublication(commitOid);
+  await publicationOf(itx, commitOid);
   return { commitOid };
+}
+
+/** The outcome of commit `commitOid` of `/repos/config` on `root`, the project's root: every commit
+ *  fact gets one (src/project/processor.ts), found by its oid; a failure is thrown with why. */
+async function publicationOf(root: any, commitOid: string): Promise<any> {
+  const outcome = await root.waitForEvent({
+    type: [
+      "events.iterate.com/project/worker-updated",
+      "events.iterate.com/project/worker-update-failed",
+    ],
+    payload: { commitOid },
+    afterOffset: 0,
+    timeoutMs: 60_000,
+  });
+  if (outcome.type === "events.iterate.com/project/worker-update-failed")
+    throw new Error(`the publication of ${commitOid} failed: ${outcome.payload.error}`);
+  return outcome;
 }
 
 /** Until every snapshot of a context's rules read before now has expired (src/context/

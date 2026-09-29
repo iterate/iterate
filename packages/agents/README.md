@@ -33,8 +33,9 @@ platform pins a template's `…@main` to one as it seeds the project.
 
 An upgrade commits a newer pin (the Agents app's **Upgrade to the newest**): `upgradeAgents`
 writes it into the root package.json in one commit on the tip it read, then waits for that commit's
-publication, and throws why when the platform refuses it. `agentsVersion` reads the pin the config
-holds at its tip.
+publication, or main's head's when main moved on, and throws why when the platform refuses it.
+`agentsVersion` reads the build the project runs: the pin of its published commit, which a refused
+upgrade leaves where it was.
 
 Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.

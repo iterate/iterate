@@ -28,83 +28,84 @@ import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, type DurableObjectAddress } 
 import { ruleSnapshots, type RulesSnapshotAnswer } from "./rule-snapshots.ts";
 
 /** A CONTEXT'S REACH INTO ITS PROJECT, a context's Durable Object's and the stateless resolver's
- *  alike: every other context's name and Durable Object, its rule snapshot as this isolate holds
- *  it (context/rule-snapshots.ts), one call there (`located`: built-ins.ts `callContext`, whose
- *  invoke rides `contextStub` — context-stub.ts's retry and failure policy on every hop), and
- *  `workers` speaking for it — loaded here, with its loader identity, its `env.ITX` minted from
- *  `ctx`'s exports, its producer run there as its loaded code. A hop carries `platformOrigin()`
- *  when its caller names none: an alarm's delivery has no caller to carry one. `namespace` is the
- *  contexts' binding, the privileged reach only a context or the entrypoint holds. `delivery` is
- *  the delivery authority of the call being made (caller.ts `Caller.delivery`), read as it is
- *  made: a context's Durable Object reads its ambient caller's; the stateless entrypoint passes
- *  none, so a call loaded code makes never carries one. */
+ *  alike (itx-expression-rewriting.ts `ResolverReach`): every other context's Durable Object, its
+ *  rule snapshot as this isolate holds it (context/rule-snapshots.ts), one call there (`located`:
+ *  built-ins.ts `callContext`, whose invoke rides `contextStub` — context-stub.ts's retry and
+ *  failure policy on every hop), `workers` speaking for it — loaded here, with its loader identity,
+ *  its `env.ITX` minted from `ctx`'s exports — and its loaded code resolved here (`loadedCodeAt`:
+ *  always statelessly, so a cold load relays nothing through that context). A hop carries
+ *  `platformOrigin()` when its caller names none: an alarm's delivery has no caller to carry one.
+ *  `ambient` is the call being made, read as it is made — its delivery authority (caller.ts
+ *  `Caller.delivery`) and its cause: a context's Durable Object reads its ambient caller's; the
+ *  stateless resolver its caller's cause alone, so a call loaded code makes never carries a
+ *  delivery. `namespace` is the contexts' binding, the privileged reach only a context or the
+ *  entrypoint holds. */
 export function contextReach(args: {
   env: Env;
   namespace: Env["ITERATE_CONTEXT"];
   projectId: string;
   platformOrigin: () => string | null;
   ctx: DurableObjectState | ExecutionContext;
-  delivery?: () => string | undefined;
-  /** The cause of the call being made (caller.ts `Caller.cause`), read as it is made. */
-  cause?: () => Cause | undefined;
+  ambient?: () => Pick<Caller, "delivery" | "cause">;
   /** False for a context's Durable Object, whose calls send on the call it was made: a run's
    *  request is answered up as it came, for its caller's side to read (context-stub.ts). */
   readsRunSettlements?: boolean;
 }) {
   const { env, namespace, projectId, platformOrigin, readsRunSettlements } = args;
+  const ambient: () => Pick<Caller, "delivery" | "cause"> = args.ambient || (() => ({}));
   const nameOf = (path: string) => DurableObjectNameCodec.stringify({ projectId, path });
-  const context = (path: string) => namespace.getByName(nameOf(path));
-  const callAt = (
-    path: string,
-    expression: ItxExpression,
-    callArgs: unknown[],
-    caller: Caller,
-    delivery?: () => string | undefined,
-  ): Promise<unknown> => {
-    const callerThere = { ...caller, platformOrigin: caller.platformOrigin || platformOrigin() };
-    return callContext(
-      () => ({
-        fetch: (request) => context(path).fetch(request),
-        invoke: (target, targetArgs = [], targetCaller = callerThere) =>
-          contextStub(namespace, DurableObjectNameCodec.address({ projectId, path }), "itx", {
-            readsRunSettlements,
-          }).invoke(normalizedItxExpression(target), targetArgs, targetCaller),
-      }),
-      expression,
-      callArgs,
-      callerThere,
-      path,
-      delivery,
-    );
-  };
+  const contextOf = (path: string) => namespace.getByName(nameOf(path));
+  const addressOf = (path: string) => DurableObjectNameCodec.address({ projectId, path });
+  /** The resolver of the context at `path` for a caller of no one, the platform's or (`app`) its
+   *  loaded code's, under `cause`. */
+  const resolverAt = (path: string, cause: Cause | undefined, app?: true) =>
+    statelessResolverFor({
+      env,
+      namespace,
+      address: addressOf(path),
+      caller: { principal: null, app, platformOrigin: platformOrigin(), cause },
+      ctx: args.ctx,
+    });
+  const loadedCodeAt = (path: string, cause: Cause | undefined) => (call: ItxExpression) =>
+    resolverAt(path, cause, true).invoke(call);
   return {
-    nameOf,
-    contextOf: context,
+    projectId,
+    contextOf,
+    loadedCodeAt,
+    recordLoopLimit: (path: string, cause: Cause, message: string) =>
+      args.ctx.waitUntil(contextOf(path).recordLoopLimit(cause, message)),
     snapshotOf: (path: string) =>
       ruleSnapshots.get(
         nameOf(path),
         (ifVersion) =>
-          context(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
+          contextOf(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
       ),
-    located: (path: string, expression: ItxExpression, callArgs: unknown[], caller: Caller) =>
-      callAt(path, expression, callArgs, caller, args.delivery),
+    located: (path: string, expression: ItxExpression, callArgs: unknown[], caller: Caller) => {
+      const callerThere = { ...caller, platformOrigin: caller.platformOrigin || platformOrigin() };
+      return callContext(
+        () => ({
+          fetch: (request) => contextOf(path).fetch(request),
+          invoke: (target, targetArgs = [], targetCaller = callerThere) =>
+            contextStub(namespace, addressOf(path), "itx", { readsRunSettlements }).invoke(
+              normalizedItxExpression(target),
+              targetArgs,
+              targetCaller,
+            ),
+        }),
+        expression,
+        callArgs,
+        callerThere,
+        path,
+        () => ambient().delivery,
+      );
+    },
     workersOf: (path: string, caller: Caller, hops: number) => {
       // the cause of the call being made, read as it is made (a row's target is resolved once and
       // called for each delivery), plus the contexts it crossed to get here (cause.ts)
       const cause = () => {
-        let crossed = args.cause?.();
-        for (let hop = 0; crossed && hop < hops; hop++) crossed = crossingOneMore(crossed, path);
-        return crossed;
+        const now = ambient().cause;
+        return now && hops ? crossingOneMore(now, path, hops) : now;
       };
-      // the resolver of the context at `at`, the platform's (`app` unset) or its loaded code's
-      const resolverAt = (at: string, app?: true) =>
-        statelessResolverFor({
-          env,
-          namespace: args.namespace,
-          address: DurableObjectNameCodec.address({ projectId, path: at }),
-          caller: { principal: null, app, platformOrigin: platformOrigin(), cause: cause() },
-          ctx: args.ctx,
-        });
       return workersRoot({
         env,
         deployId: appConfigOf(env).deployId,
@@ -113,19 +114,17 @@ export function contextReach(args: {
         iterateContextName: nameOf(path),
         platformOrigin,
         itxEntrypoint: () => itxEntrypointFor(args.ctx, nameOf(path), platformOrigin()),
-        // A producer is loaded code's word at `path`, never the delivery's, under the call's cause
-        // — resolved HERE, so what it reads through a portable root (the config repo's `repos`) is
-        // walked in this isolate and no cold load is relayed through `path`'s context.
-        invoke: (call) => resolverAt(path, true).invoke(call),
+        // A producer is loaded code's word at `path`, never the delivery's, under the call's cause.
+        invoke: (call) => loadedCodeAt(path, cause())(call),
         // A name is read as the platform from `path` (it only reads rules); the producer of the
         // worker it names runs as the loaded code of the context whose rule that is, as a
         // context's own `#namedWorker` runs it.
         namedWorker: async (source) => {
-          const { at, spec, vouched } = await resolverAt(path).namedWorker(source);
-          return { spec, vouched, invoke: (call) => resolverAt(at, true).invoke(call) };
+          const { at, spec, vouched } = await resolverAt(path, cause()).namedWorker(source);
+          return { spec, vouched, invoke: (call) => loadedCodeAt(at, cause())(call) };
         },
         caller: () => caller,
-        delivery: () => args.delivery?.(),
+        delivery: () => ambient().delivery,
         cause,
       });
     },
@@ -181,7 +180,7 @@ export function statelessResolverFor(args: {
     namespace: args.namespace,
     projectId,
     platformOrigin: () => platformOrigin,
-    cause: () => caller.cause,
+    ambient: () => ({ cause: caller.cause }),
     ctx: args.ctx,
   });
   const context = reach.contextOf;
@@ -219,10 +218,11 @@ export function statelessResolverFor(args: {
           secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
         }),
       caller: () => withOrigin(callerNow),
+      invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
       library,
     });
     return new ItxExpressionResolver({
-      ...reach,
+      reach,
       builtIns: {
         ...builtIns,
         ...buildIdentityRoots({
@@ -234,7 +234,6 @@ export function statelessResolverFor(args: {
         }),
       },
       path,
-      projectId,
       caller: () => withOrigin(callerNow),
     });
   };

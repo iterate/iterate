@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 import { SNAPSHOT_TTL_MS } from "../src/context/rule-snapshots.ts";
 import { appendAsPlatform, bornWithBirthRows, readLog, stub, until } from "./support.ts";
 
-test("a context born before the project's first publication hands the config entrypoint what waited — its birth first — within SNAPSHOT_TTL_MS of the pointer's landing, with no commit of its own", async () => {
+test("a context born before the project's first publication hands the config entrypoint what waited — its birth included — within SNAPSHOT_TTL_MS of the pointer's landing, with no commit of its own", async () => {
   const project = `prj_birth_rows_${crypto.randomUUID().slice(0, 8)}`;
   const x = `${project}.iterate/x`;
   await bornWithBirthRows(project);
@@ -30,24 +30,25 @@ test("a context born before the project's first publication hands the config ent
       target: ["itx", "builtins", "workers", ["get", { source: RECORDING_CONFIG }]],
     },
   });
-  const told = await until(
-    "x's ping told",
+  // what waited is told in any order (a fan-out row's calls race): its birth, its row, its ping
+  const waited = [
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/subscription-configured",
+    "ping",
+  ];
+  await until(
+    "x's waiting events told",
     async () => {
-      const seen = (await readLog(`${project}.iterate/sink`))
+      const told = (await readLog(`${project}.iterate/sink`))
         .filter((event) => event.type === "told")
         .map((event) => event.payload as { path: string; type: string });
-      return seen.some(({ path, type }) => path === "/x" && type === "ping") && seen;
+      return waited.every((type) =>
+        told.some((event) => event.path === "/x" && event.type === type),
+      );
     },
     SNAPSHOT_TTL_MS * 3,
   );
   expect(Date.now() - landed).toBeLessThan(SNAPSHOT_TTL_MS + 1_500);
-  expect(told.filter(({ path }) => path === "/x").map(({ type }) => type)).toEqual(
-    expect.arrayContaining([
-      "events.iterate.com/itx/created",
-      "events.iterate.com/itx/subscription-configured",
-      "ping",
-    ]),
-  );
 });
 
 /** The project's config entrypoint: it records each event it is told of on `/sink`, once. */

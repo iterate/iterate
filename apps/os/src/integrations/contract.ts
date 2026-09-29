@@ -83,13 +83,13 @@ export const IntegrationEventCatalog = {
   },
 };
 
-/** The fold both owners run: a platform `<provider>/connected` is the row at its log path, a
- *  `disconnected` drops it; anything else, or a fact not the platform's, changes nothing. */
+/** The fold both owners run: a `<provider>/connected` (the platform's fact alone, caller.ts
+ *  `PLATFORM_FACT_TYPES`) is the row at its log path, a `disconnected` drops it; anything else
+ *  changes nothing. */
 export function reduceIntegrations(
   integrations: Record<string, IntegrationConnectionRow>,
-  event: { type: string; payload: unknown; source?: { platform?: boolean } },
+  event: { type: string; payload: unknown },
 ): Record<string, IntegrationConnectionRow> | undefined {
-  if (event.source?.platform !== true) return undefined;
   const [provider, fact] = event.type.slice("events.iterate.com/".length).split("/");
   const parsedProvider = IntegrationProvider.safeParse(provider);
   if (!parsedProvider.success || (fact !== "connected" && fact !== "disconnected"))
