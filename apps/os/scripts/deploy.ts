@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
 import {
   OS_DOPPLER_PROJECT,
-  getOsDeployableEnv,
+  getOsEnv,
   osResourceNames,
   type OsDeployableEnv,
 } from "../../../envs.ts";
@@ -16,7 +16,7 @@ import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { PREVIEW_GITHUB_APP, previewGithubAppPrivateKey } from "./preview-github-app.ts";
 
-/** Deploy apps/os to `--env`, any name envs.ts `getOsDeployableEnv` knows: `prd` (Deploy OS), `preview` (main on
+/** Deploy apps/os to `--env`, any name envs.ts `getOsEnv` knows: `prd` (Deploy OS), `preview` (main on
  *  dev, scripts/preview.ts `deploy-parents`) or a per-commit deployment's (`pr3144-a1b2c3d`,
  *  scripts/preview.ts `deploy`). */
 export default async function deploy(options: {
@@ -25,9 +25,8 @@ export default async function deploy(options: {
    *  `withoutRoutes`): the first step of moving a deployment to a new Worker. */
   withoutRoutes?: boolean;
 }) {
-  const env = getOsDeployableEnv(options.env);
-  await deployApp({
-    env,
+  const env = getOsEnv(options.env);
+  await deployApp(env, {
     dopplerProject: OS_DOPPLER_PROJECT,
     withoutRoutes: options.withoutRoutes,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
@@ -70,12 +69,12 @@ export default async function deploy(options: {
     },
     smokes: [
       {
-        url: `${env.baseUrl}/version`,
+        url: "/version",
         ok: (response) => response.status === 200,
         label: "version",
       },
       {
-        url: `${env.baseUrl}/.well-known/oauth-authorization-server`,
+        url: "/.well-known/oauth-authorization-server",
         ok: (response) => response.status === 200,
         label: "OAuth discovery",
       },
@@ -85,7 +84,7 @@ export default async function deploy(options: {
         label: "MCP bearer challenge",
       },
       {
-        url: `${env.baseUrl}/api`,
+        url: "/api",
         ok: (response) => response.status === 401,
         label: "Cap’n Web bearer challenge",
       },

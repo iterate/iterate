@@ -52,7 +52,7 @@ import {
 import {
   OS_DOPPLER_PROJECT,
   backupBucketEnvs,
-  getDeployableEnv,
+  getEnv,
   osEnvs,
   type OsDeployableEnv,
 } from "../../envs.ts";
@@ -150,7 +150,7 @@ export default async function contextSweep(options: {
   destroy?: boolean;
 }) {
   const ctx = await resolveEnvContext({
-    env: getDeployableEnv(options.env, osEnvs),
+    env: getEnv(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   // Before anything is read: a backup that cannot be written would leave every orphan standing.

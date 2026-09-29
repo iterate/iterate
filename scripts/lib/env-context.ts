@@ -5,8 +5,8 @@ import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shar
 import { UNPROVISIONED } from "../../envs.ts";
 
 /**
- * An app's envs.ts entry and the name it was found by (envs.ts `getDeployableEnv`,
- * `getOsDeployableEnv`), as the deploy tooling needs every one: which Doppler
+ * An app's envs.ts entry and the name it was found by (envs.ts `getEnv`,
+ * `getOsEnv`), as the deploy tooling needs every one: which Doppler
  * config supplies its secrets and which Cloudflare account it lives in. The
  * name (`prd`, `preview`, a per-commit deployment's `pr3144-a1b2c3d`) travels
  * with the entry because the vite build runs in its own process and finds the

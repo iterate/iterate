@@ -16,7 +16,7 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { parseAppConfig } from "../../../apps/os/src/app-config.ts";
-import { ciBucketEnvs, getDeployableEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import { ciBucketEnvs, getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { dopplerSecret, resolveEnvContext } from "../../lib/env-context.ts";
 import { createOctokit } from "../github.ts";
 import { DASHBOARD_MARKER, renderDashboard } from "./dashboard.ts";
@@ -36,7 +36,7 @@ export default async function update(
   if (!owner || !repo) throw new Error(`GITHUB_REPOSITORY is not owner/repo: ${repository}`);
   const bucket = ciBucketEnvs.ci;
   const prd = await resolveEnvContext({
-    env: getDeployableEnv("prd", osEnvs),
+    env: getEnv("prd", osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const iterateApp = parseAppConfig({

@@ -3,7 +3,7 @@ import JSON5 from "json5";
 import {
   osEnvs,
   PREVIEW_AND_DEV_ACCOUNT_ID,
-  getOsDeployableEnv,
+  getOsEnv,
   osResourceNames,
   type OsEnv,
 } from "../../../envs.ts";
@@ -196,7 +196,7 @@ export function viteWranglerConfig(
         }),
       },
     };
-  return { ...local, ...deploymentWranglerConfig(getOsDeployableEnv(name)) };
+  return { ...local, ...deploymentWranglerConfig(getOsEnv(name)) };
 }
 
 /** THE SELF-HOST CONFIG (SELF-HOSTING.md): the same worker, the same bindings, for a deployment into

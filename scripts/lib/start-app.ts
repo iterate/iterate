@@ -21,7 +21,7 @@ import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
-  getDeployableEnv,
+  getEnv,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -214,21 +214,17 @@ function workerFirstRoutes(app: StartApp) {
 }
 
 async function deploy(app: StartApp, options: { env: string }) {
-  const env = getDeployableEnv(options.env, app.envs);
-  await deployApp({
-    env,
+  await deployApp(getEnv(options.env, app.envs), {
     dopplerProject: app.name,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
-    smokes: [
-      { url: `${env.baseUrl}/healthz`, ok: (response) => response.status === 200, label: "health" },
-    ],
+    smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
   });
 }
 
 async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext({
-    env: getDeployableEnv(options.env, app.envs),
+    env: getEnv(options.env, app.envs),
     dopplerProject: app.name,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
