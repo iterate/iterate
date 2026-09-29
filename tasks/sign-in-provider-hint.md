@@ -5,7 +5,9 @@ size: small
 
 # A link can recommend how to sign in: `provider_hint`
 
-**Status:** spec'd, implementation starting. Stacked on iterate/iterate#3401.
+**Status:** built, in review (iterate/iterate#3409; #3401 merged). The hint, its plumbing, the PR
+body links and the deployment-naming title are in; screenshots on the PR. Open: Jonas's question on
+what "Sign in with os.iterate.com" means (answered on the PR).
 
 ## Why
 
@@ -33,13 +35,18 @@ a reviewer can use. Nothing on the page says so. The link should put that button
 
 ## Checklist
 
-- [ ] `/login`: `provider_hint` in the search; the recommended button and the way back
-- [ ] app-server `/.auth/login` passes it on; consent's sign-in redirect lifts it
-- [ ] PR body links carry it
-- [ ] tests: app-server rows, preview.test.ts rows, the Notes link spec shows the recommendation and
+- [x] `/login`: `provider_hint` in the search; the recommended button and the way back _`RecommendedSignIn`, `signInProvidersOf`_
+- [x] app-server `/.auth/login` passes it on; consent's sign-in redirect lifts it
+- [x] PR body links carry it
+- [x] tests: app-server rows, preview.test.ts rows, the Notes link spec shows the recommendation and
       the way back
-- [ ] docs
+- [x] the page names the deployment (added in review): "Sign in to PR <N>'s preview", the deployment
+      name beneath, the tab's icon in the header; "local dev"; prd unchanged _`routes/login.tsx`,
+      `deploymentEnvironment`'s `deployment`_
+- [x] docs
 
 ## Implementation notes
 
-(log goes here)
+- #3401 was squash-merged and GitHub retargeted this PR to main without rebasing it, so it
+  conflicted; merged main in, kept this branch's side plus #3401's last commit (`Promise.all`), and
+  dropped the pre-squash copies of #3401's tests and task file the merge resurrected.

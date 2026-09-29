@@ -73,7 +73,9 @@ test.each([
   [2990, 198],
   [12345, 158],
 ])("PR %i's digits fit across the square at font-size %i", (pr, fontSize) => {
-  expect(environmentFaviconSvg({ kind: "preview", pr })).toContain(`font-size="${fontSize}"`);
+  expect(environmentFaviconSvg({ kind: "preview", pr, deployment: `pr${pr}-a1b2c3d` })).toContain(
+    `font-size="${fontSize}"`,
+  );
 });
 
 function decodeSvg(href: string) {
