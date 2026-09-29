@@ -1,13 +1,10 @@
-// The voice package as this checkout has it, installed as a project's config installs it (its
-// `voice.ts`, published, then `installVoice`), on a call whose agent is the agents app's. Only the provider URL is replaced: a real deployed WebSocket
-// fixture speaks the small GPT-Live protocol below. It delegates when it hears a question frame,
-// and speaks back (transcribes as its own speech) every commentary the relay sends it. The agent's
-// model is a fake `itx.ai` lent to the call's context, except in the REAL row.
-// This pins loaded-code admission, agent birth, inherited KV/egress, secret substitution, the
-// hand-over to the agent, its sandbox scripts, its answer reaching the live model, and audio in both
-// directions. It does not test the live model, microphones or speakers.
+// This checkout's voice package, installed as a project's config installs it, on a call whose agent
+// is the agents app's; only the provider URL is replaced, by a deployed WebSocket fixture speaking the
+// small GPT-Live protocol below: it delegates on a question frame and speaks back every commentary.
+// The agent's model is a fake `itx.ai`, except in the REAL row. Pins admission, agent birth,
+// inherited KV/egress, secrets, the hand-over, sandbox scripts and audio both ways; not the live
+// model, microphones or speakers.
 import { expect } from "vitest";
-
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system-prompt.ts";
 import { openItx, readAll, runId, until, untilValue } from "../../os/e2e/support/client.ts";
 import { FakeAi, sseResponse } from "../../os/e2e/support/fake-ai.ts";
@@ -20,7 +17,7 @@ import {
   realModelOnly,
   registerProject,
 } from "../../os/e2e/support/project-host.ts";
-import { installWorkspaceVoice, voiceWorkspaceBundle } from "./support.ts";
+import { installWorkspaceApps, voiceWorkspaceBundle } from "./support.ts";
 
 const CLOCK = "What time is it in London?";
 const WEBSITE = "Add a horse joke to the website and verify it is live.";
@@ -29,7 +26,6 @@ const TWO_PLUS_TWO = "What is two plus two?";
 deployedOnly(
   "a delegated question reaches the call's agent as the person's words, and its answer is what the live model speaks",
   async () => {
-    // A config entrypoint, as publication admits one (packages/agents system-prompt.ts)
     const candidateSource =
       'import { IterateConfigEntrypoint } from "iterate/sdk"; export default class extends IterateConfigEntrypoint { fetch() { return new Response("Because it had bad stable manners!"); } }';
     // Execute the exact candidate-probe example taught to the agent. A stale module
@@ -321,7 +317,7 @@ export default class extends WorkerEntrypoint {
   expect(voice.split(liveUrl)).toHaveLength(2);
   // Voice makes no model call of its own: every delegation is the agent's.
   expect(voice).not.toContain("https://api.openai.com/v1/responses");
-  await installWorkspaceVoice(root, voice.replace(liveUrl, providerUrl));
+  await installWorkspaceApps(root, voice.replace(liveUrl, providerUrl));
   expect(await root.voice.health()).toMatchObject({ ok: true, projectId });
 
   const streamPath = "/agents/voice/zectrix_note4/2026-09-28-101500-e2e";

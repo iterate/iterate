@@ -6,9 +6,8 @@ import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { olderMainCommit } from "../test-support/published-builds.ts";
 import { test } from "../test-support/test.ts";
 
-// main's older builds predate agents run from the published config: their `installAgents` takes a
-// source, so a project pinned at one cannot install them.
-// parked: an older main build cannot run on this platform — revisit by 2026-10-05
+// main's older builds install agents from a source, which a published config cannot run
+// parked: an older main build cannot run on this platform — revisit by 2026-10-12
 test.skip("a project on an older agents build upgrades to main's newest from the sidebar", async ({
   page,
   baseURL,
@@ -17,8 +16,7 @@ test.skip("a project on an older agents build upgrades to main's newest from the
 }) => {
   helpers.appOrigin("agents");
   await using fixture = await helpers.createFixture("agents-upgrade", { app: baseURL });
-  // The default template pins this deployment's own build, so the older one is committed as the
-  // operator: the same pin commit an upgrade makes.
+  // the older pin committed as the operator, the same commit an upgrade makes
   const older = await olderMainCommit(["@iterate-com/agents"]);
   await upgradeAgents(fixture.itx, pkgPrNewVersion("@iterate-com/agents", older));
   const build = page.getByRole("region", { name: "Agents build" });

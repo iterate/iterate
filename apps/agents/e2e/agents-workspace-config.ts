@@ -1,12 +1,7 @@
-// e2e/agents-workspace-config.ts — the agents app as a project's config over this checkout's
-// @iterate-com/agents source, so the rows that drive the agents need neither a publish of the
-// package nor esm.sh; template.e2e.test.ts proves the published package installs from the default
-// template. It imports nothing, so the e2e suite (agents-source.ts) and the Workers suite
-// (__workers-tests__/agent-revive.test.ts) both load it.
+// The agents app as a project's config over this checkout's source, no publish or esm.sh needed; it
+// imports nothing, so the e2e and Workers suites both load it. The published package is template.e2e's.
 
-/** A config shaped as the default template (configs/default), over the package's source files by
- *  name: `worker.ts`, the entry, is a config entrypoint that ignores every event, and `agents.ts`
- *  re-exports the two classes the app's facets load by `mainModule`, never as the entry. */
+/** A config shaped as configs/default: `worker.ts` ignores every event, `agents.ts` holds the classes. */
 export const agentsWorkspaceConfig: Record<string, string> = {
   "package.json": '{"main":"worker.ts"}',
   "worker.ts":
