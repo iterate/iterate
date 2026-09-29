@@ -427,7 +427,9 @@ for (const { name, events, state } of reduceRows)
 // once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
 // the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
 test("ProjectProcessor — the config worker follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
-  const processor = processorOverConfigRepo({ bbb: '{"events":["events.iterate.com/x/y"]}' });
+  const processor = processorOverConfigRepo({
+    bbb: '{"events":["events.iterate.com/test/ping-sent"]}',
+  });
   const appended: { idempotencyKey?: string; payload?: { target?: unknown } }[] = [];
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -460,7 +462,7 @@ test("ProjectProcessor — the config worker follows the config repo: each tip i
     { target: configRepoTarget("bbb") },
     {
       name: "config-worker",
-      consumes: ["events.iterate.com/x/y"],
+      consumes: ["events.iterate.com/test/ping-sent"],
       target: [...configRepoTarget("bbb"), "processEventBatch"],
       afterOffset: 6,
     },
@@ -520,7 +522,7 @@ test("ProjectProcessor — an iterate.json that is not { events: [string] } name
   };
   for (const [commitOid, manifest] of [
     ["aaa", "{ not json"],
-    ["bbb", '{"events":"events.iterate.com/x/y"}'],
+    ["bbb", '{"events":"events.iterate.com/test/ping-sent"}'],
   ]) {
     deliver(
       processorOverConfigRepo({ [commitOid]: manifest }),
