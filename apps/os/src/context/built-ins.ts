@@ -39,7 +39,7 @@ import {
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Cause } from "../cause.ts";
-import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
+import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
 import { Kept } from "../kept.ts";
 import { facetStateOf } from "../context-stub.ts";
@@ -53,13 +53,7 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import {
-  assertSecretPath,
-  hmacSha256Hex,
-  normalizeSecretRecord,
-  originsOf,
-  sha256Hex,
-} from "../secrets.ts";
+import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { deliverToPlatformHook } from "../platform-hook.ts";

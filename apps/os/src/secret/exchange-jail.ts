@@ -20,7 +20,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import type { SecretMaterial } from "iterate/api";
 import { z } from "zod";
-import { originPinned, sha256Hex } from "../secrets.ts";
+import { sha256Hex } from "../caller.ts";
+import { originPinned } from "../secrets.ts";
 
 /** The header `PinnedOutbound` answers a refused request with, naming the refused origin. */
 const REFUSED_HEADER = "x-itx-exchange-refused";
