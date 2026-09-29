@@ -818,7 +818,7 @@ async function runSuite(
     new Error(`the ${suite} suite failed against ${url}: ${describe(error)}`);
   let tests: { args: string[]; env: Record<string, string> };
   try {
-    tests = await traceOperation("Set up the suite", async () => {
+    tests = await traceOperation({ name: "Set up the suite", phase: "setup" }, async () => {
       if (suite === "specs") {
         // The headless shell alone, which headless Chromium with no `channel`
         // (playwright.config.ts) launches: a no-op when CI restored it.
@@ -858,7 +858,9 @@ async function runSuite(
   }
   if (deployJob) {
     try {
-      await traceOperation("Wait for Deploy preview", () => awaitDeployOfThisRun(deployJob));
+      await traceOperation({ name: "Wait for Deploy preview", phase: "wait" }, () =>
+        awaitDeployOfThisRun(deployJob),
+      );
     } catch (error) {
       await warm?.stop();
       throw error;
@@ -985,7 +987,7 @@ function warmUp(
   let stopping = false;
   let closed = false;
   const exited = traceOperation(
-    `Warm up ${what}`,
+    { name: `Warm up ${what}`, phase: "setup" },
     () =>
       new Promise<void>((resolve) => {
         child.once("error", (error) => {

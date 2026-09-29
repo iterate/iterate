@@ -7,11 +7,13 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { DEPOT_ORG } from "@iterate-com/shared/depot-api";
 
-/** Measured work inside a CI step. Parallel operations keep their own parent. */
+/** Measured work inside a CI step. Parallel operations keep their own parent. A `phase` colours
+ *  its bar in the report: `wait` for time blocked on another job, `setup` for preparation. */
 export async function traceOperation<T>(
-  name: string,
+  what: string | { name: string; phase: OperationPhase },
   operation: (span: { fail(): void }) => Promise<T>,
 ) {
+  const { name, phase } = typeof what === "string" ? { name: what } : what;
   const enabled = process.env.CI_TRACE_ENABLED === "1";
   const id = randomUUID();
   let status = "passed";
@@ -23,6 +25,7 @@ export async function traceOperation<T>(
         id,
         parentId: parent.getStore() || "",
         name,
+        phase,
         time: Date.now(),
       })}`,
     );
@@ -368,6 +371,8 @@ export function assembleTrace(
           done?.time || Math.max(operation.time, enclosingEnd),
           {
             "ci.kind": "operation",
+            // none, like a step outside a test job
+            "ci.phase": operation.phase || "",
             "ci.status": done?.status || "incomplete",
             "ci.evidence": done
               ? "Measured operation start/end"
@@ -627,12 +632,17 @@ export const Workflow = z.object({
   ),
 });
 
+const OperationPhase = z.enum(["setup", "wait"]);
+type OperationPhase = z.infer<typeof OperationPhase>;
+
 const TraceEvent = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("span-start"),
     id: z.string(),
     parentId: z.string(),
     name: z.string(),
+    // absent on markers from before operations had phases, and on most operations since
+    phase: OperationPhase.optional(),
     time: z.number().finite(),
   }),
   z.object({

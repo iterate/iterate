@@ -47,6 +47,11 @@ the downloads and the merge.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
 
+A bar takes its children's colour wherever every child running at that moment has it: E2E tests is
+striped for as long as it only waits for Deploy preview, Browser specs only while it and all its
+shards wait. Where children running side by side differ, or none runs, a bar keeps its own colour.
+A failed or unfinished bar that takes its children's colours keeps a red or grey outline.
+
 The summary shows **Time to green** at the last traced job's finish (the later
 of the two suites, usually E2E tests) when none failed or was cancelled, and **Time to red** from the first failed job attempt
 in the run; recovered test or job attempts do not count. Missing failure timing uses a
@@ -80,7 +85,8 @@ deploy, it begins with **Set up the suite** and **Wait for Deploy preview**
 (`runSuite` in `apps/os/scripts/preview.ts`), which sit beside the job's other
 steps, and its tests sit in one **Run tests** row, from the end of that wait to
 the step's exit. The steps before it are coloured as setup and the ones after
-as finish. The shell hook preserves
+as finish; Set up the suite and the specs' warm-up as setup, and the waits for Deploy preview and
+for the shards as waiting, the phase `traceOperation({ name, phase })` gives them. The shell hook preserves
 exit codes and ignores nested shells. It is plain bash that starts no process,
 so it measures `pnpm install` too and adds about a millisecond to a step.
 

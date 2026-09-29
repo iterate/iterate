@@ -392,6 +392,7 @@ test("nested concurrent deploys and readiness become measured children of their 
           if (error.message !== "private diagnostic payload") throw error;
         });
         await traceOperation("Failed command", async span => { span.fail(); });
+        await traceOperation({ name: "Wait for the deploy", phase: "wait" }, async () => {});
       `,
     ],
     { env: { ...process.env, CI_TRACE_ENABLED: "1" } },
@@ -450,6 +451,9 @@ test("nested concurrent deploys and readiness become measured children of their 
     status: { code: 2 },
   });
   expect(byName("Failed command")).toMatchObject({ status: { code: 2 } });
+  expect(byName("Wait for the deploy")).toMatchObject({
+    attributes: expect.arrayContaining([{ key: "ci.phase", value: { stringValue: "wait" } }]),
+  });
   expect(
     spans.every((span) => BigInt(span.endTimeUnixNano) >= BigInt(span.startTimeUnixNano)),
   ).toBe(true);
@@ -896,8 +900,8 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
           line("install", { kind: "shell-start", id: "install", step: "install", time: ms(42) }),
           line("install", { kind: "shell-end", id: "install", time: ms(50), exitCode: 0 }),
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(52) }),
-          ...operation("suite", "Set up the suite", 52, 53),
-          ...operation("suite", "Wait for Deploy preview", 53, 60),
+          ...operation("suite", { name: "Set up the suite", phase: "setup" }, 52, 53),
+          ...operation("suite", { name: "Wait for Deploy preview", phase: "wait" }, 53, 60),
           ...playwrightTest("suite", "greets", 61, 165),
           line("suite", { kind: "shell-end", id: "suite", time: ms(170), exitCode: 0 }),
           line("evidence", {
@@ -913,7 +917,7 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
         "specs-attempt",
         [
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
-          ...operation("suite", "Wait for Deploy preview", 50, 58),
+          ...operation("suite", { name: "Wait for Deploy preview", phase: "wait" }, 50, 58),
           ...playwrightTest("suite", "signs in", 59, 100),
           line("suite", { kind: "shell-end", id: "suite", time: ms(110), exitCode: 0 }),
         ],
@@ -944,12 +948,12 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
     e2e: [
       ["install", "setup"],
       ["evidence", "finish"],
-      ["Set up the suite", undefined],
-      ["Wait for Deploy preview", undefined],
+      ["Set up the suite", "setup"],
+      ["Wait for Deploy preview", "wait"],
       ["Run tests", "test"],
     ],
     specs: [
-      ["Wait for Deploy preview", undefined],
+      ["Wait for Deploy preview", "wait"],
       ["Run tests", "test"],
     ],
   });
@@ -1009,7 +1013,7 @@ test("the Browser specs shards sit under the Browser specs job that waits for th
           line("checkout", { kind: "shell-start", id: "checkout", step: "checkout", time: ms(62) }),
           line("checkout", { kind: "shell-end", id: "checkout", time: ms(63), exitCode: 0 }),
           line("collect", { kind: "shell-start", id: "collect", step: "collect", time: ms(64) }),
-          ...operation("collect", "Wait for the shards", 64, 128),
+          ...operation("collect", { name: "Wait for the shards", phase: "wait" }, 64, 128),
           line("collect", { kind: "shell-end", id: "collect", time: ms(129), exitCode: 1 }),
         ],
       ],
@@ -1169,9 +1173,14 @@ const line = (stepKey: string, event: object) => ({
 });
 
 /** A traced operation of step `stepKey` (preview.ts `traceOperation`), from `start` to `end` s. */
-const operation = (stepKey: string, name: string, start: number, end: number) => [
-  line(stepKey, { kind: "span-start", id: name, parentId: "", name, time: ms(start) }),
-  line(stepKey, { kind: "span-end", id: name, status: "passed", time: ms(end) }),
+const operation = (
+  stepKey: string,
+  what: { name: string; phase: string },
+  start: number,
+  end: number,
+) => [
+  line(stepKey, { kind: "span-start", id: what.name, parentId: "", ...what, time: ms(start) }),
+  line(stepKey, { kind: "span-end", id: what.name, status: "passed", time: ms(end) }),
 ];
 
 /** One passing Playwright attempt in step `stepKey`, from `start` to `end` s. */
