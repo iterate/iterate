@@ -1,13 +1,13 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
 # A link can recommend how to sign in: `provider_hint`
 
-**Status:** built, in review (iterate/iterate#3409; #3401 merged). The hint, its plumbing, the PR
-body links and the deployment-naming title are in; screenshots on the PR. Open: Jonas's question on
-what "Sign in with os.iterate.com" means (answered on the PR).
+**Status:** done (iterate/iterate#3409). The hint, its plumbing, the PR body links and the
+deployment-naming title are in; screenshots on the PR. Jonas's question on what "Sign in with
+os.iterate.com" means is answered there, and the description now opens with that context.
 
 ## Why
 
