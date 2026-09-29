@@ -336,7 +336,7 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async
   expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
 });
 
-test.each([
+test.for([
   {
     name: "the same string",
     material: "pebble-token",
