@@ -174,6 +174,14 @@ export function suiteInputFiles(suite: PreviewSuite, files: string[]) {
   );
 }
 
+/** Whether `file` is a test itself, an e2e row's or a spec's, which no other file depends on. */
+export function isTestFile(file: string) {
+  return (
+    matchesPaths(E2E_TEST_FILES, file) ||
+    SPEC_DIRECTORIES.some(({ files }) => matchesPaths(files, file))
+  );
+}
+
 /** The e2e rows' own files: a change to nothing but some of them reruns only those. */
 const E2E_TEST_FILES = ["apps/os/e2e/**/*.e2e.test.ts", "apps/agents/e2e/**/*.e2e.test.ts"];
 

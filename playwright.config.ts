@@ -24,6 +24,12 @@ const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
  *  Locally, unset skips their specs; in CI, unset fails them. */
 const dashBaseUrl = process.env.DASH_BASE_URL?.replace(/\/+$/, "");
 const adminBaseUrl = process.env.ADMIN_BASE_URL?.replace(/\/+$/, "");
+/** CI's Browser specs run as SPECS_SHARDS jobs, each SPECS_SHARD of them running its share of the
+ *  tests (preview-os.yml's `specs-shard`). A shard writes a blob report instead of an HTML one, and
+ *  the Browser specs job merges them all into the one HTML report (scripts/ci/specs-shards.ts). */
+const shard = process.env.SPECS_SHARD
+  ? { current: Number(process.env.SPECS_SHARD), total: Number(process.env.SPECS_SHARDS) }
+  : null;
 const desktopWebUse = {
   ...devices["Desktop Chrome"],
   viewport: { width: 1280, height: 900 },
@@ -46,12 +52,17 @@ export default defineConfig({
   // (packages/shared/src/test-support/e2e-policy). A burst that defeats it fails
   // the run on purpose: platform weather should be visible, not absorbed.
   retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  // Six browsers use about 2.7 of a 4x16's vCPUs (#3258). CI runs enough shards of six that every
+  // test has a worker from the start (scripts/ci/specs-shards.test.ts).
   workers: process.env.CI ? 6 : 1,
+  shard,
   // Everything the run leaves goes into the test evidence folder (docs/test-evidence.md).
   outputDir: testEvidencePaths.playwrightOutput,
   reporter: [
     ["list"],
-    ["html", { outputFolder: testEvidencePaths.playwrightReport, open: "never" }],
+    shard
+      ? ["blob", { outputDir: testEvidencePaths.playwrightBlob }]
+      : ["html", { outputFolder: testEvidencePaths.playwrightReport, open: "never" }],
     ["json", { outputFile: testEvidencePaths.playwrightResults }],
     // The telemetry reporter writes the canonical test artifact and the plain tests' flake records
     // (retried passes and hard failures) the preview's CI finalizer uploads (docs/testing.md#flakes-and-pinned-failures).

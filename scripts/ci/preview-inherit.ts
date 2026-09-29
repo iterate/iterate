@@ -31,7 +31,7 @@
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import process from "node:process";
-import { suiteInputFiles, suiteSelection, type PreviewSuite } from "./preview-units.ts";
+import { isTestFile, suiteInputFiles, suiteSelection, type PreviewSuite } from "./preview-units.ts";
 
 /** Each suite's checks, as Depot names them: a PR run's (preview-os.yml) and main's
  *  (main-os-e2e.yml, every row, the slow ones too). */
@@ -99,6 +99,20 @@ export async function planInherit(input: {
   return all(`none of the head's last ${MAX_WALK} ancestors has a verdict of this suite`);
 }
 
+/** The files of a comparison (GitHub's compare API) that a suite could depend on: both paths of a
+ *  rename, but not a test file the head deleted or renamed away, since no test is left to run it.
+ *  So a push that only deletes a spec inherits, and every shard of a suite has something to run. */
+export function comparedFiles(
+  files: { filename: string; status: string; previous_filename?: string }[],
+) {
+  return files.flatMap((file) => [
+    ...(file.status === "removed" && isTestFile(file.filename) ? [] : [file.filename]),
+    ...(file.previous_filename && !isTestFile(file.previous_filename)
+      ? [file.previous_filename]
+      : []),
+  ]);
+}
+
 /** GitHub's REST answer at `path`, with the job's token. */
 async function github(path: string): Promise<unknown> {
   const response = await fetch(
@@ -156,15 +170,13 @@ async function inheritFromGitHub(input: {
         (async () => {
           const comparison = (await github(`/compare/${sha}...${input.headSha}`)) as {
             status: string;
-            files?: { filename: string; previous_filename?: string }[];
+            files?: { filename: string; status: string; previous_filename?: string }[];
           };
           // GitHub lists at most 300 files; a head that is not ahead of the commit is a force-push
           if (!["ahead", "identical"].includes(comparison.status)) return undefined;
           const files = comparison.files || [];
           if (files.length >= 300) return undefined;
-          return files.flatMap((file) =>
-            file.previous_filename ? [file.filename, file.previous_filename] : [file.filename],
-          );
+          return comparedFiles(files);
         })(),
       );
     return changed.get(sha)!;

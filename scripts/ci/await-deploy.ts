@@ -39,17 +39,19 @@ const NO_PREVIEW = ["failed", "cancelled", "skipped"];
 
 // Connect's JSON omits empty lists and strings (https://protobuf.dev/programming-guides/json/).
 const WorkflowJobs = z.object({
+  runId: z.string(),
   jobs: z
     .array(
       z.object({
         jobKey: z.string(),
         jobDisplayName: z.string().default(""),
         status: z.string(),
-        attempts: z.array(z.object({ attempt: z.number() })).default([]),
+        attempts: z.array(z.object({ attemptId: z.string(), attempt: z.number() })).default([]),
       }),
     )
     .default([]),
 });
+export type WorkflowJobs = z.infer<typeof WorkflowJobs>;
 
 /** Wait until the job `job` (its id in the workflow file, `deploy`) of the workflow run
  *  `workflowId` has finished; throw once it failed, was cancelled or skipped, after the bound, after
@@ -61,10 +63,51 @@ export async function awaitDeploy(input: {
   log?: (line: string) => void;
   warn?: (line: string) => void;
 }) {
-  const { depot, workflowId, job, log = console.log, warn = console.warn } = input;
-  const started = Date.now();
-  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+  const { workflowId, job, log = console.log } = input;
   let reported = "";
+  await pollWorkflow({
+    ...input,
+    tag: "await-deploy",
+    waitingFor: job,
+    boundMs: AWAIT_DEPLOY.boundMs,
+    settled: ({ jobs }, waitedMs) => {
+      // `<file>:<job id>`, a matrix leg's with `:matrix-<n>` after it
+      const deploy = jobs.find((candidate) => candidate.jobKey.split(":")[1] === job);
+      if (!deploy)
+        throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to wait for`);
+      const name = deploy.jobDisplayName || deploy.jobKey;
+      const attempt = Math.max(0, ...deploy.attempts.map((candidate) => candidate.attempt));
+      const state = `${name}${attempt ? ` (attempt ${attempt})` : ""} ${deploy.status}`;
+      if (state !== reported) log(`[await-deploy] ${seconds(waitedMs)}: ${state}`);
+      reported = state;
+      if (deploy.status === "finished") return true;
+      if (NO_PREVIEW.includes(deploy.status))
+        throw new Error(`${name} ${deploy.status}, so there is no preview of this commit to test.`);
+      if (waitedMs >= AWAIT_DEPLOY.boundMs)
+        throw new Error(
+          `${name} is still ${deploy.status} after ${AWAIT_DEPLOY.boundMs / 60_000} minutes, its own timeout, so no preview of this commit is coming.`,
+        );
+      return undefined;
+    },
+  });
+}
+
+/** Depot's GetWorkflow for the run `workflowId`, once every AWAIT_DEPLOY.pollMs, each answer handed
+ *  to `settled`, until it returns what the wait was for or throws. A call Depot fails on its own side
+ *  is a warn, tagged `[tag]`, and asked again; only failures for AWAIT_DEPLOY.outageMs, or past
+ *  `boundMs`, end the wait. An answer about the request, or one it cannot read, throws at once. */
+export async function pollWorkflow<Result>(input: {
+  depot: DepotApi;
+  workflowId: string;
+  tag: string;
+  /** What the wait is for, as its failure names it: `deploy`. */
+  waitingFor: string;
+  boundMs: number;
+  warn?: (line: string) => void;
+  settled: (workflow: WorkflowJobs, waitedMs: number) => Result | undefined;
+}): Promise<Result> {
+  const { depot, workflowId, warn = console.warn } = input;
+  const started = Date.now();
   /** When the first of the calls Depot has failed since its last answer was made. */
   let failingSince: number | undefined;
   for (;;) {
@@ -77,52 +120,34 @@ export async function awaitDeploy(input: {
       failingSince ??= askedAt;
       const { message } = httpFailureFields(error);
       const failingMs = Date.now() - failingSince;
-      if (failingMs >= AWAIT_DEPLOY.outageMs || Date.now() - started >= AWAIT_DEPLOY.boundMs)
+      if (failingMs >= AWAIT_DEPLOY.outageMs || Date.now() - started >= input.boundMs)
         throw new Error(
-          `Depot has failed every GetWorkflow for the last ${seconds(failingMs)} (${message}), so the wait for ${job} gives up.`,
+          `Depot has failed every GetWorkflow for the last ${seconds(failingMs)} (${message}), so the wait for ${input.waitingFor} gives up.`,
           { cause: error },
         );
       warn(
-        `[await-deploy] ${seconds(Date.now() - started)}: ${message}; asking again in ${seconds(AWAIT_DEPLOY.pollMs)}, until ${AWAIT_DEPLOY.outageMs / 60_000} minutes of failures`,
+        `[${input.tag}] ${seconds(Date.now() - started)}: ${message}; asking again in ${seconds(AWAIT_DEPLOY.pollMs)}, until ${AWAIT_DEPLOY.outageMs / 60_000} minutes of failures`,
       );
       await new Promise((resolve) => setTimeout(resolve, AWAIT_DEPLOY.pollMs));
       continue;
     }
     failingSince = undefined;
-    const { jobs } = WorkflowJobs.parse(answer);
-    // `<file>:<job id>`, a matrix leg's with `:matrix-<n>` after it
-    const deploy = jobs.find((candidate) => candidate.jobKey.split(":")[1] === job);
-    if (!deploy) throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to wait for`);
-    const name = deploy.jobDisplayName || deploy.jobKey;
-    const attempt = Math.max(0, ...deploy.attempts.map((candidate) => candidate.attempt));
-    const state = `${name}${attempt ? ` (attempt ${attempt})` : ""} ${deploy.status}`;
-    const waitedMs = Date.now() - started;
-    if (state !== reported) log(`[await-deploy] ${seconds(waitedMs)}: ${state}`);
-    reported = state;
-    if (deploy.status === "finished") return;
-    if (NO_PREVIEW.includes(deploy.status))
-      throw new Error(`${name} ${deploy.status}, so there is no preview of this commit to test.`);
-    if (waitedMs >= AWAIT_DEPLOY.boundMs)
-      throw new Error(
-        `${name} is still ${deploy.status} after ${AWAIT_DEPLOY.boundMs / 60_000} minutes, its own timeout, so no preview of this commit is coming.`,
-      );
+    const result = input.settled(WorkflowJobs.parse(answer), Date.now() - started);
+    if (result !== undefined) return result;
     await new Promise((resolve) => setTimeout(resolve, AWAIT_DEPLOY.pollMs));
   }
 }
 
-/** This suite job's own workflow run, from DEPOT_JOB_URL (`…/workflows/<workflowId>?job=…&attempt=…`),
- *  read with the Depot organization token (depot.ts `depotApi`). */
-function thisRun() {
-  const workflowId = z
-    .string()
-    .regex(/^[a-z0-9]+$/)
-    .parse(new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname.split("/").at(-1));
-  return { depot: depotApi(), workflowId };
-}
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
-/** The wait as a suite job runs it, for its own workflow run. */
+/** The wait as a suite job runs it: its own workflow run (thisWorkflowRun), read with the Depot
+ *  organization token (depot.ts `depotApi`). */
 export async function awaitDeployOfThisRun(job: string) {
-  await awaitDeploy({ ...thisRun(), job });
+  await awaitDeploy({
+    depot: depotApi(),
+    workflowId: thisWorkflowRun(),
+    job,
+  });
 }
 
 /** `file` in the newest artifact named `artifact` this suite job's workflow run uploaded, as text:
@@ -130,7 +155,8 @@ export async function awaitDeployOfThisRun(job: string) {
  *  apps/os/scripts/preview.ts). A run whose deploy uploaded none fails: the suite would not know what
  *  it tests. */
 export async function artifactOfThisRun(artifact: string, file: string) {
-  const { depot, workflowId } = thisRun();
+  const depot = depotApi();
+  const workflowId = thisWorkflowRun();
   const { runId } = z
     .object({ runId: z.string() })
     .parse(await depot("GetWorkflow", { workflowId }));
@@ -143,4 +169,13 @@ export async function artifactOfThisRun(artifact: string, file: string) {
   const bytes = files?.[file];
   if (!bytes) throw new Error(`this run uploaded no ${artifact} artifact holding ${file}`);
   return new TextDecoder().decode(bytes);
+}
+
+/** The workflow run of the job this runs in, from DEPOT_JOB_URL
+ *  (`…/workflows/<workflowId>?job=…&attempt=…`). */
+export function thisWorkflowRun() {
+  return z
+    .string()
+    .regex(/^[a-z0-9]+$/)
+    .parse(new URL(z.url().parse(process.env.DEPOT_JOB_URL)).pathname.split("/").at(-1));
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { MAX_WALK, planInherit, type SuiteCheck } from "./preview-inherit.ts";
+import { comparedFiles, MAX_WALK, planInherit, type SuiteCheck } from "./preview-inherit.ts";
 
 // Each case is a pull request's commits before its head, newest first: the suite's latest check on
 // each (none, running or with a conclusion) and, for a green one, the files changed from it to the
@@ -65,6 +65,30 @@ test.for<{
         }
       : { inherit: false, selection: expected.runs && { args: expected.runs } },
   );
+});
+
+test("a test file the head deleted or renamed away is nothing a suite depends on; any other file is", () => {
+  expect(
+    comparedFiles([
+      { filename: "specs/notes/old.spec.ts", status: "removed" },
+      {
+        filename: "apps/os/e2e/b.e2e.test.ts",
+        status: "renamed",
+        previous_filename: "apps/os/e2e/a.e2e.test.ts",
+      },
+      { filename: "specs/test-support/helper.ts", status: "removed" },
+      {
+        filename: "apps/notes/src/b.tsx",
+        status: "renamed",
+        previous_filename: "apps/notes/src/a.tsx",
+      },
+    ]),
+  ).toEqual([
+    "apps/os/e2e/b.e2e.test.ts",
+    "specs/test-support/helper.ts",
+    "apps/notes/src/b.tsx",
+    "apps/notes/src/a.tsx",
+  ]);
 });
 
 function green(sha: string, changedToHead: string[] | undefined): Commit {

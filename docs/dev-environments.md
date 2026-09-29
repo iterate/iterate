@@ -313,8 +313,8 @@ Playwright owns the server lifecycle: for a localhost target it runs
 server outside CI, and waits on `/version`.
 
 Specs sign in through the real `/login` password step and stamp their own
-identities, so in CI files and tests run side by side (`fullyParallel`, six
-workers, one retry); locally they run on one worker so a single dev server
+identities, so in CI files and tests run side by side (`fullyParallel`, shards
+of six workers, one retry); locally they run on one worker so a single dev server
 isn't hammered. The target is the only thing that changes between local and
 deployed runs:
 

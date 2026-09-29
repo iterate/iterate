@@ -73,7 +73,7 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `test.yml`            | PR, main push, dispatch                          | **Test** (required): `pnpm test`, and beside it the Kit firmware host tests                                      |
 | `loc-report.yml`      | PR, dispatch                                     | The LOC table in the PR body                                                                                     |
 | `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The event's line in #ci and the daily PR dashboard                                                               |
-| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs**, then CI trace                     |
+| `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs** in shards, then CI trace           |
 | `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
 | `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
@@ -282,7 +282,7 @@ Preview OS's inputs are documented in its header: `action` (`deploy | reset | te
 
 `test` runs E2E tests and Browser specs against a preview as it is deployed,
 without redeploying it; `e2e` and `specs` run one of them. Name the preview by
-`pull-request-number`, and the jobs test that PR merged into main, or by
+`pull-request-number`, and the jobs test that PR's newest deployment, or by
 `preview-name` without a number (a PR's `pr<n>`, or `main`, the one Main OS
 e2e keeps), and they run the dispatched ref's suite:
 
@@ -386,7 +386,7 @@ before changing a size, and the retries too before adding Playwright workers or 
 | Size (label)                    | Jobs                                                                                                                                                | Evidence                                                                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `8x32` (`depot-ubuntu-24.04-8`) | Lint and Typecheck (four checks in parallel), Test, Deploy preview (seven client builds side by side)                                               | Test's step 80 s p50 against 87 s on a `4x16`. Watch main's Test for a no-log `Sandbox terminated before worker reported completion`. Deploy preview's builds take 5–7 s against 9–12 s on a `4x16`, and it reaches the readiness gate 21.6/24.6 s p50/p90 after it starts against 25.3/28.4 s (n=5 each, 2026-09-27) |
-| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, Browser specs (six Playwright workers), Kit Firmware's legs                                                                              | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
+| `4x16` (`depot-ubuntu-24.04-4`) | Deploy OS, each Browser specs shard (six Playwright workers), Kit Firmware's legs                                                                   | #3258: specs 79/104 s p50/p90 against 96/123 s on a `2x8`; 12+ workers or shards were faster but retried two to four times as many specs                                                                                                                                                                              |
 | `2x8` (`depot-ubuntu-24.04`)    | E2E tests (it waits on a remote preview), client deploys, trace jobs, API-only jobs (LOC report, PR dashboard, Release, Health, Main OS e2e's page) | E2E tests peaked at 1.7 vCPUs on a `4x16`, and took 68 s against 62 s there, for half the price                                                                                                                                                                                                                       |
 
 ## Kit firmware releases
@@ -438,11 +438,11 @@ project and config.
 
 `actions/cache` is Depot Cache on Depot CI, whose entries expire after 14 days:
 
-| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
-| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key           |
-| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | Browser specs, beside its setup                                    | Main OS e2e's Browser specs, on a push that missed |
-| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
+| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                          |
+| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
+| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key          |
+| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | each specs shard, beside its setup                                 | Main OS e2e's first shard, on a push that missed  |
+| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it |
 
 Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
 an older pin's is of no use, nor is one whose Python environment was built for another python3.
@@ -532,7 +532,7 @@ So a PR's checks but Preview OS's cover the PR merged into main at the push: a s
 is a real red there. A
 retry reruns the same merge commit; push or rebase to test against a newer main. A
 `workflow_dispatch` reads its file from the dispatched ref: a Preview OS dispatch from main runs
-main's file against the PR merged into main now, and a Preview delete dispatch takes
+main's file against the PR's head, and a Preview delete dispatch takes
 `refs/pull/<n>/head`.
 
 ## Pull requests that conflict with main
@@ -609,18 +609,20 @@ Each deploy is one job, and every app but SPA, dummy-petshop and ci-reports post
 
 ## Preview job shape
 
-Preview OS runs four jobs, each a check named for what it proves:
+Preview OS runs these jobs, each a check named for what it proves:
 
-- **Deploy preview** deploys the PR merged into main, each step starting once what it needs is
-  there ([the trace's spans](ci-traces.md#steps-and-phases)).
+- **Deploy preview** deploys the PR's head, each step starting once what it needs is
+  there ([the trace's spans](ci-traces.md#steps)).
 - **E2E tests** (`pnpm preview e2e`) and **Browser specs** (`pnpm preview specs`) start with the
   run, beside Deploy preview, each on its own runner ([reliability defaults](#reliability-defaults)).
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-- **CI trace** runs after the three, whatever their outcome, and reports only: it writes the two
-  suites' lines (their jobs' `status` output) into the PR body, then the trace
-  ([Interactive trace reports](#interactive-trace-reports)).
+  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/10** to **10/10**, and
+  **Browser specs** beside them gives their verdict.
+- **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
+  only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
+  trace ([Interactive trace reports](#interactive-trace-reports)).
 
 The two suites report on every PR, so a ruleset can require them. Each is
 skipped only on a dispatch of the other suite alone. On a push it inherits for,
@@ -639,6 +641,32 @@ a redeploy, because the preview persists until the PR closes. Dispatch
 suite and the trace job after it, since Depot refuses to retry a job alone
 once a job that needs it has started. Main OS e2e has the same jobs by the
 same names.
+
+### Browser specs in shards
+
+With Playwright's full parallelism a spec starts as soon as a worker is free, so when
+`shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
+longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
+`ceil(specs / 6)` shards: 10 for 56 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
+fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
+`specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
+fullest shard holds `ceil(specs / shards)`.
+
+- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/10** to **10/10**.
+  Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
+  `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
+  blob report in place of the HTML one.
+- **Browser specs** (`specs`, the required check) runs no spec. It starts with the run on the
+  smallest runner, decides whether there is a preview to test by the suites' own steps, and
+  waits for every shard to settle. Then it downloads each shard's blob report from its newest
+  attempt's test results, merges them into the one HTML report behind the **Playwright report**
+  status, and fails when a shard did not pass (`scripts/ci/specs-shards.ts`). So it is green only
+  when every spec passed. With `needs:` it would boot and set up only after the last shard; this
+  way its verdict comes about a second after it. In the CI trace the shards sit under its row,
+  below its own steps in one **Coordinate shards** row, where its wait for them is nearly all.
+- Cost: every shard waits out the deploy on its own `4x16`, and Browser specs on a `2x8`. More
+  workers against one preview have raised retries before (#3258), so compare the retried specs per
+  run before and after changing the count.
 
 ### Suites start with the run
 
@@ -783,7 +811,7 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
 
 - **main e2e** and **slow e2e rows**: Main OS e2e's own `alert` job, as soon as
   the run's deploy and both suites have ended, from their results and the suite
-  summaries E2E tests and Browser specs upload with their flake records. A push
+  summaries E2E tests and the specs shards upload with their flake records. A push
   run only.
 - `health.yml`, every hour, judges what the measuring workflows left:
   - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
@@ -860,14 +888,16 @@ week ([test evidence](test-evidence.md) keeps them in R2). Anyone can open an ar
 starts with `public-` at `https://ci-reports.iterate-dev-preview.workers.dev/<artifact-id>/`
 ([CI traces](./ci-traces.md#the-viewer)), so upload only files intended to be public.
 
-The Browser specs jobs print Playwright's report into the job log, and upload two artifacts even
-when the suite fails:
+Each Browser specs shard prints Playwright's report of its share into its job log, and uploads its
+artifacts even when the suite fails:
 
-- `public-playwright-report`: the HTML report (`test-results/playwright-html`), which the
-  **Playwright report** status opens; a failed spec's trace opens in its trace viewer.
+- `public-playwright-report`, from Browser specs: the HTML report of every shard
+  (`test-results/playwright-html`), which the **Playwright report** status opens; a failed spec's
+  trace opens in its trace viewer.
 - `preview-os-test-artifacts-attempt-<id>` (main: `main-os-test-artifacts-attempt-<id>`): all of
   `test-results/`, one per job attempt ([above](#artifacts-per-job-attempt)). Each failed spec's
-  `trace.zip`, screenshot and `error-context.md` are under `playwright-output/<test>/`.
+  `trace.zip`, screenshot and `error-context.md` are under `playwright-output/<test>/`, and the
+  shard's blob report under `playwright-blob/`.
 
 Fetch either with `depot ci artifacts`, unzip, and open it with
 `pnpm exec playwright show-report <dir>` or `pnpm exec playwright show-trace <trace.zip>`.

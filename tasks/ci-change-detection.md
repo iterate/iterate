@@ -79,7 +79,7 @@ Deploy preview inherits when both suites do: no deploy, no trace. The PR body ke
 - E2E tests: when every input is an e2e row's file (`apps/os/e2e/**/*.e2e.test.ts`, `apps/agents/e2e/**/*.e2e.test.ts`), those files.
 - Browser specs: a changed spec file adds itself and its projects (`specs/os/` runs in `os` and `os-phone`); a changed app adds its projects' directories (`notes` → `specs/notes/`; `dash` → dash, notes, voice and admin). Anything else, os, agents, kit, `specs/setup.ts`, the shared helpers, `playwright.config.ts`, means everything.
 
-The suite job's `changes` step writes it as `selection` (JSON); `runSuite` appends it to `pnpm e2e:run` or `pnpm spec`, and drops test files the push deleted (nothing left: the suite passes).
+The suite job's `changes` step writes it as `selection` (JSON); `runSuite` appends it to `pnpm e2e:run` or `pnpm spec`. A test file the push deleted or renamed away is no input at all (`preview-inherit.ts` `comparedFiles`), so a push that only deletes a spec inherits, and every Browser specs shard gets the same decision.
 
 ### Reuse
 
@@ -123,7 +123,7 @@ What else changes:
 ### 4. Selection and whole reuse (decisions 8 and 9)
 
 - [x] `suiteSelection` in preview-units.ts, table-tested _16 rows: e2e files, spec files, app projects, the Dash's fan-out, everything for os/kit/shared code_
-- [x] planInherit carries the selection; the step writes `selection`; runSuite passes it on and drops deleted test files
+- [x] planInherit carries the selection; the step writes `selection`; runSuite passes it on _deleted test files dropped in `comparedFiles` since the merge of #3394 (shards): a shard with nothing to run would leave no blob report_
 - [x] Reuse whole or not at all: partial deployments, `PREVIEW_REUSE` app linking and the partial cleanup/sweep rules removed
 - [x] Live check: an e2e-row push runs one file on a reused deployment; a Notes push deploys all seven and runs the Notes project _`00bfa5e`: 1 file, nothing deployed, green in 64 s; `00e96d5` and `6a7af4e`: the notes project alone (1 spec, 26 s), E2E tests inherited in 6 s, Deploy preview 127–182 s_
 
@@ -143,7 +143,7 @@ What else changes:
 - Old draft: `git show 'stash@{0}^2:tasks/ci-change-detection.md'` (the stash's index commit, `de2457c92`)
 - Old planner: `git show 97ffd6fd65:scripts/preview/change-plan.ts` (#2712); history via the API: `origin/codex/lazy-preview-history` (#2744); both deleted by #2837
 - Per-commit deployments: #3165, `envs.ts` `previewDeployment`, `apps/os/scripts/preview.ts`, `preview-sweep.ts` `planSupersededCleanup`
-- Today's PR-wide skip: `scripts/ci/preview-paths.ts`; tested commit: `scripts/ci/preview-tested-commit.ts`; the suites' wait: `scripts/ci/await-deploy.ts`
+- Main's PR-wide skip: `scripts/ci/preview-paths.ts` `changes`; tested commit: `scripts/ci/preview-tested-commit.ts` (both deleted here); the suites' wait: `scripts/ci/await-deploy.ts`; the specs shards: `scripts/ci/specs-shards.ts` (#3394)
 - App linking: `scripts/lib/start-app.ts` `linkedEnvironment`; CIMD client id: `packages/iterate/src/app-server.ts`
 
 ## Implementation log
@@ -153,3 +153,4 @@ What else changes:
 - After decision 7: `91866ad` (merge of main) walked into main's history and ran both suites (the PR changes machinery); its E2E tests and one spec went red on Cloudflare Artifacts errors. `eb6db04` (docs) inherited nothing from that red, reused `pr3340-91866ad` and passed. `068e2e5` (notes) and `665c364` (its revert) behaved as the plan says. Old merge-commit deployments (`pr3340-c08836c`) were correctly passed over as "not an ancestor".
 - Decisions 8 and 9 (Misha, after asking whether it was worth it): as built it saved about 9% of Preview OS machine time and time only on docs pushes, with partial deployments the costliest part. Selecting the changed rows and app projects puts the time savings on test-only and app-only pushes, and makes partial deployments not worth their complexity.
 - Live checks after decisions 8 and 9: the first e2e-row push (`4773a5e`) failed with "No test files found": vitest matches a filter against the path from its root, apps/os, so selected rows now go as absolute paths (`4bee6ae`). Then `00bfa5e` ran one file on a reused deployment, green in 64 s; `00e96d5` and `6a7af4e` ran only the notes project. Their full deploys took 127–182 s, most of it the readiness gate on a brand-new apps/os (16, 31, 62 and 96 s across today's full deploys; 1–2 s on a reused, warm one). That is decision 9's trade-off: a partial deployment reusing a warm apps/os would have skipped both the os deploy and that wait.
+- 2026-09-29: merged main with #3394 (Browser specs in 10 shards plus a merging Browser specs job). Every shard and the merger run the inherit step for `specs`, so all eleven decide alike; each shard gets the selection and runs its share of it (Playwright skips its "No tests found" error when sharded, and writes a blob report either way). A push that only deleted a spec used to reach `runSuite` and return early, which with shards would leave no blob report and turn the merger red, so deleted test files are now dropped before the decision (`comparedFiles`).

@@ -21,7 +21,7 @@
 //   reset-parent        main on dev's data erased, then deployed again (preview-sweep.yml)
 // `--dry-run` prints the plan.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { connectIterate } from "iterate/node";
@@ -868,16 +868,8 @@ async function runSuite(
         }
       : { WORKER_BASE_URL: urls.os };
   // THE PART OF THE SUITE THIS PUSH NEEDS (scripts/ci/preview-inherit.ts `selection`): the runner's
-  // arguments, [] for all of it. A test file the push deleted has nothing left to run.
-  const selected = z.array(z.string()).parse(JSON.parse(process.env.PREVIEW_SELECTION || "[]"));
-  const gone = (arg: string) => arg.endsWith(".ts") && !existsSync(path.join(REPO_ROOT, arg));
-  const filters = (args: string[]) =>
-    args.filter((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--project");
-  const selection = selected.filter((arg) => !gone(arg));
-  if (filters(selected).length > 0 && filters(selection).length === 0) {
-    console.log(`nothing to run: the push only deleted ${selected.filter(gone).join(", ")}`);
-    return;
-  }
+  // arguments, [] for all of it.
+  const selection = z.array(z.string()).parse(JSON.parse(process.env.PREVIEW_SELECTION || "[]"));
   if (selection.length > 0)
     console.log(`running only the part this push needs: ${selection.join(" ")}`);
   const deployJob = process.env.PREVIEW_AWAIT_DEPLOY_JOB;

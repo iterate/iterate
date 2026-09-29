@@ -3,14 +3,14 @@
 # pushed commit, `main-<sha7>-<app>` (envs.ts `previewDeployment`), apps/os and the clients on top,
 # and runs the e2e suite and the browser specs against it, each in its own job, the jobs a PR's
 # Preview OS has, by the same names: Deploy preview, and beside it from the start E2E tests (every
-# row, the ones tagged `slow` that most PRs skip too) and Browser specs, each set up while the
-# deployment deploys and started once it has, then CI trace; after the deploy, Clean up superseded
-# deletes the `main-…` deployments before it. A BRAND-NEW worker's Durable Objects can answer
-# Cloudflare's `internal error; reference = …` for seconds after it is created, which the deploy's
-# readiness gate (apps/os/scripts/preview-readiness.ts) waits out. Every row mints its own people and
-# projects, so nothing reads what earlier runs left. The newest `main-…` deployment stays for
-# debugging a red main; the nightly sweep keeps it through quiet days (apps/os/scripts/preview-sweep.ts
-# rule 4).
+# row, the ones tagged `slow` that most PRs skip too) and Browser specs in shards, each set up
+# while the deployment deploys and started once it has, then CI trace; after the deploy, Clean up
+# superseded deletes the `main-…` deployments before it. A BRAND-NEW worker's Durable Objects can
+# answer Cloudflare's `internal error; reference = …` for seconds after it is created, which the
+# deploy's readiness gate (apps/os/scripts/preview-readiness.ts) waits out. Every row mints its own
+# people and projects, so nothing reads what earlier runs left. The newest `main-…` deployment stays
+# for debugging a red main; the nightly sweep keeps it through quiet days
+# (apps/os/scripts/preview-sweep.ts rule 4).
 #
 # Runs never cancel each other: one at a time, so each run's cleanup only ever deletes the runs
 # before it, and a push that lands meanwhile queues, where Depot keeps only the newest (a burst of merges
@@ -231,19 +231,11 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          - name: Upload public Playwright HTML report
-            if: ${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}
-            uses: actions/upload-artifact@v4
-            with:
-              name: public-playwright-report
-              path: test-results/playwright-html
-              if-no-files-found: error
-              retention-days: 30
-              overwrite: true
           # THE SPECS' BROWSER FOR THE NEXT RUNS, from a main push whose lockfile no run saved one
-          # for yet: what the suite's `playwright install --only-shell` fetched.
+          # for yet: what the suite's `playwright install --only-shell` fetched, saved by the first
+          # shard alone, since every shard would save the same key.
           - name: Save Playwright's browser
-            if: ${{ !cancelled() && env.SUITE == 'specs' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.suite.outcome != 'skipped' && steps.playwright.outputs.cache-hit != 'true' }}
+            if: ${{ !cancelled() && env.SPECS_SHARD == '1' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.suite.outcome != 'skipped' && steps.playwright.outputs.cache-hit != 'true' }}
             uses: actions/cache/save@v4
             continue-on-error: true
             timeout-minutes: 3
@@ -256,10 +248,16 @@ jobs:
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
-  specs:
-    name: Browser specs
+  # The specs in shards, as a PR preview runs them (preview-os.yml SHARDS), and Browser specs, their
+  # verdict, as a PR preview's (preview-os.yml BROWSER SPECS).
+  specs-shard:
+    name: Browser specs ${{ matrix.shard }}/10
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -267,7 +265,36 @@ jobs:
       TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
+      SPECS_SHARD: ${{ matrix.shard }}
+      SPECS_SHARDS: "10"
     steps: *suite-steps
+
+  specs:
+    name: Browser specs
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+      - name: Collect the shards' results
+        id: collect
+        timeout-minutes: 80
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/specs-shards.ts collect
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && steps.collect.outputs.playwright-report == 'written' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (apps/os/scripts/preview.ts
   # `cleanup-superseded`), beside the suites and never gating them or the alert.
@@ -290,7 +317,7 @@ jobs:
           PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
 
-  # THE PAGE (scripts/monitors/health.ts `main-e2e`), once the deploy and both suites have ended:
+  # THE PAGE (scripts/monitors/health.ts `main-e2e`), once the deploy and every suite job has ended:
   # main e2e and slow e2e rows, each with a page of its own while it is red or unjudged
   # (docs/depot-ci.md#health). Its memory is its own `main-e2e-state` artifact, with each open
   # page's Slack ts, which the next run reads back with the Depot organization token (Doppler
@@ -298,7 +325,7 @@ jobs:
   # run only: a dispatch pages nothing and keeps nothing, and a run cancelled by hand is left out.
   alert:
     name: Page a change of state
-    needs: [deploy, e2e, specs]
+    needs: [deploy, e2e, specs, specs-shard]
     if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10
@@ -339,7 +366,7 @@ jobs:
   # the pushed commit.
   trace:
     name: CI trace
-    needs: [deploy, e2e, specs]
+    needs: [deploy, e2e, specs, specs-shard]
     if: always()
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 10

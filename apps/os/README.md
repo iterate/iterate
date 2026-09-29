@@ -70,7 +70,7 @@ The Preview OS workflow's Deploy preview job deploys the tested commit's platfor
 clients (Dash, Agents, Notes, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
 suite and its Browser specs job the browser specs, and each runs its suite against them once the
 deploy has finished, each a required check; after the deploy, Clean up superseded deletes the PR's
-older deployments. A PR that changes no preview path deploys nothing and passes both without testing.
+older deployments. A push that changes nothing a suite depends on since an ancestor's green deploys nothing and passes both without testing.
 The commands to run them from a checkout or from CI are below.
 
 Every tested commit gets a deployment of its own, a set of plain Workers named `<prefix>-<sha7>-<app>`

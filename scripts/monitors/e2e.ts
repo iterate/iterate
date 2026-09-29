@@ -65,8 +65,17 @@ export const realModelTelemetry = {
   artifact: "os-real-model-telemetry",
 } as const;
 
-/** The Main OS e2e jobs whose results are main's verdict, by job key; the trace only reports. */
-const MAIN_JOBS = ["main-os-e2e.yml:deploy", "main-os-e2e.yml:e2e", "main-os-e2e.yml:specs"];
+/** The Main OS e2e jobs whose results are main's verdict, by job key (each leg of the matrix job
+ *  `specs-shard` a job of its own); the trace only reports. */
+const MAIN_JOBS = [
+  "main-os-e2e.yml:deploy",
+  "main-os-e2e.yml:e2e",
+  "main-os-e2e.yml:specs",
+  "main-os-e2e.yml:specs-shard",
+];
+
+/** A job's key without a matrix leg's `:matrix-<n>`. */
+const jobOf = (jobKey: string) => jobKey.replace(/:matrix-\d+$/u, "");
 
 /** The run's verdict from its jobs' results: red when a job failed or was cancelled, green when every
  *  job succeeded, and none when nothing failed but not everything ran. A cancelled job hit its
@@ -287,7 +296,8 @@ export const mainE2eRecords = {
   workflow: "Main OS e2e",
   jobs: [
     { jobKey: "main-os-e2e.yml:e2e", suite: "preview-e2e" },
-    { jobKey: "main-os-e2e.yml:specs", suite: "specs" },
+    // the specs' shards, each with the summary of its share; Browser specs, their verdict, runs none
+    { jobKey: "main-os-e2e.yml:specs-shard", suite: "specs" },
   ],
   artifact: (attemptId: string) => `main-os-test-artifacts-attempt-${attemptId}`,
   file: (suite: string) => `flake-records/${suite}/suite-summary.json`,
@@ -351,7 +361,7 @@ export async function checkMainE2e(input: {
       const { jobs } = WorkflowJobs.parse(
         await input.depot("GetWorkflow", { workflowId: run.workflowId }),
       );
-      const mainJobs = jobs.filter((job) => MAIN_JOBS.includes(job.jobKey));
+      const mainJobs = jobs.filter((job) => MAIN_JOBS.includes(jobOf(job.jobKey)));
       const unsettled = mainJobs.find((job) => ["queued", "running"].includes(job.status));
       if (unsettled && run.workflowId === input.current?.workflowId)
         throw new Error(
@@ -368,11 +378,8 @@ export async function checkMainE2e(input: {
       const verdict: Verdict | undefined = mainJobs.length === 0 ? "red" : mainE2eVerdict(results);
       // A job that ran (an attempt) and left no summary proves nothing; one that never had a preview
       // judges nothing.
-      const summary = async ({ jobKey, suite }: (typeof mainE2eRecords.jobs)[number]) => {
-        const newest = judgedJobs
-          .find((job) => job.jobKey === jobKey)
-          ?.attempts.toSorted((a, b) => a.attempt - b.attempt)
-          .at(-1);
+      const summary = async (job: (typeof judgedJobs)[number] | undefined, suite: string) => {
+        const newest = job?.attempts.toSorted((a, b) => a.attempt - b.attempt).at(-1);
         if (!newest) return { ran: false as const };
         const artifact = mainE2eRecords.artifact(newest.attemptId);
         const bytes = (
@@ -383,11 +390,20 @@ export async function checkMainE2e(input: {
           summary: bytes && FlakeSuiteSummary.parse(JSON.parse(new TextDecoder().decode(bytes))),
         };
       };
+      // E2E tests' summary, and each specs shard's, which holds its share of the specs
+      const [e2eRecords, shardRecords] = mainE2eRecords.jobs;
       const [e2e, specs] = await Promise.all([
-        summary(mainE2eRecords.jobs[0]),
-        summary(mainE2eRecords.jobs[1]),
+        summary(
+          judgedJobs.find((job) => job.jobKey === e2eRecords.jobKey),
+          e2eRecords.suite,
+        ),
+        Promise.all(
+          judgedJobs
+            .filter((job) => jobOf(job.jobKey) === shardRecords.jobKey)
+            .map((job) => summary(job, shardRecords.suite)),
+        ),
       ]);
-      const failingRows = [e2e, specs].flatMap((job) =>
+      const failingRows = [e2e, ...specs].flatMap((job) =>
         job.ran && job.summary
           ? job.summary.tests.filter((test) => test.failed).map(({ name }) => ({ name }))
           : [],
