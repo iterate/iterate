@@ -61,18 +61,23 @@ export async function ensureVoiceAgent(
   openaiKey?: string,
 ): Promise<"ready" | "needs-openai-key"> {
   const repo = project.repos.get("/repos/config");
-  const [secrets, rule, tip] = await Promise.all([
+  const [secrets, rule, config] = await Promise.all([
     project.secrets.list(),
     project.rewriteRules.get("itx.voice"),
-    // a project created a moment ago may not have its config repo yet: voice is waited for below
-    repo.tip().catch((error: unknown) => {
-      if (/: not created —/.test(String(error))) return undefined;
-      throw error;
-    }),
+    // the config repo's tip, or none while a project created a moment ago has no config repo yet:
+    // voice is then waited for below
+    repo.tip().then(
+      (tip) => ({ tip }),
+      (error: unknown) => {
+        if (/: not created —/.test(String(error))) return undefined;
+        throw error;
+      },
+    ),
   ]);
+  const tip = config?.tip;
   if (
     !rule?.target &&
-    tip !== undefined &&
+    config &&
     !(tip && voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
   )
     throw new Error(
