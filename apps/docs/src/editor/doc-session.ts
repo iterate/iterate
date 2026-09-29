@@ -8,6 +8,10 @@
 // with the doc's processor (collab.ts): from then on the editor is bound to the shared Y.Text
 // (y-codemirror.next), and the processor saves. Its live state (`commitOid`, `dirty`, `savedBy`,
 // `saveError`) is what the status line says.
+//
+// COMMENTS are events this tab appends to the doc's context (@iterate-com/docs/comments); the
+// threads come back in the processor's live state, and the editor highlights each one's text
+// (comment-marks.ts). A comment being written is a draft here until its thread comes back.
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import * as Y from "yjs";
@@ -15,9 +19,20 @@ import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import { z } from "zod";
 import type { IterateContextApi } from "iterate/api";
 import { connectLiveState } from "iterate/client";
+import { quoteAt, type Quote } from "@iterate-com/docs/anchor";
+import {
+  COMMENT_ADDED,
+  COMMENT_DELETED,
+  COMMENT_EDITED,
+  COMMENT_REOPENED,
+  COMMENT_REPLIED,
+  COMMENT_RESOLVED,
+  type CommentThread,
+} from "@iterate-com/docs/comments";
 import { DocLiveState } from "@iterate-com/docs/frames";
 import type { FileKind } from "../lib/file-kind.ts";
 import { DocCollab, type CollabStatus } from "./collab.ts";
+import { commentMarks, commentTheme, setMarked } from "./comment-marks.ts";
 import {
   codeEditorExtensions,
   codeLanguage,
@@ -37,6 +52,13 @@ export type DocStatus =
   | { kind: "save-failed"; message: string }
   | { kind: "disconnected"; message: string };
 
+/** A thread as the panel lists it: `attached` false when its quote is found nowhere in the text. */
+export type ThreadView = CommentThread & { attached: boolean };
+
+/** A comment being written: the thread it'll start (its id made here), and its quote, or none for a
+ *  comment on the whole doc. */
+export type Draft = { thread: string; quote: Quote | null };
+
 export type DocSessionState = {
   mode: DocMode;
   status: DocStatus;
@@ -44,6 +66,14 @@ export type DocSessionState = {
   others: string[];
   /** An html file's text for its Preview, at most twice a second behind the editor's. */
   previewText: string;
+  /** The doc's comment threads: those on the whole doc, then the rest in the order their text
+   *  comes, then those found nowhere, in the order they were started. */
+  threads: ThreadView[];
+  /** The selected thread: clicked in the panel, or the one the cursor is in. */
+  active: string | null;
+  draft: Draft | null;
+  /** The comment of this person's being edited. */
+  editing: { thread: string; comment: string } | null;
 };
 
 type DocSessionOptions = {
@@ -83,6 +113,10 @@ export class DocSession {
   #undo: Y.UndoManager | null = null;
   #collabStatus: CollabStatus = { kind: "opening" };
   #live: DocLiveState | undefined;
+  #context: IterateContextApi | null = null;
+  /** The threads as last listed, and their order and attachment: the panel changes with these. */
+  #listed: CommentThread[] = [];
+  #threadsKey = "";
 
   options: DocSessionOptions;
 
@@ -93,6 +127,10 @@ export class DocSession {
       status: { kind: "opening" },
       others: [],
       previewText: options.text,
+      threads: [],
+      active: null,
+      draft: null,
+      editing: null,
     };
   }
 
@@ -144,6 +182,7 @@ export class DocSession {
       this.#previewTimer = undefined;
       this.#view = null;
       this.#collab = null;
+      this.#context = null;
       this.#undo = null;
       view.destroy();
     };
@@ -189,12 +228,15 @@ export class DocSession {
           const next = live.store.get();
           // a save landed: sync again, in case a frame either way went missing before it
           if (next?.commitOid !== this.#live?.commitOid) void collab.sync();
+          const threadsChanged = next?.threads !== this.#live?.threads;
           this.#live = next;
           this.#refresh();
+          if (threadsChanged) this.#threadsChanged();
         }),
       );
       this.#live = live.store.get();
       this.#collab = collab;
+      this.#context = opened.context;
       this.#undo = new Y.UndoManager(collab.text);
       view.setState(
         EditorState.create({
@@ -207,6 +249,7 @@ export class DocSession {
         }),
       );
       this.#refresh();
+      this.#threadsChanged();
     } catch (error) {
       this.#collabStatus = {
         kind: "failed",
@@ -226,6 +269,14 @@ export class DocSession {
         : codeEditorExtensions({ language: this.#language.of(this.#languageSupport) }),
       // the text box is named by the file it edits
       EditorView.contentAttributes.of({ "aria-label": this.options.path }),
+      commentMarks,
+      commentTheme,
+      // Google Docs' shortcut for a comment on the selection
+      keymap.of([{ key: "Mod-Alt-m", run: () => this.startComment(), preventDefault: true }]),
+      EditorView.updateListener.of((update) => {
+        if (update.startState.field(commentMarks) !== update.state.field(commentMarks))
+          this.#listThreads();
+      }),
       this.options.kind === "html"
         ? EditorView.updateListener.of((update) => {
             if (update.docChanged) this.#schedulePreview();
@@ -267,6 +318,123 @@ export class DocSession {
           .filter((name): name is string => Boolean(name))
       : [];
     this.#set({ status, others });
+  }
+
+  /** The live state's threads changed: a draft whose thread has come back is done, and the
+   *  editor highlights the open threads' text. */
+  #threadsChanged() {
+    const threads = this.#live ? this.#live.threads : [];
+    const draft = this.#state.draft;
+    if (draft && threads.some((thread) => thread.id === draft.thread)) this.#set({ draft: null });
+    this.#mark(this.#state.active);
+    this.#listThreads();
+  }
+
+  /** Tell the editor what to highlight, and which thread is selected. */
+  #mark(active: string | null) {
+    const open = (this.#live ? this.#live.threads : []).filter((thread) => !thread.resolved);
+    const draft = this.#state.draft;
+    const quoted = [...open, ...(draft ? [{ id: draft.thread, quote: draft.quote }] : [])].flatMap(
+      (thread) => (thread.quote ? [{ id: thread.id, quote: thread.quote }] : []),
+    );
+    this.#view?.dispatch({ effects: setMarked.of({ threads: quoted, active }) });
+  }
+
+  /** The threads in the panel's order, when that order, what's attached or what's selected moved. */
+  #listThreads() {
+    const marks = this.#view?.state.field(commentMarks, false);
+    const ranges = marks ? marks.ranges : new Map<string, { from: number }>();
+    const active = marks ? marks.active : this.#state.active;
+    const threads = this.#live ? this.#live.threads : [];
+    // the whole doc's first, then by where their text is; found nowhere, last
+    const at = (thread: CommentThread) => {
+      const range = ranges.get(thread.id);
+      return !thread.quote ? -1 : range ? range.from : Number.POSITIVE_INFINITY;
+    };
+    const views = [...threads]
+      .sort((a, b) => at(a) - at(b))
+      .map((thread) => ({ ...thread, attached: at(thread) !== Number.POSITIVE_INFINITY }));
+    const key = views.map((view) => `${view.id}${view.attached ? "" : "!"}`).join(" ");
+    if (key === this.#threadsKey && threads === this.#listed && active === this.#state.active)
+      return;
+    this.#threadsKey = key;
+    this.#listed = threads;
+    this.#set({ threads: views, active });
+  }
+
+  /** Start a comment on the selection, or on the whole doc when nothing is selected. */
+  startComment() {
+    const view = this.#view;
+    if (!view || !this.#context) return false;
+    const text = view.state.doc.toString();
+    let { from, to } = view.state.selection.main;
+    // a selection's spaces and line breaks at either end aren't what it's about
+    while (from < to && /\s/.test(text[from]!)) from++;
+    while (to > from && /\s/.test(text[to - 1]!)) to--;
+    const thread = crypto.randomUUID();
+    this.#set({
+      draft: { thread, quote: to > from ? quoteAt(text, from, to) : null },
+      active: thread,
+    });
+    this.#mark(thread);
+    return true;
+  }
+
+  cancelDraft() {
+    this.#set({ draft: null, active: null });
+    this.#mark(null);
+  }
+
+  /** Post the draft; it stays a draft until its thread comes back in the live state. */
+  async postDraft(body: string) {
+    const draft = this.#state.draft;
+    if (!draft) return;
+    await this.#append(COMMENT_ADDED, { thread: draft.thread, quote: draft.quote, body });
+  }
+
+  reply(thread: string, body: string) {
+    return this.#append(COMMENT_REPLIED, { thread, comment: crypto.randomUUID(), body });
+  }
+
+  startEditing(thread: string, comment: string) {
+    this.#set({ editing: { thread, comment } });
+  }
+
+  stopEditing() {
+    this.#set({ editing: null });
+  }
+
+  async editComment(thread: string, comment: string, body: string) {
+    await this.#append(COMMENT_EDITED, { thread, comment, body });
+    this.stopEditing();
+  }
+
+  deleteComment(thread: string, comment: string) {
+    return this.#append(COMMENT_DELETED, { thread, comment });
+  }
+
+  resolve(thread: string) {
+    return this.#append(COMMENT_RESOLVED, { thread });
+  }
+
+  reopen(thread: string) {
+    return this.#append(COMMENT_REOPENED, { thread });
+  }
+
+  /** Select a thread from the panel: its text highlighted and scrolled to, in the editor. */
+  focusThread(thread: string) {
+    this.#set({ active: thread });
+    this.#mark(thread);
+    const range = this.#view?.state.field(commentMarks, false)?.ranges.get(thread);
+    if (!range) return;
+    // an html file's Preview has no text to point at
+    if (this.#state.mode === "preview") this.setMode("source");
+    this.#view?.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: "center" }) });
+  }
+
+  async #append(type: string, payload: Record<string, unknown>) {
+    if (!this.#context) throw new Error("The doc isn't open yet");
+    await this.#context.append({ type, payload });
   }
 
   /** Sync with the doc's processor again: what "Try again" does after the connection failed. */
