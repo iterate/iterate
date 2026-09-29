@@ -834,13 +834,15 @@ const CAUSES: Record<Cause, string> = {
 const EXPECTED_ERRORS = Object.values(CAUSES);
 
 /**
- * Outcomes the platform expects and announces at info, in the invocation whose error the runtime
- * logs for them itself, uncatchably: a reset the context DO asks for (`ctx.abort`: a destroyed
- * context, `itx.abort()`, a deleted root whose project came back), and the constructor's refusal of
- * an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
- * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). An invocation that logged
- * one ends in it: its error lines are that outcome and page nothing, and its summary folds into its
- * exception (summarized-exceptions). The same error in an invocation that announced nothing pages.
+ * Outcomes the platform expects and announces at info, each with the message of the error line the
+ * runtime logs for it itself, uncatchably: a reset the context DO asks for (`ctx.abort`: a destroyed
+ * context, `itx.abort()`, a deleted root whose project came back), which the runtime logs in the
+ * asking invocation and in every other call in flight that it rejects, and the constructor's refusal
+ * of an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
+ * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). An error line whose
+ * message a Durable Object announced in the window, in that Durable Object, is that outcome and
+ * pages nothing; its invocation's summary folds into it (summarized-exceptions). The same error in
+ * a Durable Object that announced nothing pages.
  */
 const ANNOUNCED = [
   "context.destroyed",
@@ -1015,7 +1017,7 @@ async function readWindow(
       },
     );
   const errorLevel = leaf("$metadata.level", "eq", "error");
-  const [outcomeRays, causeRays, summaryRequests, announcedRequests] = await Promise.all([
+  const [outcomeRays, causeRays, summaryRequests, announcements] = await Promise.all([
     Promise.all(
       RAY_OUTCOMES.map((outcome) =>
         evidence(outcome.name, async () =>
@@ -1043,27 +1045,17 @@ async function readWindow(
         ([[requestId]]) => requestId!,
       ),
     ),
-    evidence("announced", async () =>
-      (await rows([leaf("event", "in", ANNOUNCED.join(","))], ["$metadata.requestId"])).map(
-        ([[requestId]]) => requestId!,
+    evidence("announced", () =>
+      rows(
+        [leaf("event", "in", ANNOUNCED.join(","))],
+        ["$workers.durableObjectId", "$metadata.message"],
       ),
     ),
   ]);
-  // The message lines' count leaves room for one `not_in` of request IDs beside its rays': past
-  // 500 announced invocations, the rest page, and the log says how many.
-  if (announcedRequests.length > 500)
-    console.warn(
-      JSON.stringify({
-        event: "prd-fault-alarm.announced-capped",
-        unexcluded: announcedRequests.length - 500,
-      }),
-    );
-  const announced: Exclusion = {
-    name: "announced",
-    key: "$metadata.requestId",
-    values: announcedRequests.slice(0, 500),
-    keep: null,
-  };
+  // Each Durable Object that announced an outcome (ANNOUNCED), with the messages it announced.
+  const announced = new Map<string, Set<string>>();
+  for (const [[objectId, message]] of announcements)
+    if (objectId && message) announced.set(objectId, new Set(announced.get(objectId)).add(message));
   // The summary of an invocation that also logged its exception (a `*.jsrpc` call's, an alarm's) is
   // that exception's sighting, counted (or expected) once, as the exception.
   // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
@@ -1194,13 +1186,31 @@ async function readWindow(
     rowsOf: ErrorRows,
     key: "$metadata.message" | "$metadata.error",
     filters: LogFilter[],
-    exclusions: Exclusion[] = [],
-  ) =>
-    count(
-      [errorLevel, ...ERROR_ROWS[rowsOf], ...filters],
-      [...exclusionsFor(rowsOf), ...exclusions],
-      key,
+  ) => count([errorLevel, ...ERROR_ROWS[rowsOf], ...filters], exclusionsFor(rowsOf), key);
+  // The message lines of the announcing Durable Objects that carry a message they announced, by
+  // message: rows the message lines' count reads, under its filters and exclusions, known expected.
+  // An announced outcome's line always has its message: the error lines without one are none.
+  const lineFilters = [leaf("$metadata.message", "neq", "")];
+  const readAnnounced = async () => {
+    const found = await Promise.all(
+      chunks([...announced.keys()]).flatMap((objectIds) =>
+        exclusionQueries(
+          [
+            errorLevel,
+            ...ERROR_ROWS.lines,
+            ...lineFilters,
+            leaf("$workers.durableObjectId", "in", objectIds.join(",")),
+          ],
+          exclusionsFor("lines"),
+        ).map(({ filters }) => rows(filters, ["$workers.durableObjectId", "$metadata.message"])),
+      ),
     );
+    const expected = new Map<string, number>();
+    for (const [[objectId = "", message = ""], n] of found.flat())
+      if (announced.get(objectId)?.has(message))
+        expected.set(message, (expected.get(message) ?? 0) + n);
+    return expected;
+  };
   const readUnreadBodyOnApi = async () => {
     const [[, n] = ["", 0]] = await count(
       [
@@ -1239,6 +1249,7 @@ async function readWindow(
     heals,
     healEvents,
     lines,
+    announcedLines,
     structured,
     apiUnreadBody,
     hungOffItxEntrypoint,
@@ -1250,8 +1261,8 @@ async function readWindow(
     readCauses(),
     rows(healed, ["name"]),
     rows(healed, ["event"]),
-    // the runtime's line for an announced outcome has a message, as the runtime logs it
-    readErrors("lines", "$metadata.message", [leaf("$metadata.message", "neq", "")], [announced]),
+    readErrors("lines", "$metadata.message", lineFilters),
+    readAnnounced(),
     readErrors("lines", "$metadata.error", [
       leaf("$metadata.error", "neq", ""),
       anyOf(leaf("$metadata.message", "is_null"), leaf("$metadata.message", "eq", "")),
@@ -1270,7 +1281,13 @@ async function readWindow(
     heals: single(heals),
     healEvents: single(healEvents),
     errors: [
-      ...[...lines, ...structured].filter(([message]) => !expectedError(message)),
+      ...[
+        ...lines.map(([message, n]): [string, number] => [
+          message,
+          n - (announcedLines.get(message) ?? 0),
+        ]),
+        ...structured,
+      ].filter(([message, n]) => n > 0 && !expectedError(message)),
       ...apiUnreadBody,
       ...hungOffItxEntrypoint,
       ...requestLines,

@@ -792,8 +792,7 @@ test.for([
   },
   {
     name: "a context destroyed with its deleted project, announced at info, pages nothing, nor its jsrpc summary",
-    events: () =>
-      announcedReset("context.destroyed", "destroy", "destroyed: its project was deleted"),
+    events: () => announcedReset("context.destroyed", "do-1", "destroyed: its project was deleted"),
     page: null,
   },
   {
@@ -801,7 +800,7 @@ test.for([
     events: () =>
       announcedReset(
         "context.unborn-by-id",
-        "sweep",
+        "do-1",
         "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
       ),
     page: null,
@@ -811,8 +810,8 @@ test.for([
     events: () =>
       announcedReset(
         "context.aborted",
-        "invoke",
-        "itx.abort() reset the context /: pick up a change",
+        "do-1",
+        "itx.abort() reset the context /: a deploy's reset, on demand",
       ),
     page: null,
   },
@@ -821,22 +820,34 @@ test.for([
     events: () =>
       announcedReset(
         "context.root-restored",
-        "restored",
+        "do-1",
         "project prj_x was restored: its root is born on the next request",
       ),
     page: null,
   },
   {
-    name: "the same error in an invocation that announced nothing pages",
+    name: "the calls in flight a reset rejects with its message page nothing (itx.abort() on a preview, 2026-09-29 09:56)",
     events: () => [
-      ...announcedReset("context.destroyed", "destroy", "destroyed: its project was deleted"),
-      ...announcedReset(
-        "context.destroyed",
-        "unannounced",
-        "destroyed: its project was deleted",
-      ).slice(1),
+      ...announcedReset("context.aborted", "do-1", "itx.abort() reset the context /: busy"),
+      ...rejectedInFlight("do-1", "in-flight", "itx.abort() reset the context /: busy"),
+    ],
+    page: null,
+  },
+  {
+    name: "the same error in a Durable Object that announced nothing pages",
+    events: () => [
+      ...announcedReset("context.destroyed", "do-1", "destroyed: its project was deleted"),
+      ...rejectedInFlight("do-2", "unannounced", "destroyed: its project was deleted"),
     ],
     page: ["• errors: destroyed: its project was deleted 1 · last 07:30 UTC"],
+  },
+  {
+    name: "another error in a Durable Object that announced a reset pages",
+    events: () => [
+      ...announcedReset("context.aborted", "do-1", "itx.abort() reset the context /: busy"),
+      ...rejectedInFlight("do-1", "other", "Durable Object storage operation exceeded timeout"),
+    ],
+    page: ["• errors: Durable Object storage operation exceeded timeout 1 · last 07:30 UTC"],
   },
 ])("$name", async ({ events, page }) => {
   queryableWorkersLogs(events());
@@ -1170,14 +1181,14 @@ test.for([
     most: 15,
   },
   {
-    name: "the lines and request lines beside gone visitors' and deploy resets' rays and announced invocations",
+    name: "the lines and request lines beside gone visitors' and deploy resets' rays and 500 contexts' announced resets",
     events: () => [
       ...rays("gone-", 1000).flatMap((ray) => vanishedVisitorRequest(ray)),
       ...rays("reset-", 999).flatMap((ray) =>
         deployResetRay(ray, "https://garple.com/").slice(1, 2),
       ),
-      ...rays("destroy-", 500).flatMap((requestId) =>
-        announcedReset("context.destroyed", requestId, "destroyed: its project was deleted"),
+      ...rays("destroyed-", 500).flatMap((objectId) =>
+        announcedReset("context.destroyed", objectId, "destroyed: its project was deleted"),
       ),
       invocation({ outcome: "exception", url: "https://garple.com/chat", rayId: "other" }),
       line({ message: "boom", rayId: "gone-3" }),
@@ -1673,6 +1684,7 @@ function invocation(options: {
   requestId?: string;
   version?: string;
   message?: string;
+  objectId?: string;
 }) {
   const {
     hop,
@@ -1693,6 +1705,7 @@ function invocation(options: {
     $workers: {
       executionModel: durableObject ? "durableObject" : "stateless",
       entrypoint: hop,
+      durableObjectId: options.objectId,
       eventType,
       outcome,
       scriptVersion: { id: version },
@@ -1712,6 +1725,7 @@ function line(options: {
   requestId?: string;
   version?: string;
   url?: string;
+  objectId?: string;
 }) {
   const durableObject = options.hop?.endsWith("DurableObject");
   return {
@@ -1725,6 +1739,7 @@ function line(options: {
     $workers: {
       executionModel: durableObject ? "durableObject" : "stateless",
       entrypoint: options.hop,
+      durableObjectId: options.objectId,
       scriptVersion: { id: options.version || "502616fb-0000" },
       event: options.url ? { request: { url: options.url } } : undefined,
     },
@@ -1782,18 +1797,34 @@ function failedDocsRequest() {
   ];
 }
 
-/** An invocation that announced an outcome at info (apps/os iterate-context-durable-object.ts
- *  `#abort`), then the error line the runtime logs for it and its jsrpc summary, as prd logs a
- *  destroyed context's. */
-function announcedReset(event: string, requestId: string, message: string) {
+/** The context DO `objectId` announcing an outcome at info with its message (apps/os
+ *  iterate-context-durable-object.ts `#abort`), then the error line the runtime logs for it in the
+ *  same invocation and that invocation's jsrpc summary, as a preview logged its `itx.abort()` on
+ *  2026-09-29 09:56. */
+function announcedReset(event: string, objectId: string, message: string) {
+  const requestId = `${objectId}-asked`;
   return [
-    { timestamp: 42, event, $metadata: { type: "cf-worker", level: "info", requestId } },
-    line({ hop: "IterateContextDurableObject", requestId, message }),
+    {
+      timestamp: 42,
+      event,
+      $metadata: { type: "cf-worker", level: "info", requestId, message },
+      $workers: { entrypoint: "IterateContextDurableObject", durableObjectId: objectId },
+    },
+    ...rejectedInFlight(objectId, requestId, message),
+  ];
+}
+
+/** Another call on the context DO `objectId`, failed with `message`: its error line and its jsrpc
+ *  summary. */
+function rejectedInFlight(objectId: string, requestId: string, message: string) {
+  return [
+    line({ hop: "IterateContextDurableObject", requestId, message, objectId }),
     invocation({
       hop: "IterateContextDurableObject",
       eventType: "jsrpc",
       outcome: "exception",
       requestId,
+      objectId,
     }),
   ];
 }
