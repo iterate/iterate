@@ -128,6 +128,7 @@ export async function sync(options: {
  * The self-host recipe (apps/os/public/setup-prompt.md) against a fresh clone of iterate/os, as far
  * as it goes without a Cloudflare account: the install (with --frozen-lockfile, which proves the
  * copy's lockfile), the self-host build, a dry-run deploy, and the SDK imports its later steps run.
+ * After all that, `git status` in the clone must be clean.
  */
 function checkSelfHost(input: { repo: string; credentials: string; work: string }) {
   const clone = join(input.work, `${input.repo}-clone`);
@@ -158,7 +159,15 @@ function checkSelfHost(input: { repo: string; credentials: string; work: string 
     os,
   );
   run("node", ["--eval", 'Promise.all([import("iterate/node"), import("capnweb")])'], os);
-  console.log(`[copybara] ${input.repo}: a fresh clone installs, builds and deploys (dry run)`);
+  // and leaves the clone clean: everything it made is ignored, and nothing tracked changed
+  const status = execFileSync("git", ["status", "--porcelain"], { cwd: clone, encoding: "utf8" });
+  if (status.trim())
+    throw new Error(
+      `the recipe left ${input.repo}'s clone dirty (copybara/os/.gitignore, or an install that rewrites a tracked file):\n${status.split("\n").slice(0, 20).join("\n")}`,
+    );
+  console.log(
+    `[copybara] ${input.repo}: a fresh clone installs, builds and deploys (dry run), and stays clean`,
+  );
 }
 
 /**
