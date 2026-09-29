@@ -104,6 +104,19 @@ A real deploy needs a Cloudflare account with Artifacts access; the dry run prov
 
 Later, not in round 3: a template registry served by the Worker (shadcn's item format), once features get added to existing projects. Links that name iterate/iterate (the MCP tool's examples link, the recipe's clone URL, `packages/iterate`'s npm metadata, the dash's commit links) wait for the real `iterate/os`.
 
+## Round 4: the recipe, for real
+
+Make the change that introducing `iterate/os` would really need, with `os0929` in place of `os`, and hand Misha a setup prompt to run from an empty folder.
+
+- [x] iterate/os0929 is public, with issues on (the call's plan: issues are the feedback channel; pull requests are what's off)
+- [x] pkg.pr.new publishes every push to `copybara0929`, as it does every push to main. A copy's build pins agents and voice at the commit its `GitOrigin-RevId` names, so that commit needs a build. This PR touches no published package, so until now nothing was published for it (`agents@3bf0f600a`: 404). Each push to the branch is one commit, as each squash merge is on main
+- [x] The copy's root `package.json` has `"build": "CLOUDFLARE_ENV=self-host pnpm --filter os build"`
+- [ ] The recipe (`apps/os/public/setup-prompt.md`): the repo link and the clone, `git clone --depth 1 https://github.com/iterate/os0929 iterate`. Cloning into `iterate` keeps every later `iterate/apps/os` path as it is. That's the whole diff
+- [ ] Checked as a stranger would: an unauthenticated clone of os0929, the recipe's plain `pnpm install`, the build. The default template must pin agents and voice at the copy's origin commit, and pkg.pr.new must serve both builds. Then the dry-run deploy and a clean `git status`, and the PR's preview serving the new recipe
+- [ ] Misha runs the recipe from an empty folder
+
+Known wrinkle, not blocking: the named templates (`heartbeat`, `minimal`) are identified as `github:iterate/iterate#<copy commit>&path:configs/<name>`. Creation writes their baked files, so nothing downloads them. But in a copy's build the name points at a commit iterate/iterate doesn't have. A copy's build should name its own repo (`github:iterate/os0929#…`).
+
 ### What `iterate/os` contains, as input for `core/`
 
 What the self-host recipe needs today, and where each piece would sit in the call's layout:
