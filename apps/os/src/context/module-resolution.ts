@@ -312,13 +312,42 @@ export async function resolveModules(
   }
 
   // 3. the platform modules the worker reaches, and nothing else.
-  while (platformUsed.length) {
-    const name = platformUsed.pop()!;
+  addPlatformModules(out, platformUsed, platform);
+  return { mainModule: outputName(entry), modules: out };
+}
+
+/** The platform modules `names` added to `out`, with every platform module they import. */
+function addPlatformModules(out: ModuleMap, names: string[], platform: PlatformModules): void {
+  while (names.length) {
+    const name = names.pop()!;
     if (Object.hasOwn(out, name)) continue;
     out[name] = platform.modules[name]!;
-    platformUsed.push(...(platform.imports[name] ?? []));
+    names.push(...(platform.imports[name] ?? []));
   }
-  return { mainModule: outputName(entry), modules: out };
+}
+
+/** What every loaded worker evaluates first (iterate src/sdk/loaded-worker.ts), as build.ts names it. */
+const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
+/** The main module the loader starts a worker from, in the platform's own directory. */
+const LOADED_MAIN_MODULE = "node_modules/.platform/main.js";
+
+/** A resolved worker as the loader starts it: from LOADED_MAIN_MODULE, which evaluates the
+ *  platform's LOADED_WORKER_MODULE before anything of the worker's, then is the worker's main module
+ *  under another name (`aliasModule`: its default export only when it has one). */
+export function enteredThroughPlatform(
+  resolved: { mainModule: string; modules: ModuleMap },
+  platform: PlatformModules,
+  where: string,
+): { mainModule: string; modules: ModuleMap } {
+  if (Object.hasOwn(resolved.modules, LOADED_MAIN_MODULE))
+    throw new Error(`${where}: ${LOADED_MAIN_MODULE} is the platform's; name the file otherwise`);
+  const modules = { ...resolved.modules };
+  addPlatformModules(modules, [LOADED_WORKER_MODULE], platform);
+  const platformFirst = JSON.stringify(relativeSpecifier(LOADED_MAIN_MODULE, LOADED_WORKER_MODULE));
+  const { mainModule } = resolved;
+  modules[LOADED_MAIN_MODULE] =
+    `import ${platformFirst};\n${aliasModule(LOADED_MAIN_MODULE, mainModule, modules[mainModule]!)}`;
+  return { mainModule: LOADED_MAIN_MODULE, modules };
 }
 
 /** A locked npm graph: every module (each requested specifier's entry under

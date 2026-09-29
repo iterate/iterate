@@ -87,12 +87,7 @@ import {
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
 import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
-import {
-  FacetHandle,
-  isMissingRpcMethod,
-  RpcStubHandle,
-  materializeItxHandleReference,
-} from "./dispatch.ts";
+import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
 import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -2375,22 +2370,6 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   >;
 }
 
-/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
- *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
-async function callWithItsCause(
-  entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
-  cause: Cause,
-  method: string,
-  args: unknown[],
-): Promise<unknown> {
-  try {
-    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
-  } catch (error) {
-    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
-    return await entrypoint[method]!(...args);
-  }
-}
-
 /** `itx.workers`: stateless loaded code, loaded where the call is and speaking for the context
  *  `iterateContextName` names — its loader identity, its `env.ITX` (`itxEntrypoint`), the producer
  *  of a source expression run as its loaded code (`invoke`). A context builds it for itself (the
@@ -2433,12 +2412,10 @@ export function workersRoot(deps: {
             `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
           );
         const [method, ...callArgs] = call;
-        if (method === "callWithCause")
-          throw codedError(
-            "NOT_A_METHOD",
-            "workers.get(spec).callWithCause: only the platform calls it",
-          );
-        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // Workers RPC reaches both on every loaded entrypoint (iterate src/sdk/loaded-worker.ts).
+        if (method === "callWithCause" || method === "getItx")
+          throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
+        // The cause reaches the loaded code (cause.ts) on the Request, or through `callWithCause`,
         // which every other method is called through. A loaded worker's `fetch` reads who is
         // asking off its Request (iterate/principal): the call's own caller, stamped here — never
         // what the Request says, which `fetch(url, { headers })` would let the code that called it
@@ -2504,7 +2481,7 @@ export function workersRoot(deps: {
             const called =
               method === "fetch" || !cause
                 ? Reflect.apply(fn, entrypoint, args)
-                : callWithItsCause(entrypoint, cause, method, args);
+                : entrypoint.callWithCause!(cause, [[method, ...args]]);
             if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the

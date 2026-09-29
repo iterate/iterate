@@ -21,8 +21,10 @@
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
 // no client-side wrapper. Loaded code reaches it through the SDK's `withItx(env.ITX, (itx) => …)`,
 // which releases the scope and every call made through it (lint: iterate/no-raw-itx-get). A loaded SOURCE EXPORTS its own host object (a `WorkerEntrypoint` or a
-// `DurableObject` class): there is NO host-injected wrapper and no bare-lambda entry point — the code the
-// author wrote IS what runs, and it always enters through an EXPORTED entrypoint.
+// `DurableObject` class), and no bare-lambda entry point: the code the author wrote IS what runs, and
+// it always enters through an EXPORTED entrypoint. The one module the platform adds is evaluated
+// first (module-resolution.ts `enteredThroughPlatform`): it carries the cause on `fetch` and gives
+// every `WorkerEntrypoint` `callWithCause` and `getItx` (iterate src/sdk/loaded-worker.ts).
 
 import { codedError, errorCode } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
@@ -33,7 +35,12 @@ import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { sha256Hex } from "../caller.ts";
 import { WorkerManifest } from "./worker-manifest.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
-import { readPackage, resolveModules, type ResolveOptions } from "./module-resolution.ts";
+import {
+  enteredThroughPlatform,
+  readPackage,
+  resolveModules,
+  type ResolveOptions,
+} from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
@@ -358,7 +365,11 @@ export async function prepareConfinedWorker(
   // down) fails here — in the recovery below that is before `load()` opens a new generation, so a
   // failure that persists mints no billed identity per retry.
   const produce = async (): Promise<ResolvedWorker> =>
-    resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule));
+    enteredThroughPlatform(
+      await resolveModules(await getModules(), resolveOptions(opts.env, where, mainModule)),
+      PLATFORM_MODULES,
+      where,
+    );
   let workerForCode = produce;
   if (state.dead) {
     // Outside the loader, so a throw here poisons nothing; one run for every caller while it lasts.

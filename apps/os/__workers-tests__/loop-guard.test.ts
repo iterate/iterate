@@ -283,33 +283,34 @@ test("a read records nothing: a context read for its table, asleep or unborn, is
   expect(await sweep(at(project, "/unborn"))).toEqual([]);
 });
 
-test("code no callWithCause runs acts under the newest cause its isolate saw, never a chain of its own", async () => {
+test("a plain WorkerEntrypoint's method acts under its own call's cause, never the newest its isolate saw, through `using itx = this.getItx()`, which no caller reaches", async () => {
   const ctx = freshProject("prj_loop");
+  // a main module with no default export, importing nothing from iterate
   const source = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { IterateConfigEntrypoint } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
-export default class extends IterateConfigEntrypoint {
-  async touch() {}
-}
 export class NoSdkHost extends WorkerEntrypoint {
+  async touch() {}
   async act() {
-    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/no-sdk-host" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/no-sdk-host" });
   }
 }
 `,
   };
-  await stub(ctx).invoke(["itx", "workers", ["get", { source }], ["touch"]], [], caller(5));
-  await stub(ctx).invoke(
-    ["itx", "workers", ["get", { source, className: "NoSdkHost" }], ["act"]],
-    [],
-    caller(1),
-  );
+  const call = (step: unknown[], depth: number) =>
+    stub(ctx).invoke(
+      ["itx", "workers", ["get", { source, className: "NoSdkHost" }], step],
+      [],
+      caller(depth),
+    );
+  await call(["touch"], 5);
+  await call(["act"], 1);
   expect(ofType(await readLog(ctx), "test/no-sdk-host").map(causeOf)).toEqual([
-    { chain: CHAIN, depth: 5 },
+    { chain: CHAIN, depth: 1 },
   ]);
+  await refused(() => call(["getItx"], 1), "NOT_A_METHOD");
 });
 
 test("a facet's callWithCause walks only as far as Workers RPC would; the shared isolate keeps no cause", async () => {

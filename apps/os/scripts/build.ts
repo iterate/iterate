@@ -40,12 +40,16 @@ async function platformModules() {
   // are: `require.resolve("zod")` would pick zod's CJS build while the SDK links its ESM one — two
   // zods in one graph.
   const sdkDir = path.dirname(createRequire(import.meta.url).resolve("iterate/sdk"));
-  const entryPoints = Object.fromEntries(
-    PLATFORM_ENTRIES.map((specifier) => [
-      `node_modules/${specifier}`,
-      `platform-entry:${specifier}`,
-    ]),
-  );
+  const entryPoints = {
+    ...Object.fromEntries(
+      PLATFORM_ENTRIES.map((specifier) => [
+        `node_modules/${specifier}`,
+        `platform-entry:${specifier}`,
+      ]),
+    ),
+    // what every loaded worker evaluates first (module-resolution.ts `enteredThroughPlatform`)
+    "node_modules/.platform/loaded-worker": path.join(sdkDir, "loaded-worker.ts"),
+  };
   const outdir = path.join(root, "src/generated/.platform-modules");
   const bundled = await esbuild({
     entryPoints,
@@ -59,11 +63,7 @@ async function platformModules() {
           }));
           pluginBuild.onLoad({ filter: /.*/, namespace: "platform-entry" }, (args) => ({
             contents:
-              // an SDK entry, evaluated before the loaded module that imports it, has its outbound
-              // `fetch` carry the cause it runs under (iterate src/cause.ts)
-              (args.path === "zod"
-                ? `export { default } from "zod";`
-                : `import { carryCauseOnFetch } from "../cause.ts"; carryCauseOnFetch();`) +
+              (args.path === "zod" ? `export { default } from "zod";` : "") +
               ` export * from ${JSON.stringify(args.path)};`,
             resolveDir: sdkDir,
             loader: "js",

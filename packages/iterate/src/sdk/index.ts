@@ -15,7 +15,7 @@
 //   import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
 //   import { z } from "zod";
 
-import { DurableObject, RpcStub, RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import type {
   InstalledAppRoots,
   IterateContextApi,
@@ -33,10 +33,11 @@ import {
 // The hosts' `callWithCause` and `fetch` run what they call under the cause the platform hands them
 // (../cause.ts).
 import { causeOfRequest, runCausedBy } from "../cause.ts";
-import { codedError } from "../lib.ts";
 import { auth } from "./auth.ts";
-// The hosts' `this.withItx(fn)` is this function (with-itx.ts says why a scope is never kept).
-import { withItx } from "./with-itx.ts";
+import { walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
+// The hosts' `this.withItx(fn)` and `this.getItx()` are these (with-itx.ts says why a scope is
+// never kept).
+import { itxScope, withItx } from "./with-itx.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
@@ -126,48 +127,6 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
     // `Function`, which has no `publicMethods`.
     return (this.constructor as typeof FacetDurableObject).publicMethods;
   }
-}
-
-/** A step of `callWithCause`'s walk, which reaches no further than Workers RPC would: on this facet
- *  or an RpcTarget, a member its class declares (never a field of its own); anything on a stub; on
- *  plain data, its own members (never a method of data the facet holds live). */
-/** An expression's steps past a host: a property, or a method and its arguments. */
-type RpcSteps = (string | [string, ...unknown[]])[];
-
-/** `callWithCause` (../cause.ts): the platform's way to walk `steps` on `host` under the cause of
- *  the call that made it — only as far as Workers RPC would reach, and never into `callWithCause`
- *  itself. */
-function walkUnderCause(host: object, cause: unknown, steps: RpcSteps): Promise<unknown> {
-  return runCausedBy(cause, async () => {
-    let value: unknown = host;
-    for (const step of steps) {
-      const [name, ...args] = typeof step === "string" ? [step] : step;
-      if (name === "callWithCause")
-        throw codedError("NOT_A_METHOD", "callWithCause is the platform's alone");
-      const member = memberRpcReaches(value, name);
-      value =
-        typeof step === "string"
-          ? await member
-          : await Reflect.apply(member as (...a: unknown[]) => unknown, value, args);
-    }
-    return value;
-  });
-}
-
-function memberRpcReaches(value: unknown, name: string): unknown {
-  // (RpcStub's own type is generic past what TypeScript will narrow)
-  if (value instanceof (RpcStub as unknown as new () => object))
-    return (value as Record<string, unknown>)[name];
-  const prototype = typeof value === "object" && value ? Object.getPrototypeOf(value) : undefined;
-  const reaches =
-    value instanceof RpcTarget ||
-    value instanceof DurableObject ||
-    value instanceof WorkerEntrypoint
-      ? name in value && !Object.hasOwn(value, name) && !(name in Object.prototype)
-      : (prototype === Object.prototype || prototype === Array.prototype || prototype === null) &&
-        Object.hasOwn(value as object, name);
-  if (!reaches) throw codedError("NOT_A_METHOD", `${name} is no method Workers RPC would reach`);
-  return (value as Record<string, unknown>)[name];
 }
 
 /** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
@@ -319,6 +278,10 @@ export abstract class StreamProcessorDurableObject<
   protected withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
     return withItx(this.#itxEntrypoint(), call);
   }
+
+  /** `using itx = this.getItx()`: the scope `withItx` hands its callback, released the same way when
+   *  the block ends. A field, as `IterateConfigEntrypoint.getItx` is. */
+  protected readonly getItx = (): Scope & Disposable => itxScope(this.#itxEntrypoint());
 }
 
 /** What `processEvent` is handed: one event, and the project's root, typed with the installed apps
@@ -371,6 +334,10 @@ export abstract class IterateConfigEntrypoint<
    *  never get the scope (sdk/index.test.ts). */
   protected readonly withItx = <T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> =>
     withItx(this.env.ITX, call);
+
+  /** `using itx = this.getItx()`: the scope `withItx` hands its callback, released the same way when
+   *  the block ends. A field, as `withItx` is. */
+  protected readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
 
   /** THE AUTHOR HOOK: every durable event of every context of the project from its first
    *  publication on (what was committed while no config was published may be passed over), one per

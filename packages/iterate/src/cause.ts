@@ -1,7 +1,8 @@
 // cause.ts — the SDK's half of the loop guard, INTERNAL: no export names it and no signature takes
-// it (apps/os src/cause.ts explains the guard). A host's `callWithCause`, and its `fetch` under a
-// Request's mark, run their code under the cause the platform handed them, and this carries that
-// cause, unread, to every `withItx` round trip and, in a loaded isolate, every outbound `fetch`.
+// it (apps/os src/cause.ts explains the guard). A host's `callWithCause` (every loaded entrypoint
+// has one, sdk/loaded-worker.ts), and its `fetch` under a Request's mark, run their code under the
+// cause the platform handed them, and this carries that cause, unread, to every `withItx` round
+// trip and `getItx` scope and, in a loaded isolate, every outbound `fetch`.
 // Any other code runs, in a loaded isolate, under the newest cause its isolate saw, and in the
 // platform's own, shared by every project, under none. Shared by name
 // (`Symbol.for("iterate.cause")`), so every copy of the SDK in an isolate reaches the same one.
@@ -80,9 +81,8 @@ export const runCausedBy = <T>(cause: unknown, code: () => T): T => carrier.run(
 export const currentCause = (): unknown => carrier.current();
 
 /** In a LOADED isolate: every outbound `fetch` carries the cause it runs under (the platform's
- *  egress turns it into our mark) — installed as the SDK's module is evaluated there, before any of
- *  the loaded code's own module runs (apps/os scripts/build.ts); the platform's isolate never is.
- *  @public — called only from the entries that build writes, which knip does not read. */
+ *  egress turns it into our mark) — installed before any of the loaded code's own module runs
+ *  (sdk/loaded-worker.ts); the platform's isolate never is. */
 export const carryCauseOnFetch = (): void => carrier.carryOnFetch();
 
 /** The cause a Request carries, or none. */
