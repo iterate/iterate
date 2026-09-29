@@ -34,7 +34,6 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
 import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
 import { defaultFiles, templateFiles } from "../generated/config-templates.js";
@@ -115,21 +114,21 @@ export class ProjectProcessor extends StreamProcessor<
 > {
   readonly contract = ProjectContract;
 
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly downloadTemplate: TemplateDownload;
   private readonly hostnames: () => ProjectHostnames | null;
   private readonly deletion: () => ProjectDeletion | null;
   private readonly publisher: () => ProjectPublisher | null;
 
   constructor(
-    withItx: WithItx<ItxEntrypointScope>,
+    getItx: () => ItxEntrypointScope & Disposable,
     downloadTemplate: TemplateDownload,
     hostnames: () => ProjectHostnames | null = () => null,
     deletion: () => ProjectDeletion | null = () => null,
     publisher: () => ProjectPublisher | null = () => null,
   ) {
     super();
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
     this.deletion = deletion;
@@ -532,7 +531,11 @@ export class ProjectProcessor extends StreamProcessor<
   /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
    *  is, born by an earlier attempt or another commit. */
   async #seed(state: ProjectState): Promise<void> {
-    await this.withItx((itx) => itx.repos.create("/repos/config"));
+    // its own block: the template's download below outlasts it
+    {
+      using itx = this.getItx();
+      await itx.repos.create("/repos/config");
+    }
     const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
     // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
     // of the tip first — one Artifacts round trip less on every creation, and the one that hung
@@ -560,17 +563,17 @@ export class ProjectProcessor extends StreamProcessor<
         Object.fromEntries(changes.map((file) => [file.path, file.content])),
         "The config template",
       );
-      const seeded = (await this.withItx((itx) =>
-        config(itx).commitFiles({
-          message: reference ? `seed: ${reference}` : "seed: minimal project config",
-          changes,
-          parent: null,
-        }),
-      )) as unknown as { commitOid: string | null };
+      using itx = this.getItx();
+      const seeded = (await config(itx).commitFiles({
+        message: reference ? `seed: ${reference}` : "seed: minimal project config",
+        changes,
+        parent: null,
+      })) as unknown as { commitOid: string | null };
       commitOid = seeded.commitOid;
     } catch (error) {
+      using itx = this.getItx();
       // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+      commitOid = (await config(itx).tip()) as unknown as string | null;
       if (!commitOid) throw error;
       console.info({
         event: "project.seed-on-born-main",

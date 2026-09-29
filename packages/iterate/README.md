@@ -37,7 +37,6 @@ imports each symbol from one path, and the loader links this deployment's own bu
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors |
 | `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too         |
-| `iterate/with-itx`         | `withItx` alone                                                                                                                             |
 | `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                              |
 | `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                            |
 
@@ -67,30 +66,29 @@ export class HoarderDurableObject extends StreamProcessorDurableObject {
 
 ## Reaching the context from loaded code
 
-Loaded code reaches its context through `withItx`: one round trip, after which the scope, every
-call made through it and every handle it awaited are released.
+Loaded code reaches its context with `using itx = this.getItx()`: when the block ends, the scope,
+every call made through it and every handle it awaited are released. Every loaded
+`WorkerEntrypoint` has `getItx`, and so do the SDK's hosts (`IterateConfigEntrypoint`,
+`FacetDurableObject`, `StreamProcessorDurableObject`).
 
 ```js
 import { IterateConfigEntrypoint } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 
 export default class extends IterateConfigEntrypoint {
   async fetch() {
-    // An SDK host (IterateConfigEntrypoint, StreamProcessorDurableObject) has it as a method.
-    const { projectSlug } = await this.withItx((itx) => itx.whoami());
+    using itx = this.getItx();
+    const { projectSlug } = await itx.whoami();
     return new Response(`Homepage of ${projectSlug}`);
   }
 }
-
-// Anywhere else: withItx(this.env.ITX, (itx) => itx.kv.get("key"))
 ```
 
-Never keep what `env.ITX.get()` hands out, and answer data, not handles, from `withItx`: a kept
-scope, step or handle keeps the context, and any facet holding it, resident after the project goes
-idle. An object that needs
-reach takes a `WithItx` accessor (`(call) => withItx(this.env.ITX, call)`), never a scope; work
-that outlives the call runs under a processor's `runInBackground` claim. Lint refuses a raw
-`ITX.get()` in this repository (`iterate/no-raw-itx-get`).
+Bind each scope with `using` in the smallest block that holds its calls, await every call inside
+it, and hand data, not handles, out of it: a kept scope, step or handle keeps the context, and any
+facet holding it, resident after the project goes idle. An object that needs reach takes an
+accessor (`() => this.getItx()`), never a scope; work that outlives the call runs under a
+processor's `runInBackground` claim. Lint refuses a raw `ITX.get()` and a `getItx()` no `using`
+binds in this repository (`iterate/no-raw-itx-get`).
 
 ## Who wrote an event
 

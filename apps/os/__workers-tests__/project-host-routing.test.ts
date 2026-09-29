@@ -108,20 +108,21 @@ export default class Slow extends WorkerEntrypoint {
 }`,
 };
 
-/** The config worker's router, as the SDK teaches it: one `withItx` round trip per request, released
- *  once the app's Response is in, while its body still streams. */
-const SRC_WITH_ITX_ROUTER = {
+/** The config worker's router, as the SDK teaches it: one `using` scope per request, released once
+ *  the app's Response is in, while its body still streams. */
+const SRC_GET_ITX_ROUTER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class extends IterateConfigEntrypoint {
-  fetch(request) {
-    return this.withItx((itx) => itx.slow.fetch(request));
+  async fetch(request) {
+    using itx = this.getItx();
+    return await itx.slow.fetch(request);
   }
 }`,
 };
 
-test("a router that answers through this.withItx hands on the app's whole streamed body — the release after the Response does not cut it — and leaves nothing holding the context", async () => {
-  const ctx = "prj_routing_withitx_stream";
+test("a router that answers through `using itx = this.getItx()` hands on the app's whole streamed body — the release after the Response does not cut it — and leaves nothing holding the context", async () => {
+  const ctx = "prj_routing_getitx_stream";
   const s = stub(ctx);
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -138,7 +139,7 @@ test("a router that answers through this.withItx hands on the app's whole stream
         "x-itx-expression": JSON.stringify([
           "itx",
           "workers",
-          ["get", { source: SRC_WITH_ITX_ROUTER }],
+          ["get", { source: SRC_GET_ITX_ROUTER }],
         ]),
       },
     }),
@@ -324,7 +325,8 @@ const SRC_VISIT_SITE = {
   "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class extends IterateConfigEntrypoint {
   async fetch() {
-    await this.withItx((itx) => itx.append({ type: "test/visited" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/visited" });
     return new Response("visited");
   }
 }`,

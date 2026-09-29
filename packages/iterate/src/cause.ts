@@ -1,8 +1,8 @@
 // cause.ts — the SDK's half of the loop guard, INTERNAL: no export names it and no signature takes
 // it (apps/os src/cause.ts explains the guard). A host's `callWithCause` (every loaded entrypoint
 // has one, sdk/loaded-worker.ts), and its `fetch` under a Request's mark, run their code under the
-// cause the platform handed them, and this carries that cause, unread, to every `withItx` round
-// trip and `getItx` scope and, in a loaded isolate, every outbound `fetch`.
+// cause the platform handed them, and this carries that cause, unread, to every `getItx` scope
+// and, in a loaded isolate, every outbound `fetch`.
 // Any other code runs, in a loaded isolate, under the newest cause its isolate saw, and in the
 // platform's own, shared by every project, under none. Shared by name
 // (`Symbol.for("iterate.cause")`), so every copy of the SDK in an isolate reaches the same one.

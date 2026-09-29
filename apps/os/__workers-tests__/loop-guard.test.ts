@@ -44,7 +44,7 @@ const MAIL = `await itx.email.send({ to: "ann@example.com", subject: "Hi", text:
 const ACTING = facetSpec(
   "Acting",
   [],
-  `async fetch() { await withItx(this.env.ITX, (itx) => itx.append({ type: "test/acted" })); return new Response("acted"); }`,
+  `async fetch() { using itx = this.getItx(); await itx.append({ type: "test/acted" }); return new Response("acted"); }`,
 );
 
 // ── the accounting ──
@@ -128,7 +128,10 @@ test("cause-table: a retried delivery runs at its first depth and writes nothing
       const sunk = () => itx.cd("./sink").append({ type: "test/sunk" });
       await Promise.all(tries === 1 ? [x(), sunk()] : [sunk(), x()]);
       await itx.append({ type: "test/b" });
-      await this.withItx((again) => again.append({ type: "test/b" }));
+      {
+        using again = this.getItx();
+        await again.append({ type: "test/b" });
+      }
       if (tries === 1) throw new Error("the first try fails after its writes");
       await itx.append({ type: "test/done", payload: { tries } });`,
   );
@@ -601,13 +604,13 @@ export default class extends IterateConfigEntrypoint {
     ${onEvent}
   }
   async fetch(request) {
-    await this.withItx(async (itx) => {
-      ${onRequest}
-    });
+    using itx = this.getItx();
+    ${onRequest}
     return new Response("served");
   }
   async later() {
-    await this.withItx((itx) => itx.append({ type: "test/later" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/later" });
   }
 }
 `,
@@ -632,7 +635,6 @@ function facetSpec(name: string, methods: string[], body: string, preamble = "")
       "package.json": '{"main":"worker.js"}',
       "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 ${preamble}
 export class ${name} extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, ...${JSON.stringify(methods)}];
@@ -651,14 +653,16 @@ const REVIVER = facetSpec(
   ["claimNow", "touch"],
   /* js */ `
   touch() {}
-  claimNow() {
-    return withItx(this.env.ITX, (itx) => itx.processors.claim("reviver", Date.now() + 3_600_000));
+  async claimNow() {
+    using itx = this.getItx();
+    return await itx.processors.claim("reviver", Date.now() + 3_600_000);
   }
   async revive() {
     const tries = (this.ctx.storage.kv.get("tries") ?? 0) + 1;
     this.ctx.storage.kv.put("tries", tries);
     if (tries === 1) throw new Error("the first revive fails");
-    await withItx(this.env.ITX, (itx) => itx.append({ type: "test/revived" }));
+    using itx = this.getItx();
+    await itx.append({ type: "test/revived" });
   }`,
 );
 
@@ -668,8 +672,9 @@ const DOOMED = facetSpec(
   "Doomed",
   ["claimNow"],
   /* js */ `
-  claimNow() {
-    return withItx(this.env.ITX, (itx) => itx.processors.claim("doomed", Date.now() + 3_600_000));
+  async claimNow() {
+    using itx = this.getItx();
+    return await itx.processors.claim("doomed", Date.now() + 3_600_000);
   }
   revive() {
     throw Object.assign(new Error("its work in flight died with its host 5 times"), { code: "PERMANENT_FAILURE" });
@@ -694,7 +699,7 @@ class Target extends RpcTarget {
 }`,
 );
 
-/** A loaded processor `slug` on `consumes`, its StreamProcessor's body `body`; `this.withItx` is
+/** A loaded processor `slug` on `consumes`, its StreamProcessor's body `body`; `this.getItx` is
  *  its host's. */
 function processorSpec(slug: string, consumes: string[], body: string, state = "z.object({})") {
   return {
@@ -706,11 +711,11 @@ import { StreamProcessor, defineProcessorContract } from "iterate/stream/process
 import { z } from "zod";
 class Processor extends StreamProcessor {
   contract = defineProcessorContract({ slug: "${slug}", version: "1.0.0", description: "${slug}", stateSchema: ${state}, consumes: ${JSON.stringify(consumes)}, emits: ["events.iterate.com/itx/run-requested"] });
-  constructor(withItx) { super(); this.withItx = withItx; }
+  constructor(getItx) { super(); this.getItx = getItx; }
   ${body}
 }
 export class ProcessorDurableObject extends StreamProcessorDurableObject {
-  processor = new Processor((call) => this.withItx(call));
+  processor = new Processor(() => this.getItx());
 }`,
     },
     className: "ProcessorDurableObject",
@@ -722,7 +727,7 @@ function blocker(code: string) {
   return processorSpec(
     "blocker",
     ["test/said"],
-    `processEvent({ event, blockProcessorWhile }) { if (event) blockProcessorWhile(() => this.withItx(async (itx) => { ${code} })); }`,
+    `processEvent({ event, blockProcessorWhile }) { if (event) blockProcessorWhile(async () => { using itx = this.getItx(); ${code} }); }`,
   );
 }
 

@@ -799,7 +799,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     const hold = Boolean(slackTeam && (await this.#routedToAnotherProject(slackTeam.id)));
     const until = Date.now() + MOVE_OFFER_TTL_MS;
     // the context's alarm revives this facet when the offer runs out, which drops the token
-    if (hold) await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, until));
+    if (hold) {
+      using itx = this.getItx();
+      await itx.processors.claim(this.ctx.props.name, until);
+    }
     if ((await this.ctx.storage.get<number>("revision")) !== started)
       throw new Error(
         "the secret was changed while the provider was answering — the tokens were discarded; begin again",
@@ -905,7 +908,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     const held = await this.ctx.storage.get<HeldExchange>("held");
     if (!held) return;
     if (held.until <= Date.now()) await this.ctx.storage.delete("held");
-    else await this.withItx((itx) => itx.processors.claim(this.ctx.props.name, held.until));
+    else {
+      using itx = this.getItx();
+      await itx.processors.claim(this.ctx.props.name, held.until);
+    }
   }
 
   /** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token (`held`); or the record, cleared,
@@ -1289,7 +1295,8 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  happened, and a lost fact must not fail the request that caused it. */
   async #fact(event: EventInput<typeof SecretContract>): Promise<void> {
     try {
-      await this.withItx((itx) => itx.append(event));
+      using itx = this.getItx();
+      await itx.append(event);
     } catch (error) {
       reportIssue("secret.fact-append-failed", error, { type: event.type });
     }

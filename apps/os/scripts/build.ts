@@ -15,8 +15,7 @@ const root = path.resolve(import.meta.dirname, "..");
 
 /** The packages a loaded worker imports from THIS deployment rather than from npm: every `iterate/*`
  *  subpath that runs in workerd, and the zod the SDK itself is built on (one zod per isolate, so a
- *  schema made by user code is the schema the SDK checks). `iterate/with-itx` is `withItx` alone
- *  (~1.5 KB): an `itx.run` script or the agents' AI transport imports it and never loads the SDK. `package.json` naming `iterate` as
+ *  schema made by user code is the schema the SDK checks). `package.json` naming `iterate` as
  *  `latest` (or not at all) links against these — on a preview, the PR's own SDK. */
 const PLATFORM_ENTRIES = [
   "iterate/sdk",
@@ -27,7 +26,6 @@ const PLATFORM_ENTRIES = [
   "iterate/lib",
   "iterate/expression",
   "iterate/principal",
-  "iterate/with-itx",
   "zod",
 ] as const;
 

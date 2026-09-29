@@ -565,15 +565,14 @@ async function disconnectPersonalAccount(
   row: IntegrationConnectionRow,
 ): Promise<void> {
   const secretPath = tokenSecretPathOf(row.provider, row.connection);
-  const deleted = await scope
-    .withItx((itx) => itx.secrets.delete(secretPath))
-    .then(
-      () => true,
-      (error: unknown) => {
-        if (errorCode(error) === "SECRET_NOT_SET") return false;
-        throw error;
-      },
-    );
+  using itx = scope.getItx();
+  const deleted = await itx.secrets.delete(secretPath).then(
+    () => true,
+    (error: unknown) => {
+      if (errorCode(error) === "SECRET_NOT_SET") return false;
+      throw error;
+    },
+  );
   if (!deleted)
     await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
       type: `events.iterate.com/${row.provider}/disconnected`,

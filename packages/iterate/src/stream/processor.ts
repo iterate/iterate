@@ -700,7 +700,7 @@ export class ProcessorEngine<State> {
     let blockers: Promise<unknown> = Promise.resolve();
     // Validated against the declared `emits` and stamped with provenance. A certificate an entity
     // cross-posts to ANOTHER context (`/`, the project catalog) is its own `itx.cd(path).append(...)`
-    // through the host's `withItx` — the context's own append, no second verb here.
+    // through the host's `getItx` — the context's own append, no second verb here.
     const stamped = (emittedEvents: StreamEventInput[]): StreamEventInput[] => {
       for (const emitted of emittedEvents) {
         if (!emits.includes(emitted.type))
@@ -993,9 +993,9 @@ export class ReduceCheckpointTable {
 const LIVE_STATE_PATCH_MAX_CHARS = 1024 * 1024;
 
 /** The only thing a LiveState needs from its host: somewhere to append the delta. A
- *  `ProcessorStream` satisfies it; a facet that is no processor passes one round trip per delta,
- *  `{ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }` (`iterate/with-itx`), never a
- *  scope it holds. A field initializer cannot await, so a facet builds its LiveState that way and
+ *  `ProcessorStream` satisfies it; a facet that is no processor passes one scope per delta,
+ *  `{ append: async (e) => { using itx = this.getItx(); await itx.append(e); } }`, never a scope it
+ *  holds. A field initializer cannot await, so a facet builds its LiveState that way and
  *  serves `snapshot()` as the client's seed read. */
 export type LiveStateSink = {
   append(event: { type: string; ephemeral?: true; payload?: Record<string, unknown> }): unknown;
@@ -1011,7 +1011,7 @@ export class LiveState<S> {
   #lastSerializedState: S;
   #liveStateRev: number;
   /** THE DELTA APPEND CHAIN — at most one delta append in flight, so commit order = mint order for a
-   *  CROSS-HOP sink: `withItx(env.ITX, (itx) => itx.append(e))` mints a FRESH scope per call, so two deltas
+   *  CROSS-HOP sink: its `getItx()` mints a FRESH scope per call, so two deltas
    *  issued in different turns race across the hop and the second can commit first — ~14% of rapid
    *  pairs on the deployed edge (never locally, the hop is sub-ms). Nothing is dropped by a reorder,
    *  but it costs every watcher the full seed re-read the deltas exist to avoid. Every delta rides

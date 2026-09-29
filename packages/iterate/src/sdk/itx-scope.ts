@@ -1,40 +1,22 @@
-// sdk/with-itx.ts — `withItx`, THE one way code reaches its context: ONE round trip on
-// `env.ITX`, then RELEASE a Workers-RPC round trip completely — the scope and every call it made, not
-// only the last. Code imports it from "iterate/with-itx" (`withItx(this.env.ITX, (itx) => …)`),
-// this module alone, so code that must not load the SDK's hosts (a script's isolate, the agents' AI
-// transport) never does. The SDK's hosts (`StreamProcessorDurableObject.withItx`,
-// `IterateConfigEntrypoint.withItx`) delegate to it; their `getItx`, and every loaded entrypoint's
-// (loaded-worker.ts), is `itxScope`, the same scope for a `using` declaration. No workerd import,
-// so the unit tests run it in node (with-itx.test.ts) and the platform bundles it alone for a
-// script's isolate (apps/os `runScriptModule`); on native RpcPromises it is proven by every apps/os
-// e2e row that reaches a facet, and pinned by apps/os/e2e/context-residency.e2e.test.ts ("… does
-// not outlive …": a facet that kept one value from its context stayed running, billed). Lint
-// refuses the raw `env.ITX.get()` (iterate/no-raw-itx-get).
+// sdk/itx-scope.ts — `itxScope`, what every `getItx` is: the SDK's hosts' (index.ts) and every
+// loaded entrypoint's (loaded-worker.ts). THE one way code reaches its context is
+// `using itx = this.getItx()` in the smallest block that holds its calls: the `using` releases a
+// Workers-RPC scope completely when the block ends — the scope and every call made through it, not
+// only the last. A value code keeps from its context past that — an undisposed call, a handle, a
+// stub — keeps the context, and any facet holding it, running and billed: pinned by
+// apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …"). No workerd import, so the
+// unit tests run it in node (itx-scope.test.ts). Lint refuses the raw `env.ITX.get()`, and a
+// `getItx()` no `using` binds (iterate/no-raw-itx-get).
 
 import { currentCause } from "../cause.ts";
 import { releaseRpcSessions } from "../lib.ts";
 
-/** ONE round trip on `entrypoint.get()`, then RELEASE EVERYTHING IT REACHED: the scope and every call
- *  `call` made through it or through a handle it awaited, the last first. A release that throws is reported and the rest still run
- *  (lib.ts `releaseRpcSessions`), so the call's answer stands. Data it answers stays usable; a stub or
- *  handle it answers is released with the rest, so return data.
- *
- *    const { projectSlug } = await withItx(this.env.ITX, (itx) => itx.whoami());
- */
-export async function withItx<Scope, T>(
-  entrypoint: { get(): Scope },
-  call: (itx: Scope) => T,
-): Promise<Awaited<T>> {
-  const itx = itxScope(entrypoint);
-  try {
-    return await call(itx);
-  } finally {
-    itx[Symbol.dispose]();
-  }
-}
-
-/** `withItx`'s scope for a `using` declaration, which releases it as `withItx` does when the block
- *  ends: its `[Symbol.dispose]` releases the scope and every call made through it, the last first.
+/** ONE get on `entrypoint`, under the running cause, for a `using` declaration: its
+ *  `[Symbol.dispose]` releases the scope and every call made through it or through a handle it
+ *  awaited, the last first. A release that throws is reported and the rest still run (lib.ts
+ *  `releaseRpcSessions`), so an answer already awaited stands. Data stays usable after the block;
+ *  a stub or handle is released with the rest, so a block hands out data. Await every call before
+ *  the block ends: `return await itx.whoami()`, never `return itx.whoami()`.
  *
  *    using itx = this.getItx();
  *    const { projectSlug } = await itx.whoami();

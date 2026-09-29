@@ -190,7 +190,8 @@ const SRC_FETCH_ROUTER = {
   "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";
 export default class Router extends IterateConfigEntrypoint {
   async fetch(request) {
-    const route = await this.withItx((itx) => itx.fetchRoutes.match({ url: request.url, headers: request.headers }));
+    using itx = this.getItx();
+    const route = await itx.fetchRoutes.match({ url: request.url, headers: request.headers });
     if (route?.authRequirement && !request.headers.has("x-itx-principal"))
       return new Response("Sign in\\n", { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="iterate"' } });
     if (route) {

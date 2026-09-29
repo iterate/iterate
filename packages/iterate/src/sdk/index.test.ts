@@ -52,14 +52,11 @@ test("`using itx = this.getItx()` releases the scope and every call made through
   ]);
 });
 
-test.for(["withItx", "getItx"])(
-  "callWithCause refuses %s: no caller gets the scope",
-  async (name) => {
-    await expect(
-      configEntrypoint([]).callWithCause(undefined, [[name, () => {}]]),
-    ).rejects.toMatchObject({ code: "NOT_A_METHOD" });
-  },
-);
+test("callWithCause refuses getItx: no caller gets the scope", async () => {
+  await expect(configEntrypoint([]).callWithCause(undefined, [["getItx"]])).rejects.toMatchObject({
+    code: "NOT_A_METHOD",
+  });
+});
 
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`
  *  overrides `processEvent` when given. */

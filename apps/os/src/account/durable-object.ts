@@ -43,7 +43,7 @@ export class AccountDurableObject extends StreamProcessorDurableObject<
       env: this.env,
       projectId,
       rootPath: path,
-      withItx: (call) => this.withItx(call),
+      getItx: () => this.getItx(),
       storage: this.ctx.storage,
     };
   }

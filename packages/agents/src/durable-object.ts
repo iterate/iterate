@@ -13,14 +13,15 @@ export class AgentDurableObject
    *  reaches it through the collection (collection.ts). */
   static override publicMethods = [...super.publicMethods, "message"];
 
-  processor = new AgentProcessor({ withItx: (call) => this.withItx(call) });
+  processor = new AgentProcessor({ getItx: () => this.getItx() });
 
   /** The context this facet is hosted on IS the agent: its path is the one name it goes by, here
    *  and under `itx.files` (attachments are stored beneath it). Read once per incarnation. */
   #pathRead?: string;
   async #path(): Promise<string> {
     if (this.#pathRead) return this.#pathRead;
-    const { path } = await this.withItx((itx) => itx.whoami());
+    using itx = this.getItx();
+    const { path } = await itx.whoami();
     return (this.#pathRead = path);
   }
 
@@ -37,9 +38,10 @@ export class AgentDurableObject
     for (const file of files) {
       const filename = file.filename.replace(/[^A-Za-z0-9._-]+/g, "-");
       const storedAt = `${path}/${crypto.randomUUID().slice(0, 8)}-${filename}`;
-      const stored = await this.withItx((itx) =>
-        itx.files.get(storedAt).put({ contentType: file.contentType, data: file.data }),
-      );
+      using itx = this.getItx();
+      const stored = await itx.files
+        .get(storedAt)
+        .put({ contentType: file.contentType, data: file.data });
       attachments.push({
         contentType: stored.contentType,
         filename: file.filename,
@@ -47,18 +49,17 @@ export class AgentDurableObject
         size: stored.size,
       });
     }
-    const appended = await this.withItx((itx) =>
-      itx.append({
-        type: "events.iterate.com/agent/context-added",
-        payload: {
-          role: "user",
-          content: message,
-          actor: { type: "user" },
-          ...(attachments.length > 0 && { files: attachments }),
-          from,
-        },
-      }),
-    );
+    using itx = this.getItx();
+    const appended = await itx.append({
+      type: "events.iterate.com/agent/context-added",
+      payload: {
+        role: "user",
+        content: message,
+        actor: { type: "user" },
+        ...(attachments.length > 0 && { files: attachments }),
+        from,
+      },
+    });
     // Over the loopback stub the append's answer types as an RPC result, not the array the context
     // declares (`append(...events): Promise<StreamEvent[]>`, context/built-ins.ts); the wire copied it.
     return (appended as unknown as StreamEvent[])[0]!;

@@ -5,7 +5,7 @@
 //   callWithCause(cause, steps) — the walk the platform makes every call but `fetch` through
 //                                 (call-with-cause.ts), so a method runs under its own call's cause;
 //   getItx()                    — `using itx = this.getItx()`: `env.ITX`'s scope, released when the
-//                                 block ends (with-itx.ts `itxScope`).
+//                                 block ends (itx-scope.ts).
 // Workers RPC reaches anything on the prototype, `getItx` included, so the platform refuses a
 // caller's step by that name (`walkUnderCause`, apps/os built-ins.ts `workers`). Small, and imports
 // no host: every loaded isolate's cold start evaluates it.
@@ -13,7 +13,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { carryCauseOnFetch } from "../cause.ts";
 import { walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
-import { itxScope } from "./with-itx.ts";
+import { itxScope } from "./itx-scope.ts";
 
 carryCauseOnFetch();
 

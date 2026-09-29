@@ -138,7 +138,9 @@ test("the badge counts running and waiting agents, never idle or unknown ones", 
 function stateAfter(events: { type: string; payload?: unknown }[]) {
   return reduceProcessor(
     new AgentProcessor({
-      withItx: () => Promise.reject(new Error("the reduce reaches no itx")),
+      getItx: () => {
+        throw new Error("the reduce reaches no itx");
+      },
     }),
     events,
   );

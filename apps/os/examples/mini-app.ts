@@ -17,12 +17,11 @@
 // Persistence is the PROJECT's own itx.kv (this loaded code speaks for the project), so the notes
 // are shared and durable. `RpcTarget`/`WorkerEntrypoint` are the runtime's own
 // (inside a loaded isolate capnweb's RpcTarget IS the native one); `newWorkersRpcResponse` — which
-// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — comes from `iterate/sdk` and
-// `withItx` from `iterate/with-itx`, which the loader links to this deployment's own SDK build. The API holds no scope for its socket's
-// lifetime: each method is its own `withItx` round trip.
+// serves BOTH the WebSocket upgrade and a one-shot HTTP batch — comes from `iterate/sdk`, which the
+// loader links to this deployment's own SDK build. The API holds no scope for its socket's
+// lifetime: it takes the entrypoint's `getItx`, and each method is its own `using` block.
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { newWorkersRpcResponse, type WithItx } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
+import { newWorkersRpcResponse } from "iterate/sdk";
 
 const KEY = "mini-app/notes";
 
@@ -35,27 +34,31 @@ type Note = { id: string; text: string; at: number };
 
 /** The mini-app's capnweb API — the methods the page calls, backed by the project's itx.kv. */
 class Notes extends RpcTarget {
-  readonly #withItx: WithItx<Itx>;
-  constructor(withItx: WithItx<Itx>) {
+  readonly #getItx: () => Itx & Disposable;
+  constructor(getItx: () => Itx & Disposable) {
     super();
-    this.#withItx = withItx;
+    this.#getItx = getItx;
   }
   async list(): Promise<Note[]> {
-    const raw = await this.#withItx((itx) => itx.kv.get(KEY));
+    using itx = this.#getItx();
+    const raw = await itx.kv.get(KEY);
     return raw ? (JSON.parse(raw) as Note[]) : [];
   }
   async add(text: string): Promise<Note[]> {
     const notes = await this.list();
     notes.unshift({ id: crypto.randomUUID(), text: String(text), at: Date.now() });
-    await this.#withItx((itx) => itx.kv.put(KEY, JSON.stringify(notes)));
+    using itx = this.#getItx();
+    await itx.kv.put(KEY, JSON.stringify(notes));
     return notes;
   }
 }
 
-export default class MiniApp extends WorkerEntrypoint<{ ITX: { get(): Itx } }> {
+export default class MiniApp extends WorkerEntrypoint {
+  // what every loaded WorkerEntrypoint has (iterate src/sdk/loaded-worker.ts), typed for this module
+  declare getItx: () => Itx & Disposable;
   fetch(request: Request): Response | Promise<Response> {
     if (new URL(request.url).pathname === "/rpc")
-      return newWorkersRpcResponse(request, new Notes((call) => withItx(this.env.ITX, call)));
+      return newWorkersRpcResponse(request, new Notes(() => this.getItx()));
     // the path the browser addresses /rpc at: under paths, the base path the edge stripped
     const rpc = `${request.headers.get("x-iterate-base-path") || ""}/rpc`;
     return new Response(page(rpc), { headers: { "content-type": "text/html; charset=utf-8" } });

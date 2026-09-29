@@ -79,17 +79,17 @@ function woken(offset: number, incarnation: number) {
   };
 }
 
-/** The collection over a fake `withItx` whose every `cd` is `context`, with a clock that each
+/** The collection over a fake `getItx` whose every `cd` is `context`, with a clock that each
  *  timed-out slice moves on by its own `timeoutMs`. */
 function collection(context: ReturnType<typeof fakeContext>) {
   vi.useFakeTimers({ toFake: ["Date"] });
   onTestFinished(() => {
     vi.useRealTimers();
   });
-  const itx = { cd: () => context };
+  const itx = { cd: () => context, [Symbol.dispose]: () => {} };
   return new EntityCollectionRpcTarget(
     "repo",
-    (call) => Promise.resolve(call(itx as never)) as never,
+    () => itx as never,
     () => Promise.reject(new Error("the create reads no catalog")),
   );
 }

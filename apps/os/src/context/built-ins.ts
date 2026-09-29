@@ -226,7 +226,7 @@ type PlatformIntegrationsVerbs = {
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
    *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
-   *  `withItx(env.ITX, …)` hands it) can spell `itx.builtins.append(…)`. */
+   *  `getItx()` hands it) can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. A project's `projectUrl` is its apex, `url()`'s answer (on the primary
    *  hostname when it has one), present when the call carries the platform origin. */
@@ -399,7 +399,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  event, `{ name, target: null }`: the DO deletes the facet the row hosted, storage included, before
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
-   *  so loaded code (`withItx(env.ITX, (itx) => itx.processors.enable(…))`) and a sibling
+   *  so loaded code (`using itx = this.getItx(); await itx.processors.enable(…)`) and a sibling
    *  (`itx.cd(p).processors…`) do it through the same built-in as a client. A hosted processor's
    *  `claim(name, at)` is its claim on this context's alarm — "revive me by `at`" while a
    *  `runInBackground` attempt is in flight, `null` to release — durable as a kv row, never an event. */

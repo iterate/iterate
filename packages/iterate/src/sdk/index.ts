@@ -8,7 +8,7 @@
 //
 // Everything else has one path of its own: a processor's surface (`StreamProcessor`,
 // `defineProcessorContract`, `LiveState`, the event and contract types) is `iterate/stream/processor`,
-// which runs in Node too; `withItx` is `iterate/with-itx`; zod is `zod`. A loaded worker imports each
+// which runs in Node too; zod is `zod`. A loaded worker imports each
 // by name and the loader links this deployment's own build of it (apps/os/scripts/build.ts):
 //
 //   import { StreamProcessorDurableObject } from "iterate/sdk";
@@ -35,9 +35,8 @@ import {
 import { causeOfRequest, runCausedBy } from "../cause.ts";
 import { auth } from "./auth.ts";
 import { walkUnderCause, type RpcSteps } from "./call-with-cause.ts";
-// The hosts' `this.withItx(fn)` and `this.getItx()` are these (with-itx.ts says why a scope is
-// never kept).
-import { itxScope, withItx } from "./with-itx.ts";
+// The hosts' `this.getItx()` is this (itx-scope.ts says why a scope is never kept).
+import { itxScope } from "./itx-scope.ts";
 // capnweb's CLIENT constructors, so userspace can dial a remote capnweb API from inside its isolate
 // through the context's own egress, and `newWorkersRpcResponse`, the SERVER half, so a loaded worker
 // can serve a capnweb API over its `fetch`. The HTTP batch is exported ON PURPOSE beside the
@@ -55,14 +54,14 @@ export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse }
 //
 // hosted through the ordinary `itx.facets.get('presence', { source, className: 'PresenceDurableObject' })`
 // — a processor is a named facet that additionally gets pushed every commit. `processor` is a FIELD
-// so it can take what its effects need from this object — reach as a `WithItx` accessor, never a
-// scope: `new Notifier((call) => this.withItx(call))` — and so the same class is constructed bare in
-// a test. A method of the host's own that callers reach by itx expression goes on its list:
+// so it can take what its effects need from this object — reach as an accessor, never a scope:
+// `new Notifier(() => this.getItx())` — and so the same class is constructed bare in a test. A
+// method of the host's own that callers reach by itx expression goes on its list:
 // `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
 // that knows it (pinned in __workers-tests__/facets.test.ts), plus `fedByPushes` when a row
-// pushes it (FacetProps). THE STREAM is the itx scope `this.withItx(fn)` hands `fn` (apps/os
+// pushes it (FacetProps). THE STREAM is the itx scope `this.getItx()` hands out (apps/os
 // iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
@@ -99,7 +98,10 @@ export type FacetProps = {
  *  (apps/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
  *  extend this shell lists nothing, so no caller reaches it by expression. */
-export abstract class FacetDurableObject<Env = unknown> extends DurableObject<Env, FacetProps> {
+export abstract class FacetDurableObject<
+  Env extends { ITX?: ItxEntrypointService } = { ITX: ItxEntrypointService },
+  Scope = IterateContextApi,
+> extends DurableObject<Env, FacetProps> {
   /** What a caller may reach by itx expression: the FIRST step of `itx.facets.get(name).<step>…`, a
    *  method or a property of this class. A subclass lists its own on top of its parent's:
    *  `static override publicMethods = [...super.publicMethods, "send"]`. */
@@ -127,6 +129,38 @@ export abstract class FacetDurableObject<Env = unknown> extends DurableObject<En
     // `Function`, which has no `publicMethods`.
     return (this.constructor as typeof FacetDurableObject).publicMethods;
   }
+
+  /** `using itx = this.getItx()`: this facet's context's scope, released with every call made
+   *  through it when the block ends (itx-scope.ts). A Workers-RPC value this facet keeps past that —
+   *  the `itx.cd(path)` of `itx.cd(path).append(…)`, the `cfArtifacts.get(p)` of `.remote()`, an
+   *  answer awaited (`const { state } = await context.invoke(…)`), data included — keeps THIS FACET
+   *  running and billed after its context is evicted, until V8 collects the value, which an idle
+   *  isolate may not do for many minutes: each new incarnation of the context reattaches to the
+   *  facet. The context cannot end this from its side: the facet holds the value
+   *  (context-residency.e2e.test.ts, "… does not outlive …"). A field, not a method: Workers RPC
+   *  reaches a class's methods, and no caller may get the scope. */
+  protected readonly getItx = (): Scope & Disposable => itxScope(this.#itxEntrypoint());
+
+  /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
+   *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
+   *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
+   *  inside a facet (__workers-tests__/facets.test.ts). The casts name what workers-types cannot:
+   *  this worker's own `ItxEntrypoint` export, and the scope its `get` answers, which `Scope` is. */
+  #itxEntrypoint(): { get(): Scope } {
+    return (this.env.ITX ??
+      (
+        this.ctx.exports as unknown as {
+          ItxEntrypoint: (options: { props: object }) => ItxEntrypointService;
+        }
+      ).ItxEntrypoint({
+        // PLATFORM: this worker's own class, minted from its own exports — the full handle, the fixed
+        // point spellable, `cd` free to go up. A LOADED class never reaches this branch (it has
+        // `env.ITX`, baked in by the loader, and its own module's exports).
+        props: { iterateContextName: this.ctx.props.iterateContextName, platform: true },
+      })) as unknown as {
+      get(): Scope;
+    };
+  }
 }
 
 /** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
@@ -148,25 +182,17 @@ export type ProcessorScope = {
   processors: { claim(name: string, at: number | null): Promise<unknown> };
   /** Another context of the project by its dotted surface (`.append`), which the platform's handle
    *  and a loaded worker's alike answer — how an entity's processor cross-posts its certificate to
-   *  `/` (`withItx((itx) => itx.cd("/").append(certificate))`). Through the table like every other
+   *  `/` (`itx.cd("/").append(certificate)`). Through the table like every other
    *  word here: anyone's `cd(path).append` reaches any context of the project, stamped with where
    *  it came from; a jail's bare null refuses it. */
   cd(path: string): { append(...events: StreamEventInput[]): Promise<unknown> };
 };
 
-/** THE SCOPE ACCESSOR a host hands its processor: one pipelined round trip on the context's itx,
- *  released after (`StreamProcessorDurableObject.withItx`). A processor that needs an effect —
- *  `itx.cfArtifacts.create(path)`, `itx.ai.run(…)` — takes this and nothing else, so a unit test
- *  hands it a fake and the e2e lends one by rule on the context. */
-export type WithItx<Scope = IterateContextApi> = <T>(
-  call: (itx: Scope) => T,
-) => Promise<Awaited<T>>;
-
 export abstract class StreamProcessorDurableObject<
   State = unknown,
   Env extends { ITX?: ItxEntrypointService } = { ITX: ItxEntrypointService },
   Scope extends ProcessorScope = IterateContextApi,
-> extends FacetDurableObject<Env> {
+> extends FacetDurableObject<Env, Scope> {
   /** The reads a caller reaches on every processor: `fetch`, and the state caught up through the log
    *  (`snapshot`, `liveSnapshot`) or awaited (`waitUntilProcessed`). What feeds the processor —
    *  `processEventBatch`, `catchUpFromLog`, `revive` — is the platform's, never a caller's. */
@@ -180,7 +206,7 @@ export abstract class StreamProcessorDurableObject<
   /** The processor this object hosts — `processor = new PresenceProcessor()` at the top of the subclass. */
   abstract readonly processor: StreamProcessor<State>;
 
-  // ── what an author reaches (the itx scope: `this.withItx(fn)`; identity: `this.ctx.props`) ──
+  // ── what an author reaches (the itx scope: `this.getItx()`; identity: `this.ctx.props`) ──
 
   /** After a runtime field on the processor moved OUTSIDE a batch (an RPC method on this object);
    *  inside `processEvent` the engine re-projects on its own. */
@@ -219,25 +245,6 @@ export abstract class StreamProcessorDurableObject<
     return this.#engine.waitUntilProcessed(input);
   }
 
-  /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
-   *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
-   *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
-   *  inside a facet (__workers-tests__/facets.test.ts). */
-  #itxEntrypoint(): { get(): Scope } {
-    return (this.env.ITX ??
-      (
-        this.ctx.exports as unknown as {
-          ItxEntrypoint: (options: { props: object }) => ItxEntrypointService;
-        }
-      ).ItxEntrypoint({
-        // PLATFORM: this worker's own class, minted from its own exports — the full handle, the fixed
-        // point spellable, `cd` free to go up. A LOADED class never reaches this branch (it has
-        // `env.ITX`, baked in by the loader, and its own module's exports).
-        props: { iterateContextName: this.ctx.props.iterateContextName, platform: true },
-      })) as unknown as {
-      get(): Scope;
-    };
-  }
   // ── the engine: one ProcessorEngine over `processor` and this object's storage, built on first use —
   // `processor` is a subclass field, which does not exist yet while this base class constructs. ──
   #engineBuiltOnFirstUse?: ProcessorEngine<State>;
@@ -251,11 +258,18 @@ export abstract class StreamProcessorDurableObject<
       stream: {
         // A stub scope's answers are pipelined shapes by type and plain data on the wire (the
         // engine awaits them): the engine's own types, asserted.
-        append: (...events) =>
-          this.withItx((itx) => itx.append(...events)) as Promise<StreamEvent[]>,
-        read: (after, limit) =>
-          this.withItx((itx) => itx.readEvents(after, limit)) as Promise<StreamPage>,
-        claim: (at) => this.withItx((itx) => itx.processors.claim(this.ctx.props.name, at)),
+        append: async (...events) => {
+          using itx = this.getItx();
+          return (await itx.append(...events)) as StreamEvent[];
+        },
+        read: async (after, limit) => {
+          using itx = this.getItx();
+          return (await itx.readEvents(after, limit)) as StreamPage;
+        },
+        claim: async (at) => {
+          using itx = this.getItx();
+          return await itx.processors.claim(this.ctx.props.name, at);
+        },
       },
       storage: new ReduceCheckpointTable(this.ctx.storage.sql),
       fedByPushes: this.ctx.props.fedByPushes === true,
@@ -263,25 +277,6 @@ export abstract class StreamProcessorDurableObject<
       codeId: this.ctx.props.codeId,
     }));
   }
-
-  /** ONE round trip on the itx scope, then RELEASE EVERYTHING IT REACHED: the get, and every call the
-   *  callback made through it — not only the last. A Workers-RPC value this facet leaves undisposed —
-   *  the `itx.cd(path)` of `itx.cd(path).append(…)`, the `cfArtifacts.get(p)` of `.remote()`, an
-   *  answer awaited inside the callback (`const { state } = await context.invoke(…)`), data included —
-   *  keeps THIS FACET running after its context is evicted, until V8 collects the value, which an
-   *  idle isolate may not do for many minutes: each new incarnation of the context reattaches to the
-   *  facet, and the object stays billed (measured 2026-09-23: a new website project's `/` and
-   *  `/repos/config` billed 60 s of every minute for 30 min with no request). The context's own
-   *  `invoke` cannot end this from its side: the facet holds the value (context-residency.e2e.test.ts,
-   *  "… does not outlive …"). Protected: a host with methods of its own (the workspace,
-   *  src/workspace/durable-object.ts) reaches its context the same way. */
-  protected withItx<T>(call: (itx: Scope) => T): Promise<Awaited<T>> {
-    return withItx(this.#itxEntrypoint(), call);
-  }
-
-  /** `using itx = this.getItx()`: the scope `withItx` hands its callback, released the same way when
-   *  the block ends. A field, as `IterateConfigEntrypoint.getItx` is. */
-  protected readonly getItx = (): Scope & Disposable => itxScope(this.#itxEntrypoint());
 }
 
 /** What `processEvent` is handed: one event, and the project's root, typed with the installed apps
@@ -316,10 +311,10 @@ export abstract class IterateConfigEntrypoint<
   }
 
   /** The platform's delivery of one event (the dispatch boundary refuses any other caller),
-   *  through `callWithCause`: `processEvent` inside ONE `withItx` round trip, released when it
-   *  settles. */
+   *  through `callWithCause`: `processEvent` under ONE scope, released when it settles. */
   async deliverEvent(event: StreamEvent): Promise<void> {
-    await this.withItx((itx) => this.processEvent({ event, itx }));
+    using itx = this.getItx();
+    await this.processEvent({ event, itx });
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through. On no
@@ -328,15 +323,10 @@ export abstract class IterateConfigEntrypoint<
     return walkUnderCause(this, cause, steps);
   }
 
-  /** ONE round trip on the itx scope, then release the scope and every call made through it
-   *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). A
-   *  field, not a method: Workers RPC reaches an entrypoint's methods, and a caller's callback must
-   *  never get the scope (sdk/index.test.ts). */
-  protected readonly withItx = <T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> =>
-    withItx(this.env.ITX, call);
-
-  /** `using itx = this.getItx()`: the scope `withItx` hands its callback, released the same way when
-   *  the block ends. A field, as `withItx` is. */
+  /** `using itx = this.getItx()`: the project root's scope, released with every call made through
+   *  it when the block ends (`FacetDurableObject.getItx` says why nothing is kept past it). A field,
+   *  not a method: Workers RPC reaches an entrypoint's methods, and a caller must never get the
+   *  scope (sdk/index.test.ts). */
   protected readonly getItx = (): IterateContextApi & Disposable => itxScope(this.env.ITX);
 
   /** THE AUTHOR HOOK: every durable event of every context of the project from its first
@@ -350,7 +340,7 @@ export abstract class IterateConfigEntrypoint<
   /** THE WEB ROOT — every Request on a host of the project that no fetch route takes (the platform
    *  serves those first: `itx.fetchRoutes`). The host's routing slug is in `x-iterate-routing-slug`
    *  (`notes` for `notes--<project>.<hostname>`; absent on the apex), written only by the platform:
-   *  route on it in plain code, answering here (reaching the project through `this.withItx`) or
+   *  route on it in plain code, answering here (reaching the project through `this.getItx()`) or
    *  forwarding the Request. Default: not found. */
   override fetch(_request: Request): Response | Promise<Response> {
     return new Response("Not found\n", { status: 404 });

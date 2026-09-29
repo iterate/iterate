@@ -17,14 +17,12 @@ const DIGEST_MODULES = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Digest extends WorkerEntrypoint {
-  processEventBatch(events, range) {
-    return withItx(this.env.ITX, async (itx) => {
-      const seen = JSON.parse((await itx.kv.get("digested")) ?? "[]");
-      for (const e of events) seen.push(e.type + "@" + e.offset);
-      await itx.kv.put("digested", JSON.stringify(seen));
-    });
+  async processEventBatch(events, range) {
+    using itx = this.getItx();
+    const seen = JSON.parse((await itx.kv.get("digested")) ?? "[]");
+    for (const e of events) seen.push(e.type + "@" + e.offset);
+    await itx.kv.put("digested", JSON.stringify(seen));
   }
 }
 `,

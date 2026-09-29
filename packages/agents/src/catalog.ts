@@ -71,7 +71,7 @@ export class AgentCollectionDurableObject
   processor = new AgentCatalogProcessor();
   at(base: string) {
     return new AgentCollectionRpcTarget(
-      (call) => this.withItx(call),
+      () => this.getItx(),
       // THROUGH THE LOG'S HEAD, not the last pushed batch (`snapshot()` alone answers from what the
       // delivery loop has pushed so far): a death is on `/` before `delete()` returns — the saga
       // posts it here before its own certificate — so a verb on the dead agent right after must see

@@ -1,8 +1,8 @@
-// with-itx.test.ts — `withItx` disposes what `recordPipelinedSteps` records, so it must record EVERY
-// call a round trip reached and change nothing else about the stub (with-itx.ts says why).
+// itx-scope.test.ts — `itxScope`'s release disposes what `recordPipelinedSteps` records, so it must
+// record EVERY call a scope reached and change nothing else about the stub (itx-scope.ts says why).
 import { expect, test, vi } from "vitest";
 import { runCausedBy } from "../cause.ts";
-import { itxScope, recordPipelinedSteps, withItx } from "./with-itx.ts";
+import { itxScope, recordPipelinedSteps } from "./itx-scope.ts";
 
 test.for([
   {
@@ -48,12 +48,11 @@ test.for([
   },
 ])("$name", async ({ run, answer, disposed }) => {
   const log: string[] = [];
-  const answered = await withItx({ get: () => fakeStub(log) }, async (itx) => {
-    const value = await run(itx);
+  {
+    using itx = itxScope({ get: () => fakeStub(log) });
+    expect(await run(itx)).toEqual(answer);
     expect(log).toEqual([]); // recording disposes nothing itself
-    return value;
-  });
-  expect(answered).toEqual(answer);
+  }
   expect(log).toEqual(disposed);
 });
 
@@ -85,7 +84,7 @@ test("`using itx = itxScope(…)` gets the scope under the running cause and rel
   ]);
 });
 
-test("a release that throws is reported, the rest are still released and the answer stands", async () => {
+test("a release that throws is reported, the rest are still released and the block ends without its throw", async () => {
   const log: string[] = [];
   const stub = fakeStub(log);
   const itx = {
@@ -99,10 +98,10 @@ test("a release that throws is reported, the rest are still released and the ans
       }),
   };
   const reported = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  const answered = await withItx({ get: () => itx }, (scope: any) =>
-    scope.cd("/d").append({ type: "y" }),
-  );
-  expect(answered).toEqual({ appended: [{ type: "y" }] });
+  {
+    using scope: any = itxScope({ get: () => itx });
+    expect(await scope.cd("/d").append({ type: "y" })).toEqual({ appended: [{ type: "y" }] });
+  }
   expect(log).toEqual(["dispose cd(/d).append", "dispose cd(/d)"]);
   expect(reported).toHaveBeenCalled();
 });

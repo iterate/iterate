@@ -1314,7 +1314,9 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
    *  and every hand-over names the agent by this context's path. */
   #whoami?: { projectId: string; path: string };
   async #identity() {
-    return (this.#whoami ??= await this.withItx((itx) => itx.whoami()));
+    if (this.#whoami) return this.#whoami;
+    using itx = this.getItx();
+    return (this.#whoami = await itx.whoami());
   }
 
   processor = new VoiceAgentProcessor({
@@ -1326,12 +1328,11 @@ export class VoiceAgentDurableObject extends StreamProcessorDurableObject<VoiceS
     projectContext: async () => JSON.stringify(await this.#identity()),
     messageAgent: async (words) => {
       const { path } = await this.#identity();
-      return this.withItx((itx) =>
-        // This context's own `itx.agents` rule, which the press's `itx.agents.create` wrote
-        // (worker.ts): loaded code reaches no collection above it, so the agent reads the words as
-        // sent from this context, `[from <path>]`.
-        (itx as IterateContextApiWith<"agents">).agents.get(path).message(words),
-      );
+      // This context's own `itx.agents` rule, which the press's `itx.agents.create` wrote
+      // (worker.ts): loaded code reaches no collection above it, so the agent reads the words as
+      // sent from this context, `[from <path>]`.
+      using itx = this.getItx() as IterateContextApiWith<"agents"> & Disposable;
+      return await itx.agents.get(path).message(words);
     },
   });
 }

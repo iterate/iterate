@@ -11,19 +11,18 @@ import { FakeArtifacts } from "./support/fake-artifacts.ts";
 const PROBE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
-const outcome = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: String(e && e.message || e) }; } };
+const outcome = async (worker, fn) => { try { using itx = worker.getItx(); return { ok: await fn(itx) }; } catch (e) { return { error: String(e && e.message || e) }; } };
 export default class extends WorkerEntrypoint {
-  say(call, ...args) { return outcome(() => withItx(this.env.ITX, (itx) => itx.invoke(call, ...args))); }
-  cdWhoami(path) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).whoami())); }
-  lend() { return outcome(() => withItx(this.env.ITX, (itx) => itx.provide("itx.x", "itx.whoami"))); }
-  lendLive() { return outcome(() => withItx(this.env.ITX, async (itx) => { await itx.provide("itx.live", () => "from the worker"); return await itx.invoke("itx.live()"); })); }
-  watch() { return outcome(() => withItx(this.env.ITX, (itx) => itx.subscribe({ target: "itx.builtins.append" }))); }
+  say(call, ...args) { return outcome(this, (itx) => itx.invoke(call, ...args)); }
+  cdWhoami(path) { return outcome(this, (itx) => itx.cd(path).whoami()); }
+  lend() { return outcome(this, (itx) => itx.provide("itx.x", "itx.whoami")); }
+  lendLive() { return outcome(this, async (itx) => { await itx.provide("itx.live", () => "from the worker"); return await itx.invoke("itx.live()"); }); }
+  watch() { return outcome(this, (itx) => itx.subscribe({ target: "itx.builtins.append" })); }
   async fetchUrl(url) { const r = await fetch(url); return { status: r.status, text: (await r.text()).slice(0, 60) }; }
-  writeRow(match, target) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } }))); }
-  appendEvent(event) { return outcome(() => withItx(this.env.ITX, (itx) => itx.append(event))); }
-  cdInvoke(path, call) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).invoke(call))); }
-  cdAppend(path, event) { return outcome(() => withItx(this.env.ITX, (itx) => itx.cd(path).append(event))); }
+  writeRow(match, target) { return outcome(this, (itx) => itx.append({ type: "events.iterate.com/itx/rewrite-rule-configured", payload: { match, target } })); }
+  appendEvent(event) { return outcome(this, (itx) => itx.append(event)); }
+  cdInvoke(path, call) { return outcome(this, (itx) => itx.cd(path).invoke(call)); }
+  cdAppend(path, event) { return outcome(this, (itx) => itx.cd(path).append(event)); }
 }`,
 };
 

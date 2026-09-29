@@ -12,10 +12,9 @@
 // Object storage caused object to be reset". Aborting a running loaded facet is how Cloudflare comes
 // to reset a whole object (apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
 import { RpcTarget } from "cloudflare:workers";
-import type { WithItx } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
-import type { FacetSpec } from "iterate/api";
+import type { FacetSpec, IterateContextApi } from "iterate/api";
 import type { AgentHandleApi, AgentsApi } from "./api.ts";
 import type { AgentCatalogState } from "./catalog.ts";
 import type { AgentState } from "./contract.ts";
@@ -31,13 +30,17 @@ const CERTIFICATE_WAIT_SLICE_MS = 5_000;
 /** `itx.agents` (api.ts `AgentsApi`) over one base: the root's at `/`, an agent's own at its
  *  path (`at(base)`, catalog.ts). */
 export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
-  private readonly withItx: WithItx;
+  private readonly getItx: () => IterateContextApi & Disposable;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly base: string;
 
-  constructor(withItx: WithItx, catalog: () => Promise<AgentCatalogState>, base = "/") {
+  constructor(
+    getItx: () => IterateContextApi & Disposable,
+    catalog: () => Promise<AgentCatalogState>,
+    base = "/",
+  ) {
     super();
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.catalog = catalog;
     this.base = base;
   }
@@ -45,7 +48,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
   get(path: string) {
     path = resolveContextPath(this.base, path);
     if (path === "/") throw new Error("An agent needs its own context path");
-    return new AgentReference(this.withItx, path, this.catalog, this.base);
+    return new AgentReference(this.getItx, path, this.catalog, this.base);
   }
 
   /** Every agent born under the project, by path — the certificates cross-posted to `/`, folded. */
@@ -60,94 +63,93 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
    *  sought after the request that opened it, so a certificate landing between the read and the
    *  wait is seen, not missed. A deleted agent is not re-creatable: thrown. Data back, never the
    *  handle: `itx.agents.get(path)` addresses it. */
-  create(path: string) {
-    return this.withItx(async (itx) => {
-      path = resolveContextPath(this.base, path);
-      if (path === "/") throw new Error("An agent needs its own context path");
-      // The parent link goes to this collection's base — the context whose own `itx.agents` row
-      // reached it — and never to a context `create` names: a script could otherwise link its child
-      // above its own masks. The base itself is still the caller's to choose through the public
-      // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-      // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
-      const creator = resolveContextPath("/", this.base);
-      // Writing a parent link on an ancestor would point back down to its child.
-      // Refuse before loading a facet or changing any context rows.
-      if (creator.startsWith(`${path}/`))
-        throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
-      // Dead is terminal, and a dead agent's facet is never hosted again (the header says why).
-      const dead = new Error(`agent ${path}: deleted — not re-creatable`);
+  async create(path: string) {
+    using itx = this.getItx();
+    path = resolveContextPath(this.base, path);
+    if (path === "/") throw new Error("An agent needs its own context path");
+    // The parent link goes to this collection's base — the context whose own `itx.agents` row
+    // reached it — and never to a context `create` names: a script could otherwise link its child
+    // above its own masks. The base itself is still the caller's to choose through the public
+    // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
+    // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
+    const creator = resolveContextPath("/", this.base);
+    // Writing a parent link on an ancestor would point back down to its child.
+    // Refuse before loading a facet or changing any context rows.
+    if (creator.startsWith(`${path}/`))
+      throw codedError("FORBIDDEN", "An agent cannot create its own ancestor");
+    // Dead is terminal, and a dead agent's facet is never hosted again (the header says why).
+    const dead = new Error(`agent ${path}: deleted — not re-creatable`);
+    if ((await this.catalog()).deleted[path]) throw dead;
+    const context = itx.cd(path);
+    const spec = agentsFacetSpec("AgentDurableObject");
+    // The facet is this app's AgentDurableObject and `snapshot()` the engine's
+    // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+    const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
+      (await context.invoke(["itx", "facets", facet, ["snapshot"]])) as { state: AgentState };
+    // BY NAME FIRST, so a delete that finishes after the check above cannot have this call host
+    // the dead agent's facet again: a path with an `agent` row (alive, being born, or dying) reads
+    // the facet its row hosts, and NO_FACET is a path with neither row nor facet — never born, or
+    // dead since. Only a path the catalog still does not know as dead is hosted from the spec: the
+    // birth.
+    let state: AgentState;
+    try {
+      ({ state } = await snapshot(["get", "agent"]));
+    } catch (error) {
+      if (errorCode(error) !== "NO_FACET") throw error;
       if ((await this.catalog()).deleted[path]) throw dead;
-      const context = itx.cd(path);
-      const spec = agentsFacetSpec("AgentDurableObject");
-      // The facet is this app's AgentDurableObject and `snapshot()` the engine's
-      // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-      const snapshot = async (facet: [method: "get", name: "agent", spec?: FacetSpec]) =>
-        (await context.invoke(["itx", "facets", facet, ["snapshot"]])) as { state: AgentState };
-      // BY NAME FIRST, so a delete that finishes after the check above cannot have this call host
-      // the dead agent's facet again: a path with an `agent` row (alive, being born, or dying) reads
-      // the facet its row hosts, and NO_FACET is a path with neither row nor facet — never born, or
-      // dead since. Only a path the catalog still does not know as dead is hosted from the spec: the
-      // birth.
-      let state: AgentState;
-      try {
-        ({ state } = await snapshot(["get", "agent"]));
-      } catch (error) {
-        if (errorCode(error) !== "NO_FACET") throw error;
-        if ((await this.catalog()).deleted[path]) throw dead;
-        ({ state } = await snapshot(["get", "agent", spec]));
-      }
-      if (state.deletion) throw dead;
-      // The agent's row: its birth enables it, and enabling it again appends nothing.
-      await context.processors.enable("agent", spec);
-      if (state.creation?.status === "created") return { path };
-      let requestedAtOffset: number;
-      if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
-      else {
-        // The collection owns the project scope and delegates it to this child. The
-        // processor and its scripts get distinct contexts so their grants can be narrowed separately.
-        const sandbox = `${path}/sandbox`;
-        const rule = (match: string, target: string, key: string) => ({
-          type: "events.iterate.com/itx/rewrite-rule-configured",
-          idempotencyKey: key,
-          payload: { match, target },
-        });
-        await context.append(
-          rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
-          rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
+      ({ state } = await snapshot(["get", "agent", spec]));
+    }
+    if (state.deletion) throw dead;
+    // The agent's row: its birth enables it, and enabling it again appends nothing.
+    await context.processors.enable("agent", spec);
+    if (state.creation?.status === "created") return { path };
+    let requestedAtOffset: number;
+    if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
+    else {
+      // The collection owns the project scope and delegates it to this child. The
+      // processor and its scripts get distinct contexts so their grants can be narrowed separately.
+      const sandbox = `${path}/sandbox`;
+      const rule = (match: string, target: string, key: string) => ({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        idempotencyKey: key,
+        payload: { match, target },
+      });
+      await context.append(
+        rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
+        rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
+        rule(
+          "itx.agents",
+          `itx.cd('/').agents.at(${JSON.stringify(path)})`,
+          `agent-collection:${path}`,
+        ),
+      );
+      await itx
+        .cd(sandbox)
+        .append(
+          rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
           rule(
             "itx.agents",
-            `itx.cd('/').agents.at(${JSON.stringify(path)})`,
-            `agent-collection:${path}`,
+            `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
+            `agent-collection:${sandbox}`,
           ),
         );
-        await itx
-          .cd(sandbox)
-          .append(
-            rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-            rule(
-              "itx.agents",
-              `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-              `agent-collection:${sandbox}`,
-            ),
-          );
-        // Over the loopback stub an append's answer types as an RPC result, not the array the context
-        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-        const [requested] = (await context.append({
-          type: "events.iterate.com/agent/create-requested",
-          payload: {},
-        })) as unknown as StreamEvent[];
-        requestedAtOffset = requested!.offset;
-      }
-      const settled = await agentCertificate(
-        context,
-        path,
-        ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
-        requestedAtOffset,
-      );
-      if (settled.type === "events.iterate.com/agent/create-failed")
-        throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);
-      return { path };
-    });
+      // Over the loopback stub an append's answer types as an RPC result, not the array the context
+      // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+      const [requested] = (await context.append({
+        type: "events.iterate.com/agent/create-requested",
+        payload: {},
+      })) as unknown as StreamEvent[];
+      requestedAtOffset = requested!.offset;
+    }
+    const settled = await agentCertificate(
+      context,
+      path,
+      ["events.iterate.com/agent/created", "events.iterate.com/agent/create-failed"],
+      requestedAtOffset,
+    );
+    if (settled.type === "events.iterate.com/agent/create-failed")
+      throw new Error(`agent ${path}: creation failed — ${String(settled.payload?.error)}`);
+    return { path };
   }
 
   /** Take the agent at `path` out of being: `agent/delete-requested` on that path, then the death
@@ -157,68 +159,67 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
    *  — the certificate is sought after the request that opened it, so one landing between the read
    *  and the wait is seen, not missed. An agent never created has nothing to delete: thrown.
    *  Terminal: a deleted agent is not re-creatable. */
-  delete(path: string) {
-    return this.withItx(async (itx) => {
-      path = resolveContextPath(this.base, path);
-      if (path === "/") throw new Error("An agent needs its own context path");
-      const context = itx.cd(path);
-      // THE CATALOG, THEN THE FACET BY NAME, so no call here hosts a facet for an agent that has
-      // none (the header says why). Never born: nothing to delete. Dead with no `agent` row left:
-      // answered at once. Otherwise the facet is read by name: the row's own — alive, or dead with
-      // the row not yet gone (a retry, or a second delete racing the saga), whose certificate is
-      // waited for on this path as ever. NO_FACET there is a row gone meanwhile (dead: answered) or
-      // a live agent without its row, which only `create` binds again: thrown. Over the loopback
-      // stub the list's answer types as an RPC result, not the rows the context declares; the wire
-      // copied it.
-      const catalog = await this.catalog();
-      if (!catalog.deleted[path] && !catalog.agents[path])
-        throw new Error(`agent ${path}: not created — nothing to delete`);
-      const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
-      if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
-        return { path };
-      let state: AgentState;
-      try {
-        // The facet is this app's AgentDurableObject and `snapshot()` the engine's
-        // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
-        ({ state } = (await context.invoke(["itx", "facets", ["get", "agent"], ["snapshot"]])) as {
-          state: AgentState;
-        });
-      } catch (error) {
-        if (errorCode(error) !== "NO_FACET") throw error;
-        if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
-        throw new Error(
-          `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
-        );
-      }
-      if (state.deletion?.status !== "deleted") {
-        if (state.creation?.status !== "created")
-          throw new Error(`agent ${path}: not created — nothing to delete`);
-        let requestedAtOffset: number;
-        if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
-        else {
-          // Over the loopback stub an append's answer types as an RPC result, not the array the context
-          // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
-          const [requested] = (await context.append({
-            type: "events.iterate.com/agent/delete-requested",
-            payload: {},
-          })) as unknown as StreamEvent[];
-          requestedAtOffset = requested!.offset;
-        }
-        await agentCertificate(
-          context,
-          path,
-          ["events.iterate.com/agent/deleted"],
-          requestedAtOffset,
-        );
-      }
-      // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
-      // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
-      // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
-      // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
-      if ((await rows()).some((row) => row.name === "agent"))
-        await context.processors.disable("agent");
+  async delete(path: string) {
+    using itx = this.getItx();
+    path = resolveContextPath(this.base, path);
+    if (path === "/") throw new Error("An agent needs its own context path");
+    const context = itx.cd(path);
+    // THE CATALOG, THEN THE FACET BY NAME, so no call here hosts a facet for an agent that has
+    // none (the header says why). Never born: nothing to delete. Dead with no `agent` row left:
+    // answered at once. Otherwise the facet is read by name: the row's own — alive, or dead with
+    // the row not yet gone (a retry, or a second delete racing the saga), whose certificate is
+    // waited for on this path as ever. NO_FACET there is a row gone meanwhile (dead: answered) or
+    // a live agent without its row, which only `create` binds again: thrown. Over the loopback
+    // stub the list's answer types as an RPC result, not the rows the context declares; the wire
+    // copied it.
+    const catalog = await this.catalog();
+    if (!catalog.deleted[path] && !catalog.agents[path])
+      throw new Error(`agent ${path}: not created — nothing to delete`);
+    const rows = async () => (await context.processors.list()) as unknown as { name: string }[];
+    if (catalog.deleted[path] && !(await rows()).some((row) => row.name === "agent"))
       return { path };
-    });
+    let state: AgentState;
+    try {
+      // The facet is this app's AgentDurableObject and `snapshot()` the engine's
+      // `{ offset, state }`, its state the contract's parsed shape — ours, so asserted, not re-validated.
+      ({ state } = (await context.invoke(["itx", "facets", ["get", "agent"], ["snapshot"]])) as {
+        state: AgentState;
+      });
+    } catch (error) {
+      if (errorCode(error) !== "NO_FACET") throw error;
+      if (catalog.deleted[path] || (await this.catalog()).deleted[path]) return { path };
+      throw new Error(
+        `agent ${path}: its context has no \`agent\` processor — itx.agents.create(${JSON.stringify(path)}) binds it again`,
+      );
+    }
+    if (state.deletion?.status !== "deleted") {
+      if (state.creation?.status !== "created")
+        throw new Error(`agent ${path}: not created — nothing to delete`);
+      let requestedAtOffset: number;
+      if (state.deletion?.status === "requested") requestedAtOffset = state.deletion.offset;
+      else {
+        // Over the loopback stub an append's answer types as an RPC result, not the array the context
+        // declares (`append(...events): Promise<StreamEvent[]>`); the wire copied it.
+        const [requested] = (await context.append({
+          type: "events.iterate.com/agent/delete-requested",
+          payload: {},
+        })) as unknown as StreamEvent[];
+        requestedAtOffset = requested!.offset;
+      }
+      await agentCertificate(
+        context,
+        path,
+        ["events.iterate.com/agent/deleted"],
+        requestedAtOffset,
+      );
+    }
+    // The row goes LAST — and again on a retry: a call that lost its answer between the certificate
+    // and the disable would otherwise leave the row and the facet's storage behind (a workspace's
+    // overlay readable, a repo's checkpoint kept), so the certificate alone never answers a delete.
+    // `processors.list` is the read; `disable` appends, so it runs only while the row is there.
+    if ((await rows()).some((row) => row.name === "agent"))
+      await context.processors.disable("agent");
+    return { path };
   }
 }
 
@@ -272,19 +273,19 @@ async function agentCertificate(
 /** `itx.agents.get(path)` (api.ts `AgentHandleApi`): the agent at one path, reached from the
  *  collection's base. */
 class AgentReference extends RpcTarget implements AgentHandleApi {
-  private readonly withItx: WithItx;
+  private readonly getItx: () => IterateContextApi & Disposable;
   private readonly path: string;
   private readonly catalog: () => Promise<AgentCatalogState>;
   private readonly base: string;
 
   constructor(
-    withItx: WithItx,
+    getItx: () => IterateContextApi & Disposable,
     path: string,
     catalog: () => Promise<AgentCatalogState>,
     base: string,
   ) {
     super();
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.path = path;
     this.catalog = catalog;
     this.base = base;
@@ -306,9 +307,10 @@ class AgentReference extends RpcTarget implements AgentHandleApi {
     // The facet is this app's AgentDurableObject, whose `message` answers the event it appended
     // (durable-object.ts, `implements Pick<AgentHandleApi, "message">`) — ours, so asserted.
     try {
-      return (await this.withItx((itx) =>
-        itx.cd(path).invoke(["itx", "facets", ["get", "agent"], ["message", input, this.base]]),
-      )) as StreamEvent;
+      using itx = this.getItx();
+      return (await itx
+        .cd(path)
+        .invoke(["itx", "facets", ["get", "agent"], ["message", input, this.base]])) as StreamEvent;
     } catch (error) {
       if (errorCode(error) !== "NO_FACET") throw error;
     }

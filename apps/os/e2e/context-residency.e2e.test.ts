@@ -107,13 +107,13 @@ test("a run whose script returned a live value does not keep its context residen
   expect(await wakesAcrossIdles(itx)).toBeGreaterThanOrEqual(EVICTION_IDLES);
 }, 90_000);
 
-// A FACET reaches its own context the other way round: through the SDK's `withItx` on the loopback
+// A FACET reaches its own context the other way round: through the SDK's `getItx` on the loopback
 // entrypoint — the repo facet's `itx.cfArtifacts.get(path).remote()`, the collection's
 // `itx.cd(path)…waitForEvent`. A step such a round trip left holding the context's session kept
 // facet → ItxEntrypoint → context resident UNTIL THE NEXT DEPLOY (every project an apps/os preview's
 // e2e run created stayed billed for hours, 2026-09-21/22); the context now ends that session with
-// the call. What `withItx` leaves undisposed keeps the FACET running instead, so it releases every
-// call (the rows at the bottom).
+// the call. What a `getItx` scope leaves undisposed keeps the FACET running instead, so it releases
+// every call (the rows at the bottom).
 test("a repo read through its facet does not keep its own context resident", async () => {
   const { ctx, path } = await repoBornAndRead("residency_facet");
   const itx = openItx(ctx);
@@ -307,7 +307,7 @@ deployedOnly(
 // (`liveSnapshot().rev` is that moment × 4096, stream/processor.ts `LiveState`). Measured 2026-09-23
 // on previews of main: after one page load a website project's `/` and `/repos/config` were billed
 // every minute with no request until the next deploy; both rows below failed there, the facets'
-// births unchanged across three evictions, and pass once `withItx` releases every call.
+// births unchanged across three evictions, and pass once the `getItx` scope releases every call.
 
 test("a website project's facets do not outlive their contexts after a page load", async () => {
   const slug = freshDnsSafeProjectSlug("residency-site");
@@ -341,7 +341,7 @@ test("a website project's facets do not outlive their contexts after a page load
 }, 90_000);
 
 /** An SDK facet that reaches its context the way the platform's own facets do: a pipelined chain
- *  (the repo facet's `cfArtifacts.get(path).remote()`), and answers awaited inside the round trip
+ *  (the repo facet's `cfArtifacts.get(path).remote()`), and answers awaited inside the scope
  *  (the collection's `const context = itx.cd(path)`). */
 const REACHER_SOURCE = {
   "package.json": '{"main":"worker.js"}',
@@ -351,7 +351,7 @@ import { z } from "zod";
 const contract = defineProcessorContract({
   slug: "reacher",
   version: "1.0.0",
-  description: "Reaches its context through withItx, the platform's shapes.",
+  description: "Reaches its context through getItx, the platform's shapes.",
   stateSchema: z.object({}),
   consumes: [],
   emits: [],
@@ -364,17 +364,16 @@ export class ReacherDurableObject extends StreamProcessorDurableObject {
   static publicMethods = [...super.publicMethods, "reach"];
   processor = new ReacherProcessor();
   async reach(path) {
-    await this.withItx((itx) => itx.cd(path).whoami());
-    await this.withItx(async (itx) => {
-      const child = itx.cd(path);
-      await child.whoami();
-      return child.whoami();
-    });
+    using itx = this.getItx();
+    await itx.cd(path).whoami();
+    const child = itx.cd(path);
+    await child.whoami();
+    await child.whoami();
   }
 }`,
 };
 
-test("an SDK facet that reached its context through withItx does not outlive the context", async () => {
+test("an SDK facet that reached its context through getItx does not outlive the context", async () => {
   const { ctx } = await freshPublishedCtx("residency_sdk_facet");
   const reacher = (itx: any) =>
     itx.facets.get("reacher", { source: REACHER_SOURCE, className: "ReacherDurableObject" });
@@ -598,7 +597,7 @@ async function repoBornAndRead(prefix: string): Promise<{ ctx: string; path: str
   const { ctx, itx } = await freshPublishedCtx(prefix);
   const path = freshRepoPath("residency");
   expect(await itx.repos.create(path)).toEqual({ path });
-  expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via withItx
+  expect(await itx.repos.get(path).tip()).toBeNull(); // the facet's remote + token, via getItx
   disposeSessions();
   return { ctx, path };
 }

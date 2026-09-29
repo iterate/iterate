@@ -93,7 +93,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
       return {
         entryKind: Object.getPrototypeOf(entry)?.constructor?.name,
         classKind: Object.getPrototypeOf(klass)?.constructor?.name,
-        // `snapshot()` catches up from the context's log through `withItx` — the loopback the class
+        // `snapshot()` catches up from the context's log through `getItx` — the loopback the class
         // minted from its props — so a fresh context answers the processor's empty view.
         snapshot: await facet.snapshot(),
       };
@@ -1427,7 +1427,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "loaded processor", method: "revive", byExpression: "FORBIDDEN" },
   // Nor is what a class has but never listed: the SDK's own plumbing.
   { facet: "account", method: "listPublicMethods", byExpression: "FORBIDDEN" },
-  { facet: "account", method: "withItx", byExpression: "FORBIDDEN" },
+  { facet: "account", method: "getItx", byExpression: "FORBIDDEN" },
   { facet: "loaded processor", method: "publishLiveState", byExpression: "FORBIDDEN" },
   // The `secret` facet lists its reads alone.
   { facet: "secret", method: "write", byExpression: "FORBIDDEN" },

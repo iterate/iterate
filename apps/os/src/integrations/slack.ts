@@ -67,7 +67,8 @@ async function slackAppOf(
     return { origin: slack.slackOrigin, scopes: slack.scopes };
   }
   const secretPath = tokenSecretPathOf("slack", connection);
-  const secrets = await scope.withItx((itx) => itx.secrets.list());
+  using itx = scope.getItx();
+  const secrets = await itx.secrets.list();
   const pin = secrets.find((secret) => secret.path === secretPath)?.urls[0];
   if (!pin)
     throw codedError(
@@ -105,8 +106,10 @@ export async function connectSlack(
 ): Promise<{ authorizationUrl: string }> {
   const { connection, client } = input;
   const { origin, scopes } = await slackAppOf(scope, client, connection);
-  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
-    itx.secrets.beginOAuth(tokenSecretPathOf("slack", connection), {
+  using itx = scope.getItx();
+  const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(
+    tokenSecretPathOf("slack", connection),
+    {
       authorizationEndpoint: `${origin}/oauth/v2/authorize`,
       tokenEndpoint: `${origin}/api/oauth.v2.access`,
       client: client === "iterate" ? { platform: "slack" } : { project: "slack" },
@@ -116,7 +119,7 @@ export async function connectSlack(
       urls: origin === "https://slack.com" ? [origin, "https://files.slack.com"] : [origin],
       next: input.next,
       expectAccount: input.existing?.externalId,
-    }),
+    },
   );
   const attempt: ConnectionAttempt = { client, origin, until: Date.now() + SECRET_OAUTH_TTL_MS };
   await scope.storage.put(consentAttemptKeyOf("slack", connection, nonce), attempt);

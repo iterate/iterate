@@ -215,10 +215,10 @@ deployedOnly(
 
 // THE MINI-APP EXAMPLE (examples/mini-app.ts, TS stripped and routed as specs/os/mini-app.spec.ts
 // publishes it): its capnweb API lives as long as the page's WebSocket, and holds no scope for it —
-// `Notes` takes a `WithItx` accessor, so each method is its own round trip. The spec drives the page;
+// `Notes` takes a `getItx` accessor, so each method is its own scope. The spec drives the page;
 // this row dials the API itself.
 deployedOnly(
-  "deployed: the mini-app example's notes round-trip over one long-lived WebSocket, each method its own withItx round trip",
+  "deployed: the mini-app example's notes round-trip over one long-lived WebSocket, each method its own getItx scope",
   async () => {
     const slug = freshDnsSafeProjectSlug("mini-app");
     const itx = openItx(await registerProject(slug));
