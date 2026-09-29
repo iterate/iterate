@@ -250,7 +250,9 @@ static void drive_socket(
   }
   if (!transport->socket_connected) {
     if (!iterate_kit_retry_gate_ready(
-            &transport->websocket_retry, now_us)) {
+            &transport->websocket_retry, now_us) ||
+        !iterate_kit_itx_credential_retry_ready(
+            &transport->credential_retry, now_us)) {
       return;
     }
     if (!transport->websocket_open_attempt_active) {
@@ -275,11 +277,22 @@ static void drive_socket(
       return;
     }
     if (result == ITERATE_KIT_WEBSOCKET_OPEN_FAILED) {
-      /* The loop only sees CONNECTING while this retries; say why here. */
       transport->last_platform_error = websocket_error(transport);
-      (void)fprintf(
-          stderr, "transport: websocket open failed (error %d); retrying\n",
-          transport->last_platform_error);
+      if (iterate_kit_itx_credential_retry_upgrade_failed(
+              &transport->credential_retry,
+              transport->websocket.last_upgrade_status,
+              step_now_us)) {
+        (void)fprintf(
+            stderr,
+            "transport: iterate refused this device's key (HTTP %d); "
+            "asking again in a minute or more\n",
+            (int)transport->websocket.last_upgrade_status);
+      } else {
+        /* The loop only sees CONNECTING while this retries; say why here. */
+        (void)fprintf(
+            stderr, "transport: websocket open failed (error %d); retrying\n",
+            transport->last_platform_error);
+      }
       transport->websocket_open_attempt_active = false;
       transport->websocket_open_deadline_us = 0;
       increment(&transport->websocket_errors);
@@ -300,6 +313,7 @@ static void drive_socket(
     transport->websocket_open_attempt_active = false;
     transport->websocket_open_deadline_us = 0;
     transport->socket_connected = true;
+    iterate_kit_itx_credential_retry_upgraded(&transport->credential_retry);
     increment(&transport->websocket_connections);
   }
   receive_messages(transport, now_us);
@@ -399,6 +413,7 @@ static enum iterate_kit_status drain_application(
       transport->ready_socket_generation =
           transport->socket_generation;
       iterate_kit_retry_gate_reset(&transport->websocket_retry);
+      iterate_kit_itx_credential_retry_mounted(&transport->credential_retry);
       transport->state = ITERATE_KIT_ITX_READY;
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
@@ -455,7 +470,9 @@ enum iterate_kit_status iterate_kit_itx_transport_prepare(
       iterate_kit_retry_gate_init(
           &transport->websocket_retry,
           WEBSOCKET_RETRY_INITIAL_MS,
-          WEBSOCKET_RETRY_MAX_MS) != ITERATE_KIT_OK) {
+          WEBSOCKET_RETRY_MAX_MS) != ITERATE_KIT_OK ||
+      iterate_kit_itx_credential_retry_init(
+          &transport->credential_retry) != ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
@@ -625,6 +642,8 @@ void iterate_kit_itx_transport_metrics(
   metrics->websocket_open_timeouts = transport->websocket_open_timeouts;
   metrics->websocket_disconnects = transport->websocket_disconnects;
   metrics->websocket_errors = transport->websocket_errors;
+  metrics->credential_refused =
+      iterate_kit_itx_credential_retry_refused(&transport->credential_retry);
   metrics->ready_socket_generation = transport->ready_socket_generation;
   metrics->mount_timeouts = transport->mount_timeouts;
   metrics->protocol_failures = transport->protocol_failures;

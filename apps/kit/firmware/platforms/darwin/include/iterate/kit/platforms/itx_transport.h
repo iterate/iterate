@@ -3,6 +3,7 @@
 
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/itx_credential_retry.h"
 #include "iterate/kit/itx_outbox_sender.h"
 #include "iterate/kit/platforms/posix_tls_stream.h"
 #include "iterate/kit/retry_gate.h"
@@ -89,8 +90,7 @@ struct iterate_kit_itx_transport_metrics {
   int32_t last_websocket_close_status_code;
   int32_t last_websocket_transport_errno;
   uint32_t websocket_pongs_received;
-  /* The Mac does not hold a refused key back: a refused key is an ordinary
-   * failed connect here, and this stays false. */
+  /** From a refused upgrade until an upgrade succeeds. */
   bool credential_refused;
   /** A Mac has no Wi-Fi to join: always ITERATE_KIT_WIFI_JOINED. */
   enum iterate_kit_wifi_status wifi_status;
@@ -133,6 +133,7 @@ struct iterate_kit_itx_transport {
   struct iterate_kit_websocket_client websocket;
   struct iterate_kit_posix_tls_stream stream;
   struct iterate_kit_retry_gate websocket_retry;
+  struct iterate_kit_itx_credential_retry credential_retry;
   enum iterate_kit_itx_transport_state state;
   enum capnweb_status last_capnweb_status;
   int64_t websocket_open_deadline_us;
