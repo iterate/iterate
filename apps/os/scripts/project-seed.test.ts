@@ -84,6 +84,36 @@ test("hostnames are restored only onto the deployment the seed was captured on",
   ]);
   expect(restorableHostnames(seed, "https://os-pr3045.preview.example.test")).toEqual([]);
 });
+test("fetch routes: one `set` takes is kept; a repeated name, one `set` refuses, and an archive without them are refused", async () => {
+  const seed = await archive();
+  const docs = {
+    fetchRouteName: "docs",
+    requestMatcher: { routingSlug: "docs" },
+    target: ["itx", "workers", ["get", { source: { "worker.js": "export default {}" } }]],
+    authRequirement: { visitors: "project-members" },
+    priority: 0,
+  };
+  const docsIterateCom = {
+    ...docs,
+    fetchRouteName: "docs-iterate-com",
+    requestMatcher: { url: { hostname: "docs.iterate.com" } },
+  };
+  expect(
+    (await openProjectSeed({ ...seed, fetchRoutes: [docs, docsIterateCom] }, keys)).seed,
+  ).toMatchObject({ fetchRoutes: [docs, docsIterateCom] });
+  await expect(openProjectSeed({ ...seed, fetchRoutes: [docs, docs] }, keys)).rejects.toThrow(
+    "Duplicate fetch route: docs",
+  );
+  // the platform's own checks (src/fetch-routes.ts): a DNS-label name, a URLPattern, no builtins step
+  for (const route of [
+    { ...docs, fetchRouteName: "Docs" },
+    { ...docs, requestMatcher: { url: { pathname: "(" } } },
+    { ...docs, target: ["itx", "builtins", "secrets"] },
+  ])
+    await expect(openProjectSeed({ ...seed, fetchRoutes: [route] }, keys)).rejects.toThrow();
+  const { fetchRoutes: _, ...withoutRoutes } = seed;
+  await expect(openProjectSeed(withoutRoutes, keys)).rejects.toThrow();
+});
 test("a recreation with fresh user and organization IDs matches; the empty admin org is a note", () => {
   expect(compareStructure(captured, recreated())).toEqual({
     problems: [],
@@ -166,6 +196,7 @@ async function archive() {
     ],
     hostnames: [],
     primaryHostname: null,
+    fetchRoutes: [],
   };
 }
 

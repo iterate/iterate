@@ -1,12 +1,15 @@
 import { env } from "cloudflare:workers";
+import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
 import { appConfigOf, atRestKeysOf } from "../src/app-config.ts";
 import { decryptSecretMaterial } from "../src/secret-at-rest.ts";
 import {
   EncryptedSecretSeed,
   ProjectSeed,
+  captureFetchRoutes,
   captureHostnames,
   capturePrimaryHostname,
+  restoreFetchRoutes,
   restoreHostnames,
   restorePrimaryHostname,
 } from "../scripts/project-seed-format.ts";
@@ -288,3 +291,124 @@ test("a project's primary hostname round-trips through a seed: capture records i
   });
   expect(await capturePrimaryHostname(project)).toBe("www.primary.test");
 });
+
+test("a project's fetch routes round-trip through a seed: capture records each but a tunnel's, apply sets each again, a rerun sets nothing, and a changed route of the same name goes back to the archived one", async () => {
+  const session = await openSession();
+  const admin = session.authenticate(adminCredentials());
+  const project = await admin.projects.create({ project: "seed-fetch-routes" });
+  // the members-only Docs routes prd's `iterate` project has (scripts/preview-config.ts
+  // `proxiedAppRoute`'s shape), on its routing slug and on a hostname of its own
+  const docs = {
+    requestMatcher: { routingSlug: "docs" },
+    target: [
+      "itx",
+      "workers",
+      [
+        "get",
+        {
+          source: {
+            "package.json": '{"main":"worker.js"}',
+            "worker.js":
+              'export default { fetch: () => fetch("https://docs.iterate.workers.dev/") }',
+          },
+        },
+      ],
+    ],
+    authRequirement: { visitors: "project-members" as const },
+  };
+  await project.fetchRoutes.set("docs", docs);
+  await project.fetchRoutes.set("docs-iterate-com", {
+    ...docs,
+    requestMatcher: { url: { hostname: "docs.iterate.com" } },
+    priority: 1,
+  });
+  // one whose target reaches nothing, carried as it stands
+  await project.fetchRoutes.set("stale", {
+    requestMatcher: { routingSlug: "stale" },
+    target: "itx.tunnels.gone",
+  });
+  // and a running `iterate tunnel`'s, which rides its lend (packages/cli/src/tunnel.ts)
+  const tunnel = await project.provide("itx.tunnels.blog", new LocalSite(), {
+    fetchRoute: { fetchRouteName: "tunnel-blog", requestMatcher: { routingSlug: "blog" } },
+  });
+  expect(await project.fetchRoutes.list()).toMatchObject([
+    { fetchRouteName: "docs-iterate-com" },
+    { fetchRouteName: "docs" },
+    { fetchRouteName: "stale" },
+    { fetchRouteName: "tunnel-blog", target: ["itx", "tunnels", "blog"] },
+  ]);
+
+  // capture, and the archive's JSON
+  const captured = await captureFetchRoutes(project);
+  expect(captured).toMatchObject({ lent: ["tunnel-blog"] });
+  const archived = ProjectSeed.shape.fetchRoutes.parse(JSON.parse(JSON.stringify(captured.routes)));
+  expect(archived).toEqual([
+    {
+      fetchRouteName: "docs-iterate-com",
+      ...docs,
+      requestMatcher: { url: { hostname: "docs.iterate.com" } },
+      priority: 1,
+    },
+    { fetchRouteName: "docs", ...docs, priority: 0 },
+    {
+      fetchRouteName: "stale",
+      requestMatcher: { routingSlug: "stale" },
+      target: ["itx", "tunnels", "gone"],
+      authRequirement: null,
+      priority: 0,
+    },
+  ]);
+
+  // the erase, as far as the routes go: the tunnel's ends with its lend, the rest are gone
+  tunnel[Symbol.dispose]();
+  for (const { fetchRouteName } of archived) await project.fetchRoutes.set(fetchRouteName, null);
+  await expect.poll(() => project.fetchRoutes.list()).toEqual([]);
+
+  // apply: each set again, and the same capture again
+  expect(await restoreFetchRoutes(project, archived)).toEqual([
+    { fetchRouteName: "docs-iterate-com", set: true },
+    { fetchRouteName: "docs", set: true },
+    { fetchRouteName: "stale", set: true },
+  ]);
+  expect(await captureFetchRoutes(project)).toEqual({ routes: archived, lent: [] });
+  expect(
+    await project.fetchRoutes.match({ url: "https://docs.iterate.com/some/page", headers: {} }),
+  ).toMatchObject({ fetchRouteName: "docs-iterate-com" });
+
+  // a rerun sets nothing
+  expect(await restoreFetchRoutes(project, archived)).toEqual([
+    { fetchRouteName: "docs-iterate-com", set: false },
+    { fetchRouteName: "docs", set: false },
+    { fetchRouteName: "stale", set: false },
+  ]);
+
+  // a route changed since goes back to the archived one; a route the archive lacks is left alone
+  await project.fetchRoutes.set("docs", { ...docs, authRequirement: null });
+  await project.fetchRoutes.set("added-since", {
+    ...docs,
+    requestMatcher: { routingSlug: "added" },
+  });
+  expect(await restoreFetchRoutes(project, archived)).toEqual([
+    { fetchRouteName: "docs-iterate-com", set: false },
+    { fetchRouteName: "docs", set: true },
+    { fetchRouteName: "stale", set: false },
+  ]);
+  expect(await captureFetchRoutes(project)).toMatchObject({
+    routes: [
+      archived[0],
+      {
+        fetchRouteName: "added-since",
+        ...docs,
+        requestMatcher: { routingSlug: "added" },
+        priority: 0,
+      },
+      ...archived.slice(1),
+    ],
+  });
+});
+
+class LocalSite extends RpcTarget {
+  fetch() {
+    return new Response("local site");
+  }
+}
