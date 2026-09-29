@@ -85,11 +85,7 @@ test("a message lands once per project address on /integrations/email with its a
     payload: { match: "itx", target: "itx.cd('/')" },
   });
   expect(
-    await child.invoke([
-      "itx",
-      "email",
-      ["send", { to: "ann@example.com", subject: "From a child", text: "…" }],
-    ]),
+    await child.invoke(`itx.email.send({ to: "ann@example.com", subject: "Child", text: "…" })`),
   ).toMatchObject({ source: { origin: "/agents/a" } });
   // Their answer to the reply names the whole chain; the thread is the first message's.
   await deliverMail(
@@ -150,14 +146,10 @@ test("a member's verified message says so, and a forged one claiming to be their
     ),
   );
   expect(mailOf(await readLog(inbox)).map((event) => event.payload)).toMatchObject([
-    {
-      messageId: "real@example.test",
-      // a DKIM signature alone: verified, but not direct (anyone could re-send it)
-      sender: { verified: true, member: true, direct: false },
-    },
+    { messageId: "real@example.test", sender: { verified: true, member: true, direct: false } },
     {
       messageId: "forged@example.test",
-      sender: { verified: false, member: false, direct: false },
+      sender: { verified: false, member: false },
       authentication: { spf: "softfail", dkim: "none", dmarc: "none" },
     },
   ]);
