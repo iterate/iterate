@@ -51,21 +51,28 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
-  // The first user append follows created and woken.
+  // The first user append follows the birth rows. No offset is pinned: a root with no config pointer
+  // keeps a dangling `config` row, whose alarm writes ephemeral traces into the same offset sequence.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
-  expect(receipts[0]).toMatchObject({ type: "hello", offset: 5 });
+  expect(receipts[0]).toMatchObject({ type: "hello" });
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
   expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
   expect(snap.state).toMatchObject({ createdAt: page.events[0].createdAt });
 
-  // exactly once per incarnation (and born exactly once, ever)
+  // woken exactly once per incarnation, born exactly once ever: the durable log is exactly this
   await itx.invoke(`itx.append({ type: 'again' })`);
   const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
-  expect(types.filter((t: string) => t === "events.iterate.com/itx/woken")).toHaveLength(1);
-  expect(types.filter((t: string) => t === "events.iterate.com/itx/created")).toHaveLength(1);
+  expect(types).toEqual([
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
+    "events.iterate.com/itx/subscription-configured",
+    "events.iterate.com/itx/subscription-configured",
+    "hello",
+    "again",
+  ]);
 });
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──
