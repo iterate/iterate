@@ -40,8 +40,8 @@ The report shows the workflow, its jobs in the order the trace job names them
 (Deploy preview, E2E tests, Browser specs), each job's measured shell steps
 directly under it, and individual Playwright attempts and Vitest tests. The
 Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) sit under
-the **Browser specs** job that waits for them, **Browser specs 1/11** to
-**11/11**, in order, each one row until opened, below that job's own steps in one
+the **Browser specs** job that waits for them, **Browser specs 1/10** to
+**10/10**, in order, each one row until opened, below that job's own steps in one
 **Coordinate shards** row: its checkout and setup, then its wait for the shards,
 the downloads and the merge.
 Expand rows, search for a test, click a bar, or zoom to a selected span.

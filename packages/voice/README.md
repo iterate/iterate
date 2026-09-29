@@ -39,7 +39,7 @@ a call starts: `ensureVoiceAgent`, which Kit's Prepare and voice.iterate.com run
 project has none, waits for `itx.voice` and asks it for `health()`, and refuses a project whose
 config installs no voice or whose publication was refused, saying why. An upgrade commits a newer
 pin (the Voice app's **Upgrade to the newest**, `upgradeVoice`) and waits for that commit's
-publication, or main's head's when main moved on; `voiceVersion` reads the build the project runs,
+publication, throwing why it was refused; `voiceVersion` reads the build the project runs,
 the pin of its published commit, which a refused upgrade leaves where it was. A device's
 press is the same call either way, so no Kit board needs a reflash for an upgrade.
 

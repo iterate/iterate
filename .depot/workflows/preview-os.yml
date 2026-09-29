@@ -15,8 +15,8 @@
 #                       deployment of the commit it checked out, then its test telemetry and flake
 #                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
-#   Browser specs 1/11  beside E2E tests: the Playwright specs, the same way, in shards
-#     … 11/11           (`specs-shard`), each running its share. One job definition, E2E tests',
+#   Browser specs 1/10  beside E2E tests: the Playwright specs, the same way, in shards
+#     … 10/10           (`specs-shard`), each running its share. One job definition, E2E tests',
 #                       differing only in the suite it names and in its bigger runner, where its six
 #                       browsers have the CPU they need
 #   Browser specs       beside them: waits for the shards, merges their reports into the Playwright
@@ -388,7 +388,7 @@ jobs:
   # from the start, so the suite takes about as long as its longest spec
   # (scripts/ci/specs-shards.test.ts has the maths).
   specs-shard:
-    name: Browser specs ${{ matrix.shard }}/11
+    name: Browser specs ${{ matrix.shard }}/10
     if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
@@ -397,7 +397,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -406,7 +406,7 @@ jobs:
       TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
       TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
       SPECS_SHARD: ${{ matrix.shard }}
-      SPECS_SHARDS: "11"
+      SPECS_SHARDS: "10"
     steps: *suite-steps
 
   # BROWSER SPECS, the required check, runs no spec itself: it waits for the shards, merges their

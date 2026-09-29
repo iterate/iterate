@@ -255,13 +255,13 @@ jobs:
   # The specs in shards, as a PR preview runs them (preview-os.yml SHARDS), and Browser specs, their
   # verdict, as a PR preview's (preview-os.yml BROWSER SPECS).
   specs-shard:
-    name: Browser specs ${{ matrix.shard }}/11
+    name: Browser specs ${{ matrix.shard }}/10
     runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 70
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -270,7 +270,7 @@ jobs:
       TEST_TELEMETRY_BRANCH: main
       TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
       SPECS_SHARD: ${{ matrix.shard }}
-      SPECS_SHARDS: "11"
+      SPECS_SHARDS: "10"
     steps: *suite-steps
 
   specs:
