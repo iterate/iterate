@@ -8,6 +8,7 @@ import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { useFacetLiveState, useIterateContext } from "iterate/react";
+import { AppBuild } from "@iterate-com/ui/components/app-build";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -17,6 +18,7 @@ import {
   BreadcrumbSeparator,
 } from "@iterate-com/ui/components/breadcrumb";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
+import { SidebarGroup, SidebarGroupContent } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "cn";
@@ -25,8 +27,14 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
-import { ensureAgents } from "@iterate-com/agents/install";
-import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
+import {
+  agentsApp,
+  ensureAgents,
+  installAgents,
+  installedVersion,
+  upgradeApp,
+} from "@iterate-com/agents/install";
+import { buildStanding, pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
@@ -75,6 +83,12 @@ const publishedAgents = createServerFn().handler(async () =>
   ),
 );
 
+/** Where the project's agents build stands against main's newest (`buildStanding`), asked in the
+ *  app's Worker: a page cannot read pkg.pr.new's headers. */
+const agentsBuild = createServerFn({ method: "GET" })
+  .inputValidator(z.string())
+  .handler(({ data }) => buildStanding("@iterate-com/agents", data));
+
 export const Route = createFileRoute("/_auth/projects/$slug")({
   // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every
   // choice (mode, filter, the inspected event, the open sheet) on the Events tab. A hand-edited value
@@ -93,9 +107,28 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     if (!project) return context.signInFor(params.slug);
     using itx = await context.api.projects.get(project.id);
     const rule = await itx.rewriteRules.get("itx.agents");
-    if (!rule?.target) return { projects, project, agents: [], agent: undefined, installed: false };
-    const agents = await withAgents(itx).agents.list();
-    return { projects, project, agents, agent: deps.agent || agents[0]?.path, installed: true };
+    if (!rule?.target)
+      return {
+        projects,
+        project,
+        agents: [],
+        agent: undefined,
+        installed: false,
+        build: undefined,
+      };
+    // the build the project's agents run (the source its install keeps), for the sidebar's upgrade
+    const [agents, build] = await Promise.all([
+      withAgents(itx).agents.list(),
+      installedVersion(itx, agentsApp),
+    ]);
+    return {
+      projects,
+      project,
+      agents,
+      agent: deps.agent || agents[0]?.path,
+      installed: true,
+      build,
+    };
   },
   component: AgentsPage,
 });
@@ -117,33 +150,55 @@ function AgentsPage() {
       activeProjectId={project}
       projectHref={(item) => `/projects/${item.slug}`}
       nav={
-        <AgentsNav
-          project={project}
-          slug={data.project.slug}
-          agents={data.agents}
-          summaries={summaries}
-          installed={data.installed}
-          agent={data.agent}
-          onCreate={async () => {
-            // An agent is its path; a new one is born at this moment's path.
-            const path = newWebAgentPath(new Date());
-            using itx = await api.projects.get(project);
-            if (!data.installed) {
-              // The SDK models the public API as promises; capnweb's stub has the
-              // same runtime methods with additional pipelining types.
-              await ensureAgents(itx as unknown as IterateContextApi, await publishedAgents());
-              await router.invalidate({ sync: true });
-              return;
-            }
-            await withAgents(itx).agents.create(path);
-            await router.invalidate();
-            await navigate({
-              to: "/projects/$slug",
-              params: { slug: data.project.slug },
-              search: { agent: path },
-            });
-          }}
-        />
+        <>
+          <AgentsNav
+            project={project}
+            slug={data.project.slug}
+            agents={data.agents}
+            summaries={summaries}
+            installed={data.installed}
+            agent={data.agent}
+            onCreate={async () => {
+              // An agent is its path; a new one is born at this moment's path.
+              const path = newWebAgentPath(new Date());
+              using itx = await api.projects.get(project);
+              if (!data.installed) {
+                // The SDK models the public API as promises; capnweb's stub has the
+                // same runtime methods with additional pipelining types.
+                await ensureAgents(itx as unknown as IterateContextApi, await publishedAgents());
+                await router.invalidate({ sync: true });
+                return;
+              }
+              await withAgents(itx).agents.create(path);
+              await router.invalidate();
+              await navigate({
+                to: "/projects/$slug",
+                params: { slug: data.project.slug },
+                search: { agent: path },
+              });
+            }}
+          />
+          {data.build ? (
+            <SidebarGroup className="mt-auto group-data-[collapsible=icon]:hidden">
+              <SidebarGroupContent className="px-2">
+                <AppBuild
+                  app="Agents"
+                  installed={data.build}
+                  check={(installed) => agentsBuild({ data: installed })}
+                  upgrade={async (version) => {
+                    using itx = await api.projects.get(project);
+                    // as for ensureAgents above: the stub has the SDK's methods
+                    const root = itx as unknown as IterateContextApi;
+                    await upgradeApp(root, agentsApp, version, (source) =>
+                      installAgents(root, source),
+                    );
+                    await router.invalidate({ sync: true });
+                  }}
+                />
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : null}
+        </>
       }
       header={
         data.agent ? (

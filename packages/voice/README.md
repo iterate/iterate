@@ -23,8 +23,9 @@ voice/worker.ts      export { default, VoiceAgentDurableObject } from "@iterate-
 which Kit's Prepare and voice.iterate.com run, also stores the OpenAI key (the live model's) and
 commits both folders, in one commit (`commitAppFolders` in `@iterate-com/agents/install`), when the
 project has none, then loads both apps at once. To upgrade, write both files as `voiceFolder` has
-them for the newer build and install again: worker.ts re-exports the build's classes by name, so a
-new pin under an old worker.ts can fail to load. A worker.ts that re-exports
+them for the newer build and install again, as `upgradeVoice` does (the Voice app's **Upgrade to
+the newest**, which then asks the new build for `health()`): worker.ts re-exports the build's
+classes by name, so a new pin under an old worker.ts can fail to load. A worker.ts that re-exports
 `VoiceDelegateDurableObject` is one: the relay facet is the only class now, so it becomes
 `export { default, VoiceAgentDurableObject } from "@iterate-com/voice";`. A device's press is the
 same call either way, so no Kit board needs a reflash for an upgrade.

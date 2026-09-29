@@ -57,10 +57,14 @@ async function signInToApp(input: { page: Page; app: string; project: { slug: st
     // noWaitAfter: Authorize posts and the issuer hands the browser back to the app; the wait
     // below covers that navigation (the spinner-waiter counts one in flight as loading)
     await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
-    // every client app's shell (packages/ui app-shell.tsx) names the active project in its switcher
+    // every client app's shell (packages/ui app-shell.tsx) names the active project in its switcher,
+    // which a phone's keeps in the sidebar sheet behind the trigger only the shell has; the landed
+    // path is checked below
     await page
       .getByRole("button", { name: "Switch project" })
       .filter({ hasText: project.slug })
+      .or(page.getByRole("button", { name: "Toggle sidebar" }))
+      .filter({ visible: true })
       .waitFor();
   });
   const landed = new URL(page.url());

@@ -13,6 +13,8 @@ import {
   publishAgents,
   sourceCacheKey,
   upgradeAgents,
+  upgradeApp,
+  type App,
 } from "@iterate-com/agents/install";
 import type { IterateContextApi, IterateContextApiWith, RepoHandle } from "iterate/api";
 import { z } from "zod";
@@ -28,6 +30,15 @@ export function voiceFolder(version: string): Record<string, string> {
     "worker.ts": 'export { default, VoiceAgentDurableObject } from "@iterate-com/voice";\n',
   };
 }
+
+/** Voice as a config repo holds it (@iterate-com/agents/install `App`): `voice/`, mounted by
+ *  `installVoice`. */
+export const voiceApp: App = {
+  dir: "voice",
+  packageName: "@iterate-com/voice",
+  folder: voiceFolder,
+  runtimeKey: "voice/runtime",
+};
 
 /** Mount voice from its source (`voiceFolder`, as `repo.modules({ dir })` answers it) at
  *  `itx.voice`. Voice runs on the agents app (every call is an agent), so `itx.agents` must be
@@ -46,7 +57,7 @@ export async function installVoice(
   const cacheKey = await sourceCacheKey(source);
   await Promise.all([
     // Written before the rule: the worker reads its facets' source from here (worker.ts).
-    itx.kv.put("voice/runtime", JSON.stringify({ cacheKey, source })),
+    itx.kv.put(voiceApp.runtimeKey, JSON.stringify({ cacheKey, source })),
     // A screen script embeds this in its HTML (screen-context.md).
     itx.kv.put("voice/screen-font.css", SCREEN_FONT_CSS),
   ]);
@@ -104,16 +115,11 @@ export async function ensureVoiceAgent(
   const withAgents = !agentsRule?.target;
   // A project installing the agents app too may have been created a moment ago (configRepoSettled).
   if (withAgents) await configRepoSettled(project);
-  const voice = {
-    dir: "voice",
-    folder: voiceFolder(versions.voice),
-    packageName: "@iterate-com/voice",
-    version: versions.voice,
-  };
+  const voice = { app: voiceApp, version: versions.voice };
   const repo = project.repos.get("/repos/config");
   const commitOid = await commitAppFolders(
     repo,
-    withAgents ? [agentsApp(versions.agents), voice] : [voice],
+    withAgents ? [{ app: agentsApp, version: versions.agents }, voice] : [voice],
   );
   const [agentsSource, voiceSource] = await Promise.all([
     withAgents ? repo.modules({ dir: "agents", commitOid }) : undefined,
@@ -127,4 +133,20 @@ export async function ensureVoiceAgent(
   ]);
   VoiceHealth.parse(health);
   return "ready";
+}
+
+/** The Voice app's upgrade: the project's voice at `version`, a newer build (`upgradeApp`), mounted
+ *  (`installVoice`) and answering `health()`, which loads the new build. The agents app is left at
+ *  its own build: its app upgrades it. */
+export async function upgradeVoice(
+  project: Parameters<typeof installVoice>[0] & Parameters<typeof upgradeApp>[0],
+  version: string,
+) {
+  // Installed, the project's `itx.voice` rule makes its handle answer `voice` (as in
+  // ensureVoiceAgent).
+  const installed = project as typeof project & Pick<IterateContextApiWith<"voice">, "voice">;
+  return upgradeApp(project, voiceApp, version, async (source) => {
+    await installVoice(project, source);
+    VoiceHealth.parse(await installed.voice.health());
+  });
 }

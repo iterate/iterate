@@ -22,6 +22,7 @@
     "@iterate-com/agents": "workspace:*",
     "@iterate-com/cli": "workspace:*",
     "@iterate-com/shared": "workspace:*",
+    "@iterate-com/voice": "workspace:*",
     "@playwright/test": "catalog:",
     "@tanstack/eslint-plugin-router": "^1.162.0",
     "@types/node": "catalog:",
