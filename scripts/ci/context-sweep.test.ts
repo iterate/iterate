@@ -1,10 +1,14 @@
 // The context sweep's decisions (scripts/ci/context-sweep.ts): what each stored object is, that an
-// orphan is destroyed only once its whole log is in the CI bucket, that a deploy's reset mid-sweep
-// is asked again rather than failing the run, and where each run's result is posted. Cloudflare's listing, the session and R2 are the script's IO, left out.
-import { expect, test } from "vitest";
+// orphan is destroyed only once its whole log is in the backup bucket, which only prd has and only
+// prd's own token writes, that a deploy's reset mid-sweep is asked again rather than failing the
+// run, and where each run's result is posted. Cloudflare's listing, the session and R2 are the
+// script's IO, left out.
+import { expect, test, vi } from "vitest";
 import type { StreamPage } from "iterate/api";
 import type { IterateConnection } from "iterate/node";
-import {
+import { PREVIEW_AND_DEV_ACCOUNT_ID, PRD_ACCOUNT_ID } from "../../envs.ts";
+import { fakeDoppler } from "../lib/fake-doppler.ts";
+import contextSweep, {
   backUpAndDestroy,
   classifyContexts,
   reconnecting,
@@ -327,6 +331,42 @@ test("a routine night's #ci line, at five-digit counts, is one line of at most 1
   expect({ text, lines: text.split("\n").length, short: text.length <= 120 }).toMatchObject({
     lines: 1,
     short: true,
+  });
+});
+
+test("a sweep that destroys refuses a deployment without a backup bucket before it reads anything", async () => {
+  using _doppler = fakeDoppler({
+    secrets: { CLOUDFLARE_ACCOUNT_ID: PREVIEW_AND_DEV_ACCOUNT_ID, CLOUDFLARE_API_TOKEN: "preview" },
+  });
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  await expect(contextSweep({ env: "preview", destroy: true })).rejects.toThrow(
+    "preview has no backup bucket: sweep it without --destroy",
+  );
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+test("prd's backups are written with prd's own Cloudflare token, checked before anything is read", async () => {
+  using _doppler = fakeDoppler({
+    secrets: { CLOUDFLARE_ACCOUNT_ID: PRD_ACCOUNT_ID, CLOUDFLARE_API_TOKEN: "prd" },
+  });
+  const fetch = vi.fn(async (url: string) =>
+    url.endsWith("/user/tokens/verify")
+      ? Response.json({ result: { id: "prd-token-id" } })
+      : Response.json(
+          { success: false, errors: [{ code: 9109, message: "stop" }] },
+          { status: 403 },
+        ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  await expect(contextSweep({ env: "prd", destroy: true })).rejects.toThrow();
+  const [verify, next] = fetch.mock.calls.map(([url, init]: unknown[]) => [
+    String(url),
+    new Headers((init as RequestInit | undefined)?.headers).get("authorization"),
+  ]);
+  expect({ verify, next: next?.[0] }).toEqual({
+    verify: ["https://api.cloudflare.com/client/v4/user/tokens/verify", "Bearer prd"],
+    next: `https://api.cloudflare.com/client/v4/accounts/${PRD_ACCOUNT_ID}/workers/durable_objects/namespaces?per_page=100&page=1`,
   });
 });
 

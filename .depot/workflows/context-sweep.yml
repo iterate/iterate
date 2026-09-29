@@ -1,7 +1,7 @@
 # Context sweep — nightly, against prd. scripts/ci/context-sweep.ts says what an orphan is and how
 # each is backed up before it is destroyed. The step passes --destroy on main (the schedule, or a
 # dispatch from main); a dispatch from any other branch only reports. The backups, under
-# r2://iterate-ci/backups/context-sweep/prd/, are kept 365 days (docs/test-evidence.md#retention).
+# r2://iterate-prd-backups/context-sweep/ on the prd account, are kept 365 days.
 # The notify job posts every result (context-sweep.ts `post`): a run on main posts its line to #ci
 # and keeps one #error-pulse page while the sweep fails; a run on another ref prints. test-run=true
 # destroys nothing and posts the result to #ci as a 🧪 TEST RUN.
@@ -42,8 +42,8 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # prd's Cloudflare credentials and operator bearer from Doppler os/prd, which the script
-      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts), and the
-      # CI bucket's token, which it reads from Doppler itself too (envs.ts `ciBucketEnvs`).
+      # downloads itself and checks against envs.ts's account (scripts/lib/env-context.ts); the
+      # same Cloudflare token writes prd's backup bucket (envs.ts `backupBucketEnvs`).
       - name: Sweep prd's contexts
         id: sweep
         env:

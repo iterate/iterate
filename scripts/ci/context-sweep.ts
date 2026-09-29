@@ -7,14 +7,14 @@
 // does not hold (deleted, or never created: an operator's made-up `prj_…`) is an orphan.
 //
 // Report-only unless `--destroy`, which backs each orphan up and then destroys it. The backup is one
-// JSON Lines object in the CI bucket (envs.ts `ciBucketEnvs`, docs/test-evidence.md#one-bucket),
-// `backups/context-sweep/<env>/<run's start, UTC>/<context id>.jsonl`: its first line the context's
-// identity `{ id, projectId, path }`, then its whole durable log, one event a line in offset order,
-// as `session.contexts.readEvents` pages it (without a wake) up to the head. The destruction
-// (`session.contexts.destroy`, refused for a global context and for any project that still exists)
-// waits for the bucket to hold the backup: an orphan whose backup did not land is left for the next
-// run, and so is one whose newest event is under an hour old (a running test's context, whose project
-// was made up: the nightly crash hunt's). A backup holds the log alone: a context's kv and its
+// JSON Lines object in the deployment's backup bucket (envs.ts `backupBucketEnvs`: prd's alone,
+// `iterate-prd-backups` on the prd account), `context-sweep/<run's start, UTC>/<context id>.jsonl`:
+// its first line the context's identity `{ id, projectId, path }`, then its whole durable log, one
+// event a line in offset order, as `session.contexts.readEvents` pages it (without a wake) up to the
+// head. The destruction (`session.contexts.destroy`, refused for a global context and for any
+// project that still exists) waits for the bucket to hold the backup: an orphan whose backup did not
+// land is left for the next run, and so is one whose newest event is under an hour old (a running
+// test's context, whose project was made up: the nightly crash hunt's). A backup holds the log alone: a context's kv and its
 // facets' storage go with it. Each orphan's read and destruction is asked again when the platform
 // failed it (`retryPlatformFailures`, CI_HTTP): a prd deploy mid-sweep resets every context and may
 // drop the session's socket, which is connected again. Each orphan logs one
@@ -24,11 +24,17 @@
 //
 // The deployment's Cloudflare credentials and APP_CONFIG (its operator bearer) come from its own
 // Doppler config (scripts/lib/env-context.ts `resolveEnvContext`, which refuses a Doppler account
-// that is not envs.ts's); `--destroy` writes the CI bucket with its account's Cloudflare API token
-// (envs.ts `ciBucketEnvs`, read from Doppler as the test evidence upload does). It fails when an
-// object could not say who it is or an orphan was not destroyed; orphans alone are the report, not
-// a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
+// that is not envs.ts's); `--destroy` writes the backup bucket with that same Cloudflare API token,
+// so prd's event logs are written and read with prd's credentials alone, and is refused for a
+// deployment without a backup bucket. It fails when an object could not say who it is or an orphan
+// was not destroyed; orphans alone are the report, not a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
 // Slack.
+//
+// The backup bucket was made with Doppler `_shared/prd`'s token (the one os/prd inherits), every
+// object expiring 365 days after it lands:
+//
+//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket create iterate-prd-backups
+//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-prd-backups backups-after-365-days --expire-days 365 --force
 import { appendFileSync } from "node:fs";
 import type { IterateSessionApi } from "iterate/api";
 import { connectIterate, type IterateConnection } from "iterate/node";
@@ -41,10 +47,10 @@ import {
   retryPlatformFailures,
   type FailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, ciBucketEnvs, osEnvs } from "../../envs.ts";
+import { OS_DOPPLER_PROJECT, backupBucketEnvs, osEnvs, type OsEnv } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
-import { dopplerSecret, resolveEnvContext } from "../lib/env-context.ts";
+import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
 import { getSlackClient, keepPage, pageText, slackChannelIds } from "./slack.ts";
 
@@ -89,13 +95,13 @@ export default async function contextSweep(options: {
   /** Back up and destroy each orphan (session.contexts.readEvents, then destroy). */
   destroy?: boolean;
 }) {
-  // Before anything is read: a backup that cannot be written would leave every orphan standing.
-  const putBackup = options.destroy ? await backupWriter() : null;
   const ctx = await resolveEnvContext({
     envs: osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
   });
+  // Before anything is read: a backup that cannot be written would leave every orphan standing.
+  const backups = options.destroy ? await backupWriter(ctx) : null;
   const target = ctx.env;
   const namespaces = (await getWorkerDoNamespaces(ctx, target.workerName)).filter(
     ({ className }) => className === "IterateContextDurableObject",
@@ -129,8 +135,8 @@ export default async function contextSweep(options: {
   const live = new Set((await session.projects.list()).map((project) => project.id));
   const classified = classifyContexts(contexts, live);
 
-  const backupPrefix = `backups/context-sweep/${options.env}/${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}/`;
-  const swept = putBackup
+  const backupPrefix = `context-sweep/${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}/`;
+  const swept = backups
     ? await backUpAndDestroy({
         orphans: classified.orphans,
         contexts: {
@@ -138,7 +144,7 @@ export default async function contextSweep(options: {
             (await connection.session()).contexts.readEvents(id, afterOffset),
           destroy: async (id) => (await connection.session()).contexts.destroy(id),
         },
-        putBackup,
+        putBackup: backups.put,
         prefix: backupPrefix,
       })
     : { destroyed: [], recent: [], failed: [] };
@@ -154,7 +160,7 @@ export default async function contextSweep(options: {
     destroyed: swept.destroyed.length,
     recent: swept.recent.length,
     destroyFailed: swept.failed.length,
-    backups: putBackup ? `r2://${ciBucketEnvs.ci.bucketName}/${backupPrefix}` : undefined,
+    backups: backups ? `r2://${backups.bucketName}/${backupPrefix}` : undefined,
   };
   console.log(JSON.stringify({ event: "context-sweep.report", namespace: namespaceId, ...report }));
   for (const orphan of classified.orphans)
@@ -239,7 +245,7 @@ const RECENT_MS = 60 * 60_000;
 export async function backUpAndDestroy(input: {
   orphans: { id: string; projectId: string; path: string }[];
   contexts: Pick<IterateSessionApi["contexts"], "readEvents" | "destroy">;
-  /** Resolves once the CI bucket holds `body` at `key`. */
+  /** Resolves once the backup bucket holds `body` at `key`. */
   putBackup: (key: string, body: Uint8Array) => Promise<void>;
   prefix: string;
   now?: () => number;
@@ -402,19 +408,26 @@ function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
   });
 }
 
-/** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with its account's Cloudflare API
- *  token): resolves once R2 holds it (ci-bucket.ts `put`). */
-async function backupWriter() {
-  const { cloudflareAccountId, bucketName, dopplerProject, dopplerConfig } = ciBucketEnvs.ci;
+/** The backup bucket of the swept deployment (envs.ts `backupBucketEnvs`), written with the
+ *  deployment's own Cloudflare API token: `put` resolves once R2 holds the backup (ci-bucket.ts
+ *  `put`). Refused for a deployment without one, and for one whose bucket is on another account. */
+async function backupWriter(ctx: EnvContext<OsEnv>) {
+  const target = backupBucketEnvs[ctx.name];
+  if (!target) throw new Error(`${ctx.name} has no backup bucket: sweep it without --destroy`);
+  if (target.cloudflareAccountId !== ctx.env.cloudflareAccountId)
+    throw new Error(`${target.bucketName} is not on ${ctx.name}'s Cloudflare account`);
   const bucket = await ciBucket({
-    accountId: cloudflareAccountId,
-    bucketName,
-    apiToken: dopplerSecret(dopplerProject, dopplerConfig, "CLOUDFLARE_API_TOKEN"),
+    accountId: target.cloudflareAccountId,
+    bucketName: target.bucketName,
+    apiToken: ctx.secrets.CLOUDFLARE_API_TOKEN,
     area: "context-sweep",
     // a large context's backup is a few hundred megabytes: minutes on a slow link
     timeoutMs: 600_000,
   });
-  return (key: string, body: Uint8Array) => bucket.put(key, body, "application/x-ndjson");
+  return {
+    bucketName: target.bucketName,
+    put: (key: string, body: Uint8Array) => bucket.put(key, body, "application/x-ndjson"),
+  };
 }
 
 function required(name: string): string {
