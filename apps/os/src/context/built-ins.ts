@@ -419,8 +419,8 @@ export interface BuiltInScope extends LibraryRoots {
   /** THE PLATFORM HOOK (platform-hook.ts): the platform's own subscriber, that a deployment's birth
    *  events point a fan-out row at (`itx.builtins.platformHook.deliverEvent`). `deliverEvent`
    *  answers the delivery loop alone (`assertDeliveryCaller`) and hands each event to the platform's
-   *  code with the bindings every built-in holds. */
-  platformHook: IterateContextApi["platformHook"];
+   *  code with the bindings every built-in holds. Not in the published API: no one else calls it. */
+  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS (`webhooks.get({ url, signingSecret? })`): a fan-out row's target that POSTs each
    *  event through THIS context's own `itx.fetch`, signed with a secret the row names.
    *  The signing key is read from the secret's context at most once per WEBHOOK_SIGNING_KEY_TTL_MS
@@ -439,13 +439,14 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-// THE PUBLISHED LIST: every built-in root is a root of iterate/api's `IterateContextApi`, and every
-// root declared there is a built-in but the edge's own verbs (iterate-context.ts `invoke`,
-// `subscribe`, `provide`) — a root published and never implemented, or implemented and never
-// published, fails to typecheck right here.
+// THE PUBLISHED LIST: every built-in root but the platform's own hook is a root of iterate/api's
+// `IterateContextApi`, and every root declared there is a built-in but the edge's own verbs
+// (iterate-context.ts `invoke`, `subscribe`, `provide`) — a root published and never implemented, or
+// implemented and never published, fails to typecheck right here.
 type EdgeOnlyRoot = "invoke" | "subscribe" | "provide";
-type RootsArePublished = [BuiltInRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
-  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [BuiltInRoot]
+type PublishedRoot = Exclude<BuiltInRoot, "platformHook">;
+type RootsArePublished = [PublishedRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
+  ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [PublishedRoot]
     ? true
     : never
   : never;

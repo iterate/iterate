@@ -944,10 +944,6 @@ export interface IterateContextApi {
       props?: unknown;
     }): InvokeHandle;
   };
-  /** THE PLATFORM'S OWN SUBSCRIBER, the target of a fan-out row a deployment's birth events give
-   *  every project context: `deliverEvent` is the delivery loop's call alone (FORBIDDEN to anyone
-   *  else). */
-  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
   /** HTTP WEBHOOKS, the target of a fan-out row that sends each event to another server, Stripe's
    *  way: `webhooks.get({ url, signingSecret? }).deliverEvent` POSTs the event as JSON from this
    *  context through its own `itx.fetch` (a context that may not fetch sends nothing), with
