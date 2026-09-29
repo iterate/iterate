@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, osEnv, osEnvs, osResourceNames, type OsEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
+import { appConfigSecretsOf } from "../../../scripts/lib/deploy-helpers.ts";
 import type { EnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { build } from "./build.ts";
@@ -44,6 +45,8 @@ export default async function deploy(options: {
     // fails leaves the running version serving; a migration must keep that version working for the
     // minute until the upload (scripts/d1.ts).
     async prepare(ctx, secretValues, credentials) {
+      // every APP_CONFIG* var in the Doppler config, not only the two required below
+      Object.assign(secretValues, appConfigSecretsOf(ctx.secrets));
       // The pet shop's GitHub fake as iterate's GitHub App (generate-wrangler-config.ts has the other
       // fakes): its throwaway key is Doppler `os/preview`'s, so the App ships as a secret, not a var.
       if (ctx.env.petshopIntegrations)

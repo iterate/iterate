@@ -27,7 +27,8 @@
 // `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
+// it). A deploy ships every `APP_CONFIG*` var of its Doppler config (scripts/lib/deploy-helpers.ts
+// `appConfigSecretsOf`), so a new key is set in Doppler alone. A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept. The mechanism is shared with the apps on top
 // (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
