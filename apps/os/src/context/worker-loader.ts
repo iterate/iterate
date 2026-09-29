@@ -29,6 +29,7 @@
 import { codedError, errorCode } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
@@ -417,7 +418,7 @@ export async function prepareConfinedWorker(
         // and replay it (workers-and-facets.e2e pins it) — every worker in the chain needs it, so
         // the parent config carries it too. No `limits`: trusted clients. The platform bounds a DO to
         // 10 distinct dynamic workers with in-flight requests — the pins' release keeps a context under it.
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         compatibilityFlags: [
           "no_nodejs_compat",
           "no_nodejs_compat_v2",

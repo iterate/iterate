@@ -12,6 +12,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";
@@ -59,7 +60,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props: how a 
     async (_instance, state) => {
       // A fixed key: low-cardinality by construction (the loader cacheKey rule), tests only.
       const worker = env.LOADER.get("probe:facet-props:v1", () => ({
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         mainModule: "probe.js",
         modules: { "probe.js": IDENTITY_PROBE },
       }));
