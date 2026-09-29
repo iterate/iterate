@@ -30,9 +30,10 @@
 // "There is nothing here yet", instead of the Worker (a WebSocket client sees only "WebSocket
 // connection failed."), ever fewer of them, and "these errors should resolve themselves after a
 // minute or so" (https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/#11-deploy-your-project).
-// The last of them are too rare for rounds to see, about one fresh connection in a thousand, while a
-// suite opens a hundred a second from its start. So the gate also holds until every workers.dev
-// hostname of the deployment is HOSTNAME_PROPAGATION_MS old; one redeployed in place is already.
+// The last of them, about one fresh connection in a hundred, slip past rounds of a few connections
+// a second, and a suite opens thousands in its first minutes. No sample proves them gone, so the
+// gate also holds until every workers.dev hostname of the deployment is HOSTNAME_PROPAGATION_MS
+// old; one redeployed in place is already.
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
