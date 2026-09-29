@@ -159,7 +159,7 @@ async function expectUnavailable(response: Response, hostname: string, retryAfte
     "retry-after": retryAfter,
   });
   expect(await response.text()).toBe(
-    `503: the platform could not look up ${hostname} just now; try again shortly\n`,
+    `503: the platform could not answer ${hostname} just now; try again shortly\n`,
   );
 }
 
