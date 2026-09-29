@@ -1,7 +1,13 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { publishedPackageCommit, publishPathsOf } from "./published-package-commit.ts";
+import {
+  checkoutPublishedPackageCommit,
+  publishedPackageCommit,
+  publishPathsOf,
+} from "./published-package-commit.ts";
 
 const publishPaths = ["packages/agents/**", "packages/iterate/**", "pnpm-lock.yaml"];
 const base = "b".repeat(40);
@@ -40,3 +46,34 @@ test("the publish paths are pkg-pr-new.yml's pull_request.paths", () => {
   );
   expect(publishPathsOf(workflow)).not.toContain("main");
 });
+
+test("a one-way copy of this repo (iterate/os) builds against the commit its HEAD was copied from", () => {
+  const origin = "0".repeat(40);
+  using copy = gitRepo();
+  copy.commit(`Add logout button (iterate/iterate#123)\n\nGitOrigin-RevId: ${origin}\n`);
+  // no origin/main to take a merge base with, and no .github/workflows/pkg-pr-new.yml to read
+  expect(checkoutPublishedPackageCommit(copy.dir, undefined)).toBe(origin);
+});
+
+/** An empty git repository in a temporary folder, removed on dispose. */
+function gitRepo() {
+  const dir = mkdtempSync(path.join(tmpdir(), "published-package-commit-"));
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  git("init", "--quiet");
+  return {
+    dir,
+    commit: (message: string) =>
+      git(
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        message,
+      ),
+    [Symbol.dispose]: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}

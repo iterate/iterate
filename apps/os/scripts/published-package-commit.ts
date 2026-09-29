@@ -44,6 +44,12 @@ export function checkoutPublishedPackageCommit(
 ): string {
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
+  // A one-way copy of this repo (iterate/os, copybara/copy.bara.sky), which self-hosters build, has
+  // no main of ours and no pkg-pr-new.yml. Its HEAD names the commit of ours it was copied from in
+  // a `GitOrigin-RevId` trailer: a main commit, since the copy only moves after a deploy, and
+  // pkg.pr.new publishes every main commit.
+  const copiedFrom = git("log", "-1", "--format=%(trailers:key=GitOrigin-RevId,valueonly)");
+  if (copiedFrom) return copiedFrom;
   const headSha = git("rev-parse", "HEAD");
   if (git("rev-parse", "--is-shallow-repository") === "true")
     git(
