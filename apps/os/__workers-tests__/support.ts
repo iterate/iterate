@@ -274,7 +274,7 @@ export async function projectWithMember(slug: string) {
 
 /** The hosts the pet shop's Slack, Google, Cloudflare and GitHub fakes answer on in this suite
  *  (APP_CONFIG `integrations`, wrangler.test.jsonc and vitest.config.ts). */
-const PETSHOP_HOSTS = ["slack.test", "google.test", "cloudflare.test", "github.test"];
+const PETSHOP_HOSTS = ["slack.test", "google.test", "cloudflare.test", "github.test", "x.test"];
 
 /** The pet shop's Slack, Google, Cloudflare and GitHub fakes over in-memory state, answering this isolate's
  *  `fetch` to their hosts until the test finishes, and the issuer's own requests to this worker;

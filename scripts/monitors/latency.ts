@@ -41,6 +41,10 @@ import {
   workflowArtifact,
   type DepotApi,
 } from "../ci/depot.ts";
+import {
+  PLATFORM_FAILURES as MESSAGE_PLATFORM_FAILURES,
+  platformFailureOf,
+} from "../ci/platform-failures.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
 import { advance, commitText, sinceText, SignalMemory, type PageUpdate } from "./page.ts";
 
@@ -132,33 +136,15 @@ const VitestReport = z.object({
   ),
 });
 
-/** THE PLATFORM'S FAILURES: what a row can break on only because Cloudflare, or the network between
- *  the runner and it, failed the row — never on anything our code decides. Each broke one row of a
- *  red main run, every budget fine, and the row was green on the next run. */
+/** THE PLATFORM'S FAILURES a probe can break on: the ones its failure message names
+ *  (../ci/platform-failures.ts), and a stall only the row's subscribe timings show. */
 const PLATFORM_FAILURES = {
-  /** undici's fetch rejects with exactly this only when no HTTP response came at all. Main
-   *  927f7a835: `read ECONNRESET` on the MCP row's first call, and Workers Logs had no `/mcp`
-   *  request from it. */
-  "connection-reset": "a fetch got no HTTP response: the connection to the edge failed",
-  /** capnweb's word for a socket that ended with no Close frame; our Worker closes one with a code
-   *  and a reason ("Peer closed WebSocket: 3000 …"). Main 6c4bd2319: 3 of 5 sockets idle 15 s were
-   *  lost on their next message, their invocations missing from Workers Logs, the account's other
-   *  previews losing sockets in the same seconds. A crash of our own Worker looks the same from the
-   *  client: the two-runs-in-a-row rule is what catches that. */
-  "socket-lost": "a WebSocket ended with no Close frame: the edge dropped it",
+  ...MESSAGE_PLATFORM_FAILURES,
   /** A wait for pushes that timed out while the row's own subscribes stalled past EDGE_STALL_MS
    *  (~0.1 s a batch normally). Main a8e6c6525: Cloudflare moved traffic out of IAD, every round
    *  trip between the edge and the Durable Object stalled ~3 s, and lends the pushes paged for came
    *  back past their 10 s timeout, the pushes lost (apps/os/src/context/rpc-stubs.ts). */
   "edge-stall": "pushes never came while the edge's round trips to the Durable Object stalled",
-  /** workerd's DISCONNECTED failure, handed back through a session that stayed open: a Workers RPC
-   *  connection under the call, from our Worker to a Durable Object or between two objects, was cut
-   *  inside Cloudflare. Our code never throws it, and a reset of our own objects fails with a
-   *  message of its own (packages/shared/src/platform-retry.ts `failureKind`). The edge sends an
-   *  idempotent call it cut once more (apps/os/src/context-stub.ts `IDEMPOTENT_CALLS`), so what
-   *  reaches a row is a write, or a second cut. On 2026-09-25, 34 of 50 concurrent calls never reached a context whose
-   *  incarnation, 50 facets and session all ran on. */
-  "transport-cut": "a Workers RPC connection under the call was lost inside Cloudflare",
 } as const;
 export type PlatformFailure = keyof typeof PLATFORM_FAILURES;
 /** A subscribe batch this slow, at the median, is the platform stalling: ~0.1 s normally, 3.0–3.2 s
@@ -168,10 +154,9 @@ const EDGE_STALL_MS = 1_000;
 /** Which platform failure broke a row, from one of its failure messages (the error and its stack)
  *  and what the row left on its meta; undefined for any other failure. Pure. */
 function platformFailure(message: string, meta: RowMeta | undefined): PlatformFailure | undefined {
+  const byMessage = platformFailureOf(message);
+  if (byMessage) return byMessage;
   const firstLine = message.split("\n", 1)[0]!.trim();
-  if (firstLine === "TypeError: fetch failed") return "connection-reset";
-  if (firstLine === "Error: WebSocket connection failed.") return "socket-lost";
-  if (firstLine === "Error: Network connection lost.") return "transport-cut";
   const subscribeBatchMs = meta?.subscribeBatchMs || [];
   if (
     firstLine.startsWith("Error: until(") &&

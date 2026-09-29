@@ -30,8 +30,7 @@ const { authorizationUrl, connection } = await itx.integrations.connect("slack",
 await itx.integrations.disconnect("slack", "acme");
 ```
 
-`itx.integrations.connect` and `disconnect` are the one way to connect and disconnect (Waitrose,
-which has no consent, connects through the facets' `connectWaitrose`, below): they run on the
+`itx.integrations.connect` and `disconnect` are the one way to connect and disconnect: they run on the
 owner's root (a project's `/`, a person's `/users/<id>`), and the `project` and `account` facets
 publish neither method they call (`src/context/built-ins.ts`). The callback finishes the connection,
 so an agent or the CLI that starts a connect needs no second call. Slack and Google come back to
@@ -241,15 +240,14 @@ secret's origins. An open outbound socket keeps every Durable Object on its path
 the project's own secret (the dialler's context and the secret's), 3 for a person's account or
 the deployment's key (plus the context that holds the token). A deploy closes it, so a bot reconnects on close.
 
-## Session logins: Waitrose and exchange code
+## Session logins: exchange code
 
 Some vendors have no OAuth: a username and password buy a short session, and logging in again is
-the refresh. The secret holds the credential and the facet logs in on first use and on a 401, never
-per call. Waitrose's login is bundled (`refresh: { kind: "waitrose-session", graphqlUrl }`,
-`src/integrations/waitrose.ts`). The Dash connects Waitrose for a project or a person with a
-username and password, and a person's is connected to a project like Google. Any other vendor is the secret's own
-exchange code, an ES module exporting `exchange(material, fetch)` that returns the next material.
-This Tesco-shaped login is the pet shop's (`/api/tesco/login`):
+the refresh (a grocer's GraphQL `NewSession` mutation, a Tesco-shaped CSRF form). The secret holds
+the credential and the facet logs in on first use and on a 401, never per call, by the secret's own
+exchange code: an ES module exporting `exchange(material, fetch)` that returns the next material. No
+vendor's login is built in; a vendor's code lives in userspace (github.com/jonastemplestein/iterategrations
+has some). This Tesco-shaped login is the pet shop's (`/api/tesco/login`):
 
 ```ts
 await itx.secrets.set(

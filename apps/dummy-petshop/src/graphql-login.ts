@@ -3,9 +3,9 @@
  * archetype): one more way to authenticate against petshop's ONE pets API,
  * alongside OAuth, the legacy JSON login, MCP, and the WebSocket gateways. Some real-world vendors authenticate exactly like
  * this — a GraphQL `NewSession` mutation trading email+password for a
- * short-lived bearer with no refresh grant — and the OS side carries a named
- * refresh strategy speaking this wire shape; this endpoint is what that strategy
- * is exercised against end to end.
+ * short-lived bearer with no refresh grant — and a secret's own exchange code
+ * (`refresh: { kind: "worker" }`) speaks this wire shape; this endpoint is what
+ * that code is exercised against end to end.
  *
  * - `NewSession` — login. Any username, password "correct-horse" (the same
  *   fixture password as /api/legacy-login) → a session token that lives

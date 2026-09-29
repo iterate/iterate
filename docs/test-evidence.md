@@ -146,9 +146,11 @@ never reached R2.
 Everything CI keeps in R2 lives in **`iterate-ci`**, on the dev/preview account
 (`ciBucketEnvs.ci` in `envs.ts`), under `evidence/`. `evidence/local/` and `state/` are reserved
 for laptop runs and the guards' state ([#3110](https://github.com/iterate/iterate/issues/3110)).
-`backups/context-sweep/<env>/<run's start>/` holds the context sweep's backups: each orphan context
-it destroys, its identity and whole durable log in one JSON Lines object
-([`scripts/ci/context-sweep.ts`](../scripts/ci/context-sweep.ts)).
+No prd data: every CI job can read this bucket, so the context sweep's backups of prd's orphan
+contexts, their whole durable logs, live in `iterate-prd-backups` on the prd account, written with
+prd's own token (`backupBucketEnvs` in `envs.ts`,
+[`scripts/ci/context-sweep.ts`](../scripts/ci/context-sweep.ts)). `backups/context-sweep/` here holds
+only preview contexts' backups from the sweep's trial runs, expiring under their rule below.
 
 One bucket, because an R2 API token scopes to buckets, never to a prefix, and CI has one
 credential that reaches every bucket anyway ([credentials](#credentials)); lifecycle rules and
@@ -236,7 +238,8 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
 - `evidence/ci/trust=main/`: 365 days (`evidence-main-after-365-days`).
 - `evidence/ci/trust=pr/`: 90 days (`evidence-pr-after-90-days`).
 - `evidence/local/`: 30 days (`evidence-local-after-30-days`).
-- `backups/context-sweep/`: 365 days (`backups-context-sweep-after-365-days`).
+- `backups/context-sweep/`: 365 days (`backups-context-sweep-after-365-days`); nothing writes it
+  any more.
 - `state/`: never deleted. Nothing in CI deletes objects.
 - **No bucket lock is set** (30 days on `trust=main/` would stop even CI's token deleting them);
   whether to set it is open ([#3110](https://github.com/iterate/iterate/issues/3110)).

@@ -6,7 +6,7 @@
 // of `grants.list(cursor)` — the route's loader, `?cursor=` in the URL; a mint or an end
 // invalidates the router, which reloads it. "Connected accounts" are the person's own connections
 // (the `account` facet's live `integrations` on `session.user`): a sign-in with Google, Cloudflare or
-// GitHub keeps one, and so does connecting Google, Cloudflare or Waitrose here (`?waitrose=1`), or
+// GitHub keeps one, and so does connecting Google or Cloudflare here, or
 // GitHub, which adds it as a sign-in to the account (`?error=` when the issuer refused). A project
 // uses one when its Integrations page connects it there; disconnecting one here ends every
 // project's use of it.
@@ -54,8 +54,6 @@ import { Identifier } from "../../components/identifier.tsx";
 import { addGithubSignInHref } from "../../lib/origins.ts";
 import { dateOf } from "../../lib/dates.ts";
 import { AllowAccount } from "../../components/allow-account.tsx";
-import { WaitroseForm } from "../../components/waitrose.tsx";
-import { connectWaitrose } from "../../lib/connections.ts";
 
 const GRANT_KIND_LABELS: Record<GrantKind, string> = {
   pending: "Pending sign-in",
@@ -69,8 +67,6 @@ export const Route = createFileRoute("/_auth/sessions")({
     cursor: z.string().optional().catch(undefined),
     /** The New token sheet. */
     token: z.literal(1).optional().catch(undefined),
-    /** The sheet that connects your own Waitrose account. */
-    waitrose: z.literal(1).optional().catch(undefined),
     /** Why the issuer refused to add a sign-in (apps/os identity.ts, "ADD A SIGN-IN"). */
     error: z.string().optional().catch(undefined),
   }),
@@ -472,7 +468,7 @@ function SessionsPage() {
 }
 
 /** The providers a person connects on their own account here (GitHub comes from signing in). */
-const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare")[] = ["google", "cloudflare"];
+const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare" | "x")[] = ["google", "cloudflare", "x"];
 
 const AccountConnections = z.looseObject({
   integrations: z.record(
@@ -510,19 +506,13 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
   const next = `${window.location.origin}/sessions`;
   const loadError = person.error || live.error || (read?.error && z.prettifyError(read.error));
-  const { waitrose, error: addError } = Route.useSearch();
+  const { error: addError } = Route.useSearch();
   const addGithub =
     state &&
     info.signInProviders.includes("github") &&
     !accounts.some((row) => row.provider === "github")
       ? addGithubSignInHref(info, next)
       : null;
-  const navigate = useNavigate({ from: Route.fullPath });
-  const closeWaitrose = () =>
-    void navigate({ search: (prev) => ({ ...prev, waitrose: undefined }), replace: true });
-  /** A Waitrose connect in flight: its sheet stays open until it answers. */
-  const [waitrosePending, setWaitrosePending] = useState(false);
-  const waitroseField = useRef<HTMLInputElement>(null);
   return (
     <section className="flex flex-col gap-2" aria-labelledby="connected-accounts-heading">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -555,13 +545,6 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
               Connect GitHub
             </a>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void navigate({ search: (prev) => ({ ...prev, waitrose: 1 }) })}
-          >
-            Connect Waitrose
-          </Button>
         </div>
       </div>
       {(error || addError) && (
@@ -639,29 +622,6 @@ function ConnectedAccounts({ projects }: { projects: { id: string; slug: string 
           })}
         </ul>
       )}
-      <Sheet
-        open={Boolean(waitrose)}
-        onOpenChange={(open) => !open && !waitrosePending && closeWaitrose()}
-      >
-        <SheetContent
-          side="right"
-          showCloseButton={!waitrosePending}
-          initialFocus={waitroseField}
-          className="overflow-y-auto data-[side=right]:w-full data-[side=right]:sm:max-w-md"
-        >
-          {waitrose && (
-            <WaitroseForm
-              firstField={waitroseField}
-              onPendingChange={setWaitrosePending}
-              onConnect={async (credentials) => {
-                // your own: the secret and its connection on your account, like a sign-in's
-                await connectWaitrose(api.user, "account", credentials);
-                closeWaitrose();
-              }}
-            />
-          )}
-        </SheetContent>
-      </Sheet>
     </section>
   );
 }

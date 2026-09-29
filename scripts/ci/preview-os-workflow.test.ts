@@ -53,7 +53,7 @@ for (const job of Object.values(preview.jobs))
 // the legs of `specs-shard`, and Browser specs (`specs`) gives their verdict.
 const suites = [
   { job: "e2e", name: "E2E tests", suite: "e2e" },
-  { job: SHARD_JOB, name: "Browser specs ${{ matrix.shard }}/10", suite: "specs" },
+  { job: SHARD_JOB, name: "Browser specs ${{ matrix.shard }}/11", suite: "specs" },
 ] as const;
 const suiteRun =
   'doppler run --project os --config preview -- pnpm preview "$SUITE" ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"} ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}';
@@ -65,7 +65,7 @@ test("Preview OS names each job for the check it is: deploy and the two suites s
     deploy: "Deploy preview",
     e2e: "E2E tests",
     specs: "Browser specs",
-    [SHARD_JOB]: "Browser specs ${{ matrix.shard }}/10",
+    [SHARD_JOB]: "Browser specs ${{ matrix.shard }}/11",
     cleanup: "Clean up superseded",
     trace: "CI trace",
   });

@@ -11,6 +11,7 @@ import { createCli } from "trpc-cli";
 
 import { getOctokit, getRepo, readEventPayload } from "./github.ts";
 import { replaceMarkedSection } from "./markdown-annotator.ts";
+import { githubPullRequestBody, writePullRequestBody } from "./pull-request-body.ts";
 
 /**
  * Array order is match order: first-match-wins, most-specific globs first, so
@@ -414,14 +415,11 @@ export default async function locReport(
   const section = renderBodySection(report, baseSha, headSha);
   console.log(section);
 
-  const github = getOctokit();
-  const repo = getRepo();
-  // Fetch the body fresh rather than trusting the event payload - the PR
-  // description may have been edited since the event fired.
-  const { data: pr } = await github.rest.pulls.get({ ...repo, pull_number: pullRequest.number });
-  const body = replaceMarkedSection(pr.body || "", bodySectionLabel, section);
-  await github.rest.issues.update({ ...repo, issue_number: pullRequest.number, body });
-  console.log(`Updated LOC report section in PR #${pullRequest.number} body`);
+  await writePullRequestBody(
+    githubPullRequestBody(getOctokit(), getRepo(), pullRequest.number),
+    "the LOC report",
+    (body) => replaceMarkedSection(body, bodySectionLabel, section),
+  );
 }
 
 if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "loc-report" }).run();

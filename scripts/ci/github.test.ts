@@ -97,6 +97,35 @@ test("asks a commit status again after GitHub's 503: the latest status per conte
   );
 });
 
+test("asks a GraphQL query again after GitHub's 502: it is a POST that only reads", async () => {
+  const fixture = githubAnswering(
+    json(502, { message: "Bad gateway" }),
+    json(200, { data: { repository: { pullRequest: { body: "before" } } } }),
+  );
+
+  const data = await fixture.github.graphql(
+    `query { repository(owner: "iterate", name: "iterate") { pullRequest(number: 2899) { body } } }`,
+  );
+
+  expect(data).toMatchObject({ repository: { pullRequest: { body: "before" } } });
+  expect(fixture.fetch).toHaveBeenCalledTimes(2);
+  expect(fixture.warn).toHaveBeenCalledWith(
+    expect.objectContaining({ route: "POST /graphql", status: 502, attempt: 1 }),
+  );
+});
+
+test("never asks a GraphQL mutation again: a 5xx may have landed", async () => {
+  const fixture = githubAnswering(json(502, { message: "Bad gateway" }));
+
+  await expect(
+    fixture.github.graphql(
+      `mutation { addComment(input: { subjectId: "PR_2899", body: "once" }) { clientMutationId } }`,
+    ),
+  ).rejects.toMatchObject({ status: 502 });
+  expect(fixture.fetch).toHaveBeenCalledOnce();
+  expect(fixture.warn).not.toHaveBeenCalled();
+});
+
 test("asks a PATCH once when the caller says so: a PR body written from a read seconds earlier", async () => {
   const fixture = githubAnswering(unexpectedError());
 

@@ -3,13 +3,13 @@
 // platform-failure heals, or an error. It reads the logs because the platform's recovery can keep
 // most requests green through a Cloudflare fault, so the heals and errors it logs are the only sign.
 //
-// Each fault is an incident, keyed by its cause: a deploy's reset or version skew, a visitor 5xx's
-// host, a healed facet's name or an error message. The incidents a run opens share one page
-// (slack.ts pageText), which later runs edit in place with each incident's running count and when
-// it was last seen. The page's thread hears only of a change of state, each reply mentioning Jonas
-// and Misha: an incident grown tenfold or back in a burst after an hour's quiet (both broadcast to
-// the channel), and the page's resolution once its last incident has gone a day unseen. An incident
-// seen after it closed opens a new page.
+// Each fault is an incident, keyed by its cause: a deploy's reset or version skew in a Worker, a
+// visitor 5xx's host, a healed facet's name or an error message. The incidents a run opens share
+// one page (slack.ts pageText), which later runs edit in place with each incident's running count
+// and when it was last seen. The page's thread hears only of a change of state, each reply
+// mentioning Jonas and Misha: an incident grown tenfold or back in a burst after an hour's quiet
+// (both broadcast to the channel), and the page's resolution once its last incident has gone a day
+// unseen. An incident seen after it closed opens a new page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
 // open pages with their incidents. Only a run on main posts and keeps it; any other run prints what
@@ -20,6 +20,8 @@
 // "<area>.platform-failure-<action>", name, … })` (apps/os context/facet-host.ts); naming it so
 // is all it takes to be alarmed. One whose defect is too rare to pin with a failing test is pinned
 // here instead (PINNED_WORKAROUNDS): the alarm posts once when its heal has been absent for weeks.
+// A Cloudflare defect that only logs an error line, where no call failed, is pinned by a test and
+// listed in PINNED_LINES with where its line still pages.
 //
 //   node scripts/ci/prd-fault-alarm.ts run   # prd's Cloudflare API token from Doppler _shared/prd
 //   … run --ref <git ref> --state <previous.json> --state-out <next.json>   # posts and keeps state on main only
@@ -88,15 +90,18 @@ type CloudflareCredentials = { accountId: string; apiToken: string };
  *  visitors were answered, by URL, outside a cause's rays; `causes` holds those inside them. `pagers`
  *  is not a fault: the rpc-stub pagers' re-dial outcomes by event, which say whether a Durable
  *  Object's close was recovered (apps/os context/rpc-stub-relay.ts); one that gives up logs an
- *  error, which is. `healEvents` is `heals` by event instead of by name, for PINNED_WORKAROUNDS. */
+ *  error, which is. `closeResets` are the errors a context's socket close logged for a reset
+ *  (CLOSE_RESET), by message: errors only when that recovery did not hold. `healEvents` is `heals`
+ *  by event instead of by name, for PINNED_WORKAROUNDS. */
 export type FaultReading = Record<
-  "serverErrors" | "heals" | "healEvents" | "errors" | "pagers",
+  "serverErrors" | "heals" | "healEvents" | "errors" | "closeResets" | "pagers",
   [string, number][]
 > & { causes: CauseReading[] };
 
-/** The visitor 5xx, by URL, in the rays a deploy's reset or version skew reached. `deploy` names the
- *  deploy as `<worker>@<version>`: the Worker and version that logged the cause. */
-export type CauseReading = { cause: Cause; deploy: string; serverErrors: [string, number][] };
+/** The visitor 5xx, by URL, in the rays a deploy's reset or version skew reached. `worker` is the
+ *  Worker that logged the cause: every deploy of it, and the old and new versions each deploy
+ *  runs side by side, are one incident while it lasts. */
+export type CauseReading = { cause: Cause; worker: string; serverErrors: [string, number][] };
 
 /**
  * WORKAROUNDS PINNED BY PRD TELEMETRY. A workaround for a platform defect stays only while a test
@@ -356,8 +361,8 @@ type Sighting = Pick<Incident, "what" | "label" | "count" | "hosts">;
 
 /** Errors a Durable Object's close or storage reset logs, and the close's own summary: the
  *  recovery the rpc-stub pagers re-dial through. They count only when that recovery did not hold: a
- *  pager gave up in the window, or none re-dialed (a reset with no pager on it). A visitor 5xx in
- *  their rays counts whatever the pagers did. */
+ *  pager gave up in the window, or none re-dialed (a reset with no pager on it). So do a reading's
+ *  `closeResets`. A visitor 5xx in their rays counts whatever the pagers did. */
 const RECOVERED_BY_REDIAL = [
   /^Connection closed: this Durable Object instance is no longer active/u,
   /^close$/u,
@@ -382,9 +387,9 @@ export function incidentsOf(reading: FaultReading) {
     });
   };
   const host = (url: string) => url.replace(/^https?:\/\/([^/]+).*$/u, "$1");
-  for (const { cause, deploy, serverErrors } of reading.causes)
+  for (const { cause, worker, serverErrors } of reading.causes)
     for (const [url, count] of serverErrors)
-      add({ what: cause, label: deploy, count, hosts: { [host(url)]: count } });
+      add({ what: cause, label: worker, count, hosts: { [host(url)]: count } });
   // prd answers no 5xx on purpose
   for (const [url, count] of reading.serverErrors)
     add({ what: "visitor 5xx", label: host(url), count, hosts: {} });
@@ -400,7 +405,7 @@ export function incidentsOf(reading: FaultReading) {
   // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident. An
   // alarm's summary is the time it was scheduled for: one incident for all. A stack's frames move
   // with every deploy, and an id (a reference, an event, a project) is new with every error.
-  for (const [message, count] of reading.errors) {
+  for (const [message, count] of [...reading.errors, ...(recovered ? [] : reading.closeResets)]) {
     if (recovered && RECOVERED_BY_REDIAL.some((pattern) => pattern.test(message))) continue;
     const requestLine = /^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/u.exec(message);
     const label = requestLine
@@ -809,12 +814,12 @@ const RAY_OUTCOMES: RayOutcome[] = [
 ];
 
 /**
- * Faults a deploy causes, each its own incident per deploy: a Durable Object reset because its code
+ * Faults a deploy causes, each its own incident per Worker: a Durable Object reset because its code
  * was updated, and the version skew of a message cloned between the old and new version. Every row
  * in their rays is the cause's: the errors are its expected outcome and never page, and the visitor
- * 5xx page as the deploy's (CauseReading), never as their hosts'. A ray with no visitor 5xx pages
- * nothing. The one error that still pages there is PAGER_GAVE_UP: the recovery a deploy's reset is
- * meant to go through failed.
+ * 5xx page as the Worker's deploys' (CauseReading), never as their hosts'. A ray with no visitor 5xx
+ * pages nothing. The one error that still pages there is PAGER_GAVE_UP: the recovery a deploy's
+ * reset is meant to go through failed.
  */
 const CAUSE_NAMES = ["deploy reset", "version skew"] as const;
 /** An rpc-stub pager that could not re-dial within its bound (apps/os context/rpc-stub-relay.ts
@@ -827,24 +832,97 @@ const CAUSES: Record<Cause, string> = {
   "version skew": "Unable to deserialize cloned data due to invalid or unsupported version",
 };
 
-/** Error messages that are expected outcomes wherever they are logged. */
-const EXPECTED_ERRORS = [
-  "itx.abort() reset the context", // explicitly requested, recorded in the durable log
-  ...Object.values(CAUSES), // a deploy's own outcomes: its visitor 5xx page as the deploy's
-  "destroyed: its project was deleted", // apps/os context/paths.ts CONTEXT_DESTROYED
+/** Error messages that are expected outcomes wherever they are logged: a deploy's own, which the
+ *  runtime logs (its visitor 5xx page as the deploy's). An expected outcome of the platform's own
+ *  is announced by it instead (ANNOUNCED). */
+const EXPECTED_ERRORS = Object.values(CAUSES);
+
+/**
+ * Outcomes the platform expects and announces at info, each with the message of the error line the
+ * runtime logs for it itself, uncatchably: a reset the context DO asks for (`ctx.abort`: a destroyed
+ * context, `itx.abort()`, a deleted root whose project came back), which the runtime logs in the
+ * asking invocation and in every other call in flight that it rejects, and the constructor's refusal
+ * of an id nothing was born at, the context sweep's lookup of an object emptied moments ago (apps/os
+ * iterate-context-durable-object.ts `#abort`, `iterateContextAddressOf`). And a facet deleted with
+ * its hosting row, whose cut-off call session the runtime logs as a bare `<class>.jsrpc` summary
+ * (apps/os context/facet-host.ts `#deleteFacet`). An error line whose message a Durable Object
+ * announced in the window, in that Durable Object, is that outcome and pages nothing, and its
+ * invocation's summary folds into it; so does a summary with no line that the Durable Object
+ * announced (folded-summaries). The same error in a Durable Object that announced nothing pages.
+ */
+const ANNOUNCED = [
+  "context.destroyed",
+  "context.aborted",
+  "context.root-restored",
+  "context.unborn-by-id",
+  "facet.deleted",
 ];
 
-// workerd#918: a Durable Object that answers before a request body is read can log
-// "Can't read from request stream after response has been sent." though the client got its
-// response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
-// itx-expression fetch's pipe. It pages only on `/api` itself — the capnweb endpoint, a platform
-// call, not a site visit (`/api/…` is a site's path).
 const UNREAD_BODY = "Can't read from request stream after response has been sent";
+const FALSE_HUNG =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response";
+const RPC_BODY_ENDED_EARLY = "ReadableStream received over RPC disconnected prematurely";
 
-/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, or an unread body
- *  outside `/api`, which the `/api` count reads on its own). Pure. */
+/** Logged anywhere but on the `entrypoint` invocations, a stateless worker's own included. */
+const notOn = (entrypoint: string) =>
+  anyOf(leaf("$workers.entrypoint", "is_null"), leaf("$workers.entrypoint", "neq", entrypoint));
+
+/**
+ * CLOUDFLARE DEFECTS THAT ONLY LOG A LINE: the runtime logs an error where no call failed. Each is
+ * pinned (`pin`: the test that goes red once Cloudflare fixes it, or the upstream issue), and an
+ * error line with its `message` pages only where `pages` selects it: anywhere else it is the defect.
+ * Delete an entry when its pin goes red.
+ */
+const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
+  {
+    // A Durable Object that answers before a request body is read, though the client got its
+    // response. Scanners POSTing to project hosts raise it on ~3 % of chunked bodies even with the
+    // itx-expression fetch's pipe. It pages only on `/api` itself — the capnweb endpoint, a
+    // platform call, not a site visit (`/api/…` is a site's path).
+    message: UNREAD_BODY,
+    pin: "https://github.com/cloudflare/workerd/issues/918",
+    pages: [
+      anyOf(
+        leaf("$metadata.message", "includes", UNREAD_BODY),
+        leaf("$metadata.error", "includes", UNREAD_BODY),
+      ),
+      leaf("$workers.event.request.url", "regex", "^https?://[^/]+/api(\\?|$)"),
+    ],
+  },
+  {
+    // The runtime's own line: always a message. The fault is its pin's.
+    message: FALSE_HUNG,
+    pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
+    pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
+  },
+  {
+    // The runtime's own line: always a message. The fault is its pin's.
+    message: RPC_BODY_ENDED_EARLY,
+    pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
+    pages: [
+      leaf("$metadata.message", "includes", RPC_BODY_ENDED_EARLY),
+      notOn("IterateContextDurableObject"),
+    ],
+  },
+];
+
+/** The error line the runtime logs in a context's hibernatable WebSocket close event when the
+ *  object was reset under the socket: its opaque "internal error; reference = …", before any of our
+ *  code runs (workerd api/hibernatable-web-socket.c++). It is the drop of the socket an rpc-stub
+ *  pager holds: FaultReading `closeResets`, recovered as RECOVERED_BY_REDIAL's are. */
+const CLOSE_RESET: LogFilter[] = [
+  leaf("$metadata.message", "includes", "internal error; reference = "),
+  leaf("$workers.eventType", "eq", "hibernatableWebSocket"),
+  leaf("$workers.event.webSocketType", "eq", "close"),
+  leaf("$workers.entrypoint", "eq", "IterateContextDurableObject"),
+];
+
+/** Whether an error row with `message` is an expected outcome (EXPECTED_ERRORS, or a pinned line,
+ *  whose own count reads where it pages). Pure. */
 function expectedError(message: string) {
-  return [...EXPECTED_ERRORS, UNREAD_BODY].some((expected) => message.includes(expected));
+  return [...EXPECTED_ERRORS, ...PINNED_LINES.map((pinned) => pinned.message)].some((expected) =>
+    message.includes(expected),
+  );
 }
 
 async function readWindow(
@@ -990,7 +1068,7 @@ async function readWindow(
       },
     );
   const errorLevel = leaf("$metadata.level", "eq", "error");
-  const [outcomeRays, causeRays, summaryRequests] = await Promise.all([
+  const [outcomeRays, causeRays, summaryRequests, announcements] = await Promise.all([
     Promise.all(
       RAY_OUTCOMES.map((outcome) =>
         evidence(outcome.name, async () =>
@@ -1008,12 +1086,7 @@ async function readWindow(
                 leaf("$metadata.error", "includes", CAUSES[cause]),
               ),
             ],
-            [
-              "$metadata.rayId",
-              "$workers.executionModel",
-              "$metadata.service",
-              "$workers.scriptVersion.id",
-            ],
+            ["$metadata.rayId", "$workers.executionModel", "$metadata.service"],
           ),
         ),
       ),
@@ -1023,27 +1096,60 @@ async function readWindow(
         ([[requestId]]) => requestId!,
       ),
     ),
-  ]);
-  // The summary of an invocation that also logged its exception (a `*.jsrpc` call's, an alarm's) is
-  // that exception's sighting, counted (or expected) once, as the exception.
-  // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
-  // summaries, the rest page beside their exceptions, and the log says how many.
-  const summarizedExceptions = await evidence("summarized-exceptions", async () => {
-    const found = await Promise.all(
-      chunks(summaryRequests).map((chunk) =>
-        rows(
-          [errorLevel, ...ERROR_ROWS.lines, leaf("$metadata.requestId", "in", chunk.join(","))],
-          ["$metadata.requestId"],
-        ),
+    evidence("announced", () =>
+      rows(
+        [leaf("event", "in", ANNOUNCED.join(","))],
+        ["$workers.durableObjectId", "$metadata.message"],
       ),
-    );
-    const requestIds = found.flat().map(([[requestId]]) => requestId!);
-    if (requestIds.length > 500)
-      console.warn(
-        JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: requestIds.length - 500 }),
+    ),
+  ]);
+  // Each Durable Object that announced an outcome (ANNOUNCED), with the messages it announced.
+  const announced = new Map<string, Set<string>>();
+  for (const [[objectId, message]] of announcements)
+    if (objectId && message) announced.set(objectId, new Set(announced.get(objectId)).add(message));
+  // Summaries folded away, by request ID. The summary of an invocation that also logged its exception
+  // (a `*.jsrpc` call's, an alarm's) is that exception's sighting, counted (or expected) once, as the
+  // exception. A summary with no line whose message its Durable Object announced (ANNOUNCED: the
+  // call session a facet's deletion cut off) is that announced outcome.
+  const [summarizedExceptions, announcedSummaries] = await Promise.all([
+    evidence("summarized-exceptions", async () => {
+      const found = await Promise.all(
+        chunks(summaryRequests).map((chunk) =>
+          rows(
+            [errorLevel, ...ERROR_ROWS.lines, leaf("$metadata.requestId", "in", chunk.join(","))],
+            ["$metadata.requestId"],
+          ),
+        ),
       );
-    return requestIds.slice(0, 500);
-  });
+      return found.flat().map(([[requestId]]) => requestId!);
+    }),
+    evidence("announced-summaries", async () => {
+      const found = await Promise.all(
+        chunks([...announced.keys()]).map((objectIds) =>
+          rows(
+            [
+              errorLevel,
+              ...ERROR_ROWS.summaries,
+              leaf("$workers.durableObjectId", "in", objectIds.join(",")),
+            ],
+            ["$metadata.requestId", "$workers.durableObjectId", "$metadata.message"],
+          ),
+        ),
+      );
+      return found
+        .flat()
+        .filter(([[, objectId = "", message = ""]]) => announced.get(objectId)?.has(message))
+        .map(([[requestId]]) => requestId!);
+    }),
+  ]);
+  // The summaries count's filters leave room for one `not_in` of request IDs: past 500 folded
+  // summaries, the rest page, and the log says how many.
+  const folded = [...new Set([...summarizedExceptions, ...announcedSummaries])];
+  if (folded.length > 500)
+    console.warn(
+      JSON.stringify({ event: "prd-fault-alarm.fold-capped", unfolded: folded.length - 500 }),
+    );
+  const foldedSummaries = folded.slice(0, 500);
   // The rays of every outcome and cause, together, stay under 2,000: the most a count's four `not_in`
   // of rays can hold beside its own filters. Evidence past that excludes nothing.
   let excludedRays = 0;
@@ -1076,16 +1182,16 @@ async function readWindow(
       ([a], [b]) => Number(b[1] === "durableObject") - Number(a[1] === "durableObject"),
     );
     const byRay = new Map<string, string>();
-    for (const [[rayId, , service, version]] of found)
-      if (rayId && !answered.has(rayId) && !caused.has(rayId) && !byRay.has(rayId))
-        byRay.set(rayId, `${service}@${version!.slice(0, 8)}`);
+    for (const [[rayId, , service]] of found)
+      if (rayId && service && !answered.has(rayId) && !caused.has(rayId) && !byRay.has(rayId))
+        byRay.set(rayId, service);
     // A ray is one cause's, the first that names it: its 5xx page once.
     for (const rayId of byRay.keys()) caused.add(rayId);
     const rays = new Set(kept(cause, [...byRay.keys()]));
-    const byDeploy = new Map<string, string[]>();
-    for (const [rayId, deploy] of byRay)
-      if (rays.has(rayId)) byDeploy.set(deploy, [...(byDeploy.get(deploy) ?? []), rayId]);
-    return [...byDeploy].map(([deploy, deployRays]) => ({ cause, deploy, rays: deployRays }));
+    const byWorker = new Map<string, string[]>();
+    for (const [rayId, worker] of byRay)
+      if (rays.has(rayId)) byWorker.set(worker, [...(byWorker.get(worker) ?? []), rayId]);
+    return [...byWorker].map(([worker, workerRays]) => ({ cause, worker, rays: workerRays }));
   });
   const exclusionsFor = (rowsOf: "serverErrors" | ErrorRows): Exclusion[] => [
     ...outcomes
@@ -1105,9 +1211,9 @@ async function readWindow(
     ...(rowsOf === "summaries"
       ? [
           {
-            name: "summarized-exceptions",
+            name: "folded-summaries",
             key: "$metadata.requestId",
-            values: summarizedExceptions,
+            values: foldedSummaries,
             keep: null,
           },
         ]
@@ -1126,7 +1232,7 @@ async function readWindow(
   };
   const readCauses = () =>
     Promise.all(
-      deploys.map(async ({ cause, deploy, rays }) => {
+      deploys.map(async ({ cause, worker, rays }) => {
         const found = await Promise.all(
           chunks(rays).map((chunk) =>
             count(
@@ -1144,7 +1250,7 @@ async function readWindow(
               new Map<string, number>(),
             ),
         ];
-        return { cause, deploy, serverErrors };
+        return { cause, worker, serverErrors };
       }),
     ).then((causes) => causes.filter((cause) => cause.serverErrors.length));
   // A count of error rows of `rowsOf` by `key`. reportIssue logs an error object without a message,
@@ -1155,21 +1261,43 @@ async function readWindow(
     key: "$metadata.message" | "$metadata.error",
     filters: LogFilter[],
   ) => count([errorLevel, ...ERROR_ROWS[rowsOf], ...filters], exclusionsFor(rowsOf), key);
-  const readUnreadBodyOnApi = async () => {
-    const [[, n] = ["", 0]] = await count(
-      [
-        errorLevel,
-        ...ERROR_ROWS.lines,
-        anyOf(
-          leaf("$metadata.message", "includes", UNREAD_BODY),
-          leaf("$metadata.error", "includes", UNREAD_BODY),
-        ),
-        leaf("$workers.event.request.url", "regex", "^https?://[^/]+/api(\\?|$)"),
-      ],
-      exclusionsFor("lines"),
+  // The message lines of the announcing Durable Objects that carry a message they announced, by
+  // message: rows the message lines' count reads, under its filters and exclusions, known expected.
+  // An announced outcome's line always has its message: the error lines without one are none.
+  const lineFilters = [leaf("$metadata.message", "neq", "")];
+  const readAnnounced = async () => {
+    const found = await Promise.all(
+      chunks([...announced.keys()]).flatMap((objectIds) =>
+        exclusionQueries(
+          [
+            errorLevel,
+            ...ERROR_ROWS.lines,
+            ...lineFilters,
+            leaf("$workers.durableObjectId", "in", objectIds.join(",")),
+          ],
+          exclusionsFor("lines"),
+        ).map(({ filters }) => rows(filters, ["$workers.durableObjectId", "$metadata.message"])),
+      ),
     );
-    return n ? [[`${UNREAD_BODY}.`, n] satisfies [string, number]] : [];
+    const expected = new Map<string, number>();
+    for (const [[objectId = "", message = ""], n] of found.flat())
+      if (announced.get(objectId)?.has(message))
+        expected.set(message, (expected.get(message) ?? 0) + n);
+    return expected;
   };
+  // Each pinned line where it still pages, under its message (PINNED_LINES).
+  const readPinnedLinesElsewhere = async () =>
+    (
+      await Promise.all(
+        PINNED_LINES.map(async ({ message, pages }) => {
+          const [[, n] = ["", 0]] = await count(
+            [errorLevel, ...ERROR_ROWS.lines, ...pages],
+            exclusionsFor("lines"),
+          );
+          return n ? [[`${message}.`, n] satisfies [string, number]] : [];
+        }),
+      )
+    ).flat();
   const healed = [leaf("event", "includes", "platform-failure")];
   const [
     serverErrors,
@@ -1177,8 +1305,10 @@ async function readWindow(
     heals,
     healEvents,
     lines,
+    announcedLines,
+    closeResets,
     structured,
-    apiUnreadBody,
+    pinnedLinesElsewhere,
     requestLines,
     summaries,
     pagers,
@@ -1187,29 +1317,40 @@ async function readWindow(
     readCauses(),
     rows(healed, ["name"]),
     rows(healed, ["event"]),
-    readErrors("lines", "$metadata.message", [leaf("$metadata.message", "neq", "")]),
+    readErrors("lines", "$metadata.message", lineFilters),
+    readAnnounced(),
+    readErrors("lines", "$metadata.message", CLOSE_RESET),
     readErrors("lines", "$metadata.error", [
       leaf("$metadata.error", "neq", ""),
       anyOf(leaf("$metadata.message", "is_null"), leaf("$metadata.message", "eq", "")),
     ]),
-    readUnreadBodyOnApi(),
+    readPinnedLinesElsewhere(),
     readErrors("requestLines", "$metadata.message", []),
     readErrors("summaries", "$metadata.message", []),
     rows([leaf("event", "includes", "rpc-stub-pager-")], ["event"]),
   ]);
   const single = (found: [string[], number][]) =>
     found.map(([[key = ""], n]): [string, number] => [key, n]);
+  // The close resets are lines the message lines' count read too: counted apart, as closeResets.
+  const closed = new Map(closeResets);
   return {
     serverErrors,
     causes,
     heals: single(heals),
     healEvents: single(healEvents),
     errors: [
-      ...[...lines, ...structured].filter(([message]) => !expectedError(message)),
-      ...apiUnreadBody,
+      ...[
+        ...lines.map(([message, n]): [string, number] => [
+          message,
+          n - (announcedLines.get(message) ?? 0) - (closed.get(message) ?? 0),
+        ]),
+        ...structured,
+      ].filter(([message, n]) => n > 0 && !expectedError(message)),
+      ...pinnedLinesElsewhere,
       ...requestLines,
       ...summaries,
     ],
+    closeResets,
     pagers: single(pagers),
   };
 }

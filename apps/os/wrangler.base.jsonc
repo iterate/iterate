@@ -40,7 +40,7 @@
 
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Workers AI, exposed VERBATIM as the built-in root `itx.ai` (context/built-ins.ts).
+  // Workers AI, the built-in root `itx.ai` through the stateless `ItxAi` (src/itx-ai.ts).
   "ai": { "binding": "AI" },
   // Browser Run, the built-in root `itx.browser` (context/built-ins.ts). Quick Actions need the
   // remote binding in local wrangler; the Workers test suite omits this the same way it omits `ai`.

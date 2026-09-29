@@ -39,7 +39,7 @@ test.for([
     missing: ["email"],
   },
   {
-    row: "nothing asked (GitHub, Waitrose)",
+    row: "nothing asked (GitHub)",
     provider: "github",
     granted: [],
     asked: [],

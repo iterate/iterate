@@ -370,10 +370,12 @@ test jobs' evidence steps read the finalizer step's outputs instead
   `cancel-in-progress: true`, except a push to `main`, whose group is its sha: every merge commit
   gets its own Test and Lint verdict, since one shared group cancels the run in progress or
   replaces the pending one.
-- Main OS e2e (`main-os-e2e`), the latency guard (`os-latency`) and the real-model suite
-  (`os-real-model`) each redeploy one preview, so each has one fixed group with
-  `cancel-in-progress: false`: every started run reaches a verdict, and pushes meanwhile collapse
-  to the newest pending run.
+- Main OS e2e groups by commit (`main-os-e2e-<sha>`) with `cancel-in-progress: false`: every main
+  commit gets its own run and verdict, and runs of different commits overlap, each on its own
+  deployment ([Main OS e2e deploys each commit fresh](#main-os-e2e-deploys-each-commit-fresh)).
+- The latency guard (`os-latency`) and the real-model suite (`os-real-model`) each have one fixed
+  group with `cancel-in-progress: false`: every started run reaches a verdict, and runs triggered
+  meanwhile collapse to the newest pending run.
 - Every mainline job has `timeout-minutes`, a watchdog, not a retry: Deploy OS 30 (build, rollout,
   readiness probes, the host check and its Slack notice), the client deploys 15–20.
 - No automatic workflow retries: a deploy rerun can repeat external side effects, so an operator
@@ -618,7 +620,7 @@ Preview OS runs these jobs, each a check named for what it proves:
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/10** to **10/10**, and
+  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/11** to **11/11**, and
   **Browser specs** beside them gives their verdict.
 - **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
   only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
@@ -647,12 +649,12 @@ same names.
 With Playwright's full parallelism a spec starts as soon as a worker is free, so when
 `shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
 longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
-`ceil(specs / 6)` shards: 10 for 56 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
+`ceil(specs / 6)` shards: 11 for 61 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
 fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
 fullest shard holds `ceil(specs / shards)`.
 
-- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/10** to **10/10**.
+- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/11** to **11/11**.
   Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
   `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
   blob report in place of the HTML one.
@@ -743,8 +745,13 @@ at the median in place (p90 25 s, against 22.8 s and 34 s) and 14.7 s brand-new 
 19.8 s and 39 s), and no row failed on a deploy signature. A storage reset or a dropped socket can
 still fail a row in any shape, and CI's one retry absorbs it.
 
-- Each workflow's runs are serialized (`cancel-in-progress: false`), so a run's cleanup deletes only
-  the deployments of runs before it.
+- Every main commit gets its own Main OS e2e run, and runs of different commits overlap. A run's
+  cleanup deletes only the deployments created before its own, and none that a run still in progress
+  tests (Depot's queued and running runs of the workflow, `cleanup-superseded`), so an older commit's
+  run keeps its deployment until it ends; a later run's cleanup or the nightly sweep takes it then.
+  The latency guard's and the real-model suite's runs are serialized, one at a time.
+- The runs' page jobs take turns, oldest run first: each waits until the older push runs have
+  ended ([Health](#health)).
 - Every row mints its own people and projects, so nothing reads what earlier runs left, and a fresh
   deployment starts with none of it.
 - The nightly sweep keeps a workflow's newest deployment through quiet days and takes it only once
@@ -846,9 +853,12 @@ commit its run tested, where red reads as "main e2e broke": a broken probe of it
 slow row not run, an incomplete or missing suite summary) is an "unjudged" page instead, and the
 job fails only when it cannot judge its run or post. Each run since the last judged is judged,
 oldest first, so a page names the run where its suite changed state: Main OS e2e's page job judges
-its own run after any settled one whose page was lost. A settled run that Depot ended before its
-jobs started has no verdict. A re-run keeps its creation time and is not judged again, so the next
-push's run pages it.
+its own run after any settled one whose page was lost. Runs of Main OS e2e overlap, so its page jobs
+take turns, oldest run first: each waits until no push run created before its own is queued or
+running (`health.ts await-older-runs`), then reads the state the one before it kept. One that has
+waited 30 minutes fails, and the next run's page job judges its run after the older ones. A settled
+run that Depot ended before its jobs started has no verdict. A re-run keeps its creation time and is
+not judged again, so the next push's run pages it.
 
 Each job's memory is its own artifact, `health-state` and `main-e2e-state`: its checks' memory
 and each open page's Slack ts and text, written only after every post succeeded. A state of another

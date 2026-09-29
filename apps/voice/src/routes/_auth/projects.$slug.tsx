@@ -4,13 +4,15 @@ import { useActionState, useRef, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import { useFacetLiveState } from "iterate/react";
+import { AppBuild } from "@iterate-com/ui/components/app-build";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
-import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
-import { ensureVoiceAgent } from "@iterate-com/voice/install";
+import { installedVersion } from "@iterate-com/agents/install";
+import { buildStanding, pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
+import { ensureVoiceAgent, upgradeVoice, voiceApp } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
 
@@ -34,6 +36,12 @@ const publishedApps = createServerFn().handler(async () => {
   };
 });
 
+/** Where the project's voice build stands against main's newest (`buildStanding`), asked in the
+ *  app's Worker: a page cannot read pkg.pr.new's headers. */
+const voiceBuild = createServerFn({ method: "GET" })
+  .inputValidator(z.string())
+  .handler(({ data }) => buildStanding("@iterate-com/voice", data));
+
 export const Route = createFileRoute("/_auth/projects/$slug")({
   loader: async ({ context, params }) => {
     const projects = await context.api.projects.list();
@@ -43,12 +51,15 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
     // Installed is what ensureVoiceAgent checks: the project has an `itx.voice` rule. One that
     // exists but fails is Call's error to report, never a reason to install over it.
     using itx = await context.api.projects.get(project.id);
-    const [rule, secrets] = await Promise.all([
+    const [rule, secrets, build] = await Promise.all([
       itx.rewriteRules.get("itx.voice"),
       itx.secrets.list(),
+      // the build the project's voice runs (the source its install keeps), for the upgrade
+      installedVersion(itx, voiceApp),
     ]);
     const voice = {
       installed: Boolean(rule),
+      build,
       // the project's own key, or one lent to it (the catalog lists a borrowed path too): a key
       // the deployment lends every project counts, and the form never asks for one
       hasOpenaiKey: secrets.some((secret) => secret.path === "/secrets/openai"),
@@ -59,8 +70,9 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
 });
 
 function CallPage() {
-  const { info } = Route.useRouteContext();
+  const { api, info } = Route.useRouteContext();
   const { projects, project, voice } = Route.useLoaderData();
+  const router = useRouter();
   const href = useRouterState({ select: (state) => state.location.href });
   return (
     <ProjectAppShell
@@ -71,7 +83,25 @@ function CallPage() {
       locationKey={href}
     >
       {voice.installed ? (
-        <Phone key={project.id} project={project.id} />
+        <>
+          <Phone key={project.id} project={project.id} />
+          {voice.build ? (
+            <div className="mx-auto w-full max-w-xl px-4 pb-4 md:px-8 md:pb-8">
+              <AppBuild
+                // one project's upgrade and its outcome, never shown on the next project's page
+                key={project.id}
+                app="Voice"
+                installed={voice.build}
+                check={(installed) => voiceBuild({ data: installed })}
+                upgrade={async (version) => {
+                  using itx = await api.projects.get(project.id);
+                  await upgradeVoice(itx, version);
+                  await router.invalidate({ sync: true });
+                }}
+              />
+            </div>
+          ) : null}
+        </>
       ) : (
         <InstallVoice key={project.id} project={project.id} needsOpenaiKey={!voice.hasOpenaiKey} />
       )}

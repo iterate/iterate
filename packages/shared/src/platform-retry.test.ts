@@ -67,6 +67,14 @@ test.for([
     kind: "disconnected",
   },
   {
+    name: "a call on an instance Cloudflare replaced is disconnected: the next call reaches the instance that replaced it",
+    error: stamped(
+      "Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.",
+      { durableObjectReset: true },
+    ),
+    kind: "disconnected",
+  },
+  {
     name: "workerd's opaque internal error is failed: a facet whose class is not exported meets it too",
     error: new Error("internal error; reference = 0123"),
     kind: "failed",

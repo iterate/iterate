@@ -128,7 +128,7 @@ test("a TSX change to JSX text alone (UI copy) is Significant", () => {
       "",
     ].join("\n");
   const base = repo.commit({ "src/page.tsx": page("Sign in to continue") });
-  const head = repo.commit({ "src/page.tsx": page("Sign in to Waitrose") });
+  const head = repo.commit({ "src/page.tsx": page("Sign in to Slack") });
 
   expect(getChangedFiles(base, head, repo.path)).toMatchObject([
     { path: "src/page.tsx", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },

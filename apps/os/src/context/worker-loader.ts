@@ -15,6 +15,7 @@
 // PRODUCES the modules, in which case the caller MUST name the `cacheKey` (a build id, a commit): the
 // producer runs inside `getCode`, i.e. only on a cold isolate, and the caller owns "same key ⇒ same
 // code". A producer without a key is refused: hashing the expression would be the stale-code trap.
+// A producer's answer is kept in ITX_KV for a day, so a cold isolate does not wake what produces it.
 //
 // A loaded worker's `env.ITX` is a Workers-RPC service binding to the `ItxEntrypoint`; `env.ITX.get()`
 // is the genuine itx scope, a real RpcTarget, so mid-chain handles and callbacks pipeline natively —
@@ -28,11 +29,18 @@ import { normalizedItxExpression, type ItxExpression } from "iterate/expression"
 import type { FacetSpec, WorkerSource } from "iterate/api";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
-import { readPackage, resolveModules } from "./module-resolution.ts";
+import { readPackage, resolveModules, sha256 } from "./module-resolution.ts";
 
 /** A worker's FILES as authored, path → code (module-resolution.ts `readPackage` finds the entry and
  *  resolves the rest into what the loader takes). */
 export type WorkerModules = Record<string, string>;
+/** How long a producer's modules stay in `ITX_KV`. Their key names the producer's whole input, so
+ *  what goes stale is only a caller's key that does not keep "same key ⇒ same code"; the expiry
+ *  bounds that, and lets a deleted project's entries go. */
+const PRODUCED_MODULES_TTL_SECONDS = 24 * 60 * 60;
+/** The most one KV value may be (Cloudflare's limit). A repo's whole tree can pass it while the
+ *  modules the entry reaches do not, so an answer over it is simply not kept. */
+const KV_VALUE_MAX_BYTES = 25 * 1024 * 1024;
 /** The most a facet's LITERAL source may be, serialized — the startup memo is one kv cell in the DO
  *  (re-read on every post-eviction wake) and the hosting event one log row under the 8 MiB event
  *  ceiling; an oversize source must fail where it is handed in, coded, not late at materialization. A
@@ -190,31 +198,65 @@ export async function prepareConfinedWorker(
   } else {
     if (!cacheKey)
       throw new Error(
-        `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it, so the key must change whenever the code does`,
+        `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it and no answer of its is kept (a day, per deploy), so the key must change whenever the code does`,
       );
     sourceVersion = cacheKey;
-    // The producer is a read the cacheKey names, so running it twice is running it once: a read a
-    // deploy's reset of the context it reads cut (the project ingress's
-    // `itx.repos.get("/repos/config")`, read on the first request after every deploy), or a lost
-    // connection, is read once more, from that context's fresh incarnation.
+    // A producer's modules are kept in `ITX_KV` under its whole input — the deploy (the loader id
+    // folds it in too, and a deploy can change how a producer answers), the owner, the caller's key
+    // and the expression — so a cold isolate reads them there instead of waking the context that
+    // produces them. For the site ingress that context is `/repos/config`, and a commit's tree
+    // never changes. A KV failure is a miss: the producer runs, as it always did.
+    const cacheFailed = (action: "get" | "put") => (error: unknown) => {
+      console.warn({
+        event: "worker-loader.platform-failure-module-cache",
+        action,
+        name: opts.owner,
+        where,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    };
+    /** Only an answer that can load is kept or believed: one the producer gave before its build
+     *  landed must reach the dead-id recovery's next run, not be read back for a day. */
+    const loadable = (files: unknown): files is WorkerModules => {
+      if (!isWorkerModules(files)) return false;
+      try {
+        readPackage(files, where);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     getModules = async () => {
-      const produced = await retryPlatformFailures(
-        () => opts.invoke(normalizedItxExpression(source)),
-        {
-          area: "worker-loader",
-          schedule: ONCE_NOW,
-          idempotent: true,
-          kind: failureKind,
-          describe: () => ({ name: opts.owner, where }),
-        },
-      );
+      const producer = normalizedItxExpression(source);
+      const kvKey = `produced-modules-1/${await sha256(
+        JSON.stringify([opts.deployId, opts.owner, cacheKey, producer]),
+      )}`;
+      const stored: unknown = await opts.env.ITX_KV.get(kvKey, "json").catch(cacheFailed("get"));
+      if (loadable(stored)) return stored;
+      // The producer is a read the cacheKey names, so running it twice is running it once: a read a
+      // deploy's reset of the context it reads cut (the project ingress's
+      // `itx.repos.get("/repos/config")`, read on the first request after every deploy), or a lost
+      // connection, is read once more, from that context's fresh incarnation.
+      const produced = await retryPlatformFailures(() => opts.invoke(producer), {
+        area: "worker-loader",
+        schedule: ONCE_NOW,
+        idempotent: true,
+        kind: failureKind,
+        describe: () => ({ name: opts.owner, where }),
+      });
       // A producer that answers one module's text (a `readFile`, a `kv.get`) answers the source of
       // that one module, named as its `main`.
-      return requireFiles(
+      const files = requireFiles(
         typeof produced === "string"
           ? { "package.json": '{"main":"worker.js"}', "worker.js": produced }
           : produced,
       );
+      const value = JSON.stringify(files);
+      if (loadable(files) && new TextEncoder().encode(value).byteLength <= KV_VALUE_MAX_BYTES)
+        await opts.env.ITX_KV.put(kvKey, value, {
+          expirationTtl: PRODUCED_MODULES_TTL_SECONDS,
+        }).catch(cacheFailed("put"));
+      return files;
     };
   }
   // 2. the confined worker under the billed cacheKey. A JSON array, never `a:b:c`: a context name,

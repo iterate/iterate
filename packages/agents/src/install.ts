@@ -2,9 +2,12 @@
 // of its config repo (`agents/` by convention) holding a package.json that pins this package and names
 // its `main`, index.ts, which re-exports the two Durable Object classes (`agentsFolder`). `installAgents` mounts
 // that source: the collection facet as the `itx.agents` rewrite rule, the `agents` processor on `/`,
-// and the same source for every agent's facet. Nothing here is the runtime, so a config worker
-// imports `@iterate-com/agents/install` without loading it.
+// and the same source for every agent's facet. An upgrade (`upgradeApp`) commits the folder at a
+// newer build and installs it again. Nothing here is the runtime, so a config worker imports
+// `@iterate-com/agents/install` without loading it.
 import type { IterateContextApi, RepoHandle } from "iterate/api";
+import { errorCode } from "iterate/lib";
+import { z } from "zod";
 
 /** What `installAgents` needs of the project's root. */
 type InstallTarget = Pick<IterateContextApi, "whoami" | "append" | "invoke"> & {
@@ -46,40 +49,72 @@ export function rootManifestListing(
   return `${JSON.stringify({ ...parsed, devDependencies }, null, 2)}\n`;
 }
 
-/** An app the config repo holds as a folder of its own: its files (`agentsFolder`, …) under `dir`,
- *  and the package the root manifest lists at `version`. */
-export type AppFolder = {
+/** An app the config repo holds as a folder of its own: `dir`, the folder; `folder(version)`, its
+ *  files pinning that version of `packageName` (`agentsFolder`, …), which the root manifest lists
+ *  too; `runtimeKey`, the project KV key its install keeps the mounted source under. */
+export type App = {
   dir: string;
-  folder: Record<string, string>;
   packageName: string;
-  version: string;
+  folder: (version: string) => Record<string, string>;
+  runtimeKey: string;
 };
 
-/** THE CONFIG REPO'S PART OF AN INSTALL: one read of `main`, then at most ONE commit — each folder
- *  the repo lacks (no `<dir>/package.json`), and the root package.json listing its package
- *  (`rootManifestListing`); a folder the repo has is kept as it is, its listing too. Answers the
- *  commit to read the apps' sources at (`repo.modules({ dir, commitOid })`): the new one, or the tip
- *  that was read. Every read and write of `main` is a git exchange with Artifacts, the slowest calls
- *  an install makes, so installing two apps reads and commits once, not once per app. */
-export async function commitAppFolders(
-  repo: Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles">,
-  apps: AppFolder[],
+/** The agents app: `agents/`, mounted by `publishAgents`. */
+export const agentsApp: App = {
+  dir: "agents",
+  packageName: "@iterate-com/agents",
+  folder: agentsFolder,
+  runtimeKey: "agents/runtime",
+};
+
+/** An app at the version of its package a commit pins. */
+type AppAt = { app: App; version: string };
+
+/** The config repo's part of an install or an upgrade: what it reads and commits. */
+type ConfigRepo = Pick<RepoHandle, "listFiles" | "readFile" | "commitFiles">;
+
+/** THE CONFIG REPO'S PART OF AN INSTALL: one read of `main`, then at most ONE commit (`commitApps`)
+ *  — each folder the repo lacks (no `<dir>/package.json`), and the root package.json listing its
+ *  package; a folder the repo has is kept as it is, its listing too. Answers the commit to read the
+ *  apps' sources at (`repo.modules({ dir, commitOid })`): the new one, or the tip that was read.
+ *  Every read and write of `main` is a git exchange with Artifacts, the slowest calls an install
+ *  makes, so installing two apps reads and commits once, not once per app. */
+export async function commitAppFolders(repo: ConfigRepo, apps: AppAt[]) {
+  const main = await repo.listFiles();
+  const missing = apps.filter(({ app }) => !main.paths.includes(`${app.dir}/package.json`));
+  if (!missing.length) return main.commitOid || undefined;
+  return commitApps(
+    repo,
+    main,
+    missing,
+    `Install ${missing.map(({ app }) => app.packageName).join(" and ")}`,
+  );
+}
+
+/** ONE COMMIT on `main` as it was read, refused if it moved since: each app's folder files as
+ *  `app.folder(version)` has them (any other file under `dir` is kept), and the root package.json
+ *  listing each package (`rootManifestListing`). Answers the commit to read the folders at: the new
+ *  one, or the tip when the repo held all of it already. */
+async function commitApps(
+  repo: ConfigRepo,
+  main: Awaited<ReturnType<ConfigRepo["listFiles"]>>,
+  apps: AppAt[],
+  message: string,
 ) {
-  const { commitOid: tip, paths } = await repo.listFiles();
-  const missing = apps.filter((app) => !paths.includes(`${app.dir}/package.json`));
-  if (!missing.length) return tip || undefined;
+  const { commitOid: tip, paths } = main;
   const before =
     tip && paths.includes("package.json")
       ? await repo.readFile("package.json", { commitOid: tip })
       : null;
   let manifest = before;
-  for (const app of missing)
-    manifest = rootManifestListing(manifest, app.packageName, app.version) ?? manifest;
+  for (const { app, version } of apps)
+    manifest = rootManifestListing(manifest, app.packageName, version) ?? manifest;
   const { commitOid } = await repo.commitFiles({
-    message: `Install ${missing.map((app) => app.packageName).join(" and ")}`,
+    message,
+    parent: tip,
     changes: [
-      ...missing.flatMap((app) =>
-        Object.entries(app.folder).map(([name, content]) => ({
+      ...apps.flatMap(({ app, version }) =>
+        Object.entries(app.folder(version)).map(([name, content]) => ({
           path: `${app.dir}/${name}`,
           content,
         })),
@@ -90,13 +125,66 @@ export async function commitAppFolders(
   return commitOid || undefined;
 }
 
-/** The agents app as `commitAppFolders` commits it, pinning `version`. */
-export const agentsApp = (version: string) => ({
-  dir: "agents",
-  folder: agentsFolder(version),
-  packageName: "@iterate-com/agents",
-  version,
+/** What an install keeps under `App.runtimeKey`: the source it mounted and that source's hash. */
+const InstalledRuntime = z.object({
+  cacheKey: z.string(),
+  source: z.record(z.string(), z.string()),
 });
+
+/** The part of a source's package.json `installedVersion` reads. */
+const SourceManifest = z.object({ dependencies: z.record(z.string(), z.string()) });
+
+/** The version of `app.packageName` the project runs: what the package.json of the source its
+ *  install keeps (`app.runtimeKey`) pins. Undefined when the app is not installed, or its source
+ *  pins no such package (a bundled source, a package.json that is not JSON). */
+export async function installedVersion(
+  project: { kv: Pick<IterateContextApi["kv"], "get"> },
+  app: Pick<App, "packageName" | "runtimeKey">,
+) {
+  const stored = await project.kv.get(app.runtimeKey);
+  if (!stored) return undefined;
+  const { source } = InstalledRuntime.parse(JSON.parse(stored));
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(source["package.json"] ?? "");
+  } catch {
+    return undefined;
+  }
+  return SourceManifest.safeParse(manifest).data?.dependencies[app.packageName];
+}
+
+/**
+ * AN UPGRADE of an installed app to `version`, a newer build of its package: `<dir>/` as
+ * `app.folder(version)` has it, and the root's listing, in ONE commit on the tip it read
+ * (`commitApps`, refused if main moved meanwhile), then `install` from that commit. Every file of
+ * the folder is written, not only the pin: the entry re-exports the build's classes by name, so an
+ * old entry under a new pin can fail to load. A folder already at `version` commits nothing and is
+ * installed again, so upgrading after a failed install finishes it. Answers the commit installed.
+ */
+export async function upgradeApp(
+  project: { repos: { get(path: string): ConfigRepo & Pick<RepoHandle, "modules"> } },
+  app: App,
+  version: string,
+  install: (source: Record<string, string>) => Promise<unknown>,
+) {
+  const repo = project.repos.get("/repos/config");
+  const commitOid = await commitApps(
+    repo,
+    await repo.listFiles(),
+    [{ app, version }],
+    `Upgrade ${app.packageName} to ${version}`,
+  );
+  try {
+    await install(await repo.modules({ dir: app.dir, commitOid }));
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `${app.dir}/ pins the new build (config commit ${commitOid?.slice(0, 7)}), but installing it failed, so the project may still run the old one: ${why}. Upgrade again to install it.`,
+      { cause: error },
+    );
+  }
+  return commitOid;
+}
 
 /** An installed app's runtime name: the SHA-256 of its files as JSON, sorted by name. Every facet
  *  the runtime hosts names it (a processor row shows which runtime an agent runs), and an upgrade is
@@ -121,7 +209,7 @@ export async function publishAgents(itx: InstallTarget, source: Record<string, s
   const { path } = await itx.whoami();
   if (path !== "/") throw new Error("Install agents at the project root");
   const cacheKey = await sourceCacheKey(source);
-  await itx.kv.put("agents/runtime", JSON.stringify({ cacheKey, source }));
+  await itx.kv.put(agentsApp.runtimeKey, JSON.stringify({ cacheKey, source }));
   const spec = { cacheKey, source, className: "AgentCollectionDurableObject" };
   await itx.processors.enable("agents", {
     ...spec,
@@ -151,17 +239,40 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
   await upgradeAgents(itx);
 }
 
+/** How long `configRepoSettled` waits for the project's creation in all. */
+const PROJECT_CREATION_WAIT_MS = 60_000;
+/** How long ONE call of that wait is held on the project's root before it is asked again on a
+ *  fresh call, so an instance Cloudflare replaces under the wait costs one slice (apps/os
+ *  project/collection.ts `TERMINAL_WAIT_SLICE_MS` says why). */
+const PROJECT_CREATION_WAIT_SLICE_MS = 5_000;
+
 /** A project created a moment ago may still be seeding its config repo: the project's creation
  *  creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
- *  seed. Resolves once creation has settled (at once for a project created earlier). */
+ *  seed. Resolves once creation has settled (at once for a project created earlier); a failed
+ *  creation throws, saying why it failed. */
 export async function configRepoSettled(project: Pick<IterateContextApi, "waitForEvent">) {
-  const settled = await project.waitForEvent({
-    type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
-    afterOffset: 0,
-    timeoutMs: 60_000,
-  });
-  if (settled.type !== "events.iterate.com/project/created")
-    throw new Error("The project's creation failed, so there is no config repo to install into");
+  const started = Date.now();
+  for (;;) {
+    const remainingMs = started + PROJECT_CREATION_WAIT_MS - Date.now();
+    let settled: Awaited<ReturnType<IterateContextApi["waitForEvent"]>>;
+    try {
+      settled = await project.waitForEvent({
+        type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
+        afterOffset: 0,
+        timeoutMs: Math.min(PROJECT_CREATION_WAIT_SLICE_MS, remainingMs),
+      });
+    } catch (error) {
+      // the last slice's timeout is the whole wait's
+      if (errorCode(error) !== "WAIT_TIMEOUT" || remainingMs <= PROJECT_CREATION_WAIT_SLICE_MS)
+        throw error;
+      continue;
+    }
+    if (settled.type !== "events.iterate.com/project/created")
+      throw new Error(
+        `The project's creation failed, so there is no config repo to install into: ${String(settled.payload?.error)}`,
+      );
+    return;
+  }
 }
 
 /** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or
@@ -180,6 +291,6 @@ export async function ensureAgents(
   if ((await project.rewriteRules.get("itx.agents"))?.target) return;
   await configRepoSettled(project);
   const repo = project.repos.get("/repos/config");
-  const commitOid = await commitAppFolders(repo, [agentsApp(version)]);
+  const commitOid = await commitAppFolders(repo, [{ app: agentsApp, version }]);
   await installAgents(project, await repo.modules({ dir: "agents", commitOid }));
 }

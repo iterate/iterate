@@ -106,13 +106,16 @@ export async function parseAuthorization(env: Env, request: Request): Promise<Au
  *  person's own Durable Object.
  *
  *  A read is sent ONCE more when a deploy's reset or a lost connection cut it (session.ts
- *  `ownerContext`): every admission and every code exchange reads here (`grantLifetime`), so a
- *  deploy's reset of the person's Durable Object would otherwise fail a sign-in's token request.
+ *  `ownerContext`): every admission, every refresh and every client's code exchange reads here
+ *  (`grantLifetime`; a sign-in's own exchange does not), so a deploy's reset of the person's
+ *  Durable Object would otherwise fail their token request.
  *
  *  A read still pending after five seconds logs `oauth.step-slow` naming the person while it waits
- *  (sign-in-watch.ts). A person's account is often brand new at their first sign-in's code
- *  exchange, and Cloudflare can hold a new Durable Object's answers until its first write is
- *  confirmed. */
+ *  (sign-in-watch.ts). At a first sign-in the account is a brand-new Durable Object: Cloudflare
+ *  takes about half a second to reach a new one, and in bursts holds it 1.5 to 15 s more before
+ *  its constructor runs (a preview, 2026-09-29). So the sign-in reads it first, in the background
+ *  (issuer-session.ts `startAccount`), and the consent page says the account is still being set up
+ *  while its own read waits (consent-page.server.ts `describeConsent`). */
 export async function accountStateOf(env: Env, userId: string): Promise<AccountState> {
   // `invoke` answers `unknown` across the DO hop; the facet is the platform's own
   // AccountDurableObject and `snapshot()` the engine's `{ offset, state }`.
@@ -511,7 +514,14 @@ async function personalAccessTokenAdmission(
  *  "Sliding expiry"). A grant whose end is on the person's account, or past its `deadline`, is
  *  refused. Every grant lives a week unused (the server's `refreshTokenTTL` and
  *  `refreshTokenIdleTTL`), and within a week of its deadline, 30 days after the sign-in or consent
- *  that made it, only until that deadline. */
+ *  that made it, only until that deadline.
+ *
+ *  THE SIGN-IN'S OWN CODE EXCHANGE READS NO ACCOUNT. An issuer grant's code is minted and exchanged
+ *  by one sign-in, inside one request (issuer-session.ts `startIssuerSession`), before anything
+ *  could end it; every use of its tokens reads the account (`grantIsLive`), and so does every
+ *  refresh here. So a sign-in never waits on the person's Durable Object — at a first sign-in a
+ *  brand-new one, which Cloudflare has taken up to 45 s to start (measured on previews 2026-09-24
+ *  to 09-28), past the 10 s the browser session gives the exchange. */
 async function grantLifetime(
   env: Env,
   input: TokenExchangeCallbackOptions,
@@ -524,9 +534,11 @@ async function grantLifetime(
   const parsed = GrantProps.safeParse(input.props);
   if (!parsed.success || parsed.data.userId !== input.userId)
     throw refused("props_invalid", "The session is no longer active.");
-  if ((await accountStateOf(env, input.userId)).endedGrants[input.grantId])
-    throw refused("grant_ended", "The session is no longer active.");
   const grant = parsed.data;
+  const signInsOwnExchange =
+    grant.kind === "issuer" && input.grantType === GrantType.AUTHORIZATION_CODE;
+  if (!signInsOwnExchange && (await accountStateOf(env, input.userId)).endedGrants[input.grantId])
+    throw refused("grant_ended", "The session is no longer active.");
   if (!emailAllowed(appConfigOf(env).login.allowedEmails, grant.email))
     throw refused("email_not_allowed", "The session is no longer active.");
   if (!grantAdminsStillListed(env, { ...grant, scope: input.scope }))

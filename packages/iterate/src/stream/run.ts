@@ -6,22 +6,24 @@ import { z } from "zod";
  *  alarm pass, a fresh invocation, so a processor's turns never pile up call depth. */
 export const RunRequested = z.object({ code: z.string().min(1) });
 export type RunRequested = z.infer<typeof RunRequested>;
+/** How a failed run failed (`RunSettled` says what each kind means). */
+const RunFailureKind = z.enum(["runtime", "deadline", "interrupted"]);
 /** `events.iterate.com/itx/run-settled`: `requestOffset` names the request; `settlement` is
  *  what the script returned (JSON — a round trip drops what JSON cannot carry) or how it failed —
  *  `runtime` (the script threw, or returned what the log refuses), `deadline` (it had not finished
- *  when its time ran out; it may have partly run) or `interrupted` (the context restarted before it
- *  finished, or before a processor's request started). A failed run is never run again. */
+ *  when its time ran out; it may have partly run) or `interrupted` (the context restarted, or
+ *  Cloudflare replaced its instance, before the run's settlement was written — it may have partly
+ *  run — or before a processor's request started). A failed run is never run again. */
 export const RunSettled = z.object({
   requestOffset: z.number().int().positive(),
   settlement: z.discriminatedUnion("status", [
     z.object({ status: z.literal("succeeded"), result: z.unknown().optional() }),
-    z.object({
-      status: z.literal("failed"),
-      error: z.string(),
-      failureKind: z.enum(["runtime", "deadline", "interrupted"]),
-    }),
+    z.object({ status: z.literal("failed"), error: z.string(), failureKind: RunFailureKind }),
   ]),
 });
+/** A failed run's error as its caller meets it: the settlement's `error` as the message, its
+ *  `failureKind` on the error. */
+export const RunFailure = z.object({ failureKind: RunFailureKind });
 export type RunSettled = z.infer<typeof RunSettled>;
 export type RunSettlement = RunSettled["settlement"];
 

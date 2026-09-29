@@ -42,7 +42,7 @@ import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
 import { contextStub } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
-import { IterateAppProvider } from "./integrations/contract.ts";
+import { IntegrationProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { assertSecretPath } from "./secrets.ts";
 
@@ -521,7 +521,7 @@ export class SessionRpcTarget extends RpcTarget {
       platformOrigin: this.#input.platformOrigin,
       ingressRouting: this.#input.appConfig.urls.ingressRouting,
       mcpOrigin: this.#input.appConfig.urls.mcp,
-      iterateAppProviders: IterateAppProvider.options.filter((provider) =>
+      iterateAppProviders: IntegrationProvider.options.filter((provider) =>
         Boolean(this.#input.appConfig.integrations[provider]),
       ),
       iterateAppScopes: iterateAppScopesOf(this.#input.appConfig),

@@ -12,9 +12,11 @@
 //
 // SUPERSEDED (`planSupersededCleanup`, each run's cleanup job once its own deployment is ready):
 // every other deployment of the same prefix whose members were all created before the current
-// deployment's first one. A deployment created after that — a later push's, in flight — stays; so
-// does a `main-…` one for MAIN_REUSE_GRACE_MS after a newer one was created, since a PR run may be
-// testing against it (preview-reuse.ts).
+// deployment's first one. A deployment created after that — a later push's, in flight — stays, and
+// so does one a run of its CI workflow still in progress tests: Main OS e2e runs every main commit,
+// so an older commit's run may still be testing its deployment. A `main-…` one also stays for
+// MAIN_REUSE_GRACE_MS after a newer one was created, since a PR run may be testing against it
+// (preview-reuse.ts), and no Main OS e2e run says so. What stays, a later cleanup or the sweep takes.
 //
 // STALE (`planPreviewSweep`, nightly) when
 //   1. its newest member is more than 7 days old, whatever its prefix;
@@ -54,11 +56,16 @@ import { FORMER_PARENTS, previewPullRequestNumber } from "./preview-config.ts";
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
 export type PullRequestState = "open" | "closed" | "missing" | "unknown";
 
-/** THE CI WORKFLOWS' OWN PREFIXES: Main OS e2e's `main` (.depot/workflows/main-os-e2e.yml), the
- *  latency guard's `latency` (os-latency.yml) and the real-model suite's `real-model`
- *  (os-real-model.yml). Each deploys a fresh deployment per run and deletes the one before it once
- *  the new one is ready; a quiet day is no reason for the sweep to take its newest (rule 4). */
-export const CI_WORKFLOW_PREVIEWS: ReadonlySet<string> = new Set(["main", "latency", "real-model"]);
+/** THE CI WORKFLOWS' OWN PREFIXES, each with its workflow's `name:`: Main OS e2e's `main`
+ *  (.depot/workflows/main-os-e2e.yml), the latency guard's `latency` (os-latency.yml) and the
+ *  real-model suite's `real-model` (os-real-model.yml). Each deploys a fresh deployment per run and
+ *  deletes the ones before it once the new one is ready, but none a run of that workflow still in
+ *  progress tests; a quiet day is no reason for the sweep to take its newest (rule 4). */
+export const CI_WORKFLOW_PREVIEWS: ReadonlyMap<string, string> = new Map([
+  ["main", "Main OS e2e"],
+  ["latency", "OS latency"],
+  ["real-model", "OS real model"],
+]);
 
 export type PreviewMemberKind = "worker" | "kv" | "r2" | "d1" | "artifacts";
 
@@ -176,12 +183,14 @@ function supersededAt(
 }
 
 /** The deployments `current` supersedes: the same prefix, every stamped member created before
- *  `current`'s first one, or no stamped member left (a half-deleted one), but never a `main-…` one
- *  within MAIN_REUSE_GRACE_MS of a newer one's creation. Undefined `current` stamps (its members not
- *  listed yet, or a run that reused a deployment and deployed nothing) supersede nothing. */
+ *  `current`'s first one, or no stamped member left (a half-deleted one), and not `underTest`, the
+ *  deployments a run still in progress tests, nor a `main-…` one within MAIN_REUSE_GRACE_MS of a
+ *  newer one's creation. Undefined `current` stamps (its members not listed yet, or a run that
+ *  reused a deployment and deployed nothing) supersede nothing. */
 export function planSupersededCleanup(
   deployments: PreviewDeploymentListing[],
   currentName: string,
+  underTest: ReadonlySet<string>,
   now: number,
 ) {
   const current = deployments.find((deployment) => deployment.name === currentName);
@@ -189,6 +198,7 @@ export function planSupersededCleanup(
   const since = Date.parse(current.firstCreatedAt);
   return deployments.filter((deployment) => {
     if (deployment.prefix !== current.prefix || deployment.name === current.name) return false;
+    if (underTest.has(deployment.name)) return false;
     if (deployment.newestCreatedAt && Date.parse(deployment.newestCreatedAt) >= since) return false;
     const stoppedBeingNewest = supersededAt(deployments, deployment);
     return !(

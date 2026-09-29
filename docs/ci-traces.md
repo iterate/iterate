@@ -40,12 +40,17 @@ The report shows the workflow, its jobs in the order the trace job names them
 (Deploy preview, E2E tests, Browser specs), each job's measured shell steps
 directly under it, and individual Playwright attempts and Vitest tests. The
 Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) sit under
-the **Browser specs** job that waits for them, **Browser specs 1/10** to
-**10/10**, in order, each one row until opened, below that job's own steps in one
+the **Browser specs** job that waits for them, **Browser specs 1/11** to
+**11/11**, in order, each one row until opened, below that job's own steps in one
 **Coordinate shards** row: its checkout and setup, then its wait for the shards,
 the downloads and the merge.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
+
+A bar takes its children's colour wherever every child running at that moment has it: E2E tests is
+striped for as long as it only waits for Deploy preview, Browser specs only while it and all its
+shards wait. Where children running side by side differ, or none runs, a bar keeps its own colour.
+A failed or unfinished bar that takes its children's colours keeps a red or grey outline.
 
 The summary shows **Time to green** at the last traced job's finish (the later
 of the two suites, usually E2E tests) when none failed or was cancelled, and **Time to red** from the first failed job attempt
@@ -80,7 +85,8 @@ deploy, it begins with **Set up the suite** and **Wait for Deploy preview**
 (`runSuite` in `apps/os/scripts/preview.ts`), which sit beside the job's other
 steps, and its tests sit in one **Run tests** row, from the end of that wait to
 the step's exit. The steps before it are coloured as setup and the ones after
-as finish. The shell hook preserves
+as finish; Set up the suite and the specs' warm-up as setup, and the waits for Deploy preview and
+for the shards as waiting, the phase `traceOperation({ name, phase })` gives them. The shell hook preserves
 exit codes and ignores nested shells. It is plain bash that starts no process,
 so it measures `pnpm install` too and adds about a millisecond to a step.
 

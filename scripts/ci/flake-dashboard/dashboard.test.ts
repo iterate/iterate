@@ -204,6 +204,97 @@ test("an unknown flake on main stays until it passes 20 complete main runs in a 
   expect(render(runs)).toContain("0/20 consecutive passes");
 });
 
+test("a retry the platform forced opens no unknown row: it is the pass it was, and the suite line counts it", () => {
+  const cut = (name: string, error: string) =>
+    record(name, "retried-pass", { kind: "unknown", error });
+  // a summary names a retried row `fail`, and `failed` says whether its retry failed too
+  const retried = (name: string) => ({ name, outcome: "fail" as const, retries: 1, failed: false });
+  const body = render([
+    run(1, [cut("residency", "WebSocket connection failed.")], {
+      suite: "preview-e2e",
+      tests: [retried("residency")],
+    }),
+    run(2, [], { suite: "preview-e2e", tests: [{ name: "residency", outcome: "pass" }] }),
+    run(
+      3,
+      [
+        cut(
+          "hops",
+          "Connection closed: this Durable Object instance is no longer active. Reconnect or retry the request.",
+        ),
+        cut("depth-2", "WebSocket connection failed."),
+      ],
+      {
+        suite: "preview-e2e",
+        tests: [retried("hops"), retried("depth-2")],
+      },
+    ),
+  ]);
+
+  expect(unknownFlakes(body)).not.toContain("residency |");
+  expect(unknownFlakes(body)).not.toContain("hops |");
+  expect(body).toContain(
+    "0 failed. The platform forced 3 retries on main in 7 days: socket-lost 2, object-shut-down 1.",
+  );
+  expect(body).toContain("_No active unknown flakes.");
+});
+
+test("the platform forcing the same test's retry in two main runs in a row is the test's failure", () => {
+  const cut = record("residency", "retried-pass", {
+    kind: "unknown",
+    error: "WebSocket connection failed.",
+  });
+  const retried = {
+    tests: [{ name: "residency", outcome: "fail" as const, retries: 1, failed: false }],
+  };
+  const pass = { tests: [{ name: "residency", outcome: "pass" as const }] };
+  const runs = [run(1, [cut], retried), run(2, [], { tests: [] }), run(3, [cut], retried)];
+  expect(render(runs)).toContain(
+    "residency | `WebSocket connection failed.` | unit | [🟦](https://github.com/iterate/iterate/commit/commit-1)[🟥](https://github.com/iterate/iterate/commit/commit-3)<br>0/20 consecutive passes",
+  );
+
+  runs.splice(1, 1, run(2, [], pass));
+  expect(unknownFlakes(render(runs))).not.toContain("residency |");
+});
+
+test("a retry the platform forced after a test's own failure is a pass of its streak, and the row keeps the test's error", () => {
+  const body = render([
+    run(1, [record("chat upload", "retried-pass", { kind: "unknown", error: "boom" })], {
+      tests: [{ name: "chat upload", outcome: "fail", retries: 1, failed: false }],
+    }),
+    run(2, [], { tests: [{ name: "chat upload", outcome: "pass" }] }),
+    run(
+      3,
+      [
+        record("chat upload", "retried-pass", {
+          kind: "unknown",
+          error: "Network connection lost.",
+        }),
+      ],
+      { tests: [{ name: "chat upload", outcome: "fail", retries: 1, failed: false }] },
+    ),
+  ]);
+
+  expect(body).toContain("chat upload | `boom` | unit |");
+  expect(body).toContain("2/20 consecutive passes");
+  expect(line(body, "chat upload |").match(/🟥|🟩|🟦|❌/gu)).toEqual(["🟥", "🟩", "🟦"]);
+});
+
+test("a platform failure that failed every attempt is the test's failure", () => {
+  const body = render([
+    run(
+      1,
+      [record("seed", "unexpected-error", { kind: "unknown", error: "Network connection lost." })],
+      {
+        tests: [{ name: "seed", outcome: "fail" }],
+      },
+    ),
+  ]);
+
+  expect(body).toContain("seed | `Network connection lost.` | unit | [❌]");
+  expect(body).not.toContain("The platform forced");
+});
+
 test("a plain test's hard failure on main opens an unknown row with its error", () => {
   const failure = record("socket opens", "unexpected-error", {
     kind: "unknown",
@@ -413,6 +504,11 @@ function record(
     durationMs: 5,
     at: options.at || day(0),
   };
+}
+
+/** The body's Unknown flakes section alone: the Cost section below it names rows too. */
+function unknownFlakes(body: string) {
+  return body.slice(body.indexOf("## Unknown flakes"), body.indexOf("## Cost"));
 }
 
 /** ISO timestamp `days` (fractional ok) after a fixed epoch. */

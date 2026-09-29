@@ -7,28 +7,35 @@
 // does not hold (deleted, or never created: an operator's made-up `prj_…`) is an orphan.
 //
 // Report-only unless `--destroy`, which backs each orphan up and then destroys it. The backup is one
-// JSON Lines object in the CI bucket (envs.ts `ciBucketEnvs`, docs/test-evidence.md#one-bucket),
-// `backups/context-sweep/<env>/<run's start, UTC>/<context id>.jsonl`: its first line the context's
-// identity `{ id, projectId, path }`, then its whole durable log, one event a line in offset order,
-// as `session.contexts.readEvents` pages it (without a wake) up to the head. The destruction
-// (`session.contexts.destroy`, refused for a global context and for any project that still exists)
-// waits for the bucket to hold the backup: an orphan whose backup did not land is left for the next
-// run, and so is one whose newest event is under an hour old (a running test's context, whose project
-// was made up: the nightly crash hunt's). A backup holds the log alone: a context's kv and its
-// facets' storage go with it. Each orphan's read and destruction is asked again when the platform
-// failed it (`retryPlatformFailures`, CI_HTTP): a prd deploy mid-sweep resets every context and may
-// drop the session's socket, which is connected again. Each orphan logs one
+// JSON Lines object in the deployment's backup bucket (envs.ts `backupBucketEnvs`: prd's alone,
+// `iterate-prd-backups` on the prd account), `context-sweep/<run's start, UTC>/<context id>.jsonl`:
+// its first line the context's identity `{ id, projectId, path }`, then its whole durable log, one
+// event a line in offset order, as `session.contexts.readEvents` pages it (without a wake) up to the
+// head. The destruction (`session.contexts.destroy`, refused for a global context and for any
+// project that still exists) waits for the bucket to hold the backup: an orphan whose backup did not
+// land is left for the next run, and so is one whose newest event is under an hour old (a running
+// test's context, whose project was made up: the nightly crash hunt's). A backup holds the log
+// alone: a context's kv and its facets' storage go with it. Each object's identification and each
+// orphan's read and destruction is asked again when the platform failed it (`retryPlatformFailures`,
+// CI_HTTP): a prd deploy mid-sweep resets every context and may drop the session's socket, which is
+// connected again (`identifyEach`, `backUpAndDestroy`). Each orphan logs one
 // `context-sweep.orphan` line as soon as it is done, so a run cut short still says what it destroyed.
 //
 //   node scripts/ci/context-sweep.ts --env prd [--destroy]
 //
 // The deployment's Cloudflare credentials and APP_CONFIG (its operator bearer) come from its own
 // Doppler config (scripts/lib/env-context.ts `resolveEnvContext`, which refuses a Doppler account
-// that is not envs.ts's); `--destroy` writes the CI bucket with its account's Cloudflare API token
-// (envs.ts `ciBucketEnvs`, read from Doppler as the test evidence upload does). It fails when an
-// object could not say who it is or an orphan was not destroyed; orphans alone are the report, not
-// a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
+// that is not envs.ts's); `--destroy` writes the backup bucket with that same Cloudflare API token,
+// so prd's event logs are written and read with prd's credentials alone, and is refused for a
+// deployment without a backup bucket. It fails when an object could not say who it is or an orphan
+// was not destroyed; orphans alone are the report, not a failure. The report is the step's `report` output too (GITHUB_OUTPUT), which `post` sends to
 // Slack.
+//
+// The backup bucket was made with Doppler `_shared/prd`'s token (the one os/prd inherits), every
+// object expiring 365 days after it lands:
+//
+//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket create iterate-prd-backups
+//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-prd-backups backups-after-365-days --expire-days 365 --force
 import { appendFileSync } from "node:fs";
 import type { IterateSessionApi } from "iterate/api";
 import { connectIterate, type IterateConnection } from "iterate/node";
@@ -38,13 +45,14 @@ import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   failureKind,
+  isPlatformFailureKind,
   retryPlatformFailures,
   type FailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, ciBucketEnvs, osEnvs } from "../../envs.ts";
+import { OS_DOPPLER_PROJECT, backupBucketEnvs, osEnvs, type OsEnv } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
-import { dopplerSecret, resolveEnvContext } from "../lib/env-context.ts";
+import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
 import { getSlackClient, keepPage, pageText, slackChannelIds } from "./slack.ts";
 
@@ -77,6 +85,52 @@ export function classifyContexts(contexts: SweptContext[], liveProjectIds: Reado
   return report;
 }
 
+/** Who each of `ids` is (`identify`, 50 at a time), each batch asked again while the platform fails
+ *  it (a session whose socket a deploy closed). An object whose answer is a platform failure, a
+ *  deploy's reset of that context above all, is asked again on its own on CI_HTTP's waits, as a read
+ *  or a destruction is: `identify` records no wake, so it is safe to repeat. The answer it gets once
+ *  the waits run out is kept, and the sweep fails on it as unidentified. */
+export async function identifyEach(
+  ids: string[],
+  identify: (ids: string[]) => Promise<SweptContext[]>,
+) {
+  const contexts: SweptContext[] = [];
+  for (let start = 0; start < ids.length; start += 50) {
+    const batch = ids.slice(start, start + 50);
+    const answers = await retryingPlatformFailures(
+      `identify ${batch.length} from ${batch[0]}`,
+      () => identify(batch),
+    );
+    for (const answer of answers)
+      contexts.push(platformFailed(answer) ? await identifyAgain(answer.id, identify) : answer);
+  }
+  return contexts;
+}
+
+/** Whether an object's answer is a failure of the platform's, not of who it is (failureKind reads
+ *  the error the session hands back as text). */
+function platformFailed(answer: SweptContext): answer is { id: string; error: string } {
+  return "error" in answer && isPlatformFailureKind(failureKind(new Error(answer.error)));
+}
+
+async function identifyAgain(
+  id: string,
+  identify: (ids: string[]) => Promise<SweptContext[]>,
+): Promise<SweptContext> {
+  const asked: { last?: SweptContext } = {};
+  try {
+    return await retryingPlatformFailures(`identify ${id}`, async () => {
+      const [answer = { id, error: "identify answered nothing" }] = await identify([id]);
+      asked.last = answer;
+      if (platformFailed(answer)) throw new Error(answer.error);
+      return answer;
+    });
+  } catch (error) {
+    // the waits ran out: the last answer, or why the last ask got none
+    return asked.last || { id, error: String(error).slice(0, 300) };
+  }
+}
+
 /** The largest page Cloudflare's List Objects API answers. The API client hands back no cursor, so
  *  the sweep reads one page and refuses a full one, which may be cut off. */
 const OBJECTS_PAGE = 10_000;
@@ -89,13 +143,13 @@ export default async function contextSweep(options: {
   /** Back up and destroy each orphan (session.contexts.readEvents, then destroy). */
   destroy?: boolean;
 }) {
-  // Before anything is read: a backup that cannot be written would leave every orphan standing.
-  const putBackup = options.destroy ? await backupWriter() : null;
   const ctx = await resolveEnvContext({
     envs: osEnvs,
     dopplerProject: OS_DOPPLER_PROJECT,
     env: options.env,
   });
+  // Before anything is read: a backup that cannot be written would leave every orphan standing.
+  const backups = options.destroy ? await backupWriter(ctx) : null;
   const target = ctx.env;
   const namespaces = (await getWorkerDoNamespaces(ctx, target.workerName)).filter(
     ({ className }) => className === "IterateContextDurableObject",
@@ -122,15 +176,16 @@ export default async function contextSweep(options: {
       auth: { type: "admin-secret", secret: config.secrets.adminBearer.exposeSecret() },
     }),
   );
-  const session = await connection.session();
-  const contexts: SweptContext[] = [];
-  for (let start = 0; start < stored.length; start += 50)
-    contexts.push(...(await session.contexts.identify(stored.slice(start, start + 50))));
-  const live = new Set((await session.projects.list()).map((project) => project.id));
+  const contexts = await identifyEach(stored, async (ids) =>
+    (await connection.session()).contexts.identify(ids),
+  );
+  const live = new Set(
+    (await (await connection.session()).projects.list()).map((project) => project.id),
+  );
   const classified = classifyContexts(contexts, live);
 
-  const backupPrefix = `backups/context-sweep/${options.env}/${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}/`;
-  const swept = putBackup
+  const backupPrefix = `context-sweep/${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}/`;
+  const swept = backups
     ? await backUpAndDestroy({
         orphans: classified.orphans,
         contexts: {
@@ -138,7 +193,7 @@ export default async function contextSweep(options: {
             (await connection.session()).contexts.readEvents(id, afterOffset),
           destroy: async (id) => (await connection.session()).contexts.destroy(id),
         },
-        putBackup,
+        putBackup: backups.put,
         prefix: backupPrefix,
       })
     : { destroyed: [], recent: [], failed: [] };
@@ -154,7 +209,7 @@ export default async function contextSweep(options: {
     destroyed: swept.destroyed.length,
     recent: swept.recent.length,
     destroyFailed: swept.failed.length,
-    backups: putBackup ? `r2://${ciBucketEnvs.ci.bucketName}/${backupPrefix}` : undefined,
+    backups: backups ? `r2://${backups.bucketName}/${backupPrefix}` : undefined,
   };
   console.log(JSON.stringify({ event: "context-sweep.report", namespace: namespaceId, ...report }));
   for (const orphan of classified.orphans)
@@ -239,7 +294,7 @@ const RECENT_MS = 60 * 60_000;
 export async function backUpAndDestroy(input: {
   orphans: { id: string; projectId: string; path: string }[];
   contexts: Pick<IterateSessionApi["contexts"], "readEvents" | "destroy">;
-  /** Resolves once the CI bucket holds `body` at `key`. */
+  /** Resolves once the backup bucket holds `body` at `key`. */
   putBackup: (key: string, body: Uint8Array) => Promise<void>;
   prefix: string;
   now?: () => number;
@@ -292,8 +347,9 @@ export async function backUpAndDestroy(input: {
 
 /** `call`, asked again on CI_HTTP's waits while the platform fails it: a deploy's reset of the
  *  context, or a session whose socket closed (capnweb's "Peer closed WebSocket", which
- *  `reconnecting` answers with a new connection) or could not be connected again. Both calls are safe to repeat: a read, and a
- *  destruction whose landed try answers EMPTIED. */
+ *  `reconnecting` answers with a new connection) or could not be connected again. Every call is
+ *  safe to repeat: an identification and a read record no wake, and a destruction whose landed try
+ *  answers EMPTIED. */
 const retryingPlatformFailures = <T>(name: string, call: () => Promise<T>) =>
   retryPlatformFailures(call, {
     area: "context-sweep",
@@ -402,19 +458,26 @@ function sweepPage(what: string, input: { runUrl: string; testRun: boolean }) {
   });
 }
 
-/** Writes a backup into the CI bucket (scripts/ci/ci-bucket.ts, with its account's Cloudflare API
- *  token): resolves once R2 holds it (ci-bucket.ts `put`). */
-async function backupWriter() {
-  const { cloudflareAccountId, bucketName, dopplerProject, dopplerConfig } = ciBucketEnvs.ci;
+/** The backup bucket of the swept deployment (envs.ts `backupBucketEnvs`), written with the
+ *  deployment's own Cloudflare API token: `put` resolves once R2 holds the backup (ci-bucket.ts
+ *  `put`). Refused for a deployment without one, and for one whose bucket is on another account. */
+async function backupWriter(ctx: EnvContext<OsEnv>) {
+  const target = backupBucketEnvs[ctx.name];
+  if (!target) throw new Error(`${ctx.name} has no backup bucket: sweep it without --destroy`);
+  if (target.cloudflareAccountId !== ctx.env.cloudflareAccountId)
+    throw new Error(`${target.bucketName} is not on ${ctx.name}'s Cloudflare account`);
   const bucket = await ciBucket({
-    accountId: cloudflareAccountId,
-    bucketName,
-    apiToken: dopplerSecret(dopplerProject, dopplerConfig, "CLOUDFLARE_API_TOKEN"),
+    accountId: target.cloudflareAccountId,
+    bucketName: target.bucketName,
+    apiToken: ctx.secrets.CLOUDFLARE_API_TOKEN,
     area: "context-sweep",
     // a large context's backup is a few hundred megabytes: minutes on a slow link
     timeoutMs: 600_000,
   });
-  return (key: string, body: Uint8Array) => bucket.put(key, body, "application/x-ndjson");
+  return {
+    bucketName: target.bucketName,
+    put: (key: string, body: Uint8Array) => bucket.put(key, body, "application/x-ndjson"),
+  };
 }
 
 function required(name: string): string {

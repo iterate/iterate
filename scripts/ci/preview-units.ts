@@ -189,9 +189,22 @@ const E2E_TEST_FILES = ["apps/os/e2e/**/*.e2e.test.ts", "apps/agents/e2e/**/*.e2
  *  own specs (the flake sentinel, the harness's) are the `suite` project. */
 const SPEC_DIRECTORIES: { directory: string; files: string[]; projects: string[] }[] = [
   { directory: "specs/os/", files: ["specs/os/**/*.spec.ts"], projects: ["os", "os-phone"] },
-  { directory: "specs/dash/", files: ["specs/dash/**/*.spec.ts"], projects: ["dash"] },
+  {
+    directory: "specs/dash/",
+    files: ["specs/dash/**/*.spec.ts"],
+    projects: ["dash", "dash-phone"],
+  },
   { directory: "specs/notes/", files: ["specs/notes/**/*.spec.ts"], projects: ["notes"] },
-  { directory: "specs/voice/", files: ["specs/voice/**/*.spec.ts"], projects: ["voice"] },
+  {
+    directory: "specs/agents/",
+    files: ["specs/agents/**/*.spec.ts"],
+    projects: ["agents", "agents-phone"],
+  },
+  {
+    directory: "specs/voice/",
+    files: ["specs/voice/**/*.spec.ts"],
+    projects: ["voice", "voice-phone"],
+  },
   { directory: "specs/admin/", files: ["specs/admin/**/*.spec.ts"], projects: ["admin"] },
   {
     directory: "specs/test-support/",
@@ -203,7 +216,7 @@ const SPEC_DIRECTORIES: { directory: string; files: string[]; projects: string[]
 /** The spec directories an app unit's change reruns: its own, and for the Dash, every app's, since
  *  each app's specs sign in and out through it. os, agents and kit rerun every spec. */
 const UNIT_SPECS: Partial<Record<PreviewUnit, string[]>> = {
-  dash: ["specs/dash/", "specs/notes/", "specs/voice/", "specs/admin/"],
+  dash: ["specs/dash/", "specs/notes/", "specs/agents/", "specs/voice/", "specs/admin/"],
   notes: ["specs/notes/"],
   voice: ["specs/voice/"],
   admin: ["specs/admin/"],

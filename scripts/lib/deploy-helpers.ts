@@ -214,6 +214,18 @@ export function findBuiltWranglerConfig(appRoot: string): string {
 }
 
 /**
+ * The app config a deployment reads from its Doppler config: `APP_CONFIG` and every
+ * `APP_CONFIG_<PATH>__<KEY>` beside it. The Worker's parser merges each var on top of the object
+ * (apps/os/src/app-config.ts), so a deploy ships all of them: a new key needs Doppler, not a deploy
+ * script.
+ */
+export function appConfigSecretsOf(secrets: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(secrets).filter(([name, value]) => /^APP_CONFIG(_|$)/.test(name) && value),
+  );
+}
+
+/**
  * Collect the deploy's secret values from the env's Doppler config: every
  * `required` name must be present (throws listing all missing ones at once).
  */

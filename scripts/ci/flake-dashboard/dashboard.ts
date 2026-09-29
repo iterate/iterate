@@ -9,6 +9,7 @@ import {
   UNIT_ROW_WARN_MS,
 } from "@iterate-com/shared/test-support/e2e-policy";
 import type { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
+import { platformFailureOf, type PlatformFailure } from "../platform-failures.ts";
 import { recentRuns, type FlakeRecord, type SuiteRun } from "./evidence.ts";
 
 /** The first line of the issue body: the marker, not the title, is authority. */
@@ -29,7 +30,7 @@ const transitionThresholds = {
 
 export function renderDashboard(runs: SuiteRun[], repository: { owner: string; repo: string }) {
   const ordered = runs.toSorted((a, b) => a.uploadedAt.localeCompare(b.uploadedAt));
-  const square = (entry: { outcome: FlakeRecord["outcome"]; commit?: string }) =>
+  const square = (entry: { outcome: SquareOutcome; commit?: string }) =>
     entry.commit
       ? `[${OUTCOME_EMOJI[entry.outcome]}](https://github.com/${repository.owner}/${repository.repo}/commit/${entry.commit})`
       : OUTCOME_EMOJI[entry.outcome];
@@ -236,11 +237,13 @@ function mainStreak(main: FlakeRecord[]) {
  * The plain tests that needed a retry or failed outright on main, per suite. A row lasts until its
  * test passes `transitionThresholds.unwrap.runs` complete main runs after its last failure, a
  * wrapper adopts it on main, or a complete main run's test list no longer holds it. A skip or an
- * incomplete run neither advances nor ends it.
+ * incomplete run neither advances nor ends it. A retry the platform forced (`platformRetry`) is
+ * not the test's failure once in a row, as the latency guard judges a probe: it counts as the pass
+ * the retry was, and only the same test's retry forced again in its next main run is a failure.
  */
 function renderUnknownFlakes(
   runs: SuiteRun[],
-  square: (entry: { outcome: FlakeRecord["outcome"]; commit?: string }) => string,
+  square: (entry: { outcome: SquareOutcome; commit?: string }) => string,
 ) {
   const passesToLeave = transitionThresholds.unwrap.runs;
   const suites = [...new Set(runs.map((run) => run.suite))].sort();
@@ -261,38 +264,51 @@ function renderUnknownFlakes(
       ),
     );
     const rows = [...names].sort().flatMap((name) => {
-      const history = main.map((run) => ({
-        run,
-        unknown: run.records
-          .filter((record) => record.name === name && record.kind === "unknown")
-          .toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)),
-        wrapped: run.records.some((record) => record.name === name && record.kind !== "unknown"),
-        outcome: run.summary && summaryOutcome(run.summary, name),
-      }));
-      const lastFailure = history.findLastIndex(
-        (entry) => entry.unknown.length > 0 || entry.outcome === "fail",
+      const history = forgiveOncePlatformRetries(
+        main.map((run) => ({
+          run,
+          unknown: run.records
+            .filter((record) => record.name === name && record.kind === "unknown")
+            .toSorted((a, b) => Date.parse(a.at) - Date.parse(b.at)),
+          wrapped: run.records.some((record) => record.name === name && record.kind !== "unknown"),
+          outcome: run.summary && summaryOutcome(run.summary, name),
+        })),
       );
+      // A summary names a row `fail` when any attempt failed, its retry's pass included.
+      const lastFailure = history.findLastIndex(
+        (entry) => !entry.forgiven && (entry.unknown.length > 0 || entry.outcome === "fail"),
+      );
+      if (lastFailure === -1) return [];
       const after = history.slice(lastFailure + 1);
       if (after.some((entry) => entry.wrapped)) return [];
       const inventory = after.findLast((entry) => entry.run.summary?.status === "complete");
       if (inventory && !inventory.outcome) return [];
       const passes = after.filter(
-        (entry) => entry.run.summary?.status === "complete" && entry.outcome === "pass",
+        (entry) =>
+          entry.run.summary?.status === "complete" && (entry.outcome === "pass" || entry.forgiven),
       ).length;
       if (passes >= passesToLeave) return [];
       const squares = history
         .slice(history.findIndex((entry) => entry.unknown.length > 0))
-        .flatMap(({ run, unknown, outcome }) => {
-          const commit = run.summary?.headSha;
-          if (unknown.length > 0)
-            return unknown.map((record) => ({ outcome: record.outcome, commit }));
-          if (outcome === "fail") return [{ outcome: "unexpected-error" as const, commit }];
-          if (outcome === "pass" && run.summary?.status === "complete")
-            return [{ outcome: "pass" as const, commit }];
-          return [];
-        })
+        .flatMap(
+          ({ run, unknown, outcome, forgiven }): { outcome: SquareOutcome; commit?: string }[] => {
+            const commit = run.summary?.headSha;
+            if (forgiven) return [{ outcome: "platform-retry", commit }];
+            if (unknown.length > 0)
+              return unknown.map((record) => ({ outcome: record.outcome, commit }));
+            if (outcome === "fail") return [{ outcome: "unexpected-error", commit }];
+            if (outcome === "pass" && run.summary?.status === "complete")
+              return [{ outcome: "pass", commit }];
+            return [];
+          },
+        )
         .slice(-10);
-      const record = history.flatMap((entry) => entry.unknown).at(-1)!;
+      // the error of the test's own last failure, not of a retry the platform forced after it
+      const record =
+        history
+          .slice(0, lastFailure + 1)
+          .flatMap((entry) => entry.unknown)
+          .at(-1) ?? history.flatMap((entry) => entry.unknown).at(-1)!;
       return [
         [
           escape(name),
@@ -306,8 +322,8 @@ function renderUnknownFlakes(
       complete: !!complete,
       rows,
       status: complete
-        ? `- **${escape(suite)}:** [${complete.headSha.slice(0, 7)}](${complete.runUrl}) · ${shortDate(complete.finishedAt)} UTC · ${complete.testCount} tests · ${complete.failedCount} failed.${incomplete}`
-        : `- **${escape(suite)}:** awaiting a complete main result.${incomplete}`,
+        ? `- **${escape(suite)}:** [${complete.headSha.slice(0, 7)}](${complete.runUrl}) · ${shortDate(complete.finishedAt)} UTC · ${complete.testCount} tests · ${complete.failedCount} failed.${incomplete}${platformTally(main)}`
+        : `- **${escape(suite)}:** awaiting a complete main result.${incomplete}${platformTally(main)}`,
     };
   });
   const rows = perSuite.flatMap((suite) => suite.rows);
@@ -315,7 +331,7 @@ function renderUnknownFlakes(
     "",
     "## Unknown flakes",
     "",
-    `_A plain test that needed a retry or failed outright on main is added here. Remove it after ${passesToLeave} consecutive main passes, wrapper adoption, or absence from a complete main run's full test list. Failures reset the streak. Skips and incomplete results cannot advance it or prove deletion. 🟩 passed · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
+    `_A plain test that needed a retry or failed outright on main is added here. Remove it after ${passesToLeave} consecutive main passes, wrapper adoption, or absence from a complete main run's full test list. Failures reset the streak. Skips and incomplete results cannot advance it or prove deletion. A retry the [platform's failure](https://github.com/iterate/iterate/blob/main/scripts/ci/platform-failures.ts) forced (a WebSocket with no Close frame, a lost Workers RPC connection, a Durable Object Cloudflare shut down, a fetch with no answer) is the pass it was, unless the same test's retry was forced in its previous main run too; each suite's line counts them. 🟩 passed · 🟦 passed after a retry the platform forced · 🟥 needed a retry · ❌ failed. PR results do not affect this table._`,
     "",
     ...perSuite.map((suite) => suite.status),
     "",
@@ -327,6 +343,52 @@ function renderUnknownFlakes(
             : "_No active unknown flakes. Passing streaks are evidence of stability, not proof that the root cause is fixed._",
         ]),
   ];
+}
+
+/** A main run's records of one test, all retries that passed after one of the platform's
+ *  failures (../platform-failures.ts), or undefined when any is not. */
+function platformRetry(unknown: FlakeRecord[]): PlatformFailure | undefined {
+  const failures = unknown.map((record) =>
+    record.outcome === "retried-pass" && record.error ? platformFailureOf(record.error) : undefined,
+  );
+  return failures.length > 0 && failures.every(Boolean) ? failures[0] : undefined;
+}
+
+/** Each main run of one test marked `forgiven` when the platform forced its retry
+ *  (`platformRetry`) and did not force one in the test's previous main run: the latency guard's
+ *  once-in-a-row rule (../platform-failures.ts). Runs the test did not appear in are skipped. */
+function forgiveOncePlatformRetries<
+  Entry extends { unknown: FlakeRecord[]; outcome: "pass" | "fail" | "skip" | undefined },
+>(history: Entry[]) {
+  let previousForced = false;
+  return history.map((entry) => {
+    const forced = !!platformRetry(entry.unknown);
+    const forgiven = forced && !previousForced;
+    if (entry.unknown.length > 0 || entry.outcome) previousForced = forced;
+    return { ...entry, forgiven };
+  });
+}
+
+/** A suite line's count of the retries the platform forced on main, by failure, or nothing when
+ *  there were none. */
+function platformTally(main: SuiteRun[]) {
+  const forced = main.flatMap((run) =>
+    [
+      ...Map.groupBy(
+        run.records.filter((record) => record.kind === "unknown"),
+        (record) => record.name,
+      ).values(),
+    ].flatMap((records) => {
+      const failure = platformRetry(records);
+      return failure ? [failure] : [];
+    }),
+  );
+  if (forced.length === 0) return "";
+  const byFailure = [...Map.groupBy(forced, (failure) => failure)]
+    .toSorted(([a, x], [b, y]) => y.length - x.length || a.localeCompare(b))
+    .map(([failure, all]) => `${failure} ${all.length}`)
+    .join(", ");
+  return ` The platform forced ${forced.length} ${forced.length === 1 ? "retry" : "retries"} on main in ${recentRuns.mainDays} days: ${byFailure}.`;
 }
 
 /**
@@ -513,15 +575,18 @@ function renderCost(runs: SuiteRun[]) {
 
 // One map across kinds, honest per section: green = the expected thing happened (a pass, or a pin
 // passing unexpectedly — worth a look), red = the tracked failure struck (a flake, a held pin, a
-// retried-pass), ❌ = an unexpected error that proves nothing.
+// retried-pass), blue = a retry the platform forced, ❌ = an unexpected error that proves nothing.
 const OUTCOME_EMOJI = {
   pass: "🟩",
+  "platform-retry": "🟦",
   "unexpected-pass": "🟩",
   "flake-fail": "🟥",
   "pinned-fail": "🟥",
   "retried-pass": "🟥",
   "unexpected-error": "❌",
 } as const;
+/** What a square can show: a record's outcome, or a retry the platform forced (`platformRetry`). */
+type SquareOutcome = keyof typeof OUTCOME_EMOJI;
 
 /**
  * The deliberate canary flakes are identified by naming convention: every suite's sentinel test

@@ -40,7 +40,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "14",
+  version: "15",
   description:
     "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -189,7 +189,8 @@ export const ProjectContract = defineProcessorContract({
   },
   // THE RELATIONSHIP: the project consumes the entities' certificates without owning them, its
   // connections' facts (src/integrations/contract.ts, shared with the account), and the
-  // core's apex target (`itx/ingress-configured`), which it both appends and reduces.
+  // core's apex target (`itx/ingress-configured`), which it both appends and reduces, and the
+  // config worker's subscription row (`itx/subscription-configured`), which it only appends.
   processorDeps: [
     RepoContract,
     WorkspaceContract,
@@ -228,8 +229,8 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/cloudflare/disconnected",
     "events.iterate.com/github/connected",
     "events.iterate.com/github/disconnected",
-    "events.iterate.com/waitrose/connected",
-    "events.iterate.com/waitrose/disconnected",
+    "events.iterate.com/x/connected",
+    "events.iterate.com/x/disconnected",
   ],
   emits: [
     "events.iterate.com/project/created",
@@ -239,9 +240,11 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/project/deleted",
     "events.iterate.com/project/hostname-add-settled",
     "events.iterate.com/project/hostname-removed",
-    // the core's: the saga points the project's apex at the seeded config repo's commit, and the
-    // processor re-points it at every later commit of the config repo (a commit IS its publication)
+    // the core's: the saga publishes the seeded config repo's commit, and the processor every later
+    // commit of the config repo (a commit IS its publication) — the apex and the config worker's
+    // subscription, both at that commit
     "events.iterate.com/itx/ingress-configured",
+    "events.iterate.com/itx/subscription-configured",
   ],
 });
 

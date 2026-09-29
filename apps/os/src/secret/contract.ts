@@ -31,7 +31,6 @@ import type { SecretRefresh } from "iterate/api";
  *  is a type error here until it is named. */
 export const SecretRefreshKind = z.enum([
   "oauth-refresh-token",
-  "waitrose-session",
   "github-app-installation",
   "worker",
 ] satisfies SecretRefresh["kind"][]);

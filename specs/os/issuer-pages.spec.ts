@@ -83,14 +83,14 @@ test("a consent page whose session ends underneath it returns to sign-in", async
     .getByRole("button", { name: "Switch account", exact: true })
     .click({ noWaitAfter: true });
   // The server-rendered sign-in page now names nobody.
-  await other.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  await other.getByRole("heading", { name: /^Sign in to / }).waitFor();
   await other.close();
   // the page's next action is refused; it leaves for sign-in, bound for this very request
   await page
     .getByRole("textbox", { name: "Project slug", exact: true })
     .fill(uniqueFixtureSlug("ended"));
   await page.getByRole("button", { name: "Review permissions", exact: true }).click();
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  await page.getByRole("heading", { name: /^Sign in to / }).waitFor();
   expect(page.url()).toMatch(/\/login\?next=%2Foauth2%2Fauth%3F/);
   expect(errors).toEqual([]);
 });
@@ -132,7 +132,7 @@ test("the sign-in page renders its state in HTML without a JSON round trip", asy
   const requests: string[] = [];
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.goto("/login");
-  await page.getByRole("heading", { name: "Sign in to iterate" }).waitFor();
+  await page.getByRole("heading", { name: /^Sign in to / }).waitFor();
   await page.getByLabel("Email", { exact: true }).waitFor();
   expect(requests).not.toContain("/login.json");
   expect(await page.getByText("Loading…", { exact: true }).count()).toBe(0);

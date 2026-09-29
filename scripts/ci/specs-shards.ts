@@ -1,7 +1,7 @@
 // scripts/ci/specs-shards.ts — BROWSER SPECS IN SHARDS, and their verdict. Preview OS and Main OS
 // e2e run the specs as SPECS_SHARDS jobs that start with the run, enough of them that every spec
 // has a worker from the start (./specs-shards.test.ts): the legs of the matrix job `specs-shard`,
-// Browser specs 1/10 to 10/10. Each runs its share (playwright.config.ts `shard`) and keeps its own
+// Browser specs 1/11 to 11/11. Each runs its share (playwright.config.ts `shard`) and keeps its own
 // evidence, with a Playwright blob report where an unsharded run writes its HTML one.
 //
 // `specs`, Browser specs, the required check, runs no spec itself: it starts with the run too, and
@@ -54,28 +54,30 @@ export async function collectShards(input: {
   const { depot, workflowId, job, out, log = console.log } = input;
   let reported = "";
   // Each part a row of the step in the CI trace (docs/ci-traces.md#steps): the wait is most of it.
-  const { runId, legs, waitedMs } = await traceOperation("Wait for the shards", () =>
-    pollWorkflow({
-      ...input,
-      tag: "specs-shards",
-      waitingFor: `the ${job} legs`,
-      boundMs: COLLECT_BOUND_MS,
-      settled: ({ runId, jobs }, waitedMs) => {
-        // `<file>:<job id>:matrix-<n>`
-        const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
-        if (!legs.length)
-          throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
-        const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
-        const state = waiting.length
-          ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
-          : `all ${legs.length} settled`;
-        if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
-        reported = state;
-        return waiting.length && waitedMs < COLLECT_BOUND_MS
-          ? undefined
-          : { runId, legs, waitedMs };
-      },
-    }),
+  const { runId, legs, waitedMs } = await traceOperation(
+    { name: "Wait for the shards", phase: "wait" },
+    () =>
+      pollWorkflow({
+        ...input,
+        tag: "specs-shards",
+        waitingFor: `the ${job} legs`,
+        boundMs: COLLECT_BOUND_MS,
+        settled: ({ runId, jobs }, waitedMs) => {
+          // `<file>:<job id>:matrix-<n>`
+          const legs = jobs.filter((candidate) => candidate.jobKey.split(":")[1] === job);
+          if (!legs.length)
+            throw new Error(`Depot lists no job ${job} in workflow ${workflowId} to collect`);
+          const waiting = legs.filter((leg) => !SETTLED.includes(leg.status));
+          const state = waiting.length
+            ? `waiting for ${waiting.map((leg) => `${name(leg)} (${leg.status})`).join(", ")}`
+            : `all ${legs.length} settled`;
+          if (state !== reported) log(`[specs-shards] ${seconds(waitedMs)}: ${state}`);
+          reported = state;
+          return waiting.length && waitedMs < COLLECT_BOUND_MS
+            ? undefined
+            : { runId, legs, waitedMs };
+        },
+      }),
   );
   await mkdir(out, { recursive: true });
   const problems = await traceOperation("Download their blob reports", () =>

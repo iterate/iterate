@@ -5,7 +5,7 @@
 
 import { redirect } from "@tanstack/react-router";
 import { z } from "zod";
-import { errorCode } from "iterate/lib";
+import { errorCode, withTimeout } from "iterate/lib";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ConsentRpcTarget } from "./consent.ts";
@@ -22,17 +22,45 @@ async function issuerSignIn(request: Request, env: Env) {
   return { ...signedIn, grant: signedIn.grant };
 }
 
+/** Sign in first and come back to this authorization, leading with the way to sign in its
+ *  client's link suggested (`provider_hint`, which iterate/app-server.ts `/.auth/login` passes on). */
+function signInToAuthorize(authorization: string) {
+  return signInHref(
+    `/oauth2/auth${authorization}`,
+    new URLSearchParams(authorization).get("provider_hint"),
+  );
+}
+
+/** How long the page waits on the issuer session's admission before it says the person's account
+ *  is still being set up: a new person's account can take seconds to start (oauth.ts
+ *  `accountStateOf`), and a returning person's admission takes tens of milliseconds. */
+const ACCOUNT_SETUP_WAIT_MS = 4_000;
+
 /** What the page shows for this authorization request. A request the provider refuses with a
- *  validated redirect goes back to the client at once. */
+ *  validated redirect goes back to the client at once. An admission still unanswered after
+ *  `ACCOUNT_SETUP_WAIT_MS`, or one the platform failed (UNAVAILABLE), is `setting-up`: the page
+ *  says the account is still being set up and asks again (setting-up-account.tsx). Nothing is
+ *  granted meanwhile. */
 export async function describeConsent(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
   authorization: string,
 ) {
-  const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${authorization}`) });
   const addresses = platformAddressesOf(env, request);
+  const signedIn = await withTimeout(
+    issuerSignIn(request, env),
+    ACCOUNT_SETUP_WAIT_MS,
+    "the issuer session's admission",
+  ).catch((error: unknown) => {
+    const code = errorCode(error);
+    if (code !== "TIMEOUT" && code !== "UNAVAILABLE") throw error;
+    console.info({ event: "consent.account-setting-up", code });
+    return "setting-up" as const;
+  });
+  if (signedIn === "setting-up")
+    return { view: { kind: "setting-up" as const }, platformOrigin: addresses.platformOrigin };
+  if (!signedIn) throw redirect({ href: signInToAuthorize(authorization) });
   const view = await new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
     admittedThisRequest: true,
   }).describe(authorization);
@@ -60,7 +88,7 @@ export async function createConsentProject(
   input: z.infer<typeof NewConsentProject>,
 ): Promise<{ orgId?: string; error?: string }> {
   const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) throw redirect({ href: signInHref(`/oauth2/auth${input.authorization}`) });
+  if (!signedIn) throw redirect({ href: signInToAuthorize(input.authorization) });
   const teardown = new SessionTeardown();
   const session = new SessionRpcTarget(
     {
@@ -122,7 +150,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
     new Response(null, { status: 303, headers: { location, "cache-control": "no-store" } });
   const form = await request.formData().catch(() => null);
   const signedIn = await issuerSignIn(request, env);
-  if (!signedIn) return seeOther(signInHref(`/oauth2/auth${authorization}`));
+  if (!signedIn) return seeOther(signInToAuthorize(authorization));
   const approval = ConsentApproval.safeParse({
     project: form?.getAll("project"),
     scope: form?.getAll("scope"),

@@ -89,6 +89,20 @@ export async function settledWorkflows(
     .toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
+/** The workflows named `name` (its `name:`) still in progress, queued or running, whatever started
+ *  them, oldest first. The newest 50 of the name, as settledWorkflows reads. */
+export async function workflowsInProgress(depot: DepotApi, input: { name: string }) {
+  const { workflows } = ListedWorkflows.parse(
+    await depot("ListWorkflows", {
+      repo: "iterate/iterate",
+      name: input.name,
+      status: ["queued", "running"],
+      pageSize: 50,
+    }),
+  );
+  return workflows.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 const ArtifactPage = z.object({
   artifacts: z
     .array(z.object({ artifactId: z.string(), name: z.string(), createdAt: z.iso.datetime() }))
@@ -126,7 +140,8 @@ export async function workflowArtifact(
  * undefined when none of its last 20 runs kept one. A failed run counts: a job that keeps its state
  * before it fails still handed it on. A running one counts too: a state it kept is its first
  * execution's, so a re-run's job reads that instead of the state of the run before it, and judges
- * nothing twice (the workflows that keep state run one at a time).
+ * nothing twice (a job that keeps state runs after the runs before it have ended: the Health
+ * workflow's runs one at a time, Main OS e2e's page jobs in turn).
  */
 export async function newestArtifactFile(
   depot: DepotApi,

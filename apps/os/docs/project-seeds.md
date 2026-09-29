@@ -137,6 +137,63 @@ Routes and deployment configuration remain owned by `envs.ts`. This is a selecte
 project recovery mechanism, not a complete database snapshot. Verify the restored
 websites and external integrations separately before declaring recovery complete.
 
+## What a seed does not carry
+
+An erase also removes what a project set up at runtime, and `apply` does not bring it back:
+
+- **Integration connections:** the control plane's `integration_routes` row and the `project`
+  facet's connection. The seed restores the secret `/secrets/<provider>-<connection>`, but without
+  its route the platform mints no token for it and no webhook reaches the project.
+- **Processors a session installed**, on the root and on each connection's log
+  (`/integrations/<provider>/<connection>`), with the rewrite rules their installers wrote. For
+  example the agents app, `@iterate-com/github-sync` and `@iterate-com/ai-linter`.
+- **A repo's origin** (`itx.repos.get(path).origin()`).
+- **Device client rules, schedules and fetch routes.**
+- **Config files that are not UTF-8.** `capture` refuses them, so a project that has one is
+  captured with `capture --config-repo` from a checkout without it. The origin's history keeps
+  it.
+
+Restoring these is part of the recreate. On 2026-09-28 the prd `iterate` project came back
+without its GitHub connection, sync and linter, left as an owner to-do, and nobody noticed for
+18 hours.
+
+Before the erase, list each project's processors and origin from an operator session
+(`iterate repl --project <slug>`) and keep the output with the archive:
+
+```ts
+const { integrations } = (await itx.facets.get("project").snapshot()).state;
+for (const path of ["/", ...Object.keys(integrations)])
+  console.log(
+    path,
+    (await itx.cd(path).processors.list()).map(
+      (row) => `${row.name} ${row.hostedFacet?.cacheKey ?? ""}`,
+    ),
+  );
+console.log(integrations, await itx.repos.get("/repos/config").origin());
+```
+
+After `apply` and `verify-structure`, restore them in this order:
+
+1. **Connections**, under the archived connection names, so the secret and the log keep their
+   paths. For GitHub through iterate's App, an operator session calls
+   `itx.integrations.connect("github", { installationId, connection })`. An admin of the GitHub
+   account opens the `authorizationUrl` it answers once, in a browser signed in to the platform as
+   a member of the project. GitHub skips its prompt for someone who authorized the App before, and
+   the callback answers "Done: GitHub is connected". Other providers connect again from the Dash's
+   Integrations page. Check that `integration_routes` has the row and that a webhook lands on the
+   connection's log.
+2. **Origins**, with `repo.setOrigin(url)` and the archived URL. When the origin still has the
+   pre-erase history (the erase does not reach GitHub), make it the base again:
+   `repo.pull({ force: true })` (the Dash's "Keep GitHub's"), commit on top whatever the recreate
+   changed since the capture (a re-pin, for example), and `repo.push()`, which is fast-forward
+   only. Never force-push the origin. Diff the two trees first, so nothing only the restored side
+   had is lost. Both tips end at the same SHA.
+3. **Processors**, with each installer as its README says (iterate/config's `install.ts` for
+   the sync and linter). The same source gives the same `cacheKey` as the list.
+4. **Check** the list again, then prove each connection once end to end. For the `iterate`
+   project: a push to iterate/config arrives in `/repos/config` as the same commit, a commit in
+   `/repos/config` reaches GitHub, and the "Iterate GitHub AI linter" check appears on a PR.
+
 ## Moving a deployment to a new Worker
 
 A recreation onto a new Worker (a renamed `workerName` in `envs.ts`, fresh

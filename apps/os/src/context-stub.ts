@@ -1,14 +1,19 @@
 // context-stub.ts — A CONTEXT DURABLE OBJECT AS THE PLATFORM'S OWN CODE CALLS IT, under the one
 // failure model (docs/engineering-invariants.md#failures-and-retries), so a call gets the same policy
-// whichever hop makes it: the edge (iterate-context.ts), the owner contexts the session and the
-// token endpoint read and append to (session.ts `ownerContext`).
+// whichever hop makes it: the edge (iterate-context.ts), /mcp, the owner contexts the session and
+// the token endpoint read and append to (session.ts `ownerContext`), and a runner whose row sends
+// its scripts to another context (iterate-context-durable-object.ts `#scriptExecution`).
 import { z } from "zod";
+import type { WaitForEventFilter } from "iterate/api";
 import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
+import { releaseRpcSessions } from "iterate/lib";
 import type { StreamProcessorDurableObject } from "iterate/sdk";
+import type { StreamEvent } from "iterate/stream/processor";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Caller } from "./caller.ts";
-import type { DurableObjectAddress } from "./context/paths.ts";
+import { DurableObjectNameCodec, type DurableObjectAddress } from "./context/paths.ts";
 import type { IterateContextNamespace } from "./iterate-context.ts";
+import { ScriptRunRequested, settlementOfScriptRun } from "./library.ts";
 import type { repoVerbs } from "./repo/durable-object.ts";
 import { unavailable } from "./unavailable.ts";
 import type { workspaceVerbs } from "./workspace/durable-object.ts";
@@ -19,22 +24,45 @@ import type { workspaceVerbs } from "./workspace/durable-object.ts";
  *  error-handling guide). A call that is idempotent (`isIdempotentItxCall`) and that a deploy's reset
  *  or a lost connection failed is made ONCE more, at once; an overloaded one never
  *  (`retryPlatformFailures`, its lines named `<area>.…`). A platform failure that stands is thrown
- *  as UNAVAILABLE, its message kept. */
+ *  as UNAVAILABLE, its message kept. A context answers `itx.run` with the request
+ *  (library.ts `ScriptRunRequested`), and the call answers with the run's settlement, read here in
+ *  slices of fresh calls (`settlementOfScriptRun`): no call is held on one instance for a run's
+ *  length. */
 export function contextStub(
   namespace: IterateContextNamespace,
   address: DurableObjectAddress,
   area: string,
 ) {
   return {
-    async invoke(itxExpression: ItxExpression, args: unknown[], caller: Caller): Promise<unknown> {
+    /** `givenUp`: the caller stopped waiting for this call's answer, so the call left pending is
+     *  released and never repeated. */
+    async invoke(
+      itxExpression: ItxExpression,
+      args: unknown[],
+      caller: Caller,
+      givenUp?: AbortSignal,
+    ): Promise<unknown> {
+      let answer: unknown;
       try {
-        return await retryPlatformFailures(
-          // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call
-          // denotes whatever expression the caller spelled, so `unknown` is the honest contract.
-          async () =>
-            (await namespace
-              .getByName(address.name)
-              .invoke(itxExpression, args, caller)) as unknown,
+        answer = await retryPlatformFailures(
+          async () => {
+            const call = namespace.getByName(address.name).invoke(itxExpression, args, caller);
+            // A call that threw, or that its caller gave up on, holds its session, and the context
+            // with it, until its promise is released (context/dispatch.ts
+            // `awaitAnswerReleasedIfRejected` says why).
+            const release = () => releaseRpcSessions([call]);
+            givenUp?.addEventListener("abort", release, { once: true });
+            try {
+              // The stub's `invoke` is typed as workerd's RPC wrapper over the DO method; the call
+              // denotes whatever expression the caller spelled, so `unknown` is the honest contract.
+              return (await call) as unknown;
+            } catch (error) {
+              release();
+              throw error;
+            } finally {
+              givenUp?.removeEventListener("abort", release);
+            }
+          },
           {
             area,
             schedule: ONCE_NOW,
@@ -45,12 +73,44 @@ export function contextStub(
               projectId: address.projectId,
               path: address.path,
             }),
+            signal: givenUp,
           },
         );
       } catch (error) {
         throw unavailable(error);
       }
+      const requested = ScriptRunRequested.safeParse(answer);
+      if (!requested.success) return answer;
+      releaseRpcSessions([answer]); // parsed into a copy of its own
+      return settlementOfScriptRun(
+        requested.data,
+        waitForEventOnContext(namespace, address.projectId),
+      );
     },
+  };
+}
+
+/** `settlementOfScriptRun`'s reads: one `waitForEvent` on a fresh stub of the context at `path` in
+ *  `projectId`, spelled at the fixed point with no principal — the platform's own read of its own
+ *  record, whoever asked for the run — its lines named `itx-run.…`. */
+export function waitForEventOnContext(namespace: IterateContextNamespace, projectId: string) {
+  return async (
+    path: string,
+    filter: WaitForEventFilter,
+    givenUp: AbortSignal,
+  ): Promise<StreamEvent> => {
+    const found = await contextStub(
+      namespace,
+      DurableObjectNameCodec.address({ projectId, path }),
+      "itx-run",
+    ).invoke(["itx", "builtins", ["waitForEvent", filter]], [], { principal: null }, givenUp);
+    try {
+      // The context's own `waitForEvent` answers the event it found: copied out, and the RPC
+      // result, which holds the context until released, released.
+      return structuredClone(found) as StreamEvent;
+    } finally {
+      releaseRpcSessions([found]);
+    }
   };
 }
 

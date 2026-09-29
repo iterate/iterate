@@ -52,12 +52,12 @@ async (itx) => ({
 
 Then go to the first line that fits:
 
-- **The service is Slack, Google (Gmail, Calendar, Drive; not the Gemini API), Cloudflare or GitHub
-  (as a GitHub App installation).** These are built in. Get the link that opens its Connect sheet,
+- **The service is Slack, Google (Gmail, Calendar, Drive; not the Gemini API), Cloudflare, X or
+  GitHub (as a GitHub App installation).** These are built in. Get the link that opens its Connect sheet,
   with the provider's name in lower case:
 
   ```js
-  async (itx) => itx.integrations.requestFromUser("<slack|google|cloudflare|github>");
+  async (itx) => itx.integrations.requestFromUser("<slack|google|cloudflare|github|x>");
   ```
 
   Send its `url`, then end your turn:
@@ -71,14 +71,14 @@ Then go to the first line that fits:
   When they reply "done", run step 1 again: the connection is a new secret,
   `/secrets/<provider>-<connection>`. Prove it with step 4C, sending
   `authorization: 'Bearer getSecret("/secrets/<provider>-<connection>", { field: "accessToken" })'`
-  to a read-only endpoint from the provider's API docs. Then go to step 6.
+  to a read-only endpoint from the provider's API docs. Then go to step 6. For X that is
+  `GET https://api.x.com/2/users/me` (its bookmarks, mentions and posts are under
+  `/2/users/<id>/…`); a token only does what the scopes it was granted allow, and the Connect
+  sheet's default is read-only. Anything that posts or reads bookmarks or DMs needs
+  `requestFromUser("x", { scopes: ["tweet.write"] })` (or `bookmark.read`, `dm.read`).
 
   If the person wants their own OAuth app instead (for example a GitHub OAuth App that acts as
   them), carry on at step 2.
-
-- **The service is Waitrose.** It's built in too: send
-  https://dash.iterate.com/projects/<projectSlug>/integrations and ask them to press **Connect**
-  next to Waitrose. `projectSlug` is in what step 1 returned. Don't make up another link.
 
 - **A secret for the service is already listed:** go to step 5.
 - **Otherwise:** go to step 2.

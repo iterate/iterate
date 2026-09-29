@@ -27,7 +27,8 @@
 // `APP_CONFIG_LOGIN__PASSWORD`, `APP_CONFIG_SECRETS__KEY` — the parser merges it on top of the object
 // (that is how a deployment's `urls` come from envs.ts while its secrets come from the one blob, and
 // how `secrets.key` stands alone as its own Worker secret so it can rotate with `previousKey` beside
-// it). A blank var is unset. A key the schema does not name is warned about loudly at boot and
+// it). A deploy ships every `APP_CONFIG*` var of its Doppler config (scripts/lib/deploy-helpers.ts
+// `appConfigSecretsOf`), so a new key is set in Doppler alone. A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept. The mechanism is shared with the apps on top
 // (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
 
@@ -104,6 +105,24 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "assistant:write",
   "conversations.connect:write",
 ] as const;
+
+/** What a Connect X asks for unless told otherwise: read and post, bookmarks, likes, follows, lists
+ *  and DMs, so an agent can use the account without a second consent. X grants only what the app's
+ *  own permissions allow; the granted set is what the connection records. */
+export const DEFAULT_X_SCOPES = [
+  "tweet.read",
+  "users.read",
+  "offline.access",
+  "tweet.write",
+  "media.write",
+  "bookmark.read",
+  "bookmark.write",
+  "like.read",
+  "follows.read",
+  "list.read",
+  "dm.read",
+  "dm.write",
+];
 
 /** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
  *  client's consent screen is verified for. */
@@ -289,6 +308,14 @@ export const AppConfig = z.object({
    *  project can connect through the platform's app there. */
   integrations: z
     .object({
+      x: z
+        .object({
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default(DEFAULT_X_SCOPES),
+          xOrigin: httpOrigin.optional(),
+        })
+        .optional(),
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
        *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). */

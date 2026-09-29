@@ -99,17 +99,35 @@ test.for<{ name: string; previous: PreviewMember[]; deleted: boolean }>(
       worker("pr7-2222222-dash", 0.4),
       ...previous,
     ]);
-    const superseded = planSupersededCleanup(deployments, "pr7-2222222", NOW).map(
+    const superseded = planSupersededCleanup(deployments, "pr7-2222222", new Set(), NOW).map(
       ({ name }) => name,
     );
     expect(superseded).toEqual(deleted ? ["pr7-1111111"] : []);
   },
 );
 
+// Main OS e2e runs every main commit, and runs overlap: the cleanup of a newer commit's run must not
+// take the deployment an older commit's run is still testing. The next cleanup takes it.
+test("a deployment a run still in progress tests is never superseded, and goes once that run has ended", () => {
+  const deployments = group([
+    worker("main-1111111-os", 0.2),
+    worker("main-0000000-os", 1),
+    worker("main-2222222-os", 0.1),
+  ]);
+  // an hour on, past the grace a PR run reusing a main deployment gets
+  const superseded = (underTest: string[]) =>
+    planSupersededCleanup(deployments, "main-2222222", new Set(underTest), NOW + 3_600_000).map(
+      ({ name }) => name,
+    );
+
+  expect(superseded(["main-1111111", "main-2222222"])).toEqual(["main-0000000"]);
+  expect(superseded(["main-2222222"])).toEqual(["main-1111111", "main-0000000"]);
+});
+
 test("a deployment the listing does not show yet supersedes nothing", () => {
-  expect(planSupersededCleanup(group([worker("pr7-1111111-os", 2)]), "pr7-2222222", NOW)).toEqual(
-    [],
-  );
+  expect(
+    planSupersededCleanup(group([worker("pr7-1111111-os", 2)]), "pr7-2222222", new Set(), NOW),
+  ).toEqual([]);
 });
 
 test.for([
@@ -125,7 +143,7 @@ test.for([
     worker("main-2222222-os", newerHoursAgo),
     worker("main-3333333-os", 0.1),
   ]);
-  const superseded = planSupersededCleanup(deployments, "main-3333333", NOW);
+  const superseded = planSupersededCleanup(deployments, "main-3333333", new Set(), NOW);
   expect(superseded.map(({ name }) => name)).toEqual(deleted ? ["main-1111111"] : []);
 });
 

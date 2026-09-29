@@ -65,12 +65,12 @@ test.for<{ suite: "e2e" | "specs"; inputs: string[]; args?: string[] }>(
     { suite: "e2e", inputs: ["apps/os/e2e/support/client.ts"] },
     { suite: "e2e", inputs: ["apps/os/e2e/fetch.e2e.test.ts", "packages/cli/src/index.ts"] },
     { suite: "e2e", inputs: ["apps/os/src/worker.ts"] },
-    { suite: "specs", inputs: ["specs/dash/projects.spec.ts"], args: ["specs/dash/projects.spec.ts", "--project", "dash"] },
+    { suite: "specs", inputs: ["specs/dash/projects.spec.ts"], args: ["specs/dash/projects.spec.ts", "--project", "dash", "--project", "dash-phone"] },
     { suite: "specs", inputs: ["specs/os/auth.spec.ts"], args: ["specs/os/auth.spec.ts", "--project", "os", "--project", "os-phone"] },
     { suite: "specs", inputs: ["specs/test-support/screenshot.spec.ts"], args: ["specs/test-support/screenshot.spec.ts", "--project", "suite"] },
     { suite: "specs", inputs: ["apps/notes/src/editor.tsx"], args: ["specs/notes/", "--project", "notes"] },
-    { suite: "specs", inputs: ["apps/voice/src/a.tsx", "specs/dash/x.spec.ts"], args: ["specs/voice/", "specs/dash/x.spec.ts", "--project", "voice", "--project", "dash"] },
-    { suite: "specs", inputs: ["apps/dash/src/sidebar.tsx"], args: ["specs/dash/", "specs/notes/", "specs/voice/", "specs/admin/", "--project", "dash", "--project", "notes", "--project", "voice", "--project", "admin"] },
+    { suite: "specs", inputs: ["apps/voice/src/a.tsx", "specs/dash/x.spec.ts"], args: ["specs/voice/", "specs/dash/x.spec.ts", "--project", "voice", "--project", "voice-phone", "--project", "dash", "--project", "dash-phone"] },
+    { suite: "specs", inputs: ["apps/dash/src/sidebar.tsx"], args: ["specs/dash/", "specs/notes/", "specs/agents/", "specs/voice/", "specs/admin/", "--project", "dash", "--project", "dash-phone", "--project", "notes", "--project", "agents", "--project", "agents-phone", "--project", "voice", "--project", "voice-phone", "--project", "admin"] },
     { suite: "specs", inputs: ["apps/os/src/worker.ts"] },
     { suite: "specs", inputs: ["apps/kit/src/server.ts"] },
     { suite: "specs", inputs: ["packages/ui/src/button.tsx"] },
@@ -79,6 +79,32 @@ test.for<{ suite: "e2e" | "specs"; inputs: string[]; args?: string[] }>(
   ],
 )("$suite, changed $inputs ⇒ runs $args", ({ suite, inputs, args }) => {
   expect(suiteSelection(suite, inputs)?.args).toEqual(args);
+});
+
+// A selection never runs a changed spec in fewer projects than the whole suite runs it in: the
+// projects Playwright lists for each spec file against the `--project`s its selection names.
+test("a changed spec file reruns in every Playwright project that runs it", () => {
+  const listed = JSON.parse(
+    execFileSync(
+      resolve(repoRoot, "node_modules/.bin/playwright"),
+      ["test", "--config", "playwright.config.ts", "--list", "--reporter=json"],
+      { cwd: repoRoot, env: { ...process.env, CI: "1", SPECS_SHARD: "" }, encoding: "utf8" },
+    ),
+  );
+  const projects = (suite: any): string[] => [
+    ...(suite.specs || []).flatMap((spec: any) => spec.tests.map((test: any) => test.projectName)),
+    ...(suite.suites || []).flatMap(projects),
+  ];
+  const missed = listed.suites.flatMap((suite: any) => {
+    const file = `specs/${suite.file}`;
+    const args = suiteSelection("specs", [file])?.args || [];
+    const selected = args.filter((_, index) => args[index - 1] === "--project");
+    return [...new Set(projects(suite))]
+      .filter((project) => !selected.includes(project))
+      .map((project) => `${file} runs in ${project}`);
+  });
+  expect(listed.suites.length).toBeGreaterThan(0);
+  expect(missed).toEqual([]);
 });
 
 test("a unit's product is what deploys it to prd: its deploy workflow's push paths", () => {

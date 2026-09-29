@@ -33,7 +33,6 @@ import {
   type FinishConnectAnswer,
   type FinishConnectInput,
 } from "../integrations/verbs.ts";
-import { connectWaitrose } from "../integrations/waitrose-connection.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
 import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
@@ -61,7 +60,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     "repos",
     "workspaces",
     "confirmIntegrationMove",
-    "connectWaitrose",
     "acceptGithubCallback",
   ];
 
@@ -130,7 +128,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
-      // back to the project's Hostnames page in the dash — addressed by the project's slug, as the
+      // back to the project's Domains page in the dash — addressed by the project's slug, as the
       // dash's routes are — which re-checks the hostname it names
       connect: async (hostname) => {
         const slug = (await controlPlane.getProject(projectId))?.slug;
@@ -138,7 +136,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
           ? domainConnectLinkOf(hostname, {
               project: projectId,
               privateKey: config.domainConnect.privateKey.exposeSecret(),
-              redirectUri: `${config.urls.dash}/projects/${slug}/hostnames?connected=${encodeURIComponent(hostname)}`,
+              redirectUri: `${config.urls.dash}/projects/${slug}/domains?connected=${encodeURIComponent(hostname)}`,
             })
           : null;
       },
@@ -235,14 +233,6 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
         ...input,
         connection: assertConnectionName(input?.connection),
       }),
-    );
-  }
-
-  /** WAITROSE (integrations/waitrose-connection.ts): the username and password are already in
-   *  `/secrets/waitrose-<connection>`; record the connection, `waitrose/connected` on `/`. */
-  connectWaitrose(input: { connection: string; account: string }): Promise<void> {
-    return this.#onConnection("waitrose", input?.connection, () =>
-      connectWaitrose(this.#integrationScope(), input),
     );
   }
 

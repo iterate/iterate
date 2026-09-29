@@ -30,6 +30,7 @@ import {
   substituteProjectSecrets,
   substituteSecretInFrame,
   verifyLendUse,
+  verifySecretEquals,
   verifySecretHmac,
 } from "./secrets.ts";
 
@@ -336,6 +337,50 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async
 });
 
 test.for([
+  {
+    name: "the same string",
+    material: "pebble-token",
+    input: { value: "pebble-token" },
+    equal: true,
+  },
+  {
+    name: "a different string",
+    material: "pebble-token",
+    input: { value: "pebble-tokeX" },
+    equal: false,
+  },
+  { name: "a prefix of it", material: "pebble-token", input: { value: "pebble" }, equal: false },
+  { name: "an empty candidate", material: "pebble-token", input: { value: "" }, equal: false },
+  { name: "an empty secret, empty candidate", material: "", input: { value: "" }, equal: false },
+  {
+    name: "a field of an object material",
+    material: { bearer: "pebble-token", other: "x" },
+    input: { value: "pebble-token", field: "bearer" },
+    equal: true,
+  },
+  {
+    name: "another field's value",
+    material: { bearer: "pebble-token", other: "x" },
+    input: { value: "x", field: "bearer" },
+    equal: false,
+  },
+  {
+    name: "an object with no field",
+    material: { bearer: "t" },
+    input: { value: "t" },
+    equal: false,
+  },
+  {
+    name: "an object's non-string field",
+    material: { bearer: 1 },
+    input: { value: "1", field: "bearer" },
+    equal: false,
+  },
+])("verifySecretEquals: $name → $equal", async ({ material, input, equal }) => {
+  expect(await verifySecretEquals(material as SecretMaterial, input)).toBe(equal);
+});
+
+test.for([
   { name: "the whole string", material: "whsec_k", field: undefined, key: "whsec_k" },
   {
     name: "an object with no field is no key",
@@ -505,17 +550,6 @@ test("normalizeSecretRecord: the pin is required and stored as origins (deduped)
   );
   expect(
     normalizeSecretRecord(
-      { username: "u", password: "p" },
-      {
-        urls: ["https://www.waitrose.com"],
-        refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" },
-      },
-    ),
-  ).toMatchObject({
-    refresh: { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" },
-  });
-  expect(
-    normalizeSecretRecord(
       { clientId: "c", clientSecret: "s", refreshToken: "r" },
       {
         urls: ["https://github.com"],
@@ -538,7 +572,7 @@ test("normalizeSecretRecord: the pin is required and stored as origins (deduped)
       urls: ["https://x.example"],
       refresh: { kind: "magic", tokenEndpoint: "https://x.example" },
     }),
-  ).toThrow(/refresh\.kind is one of oauth-refresh-token, waitrose-session/);
+  ).toThrow(/refresh\.kind is one of oauth-refresh-token, github-app-installation, worker/);
   expect(() =>
     normalizeSecretRecord("v", {
       urls: ["https://api.example.com"],
@@ -616,67 +650,6 @@ test("oauth-refresh-token: a public client sends client_id in the body; a refusa
       refused.fetchFn,
     ),
   ).rejects.toThrow(/no "refreshToken"/);
-});
-
-test("waitrose-session: the NewSession login mints the accessToken; a failures[] answer and a 401 throw naming the fix, never the password", async () => {
-  const ok = scripted(() =>
-    Response.json({
-      data: {
-        generateSession: {
-          __typename: "SetSessionPayload",
-          accessToken: "SESSION",
-          failures: null,
-        },
-      },
-    }),
-  );
-  const next = await refreshSecretMaterial(
-    { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" },
-    { username: "mum@example.com", password: "hunter2" },
-    ok.fetchFn,
-  );
-  expect(next).toEqual({
-    username: "mum@example.com",
-    password: "hunter2",
-    accessToken: "SESSION",
-  });
-  const sent = JSON.parse(ok.exchanges[0]!.body);
-  expect(sent.query).toMatch(/^mutation NewSession/);
-  expect(sent).toMatchObject({
-    variables: {
-      input: { clientId: "ANDROID_APP", password: "hunter2", username: "mum@example.com" },
-    },
-  });
-  expect(ok.exchanges[0]!.headers["user-agent"]).toMatch(/Waitrose/);
-
-  const wrong = scripted(() =>
-    Response.json({
-      data: {
-        generateSession: {
-          accessToken: null,
-          failures: [{ type: "AUTHENTICATION_FAILED", message: "incorrect username or password" }],
-        },
-      },
-    }),
-  );
-  const failure = await refreshSecretMaterial(
-    { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" },
-    { username: "u", password: "hunter2" },
-    wrong.fetchFn,
-  ).then(
-    () => "minted",
-    (error: Error) => error.message,
-  );
-  expect(failure).toBe("waitrose-session: login refused (AUTHENTICATION_FAILED)");
-  expect(failure).not.toContain("hunter2");
-  const unauthorized = scripted(() => new Response("", { status: 401 }));
-  await expect(
-    refreshSecretMaterial(
-      { kind: "waitrose-session", graphqlUrl: "https://www.waitrose.com/api/graphql" },
-      { username: "u", password: "p" },
-      unauthorized.fetchFn,
-    ),
-  ).rejects.toThrow(/HTTP 401.*username\/password/);
 });
 
 // ── the OAuth first-token flow (secret-oauth.ts) ──
@@ -1068,7 +1041,8 @@ test.for([
         client: { platform: "linear" },
       },
     },
-    refused: /refresh\.client is \{ platform: "slack" \| "google" \| "cloudflare" \| "github" \}/,
+    refused:
+      /refresh\.client is \{ platform: "slack" \| "google" \| "cloudflare" \| "github" \| "x" \}/,
   },
   {
     row: "an installation of iterate's GitHub App",
