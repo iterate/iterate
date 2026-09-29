@@ -234,9 +234,8 @@ export async function run(options: {
   ];
   await postThenKeep({ updates, testRun, dryRun, keep, stateOut: options.stateOut, next });
   const events = [...(ttg?.events || []), ...(latency?.events || [])];
-  if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
-  // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
-  else {
+  if (keep) {
+    // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
     await sendPostHogEvents(events, {
       apiKey: z.string().parse(osEnvs.prd?.posthogProjectKey),
       host: "https://eu.i.posthog.com",
@@ -244,7 +243,7 @@ export async function run(options: {
     console.log(
       `[health] sent ${events.length} PostHog events; the next run checks the latency ones`,
     );
-  }
+  } else console.log(`[health] ${events.length} PostHog events not sent`);
   if (failures.length > 0) throw new Error(`health: ${failures.join("; ")}`);
 }
 
