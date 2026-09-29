@@ -4,8 +4,17 @@
 // the pin upgrades every doc on its next call. The Docs app then calls `ensureDoc` from the browser
 // as a doc opens. Nothing here is the runtime.
 import type { FacetSpec, IterateContextApi } from "iterate/api";
-import { DocContract } from "./contract.ts";
-import { DOC_OPENED, docContextPath, type DocRef } from "./frames.ts";
+// the page imports this: frames.ts and comments.ts only, never contract.ts, whose
+// iterate/stream/processor needs node:async_hooks
+import { commentEvents } from "./comments.ts";
+import {
+  COMMIT_NOTICED,
+  DOC_LEFT,
+  DOC_OPENED,
+  docContextPath,
+  EDIT_FRAME,
+  type DocRef,
+} from "./frames.ts";
 
 /** The config module that exports the processors' classes. */
 export const docsModule = {
@@ -40,7 +49,8 @@ export async function ensureDoc(
   const context = project.cd(contextPath);
   await context.processors.enable("doc", {
     ...docsFacetSpec("DocDurableObject"),
-    consumes: [...DocContract.consumes],
+    // DocContract's consumes
+    consumes: [EDIT_FRAME, COMMIT_NOTICED, DOC_LEFT, ...commentEvents],
   });
   return context;
 }
