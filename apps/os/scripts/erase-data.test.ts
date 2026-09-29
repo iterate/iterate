@@ -163,10 +163,10 @@ function eraseFixture() {
     }),
     services: {
       resolveEnvContext: vi.fn(async () => ({
-        name: "preview",
         secrets: { CLOUDFLARE_API_TOKEN: "test-token" },
         cf: fixture.cf,
         env: {
+          name: "preview",
           workerName: "os-example",
           cloudflareAccountId: "test-account",
           resourceNamePrefix: "os-example",

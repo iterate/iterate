@@ -21,6 +21,7 @@ import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
+  getEnv,
   kitEnvs,
   notesEnvs,
   osEnvs,
@@ -29,7 +30,7 @@ import {
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
-import { resolveEnvContext, type DeployableEnv } from "./env-context.ts";
+import { resolveEnvContext } from "./env-context.ts";
 import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** The commit an app is built from, as vite.config.ts defines it for the client
@@ -42,8 +43,11 @@ export function sourceCommit(): string {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
-/** One deployed environment of a start app: what every deploy needs, plus the worker and its origin. */
-export interface StartAppEnv extends DeployableEnv {
+/** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
+ *  project named for the app), the worker and its origin. */
+export interface StartAppEnv {
+  cloudflareAccountId: string;
+  dopplerConfig: string;
   workerName: string;
   baseUrl: string;
   /** PostHog's project key (envs.ts `ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
@@ -210,25 +214,17 @@ function workerFirstRoutes(app: StartApp) {
 }
 
 async function deploy(app: StartApp, options: { env: string }) {
-  await deployApp({
+  await deployApp(getEnv(options.env, app.envs), {
+    dopplerProject: app.name,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
-    envs: app.envs,
-    dopplerProject: app.name,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
-    smokes: (env) => [
-      { url: `${env.baseUrl}/healthz`, ok: (response) => response.status === 200, label: "health" },
-    ],
+    smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
   });
 }
 
 async function ensureResources(app: StartApp, options: { env: string }) {
-  const ctx = await resolveEnvContext({
-    envs: app.envs,
+  const ctx = await resolveEnvContext(getEnv(options.env, app.envs), {
     dopplerProject: app.name,
-    env: options.env,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,

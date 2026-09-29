@@ -6,15 +6,13 @@
 import { createSign } from "node:crypto";
 import { z } from "zod";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
-import { OS_DOPPLER_PROJECT, osEnvs } from "../../envs.ts";
+import { getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
 
 /** The iterate App's id and private key, from prd's configuration. */
 export async function iterateAppFromPrd() {
-  const prd = await resolveEnvContext({
-    envs: osEnvs,
+  const prd = await resolveEnvContext(getEnv("prd", osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
-    env: "prd",
   });
   const app = parseAppConfig({
     APP_CONFIG: prd.secrets.APP_CONFIG,

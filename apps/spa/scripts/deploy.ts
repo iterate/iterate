@@ -1,25 +1,27 @@
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, spaEnvs } from "../../../envs.ts";
+import { z } from "zod";
+import { OS_DOPPLER_PROJECT, getEnv, spaEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
 import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 const assets = new URL("../dist/assets/", import.meta.url);
+/** The packaged extension's version, which scripts/build.ts names the download after. */
+const extensionManifest = new URL("../../browser-extension/public/manifest.json", import.meta.url);
 
 /** scripts/build.ts (static files + the packaged extension), an assets-only Worker's config beside
  *  them, deployed (scripts/lib/deploy-app.ts); then the deployed oauth.js, client logo and extension
  *  bundle match this checkout. */
 export default async function deploy(options: { env: string }) {
-  await deployApp({
+  const { version } = z
+    .object({ version: z.string() })
+    .parse(JSON.parse(readFileSync(extensionManifest, "utf8")));
+  await deployApp(getEnv(options.env, spaEnvs), {
+    dopplerProject: OS_DOPPLER_PROJECT,
     appRoot: fileURLToPath(new URL("..", import.meta.url)),
     appLabel: "apps/spa",
-    envs: spaEnvs,
-    dopplerProject: OS_DOPPLER_PROJECT,
-    env: options.env,
-    workerName: (env) => env.workerName,
-    servingUrl: (env) => env.baseUrl,
     async build(ctx) {
       await import("./build.ts");
       writeFileSync(
@@ -34,19 +36,17 @@ export default async function deploy(options: { env: string }) {
       );
     },
     // A status alone could be the single-page fallback's: each file's bytes are the build's.
-    smokes: (env) => {
-      const bundle = readdirSync(new URL("downloads/", assets)).find((name) =>
-        name.endsWith(".zip"),
-      );
-      if (!bundle) throw new Error("No packaged extension found");
-      return ["oauth.js", "client-logo.svg", `downloads/${bundle}`].map((path) => ({
-        url: new URL(path, env.baseUrl).href,
-        ok: async (response: Response) =>
-          response.ok &&
-          readFileSync(new URL(path, assets)).equals(Buffer.from(await response.arrayBuffer())),
-        label: `deployed ${path} matches this checkout`,
-      }));
-    },
+    smokes: [
+      "/oauth.js",
+      "/client-logo.svg",
+      `/downloads/iterate-chrome-extension-${version}.zip`,
+    ].map((path) => ({
+      url: path,
+      ok: async (response) =>
+        response.ok &&
+        readFileSync(new URL(`.${path}`, assets)).equals(Buffer.from(await response.arrayBuffer())),
+      label: `deployed ${path} matches this checkout`,
+    })),
   });
 }
 

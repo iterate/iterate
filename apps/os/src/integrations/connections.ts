@@ -55,8 +55,9 @@ export type ConnectionAttempt = {
 /** The providers whose accounts iterate's app routes to one connection each (control-plane/catalog.ts
  *  `integration_routes`): the ones an account is moved between projects of. `as const` keeps the
  *  two literals, which `RoutedProvider` and the offer's `z.enum` are read off; `satisfies` checks
- *  each is a provider. */
-export const ROUTED_PROVIDERS = ["slack", "github"] as const satisfies IntegrationProvider[];
+ *  each is a provider. X is routed but never moved: a second connection of its account is refused
+ *  (integrations/x.ts). */
+export const ROUTED_PROVIDERS = ["slack", "github", "x"] as const satisfies IntegrationProvider[];
 export type RoutedProvider = (typeof ROUTED_PROVIDERS)[number];
 
 /** THE MOVE OF AN ACCOUNT ANOTHER PROJECT HOLDS (verbs.ts `confirmIntegrationMove`): the human

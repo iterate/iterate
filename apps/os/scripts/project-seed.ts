@@ -9,7 +9,7 @@ import { z } from "zod";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { ItxExpression } from "iterate/expression";
 import { connectIterate } from "iterate/node";
-import { OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { atRestKeysOf, parseAppConfig } from "../src/app-config.ts";
 import {
@@ -27,10 +27,8 @@ import {
 } from "./project-seed-format.ts";
 
 async function target(env: string) {
-  const context = await resolveEnvContext({
-    envs: osEnvs,
+  const context = await resolveEnvContext(getEnv(env, osEnvs), {
     dopplerProject: OS_DOPPLER_PROJECT,
-    env,
   });
   // Match deploy.ts: only these two secrets are shipped.
   const config = parseAppConfig({

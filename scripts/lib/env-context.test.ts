@@ -118,6 +118,23 @@ test.for([
     answers: [Response.json({ success: false, errors: [{ code: 10200 }] }, { status: 404 })],
     outcome: { error: 'Cloudflare API DELETE /d1/query failed (404): [{"code":10200}]' },
   },
+  {
+    // R2's NoSuchKey for an object delete (apps/os/scripts/preview-delete.ts `GONE`)
+    name: "a 200 whose envelope says `success: false` is the caller's CloudflareApiError, sent once",
+    method: "DELETE",
+    answers: [Response.json({ success: false, errors: [{ code: 10007 }] }, { status: 200 })],
+    outcome: { error: 'Cloudflare API DELETE /d1/query failed (200): [{"code":10007}]' },
+  },
+  {
+    // the loser of two racing R2 bucket deletes (apps/os/scripts/preview-delete.ts `deleteR2Bucket`)
+    name: "a DELETE answered 500/10001 is sent again, and the retry's not-found is the caller's",
+    method: "DELETE",
+    answers: [
+      Response.json({ success: false, errors: [{ code: 10001 }] }, { status: 500 }),
+      Response.json({ success: false, errors: [{ code: 10006 }] }, { status: 404 }),
+    ],
+    outcome: { error: 'Cloudflare API DELETE /d1/query failed (404): [{"code":10006}]' },
+  },
 ])("cloudflareApi: $name", async ({ method, answers, outcome }) => {
   vi.useFakeTimers();
   onTestFinished(() => void vi.useRealTimers());
