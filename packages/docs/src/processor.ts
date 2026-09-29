@@ -36,8 +36,8 @@ import { mergeText, textEdits } from "./merge.ts";
 
 type DocDeps = {
   sql: SqlStorage;
-  /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc), from which
-   *  `itx.repos.get` reaches the doc's repo. */
+  /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc). The repos
+   *  are the root's (`itx.cd("/").repos`), which loaded code reaches from anywhere in its project. */
   withItx: WithItx;
   /** Re-project the live state after a change outside a batch (the host's `publishLiveState`). */
   publishLiveState: () => void;
@@ -188,7 +188,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
       this.#savedBy = JSON.parse(meta.savedBy || "[]");
     } else {
       const { tip, text } = await this.#deps.withItx(async (itx) => {
-        const repo = itx.repos.get(this.#ref.repo);
+        const repo = itx.cd("/").repos.get(this.#ref.repo);
         const tip = await repo.tip();
         return { tip, text: tip ? await repo.readFile(this.#ref.path, { commitOid: tip }) : null };
       });
@@ -254,17 +254,20 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
     const { repo, path } = this.#ref;
     try {
       const result = await this.#deps.withItx((itx) =>
-        itx.repos.get(repo).commitFiles({
-          // git's trailers, after a blank line: everyone but the author
-          message: [
-            `docs: edit ${path}`,
-            ...(editors.length > 1 ? [""] : []),
-            ...editors.slice(1).map((editor) => `Co-authored-by: ${editor} <${editor}>`),
-          ].join("\n"),
-          changes: [{ path, content: text }],
-          parent: this.#base.oid || null,
-          author: editors[0] ? { name: editors[0], email: editors[0] } : undefined,
-        }),
+        itx
+          .cd("/")
+          .repos.get(repo)
+          .commitFiles({
+            // git's trailers, after a blank line: everyone but the author
+            message: [
+              `docs: edit ${path}`,
+              ...(editors.length > 1 ? [""] : []),
+              ...editors.slice(1).map((editor) => `Co-authored-by: ${editor} <${editor}>`),
+            ].join("\n"),
+            changes: [{ path, content: text }],
+            parent: this.#base.oid || null,
+            author: editors[0] ? { name: editors[0], email: editors[0] } : undefined,
+          }),
       );
       this.#base = { oid: result.commitOid || this.#base.oid, text };
       this.#savedBy = editors;
@@ -290,7 +293,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
   async #catchUp(): Promise<boolean> {
     const { path } = this.#ref;
     const { tip, theirs } = await this.#deps.withItx(async (itx) => {
-      const repo = itx.repos.get(this.#ref.repo);
+      const repo = itx.cd("/").repos.get(this.#ref.repo);
       const tip = await repo.tip();
       return {
         tip,

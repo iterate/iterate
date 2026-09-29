@@ -166,7 +166,11 @@ function openDoc(
         Promise.resolve(
           call({
             whoami: () => ({ path: "/docs/config/plan.md" }),
-            repos: { get: () => repo },
+            // the repos are the root's, as on the platform
+            cd: (path: string) => {
+              if (path !== "/") throw new Error(`only the root has repos, not ${path}`);
+              return { repos: { get: () => repo } };
+            },
             append: log.stream.append,
           } as any),
         ),
