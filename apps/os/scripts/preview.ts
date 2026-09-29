@@ -22,6 +22,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { connectIterate } from "iterate/node";
+import type { IngressRouting } from "iterate/project-ingress";
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
@@ -79,9 +80,12 @@ import {
   previewDeploymentName,
   previewDeploymentUrls,
   previewPullRequestNumber,
+  proxiedAppRoute,
+  PROXIED_APPS,
   renderPullRequestSection,
   PREVIEW_SECTION,
   resolvePreviewPrefix,
+  signInLinkOf,
   templateQuickLaunches,
   writePullRequestBody,
   type PullRequestBody,
@@ -575,7 +579,13 @@ async function deployPreviewSteps(
   );
   console.log(`\ndeployment ${name}: ${url}`);
   const signIn = prNumber
-    ? signInLinks({ url, prNumber, apps: deployedApps, changedPaths: await changed })
+    ? signInLinks({
+        url,
+        ingressRouting: osEnv(name)!.ingressRouting || null,
+        prNumber,
+        apps: deployedApps,
+        changedPaths: await changed,
+      })
     : undefined;
   const publish = async (seeded: boolean) => {
     mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -608,7 +618,11 @@ async function deployPreviewSteps(
   };
   // The seed and the section side by side: a seed that failed rewrites the section to say so.
   const [seeded] = await Promise.all([
-    signIn ? traceOperation("Seed sign-in", () => seedSignIn(config, { url, ...signIn })) : true,
+    signIn
+      ? traceOperation("Seed sign-in", () =>
+          seedSignIn(config, { url, ...signIn, admins: osEnv(name)!.admins || [] }),
+        )
+      : true,
     publish(true),
   ]);
   if (!seeded) await publish(false);
@@ -637,17 +651,19 @@ async function changedPaths(prNumber: string | undefined) {
     .filter(Boolean);
 }
 
-/** THE SIGN-IN a PR's body links (preview-config.ts `appSignInLink`): the heading's link, one per
+/** THE SIGN-IN a PR's body links (preview-config.ts `signInLinkOf`): the heading's link, one per
  *  app, and with the Dash one per config template into its New project sheet (preview-config.ts
  *  `templateQuickLaunches`), each the app's own sign-in naming the PR's test person
  *  `pr<N>@preview.iterate.test`, whose project `pr<N>` seedSignIn creates. The link is public and
  *  grants nothing: a reviewer signs in to the deployment as themselves, one of prd's admins
  *  (src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
  *  which the link pre-fills (src/consent.ts). The admin app's names nobody: an admin opens it as
- *  themselves. The heading's lands in the Dash's `/projects/pr<N>` when the Dash was deployed,
- *  else on the issuer's own sign-in page. */
+ *  themselves, and so does a proxied app's (Notes, Docs), which is the app's page in `pr<N>`, whose
+ *  organization seedSignIn makes the admins members of. The heading's lands in the Dash's
+ *  `/projects/pr<N>` when the Dash was deployed, else on the issuer's own sign-in page. */
 function signInLinks(preview: {
   url: string;
+  ingressRouting: IngressRouting;
   prNumber: string;
   apps: { name: string; url: string }[];
   changedPaths: string[];
@@ -655,10 +671,13 @@ function signInLinks(preview: {
   const project = `pr${preview.prNumber}`;
   const email = `${project}@${TEST_EMAIL_DOMAIN}`;
   const link = (app: { name: string; url: string }) =>
-    appSignInLink(
-      app.name === "dash" ? `${app.url}/projects/${project}` : app.url,
-      app.name === "admin" ? undefined : email,
-    );
+    signInLinkOf({
+      app,
+      platform: preview.url,
+      ingressRouting: preview.ingressRouting,
+      project,
+      email,
+    });
   const dash = preview.apps.find((app) => app.name === "dash");
   return {
     heading: dash ? link(dash) : `${preview.url}/login`,
@@ -678,28 +697,52 @@ function signInLinks(preview: {
       : [],
     email,
     project,
+    // the proxied apps this deployment has, which the project serves (seedSignIn)
+    proxiedApps: preview.apps.filter((app) => PROXIED_APPS.has(app.name)),
   };
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
  *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
- *  lands inside it. It never fails the deploy: it logs, and the section says when it failed. */
+ *  lands inside it. Then what a proxied app's link needs: a fetch route per proxied app to the
+ *  deployment's own Worker (preview-config.ts `proxiedAppRoute`), and the deployment's `admins`
+ *  members of the project's organization, so a reviewer signed in as themselves opens it. Each admin
+ *  is found or created by email, the row their first sign-in finds. It never fails the deploy: it
+ *  logs, and the section says when it failed. */
 async function seedSignIn(
   config: AppConfig,
-  preview: { url: string; email: string; project: string },
+  preview: {
+    url: string;
+    email: string;
+    project: string;
+    proxiedApps: { name: string; url: string }[];
+    admins: string[];
+  },
 ) {
   const { email, project } = preview;
+  const secret = config.secrets.adminBearer.exposeSecret();
   try {
     using connection = await connectIterate({
       baseUrl: preview.url,
-      auth: {
-        type: "admin-secret",
-        secret: config.secrets.adminBearer.exposeSecret(),
-        as: { email },
-      },
+      auth: { type: "admin-secret", secret, as: { email } },
     });
-    await connection.session.projects.create({ project });
-    console.log(`sign-in: seeded ${email} with project ${project}`);
+    using created = await connection.session.projects.create({ project });
+    for (const app of preview.proxiedApps)
+      await created.fetchRoutes.set(app.name, proxiedAppRoute(app.name, app.url));
+    const { orgId } = (await connection.session.projects.list()).find(
+      (record) => record.slug === project,
+    )!;
+    using operator = await connectIterate({
+      baseUrl: preview.url,
+      auth: { type: "admin-secret", secret },
+    });
+    for (const admin of preview.admins) {
+      const user = await operator.session.users.create({ email: admin });
+      await operator.session.organizations.addMember(orgId, { userId: user.id });
+    }
+    console.log(
+      `sign-in: seeded ${email} with project ${project}, serving ${preview.proxiedApps.map((app) => app.name).join(", ") || "no proxied app"}, its members ${preview.admins.join(", ")}`,
+    );
     return true;
   } catch (error) {
     console.warn(`sign-in: seeding ${email} with project ${project} failed: ${describe(error)}`);

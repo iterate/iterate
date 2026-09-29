@@ -164,14 +164,20 @@ read secrets.
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
   `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test`
-  (`appSignInLink` in `apps/os/scripts/preview-config.ts`). CI seeds that
+  (`signInLinkOf` in `apps/os/scripts/preview-config.ts`). CI seeds that
   person and their project `pr<N>` on every deploy (`apps/os/scripts/preview.ts`
   `seedSignIn`). The PR body is public, so a link grants nothing. The app
   passes `login_hint` on to the issuer, whose consent page opens an admin's
   **Sign in as someone else…** with that person filled in, only for one of our
   own apps. One confirm signs the app in as them for an hour (see
   [Acting as users and admins](#acting-as-users-and-admins)). Anyone else gets
-  the ordinary consent page. A deployment's admins are prd's (`envs.ts`
+  the ordinary consent page. Notes and Docs have no sign-in of their own: they
+  run on the platform's, through a project. Their link is the app's page in
+  `pr<N>` (`<platform>/projects/pr<N>/<app>/projects/pr<N>`), which a
+  signed-out browser reaches through the platform's sign-in. The seed gives
+  `pr<N>` a fetch route per such app to the deployment's own Worker and makes
+  the deployment's admins members of its organization, so a reviewer opens it
+  as themselves. A deployment's admins are prd's (`envs.ts`
   `admins`) plus the specs' `admin@preview.iterate.test`, and they sign in to
   the deployment as themselves with **Continue with os.iterate.com**: prd
   confirms who they are through an OAuth grant that can only read that (prd's

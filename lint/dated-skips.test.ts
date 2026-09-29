@@ -44,6 +44,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "only a preview's admins sign in through prd",
     note: "env-gated: only a preview sets login.adminIssuer (apps/os/scripts/preview-config.ts); app-config.ts refuses it off an https workers.dev or .test origin",
   },
+  {
+    file: "specs/notes/pr-body-link.spec.ts",
+    match: "under subdomains a project's app is an origin of its own",
+    note: "env-gated: a proxied app runs on the platform's sign-in only under paths ingress (every preview's); local dev routes projects by subdomain",
+  },
   // -- Structural (fixture): the skip is the subject of the test, not a parked bug.
   {
     file: "scripts/ci/tracing/vitest.test.ts",
