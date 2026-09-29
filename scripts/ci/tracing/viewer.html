@@ -354,26 +354,31 @@
                   (b.a["ci.kind"] === "queue") - (a.a["ci.kind"] === "queue") ||
                   emitted.get(a.spanId) - emitted.get(b.spanId)
                 );
-              // a group's jobs, the Browser specs shards, by their number
-              if (s.a["ci.kind"] === "group")
-                return a.name.localeCompare(b.name, undefined, { numeric: true });
-              return a.start - b.start;
+              // a job's nested jobs, the Browser specs shards, first and by their number; the rest
+              // by their start
+              const nested = (span) => span.a["ci.kind"] === "job";
+              return (
+                nested(b) - nested(a) ||
+                (nested(a)
+                  ? a.name.localeCompare(b.name, undefined, { numeric: true })
+                  : a.start - b.start)
+              );
             }),
         ]),
       );
-      // Opened at first and by "Show steps": the workflow and each job's steps, but a group's jobs
-      // (the Browser specs shards) one row each until opened.
-      const phasesOpen = () =>
+      // Opened at first and by "Show steps": the workflow and each job's steps, but a nested job
+      // (a Browser specs shard) one row until opened.
+      const stepsOpen = () =>
         new Set(
           spans
             .filter(
               (s) =>
                 s.a["ci.kind"] === "workflow" ||
-                (s.a["ci.kind"] === "job" && byId.get(s.parentSpanId)?.a["ci.kind"] !== "group"),
+                (s.a["ci.kind"] === "job" && s.parentSpanId === root.spanId),
             )
             .map((s) => s.spanId),
         );
-      let open = phasesOpen();
+      let open = stepsOpen();
       // Cancellation can finish the workflow before its cleanup markers stop.
       const fullRange = [root.start, Math.max(...spans.map((span) => span.end))];
       let selected = root,
@@ -569,7 +574,7 @@
         render();
       };
       document.getElementById("phases").onclick = () => {
-        open = phasesOpen();
+        open = stepsOpen();
         document.getElementById("search").value = "";
         render();
       };

@@ -438,11 +438,11 @@ project and config.
 
 `actions/cache` is Depot Cache on Depot CI, whose entries expire after 14 days:
 
-| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
-| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key           |
-| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | Browser specs, beside its setup                                    | Main OS e2e's Browser specs, on a push that missed |
-| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it  |
+| Entry                               | Key                                                                              | Restored by                                                        | Saved by                                          |
+| ----------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------- |
+| pnpm's store, 247 MB                | `pnpm-store-` and the hash of the lockfile, `pnpm-workspace.yaml` and `patches/` | the setup, in every job but the production deploys and the release | Test, on a main push that missed its key          |
+| Playwright's headless shell, 103 MB | `ms-playwright-` and the lockfile's hash                                         | each specs shard, beside its setup                                 | Main OS e2e's first shard, on a push that missed  |
+| ESP-IDF and its tools, 1.06 GB      | `esp-idf-`, the hash of `scripts/ci/esp-idf.sh` (the pin) and python3's version  | Kit Firmware's legs                                                | a main leg that missed, right after installing it |
 
 Off main a restore falls back to the newest entry of its kind (`restore-keys`), except ESP-IDF's:
 an older pin's is of no use, nor is one whose Python environment was built for another python3.
@@ -615,8 +615,8 @@ Preview OS runs these jobs, each a check named for what it proves:
   Each sets its suite up while the preview deploys, then waits for the deploy
   ([suites start with the run](#suites-start-with-the-run)). They are one job definition (YAML
   anchors), each job's env naming its suite (`SUITE`, `FLAKE_SUITE`, the telemetry workspace).
-  Browser specs runs [in shards](#browser-specs-in-shards): it is the first, and **Browser specs
-  2/10** to **10/10** run beside it.
+  The specs run [in shards](#browser-specs-in-shards), **Browser specs 1/10** to **10/10**, and
+  **Browser specs** beside them gives their verdict.
 - **CI trace** runs after the deploy and the suites' jobs, whatever their outcome, and reports
   only: it writes the two suites' lines (their jobs' `status` output) into the PR body, then the
   trace ([Interactive trace reports](#interactive-trace-reports)).
@@ -650,20 +650,21 @@ fails when the count no longer matches, naming what to change: `SPECS_SHARDS` an
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
 fullest shard holds `ceil(specs / shards)`.
 
-- **Browser specs** (the required check) is shard 1. The legs of the matrix job `specs-shard` are
-  the others, each named for its shard.
-- Every shard sets up and waits for the deploy like any suite job, then runs its share
-  (`SPECS_SHARD` of `SPECS_SHARDS`, playwright.config.ts `shard`). Each keeps its own evidence,
-  with a Playwright blob report in place of the HTML one.
-- Once its own share has run, the first shard waits for every leg to settle, downloads each leg's
-  blob report from its newest attempt's test results, merges them with its own into the one HTML
-  report behind the **Playwright report** status, and fails when a leg did not pass
-  (`scripts/ci/specs-shards.ts`). So Browser specs is green only when every spec passed, and
-  there is no separate merge job to start and set up after the specs. In the CI trace the step
-  shows its wait for the other shards, which is nearly all of it, the downloads and the merge.
-- Cost: every shard waits out the deploy on its own runner, about nine more `4x16`s a push than
-  one job. More workers against one preview have raised retries before (#3258), so compare the
-  retried specs per run before and after changing the count.
+- The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/10** to **10/10**.
+  Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
+  `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
+  blob report in place of the HTML one.
+- **Browser specs** (`specs`, the required check) runs no spec. It starts with the run on the
+  smallest runner, decides whether there is a preview to test by the suites' own steps, and
+  waits for every shard to settle. Then it downloads each shard's blob report from its newest
+  attempt's test results, merges them into the one HTML report behind the **Playwright report**
+  status, and fails when a shard did not pass (`scripts/ci/specs-shards.ts`). So it is green only
+  when every spec passed. With `needs:` it would boot and set up only after the last shard; this
+  way its verdict comes about a second after it. In the CI trace the shards sit under its row, and
+  its collect step shows its wait, nearly all of it, the downloads and the merge.
+- Cost: every shard waits out the deploy on its own `4x16`, and Browser specs on a `2x8`. More
+  workers against one preview have raised retries before (#3258), so compare the retried specs per
+  run before and after changing the count.
 
 ### Suites start with the run
 
@@ -810,7 +811,7 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
 
 - **main e2e** and **slow e2e rows**: Main OS e2e's own `alert` job, as soon as
   the run's deploy and both suites have ended, from their results and the suite
-  summaries E2E tests and Browser specs upload with their flake records. A push
+  summaries E2E tests and the specs shards upload with their flake records. A push
   run only.
 - `health.yml`, every hour, judges what the measuring workflows left:
   - **real-model e2e**: the `REAL:` rows of each scheduled or push run of OS
@@ -890,7 +891,7 @@ starts with `public-` at `https://ci-reports.iterate-dev-preview.workers.dev/<ar
 Each Browser specs shard prints Playwright's report of its share into its job log, and uploads its
 artifacts even when the suite fails:
 
-- `public-playwright-report`, from the first shard only: the HTML report of every shard
+- `public-playwright-report`, from Browser specs: the HTML report of every shard
   (`test-results/playwright-html`), which the **Playwright report** status opens; a failed spec's
   trace opens in its trace viewer.
 - `preview-os-test-artifacts-attempt-<id>` (main: `main-os-test-artifacts-attempt-<id>`): all of

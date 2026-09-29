@@ -15,13 +15,12 @@
 #                       deployment of the commit it checked out, then its test telemetry and flake
 #                       records. The rows tagged `slow` run only when the PR carries the `slow-e2e`
 #                       label or edits one of them (SLOW_ROW_PATHS) (docs/testing.md#slow-rows)
-#   Browser specs       beside E2E tests: the Playwright specs, the same way, in shards, and the
-#                       Playwright report. One job definition, E2E tests', differing only in the
-#                       suite it names and in its bigger runner, where its six browsers have the CPU
-#                       they need. It is the first shard: once its own share has run it collects the
-#                       others' reports, and fails when one did not pass
-#   Browser specs 2/10  beside it, the other shards (`specs-shard`), each running its share
-#     … 10/10
+#   Browser specs 1/10  beside E2E tests: the Playwright specs, the same way, in shards
+#     … 10/10           (`specs-shard`), each running its share. One job definition, E2E tests',
+#                       differing only in the suite it names and in its bigger runner, where its six
+#                       browsers have the CPU they need
+#   Browser specs       beside them: waits for the shards, merges their reports into the Playwright
+#                       report, and fails when one did not pass
 #   Clean up superseded after Deploy preview, beside the suites: deletes this PR's older
 #                       deployments (apps/os/scripts/preview-sweep.ts `planSupersededCleanup`). Never
 #                       a verdict: what it leaves, the next run's cleanup or the nightly sweep takes
@@ -186,8 +185,8 @@ jobs:
 
   # THE TWO SUITES, E2E tests and Browser specs: side by side, and ONE DEFINITION. Browser specs
   # runs E2E tests' steps (the `suite-steps` anchor); the two differ only in the suite their env
-  # names, in which dispatch skips them, and in their runners (below). Browser specs runs in SHARDS,
-  # SPECS_SHARDS jobs of the same steps (below).
+  # names, in which dispatch skips them, and in their runners (below). The specs run in SHARDS,
+  # SPECS_SHARDS jobs of the same steps, and Browser specs gives their verdict (below).
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
   # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
@@ -241,7 +240,8 @@ jobs:
           echo "id=$id" >> "$GITHUB_OUTPUT"
       # A dispatch that deploys nothing tests the preview it names: a PR's, or one by name for action
       # test, e2e or specs. Deploy preview skips a dispatch without a PR number.
-      - name: Require a preview to test
+      - &require-preview
+        name: Require a preview to test
         if: >-
           github.event_name == 'workflow_dispatch' && inputs.pull-request-number == '' &&
           !((inputs.action == 'test' || inputs.action == env.SUITE) && inputs.preview-name != '')
@@ -253,12 +253,14 @@ jobs:
       # PR merged into main (scripts/ci/preview-tested-commit.ts). On a push that is the run's own
       # commit whenever it merges this head, and otherwise the merge GitHub has rebuilt since, which
       # the deploy resolves the same way. A preview by name is tested from the dispatched ref.
-      - name: Checkout the PR head
+      - &checkout-pr-head
+        name: Checkout the PR head
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || (inputs.pull-request-number != '' && format('refs/pull/{0}/head', inputs.pull-request-number)) || github.sha }}
       # On the stock image's own Node, before the setup, which the PR head may predate.
-      - name: Check out the PR merged into main
+      - &tested-commit
+        name: Check out the PR merged into main
         id: tested
         if: >-
           github.event_name == 'pull_request' ||
@@ -269,7 +271,8 @@ jobs:
         run: node scripts/ci/preview-tested-commit.ts
       # Deploy preview's own step, on the same commit: a push that changes no preview path deploys
       # nothing, and this job passes here, testing nothing.
-      - name: Decide whether the PR changes a preview path
+      - &preview-changes
+        name: Decide whether the PR changes a preview path
         id: changes
         if: github.event_name == 'pull_request'
         run: node scripts/ci/preview-paths.ts changes
@@ -328,17 +331,6 @@ jobs:
           doppler run --project os --config preview -- pnpm preview "$SUITE"
           ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"}
           ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}
-      # THE OTHER SHARDS, in the first: once its own share has run, Browser specs waits for the
-      # `specs-shard` legs, merges their blob reports with its own into the Playwright report its
-      # evidence keeps, and fails when one did not pass (scripts/ci/specs-shards.ts). The step's
-      # timeout is its wait's bound and then the download and merge.
-      - name: Collect the other shards' results
-        id: collect
-        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' && env.SPECS_SHARD == '1' }}
-        timeout-minutes: 40
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: node scripts/ci/specs-shards.ts collect
       # THE STEP AFTER THE SUITE: the telemetry finalizer, then the test evidence manifest, once the
       # suite read its deployed target (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
@@ -381,49 +373,17 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          # The specs' Playwright HTML report on its own (only they write one), which the trace job
-          # links from the "Playwright report" status (its `public-` name lets the ci-reports viewer
-          # serve it). Named for the PR, not the attempt, and overwritten: it is the latest attempt's
-          # report, and each attempt's own copy is in its test-results artifact.
-          - name: Upload public Playwright HTML report
-            if: ${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}
-            uses: actions/upload-artifact@v4
-            with:
-              name: public-playwright-report
-              path: test-results/playwright-html
-              if-no-files-found: error
-              retention-days: 30
-              overwrite: true
       # Either step that failed before it could say why (Node, Doppler, its timeout) gets its
       # warning and summary line here; one that reported itself is left alone.
       - name: Report a test evidence step that could not
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
-  # SHARDS: the specs run as SPECS_SHARDS jobs, each SPECS_SHARD of them running its share
-  # (playwright.config.ts `shard`), enough of them that every spec has a worker from the start and
-  # the suite takes about as long as its longest spec (scripts/ci/specs-shards.test.ts has the maths).
-  # Browser specs, the required check, is shard 1, and `specs-shard`'s legs are the others. Each
-  # keeps its own evidence; the first merges their reports and gives the verdict for all of them
-  # (the collect step above), so its timeout is theirs and then that step's.
-  specs:
-    name: Browser specs
-    if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
-    runs-on: depot-ubuntu-24.04-4
-    timeout-minutes: 110
-    env:
-      SUITE: specs
-      FLAKE_SUITE: specs
-      TEST_TELEMETRY_EXPECTED_WORKSPACES: iterate-root
-      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
-      TEST_TELEMETRY_BRANCH: ${{ github.head_ref || github.ref_name }}
-      TEST_TELEMETRY_PULL_REQUEST_NUMBER: ${{ env.PR_NUMBER }}
-      SPECS_SHARD: "1"
-      SPECS_SHARDS: "10"
-    steps: *suite-steps
-
+  # SHARDS: the specs run as SPECS_SHARDS jobs of the suite steps, the legs of `specs-shard`, each
+  # running its share (SPECS_SHARD, playwright.config.ts `shard`) and keeping its own evidence, with
+  # a Playwright blob report in place of the HTML one. Enough of them that every spec has a worker
+  # from the start, so the suite takes about as long as its longest spec
+  # (scripts/ci/specs-shards.test.ts has the maths).
   specs-shard:
     name: Browser specs ${{ matrix.shard }}/10
     if: >-
@@ -434,7 +394,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -445,6 +405,53 @@ jobs:
       SPECS_SHARD: ${{ matrix.shard }}
       SPECS_SHARDS: "10"
     steps: *suite-steps
+
+  # BROWSER SPECS, the required check, runs no spec itself: it waits for the shards, merges their
+  # blob reports into the one Playwright report, and fails when a shard did not pass
+  # (scripts/ci/specs-shards.ts). It starts with the run and sets itself up while the shards run, so
+  # its verdict comes about a second after the slowest shard ends, where `needs:` would start its
+  # runner only then. It decides whether there is a preview to test by the suites' own steps, so it
+  # passes with them on a PR that changes no preview path, and fails with them when there is none.
+  # The smallest runner: it only waits and merges. Its timeout is its collection's, which outlasts
+  # the shards', and then its setup.
+  specs:
+    name: Browser specs
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.action != 'e2e')
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      # the suite its dispatch guard names
+      SUITE: specs
+    steps:
+      - *require-preview
+      - *checkout-pr-head
+      - *tested-commit
+      - *preview-changes
+      - name: Setup
+        if: steps.changes.outputs.preview != 'false'
+        uses: ./.depot/actions/setup
+      # The step's timeout is its wait's bound, and then the downloads and the merge.
+      - name: Collect the shards' results
+        id: collect
+        if: steps.changes.outputs.preview != 'false'
+        timeout-minutes: 80
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/specs-shards.ts collect
+      # The merged report, which the trace job links from the "Playwright report" status (its
+      # `public-` name lets the ci-reports viewer serve it). Named for the PR, not the attempt, and
+      # overwritten: it is the latest attempt's report. Also after a red shard, whose report it holds.
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && steps.collect.outputs.playwright-report == 'written' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   # THE PR'S OLDER DEPLOYMENTS, deleted once this run's is ready (apps/os/scripts/preview.ts
   # `cleanup-superseded`): beside the suites, never gating them. It deletes only deployments of this

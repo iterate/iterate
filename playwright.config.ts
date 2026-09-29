@@ -25,9 +25,8 @@ const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
 const dashBaseUrl = process.env.DASH_BASE_URL?.replace(/\/+$/, "");
 const adminBaseUrl = process.env.ADMIN_BASE_URL?.replace(/\/+$/, "");
 /** CI's Browser specs run as SPECS_SHARDS jobs, each SPECS_SHARD of them running its share of the
- *  tests (preview-os.yml's `specs` and `specs-shard`). A shard writes a blob report instead of an
- *  HTML one, and the first shard merges them all into the one HTML report
- *  (scripts/ci/specs-shards.ts). */
+ *  tests (preview-os.yml's `specs-shard`). A shard writes a blob report instead of an HTML one, and
+ *  the Browser specs job merges them all into the one HTML report (scripts/ci/specs-shards.ts). */
 const shard = process.env.SPECS_SHARD
   ? { current: Number(process.env.SPECS_SHARD), total: Number(process.env.SPECS_SHARDS) }
   : null;

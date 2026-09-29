@@ -56,6 +56,8 @@ What to expect: today the Playwright wall is about 102 s (sum of spec time about
 - [x] Measure on the PR: Playwright wall, job and verdict time, retries per run, over several runs; compare with #3258's numbers _runs `qxmljkwgml`, `jvb8z6wp57`: verdict 85/103 s after the run's start, slowest shard's tests 22.6/40.4 s (vs ~84 s Playwright on one 4x16 in #3258), 0 retries; n=2, so the retry rate is still to watch on main_
 - [ ] ~~Check `depot ci retry <run> --failed` on a red leg re-runs the leg and shard 1, and shard 1 collects the new attempt~~ _not exercised: no leg went red on this PR; the collector reads each leg's newest attempt, which its tests cover_
 
+- [x] Browser specs as a coordinator (Misha, follow-up): `specs` runs no spec; the matrix is shards 1–10, all alike; `specs` starts with the run on a `2x8`, decides "is there a preview" by the suites' own (anchored) steps, collects, and uploads the merged report _the trace nests the shards under its row instead of a synthetic group_
+
 ## Follow-ups (not in this PR)
 
 - The flake dashboard's Cost and incident sections treat each evidence folder as a run of its suite, so they now see one shard as a specs run. Group a workflow run's shards into one run.

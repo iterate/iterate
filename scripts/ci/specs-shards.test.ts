@@ -1,5 +1,5 @@
-// Browser specs in shards (./specs-shards.ts): how many shards the workflows run, and the first
-// shard's collection of the others' blob reports, against the monitors' fake Depot on a fake clock.
+// Browser specs in shards (./specs-shards.ts): how many shards the workflows run, and Browser
+// specs' collection of their blob reports, against the monitors' fake Depot on a fake clock.
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -30,30 +30,25 @@ test.for(["preview-os.yml", "main-os-e2e.yml"])(
     );
     const workers: number = listed.config.workers;
     const tests: number = listed.suites.reduce((sum: number, suite: any) => sum + count(suite), 0);
-    const { specs, [SHARD_JOB]: legs } = (
+    const legs = (
       parseYaml(readFileSync(resolve(repoRoot, ".depot/workflows", file), "utf8")) as any
-    ).jobs;
-    const shards = Number(specs.env.SPECS_SHARDS);
+    ).jobs[SHARD_JOB];
+    const shards = Number(legs.env.SPECS_SHARDS);
 
     expect(
       shards,
       `${tests} specs need ${Math.ceil(tests / workers)} shards of ${workers} workers: set SPECS_SHARDS and ${SHARD_JOB}'s matrix to match in preview-os.yml and main-os-e2e.yml`,
     ).toBe(Math.ceil(tests / workers));
-    // Browser specs is the first shard; the matrix's legs are the rest
-    expect({
-      first: specs.env,
-      legs: { env: legs.env, shards: legs.strategy.matrix.shard },
-    }).toMatchObject({
-      first: { SPECS_SHARD: "1", SPECS_SHARDS: String(shards) },
-      legs: {
-        env: { SPECS_SHARD: "${{ matrix.shard }}", SPECS_SHARDS: String(shards) },
-        shards: Array.from({ length: shards - 1 }, (_, index) => index + 2),
-      },
+    // one leg a shard, each named for it
+    expect(legs).toMatchObject({
+      name: `Browser specs \${{ matrix.shard }}/${shards}`,
+      env: { SPECS_SHARD: "${{ matrix.shard }}" },
+      strategy: { matrix: { shard: Array.from({ length: shards }, (_, index) => index + 1) } },
     });
   },
 );
 
-test("the first shard waits for the others, then takes each one's blob report from its newest attempt", async () => {
+test("Browser specs waits for the shards, then takes each one's blob report from its newest attempt", async () => {
   using run = shardedRun({
     "Browser specs 2/3": { statuses: ["running", "finished"], blobs: ["report-2.zip"] },
     "Browser specs 3/3": { statuses: ["queued", "running", "running", "finished"], retried: true },
@@ -137,7 +132,7 @@ function count(suite: any): number {
   );
 }
 
-/** A Preview OS run whose first shard collects: each named leg of `specs-shard` moves through its
+/** A Preview OS run whose Browser specs job collects: each named leg of `specs-shard` moves through its
  *  statuses, one a call to GetWorkflow, the last repeated, on a fake clock that moves on whenever
  *  the wait sleeps. The blob reports go to a temporary directory, `out`, removed with the run. A leg's newest attempt's test results hold its `blobs` (one named for its shard
  *  unless given); a `retried` leg has an older attempt whose results the collection must not take. */

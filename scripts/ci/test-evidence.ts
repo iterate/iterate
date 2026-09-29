@@ -486,10 +486,8 @@ export function testEvidenceUploadedPrefix(summary: string) {
 export const testEvidenceJobs = [
   "test.yml:test",
   "preview-os.yml:e2e",
-  "preview-os.yml:specs",
   "preview-os.yml:specs-shard",
   "main-os-e2e.yml:e2e",
-  "main-os-e2e.yml:specs",
   "main-os-e2e.yml:specs-shard",
 ];
 

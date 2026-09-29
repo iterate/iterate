@@ -296,8 +296,7 @@ export const mainE2eRecords = {
   workflow: "Main OS e2e",
   jobs: [
     { jobKey: "main-os-e2e.yml:e2e", suite: "preview-e2e" },
-    // the specs' shards, each with the summary of its share
-    { jobKey: "main-os-e2e.yml:specs", suite: "specs" },
+    // the specs' shards, each with the summary of its share; Browser specs, their verdict, runs none
     { jobKey: "main-os-e2e.yml:specs-shard", suite: "specs" },
   ],
   artifact: (attemptId: string) => `main-os-test-artifacts-attempt-${attemptId}`,
@@ -392,18 +391,16 @@ export async function checkMainE2e(input: {
         };
       };
       // E2E tests' summary, and each specs shard's, which holds its share of the specs
-      const [e2eRecords, ...specsRecords] = mainE2eRecords.jobs;
+      const [e2eRecords, shardRecords] = mainE2eRecords.jobs;
       const [e2e, specs] = await Promise.all([
         summary(
           judgedJobs.find((job) => job.jobKey === e2eRecords.jobKey),
           e2eRecords.suite,
         ),
         Promise.all(
-          specsRecords.flatMap(({ jobKey, suite }) =>
-            judgedJobs
-              .filter((job) => jobOf(job.jobKey) === jobKey)
-              .map((job) => summary(job, suite)),
-          ),
+          judgedJobs
+            .filter((job) => jobOf(job.jobKey) === shardRecords.jobKey)
+            .map((job) => summary(job, shardRecords.suite)),
         ),
       ]);
       const failingRows = [e2e, ...specs].flatMap((job) =>

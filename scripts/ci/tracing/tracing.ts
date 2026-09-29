@@ -128,7 +128,12 @@ export function assembleTrace(
     ]),
   );
   workflow.workflowFinishedAt = new Date(rootEnd).toISOString();
-  if (workflow.jobs.length) workflow.workflowStatus = settledStatus(workflow.jobs);
+  if (workflow.jobs.some((job) => job.status === "failed")) workflow.workflowStatus = "failed";
+  else if (workflow.jobs.some((job) => job.status === "cancelled"))
+    workflow.workflowStatus = "cancelled";
+  else if (workflow.jobs.length && workflow.jobs.every((job) => job.status === "skipped"))
+    workflow.workflowStatus = "skipped";
+  else if (workflow.jobs.length) workflow.workflowStatus = "finished";
   const traceId = hash(`${workflow.workflowId}/${execution.executionId}`, 32);
   const spans: Span[] = [];
   const add = (
@@ -210,69 +215,34 @@ export function assembleTrace(
       false,
     );
   }
-  /** A job's attempts in this execution: those that started, and did not end before it began. */
-  const tracedAttempts = (job: (typeof workflow.jobs)[number]) =>
-    job.attempts.filter(
+  /** Each job's row by its key, its newest attempt's: the parent of the jobs nested under it. The
+   *  trace job names the parent first (tracing/cli.ts). */
+  const jobSpans = new Map<string, string>();
+  for (const job of workflow.jobs) {
+    const key = jobKeyInWorkflow(job.jobKey);
+    const parent = jobSpans.get(nestedJobs.get(key) || "") || root;
+    // a matrix leg by its own name, `Browser specs 3/10`
+    const name = jobLabels.get(key) || job.jobDisplayName || key;
+    const attempts = job.attempts.filter(
       (attempt) =>
         attempt.startedAt &&
         Date.parse(attempt.finishedAt || workflow.workflowFinishedAt) >= rootStart,
     );
-  // THE BROWSER SPECS SHARDS, one check's jobs, under one span from the first shard's start to the
-  // last one's end: `specs`, the first, and the legs of `specs-shard` (preview-os.yml SHARDS). The
-  // span's own status is the worst of theirs. A run from before the shards has no group.
-  const shards = workflow.jobs.filter((job) =>
-    SPECS_SHARD_JOBS.includes(jobKeyInWorkflow(job.jobKey)),
-  );
-  const sharded = shards.some((job) => jobKeyInWorkflow(job.jobKey) === "specs-shard");
-  let shardGroup: string | undefined;
-  /** The group's span, added where its first shard's job comes, so it takes that job's place. */
-  const shardGroupSpan = () => {
-    if (shardGroup) return shardGroup;
-    const times = shards.flatMap((job) => {
-      const attempts = tracedAttempts(job);
-      if (!attempts.length) return [rootEnd];
-      return attempts.flatMap((attempt) => [
-        Date.parse(attempt.startedAt),
-        Date.parse(attempt.finishedAt || workflow.workflowFinishedAt),
-      ]);
-    });
-    const status = settledStatus(shards);
-    shardGroup = add(
-      "specs-shards",
-      root,
-      "Browser specs",
-      Math.min(...times),
-      Math.max(...times),
-      {
-        "ci.kind": "group",
-        "ci.status": status,
-        "ci.shards": String(shards.length),
-        "ci.evidence": "The first shard's start to the last one's end (Depot timestamps)",
-      },
-      status === "failed",
-    );
-    return shardGroup;
-  };
-  for (const job of workflow.jobs) {
-    const key = jobKeyInWorkflow(job.jobKey);
-    const parent = sharded && SPECS_SHARD_JOBS.includes(key) ? shardGroupSpan() : root;
-    // a shard by its number, `Browser specs 1/10`; a matrix leg by its own name, `Browser specs 3/10`
-    const name =
-      sharded && key === "specs"
-        ? `Browser specs 1/${shards.length}`
-        : jobLabels.get(key) || job.jobDisplayName || key;
-    const attempts = tracedAttempts(job);
     if (!attempts.length) {
-      add(
-        job.jobId,
-        parent,
-        name,
-        rootEnd,
-        rootEnd,
-        { "ci.kind": "job", "ci.status": job.status, "ci.evidence": "No runner attempt started" },
-        false,
+      jobSpans.set(
+        key,
+        add(
+          job.jobId,
+          parent,
+          name,
+          rootEnd,
+          rootEnd,
+          { "ci.kind": "job", "ci.status": job.status, "ci.evidence": "No runner attempt started" },
+          false,
+        ),
       );
     }
+    const newest = Math.max(...attempts.map((attempt) => attempt.attempt));
     for (const attempt of attempts) {
       const start = Date.parse(attempt.startedAt);
       const end = Date.parse(attempt.finishedAt || workflow.workflowFinishedAt);
@@ -294,6 +264,7 @@ export function assembleTrace(
         },
         attempt.status === "failed",
       );
+      if (attempt.attempt === newest) jobSpans.set(key, jobSpan);
       const events = eventsByAttempt.get(attempt.attemptId) || [];
       const shells = events.filter((event) => event.kind === "shell-start");
       const shellEnds = new Map(
@@ -686,18 +657,9 @@ function hash(value: string, length: number) {
 const SourceWorkflow = z.object({
   jobs: z.record(z.string(), z.object({ steps: z.array(z.unknown()) })),
 });
-/** What a set of settled jobs came to: failed if one failed, else cancelled if one was, skipped if
- *  all were, else finished. */
-function settledStatus(jobs: { status: string }[]) {
-  if (jobs.some((job) => job.status === "failed")) return "failed";
-  if (jobs.some((job) => job.status === "cancelled")) return "cancelled";
-  if (jobs.every((job) => job.status === "skipped")) return "skipped";
-  return "finished";
-}
-
-/** The Browser specs shards' jobs, drawn under one span: `specs`, the first shard, and
- *  `specs-shard`, whose legs are the rest (scripts/ci/specs-shards.ts SHARD_JOB). */
-const SPECS_SHARD_JOBS = ["specs", "specs-shard"];
+/** Jobs drawn under another job's row, by key: the Browser specs shards, the legs of `specs-shard`,
+ *  under `specs`, the job that waits for them and gives their verdict (scripts/ci/specs-shards.ts). */
+const nestedJobs = new Map([["specs-shard", "specs"]]);
 const jobLabels = new Map([
   ["deploy", "Deploy preview"],
   ["e2e", "E2E tests"],

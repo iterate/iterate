@@ -33,9 +33,10 @@ artifact's path.
 
 The report shows the workflow, its jobs in the order the trace job names them
 (Deploy preview, E2E tests, Browser specs), each job's measured shell steps
-directly under it, and individual Playwright attempts and Vitest tests. The Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) are one
-**Browser specs** row, from the first shard's start to the last one's end and red when any shard
-failed; it opens into **Browser specs 1/10** to **10/10**, in order, each one row until opened.
+directly under it, and individual Playwright attempts and Vitest tests. The
+Browser specs shards ([Depot CI](depot-ci.md#browser-specs-in-shards)) sit under
+the **Browser specs** job that waits for them, **Browser specs 1/10** to
+**10/10**, in order, each one row until opened.
 Expand rows, search for a test, click a bar, or zoom to a selected span.
 Download the same trace as OTLP JSON.
 
@@ -66,7 +67,7 @@ to the authored commands. Reports show the step's name, falling back to its ID
 and then its normalized run command; hover the label or bar to see all three.
 Commands have the Doppler wrapper stripped and come from the workflow YAML at
 the run's triggering SHA (the merge revision on PR runs), never from expanded
-runner logs. Each test job's suite step, `suite` in E2E tests and Browser specs
+runner logs. Each test job's suite step, `suite` in E2E tests and the specs shards
 (one definition), is no row of its own. Since the suites start beside the
 deploy, it begins with **Set up the suite** and **Wait for Deploy preview**
 (`runSuite` in `apps/os/scripts/preview.ts`), which sit beside the job's other

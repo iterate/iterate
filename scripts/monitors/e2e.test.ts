@@ -342,13 +342,13 @@ test("a first run judges only the newest settled push run of main e2e: its jobs,
   expect(again).toEqual({ updates: [], memory: judged.memory, failures: [] });
 });
 
-test("a spec that fails in another shard of the specs is named on the page with its shard", async () => {
+test("a spec that fails in a shard of the specs is named on the page with its shard", async () => {
   const depot = fakeDepot({
     "Main OS e2e": [
       mainRun("sharded", "2026-09-26T20:00:00Z", {
         specs: "failed",
         shard: "failed",
-        shardTests: [{ name: "opens a project", failed: true }],
+        specsTests: [{ name: "opens a project", failed: true }],
       }),
     ],
   });
@@ -359,7 +359,7 @@ test("a spec that fails in another shard of the specs is named on the page with 
     {
       signal: "main e2e",
       page: {
-        impact: "failed: Browser specs, Browser specs 2/2; failing rows: opens a project",
+        impact: "failed: Browser specs, Browser specs 1/1; failing rows: opens a project",
       },
     },
   ]);

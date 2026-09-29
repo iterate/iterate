@@ -964,31 +964,40 @@ test("the preview trace covers the deploy and both test jobs: green at the last 
   ).toEqual([["greets"], ["signs in"]]);
 });
 
-test("the Browser specs shards are one span, from the first shard's start to the last one's end, red when one is", () => {
+test("the Browser specs shards sit under the Browser specs job that waits for them, its newest attempt when it was retried", () => {
   const workflow = osPreviewWorkflow();
   const specs = workflow.jobs[2]!;
-  const shard = {
+  const attempt = specs.attempts[0]!;
+  const retried = {
     ...specs,
-    jobId: "specs-shard-2",
-    jobKey: "preview-os.yml:specs-shard:matrix-0",
-    jobDisplayName: "Browser specs 2/2",
-    status: "failed",
     attempts: [
+      { ...attempt, status: "failed", finishedAt: at(60) },
       {
-        ...specs.attempts[0]!,
-        attemptId: "shard-2-attempt",
-        status: "failed",
-        startedAt: at(43),
+        ...attempt,
+        attemptId: "specs-attempt-2",
+        attempt: 2,
+        startedAt: at(61),
         finishedAt: at(130),
       },
     ],
   };
+  const shard = (index: number, status: string) => ({
+    ...specs,
+    jobId: `specs-shard-${index}`,
+    jobKey: `preview-os.yml:specs-shard:matrix-${index}`,
+    jobDisplayName: `Browser specs ${index + 1}/2`,
+    status,
+    attempts: [{ ...attempt, attemptId: `shard-${index}-attempt`, status }],
+  });
 
   const trace = assembleTrace(
-    { ...workflow, jobs: [...workflow.jobs, shard] },
+    {
+      ...workflow,
+      jobs: [...workflow.jobs.slice(0, 2), retried, shard(0, "finished"), shard(1, "failed")],
+    },
     new Map([
       [
-        "shard-2-attempt",
+        "shard-1-attempt",
         [
           line("suite", { kind: "shell-start", id: "suite", step: "suite", time: ms(50) }),
           line("suite", { kind: "shell-end", id: "suite", time: ms(100), exitCode: 1 }),
@@ -1004,23 +1013,24 @@ test("the Browser specs shards are one span, from the first shard's start to the
   };
   expect({
     workflow: children("Preview OS"),
-    group: children("Browser specs"),
+    firstAttempt: children("Browser specs"),
+    newestAttempt: children("Browser specs (attempt 2)"),
+    // its suite failed without a test: that row, red
     shard: children("Browser specs 2/2"),
   }).toEqual({
-    // the group where its first shard's job comes
-    workflow: ["Workflow queue", "Deploy preview", "E2E tests", "Browser specs"],
-    group: ["Browser specs 1/2", "Browser specs 2/2"],
-    // its suite failed without a test: that row, red
+    workflow: [
+      "Workflow queue",
+      "Deploy preview",
+      "E2E tests",
+      "Browser specs",
+      "Browser specs (attempt 2)",
+    ],
+    firstAttempt: [],
+    newestAttempt: ["Browser specs 1/2", "Browser specs 2/2"],
     shard: ["Run tests"],
   });
-  expect(spans.find((span) => span.name === "Browser specs")).toMatchObject({
-    startTimeUnixNano: String(BigInt(ms(41)) * 1_000_000n),
-    endTimeUnixNano: String(BigInt(ms(130)) * 1_000_000n),
+  expect(spans.find((span) => span.name === "Browser specs 2/2")).toMatchObject({
     status: { code: 2 },
-    attributes: expect.arrayContaining([
-      { key: "ci.kind", value: { stringValue: "group" } },
-      { key: "ci.status", value: { stringValue: "failed" } },
-    ]),
   });
 });
 

@@ -1,25 +1,26 @@
-// scripts/ci/specs-shards.ts — BROWSER SPECS IN SHARDS, the first shard's last step. Preview OS and
-// Main OS e2e run the specs as SPECS_SHARDS jobs that start with the run, enough of them that every
-// spec has a worker from the start (./specs-shards.test.ts): `specs`, Browser specs, the required
-// check, is shard 1, and the legs of the matrix job `specs-shard` are the others, Browser specs 2/10
-// and on. Each runs its share (playwright.config.ts `shard`) and keeps its own evidence, with a
-// Playwright blob report where an unsharded run writes its HTML one.
+// scripts/ci/specs-shards.ts — BROWSER SPECS IN SHARDS, and their verdict. Preview OS and Main OS
+// e2e run the specs as SPECS_SHARDS jobs that start with the run, enough of them that every spec
+// has a worker from the start (./specs-shards.test.ts): the legs of the matrix job `specs-shard`,
+// Browser specs 1/10 to 10/10. Each runs its share (playwright.config.ts `shard`) and keeps its own
+// evidence, with a Playwright blob report where an unsharded run writes its HTML one.
 //
-// Once its own share has run, the first shard waits here for every leg to settle, asking Depot's
-// GetWorkflow as the deploy wait does (./await-deploy.ts `pollWorkflow`). Then it fetches each
-// leg's blob report from the test results its newest attempt uploaded
-// (`<workflow>-test-artifacts-attempt-<attempt id>`, docs/depot-ci.md#artifacts-per-job-attempt),
-// merges them with its own into the one HTML report the "Playwright report" status opens, and
-// fails when a leg did not pass or left no blob report. So Browser specs passes only when every
-// shard did.
+// `specs`, Browser specs, the required check, runs no spec itself: it starts with the run too, and
+// waits here for every leg to settle, asking Depot's GetWorkflow as the deploy wait does
+// (./await-deploy.ts `pollWorkflow`). Then it fetches each leg's blob report from the test results
+// its newest attempt uploaded (`<workflow>-test-artifacts-attempt-<attempt id>`,
+// docs/depot-ci.md#artifacts-per-job-attempt), merges them into the one HTML report the
+// "Playwright report" status opens, and fails when a leg did not pass or left no blob report. So
+// Browser specs passes only when every shard did.
 import { spawnSync } from "node:child_process";
-import { copyFile, mkdir, readdir, writeFile } from "node:fs/promises";
+import { appendFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { createCli } from "trpc-cli";
 import {
+  AWAIT_DEPLOY,
   pollWorkflow,
   SUITE_BOUND_MS,
   thisWorkflowRun,
@@ -28,13 +29,13 @@ import {
 import { depotApi, workflowArtifact, type DepotApi } from "./depot.ts";
 import { traceOperation } from "./tracing/tracing.ts";
 
-/** The matrix job whose legs are the shards after the first (preview-os.yml, main-os-e2e.yml). */
+/** The matrix job whose legs are the shards (preview-os.yml, main-os-e2e.yml). */
 export const SHARD_JOB = "specs-shard";
 
-/** How long the first shard waits for the legs once its own share has run. Every shard waits for
- *  the same deploy, so the legs start their suites when it does, and each ends its suite within
- *  SUITE_BOUND_MS of that; the rest is for their evidence steps. */
-export const COLLECT_BOUND_MS = SUITE_BOUND_MS + 5 * 60_000;
+/** How long Browser specs waits for the legs, which start with the run as it does: each waits for
+ *  the deploy for at most AWAIT_DEPLOY.boundMs, runs its suite for at most SUITE_BOUND_MS, and has
+ *  its evidence steps after, all inside its job's timeout, which this outlasts. */
+export const COLLECT_BOUND_MS = AWAIT_DEPLOY.boundMs + SUITE_BOUND_MS + 5 * 60_000;
 
 /** Depot's statuses for a job that has ended (https://github.com/depot/cli/blob/main/pkg/cmd/ci/logs.go). */
 const SETTLED = ["finished", "failed", "cancelled", "skipped"];
@@ -53,7 +54,7 @@ export async function collectShards(input: {
   const { depot, workflowId, job, out, log = console.log } = input;
   let reported = "";
   // Each part a row of the step in the CI trace (docs/ci-traces.md#steps): the wait is most of it.
-  const { runId, legs, waitedMs } = await traceOperation("Wait for the other shards", () =>
+  const { runId, legs, waitedMs } = await traceOperation("Wait for the shards", () =>
     pollWorkflow({
       ...input,
       tag: "specs-shards",
@@ -113,16 +114,12 @@ const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 /** `node scripts/ci/specs-shards.ts <command>` */
 export default class SpecsShards {
-  /** The first shard's step after its own share (preview-os.yml `collect`): its blob report and the
-   *  legs' (collectShards), merged into the HTML report its evidence keeps. It fails when a leg did
-   *  not pass or the reports would not merge, after merging what there is. */
+  /** Browser specs' step (preview-os.yml `collect`): the legs' blob reports (collectShards), merged
+   *  into the HTML report its next step uploads, and the step output `playwright-report=written`
+   *  once it is. It fails when a leg did not pass or the reports would not merge, after merging
+   *  what there is. */
   async collect() {
     const blobs = join(process.env.RUNNER_TEMP || tmpdir(), "specs-blob-reports");
-    await mkdir(blobs, { recursive: true });
-    // Its own, unless its suite ended before Playwright wrote one; that suite's step fails the job.
-    const own = await readdir(testEvidencePaths.playwrightBlob).catch(() => []);
-    for (const file of own)
-      await copyFile(join(testEvidencePaths.playwrightBlob, file), join(blobs, file));
     const problems = await collectShards({
       depot: depotApi(),
       workflowId: thisWorkflowRun(),
@@ -145,6 +142,8 @@ export default class SpecsShards {
       if (result.status !== 0) span.fail();
       return result;
     });
+    if (merged.status === 0 && process.env.GITHUB_OUTPUT)
+      appendFileSync(process.env.GITHUB_OUTPUT, "playwright-report=written\n");
     if (merged.status !== 0)
       problems.push(
         `the blob reports would not merge: playwright merge-reports exited ${merged.status}`,

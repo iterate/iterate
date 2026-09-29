@@ -191,15 +191,6 @@ jobs:
           doppler run --project os --config preview -- pnpm preview "$SUITE"
           ${PR_NUMBER:+--pr "$PR_NUMBER"} ${DEPLOYMENT_PREFIX:+--name "$DEPLOYMENT_PREFIX"}
           ${SLOW_ROWS:+--slow-rows "$SLOW_ROWS"}
-      # The other shards, in the first, as in a PR preview's Browser specs
-      # (scripts/ci/specs-shards.ts): their blob reports merged with its own, and its verdict.
-      - name: Collect the other shards' results
-        id: collect
-        if: ${{ !cancelled() && steps.suite.outcome != 'skipped' && env.SPECS_SHARD == '1' }}
-        timeout-minutes: 40
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: node scripts/ci/specs-shards.ts collect
       # The telemetry finalizer, then the test evidence manifest, once the suite read its deployed
       # target, as in a PR preview's test jobs (scripts/ci/test-evidence.ts `finalize --only-with-target`).
       - name: Check test telemetry, write the suite summary and the test evidence manifest
@@ -240,15 +231,6 @@ jobs:
               path: test-results
               include-hidden-files: true
               if-no-files-found: error
-          - name: Upload public Playwright HTML report
-            if: ${{ always() && steps.evidence-write.outputs.playwright-report == 'written' }}
-            uses: actions/upload-artifact@v4
-            with:
-              name: public-playwright-report
-              path: test-results/playwright-html
-              if-no-files-found: error
-              retention-days: 30
-              overwrite: true
           # THE SPECS' BROWSER FOR THE NEXT RUNS, from a main push whose lockfile no run saved one
           # for yet: what the suite's `playwright install --only-shell` fetched, saved by the first
           # shard alone, since every shard would save the same key.
@@ -266,23 +248,8 @@ jobs:
         if: ${{ always() && (steps.evidence-write.outcome == 'failure' || steps.evidence-upload.outcome == 'failure') }}
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
-  # The specs in shards, as a PR preview runs them (preview-os.yml SHARDS): Browser specs is the
-  # first, and gives the verdict for all of them.
-  specs:
-    name: Browser specs
-    runs-on: depot-ubuntu-24.04-4
-    timeout-minutes: 110
-    env:
-      SUITE: specs
-      FLAKE_SUITE: specs
-      TEST_TELEMETRY_EXPECTED_WORKSPACES: iterate-root
-      TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
-      TEST_TELEMETRY_BRANCH: main
-      TEST_TELEMETRY_HEAD_SHA: ${{ github.sha }}
-      SPECS_SHARD: "1"
-      SPECS_SHARDS: "10"
-    steps: *suite-steps
-
+  # The specs in shards, as a PR preview runs them (preview-os.yml SHARDS), and Browser specs, their
+  # verdict, as a PR preview's (preview-os.yml BROWSER SPECS).
   specs-shard:
     name: Browser specs ${{ matrix.shard }}/10
     runs-on: depot-ubuntu-24.04-4
@@ -290,7 +257,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     env:
       SUITE: specs
       FLAKE_SUITE: specs
@@ -301,6 +268,33 @@ jobs:
       SPECS_SHARD: ${{ matrix.shard }}
       SPECS_SHARDS: "10"
     steps: *suite-steps
+
+  specs:
+    name: Browser specs
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+      - name: Collect the shards' results
+        id: collect
+        timeout-minutes: 80
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: node scripts/ci/specs-shards.ts collect
+      - name: Upload public Playwright HTML report
+        if: ${{ always() && steps.collect.outputs.playwright-report == 'written' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-playwright-report
+          path: test-results/playwright-html
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
   # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (apps/os/scripts/preview.ts
   # `cleanup-superseded`), beside the suites and never gating them or the alert.
