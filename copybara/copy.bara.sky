@@ -1,0 +1,48 @@
+# THE COPY OF packages/ IN iterate/copybara0929, an experiment (tasks/copybara0929-experiment.md).
+# Copybara copies every commit that touches packages/ or the copy's README to the copy's main, one
+# copy commit per origin commit, each ending in a `GitOrigin-RevId: <origin sha>` trailer. A run
+# copies whatever came after the newest trailer, so a missed run is caught up by the next one.
+# scripts/ci/copybara.ts runs it after a successful deploy.
+#
+# Two workflows, one per origin ref: `copybara0929` follows main (after Deploy OS), and
+# `copybara0929_branch` follows this experiment's branch (after its PR's Deploy preview).
+
+# The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
+# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`. A squash merge's message
+# is the PR's title and body, and HTML comments survive into it, as the loc-report and os-preview
+# sections do. Starlark has no `while`, so the sections are found with `split`.
+def copy_message(ctx):
+    title = ctx.message.split("\n")[0]
+    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(title).replace_all(" (iterate/iterate#$1)")
+    sections = [
+        part.split("<!-- /copybara -->")[0].strip()
+        for part in ctx.message.split("<!-- copybara -->")[1:]
+    ]
+    ctx.set_message("\n\n".join([title] + sections) + "\n")
+
+def copy_workflow(name, ref):
+    core.workflow(
+        name = name,
+        origin = git.origin(
+            url = "https://github.com/iterate/iterate",
+            ref = ref,
+            # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+            partial_fetch = True,
+        ),
+        origin_files = glob(["packages/**", "copybara/copybara0929/README.md"]),
+        destination = git.destination(
+            url = "https://github.com/iterate/copybara0929",
+            push = "main",
+            fetch = "main",
+        ),
+        destination_files = glob(["**"]),
+        mode = "ITERATIVE",
+        authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
+        transformations = [
+            core.move("copybara/copybara0929/README.md", "README.md"),
+            copy_message,
+        ],
+    )
+
+copy_workflow(name = "copybara0929", ref = "main")
+copy_workflow(name = "copybara0929_branch", ref = "copybara0929")
