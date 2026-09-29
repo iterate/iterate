@@ -70,11 +70,11 @@ export const OsEnv = z.object({
    *  `login.testEmailDomain`): the pet shop's fake sign-ins admit addresses under it alone, and a
    *  PR body's sign-in link pre-fills one of them for an admin. A per-commit deployment's only. */
   testEmailDomain: z.string().optional(),
-  /** iterate's own Slack app, Google and Cloudflare OAuth clients and GitHub App are the dummy pet
-   *  shop's fakes (./preview-*-app.ts), and people sign in with Google, Cloudflare and GitHub
-   *  through them. A per-commit deployment's only: prd's and main on dev's integrations are their
-   *  Doppler `APP_CONFIG`'s. */
-  petshopIntegrations: z.boolean().optional(),
+  /** The dummy pet shop's origin (apps/dummy-petshop), whose fakes are iterate's own Slack app,
+   *  Google, X and Cloudflare OAuth clients and GitHub App (./preview-*-app.ts, at this origin), and
+   *  people sign in with Google, Cloudflare and GitHub through them. A per-commit deployment's only:
+   *  prd's and main on dev's integrations are their Doppler `APP_CONFIG`'s. */
+  petshopOrigin: z.string().optional(),
   /** The ids of the resources `resourceNamePrefix` names, which ensure-resources creates and
    *  envs.ts records. Unset for a per-commit deployment (envs.ts `previewDeployment`), whose own
    *  deploy creates them by name (./deploy.ts). */

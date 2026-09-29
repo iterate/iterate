@@ -25,7 +25,6 @@ test("the build reaches only these files outside apps/os and packages/", async (
       .sort(),
   ).toMatchInlineSnapshot(`
     [
-      "envs.ts",
       "scripts/lib/vite-build.ts",
       "scripts/lib/wrangler-config.ts",
     ]

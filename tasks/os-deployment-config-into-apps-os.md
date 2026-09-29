@@ -21,7 +21,7 @@ Today apps/os reaches `envs.ts` in two ways:
 Plan ("split the difference"): move (1) into apps/os now and invert (2), so apps/os builds
 self-host and local dev by itself and iterate's deploy tooling hands it every other deployment.
 
-Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Local dev's account: option 1 (below). Still reached: envs.ts's pet shop origin, through the preview fakes (follow-up).
+Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup, iterate/iterate#3448, stacked on it) done: every build gets its deployment from the caller, and the configs are unchanged. Local dev's account: option 1 (below). The build reaches envs.ts no more: the pet shop's origin is the deployment's too.
 
 ## PR 1: the moves (no behaviour change)
 
@@ -103,7 +103,8 @@ local dev wants their own account. Options:
 --detach` through scripts/os-dev.ts answered `/version`, its process carried the dev/preview
   CLOUDFLARE_ACCOUNT_ID, and wrangler established the remote connection for Artifacts, AI and
   Browser.
-- Still reached from the build: envs.ts `dummyPetshopEnvs.prd.baseUrl`, through the four
-  scripts/preview-*-app.ts fakes a per-commit deployment turns on (`petshopIntegrations`). Follow-up:
-  the deployment carries the pet shop's origin (`petshopOrigin`) and the fakes are built from it,
-  so apps/os never names iterate's pet shop. It touches the integrations e2e and two specs.
+- The pet shop: `petshopIntegrations: true` became `petshopOrigin` (envs.ts `previewDeployment`
+  sets `dummyPetshopEnvs.prd.baseUrl`). The scripts/preview-*-app.ts fakes lost their `…Origin`
+  field and the generator (deploy.ts for GitHub's) adds it from the deployment, in the same key
+  position: every config and the GitHub App secret are byte-identical. The e2e and specs used only
+  ids, slugs, secrets and the key, so they are unchanged. build.test.ts now lists no envs.ts.

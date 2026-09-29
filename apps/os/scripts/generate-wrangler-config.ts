@@ -29,11 +29,23 @@ function configVars(env: OsEnv) {
   // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
   // (a fake admits addresses under `testEmailDomain` alone). The GitHub App carries a key, so
   // scripts/deploy.ts ships it as a secret.
-  if (env.petshopIntegrations) {
-    vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify(PREVIEW_SLACK_APP);
-    vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify(PREVIEW_GOOGLE_APP);
-    vars.APP_CONFIG_INTEGRATIONS__X = JSON.stringify(PREVIEW_X_APP);
-    vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify(PREVIEW_CLOUDFLARE_APP);
+  if (env.petshopOrigin) {
+    vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify({
+      ...PREVIEW_SLACK_APP,
+      slackOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify({
+      ...PREVIEW_GOOGLE_APP,
+      googleOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__X = JSON.stringify({
+      ...PREVIEW_X_APP,
+      xOrigin: env.petshopOrigin,
+    });
+    vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify({
+      ...PREVIEW_CLOUDFLARE_APP,
+      cloudflareOrigin: env.petshopOrigin,
+    });
     vars.APP_CONFIG_LOGIN__GOOGLE = "{}";
     vars.APP_CONFIG_LOGIN__CLOUDFLARE = JSON.stringify({
       scopes: ["openid", "user-details.read", "offline_access"],

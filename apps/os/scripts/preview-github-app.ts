@@ -1,11 +1,11 @@
 // scripts/preview-github-app.ts — the GitHub App every per-PR preview names as iterate's own
 // (scripts/deploy.ts ships it as the APP_CONFIG `integrations.github` secret), in a module of its own so the e2e
 // that installs it imports no deploy tooling.
-import { dummyPetshopEnvs } from "../../../envs.ts";
 
 /** A PREVIEW'S GITHUB APP — APP_CONFIG `integrations.github` for every per-PR preview, but its key:
  *  the pet shop's GitHub fake (apps/dummy-petshop/src/github.ts), which serves github.com's and
- *  api.github.com's paths at its deployed origin (`githubOrigin`), and its seeded OAuth client. Fake
+ *  api.github.com's paths at its deployed origin (`githubOrigin`, the deployment's `petshopOrigin`:
+ *  ./deploy.ts), and its seeded OAuth client. Fake
  *  credentials for a fake service, so they live here in code like the admin issuer; the App's
  *  private key is a throwaway generated for this fake alone and kept in Doppler `os/preview`
  *  (`previewGithubAppPrivateKey`) — no key is ever in git. A preview can never reach a real GitHub
@@ -16,7 +16,6 @@ export const PREVIEW_GITHUB_APP = {
   oauthClientId: "petshop-default",
   oauthClientSecret: "petshop-default-secret",
   webhookSecret: "preview-github-webhook-secret",
-  githubOrigin: dummyPetshopEnvs.prd!.baseUrl,
 };
 
 /** The throwaway App key (PEM) from the environment — Doppler `os/preview`

@@ -290,7 +290,7 @@ export function previewDeployment(name: string) {
     admins: [...osEnvs.prd!.admins!, `admin@${TEST_EMAIL_DOMAIN}`],
     adminIssuer: osEnvs.prd!.baseUrl,
     testEmailDomain: TEST_EMAIL_DOMAIN,
-    petshopIntegrations: true,
+    petshopOrigin: dummyPetshopEnvs.prd!.baseUrl,
     resourceNamePrefix: osWorker,
   };
   const apps = Object.fromEntries(

@@ -41,9 +41,10 @@ export default async function deploy(options: {
       Object.assign(secretValues, appConfigSecretsOf(ctx.secrets));
       // The pet shop's GitHub fake as iterate's GitHub App (generate-wrangler-config.ts has the other
       // fakes): its throwaway key is Doppler `os/preview`'s, so the App ships as a secret, not a var.
-      if (ctx.env.petshopIntegrations)
+      if (ctx.env.petshopOrigin)
         secretValues.APP_CONFIG_INTEGRATIONS__GITHUB = JSON.stringify({
           ...PREVIEW_GITHUB_APP,
+          githubOrigin: ctx.env.petshopOrigin,
           privateKey: previewGithubAppPrivateKey(),
         });
       parseAppConfig({
