@@ -1,6 +1,4 @@
-// context/stateless-context.test.ts — the loopback stub a context's loads are minted with
-// (`itxEntrypointFor`): one per execution context, so a loaded worker's dead-id recovery, kept per
-// stub (worker-loader.ts `loaderIdGenerations`), runs once for every load that context makes.
+// context/stateless-context.test.ts — `itxEntrypointFor` mints one loopback stub per execution context.
 import { expect, test, vi } from "vitest";
 import { itxEntrypointFor } from "./stateless-context.ts";
 

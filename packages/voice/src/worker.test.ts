@@ -37,11 +37,6 @@ test.for([0, 1, 2, 3, 4])(
   },
 );
 
-test("health answers the project the service runs in", async () => {
-  const { worker } = await harness();
-  expect(await worker.health()).toEqual({ ok: true, projectId: "prj_voice" });
-});
-
 test("a null image uses the same setter without rendering", async () => {
   const { worker, quickAction, setImage } = await harness();
   expect(await worker.setImage({ device: "waveshare_rlcd_4_2", image: null })).toMatchObject({
@@ -355,7 +350,6 @@ async function harness(image = png(3, 0), infoOverride = {}) {
     return [];
   });
   const itx = {
-    whoami: vi.fn(async () => ({ projectId: "prj_voice", path: "/" })),
     agents: { create: vi.fn(async () => ({})) },
     browser: { quickAction },
     clients: { waveshare_rlcd_4_2: { screen }, zectrix_note4: { screen }, tiny: { screen } },

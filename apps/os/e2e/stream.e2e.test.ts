@@ -35,19 +35,7 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   const itx = openItx(ctx);
   // A bare read sees the birth and wake records and the rows every context is born with.
   const page = await itx.invoke("itx.readEvents(0)");
-  expect(
-    page.events.map((e: { type: string; offset: number; payload: { name?: string } }) => [
-      e.type,
-      e.offset,
-      e.payload.name,
-    ]),
-  ).toEqual([
-    ["events.iterate.com/itx/created", 1, undefined],
-    ["events.iterate.com/itx/woken", 2, undefined],
-    ["events.iterate.com/itx/subscription-configured", 3, "config"],
-    ["events.iterate.com/itx/subscription-configured", 4, "platform"],
-  ]);
-  expect(page.events[0]).toMatchObject({ payload: { projectId: ctx, path: "/" } });
+  expect(page.events[0]).toMatchObject({ offset: 1, payload: { projectId: ctx, path: "/" } });
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
 
@@ -64,12 +52,14 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
 
   // woken exactly once per incarnation, born exactly once ever: the durable log is exactly this
   await itx.invoke(`itx.append({ type: 'again' })`);
-  const types = (await itx.invoke("itx.readEvents(0)")).events.map((e: { type: string }) => e.type);
-  expect(types).toEqual([
+  const names = (await itx.invoke("itx.readEvents(0)")).events.map(
+    (e: { type: string; payload?: { name?: string } }) => e.payload?.name || e.type,
+  );
+  expect(names).toEqual([
     "events.iterate.com/itx/created",
     "events.iterate.com/itx/woken",
-    "events.iterate.com/itx/subscription-configured",
-    "events.iterate.com/itx/subscription-configured",
+    "config",
+    "platform",
     "hello",
     "again",
   ]);

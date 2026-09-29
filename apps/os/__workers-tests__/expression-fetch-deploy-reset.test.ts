@@ -1,12 +1,5 @@
-// __workers-tests__/expression-fetch-deploy-reset.test.ts — a deploy resets every context, and an
-// expression fetch that dialed another context meets the reset as "Durable Object reset because its
-// code was updated." — a cold config worker's producer reading `/repos/config` among them. The
-// expected outcome: the read the cacheKey names is read again (context/worker-loader.ts); a
-// terminal fetch to what lives in another context is sent again when it cannot do anything twice,
-// a GET or HEAD with no body (context/built-ins.ts `callContext`); anything else is a 503 with
-// `Retry-After: 1`, logged `expression-fetch.deploy-reset` at info and never reported
-// (iterate-context-durable-object.ts). The reset is the test's: `state.abort` with the deploy's
-// words, mid-call, on the context dialed — whose facet the call is.
+// __workers-tests__/expression-fetch-deploy-reset.test.ts — an expression fetch that meets another
+// context's deploy reset: read again, sent again when it cannot act twice, else a 503 to retry.
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";

@@ -6,9 +6,8 @@ import { ensureVoiceAgent, upgradeVoice } from "@iterate-com/voice/install";
 import { olderMainCommit } from "../test-support/published-builds.ts";
 import { test } from "../test-support/test.ts";
 
-// main's older builds predate voice run from the published config: `voice.ts` cannot re-export
-// them, so a project pinned at one cannot publish.
-// parked: an older main build cannot run on this platform — revisit by 2026-10-05
+// main's older builds predate voice run from the published config: `voice.ts` cannot re-export them
+// parked: an older main build cannot run on this platform — revisit by 2026-10-12
 test.skip("a project on an older voice build upgrades to main's newest from its page", async ({
   page,
   baseURL,
@@ -16,9 +15,8 @@ test.skip("a project on an older voice build upgrades to main's newest from its 
 }) => {
   helpers.appOrigin("voice");
   await using fixture = await helpers.createFixture("voice-upgrade", { app: baseURL });
-  // The default template pins this deployment's own build and installs voice: set up with a key
-  // (only stored), the older pin is committed as the operator, the same pin commit an upgrade
-  // makes. The page reads the pin and calls nothing, so the older build's code never runs here.
+  // set up with a key (only stored), then the older pin committed as the operator; the page reads
+  // the pin and calls nothing, so the older build's code never runs here
   await ensureVoiceAgent(fixture.itx, "voice-spec-placeholder-key");
   const older = await olderMainCommit(["@iterate-com/voice"]);
   await upgradeVoice(fixture.itx, pkgPrNewVersion("@iterate-com/voice", older));

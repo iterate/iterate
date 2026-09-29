@@ -176,27 +176,23 @@ test("an interval coalesces an idle gap across eviction and stops on explicit ca
 });
 
 test("an interval set again as it stands keeps its clock; a changed one, or a deadline, starts anew", async () => {
-  const s = stub("prj_scheduled_interval_again");
-  const set = (input: object) =>
-    s.invoke(["itx", "schedules", ["set", input]]) as Promise<{ scheduledAtOffset: number }>;
+  const ctx = "prj_scheduled_interval_again";
   const heartbeat = {
     key: "heartbeat",
     when: { everyMs: 300_000 },
     events: [{ type: "heartbeat" }],
   };
-  const first = await set(heartbeat);
-  const armed = (await s.invoke("itx.schedules.get('heartbeat')")) as { nextAt: string };
+  const first = await set(ctx, heartbeat);
   // what an init case does after every commit: the same definition, nothing appended
-  expect(await set(heartbeat)).toEqual(first);
-  expect(await s.invoke("itx.schedules.get('heartbeat')")).toMatchObject({
-    nextAt: armed.nextAt,
-    scheduledAtOffset: first.scheduledAtOffset,
+  expect(await set(ctx, heartbeat)).toBe(first);
+  expect(await stub(ctx).invoke("itx.schedules.get('heartbeat')")).toMatchObject({
+    scheduledAtOffset: first,
   });
-  const changed = await set({ ...heartbeat, events: [{ type: "heartbeat", payload: { n: 2 } }] });
-  expect(changed.scheduledAtOffset).toBeGreaterThan(first.scheduledAtOffset);
+  const changed = { ...heartbeat, events: [{ type: "heartbeat", payload: { n: 2 } }] };
+  expect(await set(ctx, changed)).toBeGreaterThan(first);
   const deadline = { key: "deadline", when: { afterMs: 300_000 }, events: [{ type: "due" }] };
-  const once = await set(deadline);
-  expect((await set(deadline)).scheduledAtOffset).toBeGreaterThan(once.scheduledAtOffset);
+  const once = await set(ctx, deadline);
+  expect(await set(ctx, deadline)).toBeGreaterThan(once);
 });
 
 test("a failed interval stays parked across later alarms, until it is set again", async () => {
@@ -207,39 +203,19 @@ test("a failed interval stays parked across later alarms, until it is set again"
       "CREATE TRIGGER reject_tick BEFORE INSERT ON events WHEN json_extract(NEW.body, '$.type') = 'tick' BEGIN SELECT RAISE(ABORT, 'injected tick refusal'); END",
     );
   });
-  await s.invoke([
-    "itx",
-    "schedules",
-    [
-      "set",
-      {
-        key: "tick",
-        when: { everyMs: 1000 },
-        events: [{ type: "tick" }],
-      },
-    ],
-  ]);
+  const tick = { key: "tick", when: { everyMs: 1000 }, events: [{ type: "tick" }] };
+  await set(ctx, tick);
   const schedule = (await s.invoke("itx.schedules.get('tick')")) as { nextAt: string };
   await fire(ctx, Date.parse(schedule.nextAt));
   await evictDurableObject(s);
   await fire(ctx, Date.parse(schedule.nextAt) + 60_000);
   expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
-    failure: {
-      error: expect.stringContaining("injected tick refusal"),
-    },
+    failure: { error: expect.stringContaining("injected tick refusal") },
   });
   expect(
     (await readLog(ctx)).filter((event) => event.type === "events.iterate.com/itx/schedule-failed"),
   ).toHaveLength(1);
-  // the same definition again revives it
-  const revived = await s.invoke([
-    "itx",
-    "schedules",
-    ["set", { key: "tick", when: { everyMs: 1000 }, events: [{ type: "tick" }] }],
-  ]);
-  expect(await s.invoke("itx.schedules.get('tick')")).toMatchObject({
-    scheduledAtOffset: (revived as { scheduledAtOffset: number }).scheduledAtOffset,
-  });
+  await set(ctx, tick); // the same definition again revives it
   expect(await s.invoke("itx.schedules.get('tick')")).not.toHaveProperty("failure");
 });
 
@@ -337,6 +313,12 @@ test("a cold context SUPERSEDES a stale physical alarm nothing durable wants: it
   expect(alarm === null || alarm > deadline).toBe(true);
   await until("no alarm", async () => (await alarmNow()) === null);
 });
+
+/** `itx.schedules.set(input)` on `ctx`: the offset its receipt answers. */
+async function set(ctx: string, input: object) {
+  const receipt = await stub(ctx).invoke(["itx", "schedules", ["set", input]]);
+  return (receipt as { scheduledAtOffset: number }).scheduledAtOffset;
+}
 
 async function fire(ctx: string, now = Date.parse(at)) {
   vi.useFakeTimers({ now, toFake: ["Date"] });

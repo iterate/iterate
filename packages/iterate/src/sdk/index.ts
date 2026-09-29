@@ -368,7 +368,7 @@ export abstract class IterateConfigEntrypoint<
   /** ONE round trip on the itx scope, then release the scope and every call made through it
    *  (`StreamProcessorDurableObject.withItx` says why an undisposed step keeps a context billed). A
    *  field, not a method: Workers RPC reaches an entrypoint's methods, and a caller's callback must
-   *  never get the scope (__workers-tests__/config-entrypoint.test.ts). */
+   *  never get the scope (sdk/index.test.ts). */
   protected readonly withItx = <T>(call: (itx: IterateContextApi) => T): Promise<Awaited<T>> =>
     withItx(this.env.ITX, call);
 

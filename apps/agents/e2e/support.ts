@@ -10,31 +10,32 @@ import {
   publishConfig,
   sleep,
 } from "../../os/e2e/support/client.ts";
-import { installWorkspaceAgents } from "./agents-source.ts";
 import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 
-/** A fresh root with the agents app installed from this checkout (`installWorkspaceAgents`). */
+/** A fresh root with the agents app installed from this checkout (`installWorkspaceApps`). */
 export async function openAgentItx(context: string) {
   const itx = openItx(context);
-  await installWorkspaceAgents(itx);
+  await installWorkspaceApps(itx);
   return itx;
 }
 
-/** Voice and the agents app on `root` the way a project's config repo installs them (configs/default):
- *  `agentsWorkspaceConfig` with `voice.ts` re-exporting `bundle` (`voiceWorkspaceBundle`, as a row
- *  rewrites it), published as the project's config, then `installAgents` and `installVoice`, as the
- *  init case calls them; the names they add answer everywhere once older snapshots expired. */
-export async function installWorkspaceVoice(
+/** The agents app, and voice when given its `voiceBundle` (`voiceWorkspaceBundle`), on `root` as a
+ *  project's config repo installs them (configs/default): `agentsWorkspaceConfig` published as its
+ *  config, then the installs its init case calls. The names they add on the root answer in every
+ *  other context once the snapshots read before them expired, which this waits out. */
+export async function installWorkspaceApps(
   root: Parameters<typeof installAgents>[0] & Parameters<typeof installVoice>[0],
-  bundle?: string,
+  voiceBundle?: string,
 ) {
   await publishConfig(root, {
     ...agentsWorkspaceConfig,
-    "voice.ts": 'export { default, VoiceAgentDurableObject } from "./voice-bundle.js";\n',
-    "voice-bundle.js": bundle || (await voiceWorkspaceBundle()),
+    ...(voiceBundle && {
+      "voice.ts": 'export { default, VoiceAgentDurableObject } from "./voice-bundle.js";\n',
+      "voice-bundle.js": voiceBundle,
+    }),
   });
   await installAgents(root);
-  await installVoice(root);
+  if (voiceBundle) await installVoice(root);
   await olderSnapshotsExpired();
 }
 

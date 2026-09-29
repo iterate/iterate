@@ -6,8 +6,8 @@ import { collector, freshCtx, readAll, sleep, until } from "../../os/e2e/support
 import { FakeAi, sseResponse, sseStream } from "../../os/e2e/support/fake-ai.ts";
 import { startOwnWorker } from "../../os/e2e/support/own-worker.ts";
 import { localOnly } from "../../os/e2e/support/project-host.ts";
-import { installWorkspaceAgents } from "./agents-source.ts";
 import { assistantWords, configureModel, settledLog } from "./fixtures.ts";
+import { installWorkspaceApps } from "./support.ts";
 
 localOnly(
   "the installed agent settles delayed model streams through env.ITX",
@@ -15,7 +15,7 @@ localOnly(
     const worker = await startOwnWorker();
     try {
       const itx = worker.itx(freshCtx("agent-partner-stream"));
-      await installWorkspaceAgents(itx);
+      await installWorkspaceApps(itx);
       const support = itx.cd("/agents/support");
       const secondPart = Promise.withResolvers<void>();
       const partnerAi = new FakeAi([

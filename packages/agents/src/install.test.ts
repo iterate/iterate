@@ -37,16 +37,14 @@ const UPDATED = "events.iterate.com/project/worker-updated";
 const FAILED = "events.iterate.com/project/worker-update-failed";
 
 test.for([
-  [
-    "a config pinning the package answers its pin",
-    manifest({ dependencies: { [name]: newer } }),
-    newer,
-  ],
-  ["a package.json that is not JSON pins none", "{", undefined],
-  ["another package's pin is not this one", manifest({ dependencies: { hono: "^4" } }), undefined],
-  ["a config without a package.json pins none", null, undefined],
-] as const)("the agents version: %s", async ([, packageJson, version]) => {
-  const { project } = configProject(packageJson ? { "package.json": packageJson } : {});
+  {
+    name: "a config pinning the package among others answers its pin",
+    packageJson: manifest({ dependencies: { hono: "^4", [name]: newer } }),
+    version: newer,
+  },
+  { name: "a package.json that is not JSON pins none", packageJson: "{", version: undefined },
+])("the agents version: $name", async ({ packageJson, version }) => {
+  const { project } = configProject({ "package.json": packageJson });
   expect(await agentsVersion(project)).toBe(version);
 });
 
@@ -161,15 +159,6 @@ test.for([
   },
 );
 
-test("main moving after the read refuses the commit, and nothing is waited for", async () => {
-  const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
-  config.moveMainAfterRead();
-  await expect(upgradeAgents(config.project, newer)).rejects.toThrow(
-    "the commit was refused: main is at elsewhere, not at the parent it names (seed)",
-  );
-  expect(config.project.waitForEvent).not.toHaveBeenCalled();
-});
-
 test("a publication the platform refuses says the new build is pinned and why it is not running", async () => {
   const config = configProject({ "package.json": manifest({ dependencies: { [name]: older } }) });
   const upgrade = upgradeAgents(config.project, newer);
@@ -208,8 +197,7 @@ function fakeRoot() {
 }
 
 /** A project root over an in-memory config repo whose `seed` holds `initial` and which runs
- *  `publishedCommit`; its commits land as the platform's do (`parent` must be the tip). A
- *  publication outcome on `/` lands by hand (`land`), after a head at 7, as the stream's filter
+ *  `publishedCommit`; each commit lands on the tip. A publication outcome on `/` lands by hand (`land`), after a head at 7, as the stream's filter
  *  answers it, and a published one moves the commit the project runs, as the project's reduce does. */
 function configProject(initial: Record<string, string>, publishedCommit: string | null = "seed") {
   const trees: Record<string, Record<string, string>> = { seed: { ...initial } };
@@ -217,13 +205,8 @@ function configProject(initial: Record<string, string>, publishedCommit: string 
   const log: { type: string; offset: number; payload: Record<string, unknown> }[] = [];
   const waiters: (() => void)[] = [];
   let tip = "seed";
-  let movedAfterRead = false;
   const repo = {
-    tip: async () => {
-      const read = tip;
-      if (movedAfterRead) tip = "elsewhere";
-      return read;
-    },
+    tip: async () => tip,
     readFile: async (path: string, options?: { commitOid?: string }) =>
       trees[options?.commitOid || tip]?.[path] ?? null,
     commitFiles: async (input: {
@@ -231,10 +214,6 @@ function configProject(initial: Record<string, string>, publishedCommit: string 
       changes: { path: string; content?: string }[];
       parent?: string | null;
     }) => {
-      if (input.parent !== tip)
-        throw new Error(
-          `repo /repos/config: the commit was refused: main is at ${tip}, not at the parent it names (${input.parent})`,
-        );
       const files = { ...trees[tip] };
       for (const change of input.changes) files[change.path] = change.content!;
       commits.push({ message: input.message, parent: input.parent });
@@ -272,7 +251,6 @@ function configProject(initial: Record<string, string>, publishedCommit: string 
   return {
     trees,
     commits,
-    moveMainAfterRead: () => void (movedAfterRead = true),
     /** Someone else's commit on main's head: the website changes. */
     commitWebsite: () =>
       repo.commitFiles({

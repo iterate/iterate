@@ -1,5 +1,4 @@
-// cause.test.ts — a cause as the wire carries it: a chain id of any origin parses back, a mark (a
-// header's text) never keys writes, and a malformed write key costs only itself.
+// cause.test.ts — a cause as the wire carries it; the guard it drives: __workers-tests__/loop-guard.
 import { expect, test } from "vitest";
 import { causeHeader, newChain, parseCause } from "./cause.ts";
 
