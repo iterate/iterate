@@ -88,6 +88,8 @@ function CallPage() {
           {voice.build ? (
             <div className="mx-auto w-full max-w-xl px-4 pb-4 md:px-8 md:pb-8">
               <AppBuild
+                // one project's upgrade and its outcome, never shown on the next project's page
+                key={project.id}
                 app="Voice"
                 installed={voice.build}
                 check={(installed) => voiceBuild({ data: installed })}

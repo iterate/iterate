@@ -182,6 +182,8 @@ function AgentsPage() {
             <SidebarGroup className="mt-auto group-data-[collapsible=icon]:hidden">
               <SidebarGroupContent className="px-2">
                 <AppBuild
+                  // one project's upgrade and its outcome, never shown on the next project's page
+                  key={project}
                   app="Agents"
                   installed={data.build}
                   check={(installed) => agentsBuild({ data: installed })}
