@@ -210,7 +210,7 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // the seed: the config repo in the catalog (its certificate crossed to /), its files on main
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
-    paths: ["AGENTS.md", "agents.ts", "package.json", "tsconfig.json", "worker.ts"],
+    paths: ["AGENTS.md", "agents.ts", "package.json", "tsconfig.json", "voice.ts", "worker.ts"],
   });
   // published: the seed is the first publication, as the generation of its commit's fact on `/`,
   // and the apex answers its homepage (subdomain routing under the test's base) — within a

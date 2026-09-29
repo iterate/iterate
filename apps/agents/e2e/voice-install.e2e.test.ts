@@ -29,6 +29,12 @@ deployedOnly(
     const { api } = await oauthSession(projectId, user);
     const project = await api.projects.get(projectId);
     await project.kv.put("worker.js", "my existing data");
+    // the project's saga seeds its config repo before it lands `created`
+    await project.waitForEvent({
+      type: "events.iterate.com/project/created",
+      afterOffset: 0,
+      timeoutMs: 60_000,
+    });
     const config = project.repos.get("/repos/config");
     expect(JSON.parse((await config.readFile("package.json"))!)).toMatchObject({
       dependencies: { "@iterate-com/voice": version },
