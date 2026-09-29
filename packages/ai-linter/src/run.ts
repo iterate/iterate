@@ -201,13 +201,23 @@ async function lint(job: Job, config: LintConfig, io: LintIo, github: GithubApi)
   const llmRules = rules.filter((rule) => rule.engine === "llm");
   const jevRules = rules.filter((rule): rule is JevRule => rule.engine === "jev");
   const changed: z.infer<typeof ChangedFile>[] = [];
+  // GitHub can list a changed file without its filename and status: it is counted, not linted.
+  let unnamed = 0;
   for (let page = 1; changed.length < MAX_FILES; page++) {
     const batch = z
-      .array(ChangedFile)
+      .array(ChangedFile.nullable().catch(null))
       .parse(await github("GET", `${repo}/pulls/${job.number}/files?per_page=100&page=${page}`));
-    changed.push(...batch);
+    for (const file of batch) {
+      if (file) changed.push(file);
+      else unnamed++;
+    }
     if (batch.length < 100) break;
   }
+  if (unnamed > 0)
+    problems.push({
+      stage: "file",
+      error: `Not linted: ${unnamed} of the changed files GitHub listed came without a filename or status`,
+    });
   // `reviewed`: the files the LLM reads whole, for its rules; `excerpted`: those whose LLM rules all
   // select, which it reads as excerpts (`excerptsOf`); `judged`: the files Jev's rules select in.
   const reviewed: ReviewedFile[] = [];
