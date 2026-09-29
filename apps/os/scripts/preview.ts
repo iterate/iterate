@@ -931,7 +931,10 @@ async function runSuite(
       name,
       // the client apps the specs run against; the vitest rows use none
       suite === "specs"
-        ? ["notes", "voice", "dash", "admin"].map((app) => ({ name: app, url: appUrl(app) }))
+        ? ["agents", "notes", "voice", "dash", "admin"].map((app) => ({
+            name: app,
+            url: appUrl(app),
+          }))
         : [],
     );
   } catch (error) {

@@ -57,15 +57,15 @@ async function signInToApp(input: { page: Page; app: string; project: { slug: st
     // noWaitAfter: Authorize posts and the issuer hands the browser back to the app; the wait
     // below covers that navigation (the spinner-waiter counts one in flight as loading)
     await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
-    // every client app's shell (packages/ui app-shell.tsx) names the active project in its switcher,
-    // which a phone's keeps in the sidebar sheet behind the trigger only the shell has; the landed
-    // path is checked below
-    await page
-      .getByRole("button", { name: "Switch project" })
-      .filter({ hasText: project.slug })
-      .or(page.getByRole("button", { name: "Toggle sidebar" }))
-      .filter({ visible: true })
-      .waitFor();
+    // every client app's shell (packages/ui app-shell.tsx) names the active project in its switcher;
+    // below 768 px (use-mobile.ts) the switcher is in the sidebar sheet, so there the header's
+    // sidebar trigger says the shell is up, and the landed path below names the project
+    const phone = (page.viewportSize()?.width ?? 0) < 768;
+    await (
+      phone
+        ? page.getByRole("button", { name: "Toggle sidebar" })
+        : page.getByRole("button", { name: "Switch project" }).filter({ hasText: project.slug })
+    ).waitFor();
   });
   const landed = new URL(page.url());
   expect({ origin: landed.origin, pathname: landed.pathname }).toEqual({ origin, pathname: next });
