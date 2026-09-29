@@ -24,6 +24,15 @@
 // its edge (the id `/version` answers with), its own context and another brand-new one run, and
 // misses (`stage: "version"`) when any is not the deploy's: the gate passes once `consecutive`
 // rounds in a row run the deploy's version everywhere they look.
+//
+// A BRAND-NEW WORKERS.DEV HOSTNAME is not on every Cloudflare edge machine at once: for a while after
+// its Worker's first deployment, a fresh connection can reach one that answers Cloudflare's own 404,
+// "There is nothing here yet", instead of the Worker (a WebSocket client sees only "WebSocket
+// connection failed."), ever fewer of them, and "these errors should resolve themselves after a
+// minute or so" (https://developers.cloudflare.com/workers-ai/guides/tutorials/build-a-retrieval-augmented-generation-ai/#11-deploy-your-project).
+// The last of them are too rare for rounds to see, about one fresh connection in a thousand, while a
+// suite opens a hundred a second from its start. So the gate also holds until every workers.dev
+// hostname of the deployment is HOSTNAME_PROPAGATION_MS old; one redeployed in place is already.
 import { randomBytes, randomUUID } from "node:crypto";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
@@ -34,22 +43,41 @@ import { WebSocket } from "undici";
  *  measured, 58 s. */
 const DEADLINE_MS = 150_000;
 
+/** How long after a Worker's first deployment its workers.dev hostname can still answer Cloudflare's
+ *  "There is nothing here yet" on some edge: Cloudflare's "a minute or so". Measured 2026-09-28 over
+ *  232 brand-new deployments: the gate's probes met it up to 42 s after apps/os went live (p90 25 s). */
+const HOSTNAME_PROPAGATION_MS = 60_000;
+
 /** Wait until the preview at `url` answers `consecutive` full rounds in a row on `version` (the
- *  deployment's id), each `width` probes at once; throws, naming the misses, when DEADLINE_MS passes
- *  first. */
-export function awaitPreviewReady(
+ *  deployment's id), each `width` probes at once, and until its newest workers.dev hostname, live
+ *  since `hostnamesLiveSince` (epoch ms), is HOSTNAME_PROPAGATION_MS old; throws, naming the misses,
+ *  when DEADLINE_MS passes before the rounds do. */
+export async function awaitPreviewReady(
   url: string,
   options: {
     adminSecret: string;
     version: string;
     width: number;
     consecutive: number;
+    hostnamesLiveSince: number;
   },
 ) {
-  return awaitFullRounds(() => probeRound(url, options), {
+  const ready = await awaitFullRounds(() => probeRound(url, options), {
     label: url,
     consecutive: options.consecutive,
   });
+  await awaitHostnamePropagation(url, options.hostnamesLiveSince);
+  return ready;
+}
+
+/** Resolves once `liveSince` (epoch ms) is HOSTNAME_PROPAGATION_MS ago, logging the wait it makes. */
+export async function awaitHostnamePropagation(label: string, liveSince: number) {
+  const waitMs = liveSince + HOSTNAME_PROPAGATION_MS - Date.now();
+  if (waitMs <= 0) return;
+  console.log(
+    `readiness: ${label}'s newest workers.dev hostname went live ${((Date.now() - liveSince) / 1000).toFixed(1)} s ago; waiting ${(waitMs / 1000).toFixed(1)} s more, until it is ${HOSTNAME_PROPAGATION_MS / 1000} s old and on every edge`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
 }
 
 /** The gate's loop over any round of probes (preview-readiness.test.ts drives it with fakes): a

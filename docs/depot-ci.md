@@ -701,8 +701,11 @@ edge can still serve the previous version and a brand-new Durable Object can sti
 an object on it later resets with "Durable Object reset because its code was updated.", failing
 every call in flight. So each of the gate's probes also asks which version its edge and two
 brand-new contexts run (the operator's `session.versions`), and the gate passes once three rounds in
-a row run the deployment everywhere. It fails the deploy after 150 s. Every deployment goes through
-the same gate; only a same-commit redeploy and main on dev meet the in-place window now.
+a row run the deployment everywhere. It fails the deploy after 150 s. A brand-new worker's
+workers.dev hostname is not on every edge at once either: a few connections still get Cloudflare's
+"There is nothing here yet" 404 for up to a minute, too few for the rounds to see, so the gate also
+holds until every hostname of the deployment is 60 s old. Every deployment goes through the same
+gate; only a same-commit redeploy and main on dev meet the in-place window now.
 
 Soaks of the e2e suite at `--retry=0` (`os-e2e-soak.yml`), every run redeployed in place. With e2e
 as soon as a gate without the version check passed, 7 of 48 runs had a row fail on a platform

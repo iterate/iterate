@@ -29,7 +29,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, osEnv, osEnvs, type OsEnv } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, osEnvs, previewDeployment, type OsEnv } from "../../../envs.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -510,6 +510,22 @@ async function deployedVersion(ctx: EnvContext<OsEnv>, workerName: string) {
   return versions[0]!.version_id;
 }
 
+/** When the newest of `workers`' workers.dev hostnames went live: each one's first deployment
+ *  (the oldest the deployments API lists), so a worker redeployed in place counts from before its
+ *  latest deploy (preview-readiness.ts HOSTNAME_PROPAGATION_MS says why it matters). */
+async function hostnamesLiveSince(ctx: EnvContext<OsEnv>, workers: string[]) {
+  const firstDeployed = await Promise.all(
+    workers.map(async (worker) => {
+      const { deployments } = await ctx.cf<{ deployments: { created_on: string }[] }>(
+        `/workers/scripts/${worker}/deployments`,
+      );
+      if (deployments.length === 0) throw new Error(`${worker} has no deployment`);
+      return Math.min(...deployments.map((deployment) => Date.parse(deployment.created_on)));
+    }),
+  );
+  return Math.max(...firstDeployed);
+}
+
 /** apps/os (scripts/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
  *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
  *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
@@ -561,16 +577,25 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, osEnv(name)!.workerName);
+  const deployment = previewDeployment(name)!;
+  const [versionId, liveSince] = await Promise.all([
+    deployedVersion(ctx, deployment.os.workerName),
+    hostnamesLiveSince(ctx, [
+      deployment.os.workerName,
+      ...apps.map((app) => deployment.apps[app.name]!.workerName),
+    ]),
+  ]);
   const config = parseAppConfig(collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]));
   // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
-  // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
+  // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version,
+  // and every hostname of the deployment is old enough to be on every edge.
   await traceOperation("Readiness gate", () =>
     awaitPreviewReady(url, {
       adminSecret: config.secrets.adminBearer.exposeSecret(),
       version: versionId,
       width: 8,
       consecutive: 3,
+      hostnamesLiveSince: liveSince,
     }),
   );
   console.log(`\ndeployment ${name}: ${url}`);

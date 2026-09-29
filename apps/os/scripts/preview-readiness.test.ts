@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { awaitFullRounds } from "./preview-readiness.ts";
+import { awaitFullRounds, awaitHostnamePropagation } from "./preview-readiness.ts";
 
 test("awaitFullRounds: a brand-new preview's misses reset the streak, each one a platform-failure warn; ready after the full rounds in a row", async () => {
   const warn = fakeClockAndWarns();
@@ -65,6 +65,22 @@ test("awaitFullRounds: a preview that answers at once passes after exactly the r
     { label: "https://pr3-os-preview.example", consecutive: 3 },
   );
   expect({ calls, warns: warn.calls.length }).toEqual({ calls: 3, warns: 0 });
+});
+
+test("awaitHostnamePropagation: a hostname live 20 s holds the gate 40 s more, saying so; one live a minute does not wait", async () => {
+  fakeClockAndWarns();
+  const log = vi.mocked(console.log);
+  const started = Date.now();
+  await awaitHostnamePropagation("https://pr4-os-preview.example", started - 20_000);
+  expect(Date.now() - started).toBe(40_000);
+  expect(log.mock.calls.map(([line]) => String(line))).toEqual([
+    expect.stringMatching(/went live 20\.0 s ago; waiting 40\.0 s more, until it is 60 s old/),
+  ]);
+  await awaitHostnamePropagation("https://pr4-os-preview.example", Date.now() - 60_000);
+  expect({ waitedMs: Date.now() - started, logs: log.mock.calls.length }).toEqual({
+    waitedMs: 40_000,
+    logs: 1,
+  });
 });
 
 const ok = { ok: true as const, ms: 5 };
