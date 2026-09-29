@@ -125,6 +125,18 @@ type FacetGeneration = {
   endedBy?: { code: "FACET_ABORTED" | "FACET_RESTARTED" | "NO_FACET"; message: string };
 };
 
+/** Whether a call's rejection on a run the platform ended is that end's (`#call` re-codes it): an
+ *  abort asked for claims whatever the call rejected with; a restart all but the watchdog's own
+ *  TIMEOUT; a deletion only the runtime's own words for it (workerd server.c++ `deleteFacet`). */
+function isRejectionByEndOfRun(
+  code: NonNullable<FacetGeneration["endedBy"]>["code"],
+  error: unknown,
+): boolean {
+  if (code === "FACET_ABORTED") return true;
+  if (code === "FACET_RESTARTED") return errorCode(error) !== "TIMEOUT";
+  return error instanceof Error && error.message === "Facet was deleted.";
+}
+
 /** What a call's watchdog does to a facet that never answered: every call but a platform start
  *  restarts it; a platform start leaves it alone — the start gave up under its own bound and
  *  logged, and an abort then would stop the facet outside the start's `blockConcurrencyWhile`. */
@@ -1237,7 +1249,7 @@ export class FacetHost {
    *  is restarted (`#restart`) — unless the call was a platform start, which leaves it — and one
    *  whose startup threw is aborted and starts on its next call: its pending call rejects, the
    *  counter drains. A call on an instance the platform ended rejects with how it ended it
-   *  (`FacetGeneration`), a call the watchdog timed out with TIMEOUT. */
+   *  (`FacetGeneration`, `isRejectionByEndOfRun`). */
   async #call(
     { facet, startupFailed, generation }: MaterializedFacet,
     name: string,
@@ -1282,7 +1294,7 @@ export class FacetHost {
       } else if (startupFailed())
         this.#abortFacetIfRunning(name, "startup failed", undefined, generation);
       const { endedBy } = generation;
-      if (endedBy && errorCode(error) !== "TIMEOUT")
+      if (endedBy && isRejectionByEndOfRun(endedBy.code, error))
         throw codedError(endedBy.code, endedBy.message);
       throw error;
     } finally {
