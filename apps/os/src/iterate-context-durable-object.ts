@@ -111,7 +111,10 @@ import { SubscriptionDelivery, type DeliveryDeadline } from "./stream/subscripti
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
  *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
  *  lists — its own birth record, `itx/created { projectId, path }` at offset 1. A context with no
- *  birth record and no name is nobody: refused, so no id alone ever mints one. */
+ *  birth record and no name is nobody: refused, so no id alone ever mints one. That refusal is the
+ *  sweep's expected answer for an object emptied moments ago, which Cloudflare still lists: it is
+ *  logged at info, `context.unborn-by-id`, before the throw the runtime logs as an error line
+ *  (`#abort` says how the prd fault alarm reads the pair). */
 function iterateContextAddressOf(ctx: DurableObjectState) {
   if (ctx.id.name) return DurableObjectNameCodec.parse(ctx.id.name);
   let body: string | undefined;
@@ -129,10 +132,12 @@ function iterateContextAddressOf(ctx: DurableObjectState) {
     born?.type !== "events.iterate.com/itx/created" ||
     !born.payload?.projectId ||
     !born.payload.path
-  )
-    throw new Error(
-      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.",
-    );
+  ) {
+    const message =
+      "IterateContextDurableObject must be addressed by name (reach it via getByName); by id, only a context that was born answers.";
+    console.info({ event: "context.unborn-by-id", message });
+    throw new Error(message);
+  }
   return DurableObjectNameCodec.address({
     projectId: born.payload.projectId,
     path: born.payload.path,
@@ -442,8 +447,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   async #unbornStill(unborn: Error): Promise<Error> {
     const { projectId } = this.#durableObjectAddress;
     if (!(await this.#controlPlane.deletedProject(projectId).catch(() => true)))
-      this.ctx.abort(`project ${projectId} was restored: its root is born on the next request`);
+      this.#abort(
+        "context.root-restored",
+        `project ${projectId} was restored: its root is born on the next request`,
+      );
     return unborn;
+  }
+
+  /** A RESET THIS CONTEXT ASKS FOR, an expected outcome: `ctx.abort`, whose `message` the runtime
+   *  logs as an error line nothing can catch, in this invocation and in every other call in flight
+   *  here, which it rejects (https://developers.cloudflare.com/durable-objects/api/state/#abort). So
+   *  the outcome is logged first, at info, with that `message`: `event`. The prd fault alarm
+   *  (scripts/ci/prd-fault-alarm.ts `ANNOUNCED`) reads an error line with a message this Durable
+   *  Object announced as that outcome, and pages none of them. */
+  #abort(
+    event: "context.destroyed" | "context.aborted" | "context.root-restored",
+    message: string,
+    options?: { retryAlarm: boolean },
+  ): void {
+    console.info({ event, message });
+    this.ctx.abort(message, options);
   }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -547,7 +570,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // so only a deployed worker shows it. `#abortAfterTheAnswer` syncs for the same reason.
       await this.ctx.storage.sync();
       // an alarm this reset interrupts must not run again: it would wake the destroyed context
-      this.ctx.abort(CONTEXT_DESTROYED, { retryAlarm: false });
+      this.#abort("context.destroyed", CONTEXT_DESTROYED, { retryAlarm: false });
     });
   }
 
@@ -943,7 +966,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #abortAfterTheAnswer(message: string) {
     void this.ctx.blockConcurrencyWhile(async () => {
       await this.ctx.storage.sync();
-      setTimeout(() => this.ctx.abort(message), 0);
+      setTimeout(() => this.#abort("context.aborted", message), 0);
     });
   }
 
