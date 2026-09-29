@@ -8,7 +8,7 @@
 //     every writer pins one — the typed client a vendor would ship, used from typed TypeScript.
 // Both answer the pet shop's catalogue for the shopper whose bearer the request carries: the seeded
 // pets, and whatever the suite's other pet-shop rows added meanwhile.
-import { pinPkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { isPkgPrNewCommit, pinPkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { expect, test } from "vitest";
 import { openItx, runId } from "./support/client.ts";
 import { publishConfigWorker } from "./support/config-worker.ts";
@@ -56,10 +56,14 @@ test("a vendor's SDK from pkg.pr.new: @iterate-com/petshop-sdk, typed, lists the
   const sdkAt = (ref: string) =>
     `https://pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@${ref}`;
   const pr = process.env.PREVIEW_PR_NUMBER?.trim();
-  const version = await pinPkgPrNewVersion(
-    "@iterate-com/petshop-sdk",
-    pr && (await fetch(sdkAt(pr), { method: "HEAD" })).ok ? sdkAt(pr) : sdkAt("main"),
-  );
+  // The PR's own build answers with its commit. A number the PR published nothing under is a 404,
+  // or a 200 for another build pkg.pr.new matched to it, which names no commit: main's, then.
+  const prBuild = pr ? await fetch(sdkAt(pr), { method: "HEAD" }) : undefined;
+  const prCommit = prBuild?.ok ? prBuild.headers.get("x-commit-key")?.split(":").at(-1) : undefined;
+  const version =
+    prCommit && isPkgPrNewCommit(prCommit)
+      ? sdkAt(prCommit)
+      : await pinPkgPrNewVersion("@iterate-com/petshop-sdk", sdkAt("main"));
   expect(version).toMatch(/@iterate-com\/petshop-sdk@[0-9a-f]{40}$/);
   const pets = await petsFrom({
     slug: "npm-vendor",
