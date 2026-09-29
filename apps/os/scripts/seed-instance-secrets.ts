@@ -11,7 +11,7 @@
 import { createCli } from "trpc-cli";
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { connectIterate } from "iterate/node";
-import { OS_DOPPLER_PROJECT, getDeployTarget, osEnvs } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getDeployableEnv, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { parseAppConfig } from "../src/app-config.ts";
 import { previewDeploymentUrls } from "./preview-config.ts";
@@ -39,7 +39,7 @@ export default async function seedInstanceSecrets(options: {
   if (options.env === "prd" && !options.confirmPrd)
     throw new Error("--env prd sets production's keys: pass --confirm-prd as well");
   const context = await resolveEnvContext({
-    env: getDeployTarget(options.env, osEnvs),
+    env: getDeployableEnv(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const baseUrl = options.deployment

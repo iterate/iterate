@@ -382,7 +382,7 @@ export function previewDeployment(name: string) {
 /** THE ENTRY OF `envs` A NAME NAMES, with that name on it: what every deploy, provision and seed
  *  script looks its `--env` up with, and hands to scripts/lib `deployApp` / `resolveEnvContext`.
  *  Throws for a name `envs` has no entry for. */
-export function getDeployTarget<E>(name: string, envs: Record<string, E>): E & { name: string } {
+export function getDeployableEnv<E>(name: string, envs: Record<string, E>): E & { name: string } {
   const env = envs[name];
   if (!env)
     throw new Error(
@@ -391,7 +391,7 @@ export function getDeployTarget<E>(name: string, envs: Record<string, E>): E & {
   return { ...env, name };
 }
 
-/** An apps/os deployment and the name it was found by (`getOsDeployTarget`): what the deploy,
+/** An apps/os deployment and the name it was found by (`getOsDeployableEnv`): what the deploy,
  *  preview and sweep scripts hold once they have looked their `--env` up. */
 export type OsDeployableEnv = OsEnv & { name: string };
 
@@ -400,7 +400,7 @@ export type OsDeployableEnv = OsEnv & { name: string };
  *  it; throws for any other name. What building and deploying apps/os by name look up
  *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
  *  tell the two apart. */
-export function getOsDeployTarget(name: string): OsDeployableEnv {
+export function getOsDeployableEnv(name: string): OsDeployableEnv {
   const env = osEnvs[name] || previewDeployment(name)?.os;
   if (!env)
     throw new Error(

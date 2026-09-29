@@ -1,11 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
-import { ciReportsEnvs, getDeployTarget } from "../../../envs.ts";
+import { ciReportsEnvs, getDeployableEnv } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy with Depot's token → the viewer answers (scripts/lib/deploy-app.ts). */
 export default async function deploy(options: { env: string }) {
-  const env = getDeployTarget(options.env, ciReportsEnvs);
+  const env = getDeployableEnv(options.env, ciReportsEnvs);
   await deployApp({
     env,
     dopplerProject: "_shared",

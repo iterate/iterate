@@ -1,5 +1,5 @@
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, getDeployTarget, osEnvs, osResourceNames } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getDeployableEnv, osEnvs, osResourceNames } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
 import { routedHostnames } from "./generate-wrangler-config.ts";
@@ -8,7 +8,7 @@ import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
 export default async function ensureResources(options: { env: string }) {
   const ctx = await resolveEnvContext({
-    env: getDeployTarget(options.env, osEnvs),
+    env: getDeployableEnv(options.env, osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
   });
   const namespaces = await ctx.cf<{ id: string; title: string }[]>(

@@ -32,8 +32,8 @@ import {
 } from "@iterate-com/shared/test-support/test-evidence";
 import {
   OS_DOPPLER_PROJECT,
-  getDeployTarget,
-  getOsDeployTarget,
+  getDeployableEnv,
+  getOsDeployableEnv,
   osEnvs,
   previewDeployment,
   type OsDeployableEnv,
@@ -144,7 +144,7 @@ type Command = z.infer<typeof Command>;
  *  that is not the dev/preview one. */
 const accountContext = () =>
   resolveEnvContext({
-    env: getDeployTarget("preview", osEnvs),
+    env: getDeployableEnv("preview", osEnvs),
     dopplerProject: OS_DOPPLER_PROJECT,
   });
 
@@ -585,7 +585,7 @@ async function deployPreviewSteps(
     );
   const deployedApps = apps.map((app) => ({ name: app.name, url: urls.apps[app.name]! }));
   const url = urls.os;
-  const versionId = await deployedVersion(ctx, getOsDeployTarget(name).workerName);
+  const versionId = await deployedVersion(ctx, getOsDeployableEnv(name).workerName);
   const config = parseAppConfig({
     ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
     ...appConfigSecretsOf(ctx.secrets),
@@ -604,9 +604,9 @@ async function deployPreviewSteps(
   const signIn = prNumber
     ? signInLinks({
         url,
-        ingressRouting: getOsDeployTarget(name).ingressRouting || null,
+        ingressRouting: getOsDeployableEnv(name).ingressRouting || null,
         // every per-commit deployment's admins sign in through prd (envs.ts `previewDeployment`)
-        providerHint: new URL(getOsDeployTarget(name).adminIssuer!).host,
+        providerHint: new URL(getOsDeployableEnv(name).adminIssuer!).host,
         prNumber,
         apps: deployedApps,
         changedPaths: await changed,
@@ -645,7 +645,7 @@ async function deployPreviewSteps(
   const [seeded] = await Promise.all([
     signIn
       ? traceOperation("Seed sign-in", () =>
-          seedSignIn(config, { url, ...signIn, admins: getOsDeployTarget(name).admins || [] }),
+          seedSignIn(config, { url, ...signIn, admins: getOsDeployableEnv(name).admins || [] }),
         )
       : true,
     publish(true),

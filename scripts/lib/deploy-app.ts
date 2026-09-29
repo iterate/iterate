@@ -41,7 +41,7 @@ export async function deployApp<
     resources?: Record<string, string>;
   },
 >(input: {
-  /** The deploy script's `--env`, looked up (envs.ts `getDeployTarget`, `getOsDeployTarget`). */
+  /** The deploy script's `--env`, looked up (envs.ts `getDeployableEnv`, `getOsDeployableEnv`). */
   env: E;
   dopplerProject: string;
   /** Absolute app root (wrangler/vite commands run here). */
