@@ -7,6 +7,7 @@
  * and in Node alike.
  */
 import { handleGithubRequest } from "./github.ts";
+import { handleXRequest } from "./x.ts";
 import { handleGoogleRequest } from "./google.ts";
 import { handleCloudflareRequest } from "./cloudflare.ts";
 import { randomSealKey } from "./seal.ts";
@@ -31,6 +32,7 @@ export function memoryPetshop(options: { sealKey?: string } = {}) {
     sealKey: deps.sealKey,
     handle: async (request: Request): Promise<Response | null> =>
       (await handleSlackRequest(request, deps)) ??
+      (await handleXRequest(request, deps)) ??
       (await handleGoogleRequest(request, deps)) ??
       (await handleCloudflareRequest(request, deps)) ??
       (await handleGithubRequest(request, deps)),

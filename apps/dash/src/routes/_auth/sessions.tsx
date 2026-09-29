@@ -472,7 +472,7 @@ function SessionsPage() {
 }
 
 /** The providers a person connects on their own account here (GitHub comes from signing in). */
-const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare")[] = ["google", "cloudflare"];
+const PERSONAL_CONNECT_PROVIDERS: ("google" | "cloudflare" | "x")[] = ["google", "cloudflare", "x"];
 
 const AccountConnections = z.looseObject({
   integrations: z.record(

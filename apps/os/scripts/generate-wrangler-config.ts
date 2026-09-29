@@ -16,6 +16,7 @@ import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 import { PREVIEW_CLOUDFLARE_APP } from "./preview-cloudflare-app.ts";
 import { PREVIEW_GOOGLE_APP } from "./preview-google-app.ts";
 import { PREVIEW_SLACK_APP } from "./preview-slack-app.ts";
+import { PREVIEW_X_APP } from "./preview-x-app.ts";
 
 /** The half of `APP_CONFIG` (src/app-config.ts) a deployment gets from envs.ts — its `urls`, the
  *  zones of its projects' custom hostnames (`customHostnames`), its `admins` and where they sign in,
@@ -38,6 +39,7 @@ function configVars(env: OsEnv) {
   if (env.petshopIntegrations) {
     vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify(PREVIEW_SLACK_APP);
     vars.APP_CONFIG_INTEGRATIONS__GOOGLE = JSON.stringify(PREVIEW_GOOGLE_APP);
+    vars.APP_CONFIG_INTEGRATIONS__X = JSON.stringify(PREVIEW_X_APP);
     vars.APP_CONFIG_INTEGRATIONS__CLOUDFLARE = JSON.stringify(PREVIEW_CLOUDFLARE_APP);
     vars.APP_CONFIG_LOGIN__GOOGLE = "{}";
     vars.APP_CONFIG_LOGIN__CLOUDFLARE = JSON.stringify({

@@ -17,6 +17,7 @@ packages:
   - packages/iterate
   - packages/petshop-sdk
   - packages/voice
+  - packages/x
   - packages/shared
   - packages/ui
   - lint

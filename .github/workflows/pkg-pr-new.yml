@@ -18,6 +18,7 @@ on:
     paths:
       - packages/agents/**
       - packages/ai-linter/**
+      - packages/x/**
       - packages/cli/**
       - packages/github-sync/**
       - packages/iterate/**
@@ -41,7 +42,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
-      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice... --filter @iterate-com/github-sync... --filter @iterate-com/ai-linter...
+      - run: pnpm install --frozen-lockfile --filter iterate-root --filter @iterate-com/cli... --filter @iterate-com/petshop-sdk --filter @iterate-com/voice... --filter @iterate-com/github-sync... --filter @iterate-com/ai-linter... --filter @iterate-com/x...
       - run: pnpm --dir packages/iterate build
       - run: pnpm --dir packages/cli build
       - run: pnpm --dir packages/petshop-sdk build
@@ -49,7 +50,8 @@ jobs:
       - run: pnpm --dir packages/voice build
       - run: pnpm --dir packages/github-sync build
       - run: pnpm --dir packages/ai-linter build
+      - run: pnpm --dir packages/x build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation.
-      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter
+      - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter ./packages/x

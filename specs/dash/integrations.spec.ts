@@ -309,3 +309,26 @@ test("a project brings its own Slack app: the sheet gives the URLs to paste into
     .click({ noWaitAfter: true });
   await page.getByRole("heading", { name: "Slack asks you to install own-slack-client" }).waitFor();
 });
+
+test("a project connects X, lists its verified handle, and disconnects it", async ({
+  page,
+  baseURL,
+  helpers,
+}) => {
+  helpers.appOrigin("dash");
+  await using _fixture = await helpers.createFixture("integrations-x", { app: baseURL });
+  await page.getByRole("link", { name: "Integrations", exact: true }).click();
+  const x = page.getByRole("region", { name: "X", exact: true });
+  await x.getByRole("button", { name: "Connect X", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Connect an X account", exact: true })
+    .click({ noWaitAfter: true });
+  const account = x.getByRole("listitem").filter({ hasText: "@prototype" });
+  await account.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Disconnect", exact: true })
+    .click();
+  await x.getByText("Not connected", { exact: true }).waitFor();
+});

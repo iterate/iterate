@@ -1,0 +1,55 @@
+{
+  "name": "@iterate-com/x",
+  "version": "0.1.0",
+  "description": "X account tools and a userspace mention-to-agent prototype",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/x"
+  },
+  "type": "module",
+  "exports": {
+    "./client": "./src/client.ts",
+    "./bot": "./src/bot.ts",
+    "./install": "./src/install.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./client": {
+        "types": "./dist/client.d.mts",
+        "import": "./dist/client.mjs"
+      },
+      "./bot": {
+        "types": "./dist/bot.d.mts",
+        "import": "./dist/bot.mjs"
+      },
+      "./install": {
+        "types": "./dist/install.d.mts",
+        "import": "./dist/install.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "iterate": "*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "iterate": "workspace:*",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

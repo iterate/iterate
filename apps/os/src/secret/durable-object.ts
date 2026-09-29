@@ -55,6 +55,7 @@ import { ControlPlane } from "../control-plane/edge.ts";
 import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
 import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
 import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
+import { xEndpointsOf, XUserResponse } from "../integrations/x.ts";
 import { googleEndpointsOf } from "../integrations/google.ts";
 import { githubApiOriginOf } from "../integrations/github.ts";
 import { cloudflareEndpointsOf } from "../integrations/cloudflare.ts";
@@ -570,30 +571,39 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
    *  provider's OAuth endpoints answer on; refused when the deployment has none. GitHub's is the
    *  App's user-authorization client (a GitHub sign-in's token refreshes with it). */
   #platformOAuthApp(provider: OAuthPlatform) {
-    const { slack, google, cloudflare, github } = appConfigOf(this.env).integrations;
+    const { slack, google, cloudflare, github, x } = appConfigOf(this.env).integrations;
     const googleEndpoints = googleEndpointsOf(google?.googleOrigin);
     const app =
-      provider === "slack"
-        ? slack && { app: slack, origins: [slack.slackOrigin] }
-        : provider === "google"
-          ? google && {
-              app: google,
-              origins: [
-                ...new Set(
-                  [googleEndpoints.authorizationEndpoint, googleEndpoints.tokenEndpoint].map(
-                    (endpoint) => new URL(endpoint).origin,
-                  ),
-                ),
-              ],
-            }
-          : provider === "cloudflare"
-            ? cloudflare && {
-                app: cloudflare,
+      provider === "x"
+        ? x && {
+            app: x,
+            origins: [
+              new URL(xEndpointsOf(x.xOrigin).authorizationEndpoint).origin,
+              new URL(xEndpointsOf(x.xOrigin).tokenEndpoint).origin,
+            ],
+          }
+        : provider === "slack"
+          ? slack && { app: slack, origins: [slack.slackOrigin] }
+          : provider === "google"
+            ? google && {
+                app: google,
                 origins: [
-                  new URL(cloudflareEndpointsOf(cloudflare.cloudflareOrigin).tokenEndpoint).origin,
+                  ...new Set(
+                    [googleEndpoints.authorizationEndpoint, googleEndpoints.tokenEndpoint].map(
+                      (endpoint) => new URL(endpoint).origin,
+                    ),
+                  ),
                 ],
               }
-            : github && { app: github, origins: [github.githubOrigin] };
+            : provider === "cloudflare"
+              ? cloudflare && {
+                  app: cloudflare,
+                  origins: [
+                    new URL(cloudflareEndpointsOf(cloudflare.cloudflareOrigin).tokenEndpoint)
+                      .origin,
+                  ],
+                }
+              : github && { app: github, origins: [github.githubOrigin] };
     if (!app)
       throw new Error(
         `secrets: this deployment has no ${provider} app (APP_CONFIG integrations.${provider} is unset)`,
@@ -720,8 +730,10 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
     let scopes: string[] = [];
     const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
+    const { client, expectAccount } = pending.options;
+    const xClient = client && ("platform" in client ? client.platform : client.project) === "x";
     const record = await completeSecretOAuth(
-      pending,
+      xClient ? { ...pending, options: { ...pending.options, expectAccount: null } } : pending,
       input.code,
       async (exchange) => {
         if (!originPinned(exchange.url, pending.options.urls))
@@ -738,7 +750,31 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
       credentials,
       this.#clientSecretOf,
     );
-    const { client } = pending.options;
+    // X has no ID token: verify the new credential before the revision fence and the write.
+    // https://docs.x.com/x-api/users/get-my-user
+    if (xClient && expectAccount) {
+      const endpoint = xEndpointsOf(new URL(pending.options.tokenEndpoint).origin).userEndpoint;
+      if (!originPinned(endpoint, record.urls))
+        throw new Error("X identity endpoint is outside the pin");
+      const identity = await dispatch(
+        new Request(endpoint, {
+          headers: {
+            authorization: `Bearer ${secretMaterialStringOf(record.material, "accessToken")}`,
+          },
+          redirect: "manual",
+        }),
+      );
+      if (!identity.ok) {
+        await identity.body?.cancel();
+        throw new Error(`X account lookup answered ${identity.status}`);
+      }
+      const { data } = XUserResponse.parse(await identity.json());
+      if (data.id !== expectAccount)
+        throw codedError(
+          "IDENTITY_CONFLICT",
+          "X authorized a different account; connect it as a new connection instead.",
+        );
+    }
     const slackTeam =
       client && "platform" in client && client.platform === "slack" ? answered.team : null;
     if (slackTeam) record.routedAccount = { provider: "slack", externalId: slackTeam.id };

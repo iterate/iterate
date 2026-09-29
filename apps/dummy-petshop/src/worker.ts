@@ -23,6 +23,7 @@ import {
   INSTALLATION_TOKEN_TTL_SECONDS,
   type InstallationGrant,
 } from "./github.ts";
+import { handleXRequest } from "./x.ts";
 import { handleGoogleRequest } from "./google.ts";
 import { GRAPHQL_SESSION_TTL_SECONDS, handleGraphqlLogin } from "./graphql-login.ts";
 import { handleMcpRequest } from "./mcp.ts";
@@ -147,6 +148,7 @@ async function handlePetshopRequest(request: Request, deps: PetshopDeps): Promis
   const answered =
     (await handleOauthProviderRequest(request, deps)) ??
     (await handleSlackRequest(request, deps)) ??
+    (await handleXRequest(request, deps)) ??
     (await handleGoogleRequest(request, deps)) ??
     (await handleCloudflareRequest(request, deps)) ??
     (await handleGithubRequest(request, deps)) ??

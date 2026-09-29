@@ -105,6 +105,8 @@ export const DEFAULT_SLACK_BOT_SCOPES = [
   "conversations.connect:write",
 ] as const;
 
+export const DEFAULT_X_SCOPES = ["tweet.read", "users.read", "offline.access"];
+
 /** The scopes a Google connection asks for unless told otherwise: the scopes iterate's Google
  *  client's consent screen is verified for. */
 export const DEFAULT_GOOGLE_SCOPES = [
@@ -289,6 +291,14 @@ export const AppConfig = z.object({
    *  project can connect through the platform's app there. */
   integrations: z
     .object({
+      x: z
+        .object({
+          oauthClientId: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+          oauthClientSecret: redacted(z.string({ error: REQUIRED }).trim().min(1, REQUIRED)),
+          scopes: z.array(z.string().trim().min(1)).default(DEFAULT_X_SCOPES),
+          xOrigin: httpOrigin.optional(),
+        })
+        .optional(),
       /** iterate's Slack app (integrations/slack/): the OAuth client, the key Slack signs webhooks
        *  with, the bot scopes asked for, and where Slack answers — `slackOrigin`, another origin only
        *  for a fake (a per-commit deployment's, scripts/generate-wrangler-config.ts). */

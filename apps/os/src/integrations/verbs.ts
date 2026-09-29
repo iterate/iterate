@@ -1,8 +1,8 @@
 // src/integrations/verbs.ts — connect, finish and disconnect, for either owner: the project facet on a
 // project's `/` (project/durable-object.ts) and the account facet on a person's `/users/<id>`
 // (account/durable-object.ts) each run these over their own scope and their own `state.integrations`.
-// A person connects Google or Cloudflare here (GitHub comes from signing in with it); a project any
-// of the four. Waitrose has no consent: either owner connects it with a username and password
+// A person connects Google, Cloudflare or X here (GitHub also comes from signing in); a project
+// can additionally connect Slack. Waitrose has no consent: either owner connects it with a username and password
 // (`connectWaitrose`). A PERSON'S ACCOUNT used by a project (a row with `ownerUserId`) is connected
 // by `itx.integrations.connect(provider, { account })` on the project (context/built-ins.ts), or here
 // when the consent it needed finishes (the attempt's `connectToProject`); disconnecting it from the
@@ -44,6 +44,7 @@ import {
 } from "./connections.ts";
 import { connectCloudflare, finishCloudflareConnect } from "./cloudflare.ts";
 import { connectGithub, connectGithubInstallation } from "./github.ts";
+import { connectX, finishXConnect } from "./x.ts";
 import { connectGoogle, finishGoogleConnect, revokeGoogle } from "./google.ts";
 import {
   connectMovedSlackTeam,
@@ -59,7 +60,7 @@ export type ConnectInput = {
   connection: string;
   client: "iterate" | "project";
   next?: string;
-  /** More permissions than the client's default (Google, Cloudflare, Slack). */
+  /** More permissions than the client's default (Google, Cloudflare, Slack, X). */
   scopes?: string[];
   /** A GitHub App of the project's own: its public half. */
   appSlug?: string;
@@ -71,7 +72,7 @@ export type ConnectInput = {
 };
 
 /** The providers a person connects on their own context. */
-const PERSONAL_PROVIDERS: readonly IntegrationProvider[] = ["google", "cloudflare"];
+const PERSONAL_PROVIDERS: readonly IntegrationProvider[] = ["google", "cloudflare", "x"];
 
 /** EACH PROVIDER'S PART of connect, finish and disconnect; the rest is these verbs', the same for
  *  every provider. `connect` answers where to send the human to consent, given the connection when
@@ -102,6 +103,7 @@ const PROVIDERS: Record<
     ): Promise<void>;
   }
 > = {
+  x: { connect: connectX, finish: finishXConnect },
   slack: { connect: connectSlack, finish: finishSlackConnect, revoke: revokeSlack },
   google: { connect: connectGoogle, finish: finishGoogleConnect, revoke: revokeGoogle },
   cloudflare: { connect: connectCloudflare, finish: finishCloudflareConnect },

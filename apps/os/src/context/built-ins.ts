@@ -735,10 +735,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           : `itx.integrations.connect: you have ${accounts.length} ${provider} accounts named ${input.account}`,
       );
     const account = accounts[0]!;
-    // Only Google's and Cloudflare's consents add scopes to a person's own connection; a GitHub
+    // Google's, Cloudflare's and X's consents add scopes to a person's own connection; a GitHub
     // user's token and a Waitrose login have none to add, so they connect as they are.
     const requiredScopes =
-      provider === "google" || provider === "cloudflare"
+      provider === "google" || provider === "cloudflare" || provider === "x"
         ? [...(deps.iterateAppScopes()[provider] || []), ...(input.scopes || [])]
         : [];
     if (missingScopes(provider, account.scopes || [], requiredScopes).length === 0) {
