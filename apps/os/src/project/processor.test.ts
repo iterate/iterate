@@ -514,7 +514,6 @@ test("ProjectProcessor — while the project is being created its saga publishes
 
 test("ProjectProcessor — an iterate.json that is not { events: [string] } names no events: its commit is published with the config worker's row removed, and the log says why", async () => {
   const info = vi.spyOn(console, "info").mockImplementation(() => {});
-  onTestFinished(() => info.mockRestore());
   const appended: StreamEventInput[] = [];
   const append = async (...events: unknown[]) => {
     appended.push(...(events as StreamEventInput[]));
