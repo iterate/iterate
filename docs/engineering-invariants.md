@@ -23,7 +23,10 @@ resource leaks.
   exception is a defect too rare to reproduce in a test, such as the held
   Durable Object alarm ([alarm-coordinator.ts](../apps/os/src/alarm-coordinator.ts)).
   Its heal's absence from prd is the pin: `PINNED_WORKAROUNDS` in the prd fault
-  alarm posts once after 28 days without it.
+  alarm posts once after 28 days without it. An upstream defect that only logs
+  an error line, where no call failed, gets no workaround: a `createFailing`
+  test pins it (its upstream issue, where only a deployed runtime shows it), and
+  its entry in the alarm's `PINNED_LINES` says where the line still pages.
 - A healthy request is not enough if it leaves corrupt, stalled, or divergent
   state behind. Verify the resulting state and the relevant production-shaped
   telemetry.

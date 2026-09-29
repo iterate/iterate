@@ -63,6 +63,9 @@ import {
  *  platform is fixed. */
 const isFacetStartPlatformFailure = (error: unknown): error is Error =>
   error instanceof Error &&
+  // The facet call's own rejection: a coded one is a hop below's, classified there (an
+  // UNAVAILABLE the facet's own outbound call gave up with carries workerd's opaque text too).
+  errorCode(error) === undefined &&
   (error.message.includes("Unable to deserialize cloned data") ||
     error.message.startsWith("internal error; reference = "));
 /** How long one facet call may take before the facet is aborted (a call that never answers would
@@ -588,13 +591,13 @@ export class FacetHost {
       const { name, target } = event.payload as SubscriptionConfiguredPayload;
       const removedRow = !target ? subscriptionsBeforeCommit[name] : undefined;
       // The marker, not the (source-less) target, says which facet a row hosts.
-      const facetName = removedRow?.hostedFacet?.name;
-      if (!facetName) continue;
+      const hosted = removedRow?.hostedFacet;
+      if (!hosted) continue;
       // Another row still hosts it (a mirror, an audit): the facet is theirs now, not gone.
       const stillHosted = Object.values(this.#deps.stream.coreReducedState.subscriptions).some(
-        (row) => row.hostedFacet?.name === facetName,
+        (row) => row.hostedFacet?.name === hosted.name,
       );
-      if (!stillHosted) this.#deleteFacet(facetName);
+      if (!stillHosted) this.#deleteFacet(hosted.name, hosted.className);
     }
   }
 
@@ -1192,10 +1195,16 @@ export class FacetHost {
   }
 
   /** Delete a facet, storage included (there is no delete verb: a removed hosting row ends here). A
-   *  re-load into the same name is a clean rebuild, never a resume from orphaned state. */
-  #deleteFacet(name: string): void {
+   *  re-load into the same name is a clean rebuild, never a resume from orphaned state. The runtime
+   *  aborts the facet it deletes (workerd server.c++ `deleteFacet`): a call session on it that its
+   *  caller has not released yet, one that already answered included, ends `exception` with no
+   *  line, its summary `<className>.jsrpc`. So the deletion is logged first, at info, with that
+   *  summary's `message`, and the prd fault alarm (scripts/ci/prd-fault-alarm.ts `ANNOUNCED`) reads
+   *  such a summary in this Durable Object as this deletion's. */
+  #deleteFacet(name: string, className: string): void {
     if (name === CoreContract.slug)
       throw new Error(`"${name}" is the core reduce — always on, never a facet`);
+    console.info({ event: "facet.deleted", name, message: `${className}.jsrpc` });
     this.#deps.ctx.facets.delete(name);
     this.#deletedGeneration.set(name, this.#facetGeneration(name));
     this.#facetGenerationByName.set(name, this.#facetGeneration(name) + 1);

@@ -35,6 +35,7 @@ const quiet: FaultReading = {
   heals: [],
   healEvents: [],
   errors: [],
+  closeResets: [],
   pagers: [],
 };
 const now = new Date("2026-09-23T07:30:00Z");
@@ -124,6 +125,38 @@ test.for([
         ["rpc-stub-pager-redialed", 2],
         ["rpc-stub-pager-redial-failed", 1],
       ],
+    },
+    pages: true,
+  },
+  {
+    name: "a socket close's reset with every pager re-dialed (2026-09-28 14:49) pages nothing",
+    reading: {
+      closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 3]],
+      pagers: [["rpc-stub-pager-redialed", 3]],
+    },
+    pages: false,
+  },
+  {
+    name: "a socket close's reset with a pager that gave up pages",
+    reading: {
+      closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 3]],
+      pagers: [
+        ["rpc-stub-pager-redialed", 2],
+        ["rpc-stub-pager-redial-failed", 1],
+      ],
+    },
+    pages: true,
+  },
+  {
+    name: "a socket close's reset no pager re-dialed through pages",
+    reading: { closeResets: [["internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo", 1]] },
+    pages: true,
+  },
+  {
+    name: "an internal error that is not a socket close's pages with every pager re-dialed (a 500 from the expression fetch, 2026-09-28 13:04)",
+    reading: {
+      errors: [["internal error; reference = 4b2bd3s1lpsjhc4kfd1fh7gm", 1]],
+      pagers: [["rpc-stub-pager-redialed", 3]],
     },
     pages: true,
   },
@@ -842,6 +875,30 @@ test.for([
     page: ["• errors: destroyed: its project was deleted 1 · last 07:30 UTC"],
   },
   {
+    name: "a secret facet's last call session, cut off as its deletion was announced at info, pages nothing (prd's secrets.delete, 2026-09-28 11:20)",
+    events: () => [deletedSecretFacet("do-1"), cutOffSecretCall("do-1")],
+    page: null,
+  },
+  {
+    name: "a bare SecretDurableObject.jsrpc in a Durable Object that announced no deletion pages",
+    events: () => [deletedSecretFacet("do-1"), cutOffSecretCall("do-2")],
+    page: ["• errors: SecretDurableObject.jsrpc 1 · last 07:30 UTC"],
+  },
+  {
+    name: "another class's bare summary in a Durable Object that deleted its secret facet pages",
+    events: () => [
+      deletedSecretFacet("do-1"),
+      invocation({
+        hop: "RepoDurableObject",
+        eventType: "jsrpc",
+        outcome: "exception",
+        requestId: "repo-cut",
+        objectId: "do-1",
+      }),
+    ],
+    page: ["• errors: RepoDurableObject.jsrpc 1 · last 07:30 UTC"],
+  },
+  {
     name: "another error in a Durable Object that announced a reset pages",
     events: () => [
       ...announcedReset("context.aborted", "do-1", "itx.abort() reset the context /: busy"),
@@ -976,24 +1033,82 @@ test.for([
   ]);
 });
 
-test("a hung line on ItxEntrypoint is the pinned false one; on any other invocation it pages", async () => {
-  const hung =
-    "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/";
-  queryableWorkersLogs([
-    {
-      timestamp: 42,
-      $metadata: { type: "cf-worker", message: hung },
-      $workers: { entrypoint: "ItxEntrypoint", eventType: "jsrpc" },
-    },
-    {
-      timestamp: 42,
-      $metadata: { type: "cf-worker", message: hung },
-      $workers: { eventType: "fetch" },
-    },
-  ]);
-  expect(bullets(await summary())).toEqual([
-    "• errors: The Workers runtime canceled this request because it detected that your Worker's 1 · last 07:30 UTC",
-  ]);
+const HUNG =
+  "The Workers runtime canceled this request because it detected that your Worker's code had hung and would never generate a response. Refer to: https://developers.cloudflare.com/workers/observability/errors/";
+const RPC_BODY_ENDED_EARLY = "ReadableStream received over RPC disconnected prematurely.";
+
+// PINNED_LINES and a socket close's reset (CLOSE_RESET) in ./prd-fault-alarm.ts, as prd logged them.
+test.for([
+  {
+    name: "a hung line on ItxEntrypoint is the pinned false one, and its jsrpc summary folds into it",
+    events: () => [
+      line({ hop: "ItxEntrypoint", requestId: "ai-run", message: HUNG }),
+      invocation({
+        hop: "ItxEntrypoint",
+        eventType: "jsrpc",
+        outcome: "exception",
+        requestId: "ai-run",
+      }),
+    ],
+    page: null,
+  },
+  {
+    name: "a hung line on any other invocation pages",
+    events: () => [line({ message: HUNG })],
+    page: [
+      "• errors: The Workers runtime canceled this request because it detected that your Worker's 1 · last 07:30 UTC",
+    ],
+  },
+  {
+    name: "a context forwarding a repo's git requests logs the pinned RPC body line on its fetch and its jsrpc session (2026-09-29 10:35)",
+    events: () => [
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "session",
+        message: RPC_BODY_ENDED_EARLY,
+      }),
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "forward",
+        message: RPC_BODY_ENDED_EARLY,
+        url: "https://github.com/iterate/config.git/git-upload-pack",
+      }),
+    ],
+    page: null,
+  },
+  {
+    name: "the RPC body line on any other invocation pages",
+    events: () => [line({ hop: "ItxEntrypoint", message: RPC_BODY_ENDED_EARLY })],
+    page: [
+      "• errors: ReadableStream received over RPC disconnected prematurely. 1 · last 07:30 UTC",
+    ],
+  },
+  {
+    name: "a context's socket close logging its reset pages nothing once every pager re-dialed (2026-09-28 14:49)",
+    events: () => [...closeReset("close"), pagerRedialed()],
+    page: null,
+  },
+  {
+    name: "a context's socket close logging its reset pages when no pager re-dialed",
+    events: () => closeReset("close"),
+    page: ["• errors: internal error; reference = … 1 · last 07:30 UTC"],
+  },
+  {
+    name: "the same reset in a context's jsrpc call pages, every pager re-dialed or not",
+    events: () => [
+      line({
+        hop: "IterateContextDurableObject",
+        requestId: "call",
+        message: "internal error; reference = 4b2bd3s1lpsjhc4kfd1fh7gm",
+      }),
+      pagerRedialed(),
+    ],
+    page: ["• errors: internal error; reference = … 1 · last 07:30 UTC"],
+  },
+])("$name", async ({ events, page }) => {
+  queryableWorkersLogs(events());
+  const result = await summary();
+  expect(page ? bullets(result) : result).toEqual(page || "prd is quiet");
 });
 
 test.for([
@@ -1166,8 +1281,8 @@ test("filter nodes count as Cloudflare counts them: every leaf and every group, 
 });
 
 // Each count at its most: 1,999 rays across the outcomes and causes it applies (four `not_in` of
-// them), and for the other summaries 500 jsrpc calls beside them. Every query fits, no keep is
-// dropped, and what is not expected still pages.
+// them), and for the other summaries 500 folded summaries beside them, jsrpc calls' and deleted
+// facets'. Every query fits, no keep is dropped, and what is not expected still pages.
 test.for([
   {
     name: "the 5xx beside an offline stub's and a deploy reset's rays",
@@ -1202,12 +1317,16 @@ test.for([
     most: 16,
   },
   {
-    name: "the other summaries beside deploy resets' rays and jsrpc calls",
+    name: "the other summaries beside deploy resets' rays and 500 folded summaries, jsrpc calls' and deleted facets'",
     events: () => [
       ...rays("reset-", 1999).flatMap((ray) =>
         deployResetRay(ray, "https://garple.com/").slice(1, 2),
       ),
-      ...rays("call-", 498).flatMap((requestId) => [
+      ...rays("deleted-", 250).flatMap((objectId) => [
+        deletedSecretFacet(objectId),
+        cutOffSecretCall(objectId),
+      ]),
+      ...rays("call-", 248).flatMap((requestId) => [
         invocation({
           hop: "RepoDurableObject",
           eventType: "jsrpc",
@@ -1231,7 +1350,7 @@ test.for([
       }),
     ],
     page: [
-      "• errors: boom 498 · last 07:30 UTC",
+      "• errors: boom 248 · last 07:30 UTC",
       "• errors: SecretDurableObject.jsrpc 1 · last 07:30 UTC",
     ],
     most: 16,
@@ -1439,8 +1558,8 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
 
 /** How many queries a quiet run sends: the outcomes', causes', jsrpc summaries' and announced
  *  outcomes' evidence, then the 5xx by URL and in all, the heals by name and event, the error counts
- *  (an unread /api body and a hung line off ItxEntrypoint among them) and the pagers. */
-const QUIET_RUN_QUERIES = 18;
+ *  (each of PINNED_LINES where it pages, and a socket close's reset, among them) and the pagers. */
+const QUIET_RUN_QUERIES = 20;
 
 /** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
 function pageFor(reading: Partial<FaultReading>) {
@@ -1827,6 +1946,70 @@ function rejectedInFlight(objectId: string, requestId: string, message: string) 
       objectId,
     }),
   ];
+}
+
+/** The context DO `objectId` deleting its `secret` facet, as apps/os context/facet-host.ts
+ *  `#deleteFacet` announces it: at info, with the summary of a call session the deletion cuts off. */
+function deletedSecretFacet(objectId: string) {
+  return {
+    timestamp: 42,
+    event: "facet.deleted",
+    name: "secret",
+    $metadata: {
+      type: "cf-worker",
+      level: "info",
+      requestId: `${objectId}-delete`,
+      message: "SecretDurableObject.jsrpc",
+    },
+    $workers: { entrypoint: "IterateContextDurableObject", durableObjectId: objectId },
+  };
+}
+
+/** The secret facet's `endingLends` session in `objectId`, answered and then cut off by the
+ *  deletion before its caller released it: an exception summary and no line. */
+function cutOffSecretCall(objectId: string) {
+  return invocation({
+    hop: "SecretDurableObject",
+    eventType: "jsrpc",
+    outcome: "exception",
+    requestId: `${objectId}-ending-lends`,
+    objectId,
+  });
+}
+
+/** A context's hibernatable WebSocket `close` event after its object was reset, as prd logged it
+ *  on 2026-09-28 14:49: the runtime's opaque reason, and the event's exception summary. */
+function closeReset(requestId: string) {
+  const close = {
+    eventType: "hibernatableWebSocket",
+    event: { webSocketType: "close", code: 1006 },
+  };
+  const $workers = { entrypoint: "IterateContextDurableObject", ...close };
+  return [
+    {
+      timestamp: 42,
+      $metadata: {
+        type: "cf-worker",
+        requestId,
+        message: "internal error; reference = 3pq1nd2d1ovl2vse8jv5vgfo",
+      },
+      $workers,
+    },
+    {
+      timestamp: 42,
+      $metadata: { type: "cf-worker-event", requestId, message: "close" },
+      $workers: { ...$workers, outcome: "exception" },
+    },
+  ];
+}
+
+/** An rpc-stub pager that re-dialed after its socket closed (apps/os context/rpc-stub-relay.ts). */
+function pagerRedialed() {
+  return {
+    timestamp: 42,
+    event: "rpc-stub-pager-redialed",
+    $metadata: { type: "cf-worker", level: "info" },
+  };
 }
 
 /** `n` ray IDs starting with `prefix`. */
