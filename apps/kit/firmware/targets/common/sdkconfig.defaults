@@ -10,6 +10,11 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 CONFIG_SPIRAM=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# ESP-IDF 6.1's bundle no longer holds "GlobalSign Root CA", which cross-signs the "GTS Root R4"
+# that os.iterate.com's chain ends in (Google Trust Services, via Cloudflare). Verifying only that
+# top link fails the handshake; this lets the bundle supply the CA for each link instead, so the
+# chain ends at the bundle's own GTS Root R4. Off by default in the v6.1 tag, on in later 6.1.x.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
