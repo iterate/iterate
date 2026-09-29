@@ -1545,6 +1545,32 @@ test.for([
   },
 );
 
+test("fan-out: the root's snapshot that refuses `itx.config` passes over only what was committed before its read: an event newer than the snapshot waits it out, and the publication since delivers it", async () => {
+  fakeClock();
+  let published = false;
+  const told: string[] = [];
+  const config = sink(told);
+  // the snapshot lasts 1 s more: it was read 4 s ago (SNAPSHOT_TTL_MS 5 s), before the ping
+  const rig = incarnation(
+    (printed) => (published && printed === CONFIG_HEAD ? config("itx.sink") : undefined),
+    undefined,
+    { refusedForMs: 1_000, refusal: { unpublishedConfig: true } },
+  );
+  configure(rig, { name: "config", target: `${CONFIG_HEAD}.deliverEvent`, ordered: false });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  const [probe] = rig.delivery.deadlines();
+  expect(probe!.at).toBeGreaterThanOrEqual(Date.now() + 1_000);
+  published = true; // the root published after that read, before the ping
+  vi.setSystemTime(probe!.at + 1);
+  await rig.pass();
+  await drainDeliveries();
+  expect({ told, deadlines: rig.delivery.deadlines() }).toEqual({
+    told: ["demo/ping#1"],
+    deadlines: [],
+  });
+});
+
 test("fan-out: a call out claims the alarm while its time is ahead — a death mid-call is retried — and nothing once that time passes with the call still out, so it never spins the alarm; its settle tries it again", async () => {
   fakeClock(Date.now(), ["setTimeout", "clearTimeout"]);
   let answered = 0;

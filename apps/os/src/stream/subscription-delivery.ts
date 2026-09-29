@@ -1311,7 +1311,8 @@ export class SubscriptionDelivery {
   //   EVENT_TOO_LARGE), or its last attempt    `subscription-delivery-failed` (once, keyed)
   //   the target resolves to nothing           attempt n − 1, no time: the row DANGLES
   //   the project's config is unpublished      deleted: passed over (the config birth row
-  //   (`itx.config`, `unpublishedConfig`)      delivers from the commit that publishes it)
+  //   (`itx.config`, `unpublishedConfig`) as   delivers from the commit that publishes it); as
+  //   a table read after the event says        only an older snapshot says, the row DANGLES
   //   the target cannot be called, or GONE     attempt n − 1, no time: the row HALTS
   //   the context dies with the call out       still leased: at its due time a SUSPECT, retried
   //                                            ALONE, once every call out has settled and with
@@ -1696,7 +1697,11 @@ export class SubscriptionDelivery {
       validUntil?: unknown;
       unpublishedConfig?: unknown;
     };
-    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig === true) {
+    // A snapshot read before the event may predate a publication that came before it: the row waits
+    // that snapshot out (dangling, below) and asks again.
+    const readBeforeEvent =
+      typeof validUntil === "number" && validUntil - SNAPSHOT_TTL_MS < Date.parse(event.createdAt);
+    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig === true && !readBeforeEvent) {
       // nothing is owed to a config that is not published: the row delivers from the commit that
       // publishes it
       if (record.deliveries.delete(event.offset))
