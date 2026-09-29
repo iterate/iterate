@@ -4,6 +4,7 @@
 
 import { expect, test } from "vitest";
 import {
+  ARTIFACTS_ANSWER_MS,
   canBackRepo,
   projectScopedArtifacts,
   repoArtifactName,
@@ -440,6 +441,105 @@ test("the platform-failure retry is bounded: a second one surfaces, and any othe
     retries: [],
   });
 });
+
+// ── a call Artifacts leaves unanswered ── on the preview account on 2026-09-28 Artifacts left every
+// call of a deployment unanswered for up to 90 s (create, list, get, createToken, info alike), then
+// answered them all within six seconds. Each call is refused after ARTIFACTS_ANSWER_MS: UNAVAILABLE
+// `overloaded`, naming the call, never repeated at once.
+
+test("a call Artifacts leaves unanswered is refused after ARTIFACTS_ANSWER_MS as an overload that names it, and is not repeated", async () => {
+  const unansweredAfter = `within ${ARTIFACTS_ANSWER_MS / 1000} s`;
+  const refused = (call: string, verb: string, name: string) => ({
+    error: {
+      code: "UNAVAILABLE",
+      data: { kind: "overloaded", retryAfterMs: 10_000 },
+      message: `Cloudflare Artifacts did not answer ${call} ${unansweredAfter}`,
+    },
+    retries: [
+      {
+        event: "cfartifacts.platform-failure-gave-up",
+        kind: "overloaded",
+        verb,
+        name,
+        attempts: 1,
+      },
+    ],
+  });
+
+  const create = unanswered("create");
+  expect(
+    await settle(() => scoped(create.namespace, "prj_a").create("/repos/config")),
+  ).toMatchObject(refused("create(prj_a.repos--config)", "create", "prj_a.repos--config"));
+  expect(create.calls.map((call) => call.method)).toEqual(["create (unanswered)"]);
+
+  const list = unanswered("list", ["prj_a.site"]);
+  expect(await settle(() => scoped(list.namespace, "prj_a").list())).toMatchObject(
+    refused("list", "list", "prj_a."),
+  );
+
+  const del = unanswered("delete", ["prj_a.site"]);
+  expect(await settle(() => scoped(del.namespace, "prj_a").delete("/site"))).toMatchObject(
+    refused("delete(prj_a.site)", "delete", "prj_a.site"),
+  );
+
+  const get = unanswered("get", ["prj_a.repos--config"]);
+  expect(
+    await settle(async () =>
+      (await scoped(get.namespace, "prj_a").get("/repos/config")).createToken("read", 60),
+    ),
+  ).toMatchObject(refused("get(prj_a.repos--config)", "createToken", "prj_a.repos--config"));
+
+  // A handle answered, and the method on it did not.
+  const { namespace } = recordingNamespace(["prj_a.repos--config"]);
+  const silentHandle: ArtifactsNamespace = {
+    ...namespace,
+    get: async (name) => ({ ...(await namespace.get(name)), info: () => new Promise(() => {}) }),
+  };
+  expect(
+    await settle(async () => (await scoped(silentHandle, "prj_a").get("/repos/config")).remote()),
+  ).toMatchObject(refused("info(prj_a.repos--config)", "remote", "prj_a.repos--config"));
+
+  // The probe of a taken name is a call like any other: a create that found the name taken and
+  // whose probe goes unanswered is refused, never answered as created.
+  const probe = unanswered("get", ["prj_a.repos--config"]);
+  expect(
+    await settle(() => scoped(probe.namespace, "prj_a").create("/repos/config")),
+  ).toMatchObject(refused("get(prj_a.repos--config)", "probe", "prj_a.repos--config"));
+});
+
+test("an answer that arrives after its call was refused is released on arrival", async () => {
+  const { namespace } = recordingNamespace(["prj_a.repos--config"]);
+  let released = 0;
+  const late: ArtifactsNamespace = {
+    ...namespace,
+    get: async (name) => {
+      const handle = await namespace.get(name);
+      await new Promise((resolve) => setTimeout(resolve, ARTIFACTS_ANSWER_MS + 5_000));
+      return Object.assign(handle, { [Symbol.dispose]: () => released++ });
+    },
+  };
+  expect(
+    await settle(async () =>
+      (await scoped(late, "prj_a").get("/repos/config")).createToken("read", 60),
+    ),
+  ).toMatchObject({ error: { code: "UNAVAILABLE" } });
+  expect(released).toBe(1);
+});
+
+/** The recording namespace, with `method` never answering: each call is recorded, then left pending
+ *  as Artifacts left them. */
+function unanswered(method: keyof ArtifactsNamespace, existing: string[] = []) {
+  const recording = recordingNamespace(existing);
+  // the recording namespace with that one method replaced: the same shape
+  const namespace = {
+    ...recording.namespace,
+    [method]: (...args: unknown[]) => {
+      recording.calls.push({ method: `${method} (unanswered)`, name: String(args[0] ?? "*") });
+      return new Promise(() => {});
+    },
+  } as ArtifactsNamespace;
+  return { ...recording, namespace };
+}
 
 /** The recording namespace, with `method` failing as the binding did on the calls numbered
  *  `failingCalls` (from 1). */

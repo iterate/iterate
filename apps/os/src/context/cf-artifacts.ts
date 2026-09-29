@@ -17,6 +17,8 @@ import {
   UPSTREAM_ONCE,
 } from "@iterate-com/shared/platform-retry";
 import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
+import { errorCode } from "iterate/lib";
+import { unavailableError } from "../unavailable.ts";
 
 /** Cloudflare Artifacts ("git for agents", beta) — the per-namespace binding, CONTROL PLANE ONLY, and
  *  typed minimally here: only what this proxy calls, although `@cloudflare/workers-types` now
@@ -67,7 +69,7 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget implements CfArtifact
   }
   createToken(...[scope, ttlSeconds]: Parameters<CfArtifactRepoApi["createToken"]>) {
     return retryingOnePlatformFailure("createToken", this.#name, () =>
-      withArtifactRepoHandle(this.#namespace, this.#name, (handle) =>
+      withArtifactRepoHandle(this.#namespace, this.#name, "createToken", (handle) =>
         handle.createToken(scope, ttlSeconds),
       ),
     );
@@ -77,30 +79,64 @@ export class ScopedArtifactRepoRpcTarget extends RpcTarget implements CfArtifact
    *  `git-receive-pack` under, the token as the basic-auth password. */
   async remote() {
     const { remote } = await retryingOnePlatformFailure("remote", this.#name, () =>
-      withArtifactRepoHandle(this.#namespace, this.#name, (handle) => handle.info()),
+      withArtifactRepoHandle(this.#namespace, this.#name, "info", (handle) => handle.info()),
     );
     return remote;
   }
 }
 
-/** One binding handle for one verb, released after, its answer copied out: the handle and the answer
- *  object (facet-host.ts `#call` says why) each keep this actor's session to Artifacts open until
- *  disposed. */
+/** One binding handle for one verb, `method` on it, released after, its answer copied out: the handle
+ *  and the answer object (facet-host.ts `#call` says why) each keep this actor's session to Artifacts
+ *  open until disposed. */
 async function withArtifactRepoHandle<T>(
   namespace: ArtifactsNamespace,
   name: string,
+  method: "createToken" | "info",
   verb: (handle: ArtifactRepoHandle) => Promise<T>,
 ): Promise<T> {
-  const handle = await namespace.get(name);
+  const handle = await answeredInTime(`get(${name})`, namespace.get(name));
   try {
-    const answer = await verb(handle);
+    const answer = await answeredInTime(`${method}(${name})`, verb(handle));
     const copy = structuredClone(answer);
-    // The real answer and handle are disposable (Workers-RPC); a test's fake may not be.
-    (answer as Partial<Disposable>)[Symbol.dispose]?.();
+    release(answer);
     return copy;
   } finally {
-    (handle as Partial<Disposable>)[Symbol.dispose]?.();
+    release(handle);
   }
+}
+
+/** How long a call on the binding may go unanswered before the platform refuses it: our own
+ *  deadline, an overload (docs/engineering-invariants.md#failures-and-retries). Twice the slowest
+ *  healthy answer: 200 creates at once each answered within 9.7 s (preview account, 2026-09-29),
+ *  while Artifacts has left every call of a deployment unanswered for up to 90 s. */
+export const ARTIFACTS_ANSWER_MS = 20_000;
+
+/** `answer`, the pending answer to `call` on the binding, or — once it has gone ARTIFACTS_ANSWER_MS
+ *  unanswered — UNAVAILABLE `overloaded` naming the call, which `retryingOnePlatformFailure` gives
+ *  up on without repeating it. A binding call cannot be cancelled and may still land: an answer
+ *  that arrives after the refusal is released on arrival. */
+function answeredInTime<T>(call: string, answer: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const refused = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      answer.then(release, () => {});
+      reject(
+        unavailableError(
+          "overloaded",
+          `Cloudflare Artifacts did not answer ${call} within ${ARTIFACTS_ANSWER_MS / 1000} s`,
+        ),
+      );
+    }, ARTIFACTS_ANSWER_MS);
+  });
+  return Promise.race([answer, refused]).finally(() => clearTimeout(timer));
+}
+
+/** Disposes a binding answer or handle: the real ones are Workers-RPC values, which keep this actor's
+ *  session to Artifacts open until disposed; a test's fake, and an answer that is not an object, has
+ *  no disposer. */
+function release(value: unknown) {
+  // Safe to assert: the disposer is only looked up, optionally, and called where it is present.
+  (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
 }
 
 /** The Artifacts repo a PATH is backed by: the path's segments joined with `--` (`/repos/config` →
@@ -143,9 +179,11 @@ export function repoPathOf(name: string): string {
 }
 
 /** The Artifacts "repo does not exist" signal (API error 10200, "Repository not found") — the ONLY
- *  failure `create` reads as "not yet" and `delete` as "already gone"; an outage or an auth error
- *  surfaces as what it is. */
+ *  failure `create` reads as "not yet" and `delete` as "already gone"; an outage, an auth error or
+ *  a call refused for going unanswered (UNAVAILABLE, and naming a repo whose name may hold those
+ *  digits) surfaces as what it is. */
 const isRepoNotFound = (error: unknown): boolean =>
+  errorCode(error) !== "UNAVAILABLE" &&
   /not found|10200/i.test(String((error as { message?: unknown })?.message ?? error));
 
 /** The Artifacts answer to a `create` whose name is taken ("repo already exists: <name>", API error
@@ -187,7 +225,9 @@ function retryingOnePlatformFailure<T>(
     area: "cfartifacts",
     schedule: UPSTREAM_ONCE,
     idempotent: true,
+    // Artifacts' 10400 arrives unstamped; a call refused for going unanswered is coded already.
     kind: (error) =>
+      errorCode(error) !== "UNAVAILABLE" &&
       /An internal error occurred|\b10400\b/.test(
         error instanceof Error ? error.message : String(error),
       )
@@ -213,7 +253,8 @@ function retryingOnePlatformFailure<T>(
  *  published one (iterate/api `CfArtifactsApi`). `create` answers only once the repo reads: a name
  *  Artifacts is still deleting is waited out (`TAKEN_NAME_WAIT_MS`), then refused with the reason;
  *  `delete` answers false on the binding's not-found signal (API error 10200), and any other
- *  failure surfaces.
+ *  failure surfaces. Every call on the binding is refused once it has gone `ARTIFACTS_ANSWER_MS`
+ *  unanswered.
  *
  *  Pure and namespace-injected: unit-tests alone (cf-artifacts.test.ts). Every `path` is a repo's context
  *  path (`/repos/config`); `boundName` is the one step from it to the bound Artifacts name. */
@@ -230,7 +271,7 @@ export function projectScopedArtifacts(input: {
       // says "not found"; anything else (an outage, an auth failure) surfaces as what it is.
       const reads = () =>
         retryingOnePlatformFailure("probe", name, () =>
-          withArtifactRepoHandle(input.namespace, name, (handle) =>
+          withArtifactRepoHandle(input.namespace, name, "createToken", (handle) =>
             handle.createToken("read", PROBE_TOKEN_TTL_SECONDS),
           ).then(
             () => true,
@@ -250,9 +291,8 @@ export function projectScopedArtifacts(input: {
       for (let round = 1, waitMs = 1000; ; round++, waitMs = Math.min(waitMs * 2, 4000)) {
         const answer = await retryingOnePlatformFailure("create", name, async (isRetry) => {
           try {
-            // The result carries the repo's initial credential, unread — and, a Workers-RPC result, a disposer.
-            const result = await input.namespace.create(name);
-            (result as Partial<Disposable>)[Symbol.dispose]?.();
+            // The result carries the repo's initial credential, unread.
+            release(await answeredInTime(`create(${name})`, input.namespace.create(name)));
             return { created: true, taken: false };
           } catch (error) {
             if (!isRepoAlreadyThere(error)) throw error;
@@ -286,7 +326,7 @@ export function projectScopedArtifacts(input: {
     get: async (path) => new ScopedArtifactRepoRpcTarget(input.namespace, boundName(path)),
     list: async (options) => {
       const page = await retryingOnePlatformFailure("list", prefix, () =>
-        input.namespace.list(options),
+        answeredInTime("list", input.namespace.list(options)),
       );
       return {
         repos: page.repos.flatMap((r) =>
@@ -300,7 +340,9 @@ export function projectScopedArtifacts(input: {
       const name = boundName(path);
       try {
         // a retry after a delete that landed answers "not found": false, already gone
-        return await retryingOnePlatformFailure("delete", name, () => input.namespace.delete(name));
+        return await retryingOnePlatformFailure("delete", name, () =>
+          answeredInTime(`delete(${name})`, input.namespace.delete(name)),
+        );
       } catch (error) {
         if (!isRepoNotFound(error)) throw error;
         return false;

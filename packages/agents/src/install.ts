@@ -153,7 +153,8 @@ export async function installAgents(itx: InstallTarget, source: Record<string, s
 
 /** A project created a moment ago may still be seeding its config repo: the project's creation
  *  creates it and commits the seed onto an unborn `main`, so a commit here first would refuse the
- *  seed. Resolves once creation has settled (at once for a project created earlier). */
+ *  seed. Resolves once creation has settled (at once for a project created earlier); a failed
+ *  creation throws, saying why it failed. */
 export async function configRepoSettled(project: Pick<IterateContextApi, "waitForEvent">) {
   const settled = await project.waitForEvent({
     type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
@@ -161,7 +162,9 @@ export async function configRepoSettled(project: Pick<IterateContextApi, "waitFo
     timeoutMs: 60_000,
   });
   if (settled.type !== "events.iterate.com/project/created")
-    throw new Error("The project's creation failed, so there is no config repo to install into");
+    throw new Error(
+      `The project's creation failed, so there is no config repo to install into: ${String(settled.payload?.error)}`,
+    );
 }
 
 /** A project without `itx.agents` gets the app: the config repo's `agents/` folder as it is, or
