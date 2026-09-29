@@ -359,7 +359,9 @@ export async function publishConfig(
 }
 
 /** The outcome of commit `commitOid` of `/repos/config` on `root`, the project's root: every commit
- *  fact gets one (src/project/processor.ts), found by its oid; a failure is thrown with why. */
+ *  fact gets one (src/project/processor.ts), found by its oid; a failure is thrown with why. Every
+ *  context resolves through a published commit within SNAPSHOT_TTL_MS of its
+ *  `project/worker-updated`, which this waits out. */
 export async function publicationOf(root: any, commitOid: string): Promise<any> {
   const outcome = await root.waitForEvent({
     type: [
@@ -372,6 +374,7 @@ export async function publicationOf(root: any, commitOid: string): Promise<any> 
   });
   if (outcome.type === "events.iterate.com/project/worker-update-failed")
     throw new Error(`the publication of ${commitOid} failed: ${outcome.payload.error}`);
+  await olderSnapshotsExpired();
   return outcome;
 }
 

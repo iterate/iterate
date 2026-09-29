@@ -8,11 +8,12 @@
 // published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
 // certificate, once the seed's publication has landed. THE PUBLICATION OF THE CONFIG REPO: every
 // `repo/commit-completed` from `/repos/config` gets ONE outcome on `/`, as the generation of its
-// fact's offset — its commit published (publication.ts) while it is still `main`'s head: the pointer
-// `itx.config` moved to it, then `project/worker-updated`; or `project/worker-update-failed`, a
-// commit refused or one main moved on from first — so a commit changes the project's code
-// everywhere, and whoever made it can wait for its outcome by its oid. Subscribed to `/` (the row `session.projects.create` enables), it runs again
-// after every eviction: an attempt lost with an incarnation is simply run again by the next — the
+// fact's offset — its commit published (publication.ts) if it is `main`'s head as its attempt
+// begins: the pointer `itx.config` moved to it and `project/worker-updated`, in one batch; or
+// `project/worker-update-failed`, a commit refused or one main moved on from first — so a commit
+// changes the project's code everywhere, and whoever made it can wait for its outcome by its oid.
+// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every
+// eviction: an attempt lost with an incarnation is simply run again by the next — the
 // repo tolerates existing, a born `main` refuses the seed, a publication is keyed by its generation,
 // the ingress and the certificate are keyed. Its reach is its constructor's arguments; a
 // unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or hands it a fake
@@ -587,8 +588,10 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   /** ONE OUTCOME for the commit fact `commit`, as generation `commit.offset` (publication.ts). A
-   *  commit that is still `main`'s head is admitted: the pointer, as the platform — its write
-   *  answers once every context resolves through it — then `project/worker-updated`. A commit the
+   *  commit that is `main`'s head as an attempt begins and that the probe admits is published: the
+   *  pointer and `project/worker-updated` in ONE batch as the platform, so no state of `/` holds
+   *  either without the other. Every context resolves through the pointer within SNAPSHOT_TTL_MS
+   *  of that batch (context/rule-snapshots.ts), and the append answers once it does. A commit the
    *  probe refuses, or one main moved on from (anyone may append a fact), is
    *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
    *  nothing more. A platform failure is met again after 5 s and 30 s, within
@@ -638,13 +641,11 @@ export class ProjectProcessor extends StreamProcessor<
           payload: { commitOid, generation, error: attempt.error },
         });
       const { manifest } = attempt;
-      await landOnce(publisher, ...configPointer(commitOid, manifest));
-      await landOnce(publisher, {
+      return landOnce(publisher, ...configPointer(commitOid, manifest), {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
       });
-      return;
     }
     await publisher.appendAsPlatform({
       type: "events.iterate.com/project/worker-update-failed",
@@ -775,8 +776,8 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
-/** A keyed platform fact landed once: an IDEMPOTENCY_CONFLICT is the same key an earlier attempt of
- *  this generation already landed. */
+/** A keyed platform batch landed once: an IDEMPOTENCY_CONFLICT is a key an earlier attempt of this
+ *  generation already landed, and a batch lands whole or not at all, so its outcome is there. */
 async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput[]): Promise<void> {
   try {
     await publisher.appendAsPlatform(...events);

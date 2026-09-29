@@ -12,8 +12,9 @@
 // `PROJECT_CONTEXT_BIRTH_EVENTS`) and every facet of the project's config names it (iterate/api
 // `FacetSpec`); only the platform writes it (caller.ts `refuseNonPlatformWrites`), so only its manifest
 // counts.
-// The follower (processor.ts) appends the pointer, as the platform, then `project/worker-updated`;
-// a commit that fails here is `project/worker-update-failed`, and the pointer stays where it was.
+// The follower (processor.ts) appends the pointer and `project/worker-updated` in one batch, as the
+// platform; a commit that fails here is `project/worker-update-failed`, and the pointer stays where
+// it was.
 
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
@@ -73,7 +74,7 @@ export async function manifestOf(
   return { generation, modules: manifest };
 }
 
-/** THE POINTER on `/`, one batch keyed by its generation: `itx.config` names the config repo's
+/** THE POINTER on `/`, its rows keyed by its generation: `itx.config` names the config repo's
  *  worker at `commitOid` — its modules read at that commit where it is loaded, cached under the
  *  commit — with its manifest. Its producer reads them through `itx.config.modules`, which names the
  *  repo facet at the fixed point: a row on `itx.config…` is the platform's alone
