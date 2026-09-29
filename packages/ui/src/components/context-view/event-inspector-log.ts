@@ -2,6 +2,7 @@
 // log (the event, its neighbours — by comparison, not offset ± 1, since a log's offsets are sparse
 // where ephemeral events were and a stale link still finds real neighbours), the gap to each, the
 // signal-first key order the raw event reads in, and which keydowns ← → must leave alone.
+import { formatDelta } from "./event-row.tsx";
 import type { ContextViewEvent } from "./types.tsx";
 
 /** The inspected offset in a log sorted by offset: the event (when loaded), the events either side
@@ -37,17 +38,11 @@ export function inspectedPlace(
   return { previous, next, missing };
 }
 
-/** `+950ms`, `+3.2s`, `+1m40s`, `+2h5m` — the gap between two events' `createdAt`. */
+/** The gap between two events' `createdAt` in the rows' notation (event-row.tsx `formatDelta`), never
+ *  negative; none when either time does not parse. */
 export function elapsedBetween(from: string, to: string): string | undefined {
-  const fromMs = Date.parse(from);
-  const toMs = Date.parse(to);
-  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return undefined;
-  const ms = Math.max(0, Math.floor(toMs - fromMs));
-  if (ms < 1_000) return `+${ms}ms`;
-  if (ms < 60_000) return `+${(Math.floor(ms / 100) / 10).toFixed(1).replace(/\.0$/, "")}s`;
-  const seconds = Math.floor(ms / 1_000);
-  if (seconds < 3_600) return `+${Math.floor(seconds / 60)}m${seconds % 60}s`;
-  return `+${Math.floor(seconds / 3_600)}h${Math.floor((seconds % 3_600) / 60)}m`;
+  const ms = Date.parse(to) - Date.parse(from);
+  return Number.isNaN(ms) ? undefined : formatDelta(Math.max(0, ms));
 }
 
 /** The raw event's keys, signal first: what happened and its payload before the envelope. */
