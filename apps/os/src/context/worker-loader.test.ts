@@ -100,6 +100,32 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   expect(produced).toBe(2);
 });
 
+test("a producer's modules are read once per commit, not once per cold isolate: a cold isolate under the same key reads ITX_KV and never asks the producer again", async () => {
+  // prd, 2026-09-28: crawlers and scanners hit a project's site minutes apart, each request found
+  // the site's isolate cold and ran `repos.get("/repos/config").modules({ commitOid })` again —
+  // 55 wakes of /repos/config in 17 hours, though a commit's tree never changes.
+  const kv = fakeKv().kv;
+  let produced = 0;
+  const invoke = async () => {
+    produced++;
+    return { "package.json": '{"main":"worker.js"}', "worker.js": "export default class Site {}" };
+  };
+  const site = ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "c0ffee" }]];
+  const coldIsolate = async () => {
+    const { env, warm } = fakeLoaderEnv({ kv }); // the last isolate idled out: nothing warm
+    const { loaderId } = await loadConfined(env, { source: site, cacheKey: "c0ffee", invoke });
+    return warm.get(loaderId);
+  };
+  await expect(coldIsolate()).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(produced).toBe(1);
+  await expect(coldIsolate()).resolves.toMatchObject({
+    modules: { "worker.js": "export default class Site {}" },
+  });
+  expect(produced).toBe(1);
+});
+
 test("literal modules: the key is their content hash unless the caller names a cacheKey", async () => {
   const { env, keys } = fakeLoaderEnv();
   const a = await loadConfined(env, {
@@ -362,10 +388,25 @@ test("the platform origin the ITX stub was minted with is part of the loader id:
   expect(again).toMatchObject({ loaderId: after.loaderId });
 });
 
+/** A fake `env.ITX_KV` that keeps every value and records each `put`'s options. */
+const fakeKv = () => {
+  const values = new Map<string, string>();
+  const puts: { key: string; options?: KVNamespacePutOptions }[] = [];
+  const kv = {
+    get: async (key: string) => values.get(key) ?? null,
+    put: async (key: string, value: string, options?: KVNamespacePutOptions) => {
+      values.set(key, value);
+      puts.push({ key, options });
+    },
+  } as unknown as KVNamespace;
+  return { kv, values, puts };
+};
+
 /** A fake `env.LOADER` that records every key and — like workerd — runs `getCode` once per NEW key
  *  and keeps whatever came of it under the key, a rejection included (a handler is attached so a
- *  rejection kept in `warm` is not an unhandled one). */
-const fakeLoaderEnv = () => {
+ *  rejection kept in `warm` is not an unhandled one). Its `ITX_KV` is a fresh fake unless a row
+ *  shares one across two fake loaders: two isolate lifetimes of ONE platform. */
+const fakeLoaderEnv = ({ kv = fakeKv().kv }: { kv?: KVNamespace } = {}) => {
   const keys: string[] = [];
   const warm = new Map<string, Promise<unknown>>();
   const env = {
@@ -380,6 +421,7 @@ const fakeLoaderEnv = () => {
         return {};
       },
     },
+    ITX_KV: kv,
   } as unknown as Parameters<typeof prepareConfinedWorker>[0]["env"];
   return { env, keys, warm };
 };
