@@ -20,7 +20,6 @@
 // catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { errorCode, resolveContextPath } from "iterate/lib";
-import type { WorkerManifest } from "iterate/api";
 import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
 import {
   parseConfigRepoTemplateReference,
@@ -39,6 +38,7 @@ import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
 import { defaultFiles, templateFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
+import type { WorkerManifest } from "../context/worker-manifest.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";

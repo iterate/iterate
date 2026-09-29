@@ -17,21 +17,10 @@ import { WorkspaceContract } from "../workspace/contract.ts";
 import { SecretCatalog, SecretContract } from "../secret/contract.ts";
 import { CoreEventCatalog } from "../stream/core-events.ts";
 import { IntegrationConnectionRow, IntegrationEventCatalog } from "../integrations/contract.ts";
+import { WorkerManifest } from "../context/worker-manifest.ts";
 
-/** A publication's modules: each top-level module of the config commit, by path — its identity
- *  (the hash of what the loader loads with it as the main module) and the classes it exports that a
- *  loader hosts by name. */
-const PublishedModules = z.record(
-  z.string(),
-  z.object({ identity: z.string().min(1), classes: z.array(z.string()) }),
-);
-
-/** A publication's manifest (iterate/api `WorkerManifest`), as the pointer carries it: read where a
- *  facet loads from the worker it names (context/facet-host.ts), and only from the platform's rule. */
-export const WorkerManifest = z.object({
-  generation: z.number().int().positive(),
-  modules: PublishedModules,
-});
+/** A publication's modules (context/worker-manifest.ts). */
+const PublishedModules = WorkerManifest.shape.modules;
 
 /** Where a custom hostname stands at Cloudflare (custom-hostnames.ts reads it off the API). */
 export const CustomHostnameObservation = z.object({

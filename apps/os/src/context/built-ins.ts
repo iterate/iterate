@@ -85,7 +85,7 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
-import { hostedFacetMarkerOf } from "../stream/core-processor.ts";
+import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
 import {
   FacetHandle,
   isMissingRpcMethod,
@@ -101,12 +101,11 @@ import {
   stampCallerHeaders,
   terminalFetchOf,
 } from "./rpc-stubs.ts";
-import { admitLoadedCodeRow } from "./itx-expression-rewriting.ts";
+import { admitLoadedCodeRow, namesAWorker } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID, resourceScope } from "./paths.ts";
 import {
   assertFacetSourceWithinCeiling,
   contentHashOfWorkerModules,
-  facetSpecOf,
   isWorkerModules,
   namedWorkerLoad,
   prepareConfinedWorker,
@@ -2451,10 +2450,7 @@ export function workersRoot(deps: {
         // A source expression with no cacheKey NAMES a worker (iterate/api `workers.get`): the code
         // that rule's spec loads, `mainModule` under its published identity — resolved as the call
         // is, so the call after a publication runs the new code.
-        const named =
-          spec.cacheKey || isWorkerModules(spec.source)
-            ? undefined
-            : await deps.namedWorker(spec.source);
+        const named = namesAWorker(spec) ? await deps.namedWorker(spec.source) : undefined;
         const worker = named
           ? { ...namedWorkerLoad(named, spec.mainModule, "workers.get"), invoke: named.invoke }
           : { source: spec.source, cacheKey: spec.cacheKey, invoke: deps.invoke };

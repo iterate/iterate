@@ -1285,6 +1285,11 @@ const PRODUCER_ROWS: { name: string; call: string; refused?: RegExp }[] = [
     name: "the root's worker named as a descendant's facet source, with no cacheKey: passes",
     call: "itx.cd('./b').processors.enable('agent', { source: \"itx.cd('/').config\", className: 'A', mainModule: 'agents.ts' })",
   },
+  {
+    // an empty cacheKey is none: the spec names a worker, as its host reads it
+    name: "the root's worker named with an empty cacheKey: passes, a name like any other",
+    call: "itx.cd('./b').processors.enable('agent', { source: \"itx.cd('/').config\", className: 'A', cacheKey: '' })",
+  },
   // A NAME only reads rules: a spelling that calls or reaches the fixed point is a producer at the
   // context it names, and needs its cacheKey — then it is walled as one
   {

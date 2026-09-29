@@ -31,7 +31,7 @@ import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/share
 import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";
 import { sha256Hex } from "../caller.ts";
-import { WorkerManifest } from "../project/contract.ts";
+import { WorkerManifest } from "./worker-manifest.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { readPackage, resolveModules, type ResolveOptions } from "./module-resolution.ts";
 
@@ -61,23 +61,12 @@ export function assertFacetSourceWithinCeiling(spec: FacetSpec, where: string): 
     );
 }
 
-/** The same spec with an absent `cacheKey` or `mainModule` left OUT (never `cacheKey: undefined`)
- *  — the one shape a memo, an event or a compare sees. */
-export const facetSpecOf = ({ source, cacheKey, className, mainModule }: FacetSpec): FacetSpec => ({
-  source,
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- the canonical shape deliberately OMITS an absent cacheKey (never `cacheKey: undefined`, per the docstring): it is the one shape the kv-stored memo, the hosting event and the JSON.stringify compares all see, so a present-but-undefined key must never enter it
-  ...(cacheKey !== undefined && { cacheKey }),
-  className,
-  // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical shape
-  ...(mainModule !== undefined && { mainModule }),
-});
-
 export const isWorkerModules = (source: unknown): source is WorkerModules =>
   // oxlint-disable-next-line iterate/simple-truthiness-check -- `source` is untrusted `unknown`; the null check is the standard non-null-object runtime guard and keeps this a boolean type predicate
   typeof source === "object" && source !== null && !Array.isArray(source);
 
-/** A `workers.get` spec as a rule names a worker (iterate/api `WorkerManifest` for its manifest):
- *  anyone may write such a rule, so its shape is checked where a name is read. */
+/** A `workers.get` spec as a rule names a worker, with its manifest when the platform published it
+ *  (worker-manifest.ts): anyone may write such a rule, so its shape is checked where a name is read. */
 const NamedWorkerSpec = z.object({
   // the loader checks the files, or the expression, as it loads them
   source: z.custom<WorkerSource>(
@@ -254,23 +243,24 @@ export async function prepareConfinedWorker(
   // 1. the key's last component, tagged with what names the code — a published module's identity,
   // the caller's cacheKey, or the content — so no cacheKey takes the id a module identity names;
   // and how the modules will be obtained.
+  const named = opts.moduleIdentity
+    ? `module:${opts.moduleIdentity}`
+    : cacheKey
+      ? `key:${cacheKey}`
+      : undefined;
   let sourceVersion: string;
   let getModules: () => Promise<WorkerModules> | WorkerModules;
   if (isWorkerModules(source)) {
     const modules = requireFiles(source);
     readPackage(modules, where); // refused where it is handed in, not late in a cold load
-    sourceVersion = opts.moduleIdentity
-      ? `module:${opts.moduleIdentity}`
-      : cacheKey
-        ? `key:${cacheKey}`
-        : `content:${contentHashOfWorkerModules(modules)}`;
+    sourceVersion = named || `content:${contentHashOfWorkerModules(modules)}`;
     getModules = () => modules;
   } else {
-    if (!cacheKey && !opts.moduleIdentity)
+    if (!named)
       throw new Error(
         `${where}: a source EXPRESSION needs a cacheKey (a build id, a commit) — the producer runs only when no isolate is warm under it and no answer of its is kept (a day, per deploy), so the key must change whenever the code does`,
       );
-    sourceVersion = opts.moduleIdentity ? `module:${opts.moduleIdentity}` : `key:${cacheKey}`;
+    sourceVersion = named;
     // A producer's modules are kept in `ITX_KV` under its whole input — the deploy (the loader id
     // folds it in too, and a deploy can change how a producer answers), the owner, the caller's key
     // (else the published module identity it loads under) and the expression — so a cold isolate

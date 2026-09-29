@@ -42,6 +42,7 @@ import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
 import {
   CoreContract,
   facetSpecFromHostingTarget,
+  facetSpecOf,
   rowsPushingFacet,
   type CoreState,
 } from "../stream/core-processor.ts";
@@ -65,12 +66,11 @@ import { assertFacetMethodIsPublic } from "./facet-public-methods.ts";
 import { assertFacetPlacement } from "./first-party-facet-placement.ts";
 import {
   assertFacetSourceWithinCeiling,
-  facetSpecOf,
-  isWorkerModules,
   namedWorkerLoad,
   prepareConfinedWorker,
   type NamedWorker,
 } from "./worker-loader.ts";
+import { namesAWorker } from "./itx-expression-rewriting.ts";
 
 /** WORKAROUND for a platform defect — https://github.com/iterate/alarm-loader-facet-repro (the
  *  reproduction, what was measured, what was ruled out). On prd (never in local workerd) a call into
@@ -294,6 +294,9 @@ export class FacetHost {
   /** Each loaded facet's identity as this incarnation last materialized it — ahead of its
    *  `facet:<name>:loader-id` row while a restart under a new identity is starting it. */
   readonly #loaderIdByName = new Map<string, string>();
+  /** The named worker each facet was last installed under this incarnation, ahead of its
+   *  `facet:<name>:named-worker` row: what an older materialization that resumes after it finds. */
+  readonly #namedWorkerInstalled = new Map<string, NamedWorkerStarted>();
   /** The facets this incarnation called: each has its `facet-ran:<name>` row, written on its first
    *  call — what the next birth starts before its first write, and what the sweep resets. */
   readonly #ranThisIncarnation = new Set<string>();
@@ -1048,90 +1051,107 @@ export class FacetHost {
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
       // __workers-tests__/facets.test.ts). The awaits are the named worker's resolution and a dead
       // id's recovery (worker-loader.ts).
-      let worker: FacetWorker;
-      try {
-        worker = await this.#workerOf(name, memo);
-      } catch (error) {
-        // A LIVE facet outlasts a name it cannot read right now — the platform failed the read,
-        // not the rule: it keeps running under the identity it has until a read succeeds.
-        const liveLoaderId = this.#liveFacetNames.has(name)
-          ? this.#loaderIdByName.get(name)
-          : undefined;
-        if (!liveLoaderId || !isPlatformFailureKind(failureKind(error))) throw error;
-        return this.#liveFacetUnderItsIdentity(name, liveLoaderId, error);
-      }
-      const { loaderId, load, retire } = await prepareConfinedWorker({
-        env: this.#deps.env(),
-        deployId: this.#deps.deployId,
-        platformOrigin: this.#deps.platformOrigin(),
-        itxEntrypoint: this.#deps.itxEntrypoint(),
-        kind: "facet",
-        owner: [this.#deps.iterateContextName, memo.className],
-        source: worker.source,
-        cacheKey: worker.cacheKey,
-        mainModule: memo.mainModule,
-        moduleIdentity: worker.moduleIdentity,
-        invoke: worker.invoke,
-        where: `facet "${name}"`,
-      });
-      codeId = loaderId;
-      // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
-      // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
-      // stale call must neither resurrect a deleted facet as an orphan this actor never releases, nor
-      // abort the newer facet to install old code. The memo object's identity IS the check: the memo
-      // is per incarnation, and so is this await.
-      if (this.#facetStartupMemoByName.get(name) !== memo)
-        throw codedError(
-          "NO_FACET",
-          `facet "${name}" was deleted or reconfigured while its source resolved`,
-        );
-      // `facet:<name>:loader-id`, the restart marker: when the identity moves — a source change, a
-      // deploy, a workaround generation after a dead load (worker-loader.ts) — the facet restarts in
-      // place, its storage surviving. The abort matters for the dead-load case too: workerd hands
-      // back the SAME facet container on every `facets.get`, even one whose startup callback
-      // rejected, and only an abort clears it. The row is read once per incarnation and written
-      // once the facet started under the new identity (a write between the abort and the start is
-      // what the platform defect needs); this incarnation's own view is `#loaderIdByName`.
-      const recordedLoaderId = this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) as
-        | string
-        | undefined;
-      const previousLoaderId = this.#loaderIdByName.get(name) ?? recordedLoaderId;
-      this.#loaderIdByName.set(name, loaderId);
-      // Whether the facet runs under this identity already: a restart whose start failed leaves it
-      // stopped, and this call is its start.
-      let started = true;
-      if (previousLoaderId && previousLoaderId !== loaderId) {
-        // The class the old identity loaded is gone from this facet: its list goes with it.
-        this.#publicMethodsByLoaderId.delete(previousLoaderId);
-        // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
-        // it first — abort and start with nothing between (`#restart`), the identity recorded there.
-        if (platformStart) {
-          this.#abortForRestart(name, "loaded identity changed");
-          this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
-        } else {
-          started = await this.#restart(name, () =>
-            this.#abortForRestart(name, "loaded identity changed"),
-          );
-          if (this.#facetStartupMemoByName.get(name) !== memo)
-            throw codedError(
-              "NO_FACET",
-              `facet "${name}" was deleted or reconfigured while it restarted`,
-            );
-        }
-      }
-      if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
-        recordLoadedIdentity = () => {
-          this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
-          if (worker.started)
-            this.#deps.ctx.storage.kv.put(`facet:${name}:named-worker`, worker.started);
+      const resolved = await this.#workerOf(name, memo).then(
+        (worker) => ({ worker }),
+        (error: unknown) => ({ error }),
+      );
+      // A LIVE facet outlasts a name it cannot read right now — the platform failed the read, not the
+      // rule: it keeps running under the identity it has until a read succeeds, and one the runtime
+      // dropped meanwhile fails its start with why, to start cold on a later call.
+      const liveLoaderId = this.#liveFacetNames.has(name)
+        ? this.#loaderIdByName.get(name)
+        : undefined;
+      if ("error" in resolved) {
+        if (!liveLoaderId || !isPlatformFailureKind(failureKind(resolved.error)))
+          throw resolved.error;
+        materializedLoaderId = liveLoaderId;
+        mintClass = () => {
+          throw resolved.error;
         };
-      if (!platformStart && started) {
-        recordLoadedIdentity?.();
-        recordLoadedIdentity = undefined;
+      } else {
+        const { worker } = resolved;
+        const { loaderId, load, retire } = await prepareConfinedWorker({
+          env: this.#deps.env(),
+          deployId: this.#deps.deployId,
+          platformOrigin: this.#deps.platformOrigin(),
+          itxEntrypoint: this.#deps.itxEntrypoint(),
+          kind: "facet",
+          owner: [this.#deps.iterateContextName, memo.className],
+          source: worker.source,
+          cacheKey: worker.cacheKey,
+          mainModule: memo.mainModule,
+          moduleIdentity: worker.moduleIdentity,
+          invoke: worker.invoke,
+          where: `facet "${name}"`,
+        });
+        codeId = loaderId;
+        // A removal or a RECONFIGURE may have landed while that awaited: this name's memo is then gone
+        // (#deleteFacet) or a newer object (#facetStartupMemoFor replaces a changed spec). Bail — a
+        // stale call must neither resurrect a deleted facet as an orphan this actor never releases, nor
+        // abort the newer facet to install old code. The memo object's identity IS the check: the memo
+        // is per incarnation, and so is this await.
+        if (this.#facetStartupMemoByName.get(name) !== memo)
+          throw codedError(
+            "NO_FACET",
+            `facet "${name}" was deleted or reconfigured while its source resolved`,
+          );
+        // A NEWER PUBLICATION was installed while that awaited (another call's, past a dead id's
+        // recovery here): the facet only moves forward, so this call resolves again, to it.
+        if (worker.started) {
+          if ((this.#namedWorkerStarted(name, memo)?.generation ?? 0) > worker.started.generation)
+            return this.#materialize(name, firstPartyClassName, facetStartupMemo, {
+              platformStart,
+            });
+          this.#namedWorkerInstalled.set(name, worker.started);
+        }
+        // `facet:<name>:loader-id`, the restart marker: when the identity moves — a source change, a
+        // deploy, a workaround generation after a dead load (worker-loader.ts) — the facet restarts in
+        // place, its storage surviving. The abort matters for the dead-load case too: workerd hands
+        // back the SAME facet container on every `facets.get`, even one whose startup callback
+        // rejected, and only an abort clears it. The row is read once per incarnation and written
+        // once the facet started under the new identity (a write between the abort and the start is
+        // what the platform defect needs); this incarnation's own view is `#loaderIdByName`.
+        const recordedLoaderId = this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) as
+          | string
+          | undefined;
+        const previousLoaderId = this.#loaderIdByName.get(name) ?? recordedLoaderId;
+        this.#loaderIdByName.set(name, loaderId);
+        // Whether the facet runs under this identity already: a restart whose start failed leaves it
+        // stopped, and this call is its start.
+        let started = true;
+        if (previousLoaderId && previousLoaderId !== loaderId) {
+          // The class the old identity loaded is gone from this facet: its list goes with it.
+          this.#publicMethodsByLoaderId.delete(previousLoaderId);
+          // A platform start (`#start`, `#recover`) is itself the start that follows; a call restarts
+          // it first — abort and start with nothing between (`#restart`), the identity recorded there.
+          if (platformStart) {
+            this.#abortForRestart(name, "loaded identity changed");
+            this.#liveFacetNames.delete(name); // cold from here: it starts afresh below
+          } else {
+            started = await this.#restart(name, () =>
+              this.#abortForRestart(name, "loaded identity changed"),
+            );
+            if (this.#facetStartupMemoByName.get(name) !== memo)
+              throw codedError(
+                "NO_FACET",
+                `facet "${name}" was deleted or reconfigured while it restarted`,
+              );
+          }
+        }
+        if (this.#deps.ctx.storage.kv.get(`facet:${name}:loader-id`) !== loaderId)
+          recordLoadedIdentity = () => {
+            this.#deps.ctx.storage.kv.put(`facet:${name}:loader-id`, loaderId);
+            if (worker.started)
+              this.#deps.ctx.storage.kv.put(`facet:${name}:named-worker`, worker.started);
+          };
+        if (!platformStart && started) {
+          recordLoadedIdentity?.();
+          recordLoadedIdentity = undefined;
+        }
+        materializedLoaderId = loaderId;
+        mintClass = () => load().getDurableObjectClass(memo.className, { props: propsAtStart() });
+        retireLoadedIdentity = retire;
       }
-      materializedLoaderId = loaderId;
-      mintClass = () => load().getDurableObjectClass(memo.className, { props: propsAtStart() });
-      retireLoadedIdentity = retire;
     }
     // THE CLASS. A facet this actor holds LIVE (#liveFacetNames) is running: `facets.get` reuses
     // its container and never runs the startup callback — no loader lookup, no class minted for
@@ -1168,22 +1188,6 @@ export class FacetHost {
     };
   }
 
-  /** The container of a facet running under `loaderId`, reached without resolving its code again;
-   *  one the runtime dropped meanwhile fails its start with `why`, and starts cold on a later call. */
-  #liveFacetUnderItsIdentity(name: string, loaderId: string, why: unknown): MaterializedFacet {
-    let startupFailed = false;
-    const facet = this.#deps.ctx.facets.get(name, () => {
-      startupFailed = true;
-      throw why;
-    });
-    return {
-      facet,
-      startupFailed: () => startupFailed,
-      generation: this.#facetGenerationByName.get(name) ?? 0,
-      loaderId,
-    };
-  }
-
   /** WHAT A LOADED FACET LOADS: its memo's own source — its modules, or a producer under its
    *  cacheKey — or the worker that source NAMES (a source expression with no cacheKey), resolved now.
    *  Only a manifest the platform VOUCHES for (its publication wrote the rule) counts: the facet
@@ -1193,7 +1197,7 @@ export class FacetHost {
    *  a publication apart do not restart it back and forth. A manifest anyone else wrote is ignored:
    *  its worker loads under its own cacheKey or content, as any source does. */
   async #workerOf(name: string, memo: FacetSpec): Promise<FacetWorker> {
-    if (memo.cacheKey || isWorkerModules(memo.source))
+    if (!namesAWorker(memo))
       return { source: memo.source, cacheKey: memo.cacheKey, invoke: this.#deps.invoke };
     const named = await this.#deps.namedWorker(memo.source);
     const { source, cacheKey, moduleIdentity, generation } = namedWorkerLoad(
@@ -1203,17 +1207,8 @@ export class FacetHost {
       memo.className,
     );
     if (generation === undefined) return { source, cacheKey, invoke: named.invoke };
-    // kv answers `unknown`; `recordLoadedIdentity` is the only writer of the row.
-    const started = this.#deps.ctx.storage.kv.get(`facet:${name}:named-worker`) as
-      | NamedWorkerStarted
-      | undefined;
-    if (
-      started &&
-      jsonEqual(started.name, memo.source) &&
-      started.mainModule === memo.mainModule &&
-      started.generation > generation
-    )
-      return { ...started, invoke: named.invoke };
+    const started = this.#namedWorkerStarted(name, memo);
+    if (started && started.generation > generation) return { ...started, invoke: named.invoke };
     return {
       source,
       cacheKey,
@@ -1228,6 +1223,24 @@ export class FacetHost {
         moduleIdentity,
       },
     };
+  }
+
+  /** The named worker the facet `name` last started under for `memo`'s name and entry: the one
+   *  this incarnation installed, else its `facet:<name>:named-worker` row. */
+  #namedWorkerStarted(name: string, memo: FacetSpec): NamedWorkerStarted | undefined {
+    const matches = (started: NamedWorkerStarted | undefined) =>
+      started && jsonEqual(started.name, memo.source) && started.mainModule === memo.mainModule
+        ? started
+        : undefined;
+    return (
+      matches(this.#namedWorkerInstalled.get(name)) ??
+      // kv answers `unknown`; `recordLoadedIdentity` is the only writer of the row.
+      matches(
+        this.#deps.ctx.storage.kv.get(`facet:${name}:named-worker`) as
+          | NamedWorkerStarted
+          | undefined,
+      )
+    );
   }
 
   /** One call on the container under the watchdog: the steps walked receiver-preservingly — a

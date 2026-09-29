@@ -43,7 +43,7 @@ import {
 import { jsonEqual } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, ReduceArgs, StreamEventInput } from "iterate/stream/processor";
-import type { RewriteRuleConfigured } from "iterate/api";
+import type { FacetSpec, RewriteRuleConfigured } from "iterate/api";
 import { RunEventCatalog, RunRequested } from "iterate/stream/run";
 import type { Cause } from "../cause.ts";
 import { firstPartyFacetClassOf } from "../first-party-facets.ts";
@@ -58,6 +58,7 @@ import {
   implicitRootsAt,
   isBuiltInsRooted,
   normalizeRewriteRuleConfigured,
+  namesAWorker,
   refuseSelfLoopRow,
   resolveItxExpression,
   type ItxExpressionRewriteRule,
@@ -96,27 +97,23 @@ export function facetSpecFromHostingTarget(
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
     return { name: getStep[1], className: firstPartyClassName };
-  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null) {
+  if (getStep.length >= 3 && typeof getStep[2] === "object" && getStep[2] !== null)
     // The spec is caller-authored and only its object-ness is checked here: a malformed one is
     // copied as it is and fails where the facet host loads it (FacetHost `#facetStartupMemoFor`).
-    const spec = getStep[2] as {
-      source: unknown;
-      className: string;
-      cacheKey?: string;
-      mainModule?: string;
-    };
-    return {
-      name: getStep[1],
-      source: spec.source,
-      className: spec.className,
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- canonical facet spec: cacheKey feeds the loader's identity-keyed memo (facetSpecOf); an absent cacheKey must stay absent, not `cacheKey: undefined`
-      ...(spec.cacheKey !== undefined && { cacheKey: spec.cacheKey }),
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical spec
-      ...(spec.mainModule !== undefined && { mainModule: spec.mainModule }),
-    };
-  }
+    return { name: getStep[1], ...facetSpecOf(getStep[2] as FacetSpec) };
   return undefined;
 }
+
+/** The same spec with an absent `cacheKey` or `mainModule` left OUT (never `cacheKey: undefined`)
+ *  — the one shape a memo, an event or a compare sees. */
+export const facetSpecOf = ({ source, cacheKey, className, mainModule }: FacetSpec): FacetSpec => ({
+  source,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- the canonical shape deliberately OMITS an absent cacheKey (never `cacheKey: undefined`, per the docstring): it is the one shape the kv-stored memo, the hosting event and the JSON.stringify compares all see, so a present-but-undefined key must never enter it
+  ...(cacheKey !== undefined && { cacheKey }),
+  className,
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- as cacheKey: an absent mainModule stays absent in the canonical shape
+  ...(mainModule !== undefined && { mainModule }),
+});
 
 /** THE MARKER a hosting row keeps (`Subscription["hostedFacet"]`): the spec less its source — a
  *  100 KB processor must not ride the checkpoint — but for a worker's NAME (a source expression
@@ -126,8 +123,7 @@ export function hostedFacetMarkerOf(
   spec: HostingFacetSpec,
 ): NonNullable<Subscription["hostedFacet"]> {
   const { source, ...marker } = spec;
-  const named = !marker.cacheKey && (typeof source === "string" || Array.isArray(source));
-  return named ? { ...marker, source } : marker;
+  return namesAWorker(spec) ? { ...marker, source } : marker;
 }
 
 /** Resolve a target through THIS state's rules to the fixed point — or undefined when it cannot be

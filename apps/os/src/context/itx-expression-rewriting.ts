@@ -659,18 +659,29 @@ function admitLoadedCodeExpression(expression: ItxExpression, from: string): voi
             "FORBIDDEN",
             `a webhook's signing secret is named only at the project's root, and ${JSON.stringify(at)} is below it`,
           );
-        const source = typeof arg === "object" && arg && "source" in arg ? arg.source : undefined;
-        if (typeof source === "string" || Array.isArray(source)) {
-          const sourceExpression = normalizedItxExpression(source);
-          if (typeof arg === "object" && arg && "cacheKey" in arg)
-            admitLoadedCodeExpression(sourceExpression, at);
-          else admitWorkerName(sourceExpression);
+        const spec = typeof arg === "object" && arg ? (arg as WorkerSpecShape) : undefined;
+        if (spec && (typeof spec.source === "string" || Array.isArray(spec.source))) {
+          const sourceExpression = normalizedItxExpression(spec.source as ItxExpressionInput);
+          if (namesAWorker(spec)) admitWorkerName(sourceExpression);
+          else admitLoadedCodeExpression(sourceExpression, at);
         }
       }
     if (Array.isArray(step) && step[0] === "cd" && typeof step[1] === "string")
       at = resolveContextPath(at, step[1]);
   }
 }
+
+/** What a `workers.get` or facet spec carries that decides whether it names a worker. */
+type WorkerSpecShape = { source?: unknown; cacheKey?: unknown };
+
+/** Whether a `workers.get` or facet spec NAMES a worker (iterate/api `FacetSpec`): a source
+ *  expression with no cacheKey — an empty one is none — which only reads rules (`admitWorkerName`);
+ *  anything else is code, a producer walled as the loaded code it is. The wall and every host read a
+ *  spec by this alone. */
+export const namesAWorker = <Spec extends WorkerSpecShape>(
+  spec: Spec,
+): spec is Spec & { source: ItxExpressionInput } =>
+  !spec.cacheKey && (typeof spec.source === "string" || Array.isArray(spec.source));
 
 /** A WORKER'S NAME (a source expression with no `cacheKey`, iterate/api `FacetSpec`) only READS
  *  RULES: property steps and `cd(path)`, never `builtins` and never another call. So the worker it

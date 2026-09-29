@@ -1,5 +1,5 @@
 // src/project/publication.ts — ONE PUBLICATION OF THE CONFIG REPO: commit C of `/repos/config`
-// becomes the project's code. Its MANIFEST (iterate/api `WorkerManifest`) names each top-level module
+// becomes the project's code. Its MANIFEST (context/worker-manifest.ts) names each top-level module
 // by its identity — the hash of what the loader loads with it as the main module
 // (context/worker-loader.ts `moduleIdentityOf`) — and the Durable Object classes it exports, which a
 // facet's `className` must name (worker-loader.ts `namedWorkerLoad`). Every top-level module must
@@ -9,14 +9,16 @@
 // next call, saying so. A module other than the main one that throws as it is imported (a script
 // beside the worker) keeps its identity in the manifest and exports no class. The POINTER is the rule on `/` that names the
 // admitted commit, `itx.config`: every context's birth row delivers to it (envs.ts
-// `contextBirthEvents`) and every facet of the project's config names it (iterate/api `FacetSpec`).
+// `PROJECT_CONTEXT_BIRTH_EVENTS`) and every facet of the project's config names it (iterate/api
+// `FacetSpec`); only the platform writes it (caller.ts `refuseNonPlatformWrites`), so only its manifest
+// counts.
 // The follower (processor.ts) appends the pointer, as the platform, then `project/worker-updated`;
 // a commit that fails here is `project/worker-update-failed`, and the pointer stays where it was.
 
-import type { WorkerManifest } from "iterate/api";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { readPackage } from "../context/module-resolution.ts";
+import type { WorkerManifest } from "../context/worker-manifest.ts";
 
 /** What a publication reaches, for THIS project (durable-object.ts builds it). */
 export type ProjectPublisher = {

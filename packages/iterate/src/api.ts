@@ -111,23 +111,14 @@ export type WorkerSource = Record<string, string> | ItxExpressionInput;
  *  (`itx.cd('/').config`, the project's published config). The facet loads that worker's source,
  *  its producer run with that context's authority. `mainModule` names the module of the source that
  *  exports `className` when it is not the source's entry (`agents.ts` of a config repo whose entry
- *  is `worker.ts`): the facet runs that module's own graph, and — named by a worker whose
- *  `manifest` has it — restarts in place, storage kept, only when that module's identity changes,
- *  never onto an older generation. */
+ *  is `worker.ts`): the facet runs that module's own graph, and — named by the project's published
+ *  config — restarts in place, storage kept, only when that module's identity changes, never onto
+ *  an older publication. */
 export type FacetSpec = {
   source: WorkerSource;
   cacheKey?: string;
   className: string;
   mainModule?: string;
-};
-
-/** What a worker's publisher records of its source: each top-level module's `identity` (the hash
- *  of what the loader loads with it as the main module, npm dependencies included) and the classes
- *  it exports that a loader hosts by name, and the publication's `generation`, which only grows.
- *  The project's config pointer carries one for every published commit of `/repos/config`. */
-export type WorkerManifest = {
-  generation: number;
-  modules: Record<string, { identity: string; classes: string[] }>;
 };
 
 /** What `schedules.set` answers: the definition's identity, to cancel exactly it. */
@@ -931,15 +922,13 @@ export interface IterateContextApi {
   };
   workers: {
     /** A stateless worker loaded from `spec`: `mainModule` loads that module of the source as its
-     *  entry in place of package.json's `main`; `manifest` is its publisher's record, which a facet
-     *  or a worker named by this worker reads. `source` is as `FacetSpec`'s: an expression with no
+     *  entry in place of package.json's `main`. `source` is as `FacetSpec`'s: an expression with no
      *  `cacheKey` is the NAME of a loaded worker (`itx.cd('/').config`), whose code each call loads,
-     *  `mainModule` by its identity in that worker's manifest. */
+     *  `mainModule` as the project's publication of it recorded it. */
     get(spec: {
       source: WorkerSource;
       cacheKey?: string;
       mainModule?: string;
-      manifest?: WorkerManifest;
       className?: string;
       props?: unknown;
     }): InvokeHandle;
