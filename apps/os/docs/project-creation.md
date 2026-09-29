@@ -10,25 +10,28 @@ request is recorded, so recovery always uses the same source. A template's `pack
 its main module in `"main"`; the built-in minimal template is used when none is supplied. Built-in choices come from
 [configs](../../../configs/README.md).
 
-If the seed includes `iterate.json`, its `events` list configures the initial userspace
-subscription before `project/created`. The optional agents template installs that subscription;
-the platform does not add agent lifecycle behavior by itself.
-
-The processor points ingress at the exact seed commit and emits `project/created`. Interrupted
-attempts reuse the repository and seed commit; existing repositories and later edits are preserved.
-A failure emits `project/create-failed`, and a later create call can start another attempt.
+The processor publishes the seed commit (below) and emits `project/created` in the same append, so
+the config worker is subscribed and the apex answers before the certificate. The optional agents
+template's `iterate.json` subscribes its worker to `project/created`; the platform does not add
+agent lifecycle behavior by itself. Interrupted attempts reuse the repository and seed commit;
+existing repositories and later edits are preserved. A failure emits `project/create-failed`, and a
+later create call can start another attempt.
 
 ## Publishing
 
-A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes the
-resulting pinned revision; `package.json`'s `"main"` names the main module. Files may be TypeScript
+A commit to `/repos/config` emits `repo/commit-completed`, and the project processor publishes that
+commit in one append: `itx/ingress-configured` points the apex at the worker at that commit, and
+the `config-worker` subscription hands the same worker's `processEventBatch` the events its
+`iterate.json` lists (`{ "events": [...] }`; a commit that lists none, or whose manifest is not that
+shape, removes the row). One version of the config worker runs at a time: the next commit replaces
+both. `package.json`'s `"main"` names the main module. Files may be TypeScript
 (types are stripped, not checked) and import each other by relative path. `iterate/*` and `zod` come from the
 platform; any other package is listed in `package.json` and fetched from npm through esm.sh, locked
 per dependency set (`src/context/module-resolution.ts`). Probe a candidate with
 `itx.workers.get({ source }).fetch(...)` before committing it.
 
-An explicit `itx/ingress-configured` remains in effect until the next config commit. Loading a
-worker alone does not create a route.
+An explicit `itx/ingress-configured`, or a `config-worker` row written by hand, remains in effect
+until the next config commit. Loading a worker alone does not create a route.
 
 ## A config repo on GitHub
 

@@ -14,8 +14,12 @@ test("omitting a template seeds the minimal project without an agent or lifecycl
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
   expect(fixture.files()?.["agents.js"]).toBeUndefined();
   expect(fixture.downloadTemplate).not.toHaveBeenCalled();
-  expect(fixture.itx.append).not.toHaveBeenCalled();
-  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
+  // The seed names no events: its publication removes the config worker's row, if one stood.
+  expect(fixture.append).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ type: "events.iterate.com/itx/ingress-configured" }),
+    expect.objectContaining({ payload: { name: "config-worker", target: null } }),
+    expect.objectContaining({ type: "events.iterate.com/project/created" }),
+  );
   // The seed is committed at once: an unborn `main` is its own check (`parent: null`), so no read of
   // the tip comes first, and the manifest is read from the commit just pushed.
   expect(fixture.repo.tip).not.toHaveBeenCalled();
@@ -65,16 +69,15 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
     "iterate.json": JSON.stringify({ events: ["events.iterate.com/project/created"] }),
     "custom.txt": "owned by this project",
   });
-  expect(fixture).toMatchObject({
-    order: [
-      "subscription",
-      "events.iterate.com/itx/ingress-configured",
-      "events.iterate.com/project/created",
-    ],
-  });
-  expect(fixture.itx.append).toHaveBeenCalledWith(
-    expect.objectContaining({
-      payload: expect.objectContaining({
+  // One append: the apex and the subscription at the seed's commit, then the certificate.
+  expect(fixture.append).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ type: "events.iterate.com/itx/ingress-configured" }),
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      idempotencyKey: `project/config-worker:${"b".repeat(40)}`,
+      payload: {
+        name: "config-worker",
+        consumes: ["events.iterate.com/project/created"],
         target: [
           "itx",
           "workers",
@@ -92,8 +95,9 @@ test("copies the pinned subdirectory into a fresh root commit and subscribes bef
           ],
           "processEventBatch",
         ],
-      }),
-    }),
+      },
+    },
+    expect.objectContaining({ type: "events.iterate.com/project/created" }),
   );
   expect(fixture.repo.commitFiles).toHaveBeenCalledTimes(1);
   // Recovery after a successful commit lost its acknowledgement must preserve the tree: the born
@@ -235,9 +239,6 @@ test("a commit that lands before the seed is the project's config: the seed is r
     expect.objectContaining({ parent: null }),
   );
   expect(fixture.files()).toEqual({ "worker.ts": "the agent's edit" });
-  expect(fixture).toMatchObject({
-    order: ["events.iterate.com/itx/ingress-configured", "events.iterate.com/project/created"],
-  });
   expect(fixture.append).toHaveBeenCalledWith(
     expect.objectContaining({
       payload: {
@@ -258,6 +259,10 @@ test("a commit that lands before the seed is the project's config: the seed is r
           ],
         ],
       },
+    }),
+    expect.objectContaining({
+      idempotencyKey: `project/config-worker:${"c".repeat(40)}`,
+      payload: { name: "config-worker", target: null },
     }),
     expect.objectContaining({ type: "events.iterate.com/project/created" }),
   );
@@ -305,12 +310,7 @@ function project(
     files = { ...files, ...changed };
     tipOid = "c".repeat(40);
   };
-  const itx = {
-    repos: { create: vi.fn(async () => {}), get: () => repo },
-    append: vi.fn(async () => {
-      order.push("subscription");
-    }),
-  };
+  const itx = { repos: { create: vi.fn(async () => {}), get: () => repo } };
   const append = vi.fn(async (...events: { type: string }[]) => {
     order.push(...events.map((event) => event.type));
   });

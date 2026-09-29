@@ -422,25 +422,21 @@ for (const { name, events, state } of reduceRows)
   test(`ProjectProcessor — the reduce: ${name}`, () =>
     expect(reduceProcessor(processorWithoutHostnames(), events)).toEqual(state));
 
-// THE APEX FOLLOWS THE CONFIG REPO — the effect, driven by hand: `processEvent` with the kernel's
+// THE CONFIG WORKER FOLLOWS THE CONFIG REPO — the effect, driven by hand: `processEvent` with the kernel's
 // arguments faked (an `append` that records and can be held open; `runInBackground` runs the work at
 // once). Pinned: a tip that lands WHILE an append is in flight is published by the same attempt once
 // the append settles — no further delivery needed (an idempotent hit lands no fresh event to deliver).
-test("ProjectProcessor — the apex follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
-  const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
-    () => Promise.reject(new Error("unused")),
-  );
+test("ProjectProcessor — the config worker follows the config repo: each tip is published once, keyed by its commit's fact; a tip that lands during an in-flight append is published when it settles; a pull back to an earlier commit publishes it again", async () => {
+  const processor = processorOverConfigRepo({ bbb: '{"events":["events.iterate.com/x/y"]}' });
   const appended: { idempotencyKey?: string; payload?: { target?: unknown } }[] = [];
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   let calls = 0;
-  let answer: { offset: number }[] = [];
   const append = async (...events: unknown[]) => {
     calls += 1;
     if (calls === 1) await held; // the first append stays in flight
     appended.push(...(events as typeof appended));
-    return answer;
+    return [];
   };
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 5) }, append);
   // A second commit lands while the first publication is in flight: dropped by the guard, kept as the newest tip.
@@ -450,27 +446,98 @@ test("ProjectProcessor — the apex follows the config repo: each tip is publish
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
   expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa",
-    "itx/ingress-configured:bbb",
+    "itx/ingress-configured:aaa@5",
+    "project/config-worker:aaa@5",
+    "itx/ingress-configured:bbb@7",
+    "project/config-worker:bbb@7",
   ]);
-  // The target names the commit twice: the source read at it, the cache keyed by it.
-  expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"commitOid":"bbb"');
-  expect(JSON.stringify(appended[1]!.payload!.target)).toContain('"cacheKey":"bbb"');
+  // The apex and the subscription name the same worker: the repo's modules at the commit, cached
+  // under it, handed its own commit's fact onwards. A commit whose iterate.json names no events
+  // removes the row.
+  expect(appended.map((e) => e.payload)).toEqual([
+    { target: configRepoTarget("aaa") },
+    { name: "config-worker", target: null },
+    { target: configRepoTarget("bbb") },
+    {
+      name: "config-worker",
+      consumes: ["events.iterate.com/x/y"],
+      target: [...configRepoTarget("bbb"), "processEventBatch"],
+      afterOffset: 6,
+    },
+  ]);
   // Delivered again over the same tip: nothing more.
   deliver(processor, { ...empty, configRepoTip: tip("bbb", 7) }, append);
   await new Promise((r) => setTimeout(r, 0));
-  expect(appended).toHaveLength(2);
-  // A forced pull back to the first commit is a new fact: the commit's key answers its first
-  // publication (an older event), so it is published again under the fact's own key.
-  answer = [{ offset: 6 }];
+  expect(appended).toHaveLength(4);
+  // A forced pull back to the first commit is a new fact: published again, under that fact's key.
   deliver(processor, { ...empty, configRepoTip: tip("aaa", 9) }, append);
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
-  expect(appended.map((e) => e.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa",
-    "itx/ingress-configured:bbb",
-    "itx/ingress-configured:aaa",
+  expect(appended.map((e) => e.idempotencyKey).slice(4)).toEqual([
     "itx/ingress-configured:aaa@9",
+    "project/config-worker:aaa@9",
+  ]);
+});
+
+test("ProjectProcessor — while the project is being created its saga publishes: a commit that lands meanwhile is published once the creation settles", async () => {
+  const appended: StreamEventInput[] = [];
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [];
+  };
+  const processor = processorOverConfigRepo();
+  // the saga runs too, and this fake repo answers it nothing: its failure is all that lands
+  const creation = { status: "requested" as const, offset: 1 };
+  deliver(processor, { ...empty, creation, configRepoTip: tip("bbb", 3) }, append);
+  await settle();
+  expect(appended.map((event) => event.type)).toEqual(["events.iterate.com/project/create-failed"]);
+  appended.length = 0;
+  deliver(
+    processor,
+    {
+      ...empty,
+      creation: { status: "created", offset: 5 },
+      configRepoTip: tip("bbb", 3),
+      publishedCommitOid: "aaa",
+      publishedAt: 4,
+    },
+    append,
+  );
+  await settle();
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:bbb@3",
+    "project/config-worker:bbb@3",
+  ]);
+});
+
+test("ProjectProcessor — an iterate.json that is not { events: [string] } names no events: its commit is published with the config worker's row removed, and the log says why", async () => {
+  const info = vi.spyOn(console, "info").mockImplementation(() => {});
+  onTestFinished(() => info.mockRestore());
+  const appended: StreamEventInput[] = [];
+  const append = async (...events: unknown[]) => {
+    appended.push(...(events as StreamEventInput[]));
+    return [];
+  };
+  for (const [commitOid, manifest] of [
+    ["aaa", "{ not json"],
+    ["bbb", '{"events":"events.iterate.com/x/y"}'],
+  ]) {
+    deliver(
+      processorOverConfigRepo({ [commitOid]: manifest }),
+      { ...empty, configRepoTip: tip(commitOid, 1) },
+      append,
+    );
+    await settle();
+  }
+  expect(appended.map((event) => event.payload)).toEqual([
+    { target: configRepoTarget("aaa") },
+    { name: "config-worker", target: null },
+    { target: configRepoTarget("bbb") },
+    { name: "config-worker", target: null },
+  ]);
+  expect(info.mock.calls.map(([logged]) => logged)).toEqual([
+    expect.objectContaining({ event: "project.config-manifest-invalid", commitOid: "aaa" }),
+    expect.objectContaining({ event: "project.config-manifest-invalid", commitOid: "bbb" }),
   ]);
 });
 
@@ -490,13 +557,16 @@ test("ProjectProcessor — a tip the state does not hold published is published;
     void work();
   };
   deliver(
-    processorWithoutHostnames(),
+    processorOverConfigRepo(),
     { ...empty, configRepoTip: tip("aaa", 1) },
     append,
     runInBackground,
   );
   await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual(["itx/ingress-configured:aaa"]);
+  expect(appended.map((event) => event.idempotencyKey)).toEqual([
+    "itx/ingress-configured:aaa@1",
+    "project/config-worker:aaa@1",
+  ]);
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
     normalizeControlEvent(appended[0]!, "/"),
@@ -509,42 +579,33 @@ test("ProjectProcessor — a tip the state does not hold published is published;
   });
   deliver(processorWithoutHostnames(), state, append, runInBackground);
   await settle();
-  expect({ appends: appended.length, background }).toEqual({ appends: 1, background: 1 });
+  expect({ appended: appended.length, background }).toEqual({ appended: 2, background: 1 });
 });
 
 test("ProjectProcessor — a tip is published only by a publication after its fact: a pull back to a commit published before is published again, even when another commit's publication landed after that fact", async () => {
   const appended: StreamEventInput[] = [];
   const append = async (...events: unknown[]) => {
     appended.push(...(events as StreamEventInput[]));
-    return [{ offset: 3 }]; // the commit's key answers its first publication, at 3
+    return [];
   };
-  const runInBackground = (work: () => Promise<unknown>) => void work();
-  // aaa published at 3; bbb's fact at 7; back to aaa at 9; bbb's publication landed at 10
-  const state = {
-    ...empty,
-    configRepoTip: tip("aaa", 9),
-    publishedCommitOid: "bbb",
-    publishedAt: 10,
-  };
-  deliver(processorWithoutHostnames(), state, append, runInBackground);
-  await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa",
-    "itx/ingress-configured:aaa@9",
-  ]);
+  // aaa published at 3; bbb's fact at 7; back to aaa at 9; bbb's publication landed at 10 — and
   // the same commit, published before its fact: owed as well
-  appended.length = 0;
-  deliver(
-    processorWithoutHostnames(),
-    { ...empty, configRepoTip: tip("aaa", 9), publishedCommitOid: "aaa", publishedAt: 3 },
-    append,
-    runInBackground,
-  );
-  await settle();
-  expect(appended.map((event) => event.idempotencyKey)).toEqual([
-    "itx/ingress-configured:aaa",
-    "itx/ingress-configured:aaa@9",
-  ]);
+  for (const published of [
+    { publishedCommitOid: "bbb", publishedAt: 10 },
+    { publishedCommitOid: "aaa", publishedAt: 3 },
+  ]) {
+    appended.length = 0;
+    deliver(
+      processorOverConfigRepo(),
+      { ...empty, configRepoTip: tip("aaa", 9), ...published },
+      append,
+    );
+    await settle();
+    expect(appended.map((event) => event.idempotencyKey)).toEqual([
+      "itx/ingress-configured:aaa@9",
+      "project/config-worker:aaa@9",
+    ]);
+  }
 });
 
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
@@ -967,6 +1028,19 @@ function processorWithoutHostnames() {
   return new ProjectProcessor(
     () => Promise.reject(new Error("the reduce reaches no itx")),
     () => Promise.reject(new Error("the reduce downloads no template")),
+  );
+}
+
+/** A processor whose config repo holds `manifests[commitOid]` as `iterate.json` at each commit (none
+ *  where it names none): what a publication reads. */
+function processorOverConfigRepo(manifests: Record<string, string> = {}) {
+  const repo = {
+    readFile: async (path: string, { commitOid }: { commitOid: string }) =>
+      path === "iterate.json" ? (manifests[commitOid] ?? null) : null,
+  };
+  return new ProjectProcessor(
+    (call) => Promise.resolve(call({ repos: { get: () => repo } } as never)),
+    () => Promise.reject(new Error("a publication downloads no template")),
   );
 }
 
