@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Principal } from "iterate/principal";
+import type { AppPaletteEntry } from "./app-shell-palette-entries.ts";
 import { AppShell, type AppShellProject } from "./app-shell.tsx";
 import {
   Breadcrumb,
@@ -20,6 +21,7 @@ export function ProjectAppShell({
   account,
   locationKey,
   nav,
+  paletteEntries,
   children,
 }: {
   app: string;
@@ -33,6 +35,8 @@ export function ProjectAppShell({
   /** the app's own navigation in the sidebar, its `SidebarGroup`s (`AppShell`'s `nav`, which ⌘K
    *  lists too) */
   nav?: ReactNode;
+  /** rows for ⌘K the app hands over (`AppShell`'s `paletteEntries`) */
+  paletteEntries?: AppPaletteEntry[];
   children: ReactNode;
 }) {
   return (
@@ -53,6 +57,7 @@ export function ProjectAppShell({
         </Breadcrumb>
       }
       nav={nav}
+      paletteEntries={paletteEntries}
       account={account}
       locationKey={locationKey}
     >

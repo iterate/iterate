@@ -40,6 +40,7 @@
     "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.4",
     "@lezer/markdown": "^1.7.2",
+    "@pierre/trees": "1.0.0-beta.6",
     "@tanstack/react-query": "^5.103.2",
     "@tanstack/react-router": "catalog:",
     "@tanstack/react-start": "catalog:",

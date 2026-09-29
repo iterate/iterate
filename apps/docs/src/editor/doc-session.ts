@@ -1,6 +1,9 @@
 // One open doc: its editor, co-edited through the doc's processor (@iterate-com/docs). The page
 // reads `state()` through useSyncExternalStore; everything that changes it happens here.
 //
+// A markdown file gets the live-preview editor (Rich / Markdown); any other text file a code editor
+// in its language, and an html file a Preview beside it, the live text in a sandboxed frame.
+//
 // The editor opens read-only on the text the page loaded, and goes live once the tab has synced
 // with the doc's processor (collab.ts): from then on the editor is bound to the shared Y.Text
 // (y-codemirror.next), and the processor saves. Its live state (`commitOid`, `dirty`, `savedBy`,
@@ -13,8 +16,19 @@ import { z } from "zod";
 import type { IterateContextApi } from "iterate/api";
 import { connectLiveState } from "iterate/client";
 import { DocLiveState } from "@iterate-com/docs/frames";
+import type { FileKind } from "../lib/file-kind.ts";
 import { DocCollab, type CollabStatus } from "./collab.ts";
-import { docEditorExtensions, previewExtensions, type EditorMode } from "./extensions.ts";
+import {
+  codeEditorExtensions,
+  codeLanguage,
+  docEditorExtensions,
+  previewExtensions,
+  type EditorMode,
+} from "./extensions.ts";
+
+/** What the page shows of the file: a markdown file's Rich or Markdown, an html file's Preview or
+ *  Source, and the code editor for anything else. */
+export type DocMode = EditorMode | "preview" | "source" | "code";
 
 export type DocStatus =
   | { kind: "opening" }
@@ -24,14 +38,18 @@ export type DocStatus =
   | { kind: "disconnected"; message: string };
 
 export type DocSessionState = {
-  mode: EditorMode;
+  mode: DocMode;
   status: DocStatus;
   /** Everyone else with the doc open, by name. */
   others: string[];
+  /** An html file's text for its Preview, at most twice a second behind the editor's. */
+  previewText: string;
 };
 
 type DocSessionOptions = {
   path: string;
+  /** What it opens as (lib/file-kind.ts); a binary file doesn't open. */
+  kind: Exclude<FileKind, "binary">;
   /** The doc as the page loaded it: what the editor shows until it's live. */
   text: string;
   /** Who's typing, as the others see them. */
@@ -45,10 +63,21 @@ const Seed = z.object({ rev: z.number(), state: DocLiveState });
 /** One mount of the editor: whether it's gone, and what to let go when it goes. */
 type Attachment = { unmounted: boolean; cleanups: (() => void)[] };
 
+/** The first view of each kind of file. */
+const firstMode: Record<DocSessionOptions["kind"], DocMode> = {
+  markdown: "rich",
+  html: "preview",
+  code: "code",
+};
+
 export class DocSession {
-  #state: DocSessionState = { mode: "rich", status: { kind: "opening" }, others: [] };
+  #state: DocSessionState;
   #listeners = new Set<() => void>();
   #preview = new Compartment();
+  /** A code file's language, once its grammar has loaded. */
+  #language = new Compartment();
+  #languageSupport: Extension = [];
+  #previewTimer: ReturnType<typeof setTimeout> | undefined;
   #view: EditorView | null = null;
   #collab: DocCollab | null = null;
   #undo: Y.UndoManager | null = null;
@@ -59,6 +88,12 @@ export class DocSession {
 
   constructor(options: DocSessionOptions) {
     this.options = options;
+    this.#state = {
+      mode: firstMode[options.kind],
+      status: { kind: "opening" },
+      others: [],
+      previewText: options.text,
+    };
   }
 
   subscribe = (listener: () => void) => {
@@ -90,6 +125,7 @@ export class DocSession {
       }),
     });
     this.#view = view;
+    if (this.options.kind !== "markdown") void this.#loadLanguage();
     const attachment: Attachment = { unmounted: false, cleanups: [] };
     const warnIfUnsent = (event: BeforeUnloadEvent) => {
       if (this.#collab?.unsent()) event.preventDefault();
@@ -104,6 +140,8 @@ export class DocSession {
       window.removeEventListener("beforeunload", warnIfUnsent);
       window.removeEventListener("pagehide", leave);
       for (const cleanup of attachment.cleanups.reverse()) cleanup();
+      clearTimeout(this.#previewTimer);
+      this.#previewTimer = undefined;
       this.#view = null;
       this.#collab = null;
       this.#undo = null;
@@ -180,10 +218,34 @@ export class DocSession {
 
   #extensions(): Extension {
     return [
-      docEditorExtensions({ mode: this.#state.mode, preview: this.#preview }),
+      this.options.kind === "markdown"
+        ? docEditorExtensions({
+            mode: this.#state.mode === "markdown" ? "markdown" : "rich",
+            preview: this.#preview,
+          })
+        : codeEditorExtensions({ language: this.#language.of(this.#languageSupport) }),
       // the text box is named by the file it edits
       EditorView.contentAttributes.of({ "aria-label": this.options.path }),
+      this.options.kind === "html"
+        ? EditorView.updateListener.of((update) => {
+            if (update.docChanged) this.#schedulePreview();
+          })
+        : [],
     ];
+  }
+
+  /** The file's grammar, fetched once, into whichever state the view has by then. */
+  async #loadLanguage() {
+    this.#languageSupport = await codeLanguage(this.options.path);
+    this.#view?.dispatch({ effects: this.#language.reconfigure(this.#languageSupport) });
+  }
+
+  #schedulePreview() {
+    if (this.#previewTimer) return;
+    this.#previewTimer = setTimeout(() => {
+      this.#previewTimer = undefined;
+      if (this.#view) this.#set({ previewText: this.#view.state.doc.toString() });
+    }, 500);
   }
 
   #refresh() {
@@ -212,10 +274,11 @@ export class DocSession {
     void this.#collab?.sync();
   }
 
-  setMode(mode: EditorMode) {
-    this.#view?.dispatch({ effects: this.#preview.reconfigure(previewExtensions(mode)) });
+  setMode(mode: DocMode) {
+    if (mode === "rich" || mode === "markdown")
+      this.#view?.dispatch({ effects: this.#preview.reconfigure(previewExtensions(mode)) });
     this.#set({ mode });
-    this.#view?.focus();
+    if (mode !== "preview") this.#view?.focus();
   }
 
   /** Run a formatting command (commands.ts) on the editor. */

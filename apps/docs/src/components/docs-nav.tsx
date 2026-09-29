@@ -1,10 +1,8 @@
-// The sidebar's docs: which repo, "New doc", then every doc in the repo as a tree, folders from
-// their paths' `/`s, the open doc highlighted and its folders open. ⌘K (the shell's palette) lists what
-// the sidebar shows, so it finds a doc by name: a folder is a <details>, whose closed rows stay in
-// the page for it to read, and a doc in a folder carries the folder, hidden, as its second text,
-// which the palette shows after its name.
-import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ChevronRight, FileText, Folder, Plus } from "lucide-react";
+// The sidebar's docs: which repo, "New doc", then every file in the repo as a tree (doc-tree.ts),
+// the open file selected and its folders open.
+import { useMemo } from "react";
+import { Link, useNavigate, useRouter } from "@tanstack/react-router";
+import { Plus } from "lucide-react";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import {
   SidebarGroup,
@@ -13,12 +11,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
 import { useDocList } from "../lib/doc-list.ts";
-import { docTree, type DocFolder } from "../lib/docs-repo.ts";
+import { DocTree } from "./doc-tree.ts";
+
+/** The doc route, whose splat is the open file's path. */
+const docRoute = "/_auth/projects/$slug/$repo/$";
 
 export function DocsNav({
   slug,
@@ -31,14 +29,25 @@ export function DocsNav({
   /** the project's repos, by name; undefined while they're read */
   repos: string[] | undefined;
 }) {
-  const { docs } = useDocList();
+  const { list, docs } = useDocList();
   const navigate = useNavigate();
-  // the open doc's path, when a doc is open (the doc route's splat)
-  const open = useParams({ strict: false })._splat;
+  const router = useRouter();
+  const tree = useMemo(
+    () =>
+      new DocTree({
+        list,
+        openPath: () =>
+          router.state.matches.find((match) => match.routeId === docRoute)?.params._splat,
+        onNavigated: (listener) => router.subscribe("onResolved", listener),
+        open: (path) =>
+          void navigate({ to: "/projects/$slug/$repo/$", params: { slug, repo, _splat: path } }),
+      }),
+    [list, router, navigate, slug, repo],
+  );
   return (
-    <SidebarGroup>
+    <SidebarGroup className="min-h-0 flex-1">
       <SidebarGroupLabel>Docs</SidebarGroupLabel>
-      <SidebarGroupContent className="flex flex-col gap-1">
+      <SidebarGroupContent className="flex min-h-0 flex-1 flex-col gap-1">
         <NativeSelect
           size="sm"
           aria-label="Repo"
@@ -65,78 +74,27 @@ export function DocsNav({
               <span>New doc</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          {docs.kind === "loaded" ? (
-            <FolderRows folder={docTree(docs.paths)} slug={slug} repo={repo} open={open} top />
-          ) : (
-            <li
-              className={
-                docs.kind === "failed"
-                  ? "px-2 py-1 text-xs text-destructive"
-                  : "px-2 py-1 text-xs text-muted-foreground"
-              }
-            >
-              {docs.kind === "failed" ? `Couldn't list the docs: ${docs.message}` : "Loading docs…"}
-            </li>
-          )}
         </SidebarMenu>
+        {docs.kind === "loaded" ? (
+          <div
+            ref={tree.mount}
+            aria-label="Files"
+            // pierre themes itself with light-dark(); the app is light only (packages/ui globals.css)
+            style={{ colorScheme: "light" }}
+            className="min-h-0 flex-1 group-data-[collapsible=icon]:hidden"
+          />
+        ) : (
+          <p
+            className={
+              docs.kind === "failed"
+                ? "px-2 py-1 text-xs text-destructive"
+                : "px-2 py-1 text-xs text-muted-foreground"
+            }
+          >
+            {docs.kind === "failed" ? `Couldn't list the files: ${docs.message}` : "Loading files…"}
+          </p>
+        )}
       </SidebarGroupContent>
     </SidebarGroup>
-  );
-}
-
-/** A folder's subfolders, then its docs: the sidebar's top-level rows (`top`), or a folder's
- *  nested ones. */
-function FolderRows({
-  folder,
-  slug,
-  repo,
-  open,
-  top,
-}: {
-  folder: DocFolder;
-  slug: string;
-  repo: string;
-  open: string | undefined;
-  top: boolean;
-}) {
-  const Item = top ? SidebarMenuItem : SidebarMenuSubItem;
-  return (
-    <>
-      {folder.folders.map((sub) => (
-        <Item key={sub.path}>
-          {/* open when it holds the open doc; after that the reader's own clicks decide */}
-          <details className="group/folder" open={Boolean(open?.startsWith(`${sub.path}/`))}>
-            <summary className="flex h-8 cursor-pointer list-none items-center gap-2 rounded-md px-2 text-sm text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:hidden [&::-webkit-details-marker]:hidden [&>svg]:size-4 [&>svg]:shrink-0">
-              <ChevronRight className="transition-transform group-open/folder:rotate-90" />
-              <Folder />
-              <span className="truncate">{sub.name}</span>
-            </summary>
-            <SidebarMenuSub>
-              <FolderRows folder={sub} slug={slug} repo={repo} open={open} top={false} />
-            </SidebarMenuSub>
-          </details>
-        </Item>
-      ))}
-      {folder.docs.map((path) => {
-        const link = <Link to="/projects/$slug/$repo/$" params={{ slug, repo, _splat: path }} />;
-        const name = path.split("/").at(-1)!.replace(/\.md$/, "");
-        return top ? (
-          <SidebarMenuItem key={path}>
-            <SidebarMenuButton render={link} isActive={path === open} tooltip={name}>
-              <FileText />
-              <span>{name}</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ) : (
-          <SidebarMenuSubItem key={path}>
-            <SidebarMenuSubButton render={link} isActive={path === open}>
-              <span>{name}</span>
-              {/* what ⌘K shows after the name */}
-              <span hidden>{folder.path}</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-        );
-      })}
-    </>
   );
 }

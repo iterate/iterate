@@ -124,6 +124,14 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
       (`docs/left`), instead of 1.5 s after each pause. The processor already keeps unsaved edits
       safe, so there's no manual Commit button or countdown _(`DocProcessor`, `durable-object.ts`)_
 
+## Files, tree and install (asked for 2026-09-29, after trying iterate/config on the preview)
+
+- [x] The sidebar is @pierre/trees, the old app's tree, with full names (`.md` shown) _(`src/components/doc-tree.ts`, driven through its vanilla model so the page needs no effects)_
+- [x] ⌘K lists the repo's files from the page (`paletteEntries` on `AppShell`/`ProjectAppShell`), since the tree draws in its own shadow DOM
+- [x] Every file in a repo: markdown in the live-preview editor, other text in a code editor highlighted by its extension, a binary file says it isn't text _(`src/lib/file-kind.ts`, `codeEditorExtensions`)_
+- [x] An html file opens on Preview (its live text in a sandboxed frame) and edits in Source _(`DocSession` `previewText`, `doc-editor.tsx`)_
+- [x] Docs installs like agents after main's #3425: `docs.ts` and a pin in the project's config; the page enables the processors from it, and says how to install when a project hasn't _(`@iterate-com/docs/install`)_
+
 ## Later
 
 - docs.iterate.com (Host rule in the iterate project's config worker)
@@ -248,6 +256,19 @@ set of CodeMirror extensions, so switching later is cheap.
   (the GitHub sync pushed it) before this merges, with Misha's OK: until the prd Worker exists the
   address shows Cloudflare's "nothing here" to a signed-in member. Checked: the address answers
   `401 Sign in` to an anonymous request, the project's apex still serves the setup prompt.
+- 2026-09-29, #3425 (main): ConfigWorker and the pkg.pr.new pinning of an app's own build went;
+  installed apps are npm imports of the config, their facets loading `{ className, mainModule,
+source: itx.cd('/').config }`. Docs follows agents: `docs.ts` + a pin, no version of its own.
+  A member's session may enable processors that load from the config (the specs pass on
+  `pr3384-457be84` that way). Docs isn't in the default template: its `@main` pin would fail every
+  new project until the package is on main. The platform now takes fetch routes before the config
+  worker, so a project serves Docs with a members-only fetch route (`proxiedAppRoute`), and
+  `apps/docs/config-worker.ts` went. prd is reset and restored after #3425, and each config repo
+  migrated, so iterate/config's `docs` case (`d8628b1`) needs redoing there as a fetch route.
+- The tree: @pierre/trees 1.0.0-beta.6 (the old app had beta.5), through its vanilla `FileTree`:
+  made when its element mounts, fed by the page's `DocList`, selecting the open file after each
+  navigation (the router's `onResolved`). Rows are `treeitem`s named by the file, which the specs
+  find through its open shadow root.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.

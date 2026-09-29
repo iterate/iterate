@@ -24,10 +24,23 @@ import {
   TABLE_TEMPLATE,
   toggleWrap,
 } from "../editor/commands.ts";
-import type { DocSession, DocStatus } from "../editor/doc-session.ts";
+import type { DocMode, DocSession, DocStatus } from "../editor/doc-session.ts";
 
-/** The doc page's editor: formatting bar, Rich / Markdown switch, the text, who else is here and
- *  where saving stands. */
+/** The views each kind of file switches between, by label; a code file has one. */
+const modes: Record<"markdown" | "html" | "code", [DocMode, string][]> = {
+  markdown: [
+    ["rich", "Rich"],
+    ["markdown", "Markdown"],
+  ],
+  html: [
+    ["preview", "Preview"],
+    ["source", "Source"],
+  ],
+  code: [],
+};
+
+/** The doc page's editor: formatting bar (markdown's), the view switch, the text (or an html
+ *  file's preview), who else is here and where saving stands. */
 export function DocEditor({
   session,
   path,
@@ -39,25 +52,35 @@ export function DocEditor({
   back: React.ReactNode;
 }) {
   const state = useSyncExternalStore(session.subscribe, session.state, session.state);
+  const { kind } = session.options;
+  const views = modes[kind];
   return (
     <div className="flex flex-1 flex-col">
-      <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 border-b bg-background px-4 py-1.5">
-        <FormattingBar session={session} />
-        <div role="group" aria-label="Mode" className="flex rounded-lg border p-0.5">
-          {(["rich", "markdown"] as const).map((mode) => (
-            <Button
-              key={mode}
-              size="xs"
-              variant={state.mode === mode ? "secondary" : "ghost"}
-              aria-pressed={state.mode === mode}
-              onClick={() => session.setMode(mode)}
-            >
-              {mode === "rich" ? "Rich" : "Markdown"}
-            </Button>
-          ))}
-        </div>
+      <div className="sticky top-0 z-10 flex min-h-11 flex-wrap items-center justify-between gap-2 border-b bg-background px-4 py-1.5">
+        {kind === "markdown" ? <FormattingBar session={session} /> : <span />}
+        {views.length > 0 ? (
+          <div role="group" aria-label="Mode" className="flex rounded-lg border p-0.5">
+            {views.map(([mode, label]) => (
+              <Button
+                key={mode}
+                size="xs"
+                variant={state.mode === mode ? "secondary" : "ghost"}
+                aria-pressed={state.mode === mode}
+                onClick={() => session.setMode(mode)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </div>
-      <div className="mx-auto w-full max-w-3xl flex-1 px-4 md:px-8">
+      <div
+        className={
+          kind === "markdown"
+            ? "mx-auto w-full max-w-3xl flex-1 px-4 md:px-8"
+            : "flex w-full flex-1 flex-col px-4"
+        }
+      >
         <div className="flex flex-wrap justify-between gap-2 pt-4 text-xs text-muted-foreground">
           <p className="flex gap-2 font-mono">
             {back}
@@ -68,7 +91,20 @@ export function DocEditor({
             <p aria-label="Also here">Also here: {state.others.join(", ")}</p>
           )}
         </div>
-        <div ref={session.mount} className="docs-editor" />
+        {state.mode === "preview" ? (
+          <iframe
+            title={`Preview of ${path}`}
+            // its own opaque origin: the page's scripts run, and reach nothing of the app's
+            sandbox="allow-scripts allow-popups allow-forms"
+            srcDoc={state.previewText}
+            className="mt-3 min-h-[70vh] w-full flex-1 rounded-md border bg-white"
+          />
+        ) : null}
+        {/* mounted in Preview too: the text stays live, and the preview follows it */}
+        <div
+          ref={session.mount}
+          className={state.mode === "preview" ? "hidden" : "docs-editor pt-2"}
+        />
       </div>
       <p
         role="status"

@@ -1,11 +1,11 @@
-// One repo's docs as the sidebar and the doc list show them: every `.md` in it, read when the page
-// first wants them and again after each commit to the repo. The commit reaches the
+// One repo's files as the sidebar and the doc list show them, read when the page first wants them
+// and again after each commit to the repo. The commit reaches the
 // page as the project root's `repo/commit-completed`, pushed to a subscription the list holds only
 // while something on the page reads it (React's useSyncExternalStore: the first listener opens it,
 // the last one leaving closes it).
 import { createContext, use, useSyncExternalStore } from "react";
 import type { AuthenticatedApp } from "iterate/app";
-import { docPaths } from "./docs-repo.ts";
+import { repoFiles } from "./docs-repo.ts";
 
 export type DocListState =
   | { kind: "loading" }
@@ -96,7 +96,7 @@ export class DocList {
     try {
       using repo = project.repos.get(this.#repo);
       const { paths } = await repo.listFiles();
-      if (this.#project === project) this.#set({ kind: "loaded", paths: docPaths(paths) });
+      if (this.#project === project) this.#set({ kind: "loaded", paths: repoFiles(paths) });
     } catch (error) {
       if (this.#project === project)
         this.#set({

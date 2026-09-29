@@ -1,4 +1,4 @@
-// A project's docs: the markdown files in its repos. The app names a repo by its name, the part
+// A project's docs: the files in its repos, markdown first among them. The app names a repo by its name, the part
 // after `/repos/` (`config` is /repos/config), in its URLs and its repo picker.
 
 /** The repo called `name`. */
@@ -12,9 +12,9 @@ export function repoNames(repos: { path: string }[]) {
     .sort();
 }
 
-/** The repo's paths that are docs, sorted: every `.md` file. */
-export function docPaths(paths: string[]) {
-  return paths.filter((path) => path.endsWith(".md")).sort();
+/** The repo's files as Docs lists them: every one, sorted (lib/file-kind.ts says what each opens as). */
+export function repoFiles(paths: string[]) {
+  return paths.toSorted();
 }
 
 /** The path a new doc called `title` gets: its words, lowercased and dashed, `.md` on (once: a
@@ -37,31 +37,4 @@ export function newDocPath(title: string) {
 /** The first heading a new doc called `title` gets: its last part ("Offsites/Lisbon" → "Lisbon"). */
 export function newDocHeading(title: string) {
   return title.split("/").at(-1)!.trim();
-}
-
-/** A folder of docs as the sidebar shows it: its name and path ("" for the top), its subfolders,
- *  then its docs' paths, both sorted. */
-export type DocFolder = { name: string; path: string; folders: DocFolder[]; docs: string[] };
-
-/** Docs' paths as folders, from their `/`s. */
-export function docTree(paths: string[]): DocFolder {
-  type Building = { folders: Map<string, Building>; docs: string[] };
-  const root: Building = { folders: new Map(), docs: [] };
-  for (const path of paths) {
-    let at = root;
-    for (const name of path.split("/").slice(0, -1)) {
-      if (!at.folders.has(name)) at.folders.set(name, { folders: new Map(), docs: [] });
-      at = at.folders.get(name)!;
-    }
-    at.docs.push(path);
-  }
-  const sorted = (name: string, path: string, at: Building): DocFolder => ({
-    name,
-    path,
-    folders: [...at.folders]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([sub, folder]) => sorted(sub, path ? `${path}/${sub}` : sub, folder)),
-    docs: at.docs.toSorted(),
-  });
-  return sorted("", "", root);
 }

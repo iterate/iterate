@@ -6,6 +6,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";
 import { repoPath } from "../../lib/docs-repo.ts";
+import { fileKind } from "../../lib/file-kind.ts";
 
 /** One doc: `/projects/<slug>/<repo name>/<path in the repo>`, read at the repo's tip for the
  *  first paint; the editor goes live on the doc's processor (doc-session.ts), which runs the
@@ -13,6 +14,9 @@ import { repoPath } from "../../lib/docs-repo.ts";
 export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
   loader: async ({ context, params }) => {
     const path = params._splat || "";
+    const kind = fileKind(path);
+    // a binary file isn't read: Docs edits text
+    if (kind === "binary") return { repo: params.repo, path, kind, text: "", installed: true };
     using itx = context.api.projects.get(context.project.id);
     using repo = itx.repos.get(repoPath(params.repo));
     const tip = await repo.tip();
@@ -22,7 +26,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
     // the processors' code is the project's own, from its config
     using config = itx.repos.get("/repos/config");
     const installed = Boolean(await config.readFile(docsModule.path));
-    return { repo: params.repo, path, text, installed };
+    return { repo: params.repo, path, kind, text, installed };
   },
   component: DocPage,
 });
@@ -31,7 +35,7 @@ function DocPage() {
   const data = Route.useLoaderData();
   const { api, project, info } = Route.useRouteContext();
   const { slug, repo } = Route.useParams();
-  const { repo: docRepo, path, text } = data;
+  const { repo: docRepo, path, text, kind } = data;
   const userName = info.principal.email || info.principal.actor;
   // One session per doc and person, keyed on values: a new session is a new editor and a new tab
   // on the doc, so a context object or loader result that's only a new copy mustn't make one.
@@ -39,6 +43,8 @@ function DocPage() {
     () =>
       new DocSession({
         path,
+        // a binary file never mounts an editor (below)
+        kind: kind === "binary" ? "code" : kind,
         text,
         user: { name: userName },
         open: async () => {
@@ -63,8 +69,9 @@ function DocPage() {
           }
         },
       }),
-    [docRepo, path, text, userName, api, project.id],
+    [docRepo, path, kind, text, userName, api, project.id],
   );
+  if (kind === "binary") return <Binary path={path} />;
   if (!data.installed) return <NotInstalled />;
   return (
     <DocEditor
@@ -91,6 +98,18 @@ function NotInstalled() {
           <code>{docsModule.content.trim()}</code>, and <code>@iterate-com/docs</code> in the root{" "}
           <code>package.json</code>&apos;s dependencies.
         </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+/** A file Docs can't open: it isn't text. */
+function Binary({ path }: { path: string }) {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyTitle>{path.split("/").at(-1)} isn&apos;t text</EmptyTitle>
+        <EmptyDescription>Docs opens text files: markdown, html and code.</EmptyDescription>
       </EmptyHeader>
     </Empty>
   );
