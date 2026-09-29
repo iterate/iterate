@@ -11,6 +11,7 @@
 // worker runs no producer anywhere, `itx.config` is written by the platform alone, and a manifest in
 // a rule anyone else wrote names no identity — its worker loads as its content.
 import { expect, test } from "vitest";
+import { configPointer } from "../src/project/publication.ts";
 import { appendAsPlatform, readLog, refused, stub, until } from "./support.ts";
 
 test("a facet named by the root's worker keeps running across a publication that leaves its module's identity, restarts on its next call when that changes, and never goes back to an older generation", async () => {
@@ -100,11 +101,75 @@ test.for([
     await publish(project, { generation: 1, agents: "v1", worker: "w1" });
     expect(await boot()).toMatchObject({ version: "v1" });
     await publish(project, { generation: 2, agents: "v2", worker: "w1", drop });
-    await expect(boot()).rejects.toMatchObject({ message });
+    // a plain handler: an RPC rejection `expect().rejects` awaits is reported unhandled in the object
+    let refusal: unknown;
+    try {
+      await boot();
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({ message });
     await publish(project, { generation: 3, agents: "v3", worker: "w1" });
     expect(await boot()).toMatchObject({ version: "v3" });
   },
 );
+
+test("the published pointer's producer reads the config repo through the fixed point: a rule anyone appends on the root re-points no name it reads, so no other files load under the published identity", async () => {
+  const project = `prj_named_producer_${crypto.randomUUID().slice(0, 8)}`;
+  const commitOid = crypto.randomUUID().replaceAll("-", "").padEnd(40, "0");
+  await stub(project).append(serviceRule("itx.service", "service.ts"));
+  // a rule on `/`, anyone's, answering the producer's own spelling with other files
+  const substituted = {
+    "package.json": '{"main":"service.ts"}',
+    "service.ts": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint { version() { return "substituted"; } }`,
+  };
+  await stub(project).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.repos.get('/repos/config').modules",
+      target: [
+        "itx",
+        "workers",
+        [
+          "get",
+          {
+            source: {
+              "package.json": '{"main":"worker.js"}',
+              "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint { modules() { return ${JSON.stringify(substituted)}; } }`,
+            },
+          },
+        ],
+        "modules",
+      ],
+    },
+  });
+  await appendAsPlatform(
+    project,
+    ...configPointer(commitOid, {
+      generation: 1,
+      modules: { "service.ts": { identity: "published", classes: [] } },
+    }),
+  );
+  // …and the name the producer does read is the platform's alone
+  await refused(
+    () =>
+      stub(project).append({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: "itx.config.modules", target: "itx.repos.get('/repos/config').modules" },
+      }),
+    "FORBIDDEN",
+  );
+  // the project has no config repo here: the published modules are unreadable, never replaced
+  let version: unknown;
+  try {
+    version = await stub(project).invoke(["itx", "service", ["version"]]);
+  } catch (error) {
+    version = String(error);
+  }
+  expect(version).not.toBe("substituted");
+});
 
 /** A member of the project, as a session's call carries one. */
 const MEMBER = { actor: "usr_named_facets", email: "member@example.test" };

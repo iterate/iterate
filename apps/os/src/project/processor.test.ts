@@ -467,27 +467,45 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
     ["itx.config ⇒ bbb@7"],
     ["project/worker-updated bbb@7"],
   ]);
-  // the pointer names the commit's modules read at it, cached under it, with its manifest, keyed by
-  // its generation; the outcome is keyed by it too
-  expect(publisher.batches[2]![0]).toMatchObject({
-    idempotencyKey: "project/config-pointer:7",
-    payload: {
-      match: "itx.config",
-      target: [
-        "itx",
-        "builtins",
-        "workers",
-        [
-          "get",
-          {
-            source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid: "bbb" }]],
-            cacheKey: "bbb",
-            manifest: { generation: 7, modules: modulesOf("bbb") },
-          },
+  // the pointer names the commit's modules read at it — through `itx.config.modules`, the repo
+  // facet at the fixed point, a name only the platform writes — cached under it, with its
+  // manifest, one batch keyed by its generation; the outcome is keyed by it too
+  expect(publisher.batches[2]).toMatchObject([
+    {
+      idempotencyKey: "project/config-modules:7",
+      payload: {
+        match: "itx.config.modules",
+        target: [
+          "itx",
+          "builtins",
+          ["cd", "/repos/config"],
+          "builtins",
+          "facets",
+          ["get", "repo"],
+          "modules",
         ],
-      ],
+      },
     },
-  });
+    {
+      idempotencyKey: "project/config-pointer:7",
+      payload: {
+        match: "itx.config",
+        target: [
+          "itx",
+          "builtins",
+          "workers",
+          [
+            "get",
+            {
+              source: ["itx", "config", ["modules", { commitOid: "bbb" }]],
+              cacheKey: "bbb",
+              manifest: { generation: 7, modules: modulesOf("bbb") },
+            },
+          ],
+        ],
+      },
+    },
+  ]);
   expect(publisher.batches[3]![0]).toMatchObject({ idempotencyKey: "project/publication:7" });
   // delivered again over the same commits, before their outcomes reduced: nothing more
   deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
@@ -637,16 +655,16 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   const tipped = owing(tip("aaa", 1));
   deliver(processorPublishingWith(publisher), tipped, unusedAppend, runInBackground);
   await settle();
-  const [[pointer], [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
+  const [pointer, [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
-    normalizeControlEvent(pointer!, "/"),
+    ...pointer.map((rule) => normalizeControlEvent(rule, "/")),
     updated!,
   ]);
   expect(state).toEqual({
     ...tipped,
     unpublishedCommits: [],
-    lastPublicationFactOffset: 3,
+    lastPublicationFactOffset: 4,
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();
@@ -1302,7 +1320,7 @@ const unusedAppend = () => Promise.reject(new Error("the publication appends as 
 
 /** A batch, one line per event: the pointer's commit and generation, or the fact's. */
 const summary = (batch: StreamEventInput[]) =>
-  batch.map((event) => {
+  batch.flatMap((event) => {
     const payload = event.payload as {
       match?: string;
       target?: [
@@ -1314,6 +1332,8 @@ const summary = (batch: StreamEventInput[]) =>
       commitOid?: string;
       generation?: number;
     };
+    // the pointer's own producer rule rides its batch, pinned once in the publication row
+    if (payload.match === "itx.config.modules") return [];
     if (payload.match)
       return `${payload.match} ⇒ ${payload.target![3][1].cacheKey}@${payload.target![3][1].manifest.generation}`;
     return `${event.type.replace("events.iterate.com/", "")} ${payload.commitOid}@${payload.generation}`;

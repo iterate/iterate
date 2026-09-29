@@ -71,31 +71,52 @@ export async function manifestOf(
   return { generation, modules: manifest };
 }
 
-/** THE POINTER on `/`: `itx.config` names the config repo's worker at `commitOid` — its modules
- *  read at that commit where it is loaded, cached under the commit — with its manifest, keyed by
- *  its generation. */
-export function configPointer(commitOid: string, manifest: WorkerManifest): StreamEventInput {
-  return {
+/** THE POINTER on `/`, one batch keyed by its generation: `itx.config` names the config repo's
+ *  worker at `commitOid` — its modules read at that commit where it is loaded, cached under the
+ *  commit — with its manifest. Its producer reads them through `itx.config.modules`, which names the
+ *  repo facet at the fixed point: a row on `itx.config…` is the platform's alone
+ *  (itx-expression-rewriting.ts `refuseConfigPointerRows`), so no rule anyone appends re-points what
+ *  loads under the published identity. */
+export function configPointer(commitOid: string, manifest: WorkerManifest): StreamEventInput[] {
+  const rule = (match: string, key: string, target: unknown, description: string) => ({
     type: "events.iterate.com/itx/rewrite-rule-configured",
-    idempotencyKey: `project/config-pointer:${manifest.generation}`,
-    payload: {
-      match: "itx.config",
-      target: [
+    idempotencyKey: `project/${key}:${manifest.generation}`,
+    payload: { match, target, description },
+  });
+  return [
+    rule(
+      "itx.config.modules",
+      "config-modules",
+      [
+        "itx",
+        "builtins",
+        ["cd", "/repos/config"],
+        "builtins",
+        "facets",
+        ["get", "repo"],
+        "modules",
+      ],
+      "the config repo's files at a commit, as the published config's producer reads them",
+    ),
+    rule(
+      "itx.config",
+      "config-pointer",
+      [
         "itx",
         "builtins",
         "workers",
         [
           "get",
           {
-            source: ["itx", "repos", ["get", "/repos/config"], ["modules", { commitOid }]],
+            source: ["itx", "config", ["modules", { commitOid }]],
             cacheKey: commitOid,
             manifest,
           },
         ],
       ],
-      description: `the project's published config: /repos/config at ${commitOid.slice(0, 12)}, publication ${manifest.generation}`,
-    },
-  };
+      `the project's published config: /repos/config at ${commitOid.slice(0, 12)}, publication ${manifest.generation}`,
+    ),
+  ];
 }
 
 /** The probe's own module in the source it loads, beside the author's files: a name the probe

@@ -635,7 +635,7 @@ export class ProjectProcessor extends StreamProcessor<
           payload: { commitOid, generation, error: attempt.error },
         });
       const { manifest } = attempt;
-      await landOnce(publisher, configPointer(commitOid, manifest));
+      await landOnce(publisher, ...configPointer(commitOid, manifest));
       await landOnce(publisher, {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
@@ -774,9 +774,9 @@ export class ProjectProcessor extends StreamProcessor<
 
 /** A keyed platform fact landed once: an IDEMPOTENCY_CONFLICT is the same key an earlier attempt of
  *  this generation already landed. */
-async function landOnce(publisher: ProjectPublisher, event: StreamEventInput): Promise<void> {
+async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput[]): Promise<void> {
   try {
-    await publisher.appendAsPlatform(event);
+    await publisher.appendAsPlatform(...events);
   } catch (error) {
     if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
   }
