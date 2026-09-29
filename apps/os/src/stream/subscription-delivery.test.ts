@@ -362,6 +362,39 @@ test("a row re-configured onto a NEW target while a delivery is in flight delive
   expect({ sinkA, sinkB }).toEqual({ sinkA: [[1]], sinkB: [[2]] });
 });
 
+test("a cursor row re-configured `ordered: false` while its call is out leaves the fan-out row alone: the old batch moves no cursor, and `deliverEvent` only ever gets one event", async () => {
+  const pushes: number[][] = [];
+  const delivered: unknown[] = [];
+  let releasePush!: () => void;
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? {
+          push: (events: { payload?: { n?: number } }[]) => {
+            pushes.push(ns(events));
+            return new Promise<void>((resolve) => (releasePush = resolve));
+          },
+          // every call keeps its slot: the row admits 8 and stays behind the mark
+          deliverEvent: (event: StreamEvent | StreamEvent[]) => {
+            delivered.push(Array.isArray(event) ? "a batch" : ns([event])[0]);
+            return new Promise<never>(() => {});
+          },
+        }
+      : undefined,
+  );
+  configure(rig, { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(pushes).toEqual([[1]]); // parked
+  configure(rig, { ...SINK_ROW, name: "s", consumes: ["demo/ping"] });
+  rig.stream.append(...range(2, 10).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  const fanOutCursor = rig.stream.storage.listSubscriptionCursors();
+  releasePush();
+  await drainDeliveries();
+  expect(delivered).toEqual(range(2, 9));
+  expect(rig.stream.storage.listSubscriptionCursors()).toEqual(fanOutCursor);
+});
+
 test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS the callee: delivered to whole, never split into a bare root and a method", async () => {
   const delivered: number[][] = [];
   const { stream, evaluated } = incarnation((printed) =>
@@ -1038,6 +1071,7 @@ test("alarm claim: a cursor row re-pointed at a facet drops its cursor and its c
   expect(rig.delivery.deadlines()).toEqual([]);
   expect(rig).toMatchObject({ deletes: [1] });
   await rig.release();
+  expect(rig.delivery.cursor("s")).toBeUndefined(); // the call that was out acks nothing
 });
 
 test("alarm claim: the ladder's next attempt IS the row's deadline, and survives an eviction before any pass", async () => {
