@@ -100,3 +100,28 @@ jobs:
           APP_DISPLAY_NAME: OS
           UPLOADED: ${{ steps.deploy.outcome }}
         run: node scripts/ci/notify.ts deploy-failure
+
+  # THE COPYBARA COPY, an experiment (tasks/copybara0929-experiment.md): once this commit deployed,
+  # iterate/copybara0929's main catches up to it (scripts/ci/copybara.ts). A job of its own, so a
+  # failed copy shows red here but never touches the deploy or its posts, and pages nobody.
+  copybara:
+    name: Copy packages/ to iterate/copybara0929
+    needs: deploy
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+        with:
+          # a production workflow never reads Depot Cache (docs/depot-ci.md#depot-cache)
+          pnpm-store: none
+      # The stock image's Java 21 runs Copybara; the script reads the iterate App's key from Doppler
+      # os/prd, like the deploy.
+      - name: Copy packages/ up to the deployed commit
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: JAVA_HOME="${JAVA_HOME_21_X64:?the stock image has no Java 21}" node scripts/ci/copybara.ts --workflow copybara0929 --sha "$GITHUB_SHA"

@@ -477,6 +477,31 @@ jobs:
           PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
 
+  # TEMPORARY, for PR #3434 alone (tasks/copybara0929-experiment.md): once this PR's preview
+  # deployed, iterate/copybara0929's main catches up to the PR head, following the experiment's
+  # branch (scripts/ci/copybara.ts, workflow `copybara0929_branch`). Deleted before merge; Deploy OS
+  # runs the same script after production deploys.
+  copybara:
+    name: Copy packages/ to iterate/copybara0929
+    needs: deploy
+    if: >-
+      needs.deploy.result == 'success' && needs.deploy.outputs.deployment != '' &&
+      github.event.pull_request.head.ref == 'copybara0929'
+    runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.deploy.outputs.head-sha }}
+      - name: Setup
+        uses: ./.depot/actions/setup
+      - name: Copy packages/ up to the PR head
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          HEAD_SHA: ${{ needs.deploy.outputs.head-sha }}
+        run: JAVA_HOME="${JAVA_HOME_21_X64:?the stock image has no Java 21}" node scripts/ci/copybara.ts --workflow copybara0929_branch --sha "$HEAD_SHA"
+
   # THE CI TRACE (docs/ci-traces.md), reporting only: the Depot timings and `@@ci-trace` markers of
   # the jobs it needs as trace.html and trace.json, this job's artifact, then two commit statuses
   # opening the ci-reports viewer (apps/ci-reports): "CI trace", whose description is the time to

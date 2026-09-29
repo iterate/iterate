@@ -8,16 +8,24 @@
 # `copybara0929_branch` follows this experiment's branch (after its PR's Deploy preview).
 
 # The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
-# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`. A squash merge's message
-# is the PR's title and body, and HTML comments survive into it, as the loc-report and os-preview
-# sections do. Starlark has no `while`, so the sections are found with `split`.
+# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
+# its own (one mentioned mid-sentence is text). A section with no closing marker is left out. A
+# squash merge's message is the PR's title and body, and HTML comments survive into it, as the
+# loc-report and os-preview sections do.
 def copy_message(ctx):
-    title = ctx.message.split("\n")[0]
-    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(title).replace_all(" (iterate/iterate#$1)")
-    sections = [
-        part.split("<!-- /copybara -->")[0].strip()
-        for part in ctx.message.split("<!-- copybara -->")[1:]
-    ]
+    lines = ctx.message.split("\n")
+    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(lines[0]).replace_all(" (iterate/iterate#$1)")
+    sections = []
+    section = None
+    for line in lines[1:]:
+        if line.strip() == "<!-- copybara -->":
+            section = []
+        elif line.strip() == "<!-- /copybara -->" and section != None:
+            if "\n".join(section).strip():
+                sections.append("\n".join(section).strip())
+            section = None
+        elif section != None:
+            section.append(line)
     ctx.set_message("\n\n".join([title] + sections) + "\n")
 
 def copy_workflow(name, ref):

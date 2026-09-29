@@ -24,7 +24,6 @@ const COPYBARA = {
   sha256: "25807645ee17b7b863f4f885012b06192b9952632b540bdf8a21088313fe4925",
 };
 const CONFIG = resolve(import.meta.dirname, "../../copybara/copy.bara.sky");
-const ORIGIN_URL = "https://github.com/iterate/iterate";
 const COPY = { owner: "iterate", repo: "copybara0929" };
 const COPY_URL = `https://github.com/${COPY.owner}/${COPY.repo}`;
 // The App's bot user (`gh api 'users/iterate[bot]'`), so its commits link to it.
@@ -120,7 +119,7 @@ function checkCopy(input: { sha: string; credentials: string; gitDir: string }) 
     "--no-tags",
     "--depth=1",
     "--filter=blob:none",
-    ORIGIN_URL,
+    "https://github.com/iterate/iterate",
     originRev,
     input.sha,
   );
