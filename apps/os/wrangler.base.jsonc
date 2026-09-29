@@ -59,7 +59,7 @@
   // NO Artifacts simulator — the binding is a proxy to the real product on the block's account — so
   // local runs (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is
-  // `<resourceNamePrefix>-repos` (envs.ts `osResourceNames`, ensure-resources); a per-commit
+  // `<resourceNamePrefix>-repos` (scripts/os-env.ts `osResourceNames`, ensure-resources); a per-commit
   // deployment's is `<name>-os-repos`, created by scripts/deploy.ts and deleted with the deployment.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-dev-repos" }],
 

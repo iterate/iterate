@@ -10,13 +10,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import {
-  OS_DOPPLER_PROJECT,
-  getEnv,
-  osEnvs,
-  osResourceNames,
-  type OsDeployableEnv,
-} from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getEnv, osEnvs, type OsDeployableEnv } from "../../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
 import {
   CloudflareApiError,
@@ -24,6 +18,7 @@ import {
   type EnvContext,
 } from "../../../scripts/lib/env-context.ts";
 import { readWranglerBase } from "./generate-wrangler-config.ts";
+import { osResourceNames } from "./os-env.ts";
 import { isCloudflareError } from "./preview-artifacts.ts";
 
 const Listing = z.object({

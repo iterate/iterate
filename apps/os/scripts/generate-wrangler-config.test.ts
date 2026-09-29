@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 import { viteWranglerConfig } from "./generate-wrangler-config.ts";
 
 // Every deployment's Artifacts namespace, R2 bucket and D1 are `<resourceNamePrefix>-…`, the
-// self-host config's prefix being `iterate` (envs.ts `osResourceNames`).
+// self-host config's prefix being `iterate` (./os-env.ts `osResourceNames`).
 test.for([
   { name: "prd", repos: "os-prd-repos", files: "os-prd-files", db: "os-prd-db" },
   { name: "preview", repos: "os-parent-repos", files: "os-parent-files", db: "os-parent-db" },

@@ -391,7 +391,7 @@ export const AppConfig = z.object({
     })
     // the prefault must satisfy the input type; `key: ""` then fails `min(1)` naming secrets.key
     .prefault({ key: "" }),
-  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`, written
+  /** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH (project/context-birth-events.ts, written
    *  as `APP_CONFIG_CONTEXT_BIRTH_EVENTS`), appended unread in the birth's own batch (stream/stream.ts
    *  `appendBirthRecord`). Each is checked here, at boot, as the append boundary checks one at `/`,
    *  so a malformed one fails the deploy, not every project context. Unset ⇒ none. */

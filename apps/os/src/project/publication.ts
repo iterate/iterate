@@ -8,8 +8,8 @@
 // run, never a hook). A commit may drop a class or a whole module: a facet that names it fails its
 // next call, saying so. A module other than the main one that throws as it is imported (a script
 // beside the worker) keeps its identity in the manifest and exports no class. The POINTER is the rule on `/` that names the
-// admitted commit, `itx.config`: every context's birth row delivers to it (envs.ts
-// `PROJECT_CONTEXT_BIRTH_EVENTS`) and every facet of the project's config names it (iterate/api
+// admitted commit, `itx.config`: every context's birth row delivers to it
+// (./context-birth-events.ts) and every facet of the project's config names it (iterate/api
 // `FacetSpec`); only the platform writes it (caller.ts `refuseNonPlatformWrites`), so only its manifest
 // counts.
 // The follower (processor.ts) appends the pointer and `project/worker-updated` in one batch, as the

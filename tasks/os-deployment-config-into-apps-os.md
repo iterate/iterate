@@ -21,16 +21,16 @@ Today apps/os reaches `envs.ts` in two ways:
 Plan ("split the difference"): move (1) into apps/os now and invert (2), so apps/os builds
 self-host and local dev by itself and iterate's deploy tooling hands it every other deployment.
 
-Status: PR 1 (the moves) in progress. PR 2 (the lookup) not started.
+Status: PR 1 (the moves, iterate/iterate#3447) done; every deployment's config is unchanged. PR 2 (the lookup) not started.
 
 ## PR 1: the moves (no behaviour change)
 
-- [ ] `PROJECT_CONTEXT_BIRTH_EVENTS` → `apps/os/src/project/context-birth-events.ts`
-- [ ] `OsEnv` and `osResourceNames` → `apps/os/scripts/os-env.ts`; envs.ts imports the type
-- [ ] self-host config names `https://dash.iterate.com` itself instead of reading `osEnvs.prd`
-- [ ] every importer imports from the new home (no re-exports from envs.ts)
-- [ ] proof: every deployment's generated wrangler config is byte-identical before and after
-      (prd, preview, a `pr<n>-<sha7>`, self-host, local build, local dev)
+- [x] `PROJECT_CONTEXT_BIRTH_EVENTS` → `apps/os/src/project/context-birth-events.ts` _pure, like test-email-domain.ts, so the Vite config imports it as is_
+- [x] `OsEnv` and `osResourceNames` → `apps/os/scripts/os-env.ts`; envs.ts imports the type _comments that named envs.ts constants now say envs.ts explicitly_
+- [x] self-host config names `https://dash.iterate.com` itself instead of reading `osEnvs.prd` _generate-wrangler-config.ts `selfHostWranglerConfig`_
+- [x] every importer imports from the new home (no re-exports from envs.ts) _8 files in apps/os, plus comments that pointed at envs.ts_
+- [x] proof: every deployment's generated wrangler config is byte-identical before and after
+      (prd, preview, a `pr<n>-<sha7>`, self-host, local build, local dev) _`viteWranglerConfig` for each, JSON diffed: identical_
 
 ## PR 2: the lookup (stacked on PR 1)
 
@@ -62,3 +62,8 @@ Status: PR 1 (the moves) in progress. PR 2 (the lookup) not started.
 - whether `APP_CONFIG_CONTEXT_BIRTH_EVENTS` should become the worker's default rather than a var
 
 ## Implementation notes
+
+- PR 1: after the moves, apps/os's build path still reaches envs.ts for `getOsEnv` and
+  `PREVIEW_AND_DEV_ACCOUNT_ID` (generate-wrangler-config.ts) and `UNPROVISIONED` (build.ts →
+  scripts/lib/deploy-helpers.ts → env-context.ts). Those are PR 2.
+- PR 1 checks: lint, oxfmt, `pnpm typecheck`, knip, `pnpm --filter os test` (147 files) all pass.

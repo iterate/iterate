@@ -2,7 +2,7 @@
 // (`Stream` in stream/stream.ts, whose mechanics are src/stream/stream.test.ts; this file proves the
 // entry points end to end through the real DO). Pins:
 //   • the WAKE RECORD: the DO's constructor appends `itx/created` @1, `itx/woken` @2 and the
-//     deployment's birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`) before any call is served,
+//     deployment's birth rows (src/project/context-birth-events.ts) before any call is served,
 //     and the first user append lands after them; the core reduce carries identity + incarnation;
 //     woken exactly once per incarnation, created once ever
 //   • append's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE

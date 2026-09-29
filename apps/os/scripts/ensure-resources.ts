@@ -1,7 +1,8 @@
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, getEnv, osEnvs, osResourceNames } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../../envs.ts";
 import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
+import { osResourceNames } from "./os-env.ts";
 import { routedHostnames } from "./generate-wrangler-config.ts";
 import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";

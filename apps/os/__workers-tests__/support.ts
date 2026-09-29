@@ -24,7 +24,7 @@ import { receiveEmail } from "../src/integrations/email.ts";
 import type { IterateContextDurableObject } from "../src/iterate-context-durable-object.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { memoryPetshop } from "../../dummy-petshop/src/memory-state.ts";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../envs.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../src/project/context-birth-events.ts";
 
 /** This suite's platform origin (wrangler.test.jsonc `APP_CONFIG_URLS__OS`). */
 export const ORIGIN = "https://control.test";
@@ -35,7 +35,7 @@ export const ORIGIN = "https://control.test";
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
-/** A context born as a deployment's are: its birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`,
+/** A context born as a deployment's are: its birth rows (`PROJECT_CONTEXT_BIRTH_EVENTS`,
  *  the config entrypoint's fan-out row and the platform hook's) appended as its first commit. This
  *  suite's contexts are born with none: each of their calls holds a lease on the alarm while it is
  *  out (subscription-delivery.ts, the fan-out section), which every row that pins an alarm would

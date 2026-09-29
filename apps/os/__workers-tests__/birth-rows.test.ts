@@ -1,4 +1,5 @@
-// __workers-tests__/birth-rows.test.ts — a context born with the deployment's birth rows (envs.ts).
+// __workers-tests__/birth-rows.test.ts — a context born with the deployment's birth rows
+// (src/project/context-birth-events.ts).
 import { expect, test } from "vitest";
 import {
   at,

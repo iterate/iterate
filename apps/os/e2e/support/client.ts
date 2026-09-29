@@ -10,7 +10,7 @@ import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
 import { SNAPSHOT_TTL_MS } from "../../src/context/rule-snapshots.ts";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../src/project/context-birth-events.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;
@@ -328,7 +328,7 @@ export async function subscriptions(itx: any): Promise<any[]> {
   );
 }
 
-/** The birth rows (envs.ts `PROJECT_CONTEXT_BIRTH_EVENTS`) `subscriptions` and `configuredRows` omit. */
+/** The birth rows (`PROJECT_CONTEXT_BIRTH_EVENTS`) `subscriptions` and `configuredRows` omit. */
 export const BIRTH_ROW_NAMES: ReadonlySet<string> = new Set(
   PROJECT_CONTEXT_BIRTH_EVENTS.map((event) => event.payload.name),
 );
