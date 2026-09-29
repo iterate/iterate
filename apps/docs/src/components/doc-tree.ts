@@ -14,7 +14,8 @@ import type { DocList } from "../lib/doc-list.ts";
 /** Pierre's colours from the sidebar's (packages/ui globals.css), and light only like the app:
  *  its own defaults follow the OS's scheme with light-dark(). */
 const treeTheme: Record<string, string> = {
-  "--trees-bg-override": "transparent",
+  // the sidebar's own, not transparent: a truncated name's "…" is painted over in this colour
+  "--trees-bg-override": "var(--sidebar)",
   "--trees-fg-override": "var(--sidebar-foreground)",
   "--trees-fg-muted-override": "var(--muted-foreground)",
   "--trees-bg-muted-override": "var(--sidebar-accent)",
@@ -75,14 +76,9 @@ export class DocTree {
       initialSelectedPaths: open ? [open] : [],
       onSelectionChange: (selected) => {
         const path = selected[0];
-        // a folder opens and closes; a file opens, unless it's the one open or still being named
-        if (
-          path &&
-          path !== this.#openPath() &&
-          path !== this.#naming &&
-          tree.getItem(path)?.isDirectory() === false
-        )
-          this.#open(path);
+        // a folder opens and closes; a file of the repo opens, unless it's the one open (a row
+        // still being named, or renamed but not yet made, isn't the repo's yet)
+        if (path && path !== this.#openPath() && this.#paths.has(path)) this.#open(path);
       },
       composition: {
         contextMenu: {
