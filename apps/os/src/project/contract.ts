@@ -229,8 +229,6 @@ export const ProjectContract = defineProcessorContract({
     "events.iterate.com/cloudflare/disconnected",
     "events.iterate.com/github/connected",
     "events.iterate.com/github/disconnected",
-    "events.iterate.com/waitrose/connected",
-    "events.iterate.com/waitrose/disconnected",
     "events.iterate.com/x/connected",
     "events.iterate.com/x/disconnected",
   ],

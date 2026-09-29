@@ -9,8 +9,8 @@
 // material goes in; nothing comes out except a request to a pinned host. Refresh runs INSIDE the
 // secret's own facet — a named strategy in trusted code whose exchange endpoint must itself be
 // pinned, or the secret's own exchange code in a jail whose only egress is the pin
-// (secret/exchange-jail.ts) — so a credential that expires (an OAuth access token, a Waitrose or
-// Tesco session) is one secret, not a worker.
+// (secret/exchange-jail.ts) — so a credential that expires (an OAuth access token, a vendor's
+// session login) is one secret, not a worker.
 
 // The shapes a caller sees — the material, the client-auth method and the refresh strategy — are the
 // SDK's (`iterate/api`, where the dash and every client read them).
@@ -22,8 +22,7 @@ import type {
 } from "iterate/api";
 import { codedError } from "iterate/lib";
 import { secretsEqual, signClaims, verifyClaims } from "./caller.ts";
-import { IterateAppProvider } from "./integrations/contract.ts";
-import { exchange as exchangeWaitroseSession } from "./integrations/waitrose.ts";
+import { IntegrationProvider } from "./integrations/contract.ts";
 import { basicAuthorization } from "./repo/git-wire.ts";
 import { SecretRefreshKind } from "./secret/contract.ts";
 
@@ -45,7 +44,7 @@ export const EXCHANGE_SOURCE_MAX_CHARS = 64 * 1024;
 /** The deployment's apps an `oauth-refresh-token` strategy may name as its client (`{ platform }`):
  *  each refreshes with that app's credentials, attached in the secret's facet. GitHub's is the App's
  *  user-authorization client, which a GitHub sign-in's token refreshes with. */
-const OAUTH_REFRESH_PLATFORMS = IterateAppProvider.options;
+const OAUTH_REFRESH_PLATFORMS = IntegrationProvider.options;
 
 /** A secret's name: `[a-zA-Z0-9._-]+`, but never `.` or `..` — the two segments
  *  `resolveContextPath` resolves away, so `/secrets/..` would name its owner's ROOT (and
@@ -129,12 +128,7 @@ export function normalizeSecretRecord(
         );
       return { material, urls, refresh: { kind, source } };
     }
-    const endpointKey =
-      kind === "oauth-refresh-token"
-        ? "tokenEndpoint"
-        : kind === "waitrose-session"
-          ? "graphqlUrl"
-          : "apiOrigin";
+    const endpointKey = kind === "oauth-refresh-token" ? "tokenEndpoint" : "apiOrigin";
     const endpoint = new URL(String(strategy[endpointKey]));
     if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:")
       throw new Error(`secrets: refresh.${endpointKey} must be an http(s) URL`);
@@ -155,8 +149,7 @@ export function normalizeSecretRecord(
         clientAuth: clientAuthOf(strategy.clientAuth),
         ...(platform && { client: { platform } }),
       };
-    } else if (kind === "waitrose-session") refresh = { kind, graphqlUrl: endpoint.href };
-    else {
+    } else {
       const installationId = String(strategy.installationId ?? "");
       // it lands in a URL path: GitHub's ids are digits, a fake's a slug
       if (!/^[a-zA-Z0-9_-]+$/.test(installationId))
@@ -625,8 +618,5 @@ export async function refreshSecretMaterial(
     // held: a placeholder, never the value it resolved to.
     return { ...record, ...(await oauthTokensOf(response, refresh.kind)) };
   }
-  // Waitrose's login is bundled exchange code of the same shape as a secret's own.
-  if (refresh.kind === "waitrose-session")
-    return exchangeWaitroseSession(material, fetchFn, { graphqlUrl: refresh.graphqlUrl });
   throw new Error(`${refresh.kind}: the secret's facet runs this exchange code in its jail`);
 }

@@ -42,11 +42,7 @@ import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, normalizeSecretRecord, originsOf, sha256Hex } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
-import {
-  IntegrationConnectionRow,
-  IntegrationProvider,
-  IterateAppProvider,
-} from "../integrations/contract.ts";
+import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
 import {
   connectionPathOf,
   tokenSecretPathOf,
@@ -241,7 +237,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  The material is a string or a JSON object; `urls` (required) pins it to those ORIGINS only — a
    *  mis-typed URL cannot mail a credential to a stranger, nor can an app that forwards a visitor's
    *  headers; `refresh` names the strategy the facet re-mints an expired credential with, in trusted
-   *  code, on a 401 or on first use (`oauth-refresh-token`, `waitrose-session`, `github-app-installation`, or the secret's own exchange code in a jail, `worker`). WRITE-ONLY — `set`,
+   *  code, on a 401 or on first use (`oauth-refresh-token`, `github-app-installation`, or the secret's own exchange code in a jail, `worker`). WRITE-ONLY — `set`,
    *  `beginOAuth`, `delete`, and a `list` of paths, pins and strategy kinds, never a value. Every
    *  verb runs ON THE SECRET'S PATH (so the log's order is the value's) and lands its fact there —
    *  `secret/set { path, urls, refresh? }`, `secret/deleted { path }` — attributed like any append
@@ -736,7 +732,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       );
     const account = accounts[0]!;
     // Google's, Cloudflare's and X's consents add scopes to a person's own connection; a GitHub
-    // user's token and a Waitrose login have none to add, so they connect as they are.
+    // user's token has none to add, so it connects as it is.
     const requiredScopes =
       provider === "google" || provider === "cloudflare" || provider === "x"
         ? [...(deps.iterateAppScopes()[provider] || []), ...(input.scopes || [])]
@@ -1796,7 +1792,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           `/projects/${encodeURIComponent(project.projectSlug)}/integrations`,
           deps.dashOrigin,
         );
-        url.searchParams.set("connect", IterateAppProvider.parse(provider));
+        url.searchParams.set("connect", IntegrationProvider.parse(provider));
         if (scopes.length > 0) url.searchParams.set("scopes", scopes.join(" "));
         return { url: url.href };
       },

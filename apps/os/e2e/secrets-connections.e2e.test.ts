@@ -1,12 +1,10 @@
 // secrets-connections.e2e.test.ts — EVERY WAY A PROJECT CONNECTS TO A THIRD-PARTY API, end to end,
 // against the deployed dummy-petshop (support/petshop.ts) — a real third party over the real network
 // from the local worker and the deployed one alike (the plain pasted key is secrets.e2e.test.ts):
-//   • `waitrose-session` — the username/password → session archetype (Waitrose's login; the
-//     petshop's GraphQL login speaks the same wire shape): the secret holds ONLY the account
-//     credential, its Durable Object logs in on first use and logs in again on 401.
-//   • `worker` — the same archetype for any vendor, as the secret's own exchange code: the pet shop's
-//     Tesco-shaped two-step login (a CSRF token and its cookie, then the form) runs in the secret's
-//     jail on first use and on 401.
+//   • `worker` — the username/password → session archetype for any vendor, as the secret's own
+//     exchange code: the secret holds ONLY the account credential, and the code runs in the secret's
+//     jail on first use and again on 401. Two vendor shapes: a GraphQL `NewSession` mutation, and
+//     the pet shop's Tesco-shaped two-step login (a CSRF token and its cookie, then the form).
 //   • `oauth-refresh-token`, tokens brought by a trusted party — the OAuth story with the consent
 //     walked by the test: discovery, code exchange, the secret, a call, expiry, rotation, revocation.
 //   • OAuth, the first tokens obtained by the platform, confidential client — `itx.secrets.beginOAuth`
@@ -39,6 +37,7 @@ import {
   petshopBaseUrl,
   petshopConnect,
   petshopExpireGraphqlSessions,
+  petshopGraphqlExchangeSource,
   petshopExpireTescoTokens,
   petshopExpireTokens,
   petshopFailTokenEndpoint,
@@ -58,29 +57,31 @@ import {
   registerProject,
 } from "./support/project-host.ts";
 
-test("waitrose-session: a username/password secret mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves its Durable Object", async () => {
-  const itx = openItx(freshCtx("secrets-waitrose"));
+test("worker: a userspace GraphQL session login in the secret's own exchange code mints its session on first use, re-mints on 401, and the session works on the API — the password never leaves its Durable Object", async () => {
+  const itx = openItx(freshCtx("secrets-graphql-login"));
   const petshop = petshopBaseUrl();
   const username = `mum-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 6)}@example.com`;
   // The secret: the account credential and NOTHING token-shaped. "correct-horse" is the fixture's
   // one accepted password (apps/dummy-petshop/src/graphql-login.ts).
+  const source = petshopGraphqlExchangeSource();
   await itx.secrets.set(
-    "/secrets/waitrose",
+    "/secrets/session-login",
     { username, password: "correct-horse" },
-    { urls: [petshop], refresh: { kind: "waitrose-session", graphqlUrl: `${petshop}/graphql` } },
+    { urls: [petshop], refresh: { kind: "worker", source } },
   );
   expect(await itx.secrets.list()).toEqual([
     {
-      path: "/secrets/waitrose",
+      path: "/secrets/session-login",
       urls: [petshop],
-      refresh: "waitrose-session",
+      refresh: "worker",
+      refreshSourceSha256: await sha256Hex(source),
       createdAt: expect.any(String),
     },
   ]);
 
   // First use: the material has no accessToken, so substitution misses, the secret's Durable Object
-  // runs the NewSession login, and the retried request lands on the pets API as the logged-in account.
-  expect(await bearerCall(itx, "/secrets/waitrose", "/api/me")).toMatchObject({
+  // runs the exchange code's NewSession login, and the retried request lands on the pets API as the logged-in account.
+  expect(await bearerCall(itx, "/secrets/session-login", "/api/me")).toMatchObject({
     status: 200,
     body: { sub: username, clientId: "graphql-session-login" },
   });
@@ -89,22 +90,27 @@ test("waitrose-session: a username/password secret mints its session on first us
   // the refresh — the object logs in again and the retry wins. The bump is this run's account's
   // alone: the shop serves every concurrent CI run.
   await petshopExpireGraphqlSessions(username);
-  expect(await bearerCall(itx, "/secrets/waitrose", "/api/pets")).toMatchObject({
+  expect(await bearerCall(itx, "/secrets/session-login", "/api/pets")).toMatchObject({
     status: 200,
     body: { owner: username, pets: expect.any(Array) },
   });
 
   // The two logins are two `secret/refreshed` facts on the secret's path — the first-use mint and
   // the re-mint on 401 — each the strategy's kind and the outcome.
-  const secret = itx.cd("/secrets/waitrose");
+  const secret = itx.cd("/secrets/session-login");
   expect(await refreshedFacts(secret)).toEqual([
-    { kind: "waitrose-session", ok: true },
-    { kind: "waitrose-session", ok: true },
+    { kind: "worker", ok: true },
+    { kind: "worker", ok: true },
   ]);
 
   // Confinement: the fact on the secret's path and its cross-post on the root carry the pin and
   // the strategy's kind, never the password — and neither log holds it anywhere.
-  const changePayload = { path: "/secrets/waitrose", urls: [petshop], refresh: "waitrose-session" };
+  const changePayload = {
+    path: "/secrets/session-login",
+    urls: [petshop],
+    refresh: "worker",
+    refreshSourceSha256: await sha256Hex(source),
+  };
   const setsOf = async (ctx: ReturnType<typeof openItx>) =>
     (await readAll(ctx))
       .filter((e: any) => e.type === "events.iterate.com/secret/set")
