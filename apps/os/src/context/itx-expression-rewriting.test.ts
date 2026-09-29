@@ -20,7 +20,7 @@ import type { RewriteRuleListEntry } from "iterate/api";
 import type { Caller } from "../caller.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
 import { nodeSqliteStream } from "../stream/test-support.ts";
-import { oneContextReach } from "./test-support.ts";
+import { FAR, oneContextReach, rule } from "./test-support.ts";
 import {
   ItxExpressionResolver,
   type ItxExpressionRewriteRule,
@@ -324,7 +324,7 @@ test("resolveItxExpression — the call that runs: THE CHAIN: every rewrite in o
 test("resolveItxExpression — the call that runs: AT A CHILD only the context roots are implicit: a project root hops through the parent link, the context's own log stays its own, and a bare null denies all", () => {
   const link = ["itx ⇒ itx.builtins.cd('/agents/a')"];
   const runsAt = (rules: string[], call: string, roots: ReadonlySet<string>) =>
-    print(resolveItxExpression(() => table(rules), parse(call), roots).at(-1)!);
+    print(resolveItxExpression(() => rules.map(rule), parse(call), roots).at(-1)!);
   expect(runsAt(link, "itx.kv.get('k')", CHILD)).toBe("itx.builtins.cd('/agents/a').kv.get('k')");
   expect(runsAt(link, "itx.tool.hello()", CHILD)).toBe("itx.builtins.cd('/agents/a').tool.hello()");
   expect(runsAt(link, "itx.append({ type: 't' })", CHILD)).toBe("itx.builtins.append({type:'t'})");
@@ -339,7 +339,7 @@ test("resolveItxExpression — the call that runs: AT A CHILD only the context r
 test("resolveItxExpression — the call that runs: `abort` is a CONTEXT root: under a parent link a child's `itx.abort()` resets the child itself, never the context the link names; a row or a bare null takes it away", () => {
   const link = ["itx ⇒ itx.builtins.cd('/agents/a')"];
   const runsAt = (rules: string[], call: string) =>
-    print(resolveItxExpression(() => table(rules), parse(call), CHILD).at(-1)!);
+    print(resolveItxExpression(() => rules.map(rule), parse(call), CHILD).at(-1)!);
   expect(runsAt(link, "itx.abort('r')")).toBe("itx.builtins.abort('r')");
   expect(runsAt(link, "itx.facets.abort('f')")).toBe("itx.builtins.facets.abort('f')");
   expect(() => runsAt([...link, "itx.abort ⇒ null"], "itx.abort()")).toThrow(/is masked/);
@@ -829,7 +829,7 @@ for (const [order, rules] of [
     const { ruleUnsets, subscriptionNames, fetchRouteNames } = rowsNamingRpcStub({
       rpcStubKey: "itx.ai",
       implicitRoots: ROOT,
-      rules: table([...rules]),
+      rules: rules.map(rule),
       subscriptionTargets: {
         viaShortSpelling: parse("itx.rpcStubs.get('itx.ai')"),
         viaAlias: parse("itx.llm.notify"),
@@ -1470,10 +1470,18 @@ test("a lent stub the root's rule names is called at the root, which resolves th
   expect(located).toMatchObject([{ path: "/", expression: ["itx", "tool", ["hello", "x"]] }]);
 });
 
-test("a refusal another context's snapshot gives stands like any answer: the snapshot is read once, never again to refuse", async () => {
+test("a refusal another context's snapshot gives stands until that snapshot expires, read once; the own table's has no expiry", async () => {
   const { resolver, snapshotsRead } = acrossContexts({ own: ["itx ⇒ itx.cd('/')"] });
-  await expect(resolver.invoke("itx.tool")).rejects.toThrow(/no rewrite rule matches "itx.tool"/);
+  await expect(resolver.invoke("itx.tool")).rejects.toMatchObject({
+    message: expect.stringMatching(/no rewrite rule matches "itx.tool"/),
+    validUntil: FAR,
+  });
   expect(snapshotsRead).toEqual(["/"]);
+  const own = await acrossContexts({})
+    .resolver.invoke("itx.tool")
+    .catch((error: Error) => error);
+  expect((own as Error).message).toMatch(/no rewrite rule matches "itx.tool"/);
+  expect(own).not.toHaveProperty("validUntil");
 });
 
 test("the root's rule spelled through `cd('/')` answers any context and loads its worker there with the root's authority", async () => {
@@ -1616,19 +1624,12 @@ const restoreRuleTarget = (match: ItxExpressionInput): ItxExpression => [
   ...parseItxExpressionPrefix(match).slice(1),
 ];
 
-const table = (rows: string[]): ItxExpressionRewriteRule[] =>
-  rows.map((row) => {
-    const [match, target] = row.split(" ⇒ ");
-    return {
-      match: parseItxExpressionPrefix(match),
-      target: target === "null" ? null : parse(target, { holes: true }), // a target may hold `@`
-    };
-  });
-
 /** The chain of rewrites, printed — or the refusal. */
 const chain = (rules: string[], call: string): string[] | string => {
   try {
-    return resolveItxExpression(() => table(rules), parse(call), ROOT).map((step) => print(step));
+    return resolveItxExpression(() => rules.map(rule), parse(call), ROOT).map((step) =>
+      print(step),
+    );
   } catch (error) {
     return `THROWS ${(error as Error).message}`;
   }
@@ -1665,45 +1666,34 @@ const listed = (
   } = {},
 ) =>
   describeRewriteRules({
-    rules: table(rows),
+    rules: rows.map(rule),
     implicitRoots: options.implicitRoots || CHILD,
     path: options.path || "/agents/a",
     depth: options.depth ?? 3,
     inherit: options.inherit || (async () => []),
   });
 
-/** A resolver at `at` (default `/agents/a`) over the fake built-ins: its own rows live, every other
- *  context's rows the snapshot `others` gives, recording which contexts' snapshots it read. Rows
- *  are `"match ⇒ target"`. */
+/** A resolver at `at` (default `/agents/a`) over the fake built-ins: `own` its live rows (none when
+ *  `stateless`), `others` every other context's snapshot, as `oneContextReach` reads them. */
 function acrossContexts(options: {
   at?: string;
   own?: string[];
   others?: Record<string, string[]>;
-  /** No live table of its own (the stateless entrypoint's): `others[at]` is its snapshot. */
   stateless?: true;
   caller?: Caller;
-  /** How many snapshot reads answer one already expired (the caller waited on it too long). */
   expiredReads?: number;
 }) {
-  const at = options.at || "/agents/a";
-  const { located, reach } = oneContextReach();
-  const snapshotsRead: string[] = [];
+  const others = Object.entries(options.others || {});
+  const { located, reach, snapshotsRead } = oneContextReach({
+    rulesOf: Object.fromEntries(others.map(([path, rows]) => [path, rows.map(rule)])),
+    expiredReads: options.expiredReads,
+  });
   const resolver = new ItxExpressionResolver({
     builtIns: fakeBuiltIns(),
-    rewriteRules: options.stateless ? undefined : () => table(options.own || []),
-    path: at,
+    rewriteRules: options.stateless ? undefined : () => (options.own || []).map(rule),
+    path: options.at || "/agents/a",
     caller: () => options.caller || { principal: null },
-    reach: {
-      ...reach,
-      snapshotOf: async (path) => {
-        snapshotsRead.push(path);
-        const expired = snapshotsRead.length <= (options.expiredReads || 0);
-        return {
-          rules: table(options.others?.[path] || []),
-          expiresAt: expired ? Date.now() - 1 : Infinity,
-        };
-      },
-    },
+    reach,
   });
   return { resolver, located, snapshotsRead };
 }
