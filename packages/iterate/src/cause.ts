@@ -12,10 +12,7 @@
 // workers under `nodejs_als` alone (apps/os context/worker-loader.ts), Node to the unit tests.
 // @ts-ignore -- without Node's types the import has none; it is typed right below
 import { AsyncLocalStorage as NodeAsyncLocalStorage } from "node:async_hooks";
-import { codedError } from "./lib.ts";
-
-/** The header a Request carries the cause on, ours in and out. */
-const CAUSE_HEADER = "iterate-cause";
+import { ITERATE_CAUSE_HEADER, loopLimitOf } from "./lib.ts";
 
 type Carrier = {
   run<T>(cause: unknown, code: () => T): T;
@@ -53,21 +50,17 @@ function newCarrier(): Carrier {
       loaded = true;
       const outbound = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
-        const cause = current();
+        const cause = current() as { chain?: unknown; depth?: unknown; hops?: unknown } | undefined;
         const request = new Request(input, init);
-        if (cause)
-          request.headers.set(
-            CAUSE_HEADER,
-            // a header is bytes: ASCII only
-            JSON.stringify(cause).replace(
-              /[\u0080-\uffff]/g,
-              (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-            ),
-          );
+        // the mark alone, never what only a call needs (the delivery its writes are keyed by)
+        if (cause) {
+          const { chain, depth, hops } = cause;
+          request.headers.set(ITERATE_CAUSE_HEADER, JSON.stringify({ chain, depth, hops }));
+        }
         const answer = await outbound(request);
         // a request refused past the loop limit answers 508, marked: it throws as the refusal it is
-        if (answer.status === 508 && answer.headers.has("iterate-loop-limit"))
-          throw codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
+        const refused = await loopLimitOf(answer);
+        if (refused) throw refused;
         return answer;
       };
     },
@@ -90,7 +83,7 @@ export const carryCauseOnFetch = (): void => carrier.carryOnFetch();
 /** The cause a Request carries, or none. */
 export function causeOfRequest(request: Request): unknown {
   try {
-    return JSON.parse(request.headers.get(CAUSE_HEADER) ?? "null") ?? undefined;
+    return JSON.parse(request.headers.get(ITERATE_CAUSE_HEADER) ?? "null") ?? undefined;
   } catch {
     return undefined;
   }

@@ -37,12 +37,15 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     new Headers([
       ...trusted.map((name): [string, string] => [name, "forged"]),
       ["x-itx-expression", "itx.fetch"],
+      ["x-iterate-routing-slug", "forged"],
     ]);
   const leaving = forged();
   stampCallerHeaders(leaving, null);
-  expect([...leaving.keys()]).toEqual(["x-itx-expression"]); // a self-addressed expression rides on
+  expect([...leaving.keys()]).toEqual([]); // leaving the platform: not even the routing slug
   const app = forged();
   stampCallerHeaders(app, { principal: null, app: true, platformOrigin: "https://os.iterate.com" });
+  expect(app.get("x-itx-expression")).toBeNull();
+  expect(app.get("x-iterate-routing-slug")).toBe("forged"); // a hop's caller keeps the edge's word
   expect(Object.fromEntries(trusted.map((name) => [name, app.get(name)]))).toEqual({
     "x-itx-principal": null,
     "x-itx-grant": null,

@@ -7,6 +7,7 @@
 import { evictDurableObject, runDurableObjectAlarm } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { newWebSocketRpcSession } from "capnweb";
 import { runningCause, type Cause } from "../src/cause.ts";
@@ -661,7 +662,7 @@ test("a session opened with our mark — our own code calling the platform back 
     const opened = await exports.default.fetch(`${ORIGIN}/api`, {
       headers: {
         Upgrade: "websocket",
-        "iterate-cause": JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
       },
     });
     opened.webSocket!.accept();
@@ -682,11 +683,39 @@ test("a session opened with our mark — our own code calling the platform back 
   }
 });
 
+test("a session opened with our mark counts the hop its request made: at 14 hops its call through a `cd` lands, at 15 that `cd` is one context too many", async () => {
+  const project = freshProject();
+  const outcomes = [];
+  for (const hops of [14, 15]) {
+    const opened = await exports.default.fetch(`${ORIGIN}/api`, {
+      headers: {
+        Upgrade: "websocket",
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 1, hops }),
+      },
+    });
+    opened.webSocket!.accept();
+    const session = newWebSocketRpcSession(opened.webSocket as unknown as WebSocket) as any;
+    outcomes.push(
+      await session
+        .authenticate(adminCredentials())
+        .projects.get(project)
+        .invoke("itx.cd('/x').append({ type: 'test/hopped' })")
+        .then(
+          () => "landed",
+          (error: unknown) => String(error),
+        ),
+    );
+    session[Symbol.dispose]();
+  }
+  expect(outcomes[0]).toBe("landed");
+  expect(outcomes[1]).toMatch(/crossed more than 16 contexts/);
+});
+
 test("hop-16-throws: a request re-entering the platform carries its hops, and the one that would cross a seventeenth context is refused 508, naming its chain", async () => {
   const request = (hops: number) =>
     exports.default.fetch(
       new Request("https://control.test/version", {
-        headers: { "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 1, hops }) },
+        headers: { [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 1, hops }) },
       }),
     );
   expect(await request(15)).toMatchObject({ status: 200 });
@@ -724,7 +753,7 @@ test.for([
             ["get", { source: config("", code) }],
             "fetch",
           ]),
-          "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
+          [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
         },
       }),
     );
@@ -752,7 +781,7 @@ test("an edge fetch route's act past the limit is refused 508 and recorded once,
   const { projectId } = await itx.whoami();
   await itx.fetchRoutes.set("out", { requestMatcher: { routingSlug: "out" }, target: "itx.fetch" });
   const answer = await exports.default.fetch(`https://out--${slug}.projects.test/`, {
-    headers: { "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }) },
+    headers: { [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }) },
   });
   expect(answer).toMatchObject({ status: 508 });
   await answer.body?.cancel();
@@ -783,7 +812,7 @@ export default class extends IterateConfigEntrypoint {
     new Request("https://project.test/", {
       headers: {
         "x-itx-expression": JSON.stringify(["itx", "workers", ["get", { source: early }], "fetch"]),
-        "iterate-cause": JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
+        [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth: 9, hops: 0 }),
       },
     }),
   );
@@ -914,7 +943,7 @@ test("facet-fetch-keeps-depth: a Request a call hands a facet carries the call's
       new Request("https://project.test/", {
         headers: {
           "x-itx-expression": JSON.stringify(["itx", "facets", ["get", "acting", ACTING], "fetch"]),
-          "iterate-cause": JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
+          [ITERATE_CAUSE_HEADER]: JSON.stringify({ chain: CHAIN, depth, hops: 0 }),
         },
       }),
     );
@@ -1373,7 +1402,7 @@ function relayHooks(routes: Record<string, string>) {
     const request = new Request(input, init);
     const url = new URL(request.url);
     if (url.origin !== HOOKS) return through(request);
-    const mark = request.headers.get("iterate-cause");
+    const mark = request.headers.get(ITERATE_CAUSE_HEADER);
     await stub(routes[url.pathname]!)
       .fetch(
         new Request("https://project.test/", {
@@ -1385,7 +1414,7 @@ function relayHooks(routes: Record<string, string>) {
               ["get", { source: RELAY }],
               "fetch",
             ]),
-            "iterate-cause": mark || "",
+            [ITERATE_CAUSE_HEADER]: mark || "",
           },
           body: await request.text(),
         }),

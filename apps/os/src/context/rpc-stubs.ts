@@ -57,11 +57,12 @@
 //                   (fetch-upgrade-splice.ts).
 
 import { failureKind } from "@iterate-com/shared/platform-retry";
-import { codedError, errorCode } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
+import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
-import type { ItxExpression } from "iterate/expression";
-import { causeHeader, ITERATE_CAUSE_HEADER } from "../cause.ts";
+import { parse, type ItxExpression } from "iterate/expression";
+import { causeHeader } from "../cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -491,9 +492,8 @@ export class RpcStubDirectory {
 //      rpc stub's terminal fetch rides the plain invoke() walk like every other call.
 
 // ── THE ITX-EXPRESSION FETCH (the `x-itx-expression` header) ──
-// A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — the
-// edge sets it for a project host (empty: the configured ingress target), a session's terminal fetch and a
-// loaded worker's `env.ITX.fetch` set it themselves. The DO rewrites the expression through its
+// A fetch-shaped capability is reached over HTTP by naming an itx expression in this header — a
+// session's terminal fetch, a located hop and a loaded worker's `env.ITX.fetch` set it. The DO rewrites the expression through its
 // rules and the provider's Response — 101s included — flows back out natively.
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
@@ -505,14 +505,13 @@ export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
  *  before this is set. */
 export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
 
-/** THE CALLER ON A FETCH HOP: every header the context DO's `fetch` trusts as the platform's — the
- *  caller's (principal, grant, originating path, app, platform origin, cause) and the DO's own protocol
- *  (the pager attach, which appends past every table, and the fetch-upgrade leg) — replaced on
- *  `headers` by `caller`'s (`null`: none, for a Request leaving the platform). Every hop that
- *  forwards a Request stamps through here, so a Request's own copy of any of them never survives.
- *  Not an `x-itx-*` prefix sweep like the edge's (worker.ts): the edge's hop count must ride the
- *  Request an app forwards, and a loaded worker's self-addressed `x-itx-expression` must reach the
- *  DO. */
+/** THE HOP'S CALLER STAMP: every header the DO's fetch trusts as the platform's — the caller's
+ *  (principal, grant, caller path, app, platform origin, cause), the protocol's (the pager attach,
+ *  which appends past every table, and the fetch-upgrade leg) and the expression a fetch names —
+ *  replaced on `headers` by `caller`'s (`null`: none, and no routing slug either, for a Request
+ *  leaving the platform). Every hop that forwards a Request stamps through here, so a Request's own
+ *  copy of any of them never survives. An explicit list, not an `x-itx-*` sweep like the edge's
+ *  (worker.ts). */
 export function stampCallerHeaders(headers: Headers, caller: Caller | null): void {
   for (const name of [
     ITX_PRINCIPAL_HEADER,
@@ -524,15 +523,35 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     FETCH_UPGRADE_SOCKET_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
     ITERATE_CAUSE_HEADER,
+    ITX_EXPRESSION_FETCH_HEADER,
   ])
     headers.delete(name);
-  if (!caller) return;
+  if (!caller) {
+    headers.delete(ITERATE_ROUTING_SLUG_HEADER);
+    return;
+  }
   if (caller.cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(caller.cause));
   if (caller.principal) headers.set(ITX_PRINCIPAL_HEADER, JSON.stringify(caller.principal));
   if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
   if (caller.app) headers.set(ITX_APP_HEADER, "1");
   if (caller.platformOrigin) headers.set(ITX_PLATFORM_ORIGIN_HEADER, caller.platformOrigin);
+}
+
+/** THE ONE READER of an `x-itx-expression` header — untrusted: JSON (`encodeFetchExpression`) or
+ *  dotted text (loaded code's own `env.ITX.fetch`), shape-checked by the resolver and walled before
+ *  anything runs. One that does not parse is the caller's: INVALID_INPUT, answered 400. */
+export function parseFetchExpression(header: string): ItxExpression {
+  try {
+    return header.trimStart().startsWith("[")
+      ? (JSON.parse(header) as ItxExpression)
+      : parse(header);
+  } catch (error) {
+    throw codedError(
+      "INVALID_INPUT",
+      `x-itx-expression ${JSON.stringify(header.slice(0, 200))} is no itx expression: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 /** JSON in an HTTP header must be ASCII: inline worker source may contain any Unicode text.

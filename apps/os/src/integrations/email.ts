@@ -25,14 +25,13 @@
 // Both record their fact through `recordEmail`, as the platform: the `email` facet folds only
 // those (email/processor.ts).
 import PostalMime, { type Address } from "postal-mime";
-import { codedError } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import type { EmailSendInput } from "iterate/api";
 import { EmailContract } from "iterate/email";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import {
   causeHeader,
-  ITERATE_CAUSE_MAIL_HEADER,
   LOOP_DEPTH_LIMIT,
   newChain,
   parseCause,
@@ -91,7 +90,7 @@ export async function receiveEmail(message: ForwardableEmailMessage, env: Env) {
   // Mail we sent resumes the chain it carries (sendEmail's mark); any other begins one. Mail is
   // always recorded, so one past the loop limit lands at it: what reacts to it can only read.
   const mark = parseCause(
-    email.headers.find(({ key }) => key === ITERATE_CAUSE_MAIL_HEADER.toLowerCase())?.value,
+    email.headers.find(({ key }) => key === ITERATE_CAUSE_HEADER.toLowerCase())?.value,
   );
   await recordEmail(
     env.ITERATE_CONTEXT.getByName(
@@ -237,7 +236,7 @@ export async function sendEmail(
       // OUR MARK (cause.ts): mail that comes back resumes the chain.
       "Auto-Submitted": "auto-generated",
       ...(scope.caller.cause && {
-        [ITERATE_CAUSE_MAIL_HEADER]: causeHeader(scope.caller.cause),
+        [ITERATE_CAUSE_HEADER]: causeHeader(scope.caller.cause),
       }),
       ...(answered?.inReplyTo && {
         "In-Reply-To": `<${answered.inReplyTo}>`,

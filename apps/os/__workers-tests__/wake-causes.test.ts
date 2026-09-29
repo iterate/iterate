@@ -34,10 +34,12 @@ test.for([
     wake: { cause: "call", caller: "loaded" },
   },
   {
-    name: "an expression fetch naming the project's ingress",
+    name: "an expression fetch",
     call: (ctx: string) =>
       stub(ctx).fetch(
-        new Request("https://project.test/", { headers: { [ITX_EXPRESSION_FETCH_HEADER]: "" } }),
+        new Request("https://project.test/", {
+          headers: { [ITX_EXPRESSION_FETCH_HEADER]: JSON.stringify(["itx", "nosuch"]) },
+        }),
       ),
     wake: { cause: "call", caller: "other" },
   },

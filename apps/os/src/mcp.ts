@@ -1,7 +1,7 @@
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/server/validators/cf-worker";
 import { z } from "zod";
-import { codedError, errorCode } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { platformAddressesOf } from "./app-config.ts";
 import { GLOBAL_PROJECT_ID } from "./context/paths.ts";
 import type { Env } from "./env.ts";
@@ -9,7 +9,7 @@ import { contextStub } from "./context-stub.ts";
 import { ControlPlane, type Reach } from "./control-plane/edge.ts";
 import { DurableObjectNameCodec } from "./context/paths.ts";
 import type { Authorization } from "./oauth.ts";
-import { ITERATE_CAUSE_HEADER, parseCause, type Cause } from "./cause.ts";
+import { parseCause, type Cause } from "./cause.ts";
 
 // MCP uses the same authorization and project root as a Cap’n Web project handle. The OAuth
 // grant or personal access token limits which projects can be selected; each run is attributed to

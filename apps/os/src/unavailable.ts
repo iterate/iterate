@@ -9,7 +9,7 @@ import {
   RETRY_AFTER_MS,
   type PlatformFailureKind,
 } from "@iterate-com/shared/platform-retry";
-import { LOOP_LIMIT_HEADER } from "./cause.ts";
+import { LOOP_LIMIT_HEADER } from "iterate/lib";
 
 /** A failure of the platform's own, coded so a client and every later hop read its kind and when
  *  to ask again (iterate/lib `ErrorCode`). */
@@ -44,7 +44,8 @@ export function unavailableAnswer(
  *  `itxExpression` is the `x-itx-expression` header the fetch named. */
 export function expressionFetchErrorAnswer(error: unknown, itxExpression: string): Response {
   // A project host makes this path public: default-deny is a 404 (a visitor's "no such app" is
-  // no issue), a WebSocket upgrade aimed at a facet-hosted app is the caller's 400 (context/facet-host.ts),
+  // no issue), a WebSocket upgrade aimed at a facet-hosted app (context/facet-host.ts) and input
+  // that is no call at all are the caller's 400,
   // a lent stub offline or a platform failure the edge's one answer (`unavailableAnswer`: a 502,
   // a 503 with its Retry-After), anything else a 500 — the message alone every way, the stack
   // REPORTED, never served.
@@ -60,7 +61,7 @@ export function expressionFetchErrorAnswer(error: unknown, itxExpression: string
   const status =
     code === "NO_ITX_EXPRESSION_MATCH"
       ? 404
-      : code === "FACET_NO_UPGRADE"
+      : code === "FACET_NO_UPGRADE" || code === "INVALID_INPUT"
         ? 400
         : (unavailable?.status ?? 500);
   if (status === 500)

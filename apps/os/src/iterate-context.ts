@@ -21,7 +21,7 @@
 
 import { RpcPromise as CapnwebRpcPromise, RpcStub as CapnwebRpcStub, RpcTarget } from "capnweb";
 import { z } from "zod";
-import { codedError, resolveContextPath } from "iterate/lib";
+import { codedError, ITERATE_CAUSE_HEADER, loopLimitOf, resolveContextPath } from "iterate/lib";
 import * as cloudflareWorkers from "cloudflare:workers";
 import {
   InvokeHandle,
@@ -30,18 +30,10 @@ import {
   type ItxExpression,
   type ItxExpressionInput,
   installPrototypeInvokeFallback,
-  parse,
 } from "iterate/expression";
 import type { FetchRouteInput, IterateContextApi } from "iterate/api";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
-import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
-import {
-  ITERATE_CAUSE_HEADER,
-  LOOP_LIMIT_HEADER,
-  newChain,
-  parseCause,
-  type Cause,
-} from "./cause.ts";
+import { newChain, parseCause, type Cause } from "./cause.ts";
 import {
   itxAnswerDetachedFromSession,
   materializeItxHandleReference,
@@ -53,6 +45,7 @@ import type { IterateContextDurableObject, Env } from "./iterate-context-durable
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   encodeFetchExpression,
+  parseFetchExpression,
   itxExpressionEndingInFetch,
   stampCallerHeaders,
   terminalFetchOf,
@@ -275,8 +268,8 @@ export class IterateContextRpcTarget extends RpcTarget {
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     const answer = await this.#dispatch(call, args);
     // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
-    if (answer instanceof Response && answer.headers.has(LOOP_LIMIT_HEADER))
-      throw codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
+    const refused = answer instanceof Response ? await loopLimitOf(answer) : undefined;
+    if (refused) throw refused;
     return answer;
   }
 
@@ -628,32 +621,17 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a
    *  fetch it addressed itself with `x-itx-expression` — is one terminal-fetch call through the
    *  stateless resolver, run as the context's own expression fetch would run it: the headers it
-   *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). What
-   *  names no expression — the platform's bare egress (a first-party facet's raw `fetch(url)`) —
-   *  or the project's ingress (`""`) is the context's own `fetch`. */
+   *  strips stripped, a failure answered as it answers one (`expressionFetchErrorAnswer`). */
   override async fetch(request: Request): Promise<Response> {
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     // why, as the loaded code's `fetch` said it (cause.ts)
     const caller = this.#caller(address, parseCause(request.headers.get(ITERATE_CAUSE_HEADER)));
-    // A raw `fetch(url)` from loaded code IS `itx.fetch(request)` at its context — through the
-    // table (no `itx.fetch` row below the owner root, no egress).
-    const expressionHeader =
-      request.headers.get(ITX_EXPRESSION_FETCH_HEADER) ?? (caller.app ? "itx.fetch" : null);
-    if (!expressionHeader) {
-      // A loaded worker speaks for the project, never for a person: every caller stamp is the
-      // edge's (worker.ts, iterate-context.ts), stripped so loaded code cannot forge one, and the
-      // routing slug is the edge's alone.
-      const headers = new Headers(request.headers);
-      headers.delete(ITERATE_ROUTING_SLUG_HEADER);
-      stampCallerHeaders(headers, {
-        principal: null,
-        cause: caller.cause,
-        ...(caller.app && { app: true as const }),
-      });
-      return this.env.ITERATE_CONTEXT.getByName(address.name).fetch(
-        new Request(request, { headers }),
-      );
-    }
+    // A raw `fetch(url)` IS `itx.fetch(request)` at its context: loaded code's through the table (no
+    // `itx.fetch` row below the owner root, no egress), the platform's (a first-party facet's) its
+    // own egress.
+    const expression =
+      request.headers.get(ITX_EXPRESSION_FETCH_HEADER) ??
+      (caller.app ? "itx.fetch" : "itx.builtins.fetch");
     return statelessExpressionFetch(
       statelessResolverFor({
         env: this.env,
@@ -662,14 +640,9 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
         caller,
         ctx: this.ctx,
       }),
-      () =>
-        expressionHeader.trimStart().startsWith("[")
-          ? // Untrusted: the resolver's `normalizedItxExpression` shape-checks it, and the app
-            // wall admits it, before anything runs (as the context's own expression fetch).
-            (JSON.parse(expressionHeader) as ItxExpression)
-          : parse(expressionHeader),
+      () => parseFetchExpression(expression),
       request,
-      expressionHeader,
+      expression,
     );
   }
 
@@ -703,8 +676,6 @@ export async function statelessExpressionFetch(
 ): Promise<Response> {
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, null);
-  headers.delete(ITX_EXPRESSION_FETCH_HEADER);
-  headers.delete(ITERATE_ROUTING_SLUG_HEADER);
   try {
     const result = await resolver.invoke(
       itxExpressionEndingInFetch(steps()),

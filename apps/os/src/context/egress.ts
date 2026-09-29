@@ -1,17 +1,11 @@
 // context/egress.ts — EGRESS, `itx.fetch`: a project's way to the internet, the same from every one
 // of its contexts, and so from the stateless entrypoint as from a context's Durable Object
 // (itx-expression-rewriting.ts `PORTABLE_ROOTS`).
-import { resolveContextPath } from "iterate/lib";
-import {
-  parseCause,
-  causeHeader,
-  ITERATE_CAUSE_HEADER,
-  refuseActPastLimit,
-  type Cause,
-} from "../cause.ts";
+import { ITERATE_CAUSE_HEADER, resolveContextPath } from "iterate/lib";
+import { parseCause, causeHeader, refuseActPastLimit, type Cause } from "../cause.ts";
 import { secretPathsReferenced } from "../secrets.ts";
 import { FETCH_UPGRADE_RESUMABLE_HEADER } from "./fetch-upgrade.ts";
-import { ITX_EXPRESSION_FETCH_HEADER, stampCallerHeaders } from "./rpc-stubs.ts";
+import { stampCallerHeaders } from "./rpc-stubs.ts";
 import { resourceScope } from "./paths.ts";
 
 /** EGRESS: a request that names a secret — `getSecret("/secrets/NAME")` in its URL or headers — is
@@ -43,7 +37,6 @@ export function egress(
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, null);
   if (cause) headers.set(ITERATE_CAUSE_HEADER, causeHeader(cause));
-  headers.delete(ITX_EXPRESSION_FETCH_HEADER);
   headers.delete(FETCH_UPGRADE_RESUMABLE_HEADER); // the edge's ask of a lent stub, never an origin's
   // A lend's headers are platform-to-platform (secrets.ts `LEND_USE_HEADER`): never a caller's.
   for (const name of [...headers.keys()]) if (name.startsWith("x-itx-lend")) headers.delete(name);

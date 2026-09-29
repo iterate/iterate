@@ -7,9 +7,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
+import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { WebSocket as UndiciWebSocket } from "undici";
 import type { IterateRpcTarget, SessionCredentials } from "../../src/session.ts";
-import { ITERATE_CAUSE_HEADER } from "../../src/cause.ts";
 import { SNAPSHOT_TTL_MS } from "../../src/context/rule-snapshots.ts";
 import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
 
@@ -205,7 +205,7 @@ export function publicSession(token: string) {
 }
 
 /** A session our own code opens to call the platform back: its `/api` upgrade carries our mark
- *  (src/cause.ts `ITERATE_CAUSE_HEADER`), so every call it makes resumes `cause`'s chain at its
+ *  (iterate/lib `ITERATE_CAUSE_HEADER`), so every call it makes resumes `cause`'s chain at its
  *  depth. */
 export function markedSession(cause: { chain: string; depth: number }): any {
   const ws = new UndiciWebSocket(wsApi(), {

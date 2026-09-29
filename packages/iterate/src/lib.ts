@@ -55,7 +55,7 @@ type ErrorCode =
   | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (apps/os repo/durable-object.ts) — `data` is { ours, theirs }
   | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
-  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep, or one call crossing too many contexts (cause.ts): the act is refused for good, never retried
+  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (apps/os cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
   | "WORK_FAILED" // a processor's work in flight died with its host five times: its revive is refused, and the context records `itx/work-failed` (stream/processor.ts)
   | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (apps/os stream/subscription-delivery.ts)
@@ -72,6 +72,19 @@ export function errorCode(error: unknown): ErrorCode | undefined {
   return typeof error === "object" && error && "code" in error
     ? ((error as { code: unknown }).code as ErrorCode)
     : undefined;
+}
+
+/** OUR MARK (apps/os cause.ts): what the platform sends — a request, a mail — carries the cause of
+ *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
+export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
+/** What marks a 508 as an act refused past the loop limit (apps/os unavailable.ts). */
+export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
+
+/** An answer refused past the loop limit — a 508 marked so — as the LOOP_LIMIT refusal it is,
+ *  already recorded where it was met; none for any other answer. */
+export async function loopLimitOf(answer: Response): Promise<Error | undefined> {
+  if (answer.status !== 508 || !answer.headers.has(LOOP_LIMIT_HEADER)) return undefined;
+  return codedError("LOOP_LIMIT", (await answer.text()).trim(), { recorded: true });
 }
 
 // reportIssue — the ONE exit for unexpected failures (cloudflare-os error-reporting.ts, minus

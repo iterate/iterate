@@ -22,13 +22,18 @@
 // resumed stream finds dead.
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { codedError, errorCode, releaseRpcSessions, reportIssue } from "iterate/lib";
+import {
+  codedError,
+  errorCode,
+  ITERATE_CAUSE_HEADER,
+  releaseRpcSessions,
+  reportIssue,
+} from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
-  parse,
   print,
   type ItxExpression,
   type ItxExpressionInput,
@@ -45,14 +50,7 @@ import {
   isPlatformFailureKind,
   logPlatformFailure,
 } from "@iterate-com/shared/platform-retry";
-import {
-  causeOfDelivery,
-  deepestCause,
-  ITERATE_CAUSE_HEADER,
-  newChain,
-  parseCause,
-  type Cause,
-} from "./cause.ts";
+import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
@@ -66,6 +64,7 @@ import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.
 import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
+  parseFetchExpression,
   ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
   RpcStubDirectory,
@@ -1727,23 +1726,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an untrusted HTTP header: present (even empty) selects an itx-expression fetch, absent (null) routes to egress — that distinction must not collapse
     if (itxExpressionHeader !== null) {
       try {
-        // The header is UNTRUSTED. Its JSON form comes from a session's terminal fetch or a
-        // located hop (`encodeFetchExpression`), or from loaded code's self-addressed
-        // `env.ITX.fetch`, which `ItxEntrypoint.fetch` forwards unchanged; the edge serves a
+        // The header is UNTRUSTED (rpc-stubs.ts `parseFetchExpression`); the edge serves a
         // project's hosts itself (worker.ts `serveProjectHost`).
-        // The resolver's `normalizedItxExpression` shape-checks it, and for loaded code the app wall
-        // (`admitLoadedCodeExpression`) admits it, before anything runs.
-        if (itxExpressionHeader === "" && !this.#stream.coreReducedState.ingressTarget)
-          return new Response(
-            "This project has no site yet: its config worker's fetch serves this page once the project defines one\n",
-            { status: 404 },
-          );
-        const itxExpression =
-          itxExpressionHeader === ""
-            ? this.#stream.coreReducedState.ingressTarget!
-            : itxExpressionHeader.trimStart().startsWith("[")
-              ? (JSON.parse(itxExpressionHeader) as ItxExpression) // untrusted: see above
-              : parse(itxExpressionHeader);
+        const itxExpression = parseFetchExpression(itxExpressionHeader);
         const headers = new Headers(request.headers);
         headers.delete(ITX_EXPRESSION_FETCH_HEADER);
         headers.delete(ITX_APP_HEADER);

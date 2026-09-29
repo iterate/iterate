@@ -20,7 +20,7 @@
 //    is: the same on every attempt, so a retry never repeats what an attempt before it did, and the
 //    same write twice in one delivery lands once.
 
-import { codedError, errorCode } from "iterate/lib";
+import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 
 /** The chain a piece of work belongs to and how deep in it the work is — as an event stores it
  *  (`source.cause`), and as a call carries it, with what only the call needs. */
@@ -40,19 +40,14 @@ export type Cause = {
 export const LOOP_DEPTH_LIMIT = 8;
 /** The most contexts one call crosses. */
 const MAX_CONTEXT_HOPS = 16;
-/** OUR MARK on what we send (egress, webhooks, secret dispatch): the cause as JSON. Unsigned:
- *  forging it can only make the forger's own request deeper. The SDK's doors read it by name. */
-export const ITERATE_CAUSE_HEADER = "iterate-cause";
-/** The same mark on mail we send, beside `Auto-Submitted: auto-generated` (a mail header of ours
- *  must be an `X-` one). */
-export const ITERATE_CAUSE_MAIL_HEADER = "X-Iterate-Cause";
-
 /** A new chain, at depth 0, beginning now `with` its origin: the kind of thing that began it ("a
- *  call", "inbound mail", "a request to <host>"), never who — no path, no address. */
+ *  call", "inbound mail", "a request to <host>"), never who — no path, no address. Printable ASCII
+ *  only, so our mark (iterate/lib `ITERATE_CAUSE_HEADER`, unsigned: forging it can only make the
+ *  forger's own request deeper) is plain JSON on any header. */
 export function newChain(origin: string): Cause {
   const nonce = Math.random().toString(36).slice(2, 7);
   return {
-    chain: `${new Date().toISOString()} with ${origin.slice(0, 200)} ~${nonce}`,
+    chain: `${new Date().toISOString()} with ${origin.slice(0, 200).replace(/[^\x20-\x7e]/g, "?")} ~${nonce}`,
     depth: 0,
   };
 }
@@ -102,15 +97,11 @@ export function recordRefusal(
   record: (cause: Cause, message: string) => void,
 ): void {
   const refusal = (error as { data?: Refusal } | undefined)?.data;
-  // a hop past MAX_CONTEXT_HOPS is no depth refusal: it carries no chain to record
+  // the SDK's refusal (a 508 its fetch met) was recorded where it was met, and carries no chain
   if (errorCode(error) !== "LOOP_LIMIT" || !refusal?.chain || refusal.recorded) return;
   record({ chain: refusal.chain, depth: refusal.depth }, (error as Error).message);
   refusal.recorded = true;
 }
-
-/** What marks a fetch's answer as a refusal past the limit (unavailable.ts
- *  `expressionFetchErrorAnswer`), so the SDK's `fetch` and `itx.fetch` throw it as one again. */
-export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 
 /** THE HOP COUNT: the call `cause` rides crosses `contexts` more — a `cd`, a located call, a parent
  *  link, a request re-entering the platform — refused past MAX_CONTEXT_HOPS. A plain failure, not the
@@ -125,12 +116,9 @@ export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause
   return { ...cause, hops };
 }
 
-/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII only (a header is bytes). */
+/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII (a header is bytes; `newChain`). */
 export function causeHeader(cause: Cause): string {
-  return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 }).replace(
-    /[\u0080-\uffff]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
+  return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 });
 }
 
 /** `request` carrying `cause` as our mark: how a Request hands it to the SDK's request door. */
@@ -155,7 +143,9 @@ export function parseCause(value: unknown): Cause | undefined {
   const { chain, depth, hops, writeKey } = (fields ?? {}) as Record<string, unknown>;
   const count = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
   const text = (s: unknown): s is string => typeof s === "string" && s.length <= 512;
-  if (!text(chain) || !count(depth) || !count(hops || 0)) return undefined;
+  // a chain the platform mints is printable ASCII (`newChain`): anything else is forged
+  if (!text(chain) || !/^[\x20-\x7e]*$/.test(chain) || !count(depth) || !count(hops || 0))
+    return undefined;
   return {
     chain,
     depth,

@@ -2548,7 +2548,6 @@ function callerStampedRequest(
   const request = new Request(input as RequestInfo, init as RequestInit | undefined);
   const headers = new Headers(request.headers);
   stampCallerHeaders(headers, { principal: caller.principal, grant: caller.grant, cause });
-  headers.delete(ITX_EXPRESSION_FETCH_HEADER);
   if (caller.app) headers.delete(ITERATE_ROUTING_SLUG_HEADER);
   return new Request(request, { headers });
 }
