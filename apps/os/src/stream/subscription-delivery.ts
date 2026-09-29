@@ -931,6 +931,9 @@ export class SubscriptionDelivery {
     )
       return cached;
     const evaluated = await this.#evaluateItxExpressionTargetHead(name, row.target);
+    // A row removed or replaced meanwhile gets its answer and nothing more: the memo, the cursor
+    // and the fan-out state under `name` are the replacement's.
+    if (!this.#isStillTheRow(name, row)) return evaluated;
     this.#deliveryRecordFor(name).evaluatedTargetHead = {
       configuredAtOffset: row.configuredAtOffset,
       rewriteRulesRef,

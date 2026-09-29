@@ -1532,6 +1532,35 @@ test("fan-out: an evaluation is reused until it expires; a pending retry keeps i
   expect(next.records()).toEqual([]);
 });
 
+test("fan-out: a row replaced while its predecessor's call was evaluating the target keeps its own bound: the old evaluation's answer touches nothing of the new row's", async () => {
+  const evaluations: (() => void)[] = [];
+  const calls: number[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? new Promise<void>((resolve) => evaluations.push(resolve)).then(() => ({
+          // every call keeps its slot
+          deliverEvent: (event: StreamEvent) => {
+            calls.push(...ns([event]));
+            return new Promise<never>(() => {});
+          },
+        }))
+      : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] }); // over ping 1's evaluation
+  rig.stream.append(...range(2, 9).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  evaluations.shift()!(); // the old row's answers first
+  await drainDeliveries();
+  for (const answer of evaluations.splice(0)) answer();
+  await drainDeliveries();
+  rig.stream.append(...range(10, 20).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  expect(calls).toEqual(range(2, 9));
+});
+
 test.for([
   { name: "its own table's refusal", refusedForMs: undefined },
   { name: "a refusal no snapshot bounds, `validUntil` Infinity", refusedForMs: Infinity },
