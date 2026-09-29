@@ -5,7 +5,8 @@
 // once, as it writes, the way npm's lockfile holds a git dependency at its commit
 // (https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#packages). The writers: the
 // platform's seed of a config repo from a template (apps/os/src/project/processor.ts), the apps
-// that install agents and voice (`publishedCommit`) and the e2e rows.
+// that install agents and voice (`publishedCommit`) and upgrade them to main's newest build
+// (`buildStanding`), and the e2e rows.
 import { z } from "zod";
 import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";
 
@@ -46,13 +47,66 @@ export async function pinPkgPrNewVersion(
 ) {
   const parts = pkgPrNewVersionOf(name, version);
   if (!parts || isPkgPrNewCommit(parts.ref)) return version;
-  const answer = await headPkgPrNew(version, fetchFn);
-  const commit = answer.headers.get("x-commit-key")?.split(":").at(-1) ?? "";
-  if (!answer.ok || !isPkgPrNewCommit(commit))
+  const served = await servedBuild(version, fetchFn);
+  if (!served.commit)
     throw new Error(
-      `${version} answered ${answer.status} without naming the commit it serves, so it cannot be pinned`,
+      `${version} answered ${served.status} without naming the commit it serves, so it cannot be pinned`,
     );
-  return `https://pkg.pr.new/${parts.owner}/${parts.repo}/${name}@${commit}`;
+  return `https://pkg.pr.new/${parts.owner}/${parts.repo}/${name}@${served.commit}`;
+}
+
+/** Where a project's installed build of one of this repository's packages stands against the newest
+ *  build main has published, by commit (`buildStanding`). */
+export type BuildStanding =
+  /** `installed`, the version as its package.json pins it, is not this repository's build at a
+   *  commit (an npm version, a fork's build): the project's own, which it upgrades itself */
+  | { kind: "own"; installed: string }
+  /** the installed build is main's newest */
+  | { kind: "newest"; installed: string }
+  /** main published `newest` after `installed`, or pkg.pr.new no longer serves `installed`: an
+   *  upgrade, to `version` (`newest` as package.json pins it) */
+  | { kind: "behind"; installed: string; newest: string; version: string }
+  /** `installed` was published after main's newest: a pull request's build */
+  | { kind: "ahead"; installed: string; newest: string };
+
+/**
+ * WHETHER MAIN HAS A NEWER BUILD of package `name` than `installed`, the version a project's source
+ * pins: main's newest is `…@main` at the commit pkg.pr.new serves for it now, and newer is later
+ * published, by pkg.pr.new's `last-modified` (every main commit publishes a build, so a new commit
+ * is a new build). The two HEADs go at once, each bounded as `pinPkgPrNewVersion` says. A build
+ * answered without its commit or publish time throws, as does one pkg.pr.new keeps failing, so a
+ * standing is never guessed. An app's Worker asks (a server function): a page cannot read these
+ * headers.
+ */
+export async function buildStanding(
+  name: string,
+  installed: string,
+  fetchFn: typeof fetch = globalThis.fetch,
+): Promise<BuildStanding> {
+  const commit = pkgPrNewVersionOf(name, installed)?.ref ?? "";
+  if (!isPkgPrNewCommit(commit) || installed !== pkgPrNewVersion(name, commit))
+    return { kind: "own", installed };
+  const main = pkgPrNewVersion(name, "main");
+  const [newest, current] = await Promise.all([
+    servedBuild(main, fetchFn),
+    servedBuild(installed, fetchFn),
+  ]);
+  if (!newest.commit || !newest.publishedAt)
+    throw new Error(
+      `${main} answered ${newest.status} without naming the commit it serves and when it was published`,
+    );
+  // a build pkg.pr.new answers 404 for is older than every one it serves
+  if (current.status !== 404 && !current.publishedAt)
+    throw new Error(`${installed} answered ${current.status} without saying when it was published`);
+  if (newest.commit === commit) return { kind: "newest", installed: commit };
+  if (current.publishedAt && current.publishedAt > newest.publishedAt)
+    return { kind: "ahead", installed: commit, newest: newest.commit };
+  return {
+    kind: "behind",
+    installed: commit,
+    newest: newest.commit,
+    version: pkgPrNewVersion(name, newest.commit),
+  };
 }
 
 /**
@@ -120,6 +174,21 @@ export async function pinPkgPrNewDependencies(
       return { ...file, content };
     }),
   );
+}
+
+/** What pkg.pr.new serves at `version`, from one HEAD (`headPkgPrNew`): the answer's status, the
+ *  commit it names in `x-commit-key` (`<owner>:<repo>:<commit>`, trusted only as 40 hex digits of a
+ *  200: a 404 echoes there the ref it was asked for), and when that build was published
+ *  (`last-modified`, epoch milliseconds). */
+async function servedBuild(version: string, fetchFn: typeof fetch) {
+  const answer = await headPkgPrNew(version, fetchFn);
+  const key = answer.headers.get("x-commit-key")?.split(":").at(-1) ?? "";
+  const publishedAt = Date.parse(answer.headers.get("last-modified") ?? "");
+  return {
+    status: answer.status,
+    commit: answer.ok && isPkgPrNewCommit(key) ? key : undefined,
+    publishedAt: answer.ok && Number.isFinite(publishedAt) ? publishedAt : undefined,
+  };
 }
 
 /** One HEAD of a pkg.pr.new version, bounded as `pinPkgPrNewVersion` says; a 404 is an answer. */

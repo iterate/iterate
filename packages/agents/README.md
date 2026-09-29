@@ -29,7 +29,10 @@ await installAgents(
 collection facet, and rebinds every existing agent to the source; `ensureAgents` commits the folder
 first when the repo has none (the Agents app's **Install agents**). The loader resolves the pinned
 build through esm.sh once and keeps it, and refuses a branch or PR ref (`…@main`), so the folder
-names a full commit and an upgrade commits a newer one.
+names a full commit and an upgrade commits a newer one. `upgradeApp` is that upgrade for any app
+held this way (the Agents and Voice apps' **Upgrade to the newest**): the folder as the app has it
+at the newer build, in one commit on the tip it read, then the app's install from that commit.
+`installedVersion` reads the build a project runs from the source its install keeps in KV.
 
 Importing the package registers `itx.agents` on iterate/api's `InstalledAppRoots`:
 `itx as IterateContextApiWith<"agents">` types `create`, `get(path).message`, `list` and `delete`.
