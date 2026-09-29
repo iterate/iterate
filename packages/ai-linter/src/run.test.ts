@@ -153,8 +153,7 @@ test("a changed file cannot be read: Jev and an LLM rule that selects skip it, t
 });
 
 test("GitHub lists a changed file without its name: the others are linted, and the Check Run says one was not", async () => {
-  // The shape of iterate/iterate#3442's listing as GitHub answered it on 2026-09-29 at 21:02:21Z:
-  // 143 files, and the second on page 2 without its filename and status.
+  // 143 files listed over two pages, the second entry of page 2 without its filename and status
   const github = fakeGithub({
     alsoListed: Array.from({ length: 142 }, (_, index) =>
       index === 100
