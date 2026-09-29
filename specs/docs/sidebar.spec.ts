@@ -1,13 +1,13 @@
-// The sidebar lists a project's docs as a tree, folders from their paths, and follows the repo: a
-// doc an agent commits shows up without a reload. ⌘K (the shell's palette) finds a doc by name,
-// one in a closed folder included.
+// The sidebar lists the docs of one of the project's repos as a tree, folders from their paths, and
+// follows the repo: a doc an agent commits shows up without a reload. Its picker switches repo.
+// ⌘K (the shell's palette) finds a doc by name, one in a closed folder included.
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
 import { workerBaseUrl } from "../test-support/worker-base-url.ts";
 import { consent, publishDocsConfigWorker } from "./support.ts";
 
-test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘K finds a doc by name", async ({
+test("the sidebar shows a repo's docs as a tree, follows a doc an agent adds, switches repo, and ⌘K finds a doc by name", async ({
   page,
   helpers,
 }) => {
@@ -20,6 +20,9 @@ test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘
       path,
     })!;
   await publishDocsConfigWorker(fixture.itx, new URL(helpers.appOrigin("docs")));
+  // another repo of the project, with a doc of its own
+  await fixture.itx.repos.create("/repos/handbook");
+  await fixture.itx.repos.get("/repos/handbook").writeFile("welcome.md", "# Welcome\n");
   await page.goto(proxied("/projects").href);
   if (ingressRouting?.type === "subdomains") await consent(page, proxied("/").host);
 
@@ -43,7 +46,7 @@ test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘
     .waitFor();
 
   // an agent commits a doc in another folder: it is in the sidebar without a reload, its folder shut
-  await fixture.itx.repos.get("/repos/docs").writeFile("plans/q4-roadmap.md", "# Q4 roadmap\n");
+  await fixture.itx.repos.get("/repos/config").writeFile("plans/q4-roadmap.md", "# Q4 roadmap\n");
   // timeout: a commit made elsewhere, so the spinner-waiter has nothing to extend by
   await sidebar
     .locator("summary")
@@ -57,5 +60,13 @@ test("the sidebar shows the docs as a tree, follows a doc an agent adds, and ⌘
   await page
     .getByRole("textbox", { name: "plans/q4-roadmap.md", exact: true })
     .filter({ hasText: "Q4 roadmap" })
+    .waitFor();
+
+  // the picker shows another repo's docs
+  await sidebar.getByRole("combobox", { name: "Repo" }).selectOption("handbook");
+  await sidebar.getByRole("link", { name: "welcome", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "welcome.md", exact: true })
+    .filter({ hasText: "Welcome" })
     .waitFor();
 });

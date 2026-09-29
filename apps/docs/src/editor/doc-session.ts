@@ -74,7 +74,8 @@ export class DocSession {
   }
 
   /** The editor's element, as a React ref: the view and the doc's connection live while it's
-   *  mounted. Closing the tab before this tab's edits have been sent asks first. */
+   *  mounted. Closing the tab before this tab's edits have been sent asks first; closing it tells
+   *  the doc's processor this tab has left, as unmounting does. */
   mount = (parent: HTMLDivElement | null) => {
     if (!parent) return;
     const view = new EditorView({
@@ -94,10 +95,14 @@ export class DocSession {
       if (this.#collab?.unsent()) event.preventDefault();
     };
     window.addEventListener("beforeunload", warnIfUnsent);
+    // a closing tab never unmounts: say goodbye now, if the socket lasts long enough to carry it
+    const leave = () => void this.#collab?.close();
+    window.addEventListener("pagehide", leave);
     void this.#goLive(view, attachment);
     return () => {
       attachment.unmounted = true;
       window.removeEventListener("beforeunload", warnIfUnsent);
+      window.removeEventListener("pagehide", leave);
       for (const cleanup of attachment.cleanups.reverse()) cleanup();
       this.#view = null;
       this.#collab = null;
@@ -115,7 +120,9 @@ export class DocSession {
   async #goLive(view: EditorView, attachment: Attachment) {
     try {
       const opened = await this.options.open();
-      this.#hold(attachment, opened.dispose);
+      // the context goes once the tab has left the doc (collab.close), which sends on it
+      let closing: Promise<unknown> = Promise.resolve();
+      this.#hold(attachment, () => void closing.finally(opened.dispose));
       if (attachment.unmounted) return;
       const collab = new DocCollab({
         context: opened.context,
@@ -125,7 +132,9 @@ export class DocSession {
           this.#refresh();
         },
       });
-      this.#hold(attachment, () => collab.dispose());
+      this.#hold(attachment, () => {
+        closing = collab.close();
+      });
       collab.awareness.on("change", () => this.#refresh());
       await collab.open();
       if (attachment.unmounted) return;

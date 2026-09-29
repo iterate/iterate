@@ -8,6 +8,7 @@ import {
 } from "iterate/stream/test-support";
 import {
   COMMIT_NOTICED,
+  DOC_LEFT,
   DOC_OPENED,
   EDIT_FRAME,
   EditFrame,
@@ -63,6 +64,26 @@ test("a save the repo refuses because main moved takes the tip in and saves the 
   await vi.waitFor(() => expect(misha.text()).toBe("zero\none\ntwo\nthree\nfour\n"));
 });
 
+test("the last person closing the doc saves it at once, not a minute later", async () => {
+  const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
+  const misha = await doc.join("misha@iterate.com");
+  const jonas = await doc.join("jonas@iterate.com");
+  misha.type(misha.text().length, "Misha's line.\n");
+  await vi.waitFor(() => expect(jonas.text()).toBe("# Plan\nMisha's line.\n"));
+  jonas.type(jonas.text().length, "Jonas's line.\n");
+  await vi.waitFor(() => expect(misha.text()).toBe("# Plan\nMisha's line.\nJonas's line.\n"));
+
+  misha.leave();
+  jonas.leave();
+  await vi.waitFor(() =>
+    expect(doc.repo.latest()).toMatchObject({
+      files: { "plan.md": "# Plan\nMisha's line.\nJonas's line.\n" },
+      author: { email: "misha@iterate.com" },
+      message: "docs: edit plan.md\n\nCo-authored-by: jonas@iterate.com <jonas@iterate.com>",
+    }),
+  );
+});
+
 test("someone joining gets the live text, unsaved edits included", async () => {
   const doc = openDoc({ "plan.md": "# Plan\n" }, { autosave: { idleMs: 60_000, maxMs: 60_000 } });
   const misha = await doc.join("misha@iterate.com");
@@ -103,21 +124,22 @@ test("the root's docs processor tells only the opened docs a commit changed", as
   );
   root.engines.push(new ProcessorEngine(docs, { stream: root.stream, storage: memoryStorage() }));
   root.stream.append(
-    { type: DOC_OPENED, payload: { path: "plan.md" } },
-    { type: DOC_OPENED, payload: { path: "notes/retro.md" } },
-    commitCompleted("/repos/docs", "c1", ["plan.md", "never-opened.md"]),
-    commitCompleted("/repos/config", "c2", ["plan.md"]),
-    commitCompleted("/repos/docs", "c3", ["notes/retro.md"]),
+    { type: DOC_OPENED, payload: { repo: "/repos/config", path: "plan.md" } },
+    { type: DOC_OPENED, payload: { repo: "/repos/config", path: "notes/retro.md" } },
+    commitCompleted("/repos/config", "c1", ["plan.md", "never-opened.md"]),
+    // the same path in another repo is another doc
+    commitCompleted("/repos/docs", "c2", ["plan.md"]),
+    commitCompleted("/repos/config", "c3", ["notes/retro.md"]),
   );
 
   await vi.waitFor(() =>
     expect(noticed).toEqual([
       {
-        path: "/docs/plan.md",
+        path: "/docs/config/plan.md",
         event: expect.objectContaining({ type: COMMIT_NOTICED, payload: { commitOid: "c1" } }),
       },
       {
-        path: "/docs/notes/retro.md",
+        path: "/docs/config/notes/retro.md",
         event: expect.objectContaining({ type: COMMIT_NOTICED, payload: { commitOid: "c3" } }),
       },
     ]),
@@ -127,13 +149,13 @@ test("the root's docs processor tells only the opened docs a commit changed", as
 // ── fixtures ──
 
 /** One doc's context: its log, its processor over a real engine and node:sqlite, and a fake
- *  /repos/docs that refuses a stale parent the way the repo facet does. `join` is a browser: its
+ *  repo that refuses a stale parent the way the repo facet does. `join` is a browser: its
  *  own Y.Doc, synced like the Docs app's (`sync`, then edit frames both ways). */
 function openDoc(
   files: Record<string, string>,
   options: { autosave: { idleMs: number; maxMs: number } } = { autosave: { idleMs: 5, maxMs: 20 } },
 ) {
-  const log = memoryStream("/docs/plan.md");
+  const log = memoryStream("/docs/config/plan.md");
   const repo = fakeRepo(files);
   const storage = nodeSqliteDurableObjectStorage();
   let liveState: () => unknown = () => null;
@@ -143,7 +165,7 @@ function openDoc(
       withItx: (call) =>
         Promise.resolve(
           call({
-            whoami: () => ({ path: "/docs/plan.md" }),
+            whoami: () => ({ path: "/docs/config/plan.md" }),
             repos: { get: () => repo },
             append: log.stream.append,
           } as any),
@@ -185,7 +207,10 @@ function openDoc(
       log.stream.append({ type: COMMIT_NOTICED, ephemeral: true, payload: { commitOid: "?" } }),
     async join(email: string) {
       const browser = new Y.Doc();
-      const synced = await current.processor.sync(toBase64(Y.encodeStateVector(browser)));
+      const synced = await current.processor.sync(
+        toBase64(Y.encodeStateVector(browser)),
+        browser.clientID,
+      );
       Y.applyUpdate(browser, fromBase64(synced.update), "remote");
       browsers.push(browser);
       browser.on("update", (update: Uint8Array, origin: unknown) => {
@@ -200,6 +225,12 @@ function openDoc(
       return {
         text: () => browser.getText("file").toString(),
         type: (at: number, text: string) => browser.getText("file").insert(at, text),
+        leave: () =>
+          log.stream.append({
+            type: DOC_LEFT,
+            ephemeral: true,
+            payload: { client: browser.clientID },
+          }),
       };
     },
   };

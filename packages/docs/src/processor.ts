@@ -1,14 +1,17 @@
 // docs/processor.ts — ONE OPEN DOC (frames.ts): its text as a Y.Doc, the edits its browsers send,
-// and its autosave. Git stays the source of truth; the Y.Doc is the session's buffer.
+// and its autosave. Git stays the source of truth; the Y.Doc is the session's buffer, and an edit is
+// safe once it's here (the table below), so commits can be few.
 //
 // THE Y.DOC lives in this facet's own SQLite: every update appended to `doc_updates` as it lands,
 // folded into one after each save; `doc_meta` holds the commit the text was last saved as or read
 // at (`base`) and who has edited since. A facet reset or an eviction loses nothing: the next call
 // replays the table. The first open of a doc (no rows) reads the file at the repo's tip.
 //
-// AUTOSAVE: 1.5 s after the last edit (8 s at most while edits keep coming; durable-object.ts), a commit to
-// /repos/docs whose parent is `base`, authored by the first person who edited since the last save,
-// the others as `Co-authored-by:`. The repo refuses a parent that isn't its tip; then the tip's copy
+// AUTOSAVE: a minute after the first unsaved edit (durable-object.ts), or at once when the last open
+// tab leaves (`docs/left`; a tab is here from its `sync` or its first edit), a commit to the doc's
+// repo whose parent is `base`, authored by the first person who edited since the last save, the
+// others as `Co-authored-by:`. A repo like /repos/config republishes the project's site on each
+// commit, so a burst of typing is one commit, not one per pause. The repo refuses a parent that isn't its tip; then the tip's copy
 // is merged in like git (merge.ts), the merge goes to every open browser as an edit frame, and the
 // save is tried again. The same catch-up runs when a browser joins (`sync`) and when the root's
 // docs processor says a commit changed the doc (`docs/commit-noticed`, root.ts), so a commit an
@@ -19,19 +22,21 @@ import { StreamProcessor, type ProcessEventArgs } from "iterate/stream/processor
 import { DocContract } from "./contract.ts";
 import {
   COMMIT_NOTICED,
-  DOCS_REPO,
-  docPathOf,
+  DOC_LEFT,
+  DocLeft,
+  docOf,
   EDIT_FRAME,
   EditFrame,
   fromBase64,
   toBase64,
   type DocLiveState,
+  type DocRef,
 } from "./frames.ts";
 import { mergeText, textEdits } from "./merge.ts";
 
 type DocDeps = {
   sql: SqlStorage;
-  /** The doc's context, `/docs/<path in /repos/docs>` (its `whoami()` names the doc): `itx.repos`
+  /** The doc's context, `/docs/<repo name>/<path>` (its `whoami()` names the doc): `itx.repos`
    *  there is the root's (install.ts lends it by rule). */
   withItx: WithItx;
   /** Re-project the live state after a change outside a batch (the host's `publishLiveState`). */
@@ -44,8 +49,10 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
   contract = DocContract;
   readonly #deps: DocDeps;
   #doc: Y.Doc | null = null;
-  /** The doc's path in /repos/docs, from the context's own path as the doc loads. */
-  #path = "";
+  /** The doc's repo and path, from the context's own path as the doc loads. */
+  #ref: DocRef = { repo: "", path: "" };
+  /** The tabs with the doc open, by Yjs client id; when the last one leaves, the doc saves. */
+  #present = new Set<number>();
   #loading: Promise<Y.Doc> | null = null;
   /** The commit the text last matched, and its copy of the doc. */
   #base = { oid: "", text: "" };
@@ -99,10 +106,23 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
       });
       return;
     }
+    if (event.type === DOC_LEFT) {
+      const left = DocLeft.safeParse(event.payload);
+      if (!left.success) return;
+      this.#present.delete(left.data.client);
+      // the last tab gone: what's unsaved is saved now, not a minute from now
+      if (this.#present.size === 0)
+        runInBackground(async () => {
+          await this.#load();
+          await this.#exclusive(() => this.#save());
+        });
+      return;
+    }
     if (event.type !== EDIT_FRAME) return;
     const frame = EditFrame.safeParse(event.payload);
     // the processor's own frames come back to it: already applied
     if (!frame.success || frame.data.client === "processor") return;
+    this.#present.add(frame.data.client);
     const editor = event.source.principal?.email;
     blockProcessorWhile(async () => {
       const doc = await this.#load();
@@ -116,10 +136,12 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
     });
   }
 
-  /** A browser joining: the processor's state past `stateVector` (base64), after taking in any
+  /** A browser joining, or syncing again: `client` (its Yjs client id) is here until it sends
+   *  `docs/left`. Answers the processor's state past `stateVector` (base64), after taking in any
    *  commit made since the last sync, and its own state vector, for the browser to send back what
    *  the processor lacks. */
-  async sync(stateVector: string) {
+  async sync(stateVector: string, client: number) {
+    this.#present.add(client);
     const doc = await this.#load();
     await this.#exclusive(() => this.#catchUp());
     return {
@@ -144,7 +166,7 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
 
   async #loadOnce() {
     const { sql } = this.#deps;
-    this.#path = docPathOf((await this.#deps.withItx((itx) => itx.whoami())).path);
+    this.#ref = docOf((await this.#deps.withItx((itx) => itx.whoami())).path);
     const doc = new Y.Doc();
     const updates = sql
       .exec<{ data: ArrayBuffer }>("SELECT data FROM doc_updates ORDER BY seq")
@@ -166,9 +188,9 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
       this.#savedBy = JSON.parse(meta.savedBy || "[]");
     } else {
       const { tip, text } = await this.#deps.withItx(async (itx) => {
-        const repo = itx.repos.get(DOCS_REPO);
+        const repo = itx.repos.get(this.#ref.repo);
         const tip = await repo.tip();
-        return { tip, text: tip ? await repo.readFile(this.#path, { commitOid: tip }) : null };
+        return { tip, text: tip ? await repo.readFile(this.#ref.path, { commitOid: tip }) : null };
       });
       this.#base = { oid: tip || "", text: text || "" };
       doc.getText("file").insert(0, this.#base.text);
@@ -229,10 +251,10 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
     const text = this.#text();
     if (text === this.#base.text) return;
     const editors = [...this.#editors];
-    const path = this.#path;
+    const { repo, path } = this.#ref;
     try {
       const result = await this.#deps.withItx((itx) =>
-        itx.repos.get(DOCS_REPO).commitFiles({
+        itx.repos.get(repo).commitFiles({
           // git's trailers, after a blank line: everyone but the author
           message: [
             `docs: edit ${path}`,
@@ -266,9 +288,9 @@ export class DocProcessor extends StreamProcessor<Record<string, never>> {
    *  copy) merged over base, applied as small edits and sent to the open browsers. False when the
    *  tip is `base`. */
   async #catchUp(): Promise<boolean> {
-    const path = this.#path;
+    const { path } = this.#ref;
     const { tip, theirs } = await this.#deps.withItx(async (itx) => {
-      const repo = itx.repos.get(DOCS_REPO);
+      const repo = itx.repos.get(this.#ref.repo);
       const tip = await repo.tip();
       return {
         tip,

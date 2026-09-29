@@ -14,7 +14,8 @@ import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
 import { Route as AuthProjectsSlugRouteImport } from "./routes/_auth/projects.$slug.tsx";
 import { Route as AuthProjectsSlugIndexRouteImport } from "./routes/_auth/projects.$slug.index.tsx";
-import { Route as AuthProjectsSlugSplatRouteImport } from "./routes/_auth/projects.$slug.$.tsx";
+import { Route as AuthProjectsSlugRepoIndexRouteImport } from "./routes/_auth/projects.$slug.$repo.index.tsx";
+import { Route as AuthProjectsSlugRepoSplatRouteImport } from "./routes/_auth/projects.$slug.$repo.$.tsx";
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -40,24 +41,33 @@ const AuthProjectsSlugIndexRoute = AuthProjectsSlugIndexRouteImport.update({
   path: "/",
   getParentRoute: () => AuthProjectsSlugRoute,
 } as any);
-const AuthProjectsSlugSplatRoute = AuthProjectsSlugSplatRouteImport.update({
-  id: "/$",
-  path: "/$",
-  getParentRoute: () => AuthProjectsSlugRoute,
-} as any);
+const AuthProjectsSlugRepoIndexRoute =
+  AuthProjectsSlugRepoIndexRouteImport.update({
+    id: "/$repo/",
+    path: "/$repo/",
+    getParentRoute: () => AuthProjectsSlugRoute,
+  } as any);
+const AuthProjectsSlugRepoSplatRoute =
+  AuthProjectsSlugRepoSplatRouteImport.update({
+    id: "/$repo/$",
+    path: "/$repo/$",
+    getParentRoute: () => AuthProjectsSlugRoute,
+  } as any);
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
   "/projects/$slug": typeof AuthProjectsSlugRouteWithChildren;
   "/projects/": typeof AuthProjectsIndexRoute;
-  "/projects/$slug/$": typeof AuthProjectsSlugSplatRoute;
   "/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
+  "/projects/$slug/$repo/$": typeof AuthProjectsSlugRepoSplatRoute;
+  "/projects/$slug/$repo/": typeof AuthProjectsSlugRepoIndexRoute;
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
   "/projects": typeof AuthProjectsIndexRoute;
-  "/projects/$slug/$": typeof AuthProjectsSlugSplatRoute;
   "/projects/$slug": typeof AuthProjectsSlugIndexRoute;
+  "/projects/$slug/$repo/$": typeof AuthProjectsSlugRepoSplatRoute;
+  "/projects/$slug/$repo": typeof AuthProjectsSlugRepoIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -65,8 +75,9 @@ export interface FileRoutesById {
   "/_auth": typeof AuthRouteWithChildren;
   "/_auth/projects/$slug": typeof AuthProjectsSlugRouteWithChildren;
   "/_auth/projects/": typeof AuthProjectsIndexRoute;
-  "/_auth/projects/$slug/$": typeof AuthProjectsSlugSplatRoute;
   "/_auth/projects/$slug/": typeof AuthProjectsSlugIndexRoute;
+  "/_auth/projects/$slug/$repo/$": typeof AuthProjectsSlugRepoSplatRoute;
+  "/_auth/projects/$slug/$repo/": typeof AuthProjectsSlugRepoIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
@@ -74,18 +85,25 @@ export interface FileRouteTypes {
     | "/"
     | "/projects/$slug"
     | "/projects/"
-    | "/projects/$slug/$"
-    | "/projects/$slug/";
+    | "/projects/$slug/"
+    | "/projects/$slug/$repo/$"
+    | "/projects/$slug/$repo/";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/projects" | "/projects/$slug/$" | "/projects/$slug";
+  to:
+    | "/"
+    | "/projects"
+    | "/projects/$slug"
+    | "/projects/$slug/$repo/$"
+    | "/projects/$slug/$repo";
   id:
     | "__root__"
     | "/"
     | "/_auth"
     | "/_auth/projects/$slug"
     | "/_auth/projects/"
-    | "/_auth/projects/$slug/$"
-    | "/_auth/projects/$slug/";
+    | "/_auth/projects/$slug/"
+    | "/_auth/projects/$slug/$repo/$"
+    | "/_auth/projects/$slug/$repo/";
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -130,24 +148,33 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthProjectsSlugIndexRouteImport;
       parentRoute: typeof AuthProjectsSlugRoute;
     };
-    "/_auth/projects/$slug/$": {
-      id: "/_auth/projects/$slug/$";
-      path: "/$";
-      fullPath: "/projects/$slug/$";
-      preLoaderRoute: typeof AuthProjectsSlugSplatRouteImport;
+    "/_auth/projects/$slug/$repo/": {
+      id: "/_auth/projects/$slug/$repo/";
+      path: "/$repo";
+      fullPath: "/projects/$slug/$repo/";
+      preLoaderRoute: typeof AuthProjectsSlugRepoIndexRouteImport;
+      parentRoute: typeof AuthProjectsSlugRoute;
+    };
+    "/_auth/projects/$slug/$repo/$": {
+      id: "/_auth/projects/$slug/$repo/$";
+      path: "/$repo/$";
+      fullPath: "/projects/$slug/$repo/$";
+      preLoaderRoute: typeof AuthProjectsSlugRepoSplatRouteImport;
       parentRoute: typeof AuthProjectsSlugRoute;
     };
   }
 }
 
 interface AuthProjectsSlugRouteChildren {
-  AuthProjectsSlugSplatRoute: typeof AuthProjectsSlugSplatRoute;
   AuthProjectsSlugIndexRoute: typeof AuthProjectsSlugIndexRoute;
+  AuthProjectsSlugRepoSplatRoute: typeof AuthProjectsSlugRepoSplatRoute;
+  AuthProjectsSlugRepoIndexRoute: typeof AuthProjectsSlugRepoIndexRoute;
 }
 
 const AuthProjectsSlugRouteChildren: AuthProjectsSlugRouteChildren = {
-  AuthProjectsSlugSplatRoute: AuthProjectsSlugSplatRoute,
   AuthProjectsSlugIndexRoute: AuthProjectsSlugIndexRoute,
+  AuthProjectsSlugRepoSplatRoute: AuthProjectsSlugRepoSplatRoute,
+  AuthProjectsSlugRepoIndexRoute: AuthProjectsSlugRepoIndexRoute,
 };
 
 const AuthProjectsSlugRouteWithChildren =

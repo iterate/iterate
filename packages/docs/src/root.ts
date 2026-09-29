@@ -1,5 +1,5 @@
 // docs/root.ts — THE DOCS PROCESSOR on the project's root (frames.ts): which docs have been opened,
-// and a `docs/commit-noticed` to each one a commit to /repos/docs changed. The doc's processor
+// by their contexts' paths, and a `docs/commit-noticed` to each one a commit to its repo changed. The doc's processor
 // reads the commit itself (processor.ts); the notice only says to look. Its own saves come back
 // through here too, and the doc's catch-up finds nothing new.
 import { z } from "zod";
@@ -11,11 +11,11 @@ import {
   type ReduceArgs,
 } from "iterate/stream/processor";
 import { DocsContract } from "./contract.ts";
-import { COMMIT_NOTICED, DOC_OPENED, DOCS_REPO, docContextPath } from "./frames.ts";
+import { COMMIT_NOTICED, DOC_OPENED, docContextPath } from "./frames.ts";
 
 type DocsState = ProcessorState<typeof DocsContract>;
 
-const DocOpened = z.object({ path: z.string() });
+const DocOpened = z.object({ repo: z.string(), path: z.string() });
 const CommitCompleted = z.object({
   path: z.string(),
   commitOid: z.string(),
@@ -33,8 +33,9 @@ export class DocsProcessor extends StreamProcessor<DocsState> {
   override reduce({ event, state }: ReduceArgs<DocsState>): DocsState | undefined {
     if (event.type !== DOC_OPENED) return;
     const opened = DocOpened.safeParse(event.payload);
-    if (opened.success && !state.opened.includes(opened.data.path))
-      return { opened: [...state.opened, opened.data.path] };
+    if (!opened.success) return;
+    const context = docContextPath(opened.data);
+    if (!state.opened.includes(context)) return { opened: [...state.opened, context] };
   }
 
   override processEvent({
@@ -44,14 +45,18 @@ export class DocsProcessor extends StreamProcessor<DocsState> {
   }: ProcessEventArgs<DocsState>): undefined {
     if (event?.type !== "events.iterate.com/repo/commit-completed") return;
     const commit = CommitCompleted.safeParse(event.payload);
-    if (!commit.success || commit.data.path !== DOCS_REPO) return;
-    const changed = commit.data.changedPaths.filter((path) => state.opened.includes(path));
+    // a repo Docs never opened a doc in (or nested deeper than /repos/<name>) has nothing to tell
+    if (!commit.success || !/^\/repos\/[^/]+$/.test(commit.data.path)) return;
+    const repo = commit.data.path;
+    const changed = commit.data.changedPaths
+      .map((path) => docContextPath({ repo, path }))
+      .filter((context) => state.opened.includes(context));
     if (changed.length === 0) return;
     blockProcessorWhile(() =>
       this.#withItx((itx) =>
         Promise.all(
-          changed.map((path) =>
-            itx.cd(docContextPath(path)).append({
+          changed.map((context) =>
+            itx.cd(context).append({
               type: COMMIT_NOTICED,
               ephemeral: true,
               payload: { commitOid: commit.data.commitOid },

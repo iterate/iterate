@@ -1,6 +1,16 @@
-// The docs of a project: markdown files in one repo of their own, `/repos/docs`. Not the config
-// repo, where a commit republishes the project's site (tasks/docs-app.md).
-export const DOCS_REPO = "/repos/docs";
+// A project's docs: the markdown files in its repos. The app names a repo by its name, the part
+// after `/repos/` (`config` is /repos/config), in its URLs and its repo picker.
+
+/** The repo called `name`. */
+export const repoPath = (name: string) => `/repos/${name}`;
+
+/** The names of the repos the picker offers, sorted: every `/repos/<name>` of the project. */
+export function repoNames(repos: { path: string }[]) {
+  return repos
+    .map((repo) => /^\/repos\/([^/]+)$/.exec(repo.path)?.[1])
+    .filter((name): name is string => Boolean(name))
+    .sort();
+}
 
 /** The repo's paths that are docs, sorted: every `.md` file. */
 export function docPaths(paths: string[]) {

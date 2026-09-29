@@ -1,7 +1,8 @@
 // One tab's side of co-editing a doc (@iterate-com/docs frames.ts): the text as a Y.Doc, synced
 // with the doc's processor, and who else is here (y-protocols awareness). Every edit goes out as an
 // ephemeral `docs/edit-frame` on the doc's context and comes in the same way; the processor holds
-// the text between tabs and saves it, so an edit is safe once it has been sent.
+// the text between tabs and saves it, so an edit is safe once it has been sent. Closing the doc
+// says `docs/left` once the last edit is out: the last tab to leave has the processor save at once.
 //
 // Frames can go missing (an ephemeral push dropped under load, a send that failed), and Yjs updates
 // apply in any order and more than once, so the tab just syncs again with the processor, both ways:
@@ -18,6 +19,7 @@ import type { DocDurableObject } from "@iterate-com/docs";
 import {
   AWARENESS_FRAME,
   AwarenessFrame,
+  DOC_LEFT,
   EDIT_FRAME,
   EditFrame,
   fromBase64,
@@ -40,6 +42,8 @@ export class DocCollab {
   #onStatus: (status: CollabStatus) => void;
   #outbox: Uint8Array[] = [];
   #sending = false;
+  /** The edits being sent now, if any: what closing waits for before it says `docs/left`. */
+  #flushing = Promise.resolve();
   #syncing: Promise<void> | null = null;
   #syncAgain = false;
   #disposed = false;
@@ -102,7 +106,7 @@ export class DocCollab {
       this.#syncAgain = false;
       try {
         const facet = this.#context.facets.get<Pick<DocDurableObject, "sync">>("doc");
-        const answer = await facet.sync(toBase64(Y.encodeStateVector(this.doc)));
+        const answer = await facet.sync(toBase64(Y.encodeStateVector(this.doc)), this.doc.clientID);
         Y.applyUpdate(this.doc, fromBase64(answer.update), this);
         const missing = Y.encodeStateAsUpdate(this.doc, fromBase64(answer.stateVector));
         if (missing.length > NOTHING) this.#send(missing);
@@ -114,12 +118,20 @@ export class DocCollab {
     } while (this.#syncAgain || this.#missingUpdates());
   }
 
-  dispose() {
+  /** Leave the doc: the others are told this tab has gone (the awareness handler sends it), and
+   *  once the last edit is out, the processor (`docs/left`). Resolves when that has been sent, so
+   *  the caller keeps the context until then. */
+  async close() {
+    if (this.#disposed) return;
     this.#disposed = true;
-    // tells the others this tab has gone (the awareness handler sends it)
     removeAwarenessStates(this.awareness, [this.doc.clientID], "left");
     this.#subscription?.[Symbol.dispose]();
     this.awareness.destroy();
+    await this.#flushing;
+    await this.#context
+      .append({ type: DOC_LEFT, ephemeral: true, payload: { client: this.doc.clientID } })
+      // a lost goodbye costs only time: the processor saves a minute after the first edit anyway
+      .catch(() => {});
   }
 
   /** Edits this tab made that haven't reached the doc's context yet. */
@@ -150,7 +162,7 @@ export class DocCollab {
   /** Send one frame at a time; what's typed meanwhile goes as one merged update after it. */
   #send(update: Uint8Array) {
     this.#outbox.push(update);
-    if (!this.#sending) void this.#flush();
+    if (!this.#sending) this.#flushing = this.#flush();
   }
 
   async #flush() {

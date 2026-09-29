@@ -1,11 +1,11 @@
-// The project's docs as the sidebar and the doc list show them: every `.md` in /repos/docs, read
-// when the page first wants them and again after each commit to the repo. The commit reaches the
+// One repo's docs as the sidebar and the doc list show them: every `.md` in it, read when the page
+// first wants them and again after each commit to the repo. The commit reaches the
 // page as the project root's `repo/commit-completed`, pushed to a subscription the list holds only
 // while something on the page reads it (React's useSyncExternalStore: the first listener opens it,
 // the last one leaving closes it).
 import { createContext, use, useSyncExternalStore } from "react";
 import type { AuthenticatedApp } from "iterate/app";
-import { DOCS_REPO, docPaths } from "./docs-repo.ts";
+import { docPaths } from "./docs-repo.ts";
 
 export type DocListState =
   | { kind: "loading" }
@@ -19,12 +19,15 @@ export class DocList {
   #state: DocListState = { kind: "loading" };
   #listeners = new Set<() => void>();
   #open: () => Promise<Project>;
+  /** The repo listed, `/repos/<name>`. */
+  #repo: string;
   #project: Project | null = null;
   /** Lets go of the open subscription and project; null while nothing reads the list. */
   #close: (() => void) | null = null;
 
-  constructor(open: () => Promise<Project>) {
+  constructor(open: () => Promise<Project>, repo: string) {
     this.#open = open;
+    this.#repo = repo;
   }
 
   subscribe = (listener: () => void) => {
@@ -65,17 +68,15 @@ export class DocList {
       const project = await this.#open();
       hold(() => project[Symbol.dispose]());
       if (closed) return;
-      // the repo is made on a project's first visit to Docs
-      await project.repos.create(DOCS_REPO);
       // subscribed before the first read: a commit between the two is read again, never missed
       const subscription = await project.subscribe({
         consumes: ["events.iterate.com/repo/commit-completed"],
         target: (events) => {
           // capnweb hands each event as a proxy: a plain copy to read
-          const docsMoved = (
+          const moved = (
             JSON.parse(JSON.stringify(events)) as { payload?: { path?: string } }[]
-          ).some((event) => event.payload?.path === DOCS_REPO);
-          if (docsMoved) void this.#read(project);
+          ).some((event) => event.payload?.path === this.#repo);
+          if (moved) void this.#read(project);
         },
       });
       hold(() => subscription[Symbol.dispose]());
@@ -93,7 +94,7 @@ export class DocList {
 
   async #read(project: Project) {
     try {
-      using repo = project.repos.get(DOCS_REPO);
+      using repo = project.repos.get(this.#repo);
       const { paths } = await repo.listFiles();
       if (this.#project === project) this.#set({ kind: "loaded", paths: docPaths(paths) });
     } catch (error) {

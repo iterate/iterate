@@ -6,7 +6,7 @@ import { ensureDoc } from "@iterate-com/docs/install";
 import { pkgPrNewVersion, publishedCommit } from "@iterate-com/shared/pkg-pr-new";
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";
-import { DOCS_REPO } from "../../lib/docs-repo.ts";
+import { repoPath } from "../../lib/docs-repo.ts";
 
 /** The @iterate-com/docs build a doc's processors run: this app's own commit's, else main's now
  *  (`publishedCommit`), resolved in the app's Worker because a page cannot read pkg.pr.new's commit
@@ -18,18 +18,18 @@ const publishedDocs = createServerFn().handler(async () =>
   ),
 );
 
-/** One doc: `/projects/<slug>/<path in /repos/docs>`, read at the repo's tip for the first paint;
- *  the editor goes live on the doc's processor (doc-session.ts). */
-export const Route = createFileRoute("/_auth/projects/$slug/$")({
+/** One doc: `/projects/<slug>/<repo name>/<path in the repo>`, read at the repo's tip for the
+ *  first paint; the editor goes live on the doc's processor (doc-session.ts). */
+export const Route = createFileRoute("/_auth/projects/$slug/$repo/$")({
   loader: async ({ context, params }) => {
     const path = params._splat || "";
     using itx = context.api.projects.get(context.project.id);
-    using repo = itx.repos.get(DOCS_REPO);
+    using repo = itx.repos.get(repoPath(params.repo));
     const tip = await repo.tip();
     const text = tip ? await repo.readFile(path, { commitOid: tip }) : null;
     // oxlint-disable-next-line iterate/simple-truthiness-check -- an empty doc is "" and a real doc; a missing one is null
     if (!tip || text === null) throw notFound();
-    return { path, text };
+    return { repo: params.repo, path, text };
   },
   component: DocPage,
 });
@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_auth/projects/$slug/$")({
 function DocPage() {
   const data = Route.useLoaderData();
   const { api, project, info } = Route.useRouteContext();
-  const { slug } = Route.useParams();
+  const { slug, repo } = Route.useParams();
   // one session per load: another doc is a new editor
   const session = useMemo(
     () =>
@@ -52,7 +52,7 @@ function DocPage() {
             // methods, and disposes
             const context = await ensureDoc(
               itx as unknown as IterateContextApi,
-              data.path,
+              { repo: repoPath(data.repo), path: data.path },
               await publishedDocs(),
             );
             return {
@@ -72,12 +72,12 @@ function DocPage() {
   );
   return (
     <DocEditor
-      key={data.path}
+      key={`${data.repo}/${data.path}`}
       session={session}
       path={data.path}
       back={
-        <Link to="/projects/$slug" params={{ slug }} className="hover:text-foreground">
-          All docs
+        <Link to="/projects/$slug/$repo" params={{ slug, repo }} className="hover:text-foreground">
+          {repo}
         </Link>
       }
     />

@@ -5,7 +5,14 @@
 // a source that pins this package at the app's own build, so a deploy of the app upgrades every doc
 // it opens next. Nothing here is the runtime.
 import type { IterateContextApi } from "iterate/api";
-import { COMMIT_NOTICED, DOC_OPENED, docContextPath, EDIT_FRAME } from "./frames.ts";
+import {
+  COMMIT_NOTICED,
+  DOC_LEFT,
+  DOC_OPENED,
+  docContextPath,
+  EDIT_FRAME,
+  type DocRef,
+} from "./frames.ts";
 
 /** The source the processor loads, by file: `version` is what package.json pins (a pkg.pr.new URL
  *  at a commit, or an npm range once the package is on npm). */
@@ -18,11 +25,11 @@ export function docsSource(version: string): Record<string, string> {
 
 const ROOT_REPOS = "itx.builtins.cd('/').repos";
 
-/** The context co-editing the doc at `path`, its processor running at `version`. Idempotent: an
- *  open of a doc already set up at this version writes nothing. */
+/** The context co-editing `doc` (a repo and a path in it), its processor running at `version`.
+ *  Idempotent: an open of a doc already set up at this version writes nothing. */
 export async function ensureDoc(
   project: Pick<IterateContextApi, "cd" | "append" | "processors">,
-  path: string,
+  doc: DocRef,
   version: string,
 ): Promise<IterateContextApi> {
   await enableAt(project, "docs", version, {
@@ -30,12 +37,13 @@ export async function ensureDoc(
     consumes: ["events.iterate.com/repo/commit-completed", DOC_OPENED],
   });
   // one per doc: an open of a doc already opened appends nothing
+  const contextPath = docContextPath(doc);
   await project.append({
     type: DOC_OPENED,
-    payload: { path },
-    idempotencyKey: `${DOC_OPENED}:${path}`,
+    payload: { repo: doc.repo, path: doc.path },
+    idempotencyKey: `${DOC_OPENED}:${contextPath}`,
   });
-  const context = project.cd(docContextPath(path));
+  const context = project.cd(contextPath);
   if ((await context.rewriteRules.get("itx.repos"))?.target !== ROOT_REPOS)
     await context.append({
       type: "events.iterate.com/itx/rewrite-rule-configured",
@@ -43,7 +51,7 @@ export async function ensureDoc(
     });
   await enableAt(context, "doc", version, {
     className: "DocDurableObject",
-    consumes: [EDIT_FRAME, COMMIT_NOTICED],
+    consumes: [EDIT_FRAME, COMMIT_NOTICED, DOC_LEFT],
   });
   return context;
 }

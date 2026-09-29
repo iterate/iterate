@@ -14,11 +14,13 @@ export class DocDurableObject extends StreamProcessorDurableObject<Record<string
     sql: this.ctx.storage.sql,
     withItx: (call) => this.withItx(call),
     publishLiveState: () => this.publishLiveState(),
-    autosave: { idleMs: 1500, maxMs: 8000 },
+    // a minute after the first unsaved edit, however much typing follows (or sooner: the last tab
+    // leaving); each commit to a repo like /repos/config republishes the project's site
+    autosave: { idleMs: 60_000, maxMs: 60_000 },
   });
 
-  sync(stateVector: string) {
-    return this.processor.sync(stateVector);
+  sync(stateVector: string, client: number) {
+    return this.processor.sync(stateVector, client);
   }
 }
 

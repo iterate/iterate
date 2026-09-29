@@ -20,8 +20,10 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 
 ## Decisions
 
-- **Docs are markdown files in their own repo, `/repos/docs`.** Not the config repo: a config commit
-  republishes the project's site.
+- ~~**Docs are markdown files in their own repo, `/repos/docs`.**~~ _Reversed 2026-09-29: this was
+  my proposal, never agreed. Docs shows every repo of the project, `config` first (the iterate
+  project's has `tasks/`, `jams/`, `explainers/`). The worry, a config commit republishing the
+  site, is handled by committing less often: see "Repos and commits" below._
 - **The editor edits the text itself** (CodeMirror 6), with Atomic's Obsidian-style live preview
   (`@atomic-editor/editor`, the library the old app used). Not a tree editor (Lexical and friends):
   see "Rejected: a tree editor".
@@ -109,6 +111,17 @@ Not the goal: Notion parity. The thing Notion can't do is agents working on the 
 - [x] ⌘K finds a doc by name, one in a closed folder included _(the shell's palette reads the sidebar's
       rows; `specs/docs/sidebar.spec.ts`)_
 - [x] Code blocks: syntax highlighting, and a readable fence language name _(`extensions.ts`)_
+
+## Repos and commits (asked for 2026-09-29)
+
+- [x] A repo picker in the sidebar: every `/repos/<name>` of the project, `config` first; URLs are
+      `/projects/<slug>/<repo>/<path>` _(`docs-nav.tsx`, the `$repo` routes; `/projects/<slug>`
+      redirects to `config`)_
+- [x] The doc's processor knows its repo: its context is `/docs/<repo name>/<path>`, the root's
+      processor notices commits to any repo _(`docContextPath`/`docOf` in `packages/docs/src/frames.ts`)_
+- [x] Commit a minute after the first unsaved edit, or at once when the last tab leaves
+      (`docs/left`), instead of 1.5 s after each pause. The processor already keeps unsaved edits
+      safe, so there's no manual Commit button or countdown _(`DocProcessor`, `durable-object.ts`)_
 
 ## Later
 
@@ -218,6 +231,14 @@ set of CodeMirror extensions, so switching later is cheap.
   closed rows stay in the page) and a doc in a folder carries the folder as hidden text, the
   palette's "detail". In the editor ⌘K stays the link shortcut; the sidebar's Search row opens the
   palette from anywhere.
+- Commit cadence (2026-09-29): the old app (before #2837) committed a workspace's dirty repos 60 s
+  after the last change, from a browser timer, with a countdown and a Commit button. Here the
+  processor holds the edits, so it's the processor's timer: 60 s after the first unsaved edit
+  (`idleMs` = `maxMs`, so typing can't postpone it), and a save as soon as no tab is left. A tab
+  is present from its `sync` or first edit until its `docs/left`, which it sends only after its
+  last edit frame (and on `pagehide`, best effort). A crashed tab never leaves; the minute covers
+  it. The spec now checks the saved file after both people leave, which is also its check of the
+  save-on-leave.
 - Package test "two people's edits land in one autosave commit" was order-flaky: two tabs inserting
   at the same spot at once get a random order in Yjs (by client id), which is correct. The test now
   has Jonas type after he sees Misha's line.
