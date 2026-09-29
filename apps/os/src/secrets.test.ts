@@ -30,6 +30,7 @@ import {
   substituteProjectSecrets,
   substituteSecretInFrame,
   verifyLendUse,
+  verifySecretEquals,
   verifySecretHmac,
 } from "./secrets.ts";
 
@@ -333,6 +334,50 @@ test("hmacSha256Hex agrees with node's HMAC over a string and over bytes", async
   expect(await hmacSha256Hex("whsec_k", "1700000000.{}")).toBe(oracle("whsec_k", "1700000000.{}"));
   const bytes = new TextEncoder().encode("raw body ☃");
   expect(await hmacSha256Hex("k", bytes)).toBe(oracle("k", bytes));
+});
+
+test.for([
+  {
+    name: "the same string",
+    material: "pebble-token",
+    input: { value: "pebble-token" },
+    equal: true,
+  },
+  {
+    name: "a different string",
+    material: "pebble-token",
+    input: { value: "pebble-tokeX" },
+    equal: false,
+  },
+  { name: "a prefix of it", material: "pebble-token", input: { value: "pebble" }, equal: false },
+  { name: "an empty candidate", material: "pebble-token", input: { value: "" }, equal: false },
+  { name: "an empty secret, empty candidate", material: "", input: { value: "" }, equal: false },
+  {
+    name: "a field of an object material",
+    material: { bearer: "pebble-token", other: "x" },
+    input: { value: "pebble-token", field: "bearer" },
+    equal: true,
+  },
+  {
+    name: "another field's value",
+    material: { bearer: "pebble-token", other: "x" },
+    input: { value: "x", field: "bearer" },
+    equal: false,
+  },
+  {
+    name: "an object with no field",
+    material: { bearer: "t" },
+    input: { value: "t" },
+    equal: false,
+  },
+  {
+    name: "an object's non-string field",
+    material: { bearer: 1 },
+    input: { value: "1", field: "bearer" },
+    equal: false,
+  },
+])("verifySecretEquals: $name → $equal", async ({ material, input, equal }) => {
+  expect(await verifySecretEquals(material as SecretMaterial, input)).toBe(equal);
 });
 
 test.for([

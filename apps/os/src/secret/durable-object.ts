@@ -38,7 +38,12 @@ import { createPrivateKey } from "node:crypto";
 import { createAppAuth } from "@octokit/auth-app";
 import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
 import type { EventInput } from "iterate/stream/processor";
-import type { SecretHmacVerification, SecretMaterial, SecretRefresh } from "iterate/api";
+import type {
+  SecretEqualsVerification,
+  SecretHmacVerification,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/api";
 import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { signClaims, verifyAdminSecret } from "../caller.ts";
 import {
@@ -91,6 +96,7 @@ import {
   signLendUse,
   substituteProjectSecrets,
   substituteSecretInFrame,
+  verifySecretEquals,
   verifySecretHmac,
   type SecretRecord,
 } from "../secrets.ts";
@@ -494,6 +500,16 @@ export class SecretDurableObject extends StreamProcessorDurableObject<
     if (!stored) return false;
     const { material } = await this.#opened(stored);
     return verifySecretHmac(material, input);
+  }
+
+  /** THE EQUALS OPERATION: is `value` this secret's string (at `field`)? Opened HERE, one bit out,
+   *  the pin not consulted, exactly as `verifyHmac`: a secret never set or a material with no string
+   *  at the field answers false, and the comparison is constant-time. */
+  async verifyEquals(input: SecretEqualsVerification): Promise<boolean> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) return false;
+    const { material } = await this.#opened(stored);
+    return verifySecretEquals(material, input);
   }
 
   /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a

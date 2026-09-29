@@ -16,6 +16,7 @@
 // SDK's (`iterate/api`, where the dash and every client read them).
 import type {
   ClientAuth,
+  SecretEqualsVerification,
   SecretHmacVerification,
   SecretMaterial,
   SecretRefresh,
@@ -500,6 +501,19 @@ export async function verifySecretHmac(
   const signature = input.signature.trim().toLowerCase();
   if (!/^[0-9a-f]{64}$/.test(signature)) return false;
   return secretsEqual(await hmacSha256Hex(key, input.payload), signature);
+}
+
+/** THE EQUALS OPERATION, pure: is `value` the string `material` holds (at `field`)? One bit out; the
+ *  secret never leaves the caller. For a credential a caller can only send as it is (a static
+ *  header token), where an HMAC has nothing to sign. A material with no string at the
+ *  field is equal to nothing. */
+export async function verifySecretEquals(
+  material: SecretMaterial,
+  input: SecretEqualsVerification,
+): Promise<boolean> {
+  const expected = secretMaterialStringOf(material, input.field);
+  if (!expected) return false;
+  return secretsEqual(input.value, expected);
 }
 
 /** A secret is sent to its pinned origins ONLY — a mis-typed URL cannot mail a credential to a
