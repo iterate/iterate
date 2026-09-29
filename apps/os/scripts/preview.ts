@@ -286,26 +286,28 @@ async function deploymentsUnderTest(name: string): Promise<ReadonlySet<string>> 
  *  body has its section folded first (preview-config.ts `foldPreviewSection`), since its links are
  *  about to go dead and no deploy will replace them. A body write that fails is logged, never the
  *  delete's failure. */
-async function deletePrefix(
-  cf: Cf,
-  prefix: string,
-  prNumber: string | undefined,
-  options: { dryRun: boolean },
-) {
-  const deployments = (await listPreviewDeployments(cf)).filter(
-    (deployment) => deployment.prefix === prefix,
+async function deletePrefix(params: {
+  cf: Cf;
+  prefix: string;
+  prNumber: string | undefined;
+  dryRun: boolean;
+}) {
+  const deployments = (await listPreviewDeployments(params.cf)).filter(
+    (deployment) => deployment.prefix === params.prefix,
   );
   for (const deployment of deployments)
     console.log(
-      `  ${options.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
+      `  ${params.dryRun ? "would delete" : "delete"} ${deployment.name} (${deployment.members.length} members)`,
     );
-  console.log(`${deployments.length} deployment(s) of ${prefix}`);
-  if (options.dryRun) return;
-  if (prNumber && process.env.GITHUB_TOKEN)
-    await writePullRequestBody(pullRequestBody(prNumber), "the folded deleted section", (body) =>
-      foldPreviewSection(body, "Deleted deployment"),
+  console.log(`${deployments.length} deployment(s) of ${params.prefix}`);
+  if (params.dryRun) return;
+  if (params.prNumber && process.env.GITHUB_TOKEN)
+    await writePullRequestBody(
+      pullRequestBody(params.prNumber),
+      "the folded deleted section",
+      (body) => foldPreviewSection(body, "Deleted deployment"),
     ).catch((error: unknown) => console.warn(`could not fold the section: ${describe(error)}`));
-  const { failures, stuckNamespaces } = await deletePreviewDeployments(cf, deployments);
+  const { failures, stuckNamespaces } = await deletePreviewDeployments(params.cf, deployments);
   for (const stuck of stuckNamespaces)
     console.warn(
       `Artifacts namespace ${stuck.namespace} stays: Cloudflare will not delete it; the nightly sweep retries and pages #error-pulse.`,
@@ -1339,7 +1341,7 @@ async function main(command: Command, options: PreviewOptions) {
   }
   const prefix = resolvePreviewPrefix({ name: options.name, prNumber: pr });
   if (command === "delete")
-    return deletePrefix((await accountContext()).cf, prefix, pr, { dryRun });
+    return deletePrefix({ cf: (await accountContext()).cf, prefix, prNumber: pr, dryRun });
   if (command === "e2e" || command === "specs")
     return runSuite(
       command,
