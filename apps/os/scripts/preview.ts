@@ -62,8 +62,6 @@ import { readWranglerBase } from "./generate-wrangler-config.ts";
 import type { OsDeployableEnv } from "./os-env.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
-  deleteArtifactsNamespace,
-  isCloudflareError,
   renderStuckArtifactsNamespacesPage,
   STUCK_ARTIFACTS_PAGE_MARKER,
   stuckNamespacesStillThere,
@@ -89,12 +87,7 @@ import {
   signInLinkOf,
   templateQuickLaunches,
 } from "./preview-config.ts";
-import {
-  deleteD1,
-  deleteKvNamespace,
-  deletePreviewDeployments,
-  deleteR2Bucket,
-} from "./preview-delete.ts";
+import { deletePreviewDeployments } from "./preview-delete.ts";
 import {
   CI_WORKFLOW_PREVIEWS,
   groupPreviewDeployments,
@@ -173,8 +166,6 @@ function checkedOutCommit() {
 
 // ── the account's deployments: listed, grouped by name (preview-sweep.ts), deleted ─────────────
 
-type KvNamespaceRow = { id: string; title: string };
-
 /** A deployment's members' suffixes (preview-sweep.ts `previewMemberSuffixes`), wrangler naming
  *  its KV after the template's bindings. */
 const memberSuffixes = () =>
@@ -189,7 +180,7 @@ async function listAccountMembers(cf: Cf) {
   // narrowed to the `…-files` buckets a deployment has, and a full one refused.
   const [scripts, kv, { buckets }, d1, artifacts] = await Promise.all([
     cf<{ id: string; created_on?: string }[]>("/workers/scripts"),
-    listAll<KvNamespaceRow>(cf, "/storage/kv/namespaces"),
+    listAll<{ id: string; title: string }>(cf, "/storage/kv/namespaces"),
     cf<{ buckets: { name: string; creation_date?: string }[] }>(
       "/r2/buckets?name_contains=-files&per_page=1000",
     ),

@@ -57,11 +57,11 @@ async function deleteMember(cf: Cf, what: string, route: string, gone: Gone) {
 }
 
 /** A KV namespace, by its listing's row. */
-export const deleteKvNamespace = (cf: Cf, row: { id: string; title: string }) =>
+const deleteKvNamespace = (cf: Cf, row: { id: string; title: string }) =>
   deleteMember(cf, `KV namespace ${row.title}`, `/storage/kv/namespaces/${row.id}`, GONE.kv);
 
 /** A D1, by its listing's row. */
-export const deleteD1 = (cf: Cf, row: { uuid: string; name: string }) =>
+const deleteD1 = (cf: Cf, row: { uuid: string; name: string }) =>
   deleteMember(cf, `D1 ${row.name}`, `/d1/database/${row.uuid}`, GONE.d1);
 
 /** Delete an R2 bucket: its objects first (the API refuses a bucket that still holds any), then the
@@ -69,7 +69,7 @@ export const deleteD1 = (cf: Cf, row: { uuid: string; name: string }) =>
  *  a preview's e2e run leaves tens, the soak preview's bucket held 1,908 (measured 2026-09-23) — and
  *  a ceiling keeps that bounded. The loser of two racing bucket deletes answers 500/10001 (measured
  *  2026-09-29), which the API client sends again, and the retry answers 404/10006. */
-export async function deleteR2Bucket(cf: Cf, bucketName: string) {
+async function deleteR2Bucket(cf: Cf, bucketName: string) {
   const route = `/r2/buckets/${bucketName}`;
   let deletedObjects = 0;
   let goneObjects = 0;
