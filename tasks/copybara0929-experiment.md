@@ -1,24 +1,26 @@
 ---
-status: ready
+status: in-progress
 size: small
 ---
 
-# Copybara experiment: `packages/` → iterate/copybara0929
+# Copybara experiment: one-way copies of parts of iterate/iterate
 
-**Status:** branch phase done; ready to merge.
+**Status:** round 2 under way. This PR never merges: it's the experiment and the place to bikeshed the real layout.
 
-- Done: the copy repo, the config, `scripts/ci/copybara.ts`, and the job after Deploy OS. The branch-phase scenarios all ran through the PR's preview deploys and local runs (below). The temporary Preview OS job is removed.
-- Missing: after merge, one laptop run with `--last-rev <the squash commit's parent>` (Copybara refuses the branch-era trailer; see the switch scenario). Then the after-merge scenarios.
-
-A throwaway experiment: the real `iterate/os` will likely start over from what this teaches.
+- Round 1 (done): `packages/` copied to iterate/copybara0929. Every scenario below ran, and the copy stayed in sync.
+- Round 2 (now): the layout for the real thing (`copybara/`), with two copies, iterate/os0929 and iterate/packages0929.
+- Missing: round 2's first runs and scenarios. iterate/copybara0929 is still to delete: `gh` needs the `delete_repo` scope, which only an interactive login can grant.
 
 ## Why
 
-From the 2026-09-29 Tuple call with Jonas (`1b5f47c9`): iterate/iterate goes private, and public repos (`iterate/os`, `iterate/packages`) become one-way copies of parts of it. Before doing that for real, check that Copybara can keep one such copy in sync. `apps/os` is left alone until Jonas stops changing it.
+From the 2026-09-29 Tuple call with Jonas (`1b5f47c9`): iterate/iterate goes private, and public repos (`iterate/os`, `iterate/packages`) become one-way copies of parts of it. Before doing that for real, check that Copybara can keep such copies in sync, and settle where their files live. The real thing will likely start over from what this teaches, so this PR never merges.
 
 ## Goal
 
-When a commit of iterate/iterate deploys successfully, `main` of a private iterate/copybara0929 catches up to that commit. The copy holds exactly `packages/**` plus its own `README.md`. Nothing flows back.
+When a commit of iterate/iterate deploys successfully, each copy's `main` catches up to that commit. Nothing flows back.
+
+- **iterate/os0929:** `apps/os` and `packages/iterate`, today's stand-ins for `core/os` and `core/lib`, plus its README.
+- **iterate/packages0929:** every other package, plus its README.
 
 ## Copybara or a custom CLI?
 
@@ -53,50 +55,47 @@ For us, the copy only moves when a deploy succeeds, not on every push:
   - Deploy OS ships `packages/iterate`, `packages/shared` and `packages/ui`. The other packages go out through pkg.pr.new on every main push, which isn't a deploy. A commit that only touches, say, `packages/agents` reaches the copy with the next OS deploy. Copybara's catch-up means nothing is lost.
   - A manual catch-up is the same script run from a laptop (`node scripts/ci/copybara.ts --sha <sha>`), which reads the same Doppler config.
 - **Release:** for now the `GitOrigin-RevId` trailer names the origin commit, and that's enough. Later options: `git.destination(tag_name = …)` tags the copy (for example with the daily `v…` release tag from `release.yml`), or a `Deployed-Version:` line carries the Worker version id that deploy-os already reads from `/version`.
-- **Credentials:** the existing iterate GitHub App (app 2001598). It's installed on all of the org's repos with Contents: write, so it reaches iterate/copybara0929 as soon as the repo exists. Its key is in os/prd `APP_CONFIG`. The job mints an installation token narrowed to `repositories: ["copybara0929"]` and `permissions: { contents: "write" }`, the same way `iterateAppIssuesToken` in `scripts/ci/flake-dashboard/update.ts` narrows one to issues (generalize that function). A leaked token can only write the copy, for an hour.
+- **Credentials:** the existing iterate GitHub App (app 2001598). It's installed on all of the org's repos with Contents: write, so it reaches a copy repo as soon as the repo exists. Its key is in os/prd `APP_CONFIG`. The job mints an installation token narrowed to the copy repos and `permissions: { contents: "write" }`, with the code the flake dashboard used to narrow one to issues (now `scripts/ci/iterate-app-token.ts`). A leaked token can only write the copies, for an hour.
   - The repo keeps this key out of PR workflows by convention: only the schedule-only flake dashboard reads it (`depot-workflows.test.ts` pins that one). Nothing enforces it, though. Depot runs no PRs from forks, so every run is from someone who can push, holding the one `DOPPLER_TOKEN`, which reads os/prd (`docs/depot-ci.md`). The deploy-os job only runs on main and already holds prd's credentials. The temporary Preview OS job below bends the convention for this one PR.
   - No PAT and no new App. Doppler has no PAT anyway. Its only other GitHub key is `PREVIEW_GITHUB_APP_PRIVATE_KEY`, which belongs to the dummy-petshop's fake GitHub, not github.com.
   - Later, the copy's ruleset can say "only the iterate App may push to `main`".
-- **While on the branch:** Deploy OS only runs on main (dispatching it on a branch would deploy the branch to prd), but the PR's own deploy is Preview OS. A **temporary** `copybara` job at the end of Preview OS's Deploy preview, only for this PR's branch, copies the PR head to the copy's `main`, with the origin ref being the `copybara0929` branch. It runs only when Deploy preview actually deployed something (the `cleanup` job's condition), so the branch phase exercises the deploy gate too. A push that cancels the run in progress tests catch-up for free. It's deleted before merge.
+- **While on the branch:** Deploy OS only runs on main (dispatching it on a branch would deploy the branch to prd), but the PR's own deploy is Preview OS. A **temporary** `copybara` job at the end of Preview OS's Deploy preview, only for this PR's branch, copies the PR head to each copy's `main`. It runs only when Deploy preview actually deployed something (the `cleanup` job's condition), so the branch phase exercises the deploy gate too. A push that cancels the run in progress tests catch-up for free. Since the PR never merges, it stays.
   - Local runs (Homebrew's `openjdk` 26, since Copybara needs 25+) are for getting the config right before pushing.
 - **Other GitHub Apps:** about 20 apps are installed on "all repositories" in the org (cursor, claude, devin, graphite, autofix-ci, linear, depot, cloudflare-workers-and-pages, iterate, iterate-preview-1, iterate-misha, …), so they attach to the new repo automatically. For a private copy with no PRs and no workflows they do nothing. For a public `iterate/os` that's "locked down to the max", switch them to selected repositories.
 - **The iterate platform:** `@iterate-com/github-sync` keeps two remotes on _one_ history (fast-forward only, same commits). A copy of a subset of files needs different commits, so github-sync can't do this. A platform-native version (the push webhook starts a processor that pushes the copy) would be a good user-space test later. It would need the custom-CLI route, and a test of the platform's git on a 1.25 GB repo. Not for this experiment.
+
+## Where the copies' files live (for the real `iterate/os`)
+
+From the call: `iterate/os` is `core/`, which is `os/` plus `lib/` (the `iterate` npm package, the CLI with submodules like `iterate/sdk`). Unit and table tests inside `core/` go public. `test/` (end-to-end and Playwright) stays private, and so do tasks, evals and CI. `iterate/packages` is the other packages.
+
+- **Copies keep this repo's paths:** `iterate/os` holds `core/…`, not `core/`'s contents moved to the root. A path in a comment, a stack trace or an agent's answer then means the same file in both repos. The cost is a folder for the files that exist only at a copy's root.
+- **`copybara/<name>/` holds those root-only files,** copied there verbatim: `README.md`, and later `LICENSE`, `.github/ISSUE_TEMPLATE/` (the call's "link your fork's compare view in an issue") and maybe an `AGENTS.md` for agents reading the copy.
+- **`copybara/copy.bara.sky` holds every copy's workflow.** Copybara only reads a config named `copy.bara.sky`, so per-copy files like `copybara/os.bara.sky` can't work. One file with a `copy_workflow()` helper covers all copies; nothing is generated.
+- **Names not chosen:**
+  - `repos/`: the platform already has repos (`itx.repos`, `/repos/config`).
+  - `public/`: web tooling treats it as static assets.
+  - `repo-projects/`: our call's word, meaningless to anyone else.
+- **Open:** does `iterate/os` install and build on its own? Then it needs a root `package.json`, `pnpm-workspace.yaml`, tsconfig base and lockfile. The internal root's versions list private packages, so either `core/` carries its own, or `copybara/os/` holds public ones that can drift.
+
+## Release versions in the copy
+
+A pushed commit message is fixed, since changing it rewrites the copy's history. So what goes in depends on when the value exists:
+
+- **Known when the copy runs** (anything Deploy OS knows, like the Worker version id): pass `--labels worker_version:<id>`. The config reads it as the label `FLAG_WORKER_VERSION`, in `metadata.add_header("… ${FLAG_WORKER_VERSION}")` or in `copy_message`.
+- **From tags:** `git.origin(describe_version = True)` gives `git describe` labels, the nearest `v…` release tag plus a count.
+- **Made later** (the daily `v…` tag from `release.yml`): a tag or GitHub release on the copy, on the commit whose `GitOrigin-RevId` is the released sha. `git.destination(tag_name = …)` also tags at copy time from a label.
 
 ## Design
 
 Files in iterate/iterate (branch `copybara0929`, PR to main):
 
-| File                              | What                                                                                                                                                                               |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `copybara/copy.bara.sky`          | The workflow below                                                                                                                                                                 |
-| `copybara/copybara0929/README.md` | The copy's README, reviewed here and moved to the copy's root                                                                                                                      |
-| `scripts/ci/copybara.ts`          | `--workflow <name> --sha <sha>`: mints the narrowed iterate App token, downloads the pinned jar (sha256-checked), runs `copybara migrate` up to that sha, then runs the sync check |
-| `.depot/workflows/deploy-os.yml`  | New `copybara` job after the deploy and the host check (workflow `copybara0929`, origin ref `main`)                                                                                |
-| `.depot/workflows/preview-os.yml` | **Temporary** `copybara` job after Deploy preview, only on the `copybara0929` branch (workflow `copybara0929_branch`, origin ref `copybara0929`). Deleted before merge             |
-
-```python
-# copybara/copy.bara.sky (sketch): one workflow per origin ref, `copybara0929` and `copybara0929_branch`
-core.workflow(
-    name = name,
-    origin = git.origin(
-        url = "https://github.com/iterate/iterate",
-        ref = ref,  # "main" after deploys, "copybara0929" in the branch phase; the run passes the sha
-        partial_fetch = True,
-    ),
-    origin_files = glob(["packages/**", "copybara/copybara0929/README.md"]),
-    destination = git.destination(
-        url = "https://github.com/iterate/copybara0929",
-        push = "main",
-    ),
-    destination_files = glob(["**"]),
-    mode = "ITERATIVE",  # one copy commit per origin commit that touches origin_files
-    authoring = authoring.pass_thru("iterate-copybara <copybara@iterate.com>"),
-    transformations = [
-        core.move("copybara/copybara0929/README.md", "README.md"),
-        copy_message,  # defined above core.workflow (Starlark needs it first); see Commit messages
-    ],
-)
-```
+| File                                                   | What                                                                                                                                                                             |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `copybara/copy.bara.sky`                               | The `os` and `packages` workflows, and the message rewrite                                                                                                                       |
+| `copybara/os/README.md`, `copybara/packages/README.md` | Each copy's root-only files, moved to its root                                                                                                                                   |
+| `scripts/ci/copybara.ts`                               | `--sha <sha>`: mints one iterate App token for all copies, downloads the pinned jar (sha256-checked), and runs each workflow up to that sha. Then it runs each copy's sync check |
+| `.depot/workflows/deploy-os.yml`                       | A `copybara` job after the deploy and the host check: the wiring on main, which this PR never exercises                                                                          |
+| `.depot/workflows/preview-os.yml`                      | A `copybara` job after this PR's Deploy preview, only on this branch: what actually runs                                                                                         |
 
 ### Commit messages
 
@@ -106,18 +105,7 @@ A squash-merged PR's commit message is its title, ` (#123)`, and its body. HTML 
 - then every paragraph between `<!-- copybara -->` and `<!-- /copybara -->`, in order. The markers are invisible on the rendered PR page and follow the same convention as the existing sections.
 - then Copybara's `GitOrigin-RevId` trailer.
 
-A Starlark function does this. Copybara runs any `def f(ctx)` in `transformations` and has a `re2` regex module. Starlark has no `while`, so the sections are found with `split`:
-
-```python
-def copy_message(ctx):
-    title = ctx.message.split("\n")[0]
-    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(title).replace_all(" (iterate/iterate#$1)")
-    sections = [
-        part.split("<!-- /copybara -->")[0].strip()
-        for part in ctx.message.split("<!-- copybara -->")[1:]
-    ]
-    ctx.set_message("\n\n".join([title] + sections) + "\n")
-```
+`copy_message` in `copybara/copy.bara.sky` does this. Copybara runs any `def f(ctx)` in `transformations` and has a `re2` regex module. A marker only counts on a line of its own.
 
 Commits pushed straight to the experiment branch have no `(#N)`, so their title passes through unchanged.
 
@@ -126,11 +114,20 @@ Commits pushed straight to the experiment branch have no `(#N)`, so their title 
 - **First run:** `--force --last-rev <start>`. The copy's history starts at the commit after `<start>`, as one full snapshot. `--init-history` would replay all ~790 past commits that touched `packages/`, old messages included. That goes against the call's "history starts when we do this".
 - **Merges:** `first_parent = True` is the default, so a merge commit becomes one copy commit. On main every PR is one squash commit, so this matters only for branch-phase runs.
 - **No-op runs:** a deploy whose commits don't touch `origin_files` makes Copybara exit 4 (nothing to migrate). The script treats that as green.
-- **Sync check:** git tree hashes depend only on content, so the check needs no file diffing. It reads the `GitOrigin-RevId` trailer on the copy's HEAD. It asserts that the `packages` tree hash in that origin commit, in the deployed sha, and in the copy's HEAD are all the same (`git rev-parse <commit>:packages`). This only works if the copy keeps the `packages/` prefix (decision 1). It fetches the copy with `--filter=blob:none`, because trees are enough.
+- **Sync check:** Copybara writes what a copy should hold at the sha into a folder (`--to-folder --squash`), using the same file selection and moves as the real run. The check hashes that folder with `git write-tree` and compares the result with the copy head's tree hash. A git tree hash depends only on content, so equal hashes mean every file is the same, and a file added by hand shows up. It fetches the copy with `--filter=blob:none`, because trees are enough. (Round 1 compared the `packages` subtree and the README by hand; with excludes and root-only folders, that meant repeating Copybara's globs.)
 
 ## Experiment script
 
-On the branch, through the temporary Preview OS job (origin ref = the `copybara0929` branch):
+### Round 2: iterate/os0929 and iterate/packages0929
+
+- [ ] First local run with `--last-rev`: both copies get their first commit, each README lands at its root, and both checks are green
+- [ ] The Preview OS job's run on the same push is a green no-op for both
+- [ ] A commit touching `packages/iterate` lands in os0929 alone; one touching another package lands in packages0929 alone
+- [ ] Executable files keep their mode (`packages/cli/bin/iterate.js` is `100755`): the tree-hash check fails if not
+
+### Round 1: `packages/` → iterate/copybara0929 (repo to delete)
+
+Through the Preview OS job, with the origin ref being this branch:
 
 - [x] Branch point: first run creates `main` in the copy (`packages/` plus README), and the check is green _(local run, 26 s cold: [2aa4af2](https://github.com/iterate/copybara0929/commit/2aa4af2c25d3cdf566762eaeca7f61b90363d585), with `--last-rev` = the branch point)_
 - [x] A commit that touches `packages/` makes one copy commit with the right trailer _(CI, after the PR's Deploy preview: [70b9392](https://github.com/iterate/copybara0929/commit/70b9392d90d460ba1e3a5cef33e389f0cda8de96))_
@@ -146,22 +143,15 @@ On the branch, through the temporary Preview OS job (origin ref = the `copybara0
 - [x] A hand-made commit on the copy's `main` makes the check go red, and the next sync overwrites it (before the ruleset blocks hand pushes) _(0f696da, the next copy, deleted its file. Red: a local no-op run over [19a8749](https://github.com/iterate/copybara0929/commit/19a87497553841f55076e5bdeb41f0c0cce5b621) failed with "the copy's head … has no GitOrigin-RevId trailer"; Copybara itself looked past it)_
 - [x] Time per run on a warm cache, and with a cold cache _(every CI run is cold: the job took 21 s, including checkout, pnpm install and the Temurin download. Locally 26 s cold)_
 
-After merge, on main:
-
-- [ ] The first Deploy OS after merge runs the `copybara` job, which goes red: Copybara refuses, because the copy's trailer is a branch commit. One laptop run, `node scripts/ci/copybara.ts --workflow copybara0929 --sha <squash sha> --last-rev <its parent>`, moves the copy onto main's history
-- [ ] The next Deploy OS copies up to its deployed sha, and the check is green
-- [ ] A deploy that fails leaves the copy where it was, and the next successful one catches up
-- [ ] A PR that only touches `packages/agents` reaches the copy with the next OS deploy
-- [x] Switching from branch history to main: the copy's last trailer names a branch commit that main's squash commit doesn't descend from. See what Copybara does _(dry run before merge: it refuses, "last imported revision … is not ancestor of requested revision". After merge, the first Deploy OS copy goes red until one run with `--last-rev <squash commit's parent>`)_
-
-Claude creates iterate/copybara0929 (private) with `gh`. Misha is an org admin, and members may create private repos. Nothing needs Misha's hands.
+- [x] Switching from branch history to main: the copy's last trailer names a branch commit that main's squash commit doesn't descend from. See what Copybara does _(dry run: it refuses, "last imported revision … is not ancestor of requested revision". A copy moving from a branch to main needs one run with `--last-rev <the squash commit's parent>`)_
 
 ## Out of scope
 
 - The copy building or installing on its own. `packages/*/package.json` use `catalog:` and `workspace:*`, 9 tsconfigs extend `../../tsconfig.base.json`, and `packages/voice/src/worker.test.ts` imports from `apps/os`.
-- Two-way sync, `iterate/os`, making anything public, and restarting iterate/iterate's history.
+- Two-way sync, the real `iterate/os` and `iterate/packages`, making anything public, and restarting iterate/iterate's history.
+- Merging this PR, and so the Deploy OS job ever running.
 - A scheduled backstop or a dispatchable workflow. Deploys are frequent, and a laptop run covers manual catch-up.
-- Release tags or deployed version ids on the copy (see Release).
+- Release tags or deployed version ids on the copies (see Release versions).
 
 ## Decisions (Misha, 2026-09-29)
 
@@ -172,6 +162,9 @@ Claude creates iterate/copybara0929 (private) with `gh`. Misha is an org admin, 
 5. **The copy moves only after a successful deploy**, with the `GitOrigin-RevId` trailer standing in for "the release" for now. Assumed: "deploy" means Deploy OS (see Trigger).
 6. **"Referenced this pull request" backlinks on iterate/iterate PRs are welcome.**
 7. **A temporary job at the end of the PR's Deploy preview drives the branch phase.** It's a throwaway experiment, and the real thing will likely start over.
+8. **This PR never merges.** It's the experiment and the place to bikeshed the real layout.
+9. **Files live under `copybara/`:** one `copy.bara.sky`, plus a `copybara/<name>/` folder of root-only files per copy. Copies keep this repo's paths. (See Where the copies' files live.)
+10. **Round 2 copies to iterate/os0929 and iterate/packages0929;** iterate/copybara0929 is deleted.
 
 ## Implementation notes
 
@@ -183,3 +176,6 @@ Claude creates iterate/copybara0929 (private) with `gh`. Misha is an org admin, 
 - Scenario files: `packages/shared/COPYBARA-EXPERIMENT.md` exists only so there's something to copy and later delete. It goes before merge.
 - Known limit of the sync check: re-running an _older_ deploy after the copy has moved past it (a manual Deploy OS re-run) is a Copybara no-op. The check then compares the copy (newer) with that older sha and goes red, though nothing is wrong. Deploy OS runs one at a time and in order, so only a hand re-run hits it. Fixing it needs the origin's history (is the trailer's commit a descendant of `sha`?), which the check's depth-1 fetches don't have.
 - The second CI run failed in Copybara itself: `UnsupportedClassVersionError`, class file version 69. The v20260928 jar needs Java 25, not the 21 its README names; local runs worked on Homebrew's Java 26. Both jobs now install Temurin 25 with `actions/setup-java@v5` (v4 warns that it's deprecated).
+- Round 2 (2026-09-29): Copybara rejects any config file not named `copy.bara.sky` ("Copybara config file filename should be 'copy.bara.sky'"), and has no flag to change that. So per-copy `os.bara.sky` files can't work, and both workflows share `copybara/copy.bara.sky`.
+- Round 2: the iterate App token now covers every copy repo at once. `iterateAppToken` takes `repositories` and finds the App through the org's installation (`/orgs/iterate/installation`), not through one repo.
+- Round 2: `gh repo delete iterate/copybara0929` failed: the `gh` login lacks the `delete_repo` scope, and `gh auth refresh -s delete_repo` needs a browser. Misha to delete it.

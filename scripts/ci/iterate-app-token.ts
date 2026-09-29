@@ -1,8 +1,8 @@
-// THE ITERATE GITHUB APP'S INSTALLATION TOKEN, narrowed to one repository and the permissions a job
+// THE ITERATE GITHUB APP'S INSTALLATION TOKEN, narrowed to the repositories and permissions a job
 // needs. The App is the platform's own, installed on every repository in the org; its id and key
 // live in prd's configuration (Doppler os/prd's APP_CONFIG `integrations.github`). The flake
 // dashboard writes issues in this repository with one (./flake-dashboard/update.ts), and the
-// Copybara copy pushes to iterate/copybara0929 with another (./copybara.ts). A token lasts an hour.
+// Copybara copies push to their repositories with another (./copybara.ts). A token lasts an hour.
 import { createSign } from "node:crypto";
 import { z } from "zod";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
@@ -24,12 +24,12 @@ export async function iterateAppFromPrd() {
   return { appId: app.appId, privateKey: app.privateKey.exposeSecret() };
 }
 
-/** An installation token of the App, for `repo` alone, with `permissions` alone. */
+/** An installation token of the App, for `repositories` alone, with `permissions` alone. */
 export async function iterateAppToken(input: {
   appId: string;
   privateKey: string;
   owner: string;
-  repo: string;
+  repositories: string[];
   permissions: Record<string, "read" | "write">;
 }) {
   const now = Math.floor(Date.now() / 1000);
@@ -56,7 +56,7 @@ export async function iterateAppToken(input: {
   };
   const installation = z
     .object({ id: z.number() })
-    .parse(await github(`/repos/${input.owner}/${input.repo}/installation`));
+    .parse(await github(`/orgs/${input.owner}/installation`));
   const access = z
     .object({
       token: z.string().min(1),
@@ -65,7 +65,7 @@ export async function iterateAppToken(input: {
     })
     .parse(
       await github(`/app/installations/${installation.id}/access_tokens`, {
-        repositories: [input.repo],
+        repositories: input.repositories,
         permissions: input.permissions,
       }),
     );

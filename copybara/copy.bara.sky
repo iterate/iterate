@@ -1,8 +1,16 @@
-# THE COPY OF packages/ IN iterate/copybara0929, an experiment (tasks/copybara0929-experiment.md).
-# Copybara copies every commit that touches packages/ or the copy's README to the copy's main, one
-# copy commit per origin commit, each ending in a `GitOrigin-RevId: <origin sha>` trailer. A run
-# copies whatever came after the newest trailer, so a missed run is caught up by the next one.
-# scripts/ci/copybara.ts runs it after each successful Deploy OS, up to the deployed commit.
+# ONE-WAY COPIES OF PARTS OF THIS REPO, one Copybara workflow per copy (tasks/copybara0929-experiment.md):
+#
+#   os         iterate/os0929: apps/os and packages/iterate, today's stand-ins for core/os and
+#              core/lib (the call's `iterate/os` is `core/`)
+#   packages   iterate/packages0929: every other package
+#
+# Each copy keeps this repo's paths, so a path means the same file in both. `copybara/<name>/` holds
+# the files that exist only at that copy's root (README.md, and later LICENSE or .github/), moved there
+# verbatim. Copybara only reads a config named copy.bara.sky, so all copies share this one file.
+#
+# Every commit that touches a copy's files becomes one copy commit, ending in a
+# `GitOrigin-RevId: <origin sha>` trailer. A run copies whatever came after the newest trailer, so a
+# missed run is caught up by the next one. scripts/ci/copybara.ts runs both after a deploy.
 
 # The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
 # paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
@@ -25,25 +33,39 @@ def copy_message(ctx):
             section.append(line)
     ctx.set_message("\n\n".join([title] + sections) + "\n")
 
-core.workflow(
-    name = "copybara0929",
-    origin = git.origin(
-        url = "https://github.com/iterate/iterate",
-        ref = "main",
-        # fetch only what origin_files matches: iterate/iterate is 1.25 GB
-        partial_fetch = True,
-    ),
-    origin_files = glob(["packages/**", "copybara/copybara0929/README.md"]),
-    destination = git.destination(
-        url = "https://github.com/iterate/copybara0929",
-        push = "main",
-        fetch = "main",
-    ),
-    destination_files = glob(["**"]),
-    mode = "ITERATIVE",
-    authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
-    transformations = [
-        core.move("copybara/copybara0929/README.md", "README.md"),
-        copy_message,
-    ],
+def copy_workflow(name, repo, files, exclude = []):
+    core.workflow(
+        name = name,
+        origin = git.origin(
+            url = "https://github.com/iterate/iterate",
+            # the default ref; scripts/ci/copybara.ts always names the commit to copy up to
+            ref = "main",
+            # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+            partial_fetch = True,
+        ),
+        origin_files = glob(files + ["copybara/%s/**" % name], exclude = exclude),
+        destination = git.destination(
+            url = "https://github.com/iterate/%s" % repo,
+            push = "main",
+            fetch = "main",
+        ),
+        destination_files = glob(["**"]),
+        mode = "ITERATIVE",
+        authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
+        transformations = [
+            core.move("copybara/%s" % name, ""),
+            copy_message,
+        ],
+    )
+
+copy_workflow(
+    name = "os",
+    repo = "os0929",
+    files = ["apps/os/**", "packages/iterate/**"],
+)
+copy_workflow(
+    name = "packages",
+    repo = "packages0929",
+    files = ["packages/**"],
+    exclude = ["packages/iterate/**"],
 )

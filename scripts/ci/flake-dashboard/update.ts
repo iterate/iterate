@@ -35,7 +35,7 @@ export default async function update(
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),
     owner,
-    repo,
+    repositories: [repo],
     permissions: { issues: "write" },
   });
   console.log(

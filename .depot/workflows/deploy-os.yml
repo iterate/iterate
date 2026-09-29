@@ -101,11 +101,12 @@ jobs:
           UPLOADED: ${{ steps.deploy.outcome }}
         run: node scripts/ci/notify.ts deploy-failure
 
-  # THE COPYBARA COPY, an experiment (tasks/copybara0929-experiment.md): once this commit deployed,
-  # iterate/copybara0929's main catches up to it (scripts/ci/copybara.ts). A job of its own, so a
-  # failed copy shows red here but never touches the deploy or its posts, and pages nobody.
+  # THE COPYBARA COPIES, an experiment (tasks/copybara0929-experiment.md): once this commit deployed,
+  # each one-way copy in copybara/copy.bara.sky catches up to it (scripts/ci/copybara.ts). A job of
+  # its own, so a failed copy shows red here but never touches the deploy or its posts, and pages
+  # nobody.
   copybara:
-    name: Copy packages/ to iterate/copybara0929
+    name: Copybara copies
     needs: deploy
     runs-on: depot-ubuntu-24.04
     timeout-minutes: 15
@@ -127,7 +128,7 @@ jobs:
           distribution: temurin
           java-version: "25"
       # The script reads the iterate App's key from Doppler os/prd, like the deploy.
-      - name: Copy packages/ up to the deployed commit
+      - name: Copy up to the deployed commit
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: node scripts/ci/copybara.ts --workflow copybara0929 --sha "$GITHUB_SHA"
+        run: node scripts/ci/copybara.ts --sha "$GITHUB_SHA"
