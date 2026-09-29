@@ -152,3 +152,13 @@ export function formatConfigRepoTemplateReference(reference: ConfigRepoTemplateR
 export function normalizeConfigRepoTemplateReference(input: string): string {
   return formatConfigRepoTemplateReference(parseConfigRepoTemplateReference(input));
 }
+
+/**
+ * A template built into the deployment: apps/os/scripts/build.ts bakes each `configs/<name>` into
+ * the Worker, and a creation from one records `builtin:<name>@<the build's commit>`. Undefined for
+ * any other reference, a GitHub one.
+ */
+export function parseBuiltinConfigTemplate(reference: string) {
+  const match = /^builtin:([a-z0-9][a-z0-9-]*)@([0-9a-f]{7,40})$/u.exec(reference.trim());
+  return match ? { name: match[1]!, commit: match[2]! } : undefined;
+}

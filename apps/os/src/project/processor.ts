@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { jsonEqual, resolveContextPath } from "iterate/lib";
 import {
+  parseBuiltinConfigTemplate,
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
 } from "@iterate-com/shared/config-repo-template/reference";
@@ -34,7 +35,7 @@ import {
 } from "iterate/stream/processor";
 import type { WithItx } from "iterate/sdk";
 import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
-import { defaultFiles } from "../generated/config-templates.js";
+import { defaultFiles, templates } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
@@ -180,6 +181,20 @@ export class ProjectProcessor extends StreamProcessor<
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
     this.deletion = deletion;
+  }
+
+  /** The files a creation seeds the config repo with: a built-in template's, baked into this
+   *  deployment (`builtin:<name>@<commit>`; a creation resumed on a later deployment gets that
+   *  deployment's copy), a GitHub template's, downloaded at the pinned commit, or with no
+   *  template, the default files. */
+  private async templateFiles(reference: string | undefined) {
+    if (!reference) return defaultFiles;
+    const builtin = parseBuiltinConfigTemplate(reference);
+    if (!builtin) return this.downloadTemplate(parseConfigRepoTemplateReference(reference));
+    const baked = templates.find((template) => template.name === builtin.name);
+    if (!baked)
+      throw new Error(`This deployment has no built-in config template named ${builtin.name}.`);
+    return baked.files.map(({ target, content }) => ({ path: target, content }));
   }
 
   /** This incarnation's deletion attempt, so one at-head pass does not start a second; the durable
@@ -560,11 +575,7 @@ export class ProjectProcessor extends StreamProcessor<
           // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
           // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
           // that cannot be pinned fails the creation, like a download that fails.
-          const changes = await pinPkgPrNewDependencies(
-            reference
-              ? await this.downloadTemplate(parseConfigRepoTemplateReference(reference))
-              : defaultFiles,
-          );
+          const changes = await pinPkgPrNewDependencies(await this.templateFiles(reference));
           // The seed checks the template's entry with the loader's own rule (`readPackage`).
           readPackage(
             Object.fromEntries(changes.map((file) => [file.path, file.content])),

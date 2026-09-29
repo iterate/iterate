@@ -1,4 +1,4 @@
-import { existsSync, globSync, readFileSync } from "node:fs";
+import { existsSync, globSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ProjectProcessor } from "./processor.ts";
@@ -177,6 +177,34 @@ test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creati
       error: `${missing} answered 404 without naming the commit it serves, so it cannot be pinned`,
     },
   });
+});
+
+test("a built-in template seeds the files configs/<name> holds, baked into the deployment: nothing is downloaded", async () => {
+  const commit = "d".repeat(40);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () => new Response(null, { headers: { "x-commit-key": `iterate:iterate:${commit}` } }),
+    ),
+  );
+  const fixture = project();
+  await create(fixture, `builtin:with-agents@${"e".repeat(40)}`);
+  const configs = path.resolve(import.meta.dirname, "../../../../configs/with-agents");
+  const onDisk = globSync("**/*", {
+    cwd: configs,
+    exclude: (file) => file.includes("node_modules"),
+  })
+    .filter(
+      (file) =>
+        !existsSync(path.join(configs, file)) || !statSync(path.join(configs, file)).isDirectory(),
+    )
+    .sort();
+  expect(Object.keys(fixture.files() || {}).sort()).toEqual(onDisk);
+  expect(fixture.files()?.["worker.ts"]).toBe(
+    readFileSync(path.join(configs, "worker.ts"), "utf8"),
+  );
+  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
 test("a nonempty config repo keeps the project's edits even when a new template is requested", async () => {
