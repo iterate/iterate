@@ -1,6 +1,4 @@
-// sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base
-// class: the platform's `deliverEvent` hands `processEvent` one event and the project's root, the
-// scope of ONE `withItx` round trip that is released once the handler settles, even when it throws.
+// sdk/index.test.ts — `IterateConfigEntrypoint` in Node, on the `cloudflare:workers` shim's base class.
 import { expect, test } from "vitest";
 import type { StreamEvent } from "../stream/processor.ts";
 import { IterateConfigEntrypoint, type IterateConfigProcessEventArgs } from "./index.ts";
@@ -40,6 +38,12 @@ test("the defaults: an event is ignored and every request is not found", async (
   expect(await entrypoint.fetch(new Request("https://project.example/"))).toMatchObject({
     status: 404,
   });
+});
+
+test("callWithCause refuses withItx: it is no method Workers RPC would reach", async () => {
+  await expect(
+    configEntrypoint([]).callWithCause(undefined, [["withItx", () => {}]]),
+  ).rejects.toThrow(/withItx is no method Workers RPC would reach/);
 });
 
 /** A config entrypoint over a fake `env.ITX` whose root logs each call and each release; `handler`

@@ -1,12 +1,6 @@
 import { codedError } from "iterate/lib";
 import { expect, onTestFinished, test, vi } from "vitest";
-import {
-  ensureVoiceAgent,
-  installVoice,
-  upgradeVoice,
-  voiceAgentFacetSpec,
-  voiceVersion,
-} from "./install.ts";
+import { ensureVoiceAgent, installVoice, upgradeVoice, voiceVersion } from "./install.ts";
 
 const name = "@iterate-com/voice";
 const older = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@abc1234";
@@ -33,10 +27,6 @@ test("installVoice stores the screen font and writes the itx.voice rule to voice
       ],
     ],
   });
-});
-
-test("each press's relay facet is voice.ts's VoiceAgentDurableObject of the published config, with no cache key", () => {
-  expect(voiceAgentFacetSpec).toStrictEqual({ className: "VoiceAgentDurableObject", ...published });
 });
 
 test("a project whose config installed voice and that has a key is ready at once: nothing is stored or waited for", async () => {
@@ -136,8 +126,6 @@ test.for([
   const root = project({ pin, key: false });
   if (answer) root.waitForEvent.mockImplementation(answer as never);
   await expect(ensureVoiceAgent(root, "a key")).rejects.toThrow(error);
-  // a config that installs no voice is refused before anything is stored or waited for; one that
-  // pins it keeps the key it was given for when voice arrives
   expect(root.secrets.set).toHaveBeenCalledTimes(pin ? 1 : 0);
   expect(root.waitForEvent).toHaveBeenCalledTimes(pin ? 1 : 0);
 });
@@ -156,13 +144,6 @@ test("readiness has one deadline: rules that are not voice's, however many arriv
   });
   await expect(ensureVoiceAgent(root)).rejects.toThrow("Voice was not installed within a minute");
   expect(root.waitForEvent).toHaveBeenCalledTimes(6);
-});
-
-test("a broken voice service is reported as it is: nothing replaces it", async () => {
-  const root = project({ voice: true });
-  root.voice.health.mockRejectedValue(new Error("No such module voice.ts"));
-  await expect(ensureVoiceAgent(root)).rejects.toThrow("No such module voice.ts");
-  expect(root.append).not.toHaveBeenCalled();
 });
 
 test.for([

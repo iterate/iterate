@@ -59,6 +59,23 @@ test.for([
   }),
 );
 
+test("the email threads — a message with no Message-ID is a thread of its own, and one with none that answers joins", () =>
+  expect(
+    reduceProcessor(new EmailProcessor(), [
+      received({ messageId: "a@x", subject: "Hi" }),
+      received({ subject: "Other" }),
+      received({ subject: "Another" }),
+      received({ inReplyTo: "a@x", references: ["a@x"] }),
+    ]),
+  ).toEqual({
+    threads: {
+      1: { subject: "Hi", messageOffsets: [1, 4] },
+      2: { subject: "Other", messageOffsets: [2] },
+      3: { subject: "Another", messageOffsets: [3] },
+    },
+    threadOffsetByMessageId: { "a@x": 1 },
+  }));
+
 function received(message: MessageInput) {
   return {
     type: "events.iterate.com/email/received",

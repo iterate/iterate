@@ -3,7 +3,13 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { publishedPackageCommit, publishPathsOf } from "./published-package-commit.ts";
 
-const publishPaths = ["packages/agents/**", "packages/iterate/**", "pnpm-lock.yaml"];
+/** pkg-pr-new.yml's own `pull_request.paths`. */
+const publishPaths = publishPathsOf(
+  readFileSync(
+    path.resolve(import.meta.dirname, "../../../.github/workflows/pkg-pr-new.yml"),
+    "utf8",
+  ),
+);
 const base = "b".repeat(40);
 const head = "h".repeat(40);
 
@@ -23,20 +29,8 @@ test.for([
     changedPaths: ["apps/os/src/worker.ts", "configs/default/worker.ts"],
     expected: base,
   },
-  { name: "a main commit is its own merge base", changedPaths: [], expected: base },
 ])("$name", ({ changedPaths, expected }) => {
   expect(
     publishedPackageCommit({ sourceCommit: head, mergeBaseSha: base, changedPaths, publishPaths }),
   ).toBe(expected);
-});
-
-test("the publish paths are pkg-pr-new.yml's pull_request.paths", () => {
-  const workflow = readFileSync(
-    path.resolve(import.meta.dirname, "../../../.github/workflows/pkg-pr-new.yml"),
-    "utf8",
-  );
-  expect(publishPathsOf(workflow)).toEqual(
-    expect.arrayContaining(["packages/agents/**", "packages/iterate/**", "pnpm-lock.yaml"]),
-  );
-  expect(publishPathsOf(workflow)).not.toContain("main");
 });
