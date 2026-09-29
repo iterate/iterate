@@ -21,9 +21,9 @@ const CloudflareErrors = z.array(z.object({ code: z.number() }));
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
  *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos),
  *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace), 409/10306 and
- *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); KV
- *  404/10013 (no such namespace); R2 404/10006 (no such bucket); Worker Previews 404/10025 (no such
- *  preview). */
+ *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); Worker
+ *  Previews 404/10025 (no such preview). A deployment's members' not-found answers are
+ *  preview-delete.ts `GONE`. */
 export const isCloudflareError = (error: unknown, status: number, code: number) =>
   error instanceof CloudflareApiError &&
   error.status === status &&
