@@ -1,4 +1,4 @@
-// vitest/os-workers/platform-facts.test.ts — only the platform writes its facts, at every door; the
+// vitest/os-workers/platform-facts.test.ts — only the platform writes its facts, at every entry point; the
 // list of them is src/caller.test.ts's.
 import { expect, test } from "vitest";
 import { freshProject, PERSON, readLog, refused, rule, stub } from "./support.ts";
