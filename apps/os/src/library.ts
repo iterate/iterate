@@ -342,7 +342,7 @@ const SCRIPT_RUN_WAIT_SLICE_MS = 5_000;
 const SCRIPT_RUN_SLICE_ANSWER_MS = 4 * SCRIPT_RUN_WAIT_SLICE_MS;
 
 /** WHAT A CONTEXT'S `run` ANSWERS: the request, by the context it landed on (a path of the caller's
- *  project; a row may send `run` to another context, `itx.run ⇒ itx.cd(sandbox).run`) and its
+ *  project; a row may send `run` to another context, `itx.run ⇒ itx.cd(child).run`) and its
  *  offset, the run's identity. Plain data under one key, so it crosses every hop as it is
  *  (context/dispatch.ts copies an answer a hop below gave). */
 export const ScriptRunRequested = z.object({

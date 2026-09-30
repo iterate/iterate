@@ -213,12 +213,12 @@ test("REPLACED MID-RUN: the platform replaces the instance running a script — 
   expect(await itx.kv.get("starts")).toBe("1"); // not run again
 });
 
-test("REPLACED MID-RUN, REDIRECTED: a run its context sends to a sandbox (the agents app's `itx.run ⇒ itx.cd(sandbox).run`) whose instance the platform replaces while the script runs settles `interrupted` where it was requested — never the replacement's transport error as the script's own failure — and never runs again", async () => {
+test("REPLACED MID-RUN, REDIRECTED: a run its context sends to a child (`itx.run ⇒ itx.cd(child).run`) whose instance the platform replaces while the script runs settles `interrupted` where it was requested — never the replacement's transport error as the script's own failure — and never runs again", async () => {
   const project = "prj_run_redirect_replaced";
   const root = `${project}.iterate/`;
   const sandbox = `${project}.iterate/sandbox`;
-  // The agents app's two rows: the context's scripts run in its sandbox, and the sandbox's `itx` is
-  // its parent's, so the script counts its starts in the root's kv.
+  // Two rows: the context's scripts run in a child, and the child's `itx` is its parent's, so the
+  // script counts its starts in the root's kv.
   await stub(root).append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.run", target: "itx.cd('/sandbox').run" },
@@ -227,7 +227,7 @@ test("REPLACED MID-RUN, REDIRECTED: a run its context sends to a sandbox (the ag
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx", target: "itx.cd('/')" },
   });
-  // A literal request, as the agent's loop appends its scripts: the root's runner redirects it.
+  // A literal request, as a processor appends its scripts: the root's runner redirects it.
   const [requested] = (await stub(root).append({
     type: "events.iterate.com/itx/run-requested",
     payload: { code: PARKED_SCRIPT },

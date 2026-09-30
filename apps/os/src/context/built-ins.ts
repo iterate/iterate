@@ -1435,12 +1435,8 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           url.searchParams.set("description", JSON.stringify(collected.description));
         if (collected.fields) url.searchParams.set("fields", JSON.stringify(collected.fields));
         const callingPath = deps.caller().path;
-        // Agent scripts always run in exactly one child sandbox. The parent is the agent whose
-        // `message()` wakes the next turn; an ordinary `/agents/**` caller is already that agent.
-        const requestingAgent = callingPath?.endsWith("/sandbox")
-          ? callingPath.slice(0, -"/sandbox".length)
-          : callingPath;
-        if (requestingAgent?.startsWith("/agents/")) url.searchParams.set("agent", requestingAgent);
+        // The agent whose `message()` wakes the next turn: an `/agents/**` caller is that agent.
+        if (callingPath?.startsWith("/agents/")) url.searchParams.set("agent", callingPath);
         return { path: secretPath, url: url.href };
       },
       verifyHmac: (secretPath, input) =>

@@ -2,7 +2,7 @@
 // is the agents app's; only the provider URL is replaced, by a deployed WebSocket fixture speaking the
 // small GPT-Live protocol below: it delegates on a question frame and speaks back every commentary.
 // The agent's model is a fake `itx.ai`, except in the REAL row. Pins admission, agent birth,
-// inherited KV/egress, secrets, the hand-over, sandbox scripts and audio both ways; not the live
+// inherited KV/egress, secrets, the hand-over, agent scripts and audio both ways; not the live
 // model, microphones or speakers.
 import { expect } from "vitest";
 import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system-prompt.ts";
@@ -49,7 +49,9 @@ deployedOnly(
         `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
         `const { commitOid } = await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)}); const outcome = ${outcomeWait}; if (outcome.payload.error) throw new Error(outcome.payload.error); return commitOid;`,
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
-        `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
+        // the edge serves a project's hosts from the root's rule snapshot, so the publication is
+        // live for it within SNAPSHOT_TTL_MS of the outcome, not at it: ask until it serves the joke
+        `let attempts = 0; while (true) { const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); const body = await response.text(); attempts++; if (body.includes("bad stable manners") || attempts >= 20) return {status: response.status, body, attempts}; await new Promise((resolve) => setTimeout(resolve, 1000)); }`,
       ];
       // The agent's model, played: it answers the newest hand-over from the script results after
       // it, one script a turn, with prose beside the first script that must never be spoken.
@@ -71,7 +73,7 @@ deployedOnly(
                 '<codemode status="Checking the clock">\nreturn {time: new Date().toISOString(), identity: await itx.whoami()};\n</codemode>\n\nI could not verify the time.',
               );
             const { time, identity } = returned(0);
-            return answer(`The sandbox at ${identity.path} read the clock at ${time}.`);
+            return answer(`The agent at ${identity.path} read the clock at ${time}.`);
           }
           // The hand-over also carries what the voice said since the last one: the clock answer.
           if (request.endsWith(`Person: ${WEBSITE}`)) {
@@ -92,13 +94,13 @@ deployedOnly(
     });
     const { received, ai } = call;
     try {
-      // The agent's model must execute a script in the conversation's real sandbox: audio alone
-      // does not prove the sandbox's redirect is admitted for the call's loaded code.
+      // The agent's model must execute a script in the conversation's real context: audio alone
+      // does not prove the call's loaded code is admitted to run there.
       const clockStarted = Date.now();
       const clock = await call.ask(CLOCK);
-      const [, path, time] = /^The sandbox at (\S+) read the clock at (\S+)\.$/.exec(clock) ?? [];
+      const [, path, time] = /^The agent at (\S+) read the clock at (\S+)\.$/.exec(clock) ?? [];
       expect({ path, spoken: call.spoken() }).toMatchObject({
-        path: `${call.streamPath}/sandbox`,
+        path: call.streamPath,
         // Only the final answer is spoken: the prose beside the script is not.
         spoken: [clock],
       });
@@ -130,14 +132,14 @@ deployedOnly(
       expect(uses.map((event) => event.payload)).toEqual([
         { method: "GET", url: call.providerUrl, status: 101 },
       ]);
-      // The project's creation made and seeded the config repo the scripts below edit; a sandbox
-      // creates only beneath itself, so it cannot make that repo.
+      // The project's creation made and seeded the config repo the scripts below edit; an agent's
+      // script creates only beneath itself, so it cannot make that repo.
       await call.root.waitForEvent({
         type: ["events.iterate.com/project/created", "events.iterate.com/project/create-failed"],
         afterOffset: 0,
         timeoutMs: 60_000,
       });
-      // Seven real sandbox scripts: the candidate probe, the commit, then the live check.
+      // Seven real agent scripts: the candidate probe, the commit, then the live check.
       const websiteAsked = received.length;
       const websiteAskedAt = Date.now();
       await call.say(WEBSITE);
@@ -161,7 +163,7 @@ deployedOnly(
           });
       };
       // THE WAIT IS FOR PROGRESS, a step at a time (docs/testing.md: waits are progress-based): the
-      // edit is eight model turns and seven sandbox scripts in a row, each several Durable Object
+      // edit is eight model turns and seven agent scripts in a row, each several Durable Object
       // hops, and a hop between two contexts of one project can take 3 s (3.4–8.9 s a step in the
       // slowest runs, Workers traces, 2026-09-24). So 20 s bounds A STEP — an edit that stops still
       // fails 20 s after its last step, naming it — and the whole edit has a backstop of 40 s (the
