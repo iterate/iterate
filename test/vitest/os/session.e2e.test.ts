@@ -207,10 +207,11 @@ test("projects.create({ project }) writes the catalog row on global:/ and opens 
   // oxlint-disable-next-line iterate/prefer-object-property-match -- exact: the created fact carries nothing but its existence
   expect(created.payload).toEqual({}); // existence only
   expect(await processorNames(itx)).toContain("project");
-  // the seed: the config repo in the catalog (its certificate crossed to /), its files on main
+  // the seed: the config repo in the catalog (its certificate crossed to /), its files on main — no
+  // template named, so core's minimal config
   expect((await itx.repos.list()).map((r: { path: string }) => r.path)).toEqual(["/repos/config"]);
   expect(await itx.repos.get("/repos/config").listFiles()).toMatchObject({
-    paths: ["AGENTS.md", "agents.ts", "package.json", "tsconfig.json", "voice.ts", "worker.ts"],
+    paths: ["package.json", "worker.ts"],
   });
   // published: the apex answers the seed's homepage (subdomain routing under the test's base)
   await until("the apex answers the seed", async () =>
