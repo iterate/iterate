@@ -63,3 +63,20 @@ test("apps/os imports only these files outside apps/os and packages/", () => {
     ]
   `);
 });
+
+// A workspace package is outside too: packages/iterate is to become core/lib, and apps/os keeps its
+// own copies of the UI it uses (shadcn's and ours) instead of importing @iterate-com/ui.
+test("apps/os depends on only these workspace packages", () => {
+  const manifest: Record<"dependencies" | "devDependencies", Record<string, string>> = JSON.parse(
+    readFileSync(path.resolve(import.meta.dirname, "../package.json"), "utf8"),
+  );
+  expect(
+    Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })
+      .filter(([, version]) => version.startsWith("workspace:"))
+      .map(([name]) => name),
+  ).toMatchInlineSnapshot(`
+    [
+      "iterate",
+    ]
+  `);
+});

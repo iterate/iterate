@@ -1,9 +1,9 @@
 import { useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Button } from "@iterate-com/ui/components/button";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
+import { Button } from "../ui/button.tsx";
+import { IterateLogo } from "../iterate-logo.tsx";
+import { Spinner } from "../ui/spinner.tsx";
+import { StandalonePage } from "../standalone-page.tsx";
 
 /** How long the page keeps asking: past the longest Cloudflare has held a new Durable Object before
  *  starting it (45 s, previews 2026-09-24 to 09-28). */

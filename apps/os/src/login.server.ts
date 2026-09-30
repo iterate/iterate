@@ -1,8 +1,8 @@
 // The sign-in page's server side: what /login shows for this browser, and what its plain form posts
 // do. The route (routes/login.tsx) renders the first and hands POST /login to the second.
 
-import { deploymentEnvironment } from "@iterate-com/ui/lib/environment-favicon";
 import { errorCode, sameOriginPath } from "iterate/lib";
+import { deploymentEnvironment } from "./lib/environment-favicon.ts";
 import { ADMIN_SIGN_IN_PATH } from "./admin-sign-in.ts";
 import { startIssuerSession } from "./issuer-session.ts";
 import {

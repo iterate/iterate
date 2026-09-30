@@ -1,7 +1,7 @@
 import { useId } from "react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { Button } from "../ui/button.tsx";
+import { Field, FieldLabel } from "../ui/field.tsx";
+import { Input } from "../ui/input.tsx";
 import { focusOnMount } from "../focus-on-mount.ts";
 
 /** Email, then either a mailed code or the deployment's password. With both configured the code is

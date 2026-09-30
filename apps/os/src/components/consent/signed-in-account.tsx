@@ -1,6 +1,6 @@
 import { useHydrated } from "@tanstack/react-router";
-import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { Button } from "@iterate-com/ui/components/button";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar.tsx";
+import { Button } from "../ui/button.tsx";
 
 /** Who is approving — their picture (or initial) and address, wrapped rather than cut when long —
  *  and Switch account, which signs out and comes back to this request through sign-in. A platform

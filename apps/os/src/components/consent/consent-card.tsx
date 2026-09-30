@@ -2,7 +2,7 @@ import { useRef, useState, useTransition, type FormEvent } from "react";
 import { flushSync } from "react-dom";
 import { useHydrated, useRouter } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
+import { StandalonePage } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
 import { projectSlug } from "../../control-plane/catalog.ts";
 import { createProjectForConsent } from "../../issuer.functions.ts";

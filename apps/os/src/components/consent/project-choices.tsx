@@ -1,7 +1,7 @@
 import { useId } from "react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Checkbox } from "@iterate-com/ui/components/checkbox";
-import { Label } from "@iterate-com/ui/components/label";
+import { Button } from "../ui/button.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
+import { Label } from "../ui/label.tsx";
 
 /** A project the person reaches, with its organization's name for the list. */
 export interface ProjectRow {

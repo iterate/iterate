@@ -64,14 +64,16 @@ export default {
         "sqlfu.config.ts",
         "scripts/*.test.ts",
         "examples/**/*.ts",
+        // shadcn's components, vendored whole and never edited (packages/ui/AGENTS.md): the exports
+        // apps/os does not use are upstream's
+        "src/components/ui/*.tsx",
       ],
       project: ["src/**/*.{ts,tsx,css}!", "scripts/**/*.ts", "examples/**/*.ts"],
       // sqlfu writes these whole (`pnpm db:generate`): barrels and a migrations bundle the code
       // does not import, beside the query modules it does.
       ignore: ["src/control-plane/db/**/.generated/**"],
-      // `cloudflare:workers` parses as the "cloudflare" package; knip does not count
-      // src/styles.css's `@import "tailwindcss"`.
-      ignoreDependencies: ["cloudflare", "tailwindcss"],
+      // `cloudflare:workers` parses as the "cloudflare" package
+      ignoreDependencies: ["cloudflare"],
     },
     "apps/agents": {
       entry: ["scripts/**/*.ts"],

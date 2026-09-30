@@ -1,4 +1,4 @@
 # pnpm-lock.yaml's sha256, which `pnpm install` writes (scripts/lockfile-stamp.ts says why).
 # A conflict on the line below means main's lockfile changed too: on the rebased branch run
 # `pnpm install` and `node scripts/lockfile-stamp.ts`, then commit both files.
-bf32fc4d776af2a47cc2af324ccefb4d6aecc909594e053f68e363f13be3d371
+5bc7d4435d1a8f584216952e60fb3b03e075dfe2ea0631b9991e752775c051e6

@@ -1,15 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { FieldSeparator } from "@iterate-com/ui/components/field";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import {
-  environmentFaviconHref,
-  type DeploymentEnvironment,
-} from "@iterate-com/ui/lib/environment-favicon";
-import {
-  ErrorMessage,
-  StandaloneCard,
-  StandalonePage,
-} from "@iterate-com/ui/components/standalone-page";
+import { FieldSeparator } from "../components/ui/field.tsx";
+import { IterateLogo } from "../components/iterate-logo.tsx";
+import { environmentFaviconHref, type DeploymentEnvironment } from "../lib/environment-favicon.ts";
+import { ErrorMessage, StandaloneCard, StandalonePage } from "../components/standalone-page.tsx";
 import { CodeSignInForm } from "../components/login/code-sign-in-form.tsx";
 import { EmailSignInForm } from "../components/login/email-sign-in-form.tsx";
 import { signInProvidersOf } from "../components/login/providers.ts";

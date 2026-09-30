@@ -1,5 +1,5 @@
-import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar.tsx";
+import { IterateLogo } from "../iterate-logo.tsx";
 
 /** Who is asking: iterate and the client side by side, the client's name, and — independently of
  *  the name and logo the client supplies — the domain its metadata came from. A logo that fails to

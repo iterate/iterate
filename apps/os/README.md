@@ -32,8 +32,10 @@ pnpm --dir test e2e
 
 The Worker is a TanStack Start app built by Vite: `src/worker.ts` serves the platform, and the
 pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered routes in
-`src/routes/` using the shared `@iterate-com/ui` components. The build emits the Worker and its
-`dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects
+`src/routes/` using apps/os's own components: shadcn's in `src/components/ui/`, written by its CLI
+and never edited ([packages/ui/AGENTS.md](../../packages/ui/AGENTS.md#vendored-shadcn-components)),
+and ours beside them. The build emits the Worker and its `dist/server/wrangler.json`, which the
+tests, deploys and previews use. `WORKER_BASE_URL` selects
 a deployed target for the integration tests and the browser tests (`pnpm spec`,
 [test/playwright/](../../test/playwright/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
 suite boundary and required evidence.

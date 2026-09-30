@@ -13,7 +13,9 @@ The 09/29 call's split: hooks and headless providers go in `iterate`; rendered c
 a shadcn registry, and each app keeps its own copy (a `button.tsx` per repo is fine). The registry
 itself (UI PR 2) and moving the other apps to copies come later; this PR only gives apps/os its own.
 
-Status: not started.
+Status: done bar CI and the screenshots. apps/os has its own shadcn copies, our components and
+posthog pieces, and depends on no `@iterate-com/*` package; the drift check covers both folders.
+Left: CI's Browser specs and a before/after screenshot of each page.
 
 ## What apps/os takes today
 
@@ -22,7 +24,7 @@ Status: not started.
 | `@iterate-com/ui/components/{button,input,field,label,checkbox,avatar,spinner,native-select}` (+ `separator`, field's)                   | vendored shadcn (base-nova), byte for byte upstream | `apps/os/src/components/ui/`, written by `shadcn add` with apps/os's own `components.json`, under the drift check |
 | `@iterate-com/ui/components/{standalone-page,iterate-logo,environment-head-content}`, `lib/environment-favicon` (+ test, + the logo svg) | our own                                             | copied into `apps/os/src/components/` and `src/lib/`                                                              |
 | `@iterate-com/ui/components/posthog` (`initPosthog`)                                                                                     | the browser SDK's init                              | copied, only what apps/os uses                                                                                    |
-| `@iterate-com/shared/posthog` (`proxyPosthogRequest`)                                                                                    | the `/e/*` proxy to PostHog                         | into `apps/os/src/posthog.ts`, beside the error reporting                                                         |
+| `@iterate-com/shared/posthog` (`proxyPosthogRequest`)                                                                                    | the `/e/*` proxy to PostHog                         | `apps/os/src/posthog-proxy.ts`                                                                                    |
 | `@iterate-com/ui/globals.css`                                                                                                            | Tailwind, tw-animate, shadcn's layer, the tokens    | apps/os's own `src/styles.css`                                                                                    |
 
 ## Decisions
@@ -37,16 +39,28 @@ Status: not started.
 
 ## Checklist
 
-- [ ] `components.json`, the vendored items and our own copies in apps/os
-- [ ] apps/os imports nothing from `@iterate-com/ui` or `@iterate-com/shared`; both leave its
-      `package.json`
-- [ ] the drift check, lint/format/rules exclusions for apps/os's vendored files
-- [ ] `build.test.ts`'s outside-imports test fails on a new `@iterate-com/*` import
+- [x] `components.json`, the vendored items and our own copies in apps/os _(`src/components/ui/` by
+      `shadcn add`; ours in `src/components/`, `src/lib/`; posthog in `components/posthog.tsx` and
+      `src/posthog-proxy.ts`)_
+- [x] apps/os imports nothing from `@iterate-com/ui` or `@iterate-com/shared`; both leave its
+      `package.json` _(the deps the copies need went to the catalog)_
+- [x] the drift check, lint/format/rules exclusions for apps/os's vendored files _(`VENDORINGS` in
+      `scripts/ci/shadcn-drift.ts`; knip takes them as entries)_
+- [x] `build.test.ts`'s outside-imports test fails on a new `@iterate-com/*` import _(a third
+      test snapshots apps/os's `workspace:` dependencies: only `iterate`)_
 - [ ] typecheck, lint, knip, format, apps/os's tests, and the sign-in and consent pages look the
-      same (CI's Browser specs, and a screenshot of each against main's)
+      same (CI's Browser specs, and a screenshot of each against main's) _(all local checks pass)_
 
 ## Out of scope
 
 - The registry (UI PR 2), the other apps' copies, `use-context-explorer` into `iterate/react`.
 
 ## Implementation notes
+
+- The proxy got its own module rather than joining `src/posthog.ts`: that file imports `waitUntil`
+  from `cloudflare:workers`, which the unit tests' shim lacks.
+- The CLI's `"use client"` handling depends on which items one `add` run processes: avatar and
+  checkbox came out differently when added in a smaller batch. The check and refresh always add a
+  folder's whole list, so their result is stable; re-add a single item through `refresh`.
+- `apps/os/src/styles.css` drops globals.css's sidebar tokens and the sheet rule: apps/os renders
+  neither.
