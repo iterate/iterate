@@ -382,8 +382,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // requires explicit recreation. New direct contexts write their owner marker after birth.
       if (
         !this.ctx.storage.kv.get("durable-delivery-owner") &&
-        this.ctx.storage.kv.get("facet-ran:subscriptions") &&
-        !this.ctx.storage.kv.get("facet:subscriptions")
+        ((this.ctx.storage.kv.get("facet-ran:subscriptions") &&
+          !this.ctx.storage.kv.get("facet:subscriptions")) ||
+          this.ctx.storage.kv.get("facet-claim:subscriptions") ||
+          Object.values(this.#stream.coreReducedState.subscriptions).some(
+            (row) => row.delivery === "durable",
+          ))
       ) {
         this.#durableDeliveryMigrationRefusal = codedError(
           "INVALID_INPUT",
@@ -394,17 +398,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           this.#durableDeliveryMigrationRefusal,
           { path: this.#durableObjectAddress.path },
         );
-        await this.ctx.storage.deleteAlarm();
         return;
       }
       // Before this incarnation writes anything: the facets the last one ran are started (and the
       // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
       await this.#residency.resetUnclaimedFacetsAtBirth();
-      this.ctx.storage.kv.put("durable-delivery-owner", CoreContract.version);
+      if (!this.ctx.storage.kv.get("durable-delivery-owner"))
+        this.ctx.storage.kv.put("durable-delivery-owner", CoreContract.version);
       // Runners may create or prune cursor keys only after any facet that the prior incarnation
       // used has been started. This direct owner rebuilds its retry deadlines before the overdue
       // watch derives the one context alarm.
       this.#durableSubscriptionDelivery.sync();
+      if (this.ctx.storage.kv.get(IterateContextDurableObject.#durableDeliveryWakeKey))
+        this.#durableDeliveryRecoveryAt = Date.now();
       this.#stream.storage.countIncarnation();
       if (this.#stream.highestDurableOffset() > 0)
         this.#snapshotLeaseUntil = Date.now() + SNAPSHOT_TTL_MS + SNAPSHOT_CLOCK_SLACK_MS;
@@ -487,6 +493,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    * page ledger by its committed offset/path envelope, so one such event runs alone. */
   static readonly #configuredSubscriptionDeliveryMaximumBodyChars = 32 * 1024 * 1024;
   #configuredSubscriptionDeliveryBodyChars = 0;
+  static readonly #durableDeliveryWakeKey = "durable-delivery-wake-at";
   #durableDeliveryRecoveryAt: number | null = null;
   #durableDeliveryInFlight = 0;
 
@@ -529,16 +536,26 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     wakesChanged: () => this.#alarmCoordinator.reconcile(),
   });
 
+  #armDurableDeliveryRecovery(): void {
+    const at = Date.now() + 20_000;
+    this.#durableDeliveryRecoveryAt = at;
+    this.ctx.storage.kv.put(IterateContextDurableObject.#durableDeliveryWakeKey, at);
+  }
+
+  #clearDurableDeliveryRecovery(): void {
+    this.#durableDeliveryRecoveryAt = null;
+    this.ctx.storage.kv.delete(IterateContextDurableObject.#durableDeliveryWakeKey);
+  }
+
   #runDurableDelivery(work: () => Promise<unknown>): void {
-    this.#durableDeliveryInFlight++;
-    this.#durableDeliveryRecoveryAt = Date.now() + 20_000;
+    if (this.#durableDeliveryInFlight++ === 0) this.#armDurableDeliveryRecovery();
     this.ctx.waitUntil(
       Promise.resolve()
         .then(work)
         .catch((error) => reportIssue("subscription-delivery.context-background", error))
         .finally(() => {
           this.#durableDeliveryInFlight--;
-          if (this.#durableDeliveryInFlight === 0) this.#durableDeliveryRecoveryAt = null;
+          if (this.#durableDeliveryInFlight === 0) this.#clearDurableDeliveryRecovery();
           this.#alarmCoordinator.reconcile();
         }),
     );
@@ -943,6 +960,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const rows = this.#durableSubscriptionRows();
     if (rows.length === 0) {
       this.#durableSubscriptionDelivery.sync();
+      this.#clearDurableDeliveryRecovery();
       return;
     }
     const configurationChanged = events.some(
@@ -955,9 +973,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         !row.halted &&
         events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
     );
-    if (configurationChanged || durableDeliveryDue) {
-      this.#durableDeliveryRecoveryAt = Date.now() + 20_000;
-    }
+    if (configurationChanged || durableDeliveryDue) this.#armDurableDeliveryRecovery();
     if (
       !configurationChanged &&
       !durableDeliveryDue &&
@@ -967,14 +983,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       )
     )
       return;
-    this.#durableSubscriptionDelivery.push(events);
+    this.#durableSubscriptionDelivery.push(rows, events, configurationChanged);
   }
+
+  #durableSubscriptionRowsCache:
+    | {
+        subscriptions: CoreState["subscriptions"];
+        rules: CoreState["itxExpressionRewriteRules"];
+        rows: DurableSubscriptionRow[];
+      }
+    | undefined;
 
   /** Core is the durable source of subscription identity. A cold context rebuilds its runners from
    * these rows before it drives an alarm or post-commit delivery. */
   #durableSubscriptionRows(): DurableSubscriptionRow[] {
     this.#assertReconstructable();
-    return Object.entries(this.#stream.coreReducedState.subscriptions)
+    const { subscriptions, itxExpressionRewriteRules: rules } = this.#stream.coreReducedState;
+    const cached = this.#durableSubscriptionRowsCache;
+    if (cached?.subscriptions === subscriptions && cached.rules === rules) return cached.rows;
+    const rows = Object.entries(subscriptions)
       .filter(([, row]) => row.delivery === "durable")
       .map(([name, row]) => ({
         name,
@@ -991,6 +1018,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           retryCapMs: 4 * 60 * 60_000,
         }),
       }));
+    this.#durableSubscriptionRowsCache = { subscriptions, rules, rows };
+    return rows;
   }
 
   /** Context-local delivery reads only metadata. The core row is the authority for its identity
@@ -1771,7 +1800,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return [
       this.#stream.nextScheduledAppendAt(),
       this.#durableSubscriptionDelivery.deadline,
-      this.#durableDeliveryInFlight > 0 ? this.#durableDeliveryRecoveryAt : null,
+      this.#durableDeliveryRecoveryAt,
       this.#facetHost.deadlines()[0]?.at ?? null,
     ];
   }
@@ -2071,8 +2100,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
         // revive may make is the one derived below.
-        this.#durableDeliveryRecoveryAt = null;
-        this.#durableSubscriptionDelivery.revive();
+        if (!this.#durableSubscriptionDelivery.revive()) this.#clearDurableDeliveryRecovery();
         await this.#facetHost.reviveDueClaims();
       });
     } catch (error) {

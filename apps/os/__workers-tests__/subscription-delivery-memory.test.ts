@@ -2,7 +2,7 @@
 // near-limit page, but they cannot materialize twenty copies before handing their tiny matches to
 // a target. This is the replacement for the removed cursor-row memory-budget scenario.
 
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import { FANOUT_HOLD, HOLD } from "./sources.ts";
 import { releasePins, stub, until } from "./support.ts";
@@ -222,5 +222,49 @@ test("a near-8MiB legal event is admitted alone to an otherwise idle durable tar
       status.targetBodyChars === 0
     );
   });
+  await releasePins(context);
+});
+
+test("a persisted admission wake drives a configured row with no cursor after a cold start", async () => {
+  const context = "prj_subscription_delivery_persisted_admission_wake";
+  const s = stub(context);
+  const source = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  async processEventBatch() {
+    using itx = this.getItx();
+    await itx.kv.put("persisted-admission-wake", "delivered");
+  }
+}
+`,
+  };
+  let configuredAtOffset!: number;
+  await runInDurableObject(s, async (instance, state) => {
+    const [configured] = (await instance.append({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "cold-admission",
+        target: ["itx", "workers", ["get", { source }], "processEventBatch"],
+        delivery: "durable",
+        consumes: ["test/persisted-admission"],
+      },
+    })) as { offset: number }[];
+    configuredAtOffset = configured.offset;
+    await instance.append({ type: "test/persisted-admission" });
+    // Model the narrow crash after commit and before the runner writes its admitted cursor.
+    state.storage.kv.delete(`durable-delivery/cold-admission@${configuredAtOffset}`);
+    state.storage.kv.put("durable-delivery-wake-at", Date.now());
+  });
+  await evictDurableObject(s);
+  await runInDurableObject(s, async (instance) => {
+    await instance.alarm();
+  });
+  await until(
+    "the cold admission wake drives the durable target",
+    async () =>
+      (await s.invoke(["itx", "kv", ["get", "persisted-admission-wake"]])) === "delivered",
+  );
   await releasePins(context);
 });

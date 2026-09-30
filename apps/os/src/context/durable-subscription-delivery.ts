@@ -3,7 +3,7 @@ import {
   type DurableDeliveryCursor,
   type DurableDeliveryRuntime,
 } from "iterate/stream/durable-delivery";
-import { type ScannedRange, type StreamEvent } from "iterate/stream/processor";
+import { consumesEvent, type ScannedRange, type StreamEvent } from "iterate/stream/processor";
 
 export type DurableSubscriptionRow = {
   name: string;
@@ -69,36 +69,44 @@ export class DurableSubscriptionDelivery {
   }
 
   snapshots(): Record<string, DurableDeliveryCursor> {
-    this.#reconcile();
     return Object.fromEntries([...this.#runners].map(([key, runner]) => [key, runner.snapshot()]));
   }
 
   sync(): void {
-    this.#reconcile();
+    this.#reconcile(this.#deps.rows());
   }
 
-  push(events: StreamEvent[]): void {
-    this.#reconcile();
-    for (const row of this.#deps.rows()) {
+  push(rows: DurableSubscriptionRow[], events: StreamEvent[], configurationChanged: boolean): void {
+    if (configurationChanged) this.#reconcile(rows);
+    for (const row of rows) {
       if (row.halted) continue;
-      const runner = this.#runners.get(keyOf(row))!;
+      const relevant =
+        configurationChanged || events.some((event) => consumesEvent(row.consumes, event));
+      if (!relevant) continue;
+      const runner = this.#runners.get(keyOf(row));
+      if (!runner) continue;
       for (const event of events) runner.push(event);
       runner.drive((work) => this.#deps.run(work));
     }
   }
 
-  revive(): void {
-    this.#reconcile();
-    for (const row of this.#deps.rows()) {
+  /** Drives all current rows after a durable recovery wake. */
+  revive(): boolean {
+    const rows = this.#deps.rows();
+    this.#reconcile(rows);
+    let drove = false;
+    for (const row of rows) {
       const key = keyOf(row);
       this.#coldRecovery.delete(key);
-      if (!row.halted) this.#runners.get(key)?.drive((work) => this.#deps.run(work));
+      if (row.halted) continue;
+      this.#runners.get(key)?.drive((work) => this.#deps.run(work));
+      drove = true;
     }
     this.#restoreWakes();
+    return drove;
   }
 
-  #reconcile(): void {
-    const rows = this.#deps.rows();
+  #reconcile(rows: DurableSubscriptionRow[]): void {
     const live = new Set(rows.map(keyOf));
     for (const [key, runner] of this.#runners)
       if (!live.has(key)) {
@@ -142,14 +150,15 @@ export class DurableSubscriptionDelivery {
         });
         this.#runners.set(key, runner);
       }
-      if (row.halted)
+      if (row.halted) {
+        this.#coldRecovery.delete(key);
         runner.halt(
           row.halted.afterOffset,
           row.halted.attempts,
           row.halted.error || "configured subscription delivery halted",
           row.resumedAtOffset,
         );
-      else if (
+      } else if (
         row.resumedAtOffset !== undefined &&
         this.#deps.storage.get<number>(`durable-delivery-resumed/${key}`) !== row.resumedAtOffset
       ) {
@@ -170,6 +179,7 @@ export class DurableSubscriptionDelivery {
     this.#wakeByRunner.clear();
     for (const [key, runner] of this.#runners) {
       const cursor = runner.snapshot();
+      if (cursor.halted) continue;
       const fanout = cursor.fanOut?.pending.reduce<number | undefined>(
         (at, item) =>
           item.nextAttemptAtMs === undefined || (at !== undefined && at <= item.nextAttemptAtMs)
@@ -178,10 +188,9 @@ export class DurableSubscriptionDelivery {
         undefined,
       );
       const at = cursor.pending?.nextAttemptAtMs ?? fanout;
-      if (at !== undefined) this.#wakeByRunner.set(key, at);
-      else if (this.#coldRecovery.has(key)) this.#wakeByRunner.set(key, Date.now());
+      if (this.#coldRecovery.has(key)) this.#wakeByRunner.set(key, Date.now());
+      else if (at !== undefined) this.#wakeByRunner.set(key, at);
     }
-    this.#deps.wakesChanged();
   }
 
   #runtime(row: DurableSubscriptionRow): DurableDeliveryRuntime {
