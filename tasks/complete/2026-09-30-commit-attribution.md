@@ -1,14 +1,13 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
 # A commit says the platform made it, and who asked
 
-Status: built, awaiting CI and review. Every commit the platform makes is committed by `iterate`;
-a script's commit for someone is authored by them and ends with `Iterate-Run:` (and `Requested-by:`
-when it names another author); agents are told to write their own `Via:`. The MCP e2e (moved
-to test/ by #3479) asserts the committer and `Iterate-Run:` too.
+Status: done, merging (#3483). Every commit the platform makes is committed by `iterate`; a
+script's commit for someone is authored by them and ends with `Iterate-Run:` (and `Requested-by:`
+when it names another author); agents are told to write their own `Via:`.
 
 ## Why
 
