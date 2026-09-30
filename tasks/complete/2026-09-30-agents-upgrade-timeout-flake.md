@@ -1,11 +1,11 @@
 ---
-status: ready
+status: done
 size: small
 ---
 
 # The agents upgrade test flakes on the first wait's `timeoutMs`
 
-**Status:** not started.
+**Status:** done. The row asserts the first wait is within 100 ms of two minutes.
 
 ## Why
 
@@ -34,5 +34,5 @@ building, so os wrote no telemetry. Nothing to fix there.
 
 ## Checklist
 
-- [ ] loosen the `timeoutMs` assertion in `packages/agents/src/install.test.ts`
-- [ ] `pnpm --dir packages/agents test`, typecheck, lint
+- [x] loosen the `timeoutMs` assertion in `packages/agents/src/install.test.ts` _`expect.any(Number)` in the called-with, then `toBeGreaterThan(119_900)`; a subtraction trips TS because `timeoutMs` is optional_
+- [x] `pnpm --dir packages/agents test`, typecheck, lint _green; a 119 800 ms deadline in `install.ts` fails both rows_
