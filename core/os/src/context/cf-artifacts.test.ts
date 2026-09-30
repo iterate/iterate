@@ -142,7 +142,7 @@ test("every binding handle is released: create, createToken and remote leave non
 });
 
 // A repo facet asks `get(path).remote()` and `get(path).createToken(…)` through its context: each is
-// two dispatches (a mid-chain handle, packages/iterate/src/expression.ts), and each dispatch walks
+// two dispatches (a mid-chain handle, core/lib/src/expression.ts), and each dispatch walks
 // `get(path)` again. So `get` itself touches no binding, and each method opens exactly one handle.
 test("get(path) touches no binding; remote() is one get and one info, createToken one get and one mint", async () => {
   const { namespace } = recordingNamespace(["prj_a.repos--config"]);

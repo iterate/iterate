@@ -2,7 +2,7 @@
 // a different event is refused IDEMPOTENCY_CONFLICT, with the existing event's offset, on each hop an
 // appender reaches the log over: loaded code's `env.ITX` (Workers RPC, the agents' settle), a
 // client's capnweb session, and the platform's own `appendPlatformFact` (the Slack webhook's
-// redelivery). So a caller checks the code, never the message (packages/iterate/src/lib.ts).
+// redelivery). So a caller checks the code, never the message (core/lib/src/lib.ts).
 
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";

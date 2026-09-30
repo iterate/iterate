@@ -7,7 +7,7 @@ export default defineConfig({
     alias: {
       // catalog.ts's only platform imports are base classes (the SDK's hosts, RpcTarget).
       "cloudflare:workers": fileURLToPath(
-        new URL("../iterate/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
+        new URL("../../core/lib/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
     },
   },

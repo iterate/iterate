@@ -16,7 +16,7 @@ on:
       - packages/docs/**
       - envs.ts
       - scripts/lib/**
-      - packages/iterate/**
+      - core/lib/**
       - packages/ui/**
       - packages/shared/**
       - package.json

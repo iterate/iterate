@@ -254,7 +254,7 @@ function copybaraJar() {
 }
 
 /** iterate/os's workspace packages: what copy.bara.sky's `os` workflow copies of this repo's. */
-const OS_PACKAGES = ["core/os", "packages/iterate", "packages/shared", "packages/ui"];
+const OS_PACKAGES = ["core/os", "core/lib", "packages/shared", "packages/ui"];
 const OS_WORKSPACE_HEADER =
   "# iterate/os's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for\n" +
   "# these packages alone, with the same settings and the catalog trimmed to what they use.\n";

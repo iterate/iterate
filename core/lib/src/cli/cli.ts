@@ -4,12 +4,10 @@ import { dirname } from "node:path";
 import process from "node:process";
 import repl from "node:repl";
 import { RpcTarget } from "capnweb";
-import * as prompts from "@clack/prompts";
-import { os } from "@orpc/server";
-import { createCli, yamlTableConsoleLogger } from "trpc-cli";
+import { createCli, os, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod";
-import { connectIterate } from "iterate/node";
-import type { SessionCredentials } from "iterate/api";
+import { connectIterate } from "../node.ts";
+import type { SessionCredentials } from "../api.ts";
 import { isCodingAgent } from "./coding-agent.ts";
 import { launchMenubarApp } from "./menubar-app.ts";
 import { oauthLogin, refreshOAuthSession } from "./oauth.ts";
@@ -744,7 +742,7 @@ const launcherProcedures = {
       }),
   },
 };
-const getCli = async () => {
+export const runCli = async () => {
   configFlagOverride = consumeCliStringFlag("--config");
   if (process.argv.length === 2) process.argv.push("--help");
   const cli = createCli({
@@ -753,14 +751,11 @@ const getCli = async () => {
     description:
       "Iterate CLI. Run itx scripts, authenticate, share your computer, and provide local code.",
   });
-  return {
-    cli,
-    prompts: isAgent || !process.stdin.isTTY || !process.stdout.isTTY ? undefined : prompts,
-  };
-};
-export const runCli = async () => {
-  const { cli, prompts: cliPrompts } = await getCli();
-  await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
+  // trpc-cli's built-in prompts ask for a missing input, but only a person at a terminal
+  await cli.run({
+    prompts: !isAgent && process.stdin.isTTY && process.stdout.isTTY,
+    logger: yamlTableConsoleLogger,
+  });
 };
 
 /**

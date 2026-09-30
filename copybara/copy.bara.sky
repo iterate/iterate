@@ -1,7 +1,6 @@
 # ONE-WAY COPIES OF PARTS OF THIS REPO, one Copybara workflow per copy (tasks/copybara0929-experiment.md):
 #
-#   os         iterate/os0929: core/ and packages/iterate, today's stand-ins for core/os and
-#              core/lib (the call's `iterate/os` is `core/`)
+#   os         iterate/os0929: core/ (core/os and core/lib; the call's `iterate/os` is `core/`)
 #   packages   iterate/packages0929: every other package
 #
 # Each copy keeps this repo's paths, so a path means the same file in both. `copybara/<name>/` holds
@@ -85,7 +84,6 @@ copy_workflow(
     # copy's own, in copybara/os/ (scripts/ci/copybara.ts `root`).
     files = [
         "core/**",
-        "packages/iterate/**",
         "packages/shared/**",
         "packages/ui/**",
         "configs/**",
@@ -101,5 +99,4 @@ copy_workflow(
     name = "packages",
     repo = "packages0929",
     files = ["packages/**"],
-    exclude = ["packages/iterate/**"],
 )

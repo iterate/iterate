@@ -1,7 +1,7 @@
 // context/dispatch.test.ts — executable spec for dispatch.ts: the walk's pipelining contract, the
 // step walk under a rewrite rule through `ItxExpressionResolver` over a fake built-ins scope, the
 // resolver releasing what its walk held, and what a context's `invoke` answer leaves of a session.
-// The codec and the prototype hop are the SDK's (packages/iterate src/expression.test.ts); rule
+// The codec and the prototype hop are the SDK's (core/lib src/expression.test.ts); rule
 // MATCHING is itx-expression-rewriting.test.ts.
 
 import { expect, test } from "vitest";

@@ -26,7 +26,7 @@ on:
       - configs/**
       # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
       - packages/agents/**
-      - packages/iterate/**
+      - core/lib/**
       - envs.ts
       - scripts/lib/**
       # the deploy itself and what it provisions (scripts/os/deploy.ts, d1.ts)

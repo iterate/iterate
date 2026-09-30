@@ -25,7 +25,7 @@ The platform build embeds every folder here with `@iterate-com/agents` and `@ite
 pinned to this checkout's own build (core/os `scripts/published-package-commit.ts`). Any other
 template may list a pkg.pr.new dependency at a branch (`…@main`): the seed writes it at the commit
 pkg.pr.new names for it then, because the loader loads a pkg.pr.new package only at a full commit
-(`pinPkgPrNewDependencies` in `packages/iterate/src/pkg-pr-new.ts`). `devDependencies` are copied as
+(`pinPkgPrNewDependencies` in `core/lib/src/pkg-pr-new.ts`). `devDependencies` are copied as
 written.
 
 Templates are type-checkable as they stand: `package.json` lists the SDK's types from

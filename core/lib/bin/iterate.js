@@ -26,7 +26,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const pkgRoot = dirname(__dirname);
 
-// `npx @iterate-com/cli` and `bunx @iterate-com/cli` should exercise the package that the runner
+// `npx iterate` and `bunx iterate` should exercise the package that the runner
 // just installed. Normal installed/global executions still delegate to local
 // repo source below, which keeps monorepo development fast.
 const isEphemeralPackageRunner = () =>
@@ -49,10 +49,10 @@ const findLocalModule = () => {
 
   const repoRoot = findUp("pnpm-workspace.yaml");
   if (repoRoot) {
-    const repoPkg = join(repoRoot, "packages/cli");
+    const repoPkg = join(repoRoot, "core/lib");
     const repoBin = join(repoPkg, "bin/iterate.js");
     if (existsSync(repoBin) && realpathSync(repoBin) !== selfReal) {
-      const repoSrc = join(repoPkg, "src/cli.ts");
+      const repoSrc = join(repoPkg, "src/cli/cli.ts");
       if (existsSync(repoSrc)) return repoSrc;
       const repoDist = join(repoPkg, "dist/cli.mjs");
       if (existsSync(repoDist)) return repoDist;
@@ -64,9 +64,9 @@ const findLocalModule = () => {
     // pnpm's .bin entry is a shell shim, so compare the package's actual bin.
     // Comparing the shim itself mistakes our own package for another install
     // and sends repository development to a stale dist build.
-    const nmScript = join(nmRoot, "node_modules/@iterate-com/cli/bin/iterate.js");
+    const nmScript = join(nmRoot, "node_modules/iterate/bin/iterate.js");
     if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
-      const nmDist = join(nmRoot, "node_modules/@iterate-com/cli/dist/cli.mjs");
+      const nmDist = join(nmRoot, "node_modules/iterate/dist/cli.mjs");
       if (existsSync(nmDist)) return nmDist;
     }
   }
@@ -79,7 +79,7 @@ if (localModule) {
   const { runCli } = await import(localModule);
   await runCli();
 } else {
-  const srcPath = join(pkgRoot, "src/cli.ts");
+  const srcPath = join(pkgRoot, "src/cli/cli.ts");
   const distPath = join(pkgRoot, "dist/cli.mjs");
   const modulePath = !forceBuiltPackage && existsSync(srcPath) ? srcPath : distPath;
   const { runCli } = await import(modulePath);

@@ -52,10 +52,10 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
 - `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
-  `@iterate-com/cli`, `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
+  `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
   `@iterate-com/github-sync` and `@iterate-com/ai-linter` packages to
   [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes their inputs
-  (their `packages/*` folders, `packages/shared`, the root manifests and lockfile, or the workflow
+  (their folders, `core/lib` and `packages/*`, `packages/shared`, the root manifests and lockfile, or the workflow
   itself): the **publish** and **Continuous Releases** checks. Projects install agents, voice, the
   GitHub sync and the AI linter from these builds, and the e2e rows that prove it pin the PR head's.
 - `.github/workflows/merges-with-main.yml` is the **Merges with main** check, on
@@ -578,7 +578,7 @@ Preview OS runs on every pull request with no `paths` filter, because GitHub lea
 check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
 `previewPaths` (`core/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
-`test/playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
+`test/playwright.config.ts`, `core/lib`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
 `scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
 none of them gets a green Deploy preview that deployed nothing, and two green suites that tested

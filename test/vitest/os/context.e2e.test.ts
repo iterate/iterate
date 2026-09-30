@@ -171,7 +171,7 @@ test("JSON.stringify of a dangling chain node must not dispatch, and the node st
 });
 
 // PINS iterate/expression.ts's reserved-word promise AGAINST THE LIVE SURFACE (unit half:
-// packages/iterate/src/expression.test.ts "hides reserved path segments from the path proxies
+// core/lib/src/expression.test.ts "hides reserved path segments from the path proxies
 // the hop hands out").
 // RESERVED hides JS/transport machinery ('then', 'dup', 'onRpcBroken', …) at
 // the prototype hop AND inside every path proxy it hands out, so a protocol probe can never conjure

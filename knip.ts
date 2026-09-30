@@ -32,8 +32,6 @@ export default {
       entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
       project: ["*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
-        // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
-        "@iterate-com/cli",
         // `cloudflare:workers` parses as the "cloudflare" package.
         "cloudflare",
       ],
@@ -167,15 +165,10 @@ export default {
       entry: ["src/**/*.test.ts"],
       project: ["src/**/*.ts", "tsdown*.ts"],
     },
-    "packages/cli": {
-      // The `iterate` bin (package.json `bin`).
-      entry: ["src/**/*.test.ts"],
-      project: ["src/**/*.ts", "bin/**/*.js", "tsdown*.ts"],
-    },
-    "packages/iterate": {
-      // The `iterate/*` SDK is the package.json export map.
+    "core/lib": {
+      // The `iterate/*` SDK is the package.json export map; the CLI's entry is its `iterate` bin.
       entry: ["src/**/*.test.{ts,tsx}"],
-      project: ["src/**/*.{ts,tsx}", "tsdown*.ts"],
+      project: ["src/**/*.{ts,tsx}", "bin/**/*.js", "tsdown*.ts"],
       // `cloudflare:workers` (typed by src/cloudflare-workers.d.ts) parses as
       // the "cloudflare" package — same posture as the app workspaces.
       ignoreDependencies: ["cloudflare"],
