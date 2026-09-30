@@ -6,7 +6,6 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
 import { viteBuild } from "../../../scripts/lib/vite-build.ts";
 import type { OsDeployableEnv } from "./os-env.ts";
@@ -169,4 +168,4 @@ export async function buildOs(deployment: OsDeployableEnv) {
   await viteBuildOs(deployment);
 }
 
-if (isMainModule(import.meta.url)) await build();
+if (import.meta.main) await build();

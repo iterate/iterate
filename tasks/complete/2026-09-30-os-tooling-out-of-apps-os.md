@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -14,7 +14,7 @@ but one are iterate's own tooling: deploying prd and main on dev, provisioning, 
 the per-PR previews, soak and load runs. A self-hoster needs none of it. This moves that tooling to
 `scripts/os/`, next to the rest of iterate's scripts.
 
-Status: done pending CI. The tooling is in scripts/os with root commands; apps/os imports envs.ts only from its e2e suite's deployment lookup.
+Status: done: merged as iterate/iterate#3456.
 
 ## What moves (apps/os/scripts → scripts/os)
 

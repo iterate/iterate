@@ -1,44 +1,40 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
-# apps/os stops importing four small pieces of packages/shared
+# apps/os stops importing `@iterate-com/shared/dev/is-main-module`
 
-Pre-work item 3 for moving apps/os into `core/`, first slice. Core builds from a clone of itself: outside code
-may import core, core never imports outside code. `packages/shared` is outside, and apps/os imports
-14 of its subpaths. This takes the four small ones.
+Pre-work item 3 for moving apps/os into `core/` (the packages/shared question), first slice.
 
-Status: spec written, implementation not started.
+Status: done. The slice shrank: see "What changed from the plan".
 
 ## Checklist
 
-- [ ] `dev/is-main-module`: apps/os/scripts/getin.ts drops its guard (trpc-cli, given
+- [x] `dev/is-main-module`: apps/os/scripts/getin.ts drops its guard (trpc-cli, given
       `...import.meta`, already runs only when the file is the entry point); apps/os/scripts/build.ts
-      uses Node's own `import.meta.main`
-- [ ] `app-config` (the `APP_CONFIG` mechanism: `parseAppConfigVars`, `fieldNameOf`, `httpOrigin`,
-      `optionalOrigin`, `dnsName`) moves to apps/os/src/app-config-vars.ts with its test.
-      packages/shared/src/start-app-config.ts (the apps on top's schema) imports it from there
-- [ ] `compatibility-date` moves to apps/os/src/compatibility-date.ts. scripts/lib (wrangler-config,
-      start-app, do-reset test) and apps/spa's deploy import it from there
-- [ ] `test-support/temporary-directory`: apps/os gets its own 10-line copy at
-      apps/os/src/test-support/temporary-directory.ts; the shared one stays for its other ~25 users
-- [ ] packages/shared's `./app-config` and `./compatibility-date` exports and files go
-- [ ] apps/os/scripts/build.test.ts's outside-imports snapshot is unchanged (packages/ is allowed
-      there); a grep shows apps/os no longer imports the four subpaths
-- [ ] housekeeping: #3456's task file moves to tasks/complete/
+      uses Node's own `import.meta.main` _checked: running either file directly runs it; importing
+      build.ts leaves src/generated untouched and importing getin.ts prints nothing_
+- [ ] ~~`app-config` moves to apps/os~~ _dropped: see below_
+- [ ] ~~`compatibility-date` moves to apps/os~~ _dropped: see below_
+- [ ] ~~apps/os gets its own `temporary-directory`~~ _dropped: only worth it if packages/shared stays
+      outside core_
+- [x] housekeeping: #3456's task file moves to tasks/complete/
 
-## Assumptions (made without asking)
+## What changed from the plan
 
-- The APP_CONFIG mechanism belongs to core, and the apps on top reuse it from apps/os (outside
-  importing core is allowed), rather than a copy each side or a new `iterate` subpath.
-- One compatibility date for every Worker stays (#3442): core owns the constant, everyone else
-  imports it.
-- Other users of `is-main-module` (other apps, scripts/) are left alone: core does not depend on them.
+The repo already draws this line (packages/iterate/README.md, "The SDK/platform line"): a module
+goes in `iterate` when user code runs or speaks it, in apps/os when only the platform's Worker runs
+it, and in packages/shared when more than one app needs it and user code never does. Nothing
+outside apps/os may import apps/os (`import-js/no-restricted-paths` in .oxlintrc.json, pinned by
+lint/oxlintrc-platform-line.test.ts). Moving `app-config` and `compatibility-date` into apps/os broke
+that for packages/shared/src/start-app-config.ts and apps/spa/scripts/deploy.ts, and both modules
+are exactly "more than one app needs it, user code never does".
 
-## Out of scope
-
-- The other shared subpaths (platform-retry, integration-scopes, config-repo-template/reference,
-  posthog, pkg-pr-new, the test policy helpers): later PRs.
+So packages/shared is by design what the platform and the apps share, and the core/ question is
+which of its modules come into core beside apps/os, not how apps/os stops using them.
 
 ## Implementation notes
+
+- First attempt moved app-config, compatibility-date and a temporary-directory copy into apps/os;
+  lint refused the two cross-imports and the change was reset before committing.
