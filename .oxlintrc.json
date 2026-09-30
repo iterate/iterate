@@ -294,6 +294,23 @@
       }
     },
     {
+      "files": ["packages/iterate/src/stream/contract.ts", "packages/agents/src/contract.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["**", "!zod", "!iterate/stream/contract", "!iterate/stream/run"],
+                "allowTypeImports": true,
+                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through @iterate-com/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (packages/iterate/src/stream/contract.ts). Type-only imports are free."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["apps/os/src/library/**"],
       "rules": {
         "no-restricted-imports": [
