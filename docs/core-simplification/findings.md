@@ -25,11 +25,20 @@ core lines plus 7,497 SDK lines, or 25,578 combined: 42 below the 25,620 main
 baseline. That is the current comparison, not the agent-stat count that includes
 tests. Tests and moved code are never credited as runtime deletions.
 
-External evidence remains incomplete. Preview, performance, 100-run soak, and
-log comparison for `5eff` remain pending. Its predecessor `8d` had all 11
-browser checks green and 326 E2E passes; three stale fixtures were repaired
-before the `5eff` run. Those predecessor results do not replace the required
-`5eff` external validation.
+A later read-only Round 15 review found a cold, ephemeral-only first push can
+lose another filtered row's persisted wake. The local repair is `0739e06e8`:
+it drives every freshly reconciled row once, preserves warm ephemeral fan-out
+suppression, and has nine passing focused units. Its full run and publication
+are pending, so it has no green or external-validation claim.
+
+External evidence for `5eff` is incomplete and does not pass release gates. The
+`lpdbw2tv6d` 100-run soak was cancelled and is invalid, not a passing soak. Its
+completed latency run measured cross-append at 108 ms against a 100 ms budget,
+although the other metrics were good; it is archived rather than final evidence.
+Preview, performance, soak, and log comparison must restart on the next
+published head. Predecessor `8d` had all 11 browser checks green and 326 E2E
+passes; three stale fixtures were repaired before `5eff`. Those results do not
+replace the required external validation.
 
 The remaining architecture keeps the existing pager for live providers and
 callbacks. The context owns durable delivery's log, cursor, resume
@@ -765,6 +774,36 @@ promising but unimplemented simplification. The review's remaining deletions
 are candidates only until external `5eff` validation covers recovery, alarm
 behaviour, fan-out terminal handling, and source-cause preservation.
 
+### Round 15: the remaining cold-start wake loss is repaired locally, not yet validated
+
+[The fifteenth independent review](reviews/opus-round-15.md) read immutable
+`5eff1bf859f710c714806d84c8a33f3fcd397048`, made no changes, and ran no tests.
+It completed successfully with Claude Opus 5.5 xhigh: 45,985 thinking tokens,
+49,547 output tokens, and 484,064 ms of model duration.
+
+It found one last P1 issue in the Round 14 fresh-row recovery change. On a cold
+context, an ephemeral-only first relevant push could drive its ordered row while
+leaving a newly reconstructed filtered row idle. When the ordered run settled,
+it could clear the shared wake that belonged to the filtered row's future retry.
+The local `0739e06e8` repair treats a freshly reconciled row as relevant once,
+regardless of whether that first push is durable or ephemeral. That reconstructs
+all owed work after a cold start while keeping warm ephemeral pushes from
+running fan-out rows that cannot receive them.
+
+The review also confirms the captured-generation fences, selective resume and
+seek boundary, retry bound, and selected source cause behaviour as read-only
+source properties. It records accepted costs rather than treating them as
+fixed: one asynchronous terminal receipt per alarm pass, body/pin retention for
+hung native calls, and the global recovery key and old-owner refusal. Its
+remaining fan-out warnings concern intentionally at-least-once redelivery after
+a row-level target refusal and a generic interruption message after a fenced
+final attempt. They are not replacements for the new cold-start regression.
+
+The old condition fails both new cold-start tests; the `0739` condition passes
+nine focused units. No Round 15 test was run by the reviewer, and the full
+source run, publication, preview, latency, soak, and log evidence must attach
+to the next published revision before this report can call the repair complete.
+
 ## What remains core
 
 Core owns the append-only durable log, bounded ephemerals, `itx` name
@@ -893,5 +932,5 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), [round 11](reviews/opus-round-11.md), [round 12](reviews/opus-round-12.md), [round 13](reviews/opus-round-13.md), and [round 14](reviews/opus-round-14.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), [round 11](reviews/opus-round-11.md), [round 12](reviews/opus-round-12.md), [round 13](reviews/opus-round-13.md), [round 14](reviews/opus-round-14.md), and [round 15](reviews/opus-round-15.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
