@@ -12,17 +12,24 @@ fix. Main subsequently reached `e9f059e8c` with #3460.
 ## Latest published checkpoint
 
 Source draft [#3461](https://github.com/iterate/iterate/pull/3461) is published
-at `7cdbc4f00944951f919fa6b0d0b26d32821ae94f`. It is a checkpoint, not release
-proof. The prior private `subscriptions` facet was an intermediate experiment
-and is not a claimed net deletion from main; durable delivery now belongs in the
-context alongside the log, cursor, target authority, and recovery wake.
+at immutable `5eff1bf859f710c714806d84c8a33f3fcd397048`. It is a tested source
+checkpoint, not release proof. The prior private `subscriptions` facet was an
+intermediate experiment and is not a claimed net deletion from main; durable
+delivery now belongs in the context alongside the log, cursor, target authority,
+and recovery wake.
 
-The latest fully tested local source, `8eb`, measures 18,066 core runtime lines
-and 7,527 SDK runtime lines: 25,593 combined, 27 below main's 25,620 baseline.
-That is the only current line-count comparison. A local `8d` fixture/doc-comment
-revision has a full rerun in progress, so it has no green-suite or net-line
-claim here. Published `7c` was eight lines below the same baseline. Tests and
-moved code are never credited as runtime deletions.
+The frozen `5eff` full root run is green: OS reports 154 passing files, 2,314
+passing tests, and 14 existing expected failures; 51 SDK suites and full
+typecheck, lint, formatting, and Knip also pass. Its runtime count is 18,081
+core lines plus 7,497 SDK lines, or 25,578 combined: 42 below the 25,620 main
+baseline. That is the current comparison, not the agent-stat count that includes
+tests. Tests and moved code are never credited as runtime deletions.
+
+External evidence remains incomplete. Preview, performance, 100-run soak, and
+log comparison for `5eff` remain pending. Its predecessor `8d` had all 11
+browser checks green and 326 E2E passes; three stale fixtures were repaired
+before the `5eff` run. Those predecessor results do not replace the required
+`5eff` external validation.
 
 The remaining architecture keeps the existing pager for live providers and
 callbacks. The context owns durable delivery's log, cursor, resume
@@ -740,12 +747,23 @@ relaxation:
    the wrapper and fallback constructions, with a cursor-shape migration cost
    limited to this branch.
 
-The active repair plan covers cold-row recovery and irrelevant ephemeral
-fan-out work in native code, and resume descriptor clearing, empty admission
-writes, and terminal-path cleanup in the SDK. The receipt-cause correction is
-still pending. The review's suggested removals are candidates only until the
-Workers regressions cover recovery, alarm behaviour, fan-out terminal handling,
-and source-cause preservation.
+The frozen `5eff` checkpoint repairs the review's P1 cold recovery by driving
+all freshly reconciled non-halted rows, excludes fan-out rows from ephemeral
+pushes, and skips empty fan-out admission writes. The SDK now uses one
+`confirmedOffset` admission mark with a flat pending-item array rather than
+per-item resume stamps; captured generations fence every writer, and resume
+clears obsolete ephemeral descriptors. Selective resume retains its new seek
+boundary, and the ordered and fan-out halt rows carry the selected source offset
+for receipt causes. Five native fault probes cover those outcomes.
+
+The checkpoint also accepts the diagnostic tradeoff in C narrowly: it retains
+terminal errors while dropping transient per-attempt last errors. That should
+not be represented as a universal tenfold cursor reduction while asynchronous
+terminal errors remain stored. P2's one asynchronous terminal receipt per alarm
+pass remains a known cost. A same-context synchronous receipt is still a
+promising but unimplemented simplification. The review's remaining deletions
+are candidates only until external `5eff` validation covers recovery, alarm
+behaviour, fan-out terminal handling, and source-cause preservation.
 
 ## What remains core
 
