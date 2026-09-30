@@ -115,6 +115,35 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   });
 });
 
+test("the D10, E11, D12, E13, D14 model preserves the ephemeral position without persisting its body", async () => {
+  const storage = kv();
+  const delivered: string[] = [];
+  const processor = new DurableDeliveryProcessor({
+    slug: "D10-E11-D12",
+    consumes: ["work", "poke"],
+    afterOffset: 9,
+    runtime: {
+      storage,
+      read: async (after) =>
+        after < 10
+          ? { offsets: [10, 12, 14], scannedThroughOffset: 14, atHead: true }
+          : after < 12
+            ? { offsets: [12, 14], scannedThroughOffset: 14, atHead: true }
+            : after < 14
+              ? { offsets: [14], scannedThroughOffset: 14, atHead: true }
+              : { offsets: [], scannedThroughOffset: 14, atHead: true },
+      deliver: async ({ offsets }) => void delivered.push(`D${offsets.join(",")}`),
+      deliverEphemeral: async ({ offset }) => void delivered.push(`E${offset}`),
+      scheduleWake: async () => {},
+      terminal: async () => {},
+    },
+  });
+  processor.push({ ...committedEvent(11, "poke"), ephemeral: true });
+  processor.push({ ...committedEvent(13, "poke"), ephemeral: true });
+  processor.drive((work) => void work());
+  await vi.waitFor(() => expect(delivered).toEqual(["D10", "E11", "D12", "E13", "D14"]));
+  expect(JSON.stringify(processor.snapshot())).not.toContain("poke");
+});
 test("a fan-out backoff still admits the following source page", async () => {
   const source = memoryStream();
   await source.stream.append(...Array.from({ length: 101 }, () => ({ type: "work" })));
@@ -469,7 +498,6 @@ function runtime(
     deliver: async (input: Parameters<RuntimeDeliver>[0]) => await deliver(input),
     deliverEphemeral: async () => {},
     scheduleWake: async () => {},
-    tryReservePendingEphemeral: () => ({ [Symbol.dispose]: () => {} }),
     terminal: async (input: Terminal) => {
       terminals.push(input);
       await terminal(input);

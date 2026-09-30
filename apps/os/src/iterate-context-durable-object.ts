@@ -148,7 +148,7 @@ type SubscriptionDeliveryBridgeRequest = DeliveryIdentity & {
   range: { after: number; through: number };
   offsets: number[];
 };
-type DeliveryEphemeralRequest = DeliveryIdentity & { event: StreamEvent };
+type DeliveryEphemeralRequest = DeliveryIdentity & { offset: number; type: string };
 type DeliveryTerminalRequest = DeliveryIdentity & {
   afterOffset: number;
   attempts: number;
@@ -511,12 +511,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         offsets,
         range,
       }),
-    deliverEphemeral: (row, { event, resumeAtOffset }) =>
+    deliverEphemeral: (row, { offset, type, resumeAtOffset }) =>
       this.#deliverConfiguredEphemeralSubscription({
         name: row.name,
         configuredAtOffset: row.configuredAtOffset,
         resumeAtOffset,
-        event,
+        offset,
+        type,
       }),
     terminal: (row, input) =>
       this.#recordConfiguredSubscriptionTerminal({
@@ -907,7 +908,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operational telemetry for context-owned durable delivery. It is for host
    * observability and Workers state proofs; no itx expression or client route exposes it. */
   async subscriptionDeliveryStatus(): Promise<{
-    pendingEphemeralChars: number;
     targetBodyChars: number;
     activeTargetDeliveries: number;
     oldestTargetDeliveryAgeMs: number | null;
@@ -925,14 +925,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       activeTargetDeliveries === 0 ? null : Date.now() - Math.min(...startedAt);
     if (!hasDurable)
       return {
-        pendingEphemeralChars: 0,
         targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
         activeTargetDeliveries,
         oldestTargetDeliveryAgeMs,
         snapshots: {},
       };
     return {
-      ...this.#durableSubscriptionDelivery.resources(),
       targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
       activeTargetDeliveries,
       oldestTargetDeliveryAgeMs,
@@ -1090,12 +1088,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     request: DeliveryEphemeralRequest,
     row: Subscription,
   ): StreamEvent[] {
-    if (request.event.path !== this.#durableObjectAddress.path)
-      throw codedError("GONE", "ephemeral subscription source event is no longer available");
     const actual = this.#stream
-      .read(request.event.offset - 1, 1, { includeEphemeral: true })
-      .events.find((event) => event.offset === request.event.offset && event.ephemeral);
-    if (!actual || !consumesEvent(row.consumes, actual) || !jsonEqual(actual, request.event))
+      .read(request.offset - 1, 1, { includeEphemeral: true })
+      .events.find((event) => event.offset === request.offset && event.ephemeral);
+    if (!actual || actual.type !== request.type || !consumesEvent(row.consumes, actual))
       throw codedError("GONE", "ephemeral subscription source event is no longer available");
     return [actual];
   }

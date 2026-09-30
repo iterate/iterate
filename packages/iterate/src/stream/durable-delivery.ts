@@ -1,6 +1,6 @@
-// stream/durable-delivery.ts — the private subscriptions facet's durable delivery runner. The
-// context pushes and wakes it; it retains a bounded scanned range plus selected offsets and asks
-// its host to invoke the configured expression under ordinary delivery authority.
+// stream/durable-delivery.ts — the context-owned durable delivery runner. It retains a bounded
+// scanned range plus selected offsets and asks its host to invoke the configured expression under
+// ordinary delivery authority.
 
 import { errorCode } from "../lib.ts";
 import { consumesEvent, type EngineKv, type ScannedRange, type StreamEvent } from "./processor.ts";
@@ -55,11 +55,9 @@ export type DurableDeliveryRuntime = {
     /** Resume control identity captured before this call began. */
     resumeAtOffset?: number;
   }): Promise<void>;
-  /** The only body-bearing path: one ephemeral still held in the live ring. */
-  deliverEphemeral(input: { event: StreamEvent; resumeAtOffset?: number }): Promise<void>;
+  /** Re-read one ephemeral from the current context's live ring. */
+  deliverEphemeral(input: { offset: number; type: string; resumeAtOffset?: number }): Promise<void>;
   scheduleWake(atMs: number | null): Promise<void>;
-  /** Reserves aggregate facet memory for a queued ephemeral body. */
-  tryReservePendingEphemeral(chars: number): Disposable | undefined;
   terminal(input: {
     afterOffset: number;
     attempts: number;
@@ -89,11 +87,15 @@ export type DurableDeliveryOptions = {
 
 const pageLimit = 100;
 const defaultCallDeadlineMs = 20_000;
-const ephemeralQueueBudgetChars = 8 * 1024 * 1024;
+// The context's 1 MiB live ring owns ephemeral bodies. Keep only enough descriptors for one
+// ordinary source page here, so a push storm cannot build an unbounded scheduling queue.
+const ephemeralQueueLimit = pageLimit;
 
 // A native target already has this row's body. Do not spend a delivery attempt, but avoid turning
 // a wedged target into a hot alarm loop while its native completion wake is unavailable.
 const busyRetryDelayMs = 1_000;
+const deliveryErrorMessage = (error: unknown): string =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 1_024);
 const deliveryBusy = (error: unknown): boolean =>
   errorCode(error) === "UNAVAILABLE" &&
   typeof error === "object" &&
@@ -148,13 +150,7 @@ export class DurableDeliveryProcessor {
   #disposed = false;
   #resumeAtOffset: number | undefined;
   #generation = 0;
-  #ephemeralQueue: {
-    event: StreamEvent;
-    chars: number;
-    lease: Disposable;
-    resumeAtOffset: number | undefined;
-  }[] = [];
-  #ephemeralQueueChars = 0;
+  #ephemeralQueue: { offset: number; type: string; resumeAtOffset: number | undefined }[] = [];
 
   constructor(options: DurableDeliveryOptions) {
     if (!options.slug) throw new Error("durable delivery needs slug");
@@ -182,37 +178,40 @@ export class DurableDeliveryProcessor {
   }
 
   #queueEphemeral(event: StreamEvent): void {
-    const chars = JSON.stringify(event).length;
-    // Ephemerals are best effort, but queued bodies must share one facet-wide budget. Drop oldest
-    // local bodies first so a busy row keeps the newest push and returns its reservation promptly.
-    while (
-      this.#ephemeralQueue.length > 0 &&
-      this.#ephemeralQueueChars + chars > ephemeralQueueBudgetChars
-    )
-      this.#discardOldestEphemeral();
-    let lease = this.#options.runtime.tryReservePendingEphemeral(chars);
-    while (!lease && this.#ephemeralQueue.length > 0) {
-      this.#discardOldestEphemeral();
-      lease = this.#options.runtime.tryReservePendingEphemeral(chars);
-    }
-    if (!lease) {
+    const cursor = this.#cursor();
+    // A durable range already owns this position. Do not roll it back to insert a best-effort
+    // live event after an asynchronous push arrives.
+    if (
+      event.offset <= cursor.confirmedOffset ||
+      (cursor.pending !== undefined && event.offset <= cursor.pending.through)
+    ) {
       console.warn({
-        event: "durable-delivery.ephemeral-dropped",
+        event: "durable-delivery.ephemeral-overtaken",
         slug: this.#options.slug,
-        dropped: 1,
-        queuedChars: this.#ephemeralQueueChars,
+        offset: event.offset,
       });
       return;
     }
-    this.#ephemeralQueue.push({ event, chars, lease, resumeAtOffset: this.#resumeAtOffset });
-    this.#ephemeralQueueChars += chars;
+    if (this.#ephemeralQueue.some((pending) => pending.offset === event.offset)) return;
+    while (this.#ephemeralQueue.length >= ephemeralQueueLimit) {
+      const dropped = this.#ephemeralQueue.shift()!;
+      console.warn({
+        event: "durable-delivery.ephemeral-dropped",
+        slug: this.#options.slug,
+        offset: dropped.offset,
+        reason: "queue-full",
+      });
+    }
+    this.#ephemeralQueue.push({
+      offset: event.offset,
+      type: event.type,
+      resumeAtOffset: this.#resumeAtOffset,
+    });
+    this.#ephemeralQueue.sort((a, b) => a.offset - b.offset);
   }
 
-  #discardOldestEphemeral(): void {
-    const pending = this.#ephemeralQueue.shift();
-    if (!pending) return;
-    this.#ephemeralQueueChars -= pending.chars;
-    pending.lease[Symbol.dispose]();
+  #discardEphemerals(): void {
+    this.#ephemeralQueue.length = 0;
   }
 
   /** Releases bodies held only by this runner when its configured row is replaced. */
@@ -221,11 +220,11 @@ export class DurableDeliveryProcessor {
     this.#disposed = true;
     this.#generation++;
     this.#again = false;
-    while (this.#ephemeralQueue.length > 0) this.#discardOldestEphemeral();
+    this.#discardEphemerals();
   }
 
-  /** The subscriptions facet calls this after configuration and revive. It shares the normal
-   * processor background/claim path without exposing a second delivery API to authors. */
+  /** The context calls this after configuration and revive. It shares the normal processor
+   * background/claim path without exposing a second delivery API to authors. */
   drive(runInBackground: (work: () => Promise<unknown>) => void): void {
     if (this.#disposed) return;
     this.#requestDrain(runInBackground);
@@ -291,7 +290,7 @@ export class DurableDeliveryProcessor {
       return false;
     this.#generation++;
     this.#resumeAtOffset = resumeAtOffset;
-    while (this.#ephemeralQueue.length > 0) this.#discardOldestEphemeral();
+    this.#discardEphemerals();
     this.#putCursor({
       confirmedOffset: afterOffset,
       fanOut: cursor.fanOut,
@@ -377,22 +376,31 @@ export class DurableDeliveryProcessor {
           if (!this.#isCurrent(stamp)) return;
           cursor = this.#cursor();
           if (cursor.pending || cursor.halted) continue;
-          if (page.scannedThroughOffset <= cursor.confirmedOffset) {
-            // Ephemerals share this runner's chain. Do not let a live ring body overtake a
-            // persisted durable range which was already admitted before it.
+          const queuedOffset = this.#ephemeralQueue[0]?.offset;
+          // An ephemeral between two durable offsets stays between their deliveries. The durable
+          // read does not carry ephemeral bodies, so admit only the durable prefix before it.
+          const through =
+            queuedOffset !== undefined && queuedOffset <= page.scannedThroughOffset
+              ? Math.min(page.scannedThroughOffset, queuedOffset - 1)
+              : page.scannedThroughOffset;
+          if (through <= cursor.confirmedOffset) {
+            if (this.#ephemeralQueue.length === 0) {
+              await this.#options.runtime.scheduleWake(null);
+              return;
+            }
             await this.#drainEphemerals();
             if (!this.#isCurrent(stamp)) return;
-            await this.#options.runtime.scheduleWake(null);
-            return;
+            continue;
           }
-          if (page.offsets.length === 0) {
-            this.#putCursor({ confirmedOffset: page.scannedThroughOffset });
+          const offsets = page.offsets.filter((offset) => offset <= through);
+          if (offsets.length === 0) {
+            this.#putCursor({ confirmedOffset: through });
             continue;
           }
           const pending = {
             after: cursor.confirmedOffset,
-            through: page.scannedThroughOffset,
-            offsets: page.offsets,
+            through,
+            offsets,
             attempt: 0,
             resumeAtOffset: stamp.resumeAtOffset,
           };
@@ -501,25 +509,19 @@ export class DurableDeliveryProcessor {
   }
 
   async #drainEphemerals(): Promise<void> {
-    while (this.#ephemeralQueue.length > 0) {
-      const pending = this.#ephemeralQueue.shift()!;
-      this.#ephemeralQueueChars -= pending.chars;
-      try {
-        await this.#deliverEphemeralWithinDeadline({
-          event: pending.event,
-          resumeAtOffset: pending.resumeAtOffset,
-        });
-      } catch (error) {
-        // An ephemeral has no recoverable source body. Its loss is best effort, but remains
-        // observable instead of retaining an unbounded retry record in this facet.
-        console.warn({
-          event: "durable-delivery.ephemeral-failed",
-          slug: this.#options.slug,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        pending.lease[Symbol.dispose]();
-      }
+    const pending = this.#ephemeralQueue.shift();
+    if (!pending) return;
+    try {
+      await this.#deliverEphemeralWithinDeadline(pending);
+    } catch (error) {
+      // The live ring is the only source. Eviction is therefore visible best-effort loss, not a
+      // retry cursor or a copied body in this runner.
+      console.warn({
+        event: "durable-delivery.ephemeral-failed",
+        slug: this.#options.slug,
+        offset: pending.offset,
+        error: deliveryErrorMessage(error),
+      });
     }
   }
 

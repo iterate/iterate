@@ -32,7 +32,7 @@ type Deps = {
   ) => Promise<void>;
   deliverEphemeral: (
     row: DurableSubscriptionRow,
-    input: { event: StreamEvent; resumeAtOffset?: number },
+    input: { offset: number; type: string; resumeAtOffset?: number },
   ) => Promise<void>;
   terminal: (
     row: DurableSubscriptionRow,
@@ -56,8 +56,6 @@ export class DurableSubscriptionDelivery {
   /** A persisted pending attempt has no in-memory promise after a cold start. */
   readonly #coldRecovery = new Set<string>();
   #swept = false;
-  #pendingEphemeralChars = 0;
-  static readonly #pendingEphemeralBudgetChars = 8 * 1024 * 1024;
 
   constructor(deps: Deps) {
     this.#deps = deps;
@@ -73,10 +71,6 @@ export class DurableSubscriptionDelivery {
   snapshots(): Record<string, DurableDeliveryCursor> {
     this.#reconcile();
     return Object.fromEntries([...this.#runners].map(([key, runner]) => [key, runner.snapshot()]));
-  }
-
-  resources() {
-    return { pendingEphemeralChars: this.#pendingEphemeralChars };
   }
 
   sync(): void {
@@ -203,25 +197,6 @@ export class DurableSubscriptionDelivery {
         if (at === null) this.#wakeByRunner.delete(key);
         else this.#wakeByRunner.set(key, at);
         this.#deps.wakesChanged();
-      },
-      tryReservePendingEphemeral: (chars) => this.#reserve(chars),
-    };
-  }
-
-  #reserve(chars: number): Disposable | undefined {
-    if (
-      chars > DurableSubscriptionDelivery.#pendingEphemeralBudgetChars ||
-      this.#pendingEphemeralChars + chars > DurableSubscriptionDelivery.#pendingEphemeralBudgetChars
-    )
-      return undefined;
-    this.#pendingEphemeralChars += chars;
-    let released = false;
-    return {
-      [Symbol.dispose]: () => {
-        if (!released) {
-          released = true;
-          this.#pendingEphemeralChars -= chars;
-        }
       },
     };
   }
