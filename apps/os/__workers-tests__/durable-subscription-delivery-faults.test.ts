@@ -93,3 +93,55 @@ test("a retry whose range ends at an ephemeral offset survives a later body-budg
   expect(row.halted).toBeUndefined();
   await releasePins(context);
 });
+
+test("a fan-out selective resume of an ephemeral gap records one failure without halting", async () => {
+  const context = "prj_durable_invalid_selective_resume";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "selective",
+      target: [
+        "itx",
+        "facets",
+        ["get", "unused", flakyCounter("must not receive an unconsumed event")],
+        "processEventBatch",
+      ],
+      delivery: "durable",
+      ordered: false,
+      consumes: ["wanted"],
+    },
+  });
+  const [unconsumed, gap, tail] = (await s.append(
+    { type: "ignored" },
+    { type: "ephemeral-gap", ephemeral: true },
+    { type: "ignored-tail" },
+  )) as { offset: number }[];
+  await until("fan-out admits the unconsumed range", async () => {
+    const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
+    const fanOut = Object.values(status.snapshots)[0]?.fanOut;
+    return fanOut?.admittedThrough === tail.offset && fanOut.pending.length === 0
+      ? fanOut
+      : undefined;
+  });
+
+  await s.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "selective", offset: gap.offset },
+  });
+  const failure = await until("invalid selective resume is terminally acknowledged", async () => {
+    const failures = (await readLog(context)).filter(
+      (event) =>
+        event.type === "events.iterate.com/itx/subscription-delivery-failed" &&
+        (event.payload as { name?: string; offset?: number }).name === "selective",
+    );
+    const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
+    const fanOut = Object.values(status.snapshots)[0]?.fanOut;
+    return failures.length === 1 && fanOut && fanOut.pending.length === 0 ? failures[0] : undefined;
+  });
+  expect(failure).toMatchObject({ payload: { offset: gap.offset } });
+  expect(failure.source).toBeUndefined();
+  expect((await rowOf(context, "selective"))?.halted).toBeUndefined();
+  expect(unconsumed.offset).toBeLessThan(gap.offset);
+  await releasePins(context);
+});

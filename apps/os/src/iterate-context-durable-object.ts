@@ -1255,20 +1255,27 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         throw codedError("GONE", "configured subscription is no longer fan-out delivery");
       const offset = request.afterOffset + 1;
       const event = this.#stream
-        .read(request.afterOffset, 1)
-        .events.find((candidate) => candidate.offset === offset);
-      if (!event || event.ephemeral)
-        throw codedError("GONE", "fan-out delivery source event is no longer available");
+        .readForDurableDelivery(request.afterOffset, 1, offset)
+        .events.find(
+          (candidate) =>
+            candidate.offset === offset && consumesConfiguredSubscriptionEvent(row, candidate),
+        );
       this.#stream.append({
         type: "events.iterate.com/itx/subscription-delivery-failed",
         idempotencyKey: `itx/subscription-delivery-failed:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${offset}`,
         payload: { name: request.name, offset, attempts: request.attempts, error: request.error },
-        source: { cause: event.source?.cause },
+        ...(event?.source?.cause && { source: { cause: event.source.cause } }),
       });
       return;
     }
     if (row.halted) return;
-    const source = this.#stream.readForDurableDelivery(request.afterOffset, 1).events[0]?.source;
+    const offset = request.afterOffset + 1;
+    const source = this.#stream
+      .readForDurableDelivery(request.afterOffset, 1, offset)
+      .events.find(
+        (candidate) =>
+          candidate.offset === offset && consumesConfiguredSubscriptionEvent(row, candidate),
+      )?.source;
     this.#stream.append({
       type: "events.iterate.com/itx/subscription-delivery-halted",
       idempotencyKey: `itx/subscription-delivery-halted:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${request.afterOffset}`,
