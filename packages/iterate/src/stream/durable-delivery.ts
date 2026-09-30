@@ -81,7 +81,7 @@ export type DurableDeliveryOptions = {
   concurrency?: number;
   maxPending?: number;
   retryDelayMs?: (attempt: number) => number;
-  /** Bounds one invoke; the host aborts its facet instead of overlapping an unsettled call. */
+  /** Bounds one attempt; the context retains the raw call until it settles. */
   callDeadlineMs?: number;
 };
 
@@ -94,8 +94,6 @@ const ephemeralQueueLimit = pageLimit;
 // A native target already has this row's body. Do not spend a delivery attempt, but avoid turning
 // a wedged target into a hot alarm loop while its native completion wake is unavailable.
 const busyRetryDelayMs = 1_000;
-const deliveryErrorMessage = (error: unknown): string =>
-  (error instanceof Error ? error.message : String(error)).slice(0, 1_024);
 const deliveryBusy = (error: unknown): boolean =>
   errorCode(error) === "UNAVAILABLE" &&
   typeof error === "object" &&
@@ -104,7 +102,7 @@ const deliveryBusy = (error: unknown): boolean =>
   typeof (error as { data?: unknown }).data === "object" &&
   (error as { data?: { deliveryBusy?: unknown } }).data?.deliveryBusy === true;
 
-/** A resume fact can reach the context while the old facet invocation is in flight. The context
+/** A resume fact can reach the context while the old invocation is in flight. The context
  * fences that invocation with this private marker; it is neither a target failure nor an attempt. */
 const staleResume = (error: unknown, resumeAtOffset: number | undefined): boolean => {
   if (errorCode(error) !== "GONE" || typeof error !== "object" || !error || !("data" in error))

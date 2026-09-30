@@ -116,7 +116,7 @@ test("a removed held row cannot recreate a cursor or halt when its old target re
   await until("old target settles without restoring removed state", async () => {
     const state = await runInDurableObject(s, async (instance, doState) => ({
       status: instance.subscriptionDeliveryStatus(),
-      cursorKeys: [...doState.storage.kv.list({ prefix: "durable-delivery/" }).keys()],
+      cursorKeys: [...doState.storage.kv.list({ prefix: "durable-delivery/" })].map(([key]) => key),
       alarm: await doState.storage.getAlarm(),
     }));
     return state.status.activeTargetDeliveries === 0 &&
