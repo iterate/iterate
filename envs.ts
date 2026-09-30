@@ -24,12 +24,6 @@ export const PRD_ACCOUNT_ID = cloudflareAccounts.prd.cloudflareAccountId;
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
 export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].cloudflareAccountId;
 
-/**
- * Placeholder for a Cloudflare resource that hasn't been created yet.
- * Deploy scripts refuse to ship it; `ensure-resources` replaces it.
- */
-export const UNPROVISIONED = "UNPROVISIONED";
-
 /** The Doppler project holding apps/os's secrets (and apps/spa's deploy credentials): one config per
  *  `osEnvs` deployment, each inheriting `_shared/<config>`. Every script that deploys, provisions,
  *  previews, erases or seeds an OS deployment reads its secrets from here. */

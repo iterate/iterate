@@ -25,7 +25,7 @@ import {
 } from "./github.ts";
 import { handleXRequest } from "./x.ts";
 import { handleGoogleRequest } from "./google.ts";
-import { GRAPHQL_SESSION_TTL_SECONDS, handleGraphqlLogin } from "./graphql-login.ts";
+import { handleGraphqlLogin } from "./graphql-login.ts";
 import { handleMcpRequest } from "./mcp.ts";
 import { handleOauthProviderRequest, LOGIN_PASSWORD, petshopOauth } from "./oauth-provider.ts";
 import { handlePetsApiRequest, petshopOpenApiDocument } from "./openapi.ts";
@@ -33,7 +33,7 @@ import { type Pet, seedPets } from "./pets.ts";
 import { nowSeconds } from "./seal.ts";
 import { handleSlackRequest } from "./slack.ts";
 import {
-  DEFAULT_ACCESS_TTL_SECONDS,
+  ACCESS_TOKEN_TTL_SECONDS,
   DEFAULT_APP_ID,
   DEFAULT_CLIENT_ID,
   DEFAULT_CLIENT_SECRET,
@@ -64,7 +64,7 @@ const INDEX = dedent`
   POST /oauth/token         grant_type=authorization_code | refresh_token; HTTP Basic or client_secret in the form, client_id alone for a public client (PKCE required)
   POST /api/legacy-login    {email, password} → {accessToken, expiresInSeconds}; any email, password "${LOGIN_PASSWORD}"
   POST /graphql             GraphQL session login: NewSession (any username, password "${LOGIN_PASSWORD}")
-                            → a ${GRAPHQL_SESSION_TTL_SECONDS}s session token, a bearer on /api/*; no refresh grant — logging in again is the refresh;
+                            → a ${ACCESS_TOKEN_TTL_SECONDS}s session token, a bearer on /api/*; no refresh grant — logging in again is the refresh;
                             expire-tokens {clientId: "graphql-session-login", account: <username>} revokes it
   GET  /api/tesco/login     the Tesco-shaped two-step login, step one → {csrf} + Set-Cookie tesco_login (binds the token)
   POST /api/tesco/login     form email, password, _csrf with that cookie → {access_token, expires_in: ${TESCO_ACCESS_TTL_SECONDS}}; any email,
@@ -106,7 +106,7 @@ const INDEX = dedent`
   GET  /__test-controls/slack/messages?team=<id>      what chat.postMessage recorded for that workspace
   POST /__test-controls/slack/fire-webhook      {url, signingSecret, event, badSignature?} → POST it signed like Slack (x-slack-signature v0)
 
-  Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${DEFAULT_ACCESS_TTL_SECONDS}s ·
+  Seeded client: ${DEFAULT_CLIENT_ID} / ${DEFAULT_CLIENT_SECRET} · access tokens live ${ACCESS_TOKEN_TTL_SECONDS}s ·
   seeded GitHub App ${DEFAULT_APP_ID}, installation ${DEFAULT_INSTALLATION_ID} (no key until POST /__test-controls/apps)
 `;
 

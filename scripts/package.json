@@ -12,6 +12,7 @@
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
+    "fflate": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:"
   },

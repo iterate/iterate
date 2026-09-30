@@ -95,6 +95,23 @@ export function contextStub(
   };
 }
 
+/** A first-party facet's folded state on `context`, the platform's own read at the fixed point: no
+ *  rewrite row of that context's redirects or masks it. `invoke` answers `unknown` across the DO
+ *  hop; a first-party facet's `snapshot()` is the engine's `{ offset, state }`, its state the
+ *  facet contract's. */
+export async function facetStateOf<State>(
+  context: { invoke(call: ItxExpression, args: unknown[], caller: Caller): Promise<unknown> },
+  facet: string,
+  caller: Caller,
+): Promise<State> {
+  const snapshot = await context.invoke(
+    ["itx", "builtins", "facets", ["get", facet], ["snapshot"]],
+    [],
+    caller,
+  );
+  return (snapshot as { state: State }).state;
+}
+
 /** `settlementOfScriptRun`'s reads: one `waitForEvent` on a fresh stub of the context at `path` in
  *  `projectId`, spelled at the fixed point with no principal — the platform's own read of its own
  *  record, whoever asked for the run — its lines named `itx-run.…`. */

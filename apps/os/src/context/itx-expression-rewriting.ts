@@ -361,6 +361,20 @@ export function resolveItxExpression(
   }
 }
 
+/** Where `call` ends up, the last of its chain (`resolveItxExpression`, which keeps `rules` a thunk):
+ *  undefined when it cannot resolve right now, a name nothing claims, a mask or the depth budget. */
+export function fixedPointOf(
+  rules: () => readonly ItxExpressionRewriteRule[],
+  call: ItxExpression,
+  implicitRoots: ReadonlySet<string>,
+): ItxExpression | undefined {
+  try {
+    return resolveItxExpression(rules, call, implicitRoots).at(-1);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The roots that say who a context is and where it is reached (built-ins.ts
  *  `buildIdentityRoots`): resolved through the context's table like any root, and answered by a
  *  resolver that speaks for that context itself — the stateless one included — where the call is,
@@ -490,13 +504,6 @@ export function rulesChangeNeedsCommitWait(
   // link only names that answered nothing; any other row the calls its match claims. A new name
   // answers here at once, and in every other context within SNAPSHOT_TTL_MS.
   const rulesBefore = Object.values(before);
-  const answered = (match: ItxExpressionPrefix) => {
-    try {
-      return !!resolveItxExpression(() => rulesBefore, match, implicitRoots);
-    } catch {
-      return false;
-    }
-  };
   return (
     changed ||
     Object.entries(after).some(
@@ -504,7 +511,7 @@ export function rulesChangeNeedsCommitWait(
         !before[key] &&
         (next.match.length === 1
           ? !next.target
-          : answered(next.match) ||
+          : !!fixedPointOf(() => rulesBefore, next.match, implicitRoots) ||
             takenAway.some((match) => matchItxExpressionPrefix(match, next.match))),
     )
   );
@@ -528,15 +535,6 @@ export function namesTakenAway(
 }
 
 // ── WHAT NAMES A LENT STUB (pure; the DO appends the removals it decides) ──
-
-/** The physical spelling of a lent stub: `itx.builtins.rpcStubs.get('<key>')`, possibly with steps
- *  after it. */
-function namesRpcStubDirectly(target: ItxExpression, rpcStubKey: string): boolean {
-  return (
-    target.length >= 4 &&
-    jsonEqual(target.slice(0, 4), ["itx", "builtins", "rpcStubs", ["get", rpcStubKey]])
-  );
-}
 
 /** THE ROWS THAT NAME A LENT STUB — decided against ONE frozen table, so the answer never depends on
  *  the order the rows were configured in. A row names `rpcStubKey` DIRECTLY when its target IS the
@@ -563,35 +561,20 @@ export function rowsNamingRpcStub(args: {
   fetchRouteNames: string[];
 } {
   const { rpcStubKey, rules, subscriptionTargets, fetchRouteTargets, implicitRoots } = args;
-  const direct = rules.filter(
-    (rule) => rule.target && namesRpcStubDirectly(rule.target, rpcStubKey),
-  );
+  const names = (target: ItxExpression | null | undefined): boolean =>
+    !!target && builtInsGetStep(target, "rpcStubs")?.[1] === rpcStubKey;
+  const through = (table: readonly ItxExpressionRewriteRule[], target: ItxExpression) =>
+    fixedPointOf(() => table, target, implicitRoots);
+  const direct = rules.filter((rule) => names(rule.target));
   const remaining = rules.filter((rule) => !direct.includes(rule));
-  const namesThroughRemaining = (target: ItxExpression): boolean => {
-    try {
-      return namesRpcStubDirectly(
-        resolveItxExpression(() => remaining, target, implicitRoots).at(-1)!,
-        rpcStubKey,
-      );
-    } catch {
-      return false;
-    }
-  };
+  const namesThroughRemaining = (target: ItxExpression) => names(through(remaining, target));
   const indirect = remaining.filter((rule) => rule.target && namesThroughRemaining(rule.target));
   const unsetRules = [...direct, ...indirect];
   const survivingRules = rules.filter((rule) => !unsetRules.includes(rule));
-  const resolvedThrough = (table: readonly ItxExpressionRewriteRule[], target: ItxExpression) => {
-    try {
-      return resolveItxExpression(() => table, target, implicitRoots).at(-1)!;
-    } catch {
-      return null;
-    }
-  };
   const reachesOnlyRpcStub = (target: ItxExpression): boolean => {
-    const now = resolvedThrough(rules, target);
-    if (!now || !namesRpcStubDirectly(now, rpcStubKey)) return false;
-    const afterwards = resolvedThrough(survivingRules, target);
-    return !afterwards || namesRpcStubDirectly(afterwards, rpcStubKey);
+    if (!names(through(rules, target))) return false;
+    const afterwards = through(survivingRules, target);
+    return !afterwards || names(afterwards);
   };
   return {
     // Each unset carries the target the census SAW (`ifTarget`), so the removal is a compare-and-set:
@@ -740,9 +723,7 @@ export function admitLoadedCodeRow(
   if (!target) return; // a mask, an un-set (an empty string is the reduce's refusal, not this wall's)
   if (typeof target !== "string" && !Array.isArray(target)) return; // a live object: the lend's own business
   const expression = normalizedItxExpression(target as ItxExpressionInput, { holes: true });
-  const [, root, registry, lend] = expression;
-  if (root === "builtins" && registry === "rpcStubs" && Array.isArray(lend) && lend[0] === "get")
-    return;
+  if (builtInsGetStep(expression, "rpcStubs")) return;
   admitLoadedCodeExpression(expression, landsAt);
 }
 
@@ -828,13 +809,9 @@ export function rpcStubKeysNamed(args: {
     ...Object.values(fetchRouteTargets),
   ];
   for (const target of targets) {
-    try {
-      const resolved = resolveItxExpression(() => rules, target, implicitRoots).at(-1)!;
-      const getStep = builtInsGetStep(resolved, "rpcStubs");
-      if (getStep) keys.add(getStep[1]);
-    } catch {
-      /* an unresolvable target names no key */
-    }
+    const resolved = fixedPointOf(() => rules, target, implicitRoots);
+    const getStep = resolved && builtInsGetStep(resolved, "rpcStubs");
+    if (getStep) keys.add(getStep[1]);
   }
   return keys;
 }

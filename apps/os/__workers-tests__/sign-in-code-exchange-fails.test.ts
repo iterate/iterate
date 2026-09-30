@@ -161,7 +161,7 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
   expect(info).toHaveBeenCalledExactlyOnceWith({
     event: "oauth.deploy-reset-retry",
     kind: "deploy-reset",
-    name: "itx.facets.get.snapshot",
+    name: "itx.builtins.facets.get.snapshot",
     projectId: "global",
     path: `/users/${user.id}`,
     message: "Error: Durable Object reset because its code was updated.",

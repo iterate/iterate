@@ -30,6 +30,7 @@ import {
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
+import { sha256Hex } from "../caller.ts";
 import { unavailableError } from "../unavailable.ts";
 
 /** A module map: module name → code. */
@@ -348,11 +349,6 @@ export function enteredThroughPlatform(
  *  `node_modules/<specifier>.js`), and the platform modules it imports (esm.sh leaves them external). */
 type DependencyGraph = { modules: ModuleMap; platformModules: string[] };
 
-async function sha256(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /** The dependency graph for these specifiers under these versions — from the store when this exact
  *  set was resolved before (by any project), otherwise resolved from esm.sh and stored. A version
  *  that cannot be locked (`esmPackageBase`) is refused before the store is read, so no lock stored
@@ -372,7 +368,7 @@ async function lockedDependencyGraph(
     externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
-  const key = `module-lock-2/${await sha256(JSON.stringify(lockInput))}`;
+  const key = `module-lock-2/${await sha256Hex(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
   const graph = await resolveFromEsm(lockInput, bases, opts);

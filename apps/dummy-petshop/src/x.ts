@@ -1,5 +1,5 @@
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
-import type { ShopDeps } from "./state.ts";
+import { ACCESS_TOKEN_TTL_SECONDS, type ShopDeps } from "./state.ts";
 
 type Grant = { id: string; username: string; scope: string };
 
@@ -54,12 +54,8 @@ export async function handleXRequest(request: Request, deps: ShopDeps): Promise<
     return Response.json({
       token_type: "bearer",
       scope: grant.scope,
-      expires_in: client.client.accessTokenTtlSeconds,
-      access_token: await x.accessToken(
-        client.clientId,
-        grant,
-        client.client.accessTokenTtlSeconds,
-      ),
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
+      access_token: await x.accessToken(client.clientId, grant, ACCESS_TOKEN_TTL_SECONDS),
       ...(grant.scope.split(" ").includes("offline.access") && {
         refresh_token: await x.refreshToken(client.clientId, grant),
       }),

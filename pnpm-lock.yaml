@@ -1464,6 +1464,9 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
+      fflate:
+        specifier: 'catalog:'
+        version: 0.8.3
       yaml:
         specifier: 'catalog:'
         version: 2.9.1

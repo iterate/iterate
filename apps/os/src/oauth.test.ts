@@ -132,10 +132,10 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
     ITERATE_CONTEXT: {
       getByName: () => ({
         invoke: async (path: unknown[]) => {
-          const [, surface, verb] = path as [string, string, unknown[]];
-          if (surface === "facets") return { offset: appended.length, state };
-          if (surface !== "builtins") return undefined;
-          appended.push(...verb.slice(1));
+          const [, , step] = path as [string, string, unknown];
+          if (step === "facets") return { offset: appended.length, state };
+          if (!Array.isArray(step)) return undefined;
+          appended.push(...step.slice(1));
           return [{ offset: appended.length }];
         },
       }),
