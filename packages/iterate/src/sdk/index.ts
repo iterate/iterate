@@ -60,7 +60,7 @@ export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse }
 // `static override publicMethods = [...super.publicMethods, "message"]`.
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
-// that knows it (pinned in __workers-tests__/facets.test.ts), plus `fedByPushes` when a row
+// that knows it (pinned in test/vitest/os-workers/facets.test.ts), plus `fedByPushes` when a row
 // pushes it (FacetProps). THE STREAM is the itx scope `this.getItx()` hands out (apps/os
 // iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
 //
@@ -69,7 +69,7 @@ export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse }
 // engine's own recovery is a CLAIM on the context's alarm (processor.ts, rule 3): while a
 // `runInBackground` attempt is in flight the context owes this facet a `revive()`, so a host that
 // dies mid-attempt is re-materialized and runs its at-head pass again
-// (__workers-tests__/agent-revive.test.ts: an LLM call survives its context's death).
+// (test/vitest/os-workers/agent-revive.test.ts: an LLM call survives its context's death).
 //
 // THE CLAIM IS ALSO WHAT KEEPS A FACET RUNNING: a loaded facet that holds none when its context
 // starts a new incarnation is reset then (os FacetHost `resetUnclaimedLoadedFacets`). So work that
@@ -139,7 +139,7 @@ export abstract class FacetDurableObject<
   /** The loopback to this facet's context: a LOADED class gets it as `env.ITX` (the loader bakes the
    *  stub in, worker-loader.ts); a class of THIS worker hosted through `ctx.exports` has the
    *  worker's real env and mints the same stub itself from its props — `ctx.exports` is populated
-   *  inside a facet (__workers-tests__/facets.test.ts). The casts name what workers-types cannot:
+   *  inside a facet (test/vitest/os-workers/facets.test.ts). The casts name what workers-types cannot:
    *  this worker's own `ItxEntrypoint` export, and the scope its `get` answers, which `Scope` is. */
   #itxEntrypoint(): { get(): Scope } {
     return (this.env.ITX ??

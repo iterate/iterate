@@ -13,8 +13,8 @@
 // is the ONLY thing that speaks git (git protocol v2 over HTTP, src/repo/git-wire.ts): `itx.cfArtifacts`
 // — the binding proxy, by the same path — hands it a token and the remote URL; the tip's snapshot is
 // memoized under its oid — one `ls-refs` per read, the pack only when the tip moved. Locally the
-// physical tier is a fake git REMOTE (apps/os/test-support/fake-git-server.ts) behind a fake `itx.cfArtifacts`
-// proxy lent to the repo's context (`provide("itx.cfArtifacts", …)`, apps/os/test-support/fake-artifacts.ts), so
+// physical tier is a fake git REMOTE (test/helpers/fake-git-server.ts) behind a fake `itx.cfArtifacts`
+// proxy lent to the repo's context (`provide("itx.cfArtifacts", …)`, test/helpers/fake-artifacts.ts), so
 // the real wire codec runs locally too. A row that reads or commits through git is `localOnly`: the
 // fake remote listens on THIS machine's loopback, which a deployed worker's egress cannot reach (403);
 // rows that only touch the proxy still run deployed (the fake proxy is called back over the
@@ -32,7 +32,7 @@ import {
   rejection,
   repoFactTypes,
 } from "../../helpers/client.ts";
-import { FakeArtifacts } from "../../../apps/os/test-support/fake-artifacts.ts";
+import { FakeArtifacts } from "../../helpers/fake-artifacts.ts";
 import { localOnly } from "../../helpers/project-host.ts";
 
 test("itx.repos.create(path) lands the request and the certificate on the repo's path AND on /, the catalog lists it; a repo not created refuses; any path can host one", async ({

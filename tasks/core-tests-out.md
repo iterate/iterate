@@ -10,7 +10,7 @@ PR 3 of the e2e move, redefined with Misha after auditing what apps/os takes fro
 and every meaningful test lives outside core, in `test/`. Every test-support import in core came
 from a test that isn't simple, so moving those tests out removes the imports.
 
-Status: not started.
+Status: code done and checked locally; CI to confirm.
 
 ## Decisions
 
@@ -36,15 +36,15 @@ Status: not started.
 
 ## Checklist
 
-- [ ] the moves, every relative import and link recomputed from its file's new place
-- [ ] `test/vitest.config.ts`: `workers` and `node` projects (the Workers config derived from
+- [x] the moves, every relative import and link recomputed from its file's new place _the same resolver script, a new table; path mentions swept by location_
+- [x] `test/vitest.config.ts`: `workers` and `node` projects (the Workers config derived from
       apps/os's wrangler base, the long poles, the seeded order); apps/os's config keeps `unit` only
-- [ ] the shim in packages/iterate; `VITEST_EXTRA_REPORTERS` in core's configs and test.yml
-- [ ] scripts: root `pnpm test`, apps/os's and test's `test`
-- [ ] lint (the platform line has no exception left), knip, tsconfigs, Deploy OS's skip list, CI
+- [x] the shim in packages/iterate; `VITEST_EXTRA_REPORTERS` in core's configs and test.yml
+- [x] scripts: root `pnpm test`, apps/os's and test's `test` _root builds apps/os, then `pnpm -r --parallel test`; apps/os `vitest run`, test `--project node --project workers`_
+- [x] lint (the platform line has no exception left), knip, tsconfigs, Deploy OS's skip list, CI
       tests, docs and comments
-- [ ] no file in apps/os or packages/iterate imports `packages/shared/src/test-support`
-- [ ] typecheck, lint, knip, format, root `pnpm test`, and CI
+- [x] no file in apps/os or packages/iterate imports `packages/shared/src/test-support` _core's one `packages/shared` import left is the posthog proxy_
+- [x] typecheck, lint, knip, format, root `pnpm test`, and CI _locally: apps/os's unit tests (61 files, 1790 tests) and test's node + workers (79 files, 664 + 14 pinned) side by side under Node 24, the same 140 files and 2454 tests as before; the scripts workspace's toolchain and tracing tests fail on macOS bash, as on main_
 
 ## Out of scope
 
@@ -52,3 +52,16 @@ Status: not started.
 - Moving the CI telemetry plumbing out of `packages/shared`.
 
 ## Implementation notes
+
+- Option (a) held up: two lines in core's configs, one env var in test.yml, and
+  `depot-workflows.test.ts` checks both.
+- `sqlfu` and `@cloudflare/workers-oauth-provider` join the catalog (apps/os and test both use
+  them); `@cloudflare/vitest-plugin` and `ws` leave apps/os.
+- test/'s tsconfig has the Workers and Node types together, so three `URL`s went through a string:
+  `generate-wrangler-config.ts` reads the base by `join(import.meta.dirname, …)` (the only change
+  to core's code besides comments), the Workers config reads its wrangler overrides the same way,
+  and the HMR test dials `url.href`.
+- The e2e row-budget scan (`scripts/ci/e2e-policy.test.ts`) skips the in-process `*.test.ts` in
+  `test/vitest/os/`: its rules are for e2e rows.
+- apps/os no longer reaches `apps/dummy-petshop` (`build.test.ts`'s snapshot), and nothing under
+  `apps/` or `packages/` imports apps/os, so the platform-line rule has no exception.

@@ -9,7 +9,7 @@ import { DEFAULT_AGENT_SYSTEM_PROMPT } from "../../../packages/agents/src/system
 import { openItx, readAll, runId, until, untilValue } from "../../helpers/client.ts";
 import { FakeAi, sseResponse } from "../../helpers/fake-ai.ts";
 import { oauthSession } from "../../helpers/principal.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,

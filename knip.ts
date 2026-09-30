@@ -52,10 +52,9 @@ export default {
     },
     "apps/os": {
       // The platform worker. Knip's vitest plugin reads vitest.config.ts (its global
-      // setups); the rest are entries here. The suites that drive a running worker are test/'s.
+      // setup); the rest are entries here. Every test beyond a simple unit test is test/'s.
       entry: [
         "src/worker.ts!",
-        "__workers-tests__/**/*.ts",
         "src/**/*.test.ts",
         // the node programs (build and dev; iterate's deploy and preview tooling is scripts/os at the
         // root) and their tests, so the library modules beside them (generate-wrangler-config) get
@@ -66,13 +65,7 @@ export default {
         "scripts/*.test.ts",
         "examples/**/*.ts",
       ],
-      project: [
-        "src/**/*.{ts,tsx,css}!",
-        "scripts/**/*.ts",
-        "examples/**/*.ts",
-        "test-support/**/*.ts",
-        "__workers-tests__/**/*.ts",
-      ],
+      project: ["src/**/*.{ts,tsx,css}!", "scripts/**/*.ts", "examples/**/*.ts"],
       // sqlfu writes these whole (`pnpm db:generate`): barrels and a migrations bundle the code
       // does not import, beside the query modules it does.
       ignore: ["src/control-plane/db/**/.generated/**"],
@@ -81,8 +74,8 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      entry: ["scripts/**/*.ts", "__workers-tests__/**/*.test.ts"],
-      project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!", "__workers-tests__/**/*.ts"],
+      entry: ["scripts/**/*.ts"],
+      project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!"],
       vite: false,
       wrangler: false,
       ignoreDependencies: ["tailwindcss", "cloudflare"],
@@ -92,11 +85,14 @@ export default {
       entry: ["oxlint-plugin-iterate.ts"],
     },
     test: {
-      // The suites that drive a running worker or a browser. Knip's vitest and Playwright plugins
-      // read the two configs (their global setups, the helpers' tests); the suites' files are
-      // entries, and helpers/** is project code, so an unused helper export is reported.
+      // The tests outside every app: in-process, the Workers pool, against a running worker, and in
+      // a browser. Knip's vitest and Playwright plugins read the two configs (their global setups,
+      // the in-process and Workers tests); the suites' files are entries, and helpers/** is project
+      // code, so an unused helper export is reported.
       entry: [
         "vitest/**/*.e2e.test.ts",
+        "vitest/os-workers/**/*.ts",
+        "vitest/agents-workers/**/*.ts",
         "vitest/os/perf/**/*.perf.test.ts",
         "vitest/os/bench/**/*.ts",
         // read as text and handed over as the presence facet's source (helpers/sources.ts)

@@ -28,7 +28,7 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
     // suites and support, and a unit test's support beside it (src/stream/test-support.ts,
     // src/stream/memory-budget.test-support.ts)
     name: "Tests",
-    glob: "{**/*.{test,spec,test-support}.*,**/test-support.*,**/{e2e,tests,__tests__,__workers-tests__,test-helpers,test-support}/**,test/**}",
+    glob: "{**/*.{test,spec,test-support}.*,**/test-support.*,**/{e2e,tests,__tests__,test/vitest/os-workers,test-helpers,test-support}/**,test/**}",
     priority: 4,
   },
   { name: "UI components", glob: "{packages/ui/**,**/components/**}", priority: 3 },

@@ -59,7 +59,7 @@ test("raw env.X.getByName is allowed only in apps/os's edge entry points and Dur
       reported: false,
     },
     {
-      path: "apps/os/__workers-tests__/support.ts",
+      path: "test/vitest/os-workers/support.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },

@@ -19,7 +19,7 @@ import { resourceScope } from "./paths.ts";
  *  forwards outbound. OUR MARK goes instead (cause.ts), and past the loop limit nothing is sent.
  *  WS-safe: only the headers are rewritten, and every hop is a fetch channel — the other context's
  *  `fetch`, then `ctx.facets.get(name).fetch` — so a 101 flows straight back either way (measured:
- *  __workers-tests__/facets.test.ts). */
+ *  test/vitest/os-workers/facets.test.ts). */
 export function egress(
   request: Request,
   from: {

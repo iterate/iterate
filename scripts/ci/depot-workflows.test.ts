@@ -251,8 +251,8 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "test/AGENTS.md",
     "test/helpers/client.ts",
     "apps/os/src/project/templates.test.ts",
-    "apps/os/__workers-tests__/support.ts",
-    "apps/os/test-support/fake-artifacts.ts",
+    "test/vitest/os-workers/support.ts",
+    "test/helpers/fake-artifacts.ts",
     "test/vitest/os/bench/api.bench.ts",
     "test/vitest/os/perf/push-delivery.perf.test.ts",
     "test/vitest/os/perf/latency.ts",
@@ -1275,7 +1275,11 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
     (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
-  expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
+  // apps/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
+  // script builds it beside another's
+  expect(readPackageJson(".").scripts?.test).toBe(
+    "pnpm --filter os build && pnpm -r --parallel test",
+  );
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();
@@ -1299,13 +1303,25 @@ test("the preview's e2e suite writes the canonical telemetry artifact", () => {
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
+  // Core imports nothing outside it, so its workspaces take the reporter by path from the Test job.
+  const core = ["apps/os", "packages/iterate"];
+  const runTests = loadWorkflow(".depot/workflows/test.yml")
+    .jobs.test?.steps?.flatMap((step) => step.parallel || [step])
+    .find((step) => step.id === "tests");
+  expect(runTests?.env?.VITEST_EXTRA_REPORTERS).toMatch(
+    /\/packages\/shared\/src\/test-support\/e2e-policy\/retry-telemetry-reporter\.ts$/,
+  );
   const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
     const packageJson = readPackageJson(directory);
     if (!packageJson.scripts?.test) return [];
     expect(
       readVitestConfig(directory),
       `${directory}/vitest.config.ts must install the canonical test telemetry reporter`,
-    ).toMatch(/reporters: vitestReporters/);
+    ).toMatch(
+      core.includes(directory)
+        ? /process\.env\.VITEST_EXTRA_REPORTERS/
+        : /reporters: vitestReporters/,
+    );
     return [packageJson.name];
   });
 

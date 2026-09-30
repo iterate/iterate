@@ -3,7 +3,7 @@ import { freshCtx, openItx, readAll, sleep } from "../../helpers/client.ts";
 import {
   scheduledAppendFacetSource,
   scheduledAppendProcessorSource,
-} from "../../../apps/os/test-support/scheduled-append-facet.ts";
+} from "../../helpers/scheduled-append-facet.ts";
 
 test("a userspace facet schedules a durable timeout batch, then consumes it without an alarm handler", async () => {
   const itx = openItx(freshCtx("schedule_facet"));

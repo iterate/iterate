@@ -2,7 +2,7 @@
 // `{ events → table }` rows, and the match as `{ routes, request → route name }` rows. The table in
 // core state (the append boundary, the reduce) is pinned in stream/core-processor.test.ts; the
 // verbs — `itx.fetchRoutes.set` landing the fact, a config worker forwarding a match to a lent
-// stub, a WebSocket with its subprotocol — in __workers-tests__/fetch-routes.test.ts.
+// stub, a WebSocket with its subprotocol — in test/vitest/os-workers/fetch-routes.test.ts.
 
 import { expect, test } from "vitest";
 import {

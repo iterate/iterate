@@ -100,7 +100,7 @@ test("a held cd(path) handle does not keep the context resident", async () => {
 
 // A SCRIPT'S RESULT crosses Workers RPC from its loaded isolate into the context's runner, and a live
 // value in it (a function) arrives as a stub. The runner releases it once serialized (library.ts
-// `runSettlementOf`); dropped undisposed, it held the context (__workers-tests__/context-runs.test.ts).
+// `runSettlementOf`); dropped undisposed, it held the context (vitest/os-workers/context-runs.test.ts).
 test("a run whose script returned a live value does not keep its context resident", async () => {
   const { itx } = await freshPublishedCtx("residency_run_result");
   expect(await itx.run("async () => ({ n: 1, f: () => 1 })")).toEqual({ n: 1 });
@@ -428,7 +428,7 @@ test(
 // flight. A careless facet that calls its own context every few seconds keeps that context resident,
 // so no birth would ever reset it; it is reset in place a quiet minute after the last outside call.
 // That outside HTTP restarts the clock is decided in the Workers suite
-// (__workers-tests__/facets.test.ts); that a context under 5 s of traffic keeps one
+// (vitest/os-workers/facets.test.ts); that a context under 5 s of traffic keeps one
 // instance is Cloudflare's, timed in the opt-in perf file: here that row saw two when the control
 // plane stalled 12.8 s mid-traffic and the context, reached by nothing for 16 s, evicted (#2899).
 

@@ -1,4 +1,4 @@
-// cause.test.ts — a cause as the wire carries it; the guard it drives: __workers-tests__/loop-guard.
+// cause.test.ts — a cause as the wire carries it; the guard it drives: test/vitest/os-workers/loop-guard.
 import { expect, test } from "vitest";
 import { causeHeader, causeOfDelivery, newChain, parseCause, storedCause } from "./cause.ts";
 

@@ -9,11 +9,11 @@
 // never raced by two contexts. A WebSocket upgrade is a dispatch like any other: the 101 and its
 // socket ride the fetch channel back through the parent to the caller — this facet HOLDS no socket,
 // it dials one and hands it back, so the socket lives as long as the dial does (measured 2026-09-21,
-// __workers-tests__/facets.test.ts: the frames round-trip; the facet's abort
+// test/vitest/os-workers/facets.test.ts: the frames round-trip; the facet's abort
 // closes it, 1006). The one exception is an upgrade whose FRAMES carry the credential (Discord's
 // IDENTIFY; secrets.ts `SECRET_FRAMES_HEADER`): this facet holds the upstream socket and pumps
 // frames, substituting its placeholder in client text frames (`proxyFrames`,
-// __workers-tests__/secret-sockets-over-lends.test.ts).
+// test/vitest/os-workers/secret-sockets-over-lends.test.ts).
 //
 // The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
 // storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads

@@ -824,7 +824,7 @@ test("purity: an event the reduce does not know → undefined (keep the state)",
 
 // `reduceCoreEventBatch` is what the host calls (Stream reduces a commit's fresh events and each page of the
 // constructor's re-reduce through it): each core table is copied ONCE per batch and mutated as a
-// draft after — O(rows + events), not O(rows × events) (memory-budget.test.ts pins the time). What
+// draft after — O(rows + events), not O(rows × events) (test/vitest/os/memory-budget.test.ts pins the time). What
 // that must NOT cost is purity at the batch's edges: the state handed in stays what it was.
 // ── reduceCoreEventBatch — a batch's draft tables never leak into the state it was given ──
 

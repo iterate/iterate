@@ -5,7 +5,7 @@ import { installVoice } from "@iterate-com/voice/install";
 import { build } from "esbuild";
 import { inject } from "vitest";
 import { olderSnapshotsExpired, openItx, publishConfig, sleep } from "../../helpers/client.ts";
-import { agentsWorkspaceConfig } from "../../../apps/agents/__workers-tests__/agents-workspace-config.ts";
+import { agentsWorkspaceConfig } from "../agents-workers/agents-workspace-config.ts";
 
 /** A fresh root with the agents app installed from this checkout (`installWorkspaceApps`). */
 export async function openAgentItx(context: string) {

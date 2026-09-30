@@ -11,7 +11,7 @@
 import { isPkgPrNewCommit, pinPkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test } from "vitest";
 import { openItx, runId } from "../../helpers/client.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
