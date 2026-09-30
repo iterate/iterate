@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { buttonVariants } from "@iterate-com/ui/components/button";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
+import { buttonVariants } from "../components/ui/button.tsx";
+import { IterateLogo } from "../components/iterate-logo.tsx";
+import { StandalonePage } from "../components/standalone-page.tsx";
 import { getLandingState } from "../issuer.functions.ts";
 import { loginSearchOf } from "../login-search.ts";
 

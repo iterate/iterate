@@ -1,8 +1,8 @@
 import { useId } from "react";
-import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import type { IngressRouting } from "iterate/project-ingress";
+import { Field, FieldDescription, FieldLabel } from "../ui/field.tsx";
+import { Input } from "../ui/input.tsx";
+import { NativeSelect, NativeSelectOption } from "../ui/native-select.tsx";
 import type { OrganizationRecord } from "../../control-plane/catalog.ts";
 import { focusOnMount } from "../focus-on-mount.ts";
 import { typedSlug } from "./project-slug.ts";

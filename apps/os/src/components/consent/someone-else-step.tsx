@@ -1,7 +1,7 @@
 import { useId, useState, type Ref } from "react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Input } from "@iterate-com/ui/components/input";
-import { Label } from "@iterate-com/ui/components/label";
+import { Button } from "../ui/button.tsx";
+import { Input } from "../ui/input.tsx";
+import { Label } from "../ui/label.tsx";
 import type { ConsentView } from "../../consent.ts";
 import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
 

@@ -1,5 +1,5 @@
 import type { FormEvent, Ref } from "react";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "../ui/button.tsx";
 import { ConsentPanel, StepHeading, type ConsentFrame } from "./consent-step.tsx";
 import { ProjectChoices, type ProjectRow, type ProjectSelection } from "./project-choices.tsx";
 import { ProjectFields } from "./project-fields.tsx";

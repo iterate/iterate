@@ -1,8 +1,8 @@
 import { useHydrated } from "@tanstack/react-router";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { StandalonePage } from "@iterate-com/ui/components/standalone-page";
 import { cn } from "cn";
+import { Button, buttonVariants } from "../ui/button.tsx";
+import { IterateLogo } from "../iterate-logo.tsx";
+import { StandalonePage } from "../standalone-page.tsx";
 import type { ConsentView } from "../../consent.ts";
 
 /** A client asking only who the person is (the `/oauth2/userinfo` resource): it learns their email

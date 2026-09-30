@@ -1,5 +1,5 @@
-import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "cn";
+import { buttonVariants } from "../ui/button.tsx";
 import type { SignInProvider } from "./providers.ts";
 
 /** Every provider, each a link that starts its sign-in — side by side, one under the other only

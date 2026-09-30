@@ -55,6 +55,15 @@
     "packages/ui/src/components/tabs.tsx",
     "packages/ui/src/components/textarea.tsx",
     "packages/ui/src/components/tooltip.tsx",
-    "packages/ui/src/hooks/use-mobile.ts"
+    "packages/ui/src/hooks/use-mobile.ts",
+    "apps/os/src/components/ui/avatar.tsx",
+    "apps/os/src/components/ui/button.tsx",
+    "apps/os/src/components/ui/checkbox.tsx",
+    "apps/os/src/components/ui/field.tsx",
+    "apps/os/src/components/ui/input.tsx",
+    "apps/os/src/components/ui/label.tsx",
+    "apps/os/src/components/ui/native-select.tsx",
+    "apps/os/src/components/ui/separator.tsx",
+    "apps/os/src/components/ui/spinner.tsx"
   ]
 }

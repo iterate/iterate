@@ -1,6 +1,6 @@
 import type { ReactNode, Ref } from "react";
-import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "cn";
+import { buttonVariants } from "../ui/button.tsx";
 import { focusOnMount } from "../focus-on-mount.ts";
 
 /** What every step's panel shows beside the step itself: who is signed in, what went wrong (if

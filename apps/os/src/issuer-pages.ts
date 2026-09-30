@@ -6,10 +6,10 @@
 // owned by the Worker and never reach it.
 
 import {
+  isSameOriginBrowserRequest,
   deploymentEnvironment,
   environmentFaviconSvg,
-} from "@iterate-com/ui/lib/environment-favicon";
-import { isSameOriginBrowserRequest } from "iterate/lib";
+} from "iterate/lib";
 import type { Env, Handler } from "./env.ts";
 import { issuerRequests } from "./issuer-request-context.server.ts";
 
@@ -103,7 +103,7 @@ export const issuerHandler: Handler = {
 
 /** This deployment's tab icon, for pages on other origins: the SDK's gate pages
  *  (iterate/app-server) link their issuer's. Production's is the logo itself; a per-PR preview
- *  or local dev draws its badge (@iterate-com/ui/lib/environment-favicon), read from the host this
+ *  or local dev draws its badge (iterate/lib), read from the host this
  *  request reached, as the issuer's own pages do. */
 function favicon(request: Request, env: Env) {
   const url = new URL(request.url);

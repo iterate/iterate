@@ -11,7 +11,10 @@ badge, breadcrumb, button, card, checkbox, command, dialog, dropdown-menu, empty
 label, native-select, select, separator, sheet, sidebar, skeleton, sonner, spinner, table, tabs,
 textarea and tooltip in `src/components/`, plus `src/components/input-group.tsx` (command's
 dependency) and `src/hooks/use-mobile.ts` (sidebar's).
-`scripts/ci/shadcn-drift.ts` lists them.
+apps/os keeps its own copies of the ones it uses (avatar, button, checkbox, field, input, label,
+native-select, separator and spinner) in `apps/os/src/components/ui/`, written through its own
+`components.json`, and imports nothing from here. Everything below applies to both folders.
+`scripts/ci/shadcn-drift.ts` lists them (`VENDORINGS`).
 
 - **Customise at the call site or in a wrapper** of our own, never in the file: a `className`, a
   prop, or a component here that renders the vendored one. The table below shows where each earlier
@@ -30,7 +33,7 @@ dependency) and `src/hooks/use-mobile.ts` (sidebar's).
   and the `rules/` review rules exclude them, each list naming the files.
   `scripts/ci/shadcn-drift.test.ts` checks that the oxlint list, the oxfmt list, every `rules/`
   rule that would match one and the drift check's path filter cover all of them. knip needs no
-  list: the `package.json` exports (`./components/*`, `./hooks/*`, `./lib/*`) make every file an
+  list: the `package.json` exports (`./components/*`, `./hooks/*`) make every file an
   entry, so it never reports their unused exports.
 
 ### Refresh
@@ -48,14 +51,14 @@ first, without writing anything:
 pnpm --dir packages/ui exec shadcn add button --dry-run --diff src/components/button.tsx
 ```
 
-To bump the CLI, change the `shadcn` pin in `package.json` and refresh. To vendor another item, run
-`pnpm --dir packages/ui exec shadcn add <item>`, then add it to `SHADCN_ITEMS` (and any new file to
-`VENDORED_FILES`) and to the lists above.
+To bump the CLI, change the `shadcn` pin in the catalog (`pnpm-workspace.yaml`) and refresh. To
+vendor another item, run `pnpm --dir <folder> exec shadcn add <item>`, then add it to that folder's
+`items` in `VENDORINGS` (and any extra file it writes to `extraFiles`) and to the lists above.
 
 ### The drift check
 
-- **On a pull request** that touches a vendored file or an input of the CLI (`components.json`,
-  `package.json`, `tsconfig.json`, `globals.css`), `.depot/workflows/shadcn-drift.yml` runs
+- **On a pull request** that touches a vendored file or an input of the CLI in either folder
+  (`components.json`, `package.json`, `tsconfig.json`, the stylesheet), `.depot/workflows/shadcn-drift.yml` runs
   `shadcn-drift.ts check`. It asks the CLI's dry run for the exact content `add` would write, from
   shadcn's live registry, and fails on any file whose bytes differ, printing the diff. (The CLI's
   own "identical" ignores line endings and leading and trailing whitespace; the check does not.)

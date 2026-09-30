@@ -6,7 +6,6 @@
 // the issuer's pages as its catch-all.
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
 
-import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
 import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
@@ -15,6 +14,7 @@ import {
   ITERATE_ROUTING_SLUG_HEADER,
   primaryHostnameUrlOf,
 } from "iterate/project-ingress";
+import { proxyPosthogRequest } from "./posthog-proxy.ts";
 import { parseCause, crossingOneMore, newChain, requestCausedBy, type Cause } from "./cause.ts";
 import { primaryHostnameRedirectOf } from "./primary-hostname-redirect.ts";
 import { ITX_GRANT_HEADER, type Caller } from "./caller.ts";

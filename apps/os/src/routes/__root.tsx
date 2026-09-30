@@ -1,6 +1,6 @@
 import { createRootRoute, Outlet, Scripts, useHydrated } from "@tanstack/react-router";
-import { EnvironmentHeadContent } from "@iterate-com/ui/components/environment-head-content";
-import { initPosthog } from "@iterate-com/ui/components/posthog";
+import { EnvironmentHeadContent } from "../components/environment-head-content.tsx";
+import { initPosthog } from "../components/posthog.tsx";
 import { getPosthogProjectKey } from "../issuer.functions.ts";
 import css from "../styles.css?url";
 
@@ -17,7 +17,7 @@ export const Route = createRootRoute({
   component: RootDocument,
 });
 
-/** The sign-in and consent pages: the apps' PostHog (packages/ui posthog.tsx), anonymous — the
+/** The sign-in and consent pages: apps/os's own PostHog init (components/posthog.tsx), anonymous — the
  *  person is identified in the apps they sign in to (dash), and PostHog's shared `*.iterate.com`
  *  cookie joins this visit to them. */
 function RootDocument() {
