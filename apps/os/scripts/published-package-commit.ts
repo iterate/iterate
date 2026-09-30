@@ -1,6 +1,6 @@
 // scripts/published-package-commit.ts — WHICH COMMIT'S pkg.pr.new BUILD this checkout's packages are:
 // the build embeds the default config template with `@iterate-com/agents` and `@iterate-com/voice`
-// at it (build.ts), and the e2e rows wait for the same build (e2e/support/global-setup.ts).
+// at it (build.ts), and the e2e rows wait for the same build (test/helpers/global-setup.ts).
 //
 // .github/workflows/pkg-pr-new.yml publishes every main commit, and a pull request's head whenever
 // the pull request changes a published package's inputs (its `pull_request.paths`). So the commit

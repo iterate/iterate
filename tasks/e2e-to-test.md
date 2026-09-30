@@ -12,7 +12,7 @@ top-level `test/`, never copied, with a folder per runner (`playwright/`, `vites
 workspace package (`@iterate-com/test`), `__workers-tests__` stays in core, and this PR goes first
 (then the Playwright specs, then packages/shared's test helpers).
 
-Status: not started.
+Status: code done and checked locally (typecheck, lint, knip, apps/os's tests, the helpers', CI and lint-rule tests, a local e2e run); CI's Preview OS runs the moved suite against the preview.
 
 ## Moves
 
@@ -27,21 +27,21 @@ Status: not started.
 
 ## Checklist
 
-- [ ] the moves, every relative import recomputed from its file's new place
-- [ ] `test/package.json` (`@iterate-com/test`: `e2e`, `e2e:run`, `perf`, `perf:run`, `bench`,
+- [x] the moves, every relative import recomputed from its file's new place _a one-off script: specifiers, markdown links and `new URL(…)` resolved against the old place and re-relativised; repo-root and package-relative mentions rewritten; `PACKAGE_DIR` and one `import.meta.dirname` path fixed by hand_
+- [x] `test/package.json` (`@iterate-com/test`: `e2e`, `e2e:run`, `perf`, `perf:run`, `bench`,
       `test` for the helpers' own tests, `typecheck`), `test/tsconfig.json`, and `test` in
       `pnpm-workspace.yaml`
-- [ ] `test/vitest.config.ts`: the `e2e`, `perf` and `bench` projects and the root options they
+- [x] `test/vitest.config.ts`: the `e2e`, `perf` and `bench` projects and the root options they
       rely on (the long poles, the reporters, `onUnhandledError`, a global setup running apps/os's
       `scripts/build.ts`); apps/os's config keeps `unit` and `workers`
-- [ ] apps/os: scripts, `tsconfig.tests.json`, `LONG_POLES`, knip entries; no `envs.ts` import
+- [x] apps/os: scripts, `tsconfig.tests.json`, `LONG_POLES`, knip entries; no `envs.ts` import
       left (`build.test.ts`'s snapshot)
-- [ ] CI and scripts run the suites from `test/`: `scripts/os/preview.ts`, `e2e-soak.ts`,
+- [x] CI and scripts run the suites from `test/`: `scripts/os/preview.ts`, `e2e-soak.ts`,
       `slow-rows.ts`, `scripts/monitors/latency.ts`, the crash-hunt, soak, latency and
       real-model workflows, `depot-workflows.test.ts`; the preview's path filter watches `test/**`
-- [ ] lint: the platform-line rule drops its `e2e/support` exception once nothing under
+- [x] lint: the platform-line rule drops its `e2e/support` exception once nothing under
       `apps/` or `packages/` imports it; `rules/` globs and oxlint/oxfmt lists name the new paths
-- [ ] docs and comments name the new paths
+- [x] docs and comments name the new paths
 - [ ] lint, format, knip, typecheck, apps/os's `pnpm test`, the helpers' tests, a local
       `pnpm --dir test e2e` over a few files, and CI's Preview OS E2E tests against the preview
 
@@ -54,3 +54,18 @@ Status: not started.
 - `fake-git-server.ts` importing `@iterate-com/shared/test-support/fetch-safe-port`: PR 3.
 
 ## Implementation notes
+
+- `apps/agents/__workers-tests__/agents-workspace-config.ts` stays in apps/agents (was
+  `apps/agents/e2e/`): the agents workers test uses it too; `test/vitest/agents` imports it.
+- `packages/shared`'s `flake-record.ts` types its `process` lookup itself. With the e2e files gone
+  from apps/os's `tsconfig.tests.json`, that program (the Workers suite alone) had no `process` on
+  `globalThis`: the e2e files' imports had been supplying it.
+- `vitest-reporters.ts` and the two new URL-to-path calls take `.href`: `test/`'s tsconfig has the
+  Workers and Node types together, whose `URL`s differ (the repo's usual fix).
+- The e2e row-budget check (`scripts/ci/e2e-policy.test.ts`) scans `test/helpers`, `test/vitest`
+  and `apps/os/test-support`, minus perf and bench, which wait on purpose: the same files as before.
+- A root `pnpm e2e` runs `pnpm --dir test e2e`.
+- Local e2e under Node 24 (`pnpm --dir test e2e:run` over organizations, fetch, repos, agents and
+  agents install): 36 passed. The one failure, repos' "a child context with a repo but no egress…",
+  fails the same way on main (localOnly, so CI never runs it); spun off as its own task. Node 26
+  crashes these runs with `setTypeOfService EINVAL` in undici, on main too.

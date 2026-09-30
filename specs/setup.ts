@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { deployedTarget } from "../apps/os/e2e/support/deployed-target.ts";
+import { deployedTarget } from "../test/helpers/deployed-target.ts";
 import { checkoutPublishedPackageCommit } from "../apps/os/scripts/published-package-commit.ts";
 import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
 import { workerBaseUrl } from "./test-support/worker-base-url.ts";
@@ -37,7 +37,7 @@ export default function setup() {
 
 /** A local worker (apps/os/scripts/dev.ts) has fixed dev credentials and routes projects by
  *  subdomain under localhost. A deployment's come out of its own `APP_CONFIG` under `doppler run`
- *  (apps/os/e2e/support/deployed-target.ts, which the vitest e2e suite reads too). */
+ *  (test/helpers/deployed-target.ts, which the vitest e2e suite reads too). */
 function osTargetEnv(): Record<string, string> {
   if (new URL(workerBaseUrl).hostname === "localhost") {
     return {

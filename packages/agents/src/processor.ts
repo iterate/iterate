@@ -8,7 +8,7 @@
 // through the account's AI Gateway as a Workers AI partner model, streamed from the Responses API.
 // The host (durable-object.ts) hands in `getItx`, so a unit test constructs the processor with
 // `new` and reduces rows (processor.test.ts, in node); the saga and the loop are proven on the
-// worker (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// worker (test/vitest/agents/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 //
 // A request is debounced by the at-head scheduling below: one window after its trigger,
 // the failure backoff folded in, the delayed append being the intent.

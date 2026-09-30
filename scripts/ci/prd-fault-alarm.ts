@@ -895,7 +895,7 @@ const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: FALSE_HUNG,
-    pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
+    pin: "test/vitest/agents/ai-stream-hung-request.e2e.test.ts",
     pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
   },
   {

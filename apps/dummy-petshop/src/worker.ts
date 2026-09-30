@@ -1,7 +1,7 @@
 /**
  * dummy-petshop — a deliberately fake third-party service ("the pet shop")
  * for exercising Iterate's integrations & secrets system end to end
- * (apps/os/e2e/support/petshop.ts is the OS side's client): ONE pets API
+ * (test/helpers/petshop.ts is the OS side's client): ONE pets API
  * behind many authentication schemes — its own OAuth 2.0 provider, a legacy
  * email+password login, a GraphQL session login, a Tesco-shaped form login, MCP,
  * OpenAPI and capnweb surfaces, two WebSocket gateways — plus Slack-, Google-,

@@ -3,7 +3,7 @@
 // subrequest depth (why: iterate-context-durable-object.ts `#startRequestedRuns`). workerd counts no
 // depth, so this pins the mechanism: every run of a processor's 30-turn loop is started by a pass,
 // which its `alarm-fired` trace counts, and a caller's run starts at its commit. The depth itself is
-// pinned against a deployed preview (apps/agents/e2e/agents.e2e.test.ts, "an agent's script has as
+// pinned against a deployed preview (test/vitest/agents/agents.e2e.test.ts, "an agent's script has as
 // many hops left").
 // Run:
 //   pnpm exec vitest run --configLoader runner --project workers __workers-tests__/processor-runs-start-in-an-alarm.test.ts

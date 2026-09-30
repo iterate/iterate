@@ -23,6 +23,7 @@ packages:
   - packages/ui
   - lint
   - scripts
+  - test
 # Every dependency two or more packages use is pinned here once and written `catalog:` in each
 # package.json; a dependency only one package uses keeps its version in that package.json. The
 # catalog is kept by hand: pnpm's other catalog modes have `pnpm add` write every new dependency

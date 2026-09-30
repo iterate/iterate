@@ -2,7 +2,7 @@
 // `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`) — the project's own creation
 // and the catalog folded from cross-posted birth certificates. The saga — `session.projects.create`
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
-// e2e/session.e2e.test.ts.
+// test/vitest/os/session.e2e.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";

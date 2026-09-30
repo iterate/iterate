@@ -2,7 +2,7 @@
 // `{ events → state }` rows on the shared harness (iterate/stream/test-support
 // `reduceProcessor`), and the assistant-output parser's rows. The effects — the birth saga, the
 // model call, the script run, the breakers as appends — are proven end to end on the worker
-// (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// (test/vitest/agents/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";

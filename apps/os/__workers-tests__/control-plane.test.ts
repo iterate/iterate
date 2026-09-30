@@ -7,7 +7,7 @@ import { ControlPlane } from "../src/control-plane/edge.ts";
 import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../src/context/paths.ts";
 import { startLoginCode } from "../src/password-and-code-sign-in.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import {
   adminSession,
   fetchReachesThisWorker,

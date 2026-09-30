@@ -248,13 +248,13 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "apps/os/README.md",
     "apps/os/SELF-HOSTING.md",
     "apps/os/docs/project-seeds.md",
-    "apps/os/e2e/AGENTS.md",
-    "apps/os/e2e/support/client.ts",
+    "test/AGENTS.md",
+    "test/helpers/client.ts",
     "apps/os/src/project/templates.test.ts",
     "apps/os/__workers-tests__/support.ts",
-    "apps/os/bench/api.bench.ts",
-    "apps/os/perf/push-delivery.perf.test.ts",
-    "apps/os/perf/latency.ts",
+    "test/vitest/os/bench/api.bench.ts",
+    "test/vitest/os/perf/push-delivery.perf.test.ts",
+    "test/vitest/os/perf/latency.ts",
     "scripts/os/preview.ts",
     "scripts/os/preview-config.ts",
     "scripts/os/e2e-soak.ts",
@@ -457,7 +457,7 @@ test("uses only GitHub's job-scoped token for GitHub API calls", () => {
 });
 
 // The agents rows install the published build of the tested commit's merge base with main
-// (apps/agents/e2e/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
+// (test/vitest/agents/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
 // shallow checkout has no origin/main to find it in. (Preview OS names its tested head at run time.)
 test.for([
   {
@@ -707,7 +707,7 @@ test("the PR time-to-green check's checks are workflows by their names", () => {
 // The health job reads what other workflows keep (scripts/monitors): each is a workflow by its name
 // that uploads the artifact the check reads, whatever its tests' outcome, and the file in it.
 test.for([
-  { ...latencyReport, path: `apps/os/output/${latencyReport.file}` },
+  { ...latencyReport, path: `test/output/${latencyReport.file}` },
   { ...realModelTelemetry, path: "test-results/ci-telemetry" },
 ])("the health job reads $workflow's $artifact", ({ workflow, artifact, path }) => {
   const [measured] = depotWorkflowFiles
@@ -1294,8 +1294,8 @@ test("the Lint check runs the root lint script that local runs use", () => {
 
 test("the preview's e2e suite writes the canonical telemetry artifact", () => {
   // The preview runs `e2e:run` alone (it must not rebuild the deployed dist/); the reporters are a
-  // root option of apps/os's vitest config, so every project's run writes it.
-  expect(readVitestConfig("apps/os")).toMatch(/^ {4}reporters: vitestReporters,$/m);
+  // root option of test/'s vitest config, so every project's run writes it.
+  expect(readVitestConfig("test")).toMatch(/^ {4}reporters: vitestReporters,$/m);
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {

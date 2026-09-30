@@ -27,15 +27,15 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 (`"session teardown: a handle disposes only what it registered"`) or a
 `// ── section ──` comment.
 
-- **Rows that must run in order.** `pnpm --dir apps/os e2e` runs every file's tests
+- **Rows that must run in order.** `pnpm --dir test e2e` runs every file's tests
   concurrently (`--sequence.concurrent`). Rows that share state they also
   measure or reset (one seeded context) are `test.sequential(...)`, and a table
   of them is `test.sequential.for(rows)(...)`. Sequential rows run one at a time,
   in file order, while the file's other rows stay concurrent.
-  `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts` is the model. Prefer a row
+  `test/vitest/os/isolate-ceilings-deployed.e2e.test.ts` is the model. Prefer a row
   that owns its state over an ordered one: a test that creates its own project
   needs no ordering, and a row that reads worker logs boots its own worker
-  (`apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts`, sequential only so
+  (`test/vitest/os/push-delivery-no-dropped-warns.e2e.test.ts`, sequential only so
   one extra workerd runs at a time).
 - **Gated suites.** `describe.skipIf(cond)` becomes `test.skipIf(cond)` on each
   test.

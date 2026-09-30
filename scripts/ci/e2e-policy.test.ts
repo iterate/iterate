@@ -4,16 +4,18 @@ import { E2E_SLEEP_CEILING_MS, SLOW_ROW_PATHS } from "@iterate-com/shared/test-s
 import { expect, test } from "vitest";
 
 // THE E2E ROW BUDGET, from source (docs/testing.md#the-row-budget). A row's timeout is held to its
-// ceiling at runtime (apps/os/e2e/support/setup.ts); what that cannot see is a row's fixed waits,
+// ceiling at runtime (test/helpers/setup.ts); what that cannot see is a row's fixed waits,
 // which files have rows tagged `slow`, and a second retry setting. Deliberately dumb, like
 // lint/dated-skips.test.ts: a regex over the e2e files' text, no parser. A wait written with a
 // named constant, or computed at runtime, passes unseen.
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const SELF = "scripts/ci/e2e-policy.test.ts";
-const files = ["apps/os/e2e", "apps/agents/e2e"]
+// the e2e rows and their fixtures; the perf budgets and benchmarks beside them wait on purpose
+const files = ["test/helpers", "test/vitest/os", "test/vitest/agents", "apps/os/test-support"]
   .flatMap((directory) => tsFilesBelow(join(repoRoot, directory)))
-  .map((path) => ({ file: relative(repoRoot, path), text: readFileSync(path, "utf8") }));
+  .map((path) => ({ file: relative(repoRoot, path), text: readFileSync(path, "utf8") }))
+  .filter(({ file }) => !/^test\/vitest\/os\/(perf|bench)\//.test(file));
 
 /**
  * The waits over the ceiling a row makes on purpose: a row tagged `slow`, or one gated off PRs.
@@ -21,17 +23,17 @@ const files = ["apps/os/e2e", "apps/agents/e2e"]
  */
 const ALLOWED_WAITS = [
   {
-    file: "apps/os/e2e/context-residency.e2e.test.ts",
+    file: "test/vitest/os/context-residency.e2e.test.ts",
     wait: "sleep(110_000)",
     note: "slow row: the sweep's alarm is the evicted context's only wake",
   },
   {
-    file: "apps/os/e2e/context-residency.e2e.test.ts",
+    file: "test/vitest/os/context-residency.e2e.test.ts",
     wait: "sleep(120_000)",
     note: "slow row: the facet's own appends are the context's only callers",
   },
   {
-    file: "apps/os/e2e/context-residency.e2e.test.ts",
+    file: "test/vitest/os/context-residency.e2e.test.ts",
     wait: "sleep(180_000)",
     note: "slow row: the sweep runs at ~60 s and the release lands at 70 s",
   },

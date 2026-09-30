@@ -132,7 +132,7 @@ export abstract class FacetDurableObject<
 
   /** `using itx = this.getItx()`: this facet's context's scope, released with every call made
    *  through it when the block ends (itx-scope.ts). Keep no RPC values past the block; see
-   *  apps/os/e2e/context-residency.e2e.test.ts, "A FACET DOES NOT OUTLIVE ITS CONTEXT", for why.
+   *  test/vitest/os/context-residency.e2e.test.ts, "A FACET DOES NOT OUTLIVE ITS CONTEXT", for why.
    *  A field, not a method: Workers RPC reaches a class's methods, and no caller may get the scope. */
   protected readonly getItx = (): Scope & Disposable => itxScope(this.#itxEntrypoint());
 

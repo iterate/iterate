@@ -52,17 +52,10 @@ export default {
     },
     "apps/os": {
       // The platform worker. Knip's vitest plugin reads vitest.config.ts (its global
-      // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
+      // setups); the rest are entries here. The suites that drive a running worker are test/'s.
       entry: [
         "src/worker.ts!",
-        // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
-        // export is reported
-        "e2e/**/*.e2e.test.ts",
-        // read as text and handed over as the presence facet's source (e2e/support/sources.ts)
-        "e2e/support/presence/durable-object.ts",
-        "perf/**/*.perf.test.ts",
         "__workers-tests__/**/*.ts",
-        "bench/**/*.ts",
         "src/**/*.test.ts",
         // the node programs (build and dev; iterate's deploy and preview tooling is scripts/os at the
         // root) and their tests, so the library modules beside them (generate-wrangler-config) get
@@ -77,10 +70,8 @@ export default {
         "src/**/*.{ts,tsx,css}!",
         "scripts/**/*.ts",
         "examples/**/*.ts",
-        "e2e/**/*.ts",
-        "perf/**/*.ts",
+        "test-support/**/*.ts",
         "__workers-tests__/**/*.ts",
-        "bench/**/*.ts",
       ],
       // sqlfu writes these whole (`pnpm db:generate`): barrels and a migrations bundle the code
       // does not import, beside the query modules it does.
@@ -90,16 +81,24 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      entry: ["scripts/**/*.ts", "e2e/**/*.e2e.test.ts", "__workers-tests__/**/*.test.ts"],
-      project: [
-        "scripts/**/*.ts",
-        "src/**/*.{ts,tsx,css}!",
-        "e2e/**/*.ts",
-        "__workers-tests__/**/*.ts",
-      ],
+      entry: ["scripts/**/*.ts", "__workers-tests__/**/*.test.ts"],
+      project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!", "__workers-tests__/**/*.ts"],
       vite: false,
       wrangler: false,
       ignoreDependencies: ["tailwindcss", "cloudflare"],
+    },
+    test: {
+      // The suites that drive a running worker. Knip's vitest plugin reads vitest.config.ts (its
+      // global setups and the helpers' tests); the suites' files are entries, and helpers/** is
+      // project code, so an unused helper export is reported.
+      entry: [
+        "vitest/**/*.e2e.test.ts",
+        "vitest/os/perf/**/*.perf.test.ts",
+        "vitest/os/bench/**/*.ts",
+        // read as text and handed over as the presence facet's source (helpers/sources.ts)
+        "helpers/presence/durable-object.ts",
+      ],
+      project: ["helpers/**/*.ts", "vitest/**/*.ts"],
     },
     // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
     ...Object.fromEntries(

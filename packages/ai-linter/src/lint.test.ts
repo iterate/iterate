@@ -75,7 +75,7 @@ test("globs: ** spans directories, * and ? stay in one segment, braces alternate
     ["**/*.ts", "a.tsx", false],
     ["*.ts", "src/a.ts", false],
     ["**/*.{ts,tsx}", "x/y.tsx", true],
-    ["**/{__tests__,e2e}/**", "apps/os/e2e/a.ts", true],
+    ["**/{__tests__,e2e}/**", "test/vitest/os/a.ts", true],
     ["**/{__tests__,e2e}/**", "apps/os/e2e-helpers/a.ts", false],
     ["packages/ui/src/hooks/use-mobile.ts", "packages/ui/src/hooks/use-mobile.ts", true],
     ["a?.md", "ab.md", true],
@@ -90,7 +90,7 @@ test("a rule applies to a path a positive glob matches and no ! glob does", () =
   const rule = parseRule("r.md", RULE_FILE);
   expect(ruleApplies(rule, "apps/os/src/worker.ts")).toBe(true);
   expect(ruleApplies(rule, "apps/os/src/worker.test.ts")).toBe(false);
-  expect(ruleApplies(rule, "apps/os/e2e/client.ts")).toBe(false);
+  expect(ruleApplies(rule, "test/vitest/os/client.ts")).toBe(false);
   expect(ruleApplies(rule, "README.md")).toBe(false);
 });
 

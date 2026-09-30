@@ -2,10 +2,10 @@
 // src/project-host-sign-in.ts): the cookie a browser holds for `<routingSlug>--<project>.<base>` stamps the
 // member's principal on a read from anywhere and on a write or WebSocket upgrade from the host's own
 // origin; a write or upgrade another site drove arrives anonymous. Bearer rows, and the sign-in
-// challenge under both routings, are in e2e/ingress-project-host.e2e.test.ts.
+// challenge under both routings, are in test/vitest/os/ingress-project-host.e2e.test.ts.
 import { exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { signedInSession, SRC_ECHO_APP } from "./support.ts";
 
 test("a member's session cookie on a project host: a read from anywhere and a write or WebSocket upgrade from the host itself carry the principal; a cross-site write or upgrade arrives anonymous", async () => {

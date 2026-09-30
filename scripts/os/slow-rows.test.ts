@@ -14,9 +14,9 @@ test.for([
   },
   {
     case: "a PR that changes the rows themselves runs them",
-    pullRequest: pullRequest([], ["apps/os/e2e/context-residency.e2e.test.ts"]),
+    pullRequest: pullRequest([], ["test/vitest/os/context-residency.e2e.test.ts"]),
     slowRows: "run",
-    reason: "PR #7 changes apps/os/e2e/context-residency.e2e.test.ts",
+    reason: "PR #7 changes test/vitest/os/context-residency.e2e.test.ts",
   },
   {
     case: "a PR with the label runs them, whatever it changes",
