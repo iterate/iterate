@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import JSON5 from "json5";
 import { OBSERVABILITY, registrableDomainOf } from "../../../scripts/lib/wrangler-config.ts";
@@ -100,7 +101,7 @@ export function routedHostnames(env: OsEnv) {
 /** wrangler.base.jsonc, the template every deployment's config derives from. */
 export function readWranglerBase() {
   const base = JSON5.parse(
-    readFileSync(new URL("../wrangler.base.jsonc", import.meta.url), "utf8"),
+    readFileSync(join(import.meta.dirname, "../wrangler.base.jsonc"), "utf8"),
   );
   return { ...base, compatibility_date: COMPATIBILITY_DATE };
 }

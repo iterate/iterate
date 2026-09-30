@@ -40,7 +40,7 @@ import { HangTools, Tools } from "../../helpers/targets.ts";
 // (A never-configured match is default-deny like any other unmatched call — NO_ITX_EXPRESSION_MATCH
 // across the /api hop is context.e2e; RPC_STUB_OFFLINE narrows to "rule exists, no stub under its
 // key": the hand-configured-rule and mid-invoke tests below. That a visitor's `x-itx-*` headers never
-// reach the DO's attach is __workers-tests__/control-plane.test.ts + ingress-project-host.e2e.)
+// reach the DO's attach is vitest/os-workers/control-plane.test.ts + ingress-project-host.e2e.)
 
 test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {
   const ctx = freshCtx("replace");
@@ -330,7 +330,7 @@ test("concurrent provides at one key collapse to ONE live transport; the map hol
 });
 
 // (The pager attach itself — one upgrade carrying the key and the rule, atomic with the append — is
-// pinned DO-level, where the socket census is readable: __workers-tests__/rpc-stub-pager-attach.test.ts;
+// pinned DO-level, where the socket census is readable: vitest/os-workers/rpc-stub-pager-attach.test.ts;
 // its ORDER relative to presence, at the surface: rpc-stubs-reconnect-and-attach.e2e.test.ts.)
 
 // ── the same shape one layer up: a live SUBSCRIBER's stub + row ──

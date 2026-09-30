@@ -901,7 +901,7 @@ const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: RPC_BODY_ENDED_EARLY,
-    pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
+    pin: "test/vitest/os/forwarded-rpc-body.test.ts",
     pages: [
       leaf("$metadata.message", "includes", RPC_BODY_ENDED_EARLY),
       notOn("IterateContextDurableObject"),

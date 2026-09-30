@@ -8,8 +8,8 @@
 // The lend here is to ONE project: a lend to every project is state of the whole shared preview, and
 // every project another file creates while it stands would borrow it and list it among its secrets
 // (secrets-connections.e2e.test.ts pins a new project's list empty). Lending to every project, a new
-// project borrowing it and a kept path are pinned in __workers-tests__/instance-lends.test.ts, and
-// the WebSocket through that lend in __workers-tests__/secret-sockets-over-lends.test.ts.
+// project borrowing it and a kept path are pinned in vitest/os-workers/instance-lends.test.ts, and
+// the WebSocket through that lend in vitest/os-workers/secret-sockets-over-lends.test.ts.
 import { expect } from "vitest";
 import { adminCredentials, readAll, session, until } from "../../helpers/client.ts";
 import { petshopBaseUrl, petshopLegacyBearer } from "../../helpers/petshop.ts";

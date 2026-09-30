@@ -21,7 +21,7 @@
 //     env.ITX (a real Fetcher, the ItxEntrypoint loopback); RED (`createFailing`): its WebSocket upgrade
 //     dies on the Workers-RPC return leg, and a dyn-provided stub dies with the providing invocation
 //     (the detached-provider question)
-// (The workerd-provider half of the upgrade leg is __workers-tests__/ws-fetch-live-101.test.ts; a
+// (The workerd-provider half of the upgrade leg is vitest/os-workers/ws-fetch-live-101.test.ts; a
 // tunnel — `iterate tunnel bla 3000` — is the same lent stub proxying to localhost, the same hops.)
 
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
@@ -29,7 +29,7 @@ import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { adminCredentials, freshCtx, openItx, session, workerUrl } from "../../helpers/client.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   appSeesUrl,
   fetchProjectUrl,
@@ -120,7 +120,7 @@ test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host o
   expect(ws).toMatchObject({ opened: true, echo: "device-echo:hello-device", closeCode: 1000 });
 });
 
-// The workerd-provider half of the same leg is pinned in __workers-tests__/ws-fetch-live-101
+// The workerd-provider half of the same leg is pinned in vitest/os-workers/ws-fetch-live-101
 // .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
 // (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
 

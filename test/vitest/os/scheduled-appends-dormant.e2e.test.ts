@@ -11,7 +11,7 @@ import {
   readAll,
   sleep,
 } from "../../helpers/client.ts";
-import { scheduledAppendFacetSource } from "../../../apps/os/test-support/scheduled-append-facet.ts";
+import { scheduledAppendFacetSource } from "../../helpers/scheduled-append-facet.ts";
 
 // Crosses the real idle eviction without a client or waitForEvent keeping the actor active. Measured on
 // a deployed preview 2026-09-22 (deadline → alarm woke a NEW incarnation): 10 s never (0/6, the alarm

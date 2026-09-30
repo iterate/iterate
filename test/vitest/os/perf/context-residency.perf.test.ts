@@ -26,7 +26,7 @@ import {
   sleep,
   until,
 } from "../../../helpers/client.ts";
-import { publishConfigWorker } from "../../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../../helpers/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,

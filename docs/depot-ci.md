@@ -598,7 +598,7 @@ pins the exceptions:
 - Deploy Kit and Deploy Voice run for `packages/voice`: their pages run its voice check
   (`@iterate-com/voice/install`).
 - Deploy OS skips what never reaches the Worker: the markdown at the app root, `apps/os/docs`,
-  `apps/os/__workers-tests__`, `apps/os/test-support`, `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
+  `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 

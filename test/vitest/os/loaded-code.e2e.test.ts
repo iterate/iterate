@@ -5,7 +5,7 @@
 // its context, through the table.
 import { expect, test, type TestContext } from "vitest";
 import { freshCtx, openItx, readAll, until } from "../../helpers/client.ts";
-import { FakeArtifacts } from "../../../apps/os/test-support/fake-artifacts.ts";
+import { FakeArtifacts } from "../../helpers/fake-artifacts.ts";
 
 /** A loaded worker that hands its `env.ITX` whatever the test asks it to say, and reports the refusal. */
 const PROBE = {

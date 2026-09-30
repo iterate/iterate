@@ -14,7 +14,7 @@
 //   • then-safety (an awaited chain node settles into a live handle; a settled stub is not a thenable),
 //     stringify-safety (toJSON never dispatches), and the reserved transport words (then / dup /
 //     onRpcBroken) hidden at EVERY depth — pinned behaviorally: the log and a tally never move
-// `kv.list` paging past 1000 keys is __workers-tests__/kv-list-pagination.test.ts: deployed KV's list is
+// `kv.list` paging past 1000 keys is vitest/os-workers/kv-list-pagination.test.ts: deployed KV's list is
 // eventually consistent, so a row here would measure KV propagation, not the pagination.
 
 import { expect, test } from "vitest";

@@ -11,11 +11,13 @@ import { expect, test } from "vitest";
 
 const repoRoot = resolve(import.meta.dirname, "../..");
 const SELF = "scripts/ci/e2e-policy.test.ts";
-// the e2e rows and their fixtures; the perf budgets and benchmarks beside them wait on purpose
-const files = ["test/helpers", "test/vitest/os", "test/vitest/agents", "apps/os/test-support"]
+// the e2e rows and their fixtures: not the perf budgets and benchmarks beside them, which wait on
+// purpose, nor the in-process tests (`*.test.ts` but not `*.e2e.test.ts`), which run no e2e row
+const files = ["test/helpers", "test/vitest/os", "test/vitest/agents"]
   .flatMap((directory) => tsFilesBelow(join(repoRoot, directory)))
   .map((path) => ({ file: relative(repoRoot, path), text: readFileSync(path, "utf8") }))
-  .filter(({ file }) => !/^test\/vitest\/os\/(perf|bench)\//.test(file));
+  .filter(({ file }) => !/^test\/vitest\/os\/(perf|bench)\//.test(file))
+  .filter(({ file }) => file.endsWith(".e2e.test.ts") || !file.endsWith(".test.ts"));
 
 /**
  * The waits over the ceiling a row makes on purpose: a row tagged `slow`, or one gated off PRs.

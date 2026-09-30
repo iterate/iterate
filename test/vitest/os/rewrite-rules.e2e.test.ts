@@ -3,7 +3,7 @@
 // every short name `itx.<root>` is the implicit platform row `itx.<root> ⇒ itx.builtins.<root>`,
 // consulted only after the context's own rows. (The resolver's own rows — the depth budget, longest
 // match wins, a longer match under a target's prefix — are context/itx-expression-rewriting.test.ts;
-// the table as a MAP and a null's delete are __workers-tests__/do-entry-points.test.ts +
+// the table as a MAP and a null's delete are vitest/os-workers/do-entry-points.test.ts +
 // src/stream/core-processor.test.ts.) Pins:
 //   • a provided stub at a built-in's name SHADOWS it (the real root: ai-root-shadow-and-fable.e2e); a
 //     dead stub's un-set leaves a user's alias to the shadowed root alone, in either configuration order

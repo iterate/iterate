@@ -20,7 +20,7 @@ import {
   workerUrl,
 } from "../../helpers/client.ts";
 import { oauthSession } from "../../helpers/principal.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
@@ -449,7 +449,7 @@ test(
     // platform can drop the host socket's connection to the app before that re-check (about 1 in
     // 90 sockets over their 30 s on previews, measured 2026-09-25); the edge then closes it 1011
     // (project-host-lease.ts) and the lease has nothing left to close. The lease's own 1008 on a
-    // relayed socket is pinned without a platform in __workers-tests__/personal-access-tokens.test.ts.
+    // relayed socket is pinned without a platform in vitest/os-workers/personal-access-tokens.test.ts.
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const [, hostClose] = await Promise.race([

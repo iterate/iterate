@@ -49,7 +49,7 @@ import {
   petshopTescoExchangeSource,
 } from "../../helpers/petshop.ts";
 import { oauthSession } from "../../helpers/principal.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   deployedOnly,
   freshDnsSafeProjectSlug,

@@ -25,7 +25,7 @@
 //     STREAM_PAUSED; an operator's plain `itx/resumed` restores flow
 // (The two pins that read the worker's console — a quiet enable is clean, disable mid-drive raises no
 // error storm — are push-delivery-no-dropped-warns.e2e, which owns a worker of its own; a stale
-// subscribe handle's compare-and-set undo is __workers-tests__/do-entry-points.test.ts.)
+// subscribe handle's compare-and-set undo is vitest/os-workers/do-entry-points.test.ts.)
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";

@@ -55,7 +55,7 @@ path in for the build's ([packages/ui/src/apps/base-path.ts](../../packages/ui/s
 sign-in, as the deployed Notes does. Under subdomains the tunnel's host is an origin of its own, and
 plain `pnpm dev` serves it. The local OS's `pnpm dev` does not forward the HMR socket: its
 Cloudflare Vite plugin drops every `vite-*` WebSocket it does not serve itself
-([pinned](../os/scripts/dev-tunnelled-hmr.test.ts) until upstream fixes it). A deployed or built OS
+([pinned](../../test/vitest/os/dev-tunnelled-hmr.test.ts) until upstream fixes it). A deployed or built OS
 does.
 
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform its projects run on

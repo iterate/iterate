@@ -15,7 +15,7 @@ import { transformSync } from "esbuild";
 import { expect, test } from "vitest";
 import { openItx } from "../../helpers/client.ts";
 import { oauthSession } from "../../helpers/principal.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   appSeesUrl,
   deployedOnly,

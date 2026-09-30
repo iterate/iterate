@@ -23,7 +23,7 @@
     "prepare": "is-ci || (husky && node scripts/lockfile-stamp.ts)",
     "e2e": "pnpm --dir test e2e",
     "spec": "playwright test --config test/playwright.config.ts",
-    "test": "pnpm -r --parallel test"
+    "test": "pnpm --filter os build && pnpm -r --parallel test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",

@@ -218,9 +218,9 @@ test.for([
   { path: "test/helpers/test.ts", group: "Tests" },
   { path: "test/playwright/global-setup.ts", group: "Tests" },
   { path: "test/playwright/os/auth.spec.ts", group: "Tests" },
-  { path: "apps/os/__workers-tests__/support.ts", group: "Tests" },
-  { path: "apps/agents/__workers-tests__/agent-revive.test.ts", group: "Tests" },
-  { path: "apps/os/src/stream/memory-budget.test-support.ts", group: "Tests" },
+  { path: "test/vitest/os-workers/support.ts", group: "Tests" },
+  { path: "test/vitest/agents-workers/agent-revive.test.ts", group: "Tests" },
+  { path: "test/vitest/os/memory-budget.test-support.ts", group: "Tests" },
   { path: "apps/os/src/stream/test-support.ts", group: "Tests" },
   { path: "apps/os/src/worker.ts", group: "Product" },
 ])("$path counts as $group", ({ path, group }) => {

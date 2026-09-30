@@ -11,7 +11,7 @@
 //     Request reaches the app VERBATIM, path and all, and the SDK bundle exports capnweb's SERVER half
 //     (`newWorkersRpcResponse`, built with the `workerd` condition) — a LOADED worker serves a capnweb
 //     API at `rpc--<project>.<base>/<path>` that connectToCapnweb dials, through egress, back into
-//     this worker's own host (the local twin: __workers-tests__/ws-fetch-live-101.test.ts)
+//     this worker's own host (the local twin: vitest/os-workers/ws-fetch-live-101.test.ts)
 //   • connectToMcp: initialize + tools/list at connect, a tool as a method, callTool, an isError tool
 //     call throws, held across calls; without the bearer the shop's 401 reaches the caller
 //   • rules composition: `provide('itx.tools', "itx.connectToMcp(…)")`, then `itx.tools.listTools()` and
@@ -28,7 +28,7 @@
 import { expect, test } from "vitest";
 import { adminCredentials, freshCtx, openItx, runId, workerUrl } from "../../helpers/client.ts";
 import { petshopBaseUrl, petshopLegacyBearer } from "../../helpers/petshop.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   deployedOnly,
   deployedSubdomainsOnly,

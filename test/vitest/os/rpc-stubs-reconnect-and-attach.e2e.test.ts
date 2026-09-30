@@ -19,7 +19,7 @@
 //     `itx/rpc-stub-attached` (the presence fact)
 //   • a paused stream's refusal of a provide or a subscribe crosses /api CODED (STREAM_PAUSED); after
 //     resume the same calls land (the attach's atomicity at the DO — 409 + code, no socket, no
-//     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
+//     presence, no rule — is vitest/os-workers/rpc-stub-pager-attach.test.ts)
 
 import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";

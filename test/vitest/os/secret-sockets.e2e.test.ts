@@ -9,7 +9,7 @@
 // pointer a person's account connected to a project is — whose use crosses the borrowed path to the
 // lender's context and facet on fetch channels (a 101's socket crosses no Workers-RPC call).
 // Deployed only: the local worker cannot make an outbound upgrade (secrets.e2e.test.ts). The
-// in-process proof of every hop is __workers-tests__/secret-sockets-over-lends.test.ts.
+// in-process proof of every hop is vitest/os-workers/secret-sockets-over-lends.test.ts.
 import { expect } from "vitest";
 import { adminCredentials, freshCtx, openItx, session } from "../../helpers/client.ts";
 import { petshopBaseUrl, petshopLegacyBearer } from "../../helpers/petshop.ts";
