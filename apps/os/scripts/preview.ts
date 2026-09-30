@@ -479,6 +479,7 @@ async function deployPreviewSteps(
   const url = urls.os;
   const versionId = await deployedVersion(ctx, getOsEnv(name).workerName);
   const config = parseAppConfig({
+    APP_CONFIG_URLS__OS: url,
     ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
     ...appConfigSecretsOf(ctx.secrets),
   });
