@@ -512,35 +512,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     rows: () => this.#durableSubscriptionRows(),
     currentHead: () => this.#stream.highestDurableOffset(),
     read: (row, afterOffset, limit, resumeAtOffset) =>
-      this.#readSubscriptionDelivery({
-        name: row.name,
-        configuredAtOffset: row.configuredAtOffset,
-        resumeAtOffset,
-        afterOffset,
-        limit,
-      }),
-    deliver: (row, { offsets, range, resumeAtOffset }) =>
-      this.#deliverConfiguredSubscription({
-        name: row.name,
-        configuredAtOffset: row.configuredAtOffset,
-        resumeAtOffset,
-        offsets,
-        range,
-      }),
-    deliverEphemeral: (row, { offset, type, resumeAtOffset }) =>
-      this.#deliverConfiguredEphemeralSubscription({
-        name: row.name,
-        configuredAtOffset: row.configuredAtOffset,
-        resumeAtOffset,
-        offset,
-        type,
-      }),
-    terminal: (row, input) =>
-      this.#recordConfiguredSubscriptionTerminal({
-        name: row.name,
-        configuredAtOffset: row.configuredAtOffset,
-        ...input,
-      }),
+      this.#readSubscriptionDelivery({ ...row, afterOffset, limit, resumeAtOffset }),
+    deliver: (row, input) => this.#deliverConfiguredSubscription({ ...row, ...input }),
+    deliverEphemeral: (row, input) =>
+      this.#deliverConfiguredEphemeralSubscription({ ...row, ...input }),
+    terminal: (row, input) => this.#recordConfiguredSubscriptionTerminal({ ...row, ...input }),
     run: (work) => this.#runDurableDelivery(work),
     wakesChanged: () => {
       if (this.#durableDeliveryInFlight === 0)
@@ -1121,9 +1097,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     request: DeliveryEphemeralRequest,
     row: Subscription,
   ): StreamEvent[] {
-    const actual = this.#stream
-      .read(request.offset - 1, 1, { includeEphemeral: true })
-      .events.find((event) => event.offset === request.offset && event.ephemeral);
+    const actual = this.#stream.readEphemeral(request.offset);
     if (!actual || actual.type !== request.type || !consumesEvent(row.consumes, actual))
       throw codedError("GONE", "ephemeral subscription source event is no longer available");
     return [actual];

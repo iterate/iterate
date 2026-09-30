@@ -645,6 +645,11 @@ export class Stream {
     return this.#read(afterOffset, limit, options);
   }
 
+  /** One body from the current live ring, without parsing an unrelated durable page. */
+  readEphemeral(offset: number): StreamEvent | undefined {
+    return this.#recentEphemerals.find(({ event }) => event.offset === offset)?.event;
+  }
+
   /** Internal durable delivery must make bounded forward progress past a corrupt historical row.
    * `throughOffset` keeps a retry from reading past the range it admitted. Public `read` stays strict
    * so callers see corruption rather than silently skipping it. */
