@@ -37,7 +37,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { expect, test, vi } from "vitest";
 import type { ItxExpression } from "iterate/expression";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { AlarmTrace } from "../../../apps/os/src/iterate-context-durable-object.ts";
+import type { AlarmTrace } from "../../../core/os/src/iterate-context-durable-object.ts";
 import { COUNTER_SOURCE } from "./sources.ts";
 import {
   adminCredentials,

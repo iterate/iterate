@@ -9,7 +9,7 @@
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { ALARM_OVERDUE_AFTER_MS } from "../../../apps/os/src/alarm-coordinator.ts";
+import { ALARM_OVERDUE_AFTER_MS } from "../../../core/os/src/alarm-coordinator.ts";
 import { owedAlarmOf, releasePins, stub, until } from "./support.ts";
 
 const at = Date.parse("2035-01-01T00:00:00Z");

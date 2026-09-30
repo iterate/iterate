@@ -1,5 +1,5 @@
 // project-ingress.ts — HOW PROJECTS ARE REACHED OVER HTTP, both directions in ONE pure file. A
-// deployment's `urls.ingressRouting` (apps/os app-config.ts) names the mechanism; `projectAddressOf`
+// deployment's `urls.ingressRouting` (core/os app-config.ts) names the mechanism; `projectAddressOf`
 // parses a request's URL into the project and routing slug it names, `projectUrlOf` composes the URL
 // of a routing slug in a project. The platform's edge parses; the platform, the dash and an app
 // compose — one implementation, table-tested to round-trip (project-ingress.test.ts). No imports.
@@ -88,7 +88,7 @@ export function projectAddressOf(
   return { routingSlug, project, basePath: `/projects/${project}/${routingSlug}` };
 }
 
-/** A PROJECT WILDCARD — an owned zone served as one project's apex (apps/os
+/** A PROJECT WILDCARD — an owned zone served as one project's apex (core/os
  *  `urls.projectWildcard`, `{ hostname: "iterate.com", project: "iterate" }`): the zone's apex and
  *  every first-level name under it but the excluded ones, in the apex shape, `routingSlug: null`, so the
  *  project's config worker `fetch` answers exactly as it does on `<project>.<hostname>`. Null for
@@ -105,7 +105,7 @@ export function projectWildcardHostOf(
     : null;
 }
 
-/** A PROJECT'S OWN HOSTNAME — `iterate.example.com`, added by the project (apps/os
+/** A PROJECT'S OWN HOSTNAME — `iterate.example.com`, added by the project (core/os
  *  project/custom-hostnames.ts) — is that project's apex, and one label under it names a routing
  *  slug: `notes.iterate.example.com` carries `notes`, as `notes--<project>.<hostname>` does. The
  *  hostnames a request's host could be a project's own hostname for, most specific first: the host
@@ -159,7 +159,7 @@ export function projectUrlOf(
 }
 
 /** The URL of `routingSlug` (null ⇒ the apex) at `path` (default "/", must start with "/") on a
- *  project's PRIMARY HOSTNAME, one of its own live hostnames (apps/os project/contract.ts
+ *  project's PRIMARY HOSTNAME, one of its own live hostnames (core/os project/contract.ts
  *  `primaryHostname`): `https://<routingSlug>.<primaryHostname><path>`, or
  *  `https://<primaryHostname><path>` for the apex. Null for a bad routing slug. Pure. */
 export function primaryHostnameUrlOf(

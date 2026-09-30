@@ -10,7 +10,7 @@ import type { ItxExpression } from "iterate/expression";
 import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
-import { atRestKeysOf, parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { atRestKeysOf, parseAppConfig } from "../../core/os/src/app-config.ts";
 import {
   DeploymentStructure,
   EncryptedSecretSeed,
@@ -25,7 +25,7 @@ import {
   restoreFetchRoutes,
   restoreHostnames,
   restorePrimaryHostname,
-} from "../../apps/os/scripts/project-seed-format.ts";
+} from "../../core/os/scripts/project-seed-format.ts";
 
 async function target(env: string) {
   const context = await resolveEnvContext(getEnv(env, osEnvs), {
@@ -69,7 +69,7 @@ export async function capture(options: {
   const project = (await api.projects.list()).find((project) => project.slug === options.project);
   if (!project) throw new Error(`Project ${options.project} does not exist.`);
   const root = await api.projects.get(project.id);
-  // the organization and its members, off the control plane (apps/os/src/control-plane/)
+  // the organization and its members, off the control plane (core/os/src/control-plane/)
   const organization = (await api.organizations.list()).find((org) => org.id === project.orgId);
   if (!organization) throw new Error(`Organization ${project.orgId} does not exist.`);
   const members = (await api.organizations.members(project.orgId)).map(({ email, role }) => ({
@@ -307,7 +307,7 @@ export async function apply(options: {
   const owner = members.find((member) => member.role === "owner")!;
   using ownerConnection = await context.connect({ email: owner.email });
   const operator = ownerConnection.session;
-  // the operator's listing is every organization (apps/os/src/control-plane/), so reruns find an
+  // the operator's listing is every organization (core/os/src/control-plane/), so reruns find an
   // existing organization by name and reject an ambiguous one
   const orgs = (await admin.organizations.list()).filter((org) => org.name === organization);
   if (orgs.length > 1) throw new Error(`Organization name ${organization} is ambiguous.`);
@@ -331,7 +331,7 @@ export async function apply(options: {
     // the owner's session adds each member (the owner again is a no-op on the record)
     await operator.organizations.addMember(org.id, { userId: user.actor, role: member.role });
   }
-  // Asked again for an existing project, create answers it (apps/os/src/session.ts `projects.create`).
+  // Asked again for an existing project, create answers it (core/os/src/session.ts `projects.create`).
   await admin.projects.create({
     project: seed.project,
     orgId: org.id,

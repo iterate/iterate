@@ -4,8 +4,8 @@
 // client hears 1011, never 1000.
 import { env } from "cloudflare:workers";
 import { expect, onTestFinished, test } from "vitest";
-import type { AccessGrant } from "../../../apps/os/src/oauth.ts";
-import { leasedProjectHostAnswer } from "../../../apps/os/src/project-host-lease.ts";
+import type { AccessGrant } from "../../../core/os/src/oauth.ts";
+import { leasedProjectHostAnswer } from "../../../core/os/src/project-host-lease.ts";
 
 test.for([
   {

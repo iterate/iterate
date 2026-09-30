@@ -3,8 +3,8 @@
 // someone else, through the real sign-in, consent, code exchange and admission.
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { authorizationForToken } from "../../../apps/os/src/oauth.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { authorizationForToken } from "../../../core/os/src/oauth.ts";
 import {
   actingAs,
   authorizationRequest,

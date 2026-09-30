@@ -1,10 +1,11 @@
-# SHADCN DRIFT (scripts/ci/shadcn-drift.ts check): packages/ui's vendored shadcn files are byte for byte
-# what the pinned CLI's `shadcn add <item> -o` writes (packages/ui/AGENTS.md). A pull request that
-# touches one of them, an input of the CLI (components.json, the pin in packages/ui/package.json,
-# the tsconfig.json it resolves aliases with, the globals.css it merges an item's CSS into) or this
-# check asks the CLI's dry run for the exact content `add` would write, from shadcn's live registry,
-# and fails on any file whose bytes differ, printing each file's diff. The fix is a refresh
-# (`node scripts/ci/shadcn-drift.ts refresh`), never a hand edit.
+# SHADCN DRIFT (scripts/ci/shadcn-drift.ts check): the vendored shadcn files (packages/ui's and
+# core/os's) are byte for byte what the pinned CLI's `shadcn add <item> -o` writes
+# (packages/ui/AGENTS.md). A pull request that touches one of them, an input of the CLI in either
+# folder (components.json, the pin in package.json, the tsconfig.json it resolves aliases with, the
+# stylesheet it merges an item's CSS into) or this check asks the CLI's dry run for the exact
+# content `add` would write, from shadcn's live registry, and fails on any file whose bytes differ,
+# printing each file's diff. The fix is a refresh (`node scripts/ci/shadcn-drift.ts refresh`), never
+# a hand edit.
 #
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
@@ -52,6 +53,19 @@ on:
       - packages/ui/src/components/textarea.tsx
       - packages/ui/src/components/tooltip.tsx
       - packages/ui/src/hooks/use-mobile.ts
+      - core/os/components.json
+      - core/os/package.json
+      - core/os/tsconfig.json
+      - core/os/src/styles.css
+      - core/os/src/components/ui/avatar.tsx
+      - core/os/src/components/ui/button.tsx
+      - core/os/src/components/ui/checkbox.tsx
+      - core/os/src/components/ui/field.tsx
+      - core/os/src/components/ui/input.tsx
+      - core/os/src/components/ui/label.tsx
+      - core/os/src/components/ui/native-select.tsx
+      - core/os/src/components/ui/separator.tsx
+      - core/os/src/components/ui/spinner.tsx
   workflow_dispatch: {}
 concurrency:
   group: shadcn-drift-${{ github.event.pull_request.number || github.ref }}

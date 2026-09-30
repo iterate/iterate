@@ -5,16 +5,16 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import { OAuthAuthorizationServer } from "@cloudflare/workers-oauth-provider";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import { appSession } from "iterate/app-server";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { browserAuthorization } from "../../../apps/os/src/browser-client.ts";
-import { projectsForClient } from "../../../apps/os/src/consent.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { browserAuthorization } from "../../../core/os/src/browser-client.ts";
+import { projectsForClient } from "../../../core/os/src/consent.ts";
 import {
   accountStateOf,
   authorizationForToken,
   recordGrantUse,
-} from "../../../apps/os/src/oauth.ts";
-import type { Env } from "../../../apps/os/src/env.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+} from "../../../core/os/src/oauth.ts";
+import type { Env } from "../../../core/os/src/env.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import {
   actingAs,
   authorizationRequest,

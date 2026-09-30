@@ -4,7 +4,7 @@
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import { proxiedAppRoute, signInLinkOf } from "../../../scripts/os/preview-config.ts";
-import { TEST_EMAIL_DOMAIN } from "../../../apps/os/src/test-email-domain.ts";
+import { TEST_EMAIL_DOMAIN } from "../../../core/os/src/test-email-domain.ts";
 import { readOsPlaywrightAuthConfig } from "../../helpers/auth-config.ts";
 import { signInWithPassword } from "../../helpers/issuer.ts";
 import { openOperatorSession } from "../../helpers/operator.ts";
@@ -12,7 +12,7 @@ import { test } from "../../helpers/test.ts";
 import { workerBaseUrl } from "../../helpers/worker-base-url.ts";
 
 // the admin a per-commit deployment and local dev both list (envs.ts `previewDeployment`,
-// apps/os/scripts/generate-wrangler-config.ts)
+// core/os/scripts/generate-wrangler-config.ts)
 const ADMIN_EMAIL = `admin@${TEST_EMAIL_DOMAIN}`;
 // where every per-commit deployment's admins sign in (envs.ts `previewDeployment`'s `adminIssuer`)
 const PRD_ISSUER_HOST = "os.iterate.com";

@@ -5,7 +5,7 @@
 // false log line.
 //
 // Here: a loaded facet calls `itx.ai.run` through `env.ITX` (ItxEntrypoint.get), its context
-// Durable Object calls the stateless `ItxAi` (apps/os/src/itx-ai.ts), which calls `env.AI.run`, and
+// Durable Object calls the stateless `ItxAi` (core/os/src/itx-ai.ts), which calls `env.AI.run`, and
 // the facet drains the body itself, with no agents code. The verdict is the outcome of every
 // stateless invocation on the way, ItxEntrypoint's `ai.run` and ItxAi's, read from Workers Logs
 // (CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, Doppler os/preview). It pays for model calls, so

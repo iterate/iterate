@@ -7,8 +7,8 @@
 import { runInDurableObject } from "cloudflare:test";
 import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { AccountState } from "../../../apps/os/src/account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
+import type { AccountState } from "../../../core/os/src/account/contract.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
 import { adminSession, stub, until } from "./support.ts";
 
 /** How long the held creation may take. It answers in well under a second here; one that waits on

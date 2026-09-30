@@ -13,7 +13,7 @@ the context is evicted. Releasing the scope in a `finally` is not enough: the ca
 stay open. `getItx()` hands out the same scope, recorded: disposing it releases the scope, every
 call made through it, and every handle it awaited, with the calls made on that handle
 ([itx-scope.ts](../../packages/iterate/src/sdk/itx-scope.ts),
-[residency](../../apps/os/docs/residency.md)). `using` disposes it when the block ends;
+[residency](../../core/os/docs/residency.md)). `using` disposes it when the block ends;
 `const itx = this.getItx()` never does.
 
 ```js
@@ -46,6 +46,6 @@ careless keep (the context-residency rows) disables the rule above the module's 
 
 Not checked: an alias of the binding (`const binding = env.ITX`, `#itx = this.env.ITX`; no
 first-party code keeps one), a `getItx()` inside an embedded module, a module built by string
-concatenation (the `itx.run` template in `apps/os/src/library.ts`, pinned by its unit test instead)
+concatenation (the `itx.run` template in `core/os/src/library.ts`, pinned by its unit test instead)
 or imported from another file, an entrypoint stashed and restored from storage, a call a block
 returns unawaited, and a handle a block hands out.

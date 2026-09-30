@@ -1,6 +1,6 @@
 // THE TREE the dash navigates — the signed-in person → their organizations → each organization's
 // projects — READ FROM /api: `organizations.list()` and `projects.list()`, the control plane's
-// database as it stands (apps/os src/session.ts). The streams are activity logs: a fact landing on
+// database as it stands (core/os src/session.ts). The streams are activity logs: a fact landing on
 // the person's account (a membership of theirs) or on an organization's own context (renamed, a
 // member, an invitation, a project) only INVALIDATES the read, and the tree reads again. ONE
 // subscription per organization and one for the account, never one per project (every open
@@ -167,7 +167,7 @@ export function useOrganizationTreeEntry(orgId: string) {
 }
 
 /** The facts that change the tree: a membership of the person's, on their account; anything that
- *  happens to an organization, on its own context (apps/os src/organization/contract.ts). */
+ *  happens to an organization, on its own context (core/os src/organization/contract.ts). */
 const ACCOUNT_FACTS = [
   "events.iterate.com/organization/member-added",
   "events.iterate.com/organization/member-removed",

@@ -7,9 +7,9 @@ import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
-import worker from "../../../apps/os/src/worker.ts";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { authorizationForToken } from "../../../apps/os/src/oauth.ts";
+import worker from "../../../core/os/src/worker.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { authorizationForToken } from "../../../core/os/src/oauth.ts";
 
 const LAPTOP = "http://localhost:8788";
 // the suite's config (wrangler.test.jsonc: test email domain `signin.test`) on a loopback issuer

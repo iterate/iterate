@@ -2,11 +2,11 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { ControlPlaneDatabase } from "../../../apps/os/src/control-plane/catalog.ts";
-import { ControlPlane } from "../../../apps/os/src/control-plane/edge.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
-import { startLoginCode } from "../../../apps/os/src/password-and-code-sign-in.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import { ControlPlaneDatabase } from "../../../core/os/src/control-plane/catalog.ts";
+import { ControlPlane } from "../../../core/os/src/control-plane/edge.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
+import { startLoginCode } from "../../../core/os/src/password-and-code-sign-in.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   adminSession,

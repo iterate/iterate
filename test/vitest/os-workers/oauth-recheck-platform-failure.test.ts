@@ -5,12 +5,12 @@ import { createExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { ControlPlane } from "../../../apps/os/src/control-plane/edge.ts";
-import { authorizationForToken } from "../../../apps/os/src/oauth.ts";
-import { rpcResponse } from "../../../apps/os/src/rpc.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
-import { unavailableError } from "../../../apps/os/src/unavailable.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { ControlPlane } from "../../../core/os/src/control-plane/edge.ts";
+import { authorizationForToken } from "../../../core/os/src/oauth.ts";
+import { rpcResponse } from "../../../core/os/src/rpc.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
+import { unavailableError } from "../../../core/os/src/unavailable.ts";
 import { grant } from "./oauth-support.ts";
 import { fetchReachesThisWorker, ORIGIN, until } from "./support.ts";
 

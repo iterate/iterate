@@ -10,11 +10,11 @@ import { expect, onTestFinished, test, vi } from "vitest";
 import type { IntegrationProvider, IterateContextApi } from "iterate/api";
 import type { StreamEvent } from "iterate/stream/processor";
 import { fakeUserIdOf } from "../../../apps/dummy-petshop/src/state.ts";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
-import type { IntegrationScope } from "../../../apps/os/src/integrations/connections.ts";
-import { acceptGithubCallback, connectGithub } from "../../../apps/os/src/integrations/github.ts";
-import type { ProjectState } from "../../../apps/os/src/project/contract.ts";
-import type { ProjectDurableObject } from "../../../apps/os/src/project/durable-object.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
+import type { IntegrationScope } from "../../../core/os/src/integrations/connections.ts";
+import { acceptGithubCallback, connectGithub } from "../../../core/os/src/integrations/github.ts";
+import type { ProjectState } from "../../../core/os/src/project/contract.ts";
+import type { ProjectDurableObject } from "../../../core/os/src/project/durable-object.ts";
 import {
   catalog,
   followConsent,

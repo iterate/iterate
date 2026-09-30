@@ -6,7 +6,7 @@
 // disconnected from the project, which leaves the person's connection standing. Deployed only: the
 // fakes' redirects come back to a public origin.
 import { expect } from "vitest";
-import { TEST_EMAIL_DOMAIN } from "../../../apps/os/src/test-email-domain.ts";
+import { TEST_EMAIL_DOMAIN } from "../../../core/os/src/test-email-domain.ts";
 import { cookieSession, workerUrl } from "../../helpers/client.ts";
 import { petshopBaseUrl, petshopExpireTokens } from "../../helpers/petshop.ts";
 import { deployedOnly, freshDnsSafeProjectSlug } from "../../helpers/project-host.ts";

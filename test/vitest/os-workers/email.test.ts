@@ -3,7 +3,7 @@
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import type { EmailState } from "iterate/email";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
 import { deliverMail, projectWithMember, readLog, snapshot, stub } from "./support.ts";
 
 test("a message lands once per project address on /integrations/email with its attachment a project file, and a reply threads with it", async () => {

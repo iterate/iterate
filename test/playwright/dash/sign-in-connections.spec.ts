@@ -3,11 +3,11 @@
 // Google offers the accounts the person already has, and one click connects one — no provider
 // round-trip when the sign-in already granted what the project asks for. Disconnecting it from the
 // project leaves it the person's. A preview's providers are the pet shop's fakes
-// (apps/os/scripts/preview-{google,github,cloudflare}-app.ts): each asks which account on a picker
+// (core/os/scripts/preview-{google,github,cloudflare}-app.ts): each asks which account on a picker
 // page, as the real one does, then consents at once. A fake signs in addresses under the preview's
 // test email domain alone. The Dash is signed in to with its own scopes, `account` among them: the
 // person's own connections are the account's. A person signed in another way adds GitHub to their
-// own account from /sessions (the issuer's link mode, apps/os identity.ts), whatever address GitHub
+// own account from /sessions (the issuer's link mode, core/os identity.ts), whatever address GitHub
 // reports.
 import { createPublicKey } from "node:crypto";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
@@ -16,8 +16,8 @@ import { petshopBaseUrl, petshopRegisterGithubInstallation } from "../../helpers
 import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
-} from "../../../apps/os/scripts/preview-github-app.ts";
-import { TEST_EMAIL_DOMAIN } from "../../../apps/os/src/test-email-domain.ts";
+} from "../../../core/os/scripts/preview-github-app.ts";
+import { TEST_EMAIL_DOMAIN } from "../../../core/os/src/test-email-domain.ts";
 import { dashScopes } from "../../../apps/dash/src/lib/scopes.ts";
 import { openOperatorSession } from "../../helpers/operator.ts";
 import { test } from "../../helpers/test.ts";

@@ -1,5 +1,5 @@
 // scripts/monitors/latency.ts — THE LATENCY CHECK of the hourly health job (./health.ts). Every 3
-// hours .depot/workflows/os-latency.yml runs apps/os's perf suite against main redeployed to a preview
+// hours .depot/workflows/os-latency.yml runs core/os's perf suite against main redeployed to a preview
 // that nothing else touches and keeps Vitest's JSON report, where each row left its raw samples on its
 // meta (test/vitest/os/perf/record.ts), as its `os-latency-report` artifact. The health job judges each
 // report it has not judged, in order, every metric's median against two lines:
@@ -143,7 +143,7 @@ const PLATFORM_FAILURES = {
   /** A wait for pushes that timed out while the row's own subscribes stalled past EDGE_STALL_MS
    *  (~0.1 s a batch normally). Main a8e6c6525: Cloudflare moved traffic out of IAD, every round
    *  trip between the edge and the Durable Object stalled ~3 s, and lends the pushes paged for came
-   *  back past their 10 s timeout, the pushes lost (apps/os/src/context/rpc-stubs.ts). */
+   *  back past their 10 s timeout, the pushes lost (core/os/src/context/rpc-stubs.ts). */
   "edge-stall": "pushes never came while the edge's round trips to the Durable Object stalled",
 } as const;
 export type PlatformFailure = keyof typeof PLATFORM_FAILURES;

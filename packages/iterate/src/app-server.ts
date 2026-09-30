@@ -495,7 +495,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
       await session!.discard();
     }
     // A PROVIDER HINT rides on as well: which way to sign in the link that started this suggests
-    // (`provider_hint`, the platform's sign-in page leads with it: apps/os login.server.ts). A hint,
+    // (`provider_hint`, the platform's sign-in page leads with it: core/os login.server.ts). A hint,
     // like `login_hint` below: the page still offers every way.
     const providerHint = url.searchParams.get("provider_hint");
     if (config.loginPage) {
@@ -518,7 +518,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     // https://openid.net/specs/openid-connect-core-1_0.html#AuthRequest): whom the link that
     // started this sign-in was for. A hint, never a credential: the platform's consent page
     // pre-fills an admin's "Sign in as someone else…" with it, which the admin still confirms
-    // (apps/os consent.ts). A browser still signed in above never gets this far, so the hint
+    // (core/os consent.ts). A browser still signed in above never gets this far, so the hint
     // changes nothing about a session that already works.
     const loginHint = url.searchParams.get("login_hint");
     const authorize = new URL(location);
@@ -592,7 +592,7 @@ export async function appAuth(request: Request, config: AppAuth): Promise<Respon
     if (!token && request.method !== "OPTIONS") {
       // THE COOKIE'S AUTHORITY IS SAME-ORIGIN ONLY (CSRF): a page on another origin that happens to
       // carry this app's cookie gets nothing from it — its request goes on BARE, and a WebSocket then
-      // authenticates in-band with its own token, `authenticate({ type: "bearer", token })` (apps/os
+      // authenticates in-band with its own token, `authenticate({ type: "bearer", token })` (core/os
       // api.ts), or holds no session at all.
       const bearer =
         session && request.headers.get("origin") === url.origin ? await session.bearer() : null;

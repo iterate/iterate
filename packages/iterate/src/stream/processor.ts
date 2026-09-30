@@ -41,7 +41,7 @@
 // log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
 // nothing pushes learns of a new event only by reading, and reads every time. A head shown is only
 // as fresh as the pushes that have ARRIVED, so the host holds a read back until the pushes it
-// already owes the processor have landed (apps/os SubscriptionDelivery `deliveriesQueuedFor`): a
+// already owes the processor have landed (core/os SubscriptionDelivery `deliveriesQueuedFor`): a
 // read that follows a commit holds it.
 //
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
@@ -132,7 +132,7 @@ export function consumesEvent(
   return !consumes || consumes.includes("*") || consumes.includes(event.type);
 }
 
-/** A failure that is a LOOP_LIMIT refusal the platform recorded (apps/os src/cause.ts
+/** A failure that is a LOOP_LIMIT refusal the platform recorded (core/os src/cause.ts
  *  `recordRefusal`) settles as done: the loop ends there, with its one fact, and nothing is retried
  *  or reported. Any other — an unrecorded one too — is rethrown. */
 const unlessLoopLimit = (error: unknown): void => {
@@ -699,7 +699,7 @@ export class ProcessorEngine<State> {
       }
       return emittedEvents;
     };
-    // A PROCESSOR'S EFFECTS (apps/os src/cause.ts), each bound to its event's cause — an eventless
+    // A PROCESSOR'S EFFECTS (core/os src/cause.ts), each bound to its event's cause — an eventless
     // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
     // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
     // code, one hand-off deeper.
@@ -774,7 +774,7 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** PROVENANCE, stamped by the platform as the event commits (apps/os caller.ts `stampCaller`): a
+  /** PROVENANCE, stamped by the platform as the event commits (core/os caller.ts `stampCaller`): a
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
@@ -810,7 +810,7 @@ export type StreamEventInput = {
     /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
      *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
      *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
-     *  how: apps/os/src/on-behalf-of.ts. */
+     *  how: core/os/src/on-behalf-of.ts. */
     onBehalfOf?: { principal: Principal; grant?: string; run: string };
     /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
@@ -829,7 +829,7 @@ export type StreamEventInput = {
 };
 
 /** A committed event: the input plus the identity the stream assigned at its commit point, and the
- *  platform's `source`, whose `origin` every commit carries (apps/os stream.ts). */
+ *  platform's `source`, whose `origin` every commit carries (core/os stream.ts). */
 export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   offset: number;
   createdAt: string;
@@ -837,7 +837,7 @@ export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
-// ── idempotency ── the one conflict message, which apps/os stream.ts and test-support's
+// ── idempotency ── the one conflict message, which core/os stream.ts and test-support's
 // `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {

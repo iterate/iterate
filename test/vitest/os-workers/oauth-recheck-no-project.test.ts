@@ -1,7 +1,7 @@
 // A socket that holds no project. Its own file: the row waits the guard's real 30 s re-check,
 // beside the other three (oauth-support.ts).
 import { expect, test, vi } from "vitest";
-import { ControlPlane } from "../../../apps/os/src/control-plane/edge.ts";
+import { ControlPlane } from "../../../core/os/src/control-plane/edge.ts";
 import { grant, rpc } from "./oauth-support.ts";
 import { fetchReachesThisWorker, ORIGIN } from "./support.ts";
 

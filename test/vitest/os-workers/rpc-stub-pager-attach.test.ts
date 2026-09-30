@@ -23,12 +23,12 @@ import { exports, RpcTarget } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
 import {
   encodeRpcStubPagerAttachRequest,
   ITX_EXPRESSION_FETCH_HEADER,
   RPC_STUB_PAGER_WEBSOCKET_HEADER,
-} from "../../../apps/os/src/context/rpc-stubs.ts";
+} from "../../../core/os/src/context/rpc-stubs.ts";
 import {
   adminCredentials,
   Echo,

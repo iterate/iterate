@@ -1,8 +1,8 @@
 import { env } from "cloudflare:workers";
 import { RpcTarget } from "capnweb";
 import { expect, test } from "vitest";
-import { appConfigOf, atRestKeysOf } from "../../../apps/os/src/app-config.ts";
-import { decryptSecretMaterial } from "../../../apps/os/src/secret-at-rest.ts";
+import { appConfigOf, atRestKeysOf } from "../../../core/os/src/app-config.ts";
+import { decryptSecretMaterial } from "../../../core/os/src/secret-at-rest.ts";
 import {
   EncryptedSecretSeed,
   ProjectSeed,
@@ -12,7 +12,7 @@ import {
   restoreFetchRoutes,
   restoreHostnames,
   restorePrimaryHostname,
-} from "../../../apps/os/scripts/project-seed-format.ts";
+} from "../../../core/os/scripts/project-seed-format.ts";
 import {
   adminCredentials,
   catalog,

@@ -540,7 +540,7 @@ function reduceAgentUiEvent(
       );
     }
 
-    // The CONTEXT's script run (apps/os runs it): the request's offset is the
+    // The CONTEXT's script run (core/os runs it): the request's offset is the
     // run, and its settlement names that offset back.
     case "events.iterate.com/itx/run-requested": {
       const parsed = RunRequested.safeParse(event.payload);

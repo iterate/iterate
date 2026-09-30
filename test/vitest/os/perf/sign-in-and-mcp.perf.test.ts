@@ -6,7 +6,7 @@
 
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
-import type { IterateRpcTarget } from "../../../../apps/os/src/session.ts";
+import type { IterateRpcTarget } from "../../../../core/os/src/session.ts";
 import { mcpCall, workerUrl } from "../../../helpers/client.ts";
 import { issuerCookie, oauthSession } from "../../../helpers/principal.ts";
 import { freshDnsSafeProjectSlug, registerProject } from "../../../helpers/project-host.ts";

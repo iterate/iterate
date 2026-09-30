@@ -59,7 +59,7 @@ export async function installAiLinter(
   return { repository, connection };
 }
 
-/** The project's connections, as its root's `project` facet records them (apps/os
+/** The project's connections, as its root's `project` facet records them (core/os
  *  src/integrations/contract.ts `IntegrationConnectionRow`). */
 type ProjectIntegrations = {
   snapshot(): Promise<{
