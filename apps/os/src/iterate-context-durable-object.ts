@@ -1961,14 +1961,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 /** Who asked for a run: the person and grant it is written for (on-behalf-of.ts). */
 type Requester = Omit<OnBehalfOf, "run">;
 
-/** Who asked for the run `event` requests. A person's request carries their stamped principal and
- *  grant. A request a running script makes carries `source.onBehalfOf` instead: the script's own
+/** Who asked for the run `event` requests. A person's request carries their stamped principal,
+ *  grant and client. A request a running script makes carries `source.onBehalfOf` instead: the script's own
  *  `itx.cd(path).run(code)`, or a redirect of its run (`#scriptExecution`). The append stamped it
  *  after verifying the script's token, so the new run is for the same person, with a token of its
  *  own. None for a run no person asked for: an agent's loop, a schedule. */
 function requesterOf(event: StreamEvent): Requester | undefined {
-  const { principal, grant, onBehalfOf } = event.source;
-  if (principal) return { principal, grant };
-  if (onBehalfOf) return { principal: onBehalfOf.principal, grant: onBehalfOf.grant };
+  const { principal, grant, client, onBehalfOf } = event.source;
+  if (principal) return { principal, grant, client };
+  if (onBehalfOf)
+    return { principal: onBehalfOf.principal, grant: onBehalfOf.grant, client: onBehalfOf.client };
   return undefined;
 }

@@ -23,6 +23,12 @@ export type Caller = {
    *  client (a Claude Code install, a dash sign-in, a personal token), the same across every call it
    *  makes. Absent for the admin secret and the kernel. */
   grant?: string;
+  /** THE CLIENT'S NAME, beside `grant`: what the person approved on the consent screen ("Claude
+   *  Code wants to access your account", account `consent-approved`), or their personal access
+   *  token's name (oauth.ts `AccessGrant.clientName`). Set by the MCP edge (mcp.ts), so a run's
+   *  request says which client asked, and a commit the run makes says `Via:` it
+   *  (repo/commit-attribution.ts). */
+  client?: string;
   /** The context the call ORIGINATED at — stamped by the first `cd` hop and forwarded by every later
    *  one, so a relative path resolved after a hop (`repos.get('./x')` answered at the root) still
    *  means the caller's `./x`. Absent until a hop. Its presence also means the complete input
@@ -88,6 +94,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   if (event.source?.processor) source.processor = event.source.processor;
   if (caller.principal) source.principal = caller.principal;
   if (caller.principal && caller.grant) source.grant = caller.grant;
+  if (caller.principal && caller.grant && caller.client) source.client = caller.client;
   if (caller.onBehalfOf) source.onBehalfOf = caller.onBehalfOf;
   if (caller.platform) source.platform = true;
   return { ...event, source };

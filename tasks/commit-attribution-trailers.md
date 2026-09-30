@@ -5,7 +5,9 @@ size: small
 
 # A commit says the platform made it, and which client asked
 
-Status: spec'd, not started.
+Status: built, awaiting CI and review. Commits the platform makes are committed by `iterate`; a
+script's commit for someone ends with `Via:` (the client's name from the admission), `Iterate-Run:`
+and, when it names another author, `Requested-by:`. Left: the e2e against a preview (CI).
 
 ## Why
 
@@ -57,16 +59,21 @@ no person asked for (a processor's, Docs' saves, the seed) gets no trailers.
 
 ## Plan
 
-- [ ] `encodeCommit` takes a committer; the repo facet commits as `iterate` whatever the author
-- [ ] `parseCommit` / `RepoLogEntry` report the committer
-- [ ] a trailers helper: into the last paragraph when it is trailers, else a new one
-- [ ] the admission records the grant's client name (consent's `clientName`, a key's `name`)
-- [ ] MCP's caller carries it; `stampCaller` stamps `source.client`; `requesterOf` and the token
-      carry it on to `source.onBehalfOf.client`
-- [ ] the repo facet adds `Via:`, `Iterate-Run:` and `Requested-by:` for a commit made on someone's
-      behalf
-- [ ] the MCP instructions say so
-- [ ] tests: the trailers helper; the token with a client; stampCaller's `client`; the MCP e2e's
-      commit (committer, `Via:`, `Iterate-Run:`) and one naming another author (`Requested-by:`)
+- [x] `encodeCommit` takes a committer; the repo facet commits as `iterate` whatever the author _(repo/git-wire.ts; `PLATFORM` in repo/commit-attribution.ts)_
+- [x] `parseCommit` / `RepoLogEntry` report the committer _(iterate/api `RepoLogEntry.committer`)_
+- [x] a trailers helper: into the last paragraph when it is trailers, else a new one _(`withTrailers`; a client's name is flattened to one line so it can't write a trailer of its own)_
+- [x] the admission records the grant's client name (consent's `clientName`, a key's `name`) _(oauth.ts `AccessGrant.clientName`: the latest consent for the token's `clientId`)_
+- [x] MCP's caller carries it; `stampCaller` stamps `source.client`; `requesterOf` and the token
+      carry it on to `source.onBehalfOf.client` _(mcp.ts, caller.ts, on-behalf-of.ts)_
+- [x] the repo facet adds `Via:`, `Iterate-Run:` and `Requested-by:` for a commit made on someone's
+      behalf _(repo/durable-object.ts `commitFiles`, `attributionTrailers`)_
+- [x] the MCP instructions say so
+- [x] tests: the trailers helper; the token with a client; stampCaller's `client`; the MCP e2e's
+      commit (committer, `Via:`, `Iterate-Run:`) and one naming another author (`Requested-by:`) _(repo/commit-attribution.test.ts, on-behalf-of.test.ts, caller.test.ts, e2e/mcp-project-root.e2e.test.ts)_
 
 ## Implementation log
+
+- The e2e's MCP bearer is a personal access token, so its `Via:` is the key's name ("MCP root
+  regression"); an OAuth client's is its consent-screen name.
+- Docs' saves (a processor under a delivery, no token) get the `iterate` committer and no trailers,
+  so specs/docs' exact commit message still holds.

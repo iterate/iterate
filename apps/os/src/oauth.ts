@@ -68,6 +68,11 @@ export type AccessGrant = Omit<z.infer<typeof TokenProps>, "kind"> & {
    *  admission's own read of the account found it; absent when it never has. `recordGrantUse`
    *  reads it. */
   lastUsedAt?: number;
+  /** The client's name as the person approved it at consent (the account's `consents`, by the
+   *  token's client id), or a personal access token's own name; absent for a grant no consent
+   *  minted (the platform's own sign-ins). MCP stamps it beside the grant (caller.ts
+   *  `Caller.client`). */
+  clientName?: string;
 };
 
 export type Authorization = {
@@ -447,7 +452,12 @@ async function authorizationOf(
       ? "every"
       : // oxlint-disable-next-line iterate/simple-truthiness-check -- `reach` is discriminated with `"projectIds" in reach` (session.ts, control-plane/edge.ts) and TS narrows on that key, so a present-but-undefined key would both misread as a bound grant and break the narrowing; the conditional spread stays (grant.projects is string[] | null)
         { userId: grant.userId, ...(grant.projects && { projectIds: grant.projects }) },
-    grant: { ...grant, lastUsedAt: account.grantUses[grant.grantId]?.at },
+    grant: {
+      ...grant,
+      lastUsedAt: account.grantUses[grant.grantId]?.at,
+      clientName: account.consents.findLast((consent) => consent.clientId === token.clientId)
+        ?.clientName,
+    },
   };
 }
 
@@ -496,6 +506,7 @@ async function personalAccessTokenAdmission(
     scope: ["iterate"],
     expiresAt,
     lastUsedAt: account.grantUses[named.id]?.at,
+    clientName: key.name,
   };
   return {
     ok: true,

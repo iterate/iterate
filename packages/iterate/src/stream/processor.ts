@@ -807,11 +807,14 @@ export type StreamEventInput = {
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
+    /** The name of that grant's client, as the person approved it ("Claude Code"), or their
+     *  personal access token's name. Stamped beside `grant` on what MCP appends. */
+    client?: string;
     /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
-     *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
+     *  grant and client they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
      *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
      *  how: apps/os/src/on-behalf-of.ts. */
-    onBehalfOf?: { principal: Principal; grant?: string; run: string };
+    onBehalfOf?: { principal: Principal; grant?: string; client?: string; run: string };
     /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
      *  append any type to a context it holds, never this. */

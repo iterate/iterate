@@ -86,6 +86,7 @@ const forged = {
   origin: "/",
   principal: { actor: "user_owner" },
   grant: "grant_forged",
+  client: "Forged Client",
   onBehalfOf: { principal: { actor: "user_owner" }, run: "/@1" },
   platform: true as const,
   schedule: { key: "k", scheduledAtOffset: 1, at: "2026-01-01T00:00:00.000Z" },
@@ -104,6 +105,17 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
       origin: "/agents/b",
       principal: { actor: "user_1", email: "a@b.c" },
       grant: "grant_abc",
+    },
+  },
+  {
+    name: "a person through MCP: the grant's client beside it; a forged one replaced",
+    source: forged,
+    caller: { principal: { actor: "user_1" }, grant: "grant_abc", client: "Claude Code" },
+    stamped: {
+      origin: "/agents/b",
+      principal: { actor: "user_1" },
+      grant: "grant_abc",
+      client: "Claude Code",
     },
   },
   {

@@ -9,6 +9,7 @@ const now = Date.parse("2026-09-30T10:00:00.000Z");
 const onBehalfOf = {
   principal: { actor: "user_1", email: "misha@example.com" },
   grant: "grant_claude",
+  client: "Claude Code",
   run: "/@83",
 };
 

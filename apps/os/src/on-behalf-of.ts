@@ -16,9 +16,9 @@ import { RUN_DEADLINE_MS } from "iterate/stream/run";
 import { z } from "zod";
 import { signClaims, verifyClaims } from "./caller.ts";
 
-/** Who a script's writes are for: the person who asked for the run, the grant they asked through,
- *  and the request itself (`<path>@<offset>`). */
-export type OnBehalfOf = { principal: Principal; grant?: string; run: string };
+/** Who a script's writes are for: the person who asked for the run, the grant they asked through
+ *  and its client's name (caller.ts `Caller.client`), and the request itself (`<path>@<offset>`). */
+export type OnBehalfOf = { principal: Principal; grant?: string; client?: string; run: string };
 
 const Claims = z.object({
   purpose: z.literal("on-behalf-of"),
@@ -29,6 +29,7 @@ const Claims = z.object({
       impersonatedBy: z.object({ actor: z.string(), email: z.string() }).optional(),
     }),
     grant: z.string().optional(),
+    client: z.string().optional(),
     run: z.string(),
   }),
   project: z.string(),
