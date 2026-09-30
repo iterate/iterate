@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import type { IterateContextApi } from "iterate/api";
 import { docContextPath } from "@iterate-com/docs/frames";
 import { docsModule, ensureDoc, installDocs } from "@iterate-com/docs/install";
-import { pinPkgPrNewVersion, pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pinPkgPrNewVersion, pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";

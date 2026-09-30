@@ -18,10 +18,10 @@
 //   pkg.pr.new ref that is not a full commit (a branch, a PR number, a short sha) is refused: a
 //   moving ref asks to follow it, which a lock cannot do without asking pkg.pr.new on every cold
 //   start, and a project's builds would then differ by when each host started. Whatever writes a
-//   dependency pins it as it writes (@iterate-com/shared/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
+//   dependency pins it as it writes (iterate/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
 //   keeps the platform packages external, so a library's zod is the SDK's.
 
-import { isPkgPrNewCommit, pkgPrNewVersionOf } from "@iterate-com/shared/pkg-pr-new";
+import { isPkgPrNewCommit, pkgPrNewVersionOf } from "iterate/pkg-pr-new";
 import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";

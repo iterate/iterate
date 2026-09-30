@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { viteBuild } from "../../../scripts/lib/vite-build.ts";
 import type { OsDeployableEnv } from "./os-env.ts";
 import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";

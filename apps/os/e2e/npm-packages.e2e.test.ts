@@ -8,7 +8,7 @@
 //     every writer pins one — the typed client a vendor would ship, used from typed TypeScript.
 // Both answer the pet shop's catalogue for the shopper whose bearer the request carries: the seeded
 // pets, and whatever the suite's other pet-shop rows added meanwhile.
-import { isPkgPrNewCommit, pinPkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { isPkgPrNewCommit, pinPkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test } from "vitest";
 import { openItx, runId } from "./support/client.ts";
 import { publishConfigWorker } from "./support/config-worker.ts";

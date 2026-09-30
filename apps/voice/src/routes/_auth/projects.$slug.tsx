@@ -11,7 +11,7 @@ import { Field, FieldDescription, FieldLabel } from "@iterate-com/ui/components/
 import { Input } from "@iterate-com/ui/components/input";
 import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
 import { cn } from "cn";
-import { buildStanding } from "@iterate-com/shared/pkg-pr-new";
+import { buildStanding } from "iterate/pkg-pr-new";
 import { ensureVoiceAgent, upgradeVoice, voiceVersion } from "@iterate-com/voice/install";
 import { openAudio, type AudioSession } from "../../audio.ts";
 import { startCall, type Call, type CallFact } from "../../call.ts";
