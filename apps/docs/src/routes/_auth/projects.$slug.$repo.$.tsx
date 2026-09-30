@@ -23,8 +23,8 @@ import { repoPath } from "../../lib/docs-repo.ts";
 import { fileKind } from "../../lib/file-kind.ts";
 
 /** The @iterate-com/docs build this deployment installs in a project (`APP_CONFIG pkgPrNewRef`:
- *  main's, or a PR preview's), pinned at the commit pkg.pr.new serves for it now. Asked in the
- *  app's Worker: a page cannot read pkg.pr.new's headers. */
+ *  main's newest, pinned at the commit pkg.pr.new serves for it now, or a per-commit deployment's
+ *  own). Asked in the app's Worker: a page cannot read pkg.pr.new's headers. */
 const docsBuild = createServerFn({ method: "GET" }).handler(async () => {
   const { env } = await import("cloudflare:workers");
   const ref = startAppConfigOf(env).pkgPrNewRef;

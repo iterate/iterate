@@ -103,6 +103,7 @@ import {
   type PullRequestState,
   type SweptNamespace,
 } from "./preview-sweep.ts";
+import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 import { chooseSlowRows, slowRowsTagsFilter, type SlowRows } from "./slow-rows.ts";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
@@ -317,9 +318,11 @@ async function deployStartApp(
   envName: string,
   url: string,
   credentials: Record<string, string>,
+  /** a per-commit deployment's packages' commit (start-app.ts `startAppWorkerConfig`) */
+  packagesCommit: string | undefined,
 ) {
   const root = path.resolve(import.meta.dirname, "../..", app.name);
-  await buildStartApp(app, envName);
+  await buildStartApp(app, envName, packagesCommit);
   await deployWithSecrets({
     cwd: root,
     builtConfig: findBuiltWranglerConfig(root),
@@ -345,7 +348,8 @@ async function deployParents(ctx: EnvContext<OsDeployableEnv>) {
     { name: "apps/os", deploy: () => deployOs({ env: "preview" }) },
     ...APPS.map((app) => ({
       name: `apps/${app.name}`,
-      deploy: () => deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials),
+      deploy: () =>
+        deployStartApp(app, "preview", app.envs.preview!.baseUrl, credentials, undefined),
     })),
   ];
   const results = await Promise.allSettled(steps.map((step) => step.deploy()));
@@ -439,12 +443,15 @@ async function deployPreviewSteps(
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
+  // what an app installs in a project (Docs' "Install Docs"), as build.ts pins the template's agents:
+  // worked out before the builds, since in a shallow CI checkout it fetches history
+  const packagesCommit = checkoutPublishedPackageCommit(REPO_ROOT, process.env.PREVIEW_HEAD_SHA);
   const steps = [
     { step: "apps/os", done: traceOperation("Deploy OS", () => deployOs({ env: name })) },
     ...apps.map((app) => ({
       step: `apps/${app.name}`,
       done: traceOperation(`Deploy ${app.name}`, () =>
-        deployStartApp(app, name, urls.apps[app.name]!, credentials),
+        deployStartApp(app, name, urls.apps[app.name]!, credentials, packagesCommit),
       ),
     })),
   ];

@@ -1,5 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { deployedTarget } from "../apps/os/e2e/support/deployed-target.ts";
+import { checkoutPublishedPackageCommit } from "../apps/os/scripts/published-package-commit.ts";
 import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
 import { workerBaseUrl } from "./test-support/worker-base-url.ts";
 
@@ -24,6 +26,12 @@ export default function setup() {
         z.prettifyError(env.error),
     );
   Object.assign(process.env, env.data);
+  // the pkg.pr.new commit of this checkout's packages (published-package-commit.ts), which the specs
+  // that install one wait for: worked out once, since in a shallow CI checkout it fetches history
+  process.env.PUBLISHED_PACKAGE_COMMIT = checkoutPublishedPackageCommit(
+    fileURLToPath(new URL("..", import.meta.url)),
+    process.env.PREVIEW_HEAD_SHA,
+  );
   console.log(`[playwright] auth setup complete (${Date.now() - startedAt}ms)`);
 }
 
