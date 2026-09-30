@@ -33,6 +33,7 @@
     "./expression": "./src/expression.ts",
     "./principal": "./src/principal.ts",
     "./stream/processor": "./src/stream/processor.ts",
+    "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
     "./oauth-scopes": "./src/oauth-scopes.ts",
     "./project-ingress": "./src/project-ingress.ts",
@@ -89,6 +90,10 @@
       "./stream/processor": {
         "types": "./dist/stream/processor.d.mts",
         "import": "./dist/stream/processor.mjs"
+      },
+      "./stream/contract": {
+        "types": "./dist/stream/contract.d.mts",
+        "import": "./dist/stream/contract.mjs"
       },
       "./stream/test-support": {
         "types": "./dist/stream/test-support.d.mts",
