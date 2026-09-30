@@ -751,7 +751,7 @@ test("ProjectProcessor — a hostname add claims once proven, provisions and ans
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
       heldElsewhere: async (name) => name.startsWith("taken."),
-      proof: async (name) => ({ ...(await proven(name)), proven: !name.startsWith("shop.") }),
+      proof: async (name) => ({ ...(await proven(name)), proven: !/^(shop|done)\./.test(name) }),
       setPrimaryHostname: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
       dnsZone: async () => ({ zone: "acme.test", provider: "cloudflare" }),
@@ -759,7 +759,7 @@ test("ProjectProcessor — a hostname add claims once proven, provisions and ans
         provision: async (name) => {
           calls.push(`provision ${name}`);
           if (name.startsWith("new.")) throw new Error("Cloudflare says no");
-          return observation("pending");
+          return observation(name.startsWith("done.") ? "active" : "pending");
         },
         remove: async (name) => void calls.push(`remove ${name}`),
       },
@@ -839,6 +839,12 @@ test("ProjectProcessor — a hostname add claims once proven, provisions and ans
       false,
     ],
   ]);
+  // a hostname Cloudflare is done with but nobody has proven still carries where to add the record
+  await owe("done.acme.test", "add", 12);
+  expect(appended.at(-1)!.payload).toMatchObject({
+    claimed: false,
+    cloudflare: { status: "active", dns: { zone: "acme.test" } },
+  });
   // the records to add end with the ownership record, which Domain Connect writes too
   expect(appended[4]!.payload.cloudflare!.records.at(-1)).toEqual({
     type: "TXT",

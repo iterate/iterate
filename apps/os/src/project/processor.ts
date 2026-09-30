@@ -722,9 +722,10 @@ export class ProjectProcessor extends StreamProcessor<
         claimed = true;
       }
       const observed = await hostnames.provider.provision(hostname);
-      // while there is something to add: one click at the owner's DNS provider, and who that
-      // provider is, for the instructions by hand — both best effort, a failure logged and left out
-      const live = observed.status === "active" && observed.sslStatus === "active";
+      // while there is something to add — the ownership record too, once Cloudflare is done: one
+      // click at the owner's DNS provider, and who that provider is, for the instructions by hand —
+      // both best effort, a failure logged and left out
+      const live = claimed && observed.status === "active" && observed.sslStatus === "active";
       const bestEffort = <T>(what: string, ask: () => Promise<T | null>) =>
         live
           ? null
