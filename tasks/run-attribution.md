@@ -5,10 +5,11 @@ size: medium
 
 # What a `run` script writes says who asked for it
 
-Status: [poc] built, waiting on its preview. Events a `run` script appends carry `source.onBehalfOf`
-(the requester, their grant, the run), from a signed token on the run's cause; Docs reads it. Not
-done: a commit's git author (the repo facet can't verify the token; its `repo/commit-completed` event
-does say who asked).
+Status: nearly done, awaiting review. Events a `run` script appends carry `source.onBehalfOf`
+(the requester, their grant, the run), from a signed token on the run's cause; Docs reads it. A
+script's commit that names no `author` is authored by the requester. Runs a script requests (its own
+`itx.cd(path).run`, or a redirect) stay attributed; runs nobody asked for stay the project's. Left:
+Jonas's review; Docs seen on a live project.
 
 ## What we saw
 
@@ -86,9 +87,10 @@ panel's "/ · Claude Code" becomes "misha · Claude Code".
 
 ## Open questions
 
-- **A redirected run** (an agent's `itx.run ⇒ …/sandbox`): the runner appends a second
-  `run-requested` at the sandbox, principal-less. Carry `onBehalfOf` onto that request too, or
-  leave agent sandboxes as the project's?
+- ~~**A redirected run**~~ carried: the redirect's `run-requested` at the sandbox is appended under
+  the script's token, so it is stamped `source.onBehalfOf` and its runner mints a token of its own
+  (`requesterOf`). Each run's token is fresh, so a chain of runs keeps the name past one token's
+  eleven minutes; the cause's depth limit (8) bounds it.
 - **Workers a script spawns** (`itx.workers.get` inside the script) get fresh props, so their writes
   are the project's. Fine, or should `onBehalfOf` follow?
 - **A person's own browser session committing** (the Docs page's New doc): today it passes
@@ -113,9 +115,12 @@ panel's "/ · Claude Code" becomes "misha · Claude Code".
 - [x] the runner signs it from the request's stamped principal and grant (`#executeRun`) _(`requesterOf`, `mintOnBehalfOf`; a redirect's request passes it on)_
 - [x] ~~`ItxEntrypoint.#caller` verifies it~~ the append verifies it into `Caller.onBehalfOf` _(context/built-ins.ts: `#caller` is synchronous and HMAC verification isn't; hops keep the token in the cause)_
 - [x] `stampCaller` stamps `source.onBehalfOf`; the SDK's `StreamEvent` source type has it
-- [ ] a commit with no `author` under `onBehalfOf` is authored by the requester _(not in the poc: the repo facet's env has no signing secret; first-party facets would need the host to hand them the verified identity)_
+- [x] a commit with no `author` under `onBehalfOf` is authored by the requester _(repo/durable-object.ts `#authorFor`: the facet runs with the worker's real env, as the secret facet does, so it verifies the token from its running cause; `{ name: email, email }` as apps/docs `authorOf` writes it; a principal without an email keeps the platform's author)_
+- [x] the token names its `purpose` _(on-behalf-of.ts: a token of another purpose the same secret signs never verifies as one)_
 - [x] Docs' `authorOf` reads it; the MCP instructions say it
 - [x] tests: unit (token round trip, stampCaller, forged token ignored) and e2e (an MCP run's append) _(on-behalf-of.test.ts, cause.test.ts, caller.test.ts, docs processor.test.ts, e2e/mcp-project-root.e2e.test.ts)_
+- [x] tests: a run a script requests, and one its context redirects, are for the same person; a processor's run is nobody's _(**workers-tests**/context-runs.test.ts)_; an MCP script's commit is authored by the person _(e2e/mcp-project-root.e2e.test.ts)_
+- [ ] a schedule's run carries no `onBehalfOf` _(not tested separately: a due schedule's batch is the kernel's append, principal-less, the same `requesterOf` path as the processor's run)_
 
 ## Rollout
 
@@ -129,3 +134,6 @@ that reads `source.principal` changes meaning. Old events stay as they were.
   name on the next run's writes. The cause is per call. It is unsigned by design, hence the token.
 - Verified at the append (async), not in `ItxEntrypoint.#caller` (sync). The workerd tests for runs,
   the loop guard, alarm-started runs and wake causes pass unchanged.
+- The repo facet does have the signing secret: first-party facets run with the worker's real env
+  (first-party-facets.ts), and the secret facet already reads `appConfigOf(this.env)`. Only its
+  declared `Env` type was narrow. It reads the config only when a cause carries a token.

@@ -8,8 +8,9 @@
 // and `source.principal` keeps meaning "this principal's authority made the call". SIGNED because a
 // cause is anyone's to write (cause.ts: "forging it can only make the forger's own request deeper"),
 // and a name is worth forging. Scoped to the project and the run, and expiring once the run's
-// deadline has passed, so a token a script leaks names nobody for long. Never stored: an event keeps
-// what the token proves, `{ principal, grant, run }`, never the token.
+// deadline has passed, so a token a script leaks names nobody for long. Its `purpose` keeps it apart
+// from every other token the same secret signs (a session's, a file URL's). Never stored: an event
+// keeps what the token proves, `{ principal, grant, run }`, never the token.
 import type { Principal } from "iterate/principal";
 import { RUN_DEADLINE_MS } from "iterate/stream/run";
 import { z } from "zod";
@@ -20,6 +21,7 @@ import { signClaims, verifyClaims } from "./caller.ts";
 export type OnBehalfOf = { principal: Principal; grant?: string; run: string };
 
 const Claims = z.object({
+  purpose: z.literal("on-behalf-of"),
   onBehalfOf: z.object({
     principal: z.object({
       actor: z.string(),
@@ -41,11 +43,13 @@ export function mintOnBehalfOf(
   secret: string,
   now: number,
 ): Promise<string> {
-  return signClaims({ onBehalfOf, project, expiresAt: now + RUN_DEADLINE_MS + 60_000 }, secret);
+  const expiresAt = now + RUN_DEADLINE_MS + 60_000;
+  return signClaims({ purpose: "on-behalf-of", onBehalfOf, project, expiresAt }, secret);
 }
 
 /** What a cause's token proves, for a write in `project` at `now`; nothing for a missing, forged,
- *  expired or other project's token, which are all the same answer: the write is the project's. */
+ *  expired, other project's or other purpose's token, which are all the same answer: the write is
+ *  the project's. */
 export async function verifyOnBehalfOf(
   token: string | undefined,
   project: string,

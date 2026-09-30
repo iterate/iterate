@@ -84,6 +84,68 @@ test("a LITERAL run-requested appended by a Workers-RPC caller runs exactly as i
   expect(await openScriptRuns(ROOT)).toEqual({});
 });
 
+test("what a person's run writes is for them, as `source.onBehalfOf`, never `source.principal`: the script's own appends, a run it requests, and a run it requests that its context redirects", async () => {
+  const project = "prj_run_on_behalf_of";
+  // the agents app's redirect: the agent's scripts run in its sandbox
+  await stub(`${project}.iterate/agent`).append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.run", target: "itx.cd('/agent/sandbox').run" },
+  });
+  const nested =
+    "async (itx) => { await itx.cd('/notes').append({ type: 'note', payload: { by: 'a run it requested' } }) }";
+  const redirected =
+    "async (itx) => { await itx.cd('/notes').append({ type: 'note', payload: { by: 'a redirected run' } }) }";
+  const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(project);
+  await itx.run(`async (itx) => {
+    await itx.cd("/notes").append({ type: "note", payload: { by: "the run" } });
+    await itx.cd("/nested").run(${JSON.stringify(nested)});
+    await itx.cd("/agent").append({ type: "events.iterate.com/itx/run-requested", payload: { code: ${JSON.stringify(redirected)} } });
+  }`);
+  const notes = await until("the redirected run's note", async () => {
+    const notes = (await readLog(`${project}.iterate/notes`)).filter((e) => e.type === "note");
+    return notes.length === 3 ? notes : undefined;
+  });
+  const admin = { actor: "admin" };
+  expect(notes).toMatchObject([
+    {
+      payload: { by: "the run" },
+      source: { onBehalfOf: { principal: admin, run: expect.stringMatching(/^\/@\d+$/) } },
+    },
+    {
+      payload: { by: "a run it requested" },
+      source: { onBehalfOf: { principal: admin, run: expect.stringMatching(/^\/nested@\d+$/) } },
+    },
+    {
+      payload: { by: "a redirected run" },
+      source: {
+        onBehalfOf: { principal: admin, run: expect.stringMatching(/^\/agent\/sandbox@\d+$/) },
+      },
+    },
+  ]);
+  expect(notes.filter((note) => note.source?.principal)).toEqual([]);
+  // the request the script made is stamped with the run it came from, and runs for the same person
+  expect((await runEvents(`${project}.iterate/nested`))[0]).toMatchObject({
+    type: "events.iterate.com/itx/run-requested",
+    source: { onBehalfOf: { principal: admin, run: expect.stringMatching(/^\/@\d+$/) } },
+  });
+});
+
+test("a run no person asked for, like an agent loop's (a processor's request), writes as the project's: no `source.onBehalfOf`", async () => {
+  const project = "prj_run_for_nobody";
+  await stub(`${project}.iterate/`).append({
+    type: "events.iterate.com/itx/run-requested",
+    payload: {
+      code: "async (itx) => { await itx.cd('/notes').append({ type: 'note', payload: {} }) }",
+    },
+    source: { processor: { slug: "loop", version: "1.0.0" } },
+  });
+  const note = await until("the run's note", async () =>
+    (await readLog(`${project}.iterate/notes`)).find((e) => e.type === "note"),
+  );
+  expect(note.source).not.toHaveProperty("onBehalfOf");
+  expect(note.source).not.toHaveProperty("principal");
+});
+
 test("KILLED MID-RUN, NEVER RE-RUN: the context dies with a script in flight; the next incarnation's wake record settles it `interrupted` — one request, one settlement, the script's side effect never repeats", async () => {
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(PROJECT);
   const before = (await runEvents(ROOT)).length;

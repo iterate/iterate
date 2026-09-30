@@ -28,7 +28,15 @@ test.for<{ name: string; token: () => Promise<string | undefined>; project?: str
   },
   {
     name: "claims loaded code made up and signed itself",
-    token: () => signClaims({ onBehalfOf, project: "prj_a", expiresAt: now + 1 }, "made-up"),
+    token: () =>
+      signClaims(
+        { purpose: "on-behalf-of", onBehalfOf, project: "prj_a", expiresAt: now + 1 },
+        "made-up",
+      ),
+  },
+  {
+    name: "another token the same secret signed, with the same claims but no purpose",
+    token: () => signClaims({ onBehalfOf, project: "prj_a", expiresAt: now + 1 }, SECRET),
   },
   {
     name: "a real token with its payload swapped",
