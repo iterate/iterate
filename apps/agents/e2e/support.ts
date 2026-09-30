@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { installAgents } from "@iterate-com/agents/install";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { installVoice } from "@iterate-com/voice/install";
 import { build } from "esbuild";
 import { inject } from "vitest";

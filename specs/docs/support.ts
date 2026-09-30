@@ -5,7 +5,7 @@
 // consent for its host where it is one.
 import { expect, type Page } from "@playwright/test";
 import { installDocs } from "@iterate-com/docs/install";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { proxiedAppRoute } from "../../scripts/os/preview-config.ts";
 
 export async function serveDocs(itx: any, docsWorker: URL) {

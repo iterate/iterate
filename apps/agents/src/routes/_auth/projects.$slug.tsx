@@ -34,7 +34,7 @@ import {
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
 import { agentsVersion, upgradeAgents } from "@iterate-com/agents/install";
-import { buildStanding } from "@iterate-com/shared/pkg-pr-new";
+import { buildStanding } from "iterate/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
