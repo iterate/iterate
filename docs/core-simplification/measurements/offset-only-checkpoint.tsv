@@ -1,0 +1,15 @@
+revision	30875b8b9e0a92621c3f5cd858b67a38003892cc
+narrow core runtime	42	18280
+context engine runtime	25	10295
+stream engine runtime	5	2668
+context shell runtime	12	5317
+SDK runtime	26	7563
+context engine unit tests	18	7111
+stream engine unit tests	5	3531
+SDK unit tests	18	5659
+Workers runtime tests	74	23484
+OS protocol e2e tests	49	14305
+OS performance tests	6	723
+OS generated declarations	2	10
+all OS runtime, excluding generated	178	44422
+all OS colocated unit tests	61	21649

@@ -303,6 +303,31 @@ latency, throughput, and soak evidence remain required.
 
 ### #3460 guarantees retained by the source rewrite
 
+The final local checkpoint of this resumed turn is `30875b8b9`. It also fixes a
+retry-cache defect: a settled target failure was replayed for 40 seconds under
+the same source-range key, spending attempts without actually retrying the
+target. Only successful late calls are now cached. An ordinary failure leaves
+the next bounded retry free to invoke again; this needs no acknowledgement
+protocol or attempt taxonomy. The focused runner/model suite passes 27 tests,
+and full lint, typecheck, formatting, Knip and the OS build pass.
+
+The broad local suites remain unverified here: socket-dependent tests fail
+with sandbox `EPERM`. Two additional stale public-placement assertions were
+corrected to cover the reserved private facet; their focused suite passes 77
+tests. The three previous Workers baseline areas have candidate fixes but
+still need a fresh real Workers run. Publishing is pending the next turn,
+when the restored Full Access setting takes effect.
+
+Pinned counts are in
+[`latest-main.tsv`](measurements/latest-main.tsv) and
+[`offset-only-checkpoint.tsv`](measurements/offset-only-checkpoint.tsv). Against
+`e9f059e8c`, narrow core runtime falls from 18,806 to 18,280 lines, while SDK
+runtime rises from 6,814 to 7,563. Combined runtime therefore **grows by 223
+lines**. All OS runtime falls by 700 lines. These counts include the private
+delivery host and SDK additions: this is an ownership and authority
+simplification, not the requested overall reduction to 15–20 thousand lines.
+The recommendation must not count relocated code as deleted code.
+
 Main commit `e9f059e8c` fixed stale subscription writes after replacement,
 reconfiguration while a call is out, and excessive retained cause pages. The
 rewrite must retain their outcomes: a call that outlives its row cannot write
