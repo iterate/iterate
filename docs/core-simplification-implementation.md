@@ -105,7 +105,8 @@ One context recovery deadline covers cold starts and in-flight drains. Removing
 per-row wake reconstruction accepts recovery after a cold start on that bounded
 context wake, instead of introducing another persisted wake field. Resume
 acknowledgement is part of the cursor itself, so it cannot disagree with a
-separate KV marker. Fan-out persists each eight-call wave before invoking any
+separate KV marker. Starting a retry consumes its previous wake, so a long
+running call cannot repeatedly re-arm an already past deadline. Fan-out persists each eight-call wave before invoking any
 target and writes its combined outcomes once, rather than rewriting the whole
 cursor for each item.
 
@@ -132,9 +133,11 @@ position, and terminal acknowledgement of an invalid selective resume. Existing
 cold recovery, admission, halt/resume, replacement and ephemeral offset-reuse
 probes remain in the full Workers suite.
 
-The assembled checkpoint passes the full root test command, including socket
+The published b11 checkpoint passes the full root test command, including socket
 suites: OS has 153 passing files, 2,308 passing tests and 14 existing expected
-failures. Lint, typecheck, formatting and Knip have passed. Local success does not replace
+failures. The additional consumed-wake regression passes; the assembled head
+is being rerun with a frozen commit after a deployment-script commit invalidated
+two generated-template pin assertions during the previous run. Lint, typecheck, formatting and Knip have passed. Local success does not replace
 the deployed slow residency rows, browser specs, latency/throughput budgets,
 100-run soak and same-window Workers Logs comparison.
 
@@ -148,9 +151,9 @@ review used immutable source 179629660f and identified the resume, receipt,
 wake, range and fan-out persistence faults now addressed in this checkpoint.
 It did not execute tests or review later source changes.
 
-The tracked working count is **18,073 core lines plus 7,546 SDK lines = 25,619**,
-versus main's **18,806 plus 6,814 = 25,620**. This is only **one line smaller**:
-core fell by 733 lines while the SDK grew by 732. Restoring the existing
+The tracked working count is **18,066 core lines plus 7,546 SDK lines = 25,612**,
+versus main's **18,806 plus 6,814 = 25,620**. This is only **eight lines smaller**:
+core fell by 740 lines while the SDK grew by 732. Restoring the existing
 processor claim code removes the now single-caller `BackgroundClaims` class;
 moved responsibility and deleted tests do not count as runtime deletion. This
 is a real but inadequate combined reduction, and further simplification remains

@@ -974,9 +974,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         consumes: row.consumes,
         afterOffset: row.afterOffset,
         ordered: row.ordered,
-        resumedAtOffset: row.resumed?.atOffset,
-        resumedAfterOffset: row.resumed?.afterOffset,
-        resumedOffset: row.resumed?.offset,
+        resumed: row.resumed,
         halted: row.halted,
       }));
     this.#durableSubscriptionRowsCache = { subscriptions, rows };

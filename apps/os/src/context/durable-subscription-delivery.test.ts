@@ -61,8 +61,7 @@ test("a resume beyond the durable head starts at the current tail", () => {
       {
         name: "tail",
         configuredAtOffset: 1,
-        resumedAtOffset: 3,
-        resumedAfterOffset: 1_008,
+        resumed: { atOffset: 3, afterOffset: 1_008 },
       },
     ],
     currentHead: () => 3,
@@ -97,8 +96,7 @@ test("a cold cursor that already applied a resume is not reset again", () => {
       {
         name: "applied",
         configuredAtOffset: 1,
-        resumedAtOffset: 9,
-        resumedAfterOffset: 0,
+        resumed: { atOffset: 9, afterOffset: 0 },
       },
     ],
     currentHead: () => 5,
@@ -206,4 +204,54 @@ test("every durable row uses the stable 25-attempt, four-hour-capped ladder", as
     pending: { nextAttemptAtMs: number };
   };
   expect(cursor.pending.nextAttemptAtMs).toBeGreaterThanOrEqual(before + 4 * 60 * 60_000);
+});
+
+test("a running retry consumes its past wake instead of rearming it while the target is held", async () => {
+  const values = new Map<string, unknown>();
+  const storage = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    delete: (key: string) => values.delete(key),
+    list: ({ prefix }: { prefix: string }) =>
+      new Map([...values].filter(([key]) => key.startsWith(prefix))),
+  } as unknown as DurableObjectStorage["kv"];
+  let calls = 0;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const runs: Promise<unknown>[] = [];
+  const delivery = new DurableSubscriptionDelivery({
+    storage,
+    rows: () => [{ name: "retry", configuredAtOffset: 1, consumes: ["work"] }],
+    currentHead: () => 2,
+    read: (_row, after) => ({
+      offsets: after < 2 ? [2] : [],
+      scannedThroughOffset: 2,
+      atHead: true,
+    }),
+    deliver: async () => {
+      if (++calls === 1) throw new Error("retry");
+      await held;
+    },
+    deliverEphemeral: async () => {},
+    terminal: async () => {},
+    run: (work) => runs.push(work()),
+    wakesChanged: () => {},
+  });
+  delivery.revive();
+  await vi.waitFor(() => expect(calls).toBe(1));
+  await Promise.all(runs);
+  const retryAt = delivery.deadline;
+  expect(retryAt).toBeGreaterThan(Date.now());
+  vi.useFakeTimers({ now: retryAt! + 1, toFake: ["Date"] });
+  try {
+    delivery.revive();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(delivery.deadline).toBeNull();
+    delivery.revive();
+    expect(delivery.deadline).toBeNull();
+  } finally {
+    release();
+    await Promise.all(runs);
+    vi.useRealTimers();
+  }
 });

@@ -4,17 +4,10 @@ import {
   type DurableDeliveryRuntime,
 } from "iterate/stream/durable-delivery";
 import { consumesEvent, type StreamEvent } from "iterate/stream/processor";
+import type { Subscription } from "../stream/core-processor.ts";
 
-export type DurableSubscriptionRow = {
+export type DurableSubscriptionRow = Omit<Subscription, "target" | "delivery" | "hostedFacet"> & {
   name: string;
-  configuredAtOffset: number;
-  consumes?: string[];
-  afterOffset?: number;
-  ordered?: false;
-  resumedAtOffset?: number;
-  resumedAfterOffset?: number;
-  resumedOffset?: number;
-  halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
 type Page = Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
@@ -87,7 +80,7 @@ export class DurableSubscriptionDelivery {
       const runner = this.#runners.get(keyOf(row));
       if (!runner) continue;
       for (const event of events) runner.push(event);
-      runner.drive((work) => this.#deps.run(work));
+      this.#drive(keyOf(row));
     }
   }
 
@@ -99,10 +92,15 @@ export class DurableSubscriptionDelivery {
     for (const row of rows) {
       const key = keyOf(row);
       if (row.halted) continue;
-      this.#runners.get(key)?.drive((work) => this.#deps.run(work));
+      this.#drive(key);
       drove = true;
     }
     return drove;
+  }
+
+  #drive(key: string): void {
+    this.#wakeByRunner.delete(key);
+    this.#runners.get(key)?.drive((work) => this.#deps.run(work));
   }
 
   #reconcile(rows: DurableSubscriptionRow[]): void {
@@ -128,7 +126,7 @@ export class DurableSubscriptionDelivery {
           slug: key,
           consumes: row.consumes,
           afterOffset: row.afterOffset ?? row.configuredAtOffset,
-          resumeAtOffset: row.resumedAtOffset,
+          resumeAtOffset: row.resumed?.atOffset,
           maxAttempts: durableDeliveryMaxAttempts,
           retryDelayMs: (attempt) => Math.min(1_000 * 2 ** (attempt - 1), 4 * 60 * 60_000),
           ...(row.ordered === false && { fanOut: true }),
@@ -142,18 +140,15 @@ export class DurableSubscriptionDelivery {
           row.halted.afterOffset,
           row.halted.attempts,
           row.halted.error || "configured subscription delivery halted",
-          row.resumedAtOffset,
+          row.resumed?.atOffset,
         );
-      } else if (
-        row.resumedAtOffset !== undefined &&
-        cursor?.resumeAtOffset !== row.resumedAtOffset
-      ) {
+      } else if (row.resumed && cursor?.resumeAtOffset !== row.resumed.atOffset) {
         runner.resume(
-          row.resumedAfterOffset === undefined
+          row.resumed.afterOffset === undefined
             ? undefined
-            : Math.min(row.resumedAfterOffset, this.#deps.currentHead()),
-          row.resumedOffset,
-          row.resumedAtOffset,
+            : Math.min(row.resumed.afterOffset, this.#deps.currentHead()),
+          row.resumed.offset,
+          row.resumed?.atOffset,
         );
       }
     }
