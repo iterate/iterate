@@ -33,7 +33,7 @@ native-select, separator and spinner) in `apps/os/src/components/ui/`, written t
   and the `rules/` review rules exclude them, each list naming the files.
   `scripts/ci/shadcn-drift.test.ts` checks that the oxlint list, the oxfmt list, every `rules/`
   rule that would match one and the drift check's path filter cover all of them. knip needs no
-  list: the `package.json` exports (`./components/*`, `./hooks/*`, `./lib/*`) make every file an
+  list: the `package.json` exports (`./components/*`, `./hooks/*`) make every file an
   entry, so it never reports their unused exports.
 
 ### Refresh

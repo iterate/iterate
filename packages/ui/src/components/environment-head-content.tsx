@@ -1,14 +1,10 @@
 import { Asset, useRouter, useTags } from "@tanstack/react-router";
-import {
-  deploymentEnvironment,
-  environmentFaviconHref,
-  environmentTitle,
-} from "../lib/environment-favicon.ts";
+import { deploymentEnvironment, environmentFaviconHref, environmentTitle } from "iterate/lib";
 
 /**
  * Every client's `<HeadContent />`, with the deployment named in the browser tab: off production,
  * the title is prefixed (`[pr2990] Dash`, `[dev] Dash`) and the icon badged
- * (lib/environment-favicon.ts); in production both are the app's own. `productionIcon` is the
+ * (iterate/lib); in production both are the app's own. `productionIcon` is the
  * app's icon file in production.
  *
  * TanStack's own HeadContent, re-assembled from its public parts (`useTags`, `Asset`; react-router

@@ -13,7 +13,6 @@
     "./components/context-view/*": "./src/components/context-view/*.tsx",
     "./components/context-view/context-view-search": "./src/components/context-view/context-view-search.ts",
     "./components/*": "./src/components/*.tsx",
-    "./lib/*": "./src/lib/*.ts",
     "./hooks/*": "./src/hooks/*.ts"
   },
   "scripts": {
