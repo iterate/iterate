@@ -30,9 +30,9 @@ export const isCloudflareError = (error: unknown, status: number, code: number) 
   (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
 
 /** How many rounds in a row an empty namespace may answer "not empty" (409/10202, or 409/10305)
- *  before it is reported stuck. A round is a repos list, a DELETE and a 2 s wait: 60 took 3 min 39 s
- *  (2026-09-30), so 5 is about 18 s. A namespace whose repo deletes are still landing answers the
- *  same, for seconds: 89 landed in under 15 s (2026-09-24). */
+ *  before it is reported stuck: about 18 s, a round being a repos list, a DELETE and a 2 s wait.
+ *  A namespace whose repo deletes are still landing answers the same for under 15 s (measured
+ *  2026-09-24). */
 const STUCK_AFTER_REFUSED_ROUNDS = 5;
 
 /** An Artifacts namespace Cloudflare will not delete: its repos list reads empty, yet the namespace
