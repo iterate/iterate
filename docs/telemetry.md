@@ -103,8 +103,8 @@ become `project_id` and `path`.
 
 ### metrics
 
-One row per Analytics Engine data point, copied as Analytics Engine stored it. Key: `(time,
-worker, project_id, path, name, labels)`.
+One row per Analytics Engine data point, copied as Analytics Engine stored it. It has no key:
+Analytics Engine keeps time to the second, so two points can match in every column.
 
 | column                   | type   | from                                                                  |
 | ------------------------ | ------ | --------------------------------------------------------------------- |
@@ -158,7 +158,8 @@ invocation. Call it once per batch, never once per item.
 
 - `apps/telemetry` answers 5xx when a send fails, so Cloudflare retries the batch (it did through a
   12-minute outage); it answers 503, not 401, to a wrong secret, so rotating the secret loses
-  nothing. A retried batch can land twice: dedupe on each table's key.
+  nothing. A retried batch can land twice: dedupe on each table's key (`metrics` has none, and
+  its hours are copied once).
 - It sends in chunks under 5 MB and validates every row against its stream's schema first: a
   stream accepts a mismatched row and drops it silently.
 - The platform hook sends without waiting: an event in flight when a context resets is lost,
