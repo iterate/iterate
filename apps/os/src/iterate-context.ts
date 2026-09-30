@@ -510,7 +510,9 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  row's target is still that (a later provide at the same match owns the row now); never a mask,
    *  never a "restore" (at a child that spelling would be a grant: stream/core-processor.ts
    *  `CoreState.itxExpressionRewriteRules`). Fire-and-forget under
-   *  waitUntil (a disposer cannot await), a refusal ignored. */
+   *  waitUntil (a disposer cannot await), a refusal ignored: a paused stream holds the removal until
+   *  its resume (stream/core-processor.ts `pauseHolds`) and refuses only one that would change
+   *  nothing. */
   #removeRuleInBackground(matchString: string, expectedTarget: ItxExpression | null): void {
     this.#waitUntil(
       this.#append({

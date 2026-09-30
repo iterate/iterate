@@ -6,7 +6,7 @@
 //   who this context is       itx/created { projectId, path } → projectId · path · createdAt
 //   which incarnation runs    itx/woken { incarnation } → incarnation
 //   what reset it             itx/aborted, then itx/woken → wokenAfterContextAbortedOffset
-//   may appends land          itx/paused { reason } · itx/resumed → paused (one `if` in Stream.append)
+//   may appends land          itx/paused { reason } · itx/resumed → paused (one `if` in Stream.append) · heldRuleRemovals (`pauseHolds`)
 //   where the project apex goes itx/ingress-configured { target|null } → ingressTarget · snapshotVersion
 //   which requests go where   itx/fetch-route-configured { fetchRouteName, … } → fetchRoutes (every `match`) · snapshotVersion
 //   how calls rewrite         itx/rewrite-rule-configured { match, target|null, ifTarget? } → itxExpressionRewriteRules (every invoke) · snapshotVersion
@@ -38,6 +38,7 @@ import {
   type ItxExpressionInput,
   parseItxExpressionPrefix,
   type ItxExpression,
+  type ItxExpressionPrefix,
   print,
 } from "iterate/expression";
 import { jsonEqual } from "iterate/lib";
@@ -312,12 +313,16 @@ export type CoreState = {
    *  deliberate reset (the fetch-upgrade 101s name it, context/fetch-upgrade.ts). */
   wokenAfterContextAbortedOffset?: number;
   paused: { reason: string } | null;
+  /** A handle's compare-and-set removal that landed while the stream was paused, by the match it
+   *  removes (`pauseHolds`): the row stands until the `resumed` fold applies the removal. */
+  heldRuleRemovals: Record<string, { match: ItxExpressionPrefix; ifTarget: ItxExpression | null }>;
   /** THE REWRITE-RULE TABLE, by canonical match (a map — no stack, no identity beyond the match): a
    *  configured target REPLACES; `null` is kept as a MASK where something beneath would answer the
    *  match HERE (an implicit row: `itx.kv` and `itx.ai.run('gpt-5')` at the owner root, `itx.append`
    *  anywhere, the bare `itx` — one row denies all; or a stored shorter row with a target: `itx.tool`
    *  behind the parent link) and DELETES otherwise; `null` with `ifTarget` is a handle's
-   *  compare-and-set DELETE, never loaded code's (itx-expression-rewriting.ts `admitLoadedCodeRow`);
+   *  compare-and-set DELETE (held while paused: `heldRuleRemovals`), never loaded code's
+   *  (itx-expression-rewriting.ts `admitLoadedCodeRow`);
    *  a target equal to the implicit row it would restate deletes (the default said as much), the
    *  same spelling elsewhere is a grant and is stored. */
   itxExpressionRewriteRules: Record<string, ItxExpressionRewriteRule>;
@@ -370,7 +375,7 @@ function parseSubscriptionName(name: string): string {
  *  state. The reduce below is the one list of the types it consumes. */
 export const CoreContract = {
   slug: "core",
-  version: "17.0.0",
+  version: "18.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
    *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
    *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
@@ -378,6 +383,7 @@ export const CoreContract = {
   events: { ...CoreEventCatalog.events, ...RunEventCatalog.events },
   initialState: (): CoreState => ({
     paused: null,
+    heldRuleRemovals: {},
     itxExpressionRewriteRules: {},
     snapshotVersion: 0,
     subscriptions: {},
@@ -387,6 +393,33 @@ export const CoreContract = {
     scriptRuns: {},
   }),
 };
+
+/** WHAT A PAUSED STREAM HOLDS instead of refusing (stream.ts's pause check): a handle's
+ *  compare-and-set removal (`ifTarget`) of a row that still has that target and is not held already.
+ *  A disposer cannot await or retry, so a refused removal would be lost and the row would outlive
+ *  its handle; held, the row stands until the `resumed` fold applies the removal. No row can be
+ *  added while paused, so at most one removal per row lands. A match the codec refuses is no
+ *  removal: the pause refuses it. */
+export function pauseHolds(state: CoreState, event: StreamEventInput): boolean {
+  if (event.type !== "events.iterate.com/itx/rewrite-rule-configured" || event.ephemeral)
+    return false;
+  // A rule event's payload is an object whatever its fields (the append boundary parsed it); the
+  // fields are checked below.
+  const payload = (event.payload || {}) as Record<string, unknown>;
+  if (!("ifTarget" in payload)) return false;
+  let matchString: string;
+  try {
+    matchString = print(parseItxExpressionPrefix(payload.match as ItxExpressionInput)); // parsed, or refused by the throw
+  } catch {
+    return false;
+  }
+  const existing = state.itxExpressionRewriteRules[matchString];
+  return (
+    !!existing &&
+    jsonEqual(existing.target, payload.ifTarget) &&
+    !state.heldRuleRemovals[matchString]
+  );
+}
 
 /** THE BATCH REDUCE: the events in order over `state`, each table copied once for the whole batch
  *  (`draftOf`). A throwing event is handed to `onError` and skipped — the reduce touches a draft
@@ -478,8 +511,20 @@ export function reduceCoreEvent(
       return { ...state, contextAbortedOffset: event.offset };
     case "events.iterate.com/itx/paused":
       return { ...state, paused: { reason: (payload.reason as string | undefined) ?? "paused" } };
-    case "events.iterate.com/itx/resumed":
-      return { ...state, paused: null };
+    case "events.iterate.com/itx/resumed": {
+      // The removals the pause held land in the resume's own commit, each folded again now that the
+      // stream is open: still a compare-and-set, at the resume's offset.
+      let resumed: CoreState = { ...state, paused: null, heldRuleRemovals: {} };
+      for (const { match, ifTarget } of Object.values(state.heldRuleRemovals)) {
+        const removal = {
+          ...event,
+          type: "events.iterate.com/itx/rewrite-rule-configured",
+          payload: { match, target: null, ifTarget },
+        };
+        resumed = reduceCoreEvent({ event: removal, state: resumed }, draftTables) ?? resumed;
+      }
+      return resumed;
+    }
 
     case "events.iterate.com/itx/rewrite-rule-configured": {
       // A no-op is `undefined`, not a fresh object: the inline host detects change by identity, and
@@ -507,11 +552,16 @@ export function reduceCoreEvent(
       // THE COMPARE-AND-SET of a handle's undo and a dead stub's census (`ifTarget`): a DELETE that
       // applies only while the row's target is still the one the handle wrote — a replacement owns
       // the match now and a stale undo is a no-op. Decided inside the commit, so there is no
-      // read-then-append window. Never a mask: a disposed session row leaves nothing behind.
-      if ("ifTarget" in payload)
-        return existing && jsonEqual(existing.target, payload.ifTarget)
-          ? withRule(undefined)
-          : undefined;
+      // read-then-append window. Never a mask: a disposed session row leaves nothing behind. While
+      // paused the removal is HELD and the row stands until the resume (`pauseHolds`).
+      if ("ifTarget" in payload) {
+        if (!existing || !jsonEqual(existing.target, payload.ifTarget)) return undefined;
+        if (!state.paused) return withRule(undefined);
+        if (state.heldRuleRemovals[matchString]) return undefined;
+        const heldRuleRemovals = draftOf(state.heldRuleRemovals, draftTables);
+        heldRuleRemovals[matchString] = { match: matchPrefix, ifTarget: existing.target };
+        return { ...state, heldRuleRemovals };
+      }
       const description =
         typeof payload.description === "string" ? { description: payload.description } : {};
       if (payload.target === null) {

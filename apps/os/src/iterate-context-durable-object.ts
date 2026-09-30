@@ -354,7 +354,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       try {
         this.#appendAndRunCommittedEffects([event]);
       } catch {
-        // refused (a paused stream): the next wake's census un-sets it (`#unsetWhatNamesDeadRpcStubs`)
+        // refused (a paused stream refuses a subscription's or a route's un-set; a rule's
+        // compare-and-set it holds): the resume's census un-sets it (`#unsetWhatNamesDeadRpcStubs`)
       }
     };
     // Compare-and-set: each removal carries `ifTarget` (the target the census saw), so a `provide` that
@@ -402,7 +403,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** A stub whose last pager closed with no close handler run never had what named it un-set: a DO
    *  reset (every deploy) kills every hibernatable socket silently, and a stub whose last pager
-   *  closed DURING a pause had its un-set refused (`itx/paused` refuses ordinary appends). So on the
+   *  closed DURING a pause had its subscription's and route's un-sets refused (`itx/paused` refuses
+   *  ordinary appends; it holds a rule's compare-and-set until the resume). So on the
    *  `woken` commit (a fresh incarnation) and the `resumed` one, every key a row names that has NO
    *  transport (neither borrowed nor pager-backed) is un-set — a lender still alive re-dials, and its
    *  attach re-appends the row. Safe across hibernation: the pager sockets that rode it rehydrate with

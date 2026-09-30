@@ -38,6 +38,7 @@ import { reduceScheduledAppends } from "./scheduled-appends.ts";
 import {
   CoreContract,
   STREAM_RECORD_TYPES,
+  pauseHolds,
   reduceCoreEventBatch,
   type CoreState,
 } from "./core-processor.ts";
@@ -66,7 +67,9 @@ export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 /** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
  *  its wake, its delivery ladder still ends, its alarm passes stay observable, a script it started
  *  still closes) and the pause/resume
- *  pair itself (it must always accept its own resume). */
+ *  pair itself (it must always accept its own resume). Beyond these types it admits one event the
+ *  core reduce HOLDS until the resume: a handle's removal of its rule (core-processor.ts
+ *  `pauseHolds`). */
 const PAUSE_EXEMPT_EVENT_TYPES = new Set([
   ...STREAM_RECORD_TYPES,
   "events.iterate.com/itx/paused",
@@ -469,7 +472,11 @@ export class Stream {
         committedEvents.push(existingEvent); // a retry answers with the event it already has, whatever `offset` it hoped for
         continue;
       }
-      if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
+      if (
+        paused &&
+        !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type) &&
+        !pauseHolds(this.#coreReducedState, eventInput)
+      )
         throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
       // THE LOOP GUARD (cause.ts): past the limit, code's own events are refused — the platform's
       // records (a receipt, this very fact) still land.

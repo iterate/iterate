@@ -28,6 +28,7 @@ test("the contract: slug `core`; the every-field-defaulted initial state", () =>
   expect(CoreContract).toMatchObject({ slug: "core" });
   expect(CoreContract.initialState()).toEqual({
     paused: null,
+    heldRuleRemovals: {},
     itxExpressionRewriteRules: {},
     snapshotVersion: 0,
     subscriptions: {},
@@ -560,6 +561,32 @@ test("rewrite rules: a removal with `ifTarget` (a handle's undo) applies only wh
   );
   const rewritten = reduceAll([configure(1, null), configure(2, "itx.tab1")]);
   expect(reduceCoreEvent({ event: remove(3, null), state: rewritten })).toBeUndefined();
+});
+
+test("rewrite rules: a handle's removal while paused is HELD — the row stands until the resume, whose own fold applies it at the resume's offset; a repeat or a stale removal holds nothing", () => {
+  const remove = (offset: number, ifTarget: string) =>
+    at(offset, "events.iterate.com/itx/rewrite-rule-configured", {
+      match: "itx.x",
+      target: null,
+      ifTarget: parse(ifTarget),
+    });
+  const paused = reduceAll([rule(1, "itx.x", "itx.tab1"), at(2, "events.iterate.com/itx/paused")]);
+  const held = reduceAll([remove(3, "itx.tab1")], paused);
+  expect(held).toMatchObject({
+    itxExpressionRewriteRules: { "itx.x": { target: parse("itx.tab1") } },
+    heldRuleRemovals: { "itx.x": { match: ["itx", "x"], ifTarget: parse("itx.tab1") } },
+    snapshotVersion: 1,
+  });
+  expect(reduceCoreEvent({ event: remove(4, "itx.tab1"), state: held })).toBeUndefined();
+  expect(reduceCoreEvent({ event: remove(4, "itx.tab2"), state: paused })).toBeUndefined();
+  expect(reduceAll([at(5, "events.iterate.com/itx/resumed")], held)).toEqual(
+    expect.objectContaining({
+      paused: null,
+      heldRuleRemovals: {},
+      itxExpressionRewriteRules: {},
+      snapshotVersion: 5,
+    }),
+  );
 });
 
 test("rewrite rules: `snapshotVersion` is the offset of the last commit that CHANGED the table — the same row again, a double delete or a mask repeated leaves it, and the state, as they were", () => {

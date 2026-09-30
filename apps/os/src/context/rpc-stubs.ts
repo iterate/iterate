@@ -47,7 +47,8 @@
 //   [C] probe       The client's network vanished without a close: its calls fail in ~20 s, not
 //                   when the edge's TCP gives up.
 //   [D] census      A DO reset took the key's last pager with no close handler run, or a pause
-//                   refused the un-set: the `woken` or `resumed` commit un-sets what names a key no
+//                   refused a subscription's or route's un-set (a rule's it holds until the
+//                   resume): the `woken` or `resumed` commit un-sets what names a key no
 //                   pager or borrowed stub holds (iterate-context-durable-object.ts); a live
 //                   lender's re-dial [B] sets it again.
 //   [E] lend again  The lend ended under a live session (the re-dial gave up; the DO closed the

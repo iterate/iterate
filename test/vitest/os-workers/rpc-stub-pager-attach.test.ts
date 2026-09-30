@@ -162,7 +162,7 @@ test("HAPPY PATH: provide over /api opens the pager (the rule riding it); a sepa
 
 // ── the un-set half: the key's LAST pager close ──
 
-test("a stub whose last pager closes DURING a pause keeps its rule (the un-set append is refused) and is un-set once the stream resumes", async () => {
+test("a stub whose last pager closes DURING a pause keeps its rule (the pause holds the un-set) and is un-set once the stream resumes", async () => {
   const ctx = "prj_pager_pause_unset";
   const s = stub(ctx);
   const pager = await openPager(ctx, "itx.k5", [ruleFor("itx.k5")]);
@@ -173,7 +173,7 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
   pager.webSocket!.close(1000, "session died while paused");
   await until("the pager is gone", async () => (await transportState(ctx)).rpcStubPagers === 0);
-  // the un-set was refused by the pause: the row stands (the window)
+  // the pause holds the un-set: the row stands (the window)
   expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.rpcStubs.get('itx.k5')");
 
   await s.append({ type: "events.iterate.com/itx/resumed" });

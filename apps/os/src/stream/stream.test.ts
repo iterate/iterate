@@ -488,6 +488,27 @@ test("an itx/paused event pauses the stream through its own core reduce: every n
   expect(stream.append({ type: "work" })[0]).toMatchObject({ offset: 5 });
 });
 
+test("a paused stream admits a handle's compare-and-set removal of a row that still has the target it names — held, the row stands until the resume applies it — and refuses one that would change nothing", () => {
+  const stream = bareStream();
+  stream.appendBirthRecord();
+  stream.appendWakeRecord(CALL);
+  stream.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.x", target: "itx.tab1" },
+  });
+  stream.append({ type: "events.iterate.com/itx/paused" });
+  const removal = (ifTarget: string[]) => ({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.x", target: null, ifTarget },
+  });
+  expect(() => stream.append(removal(["itx", "tab2"]))).toThrow(/stream paused/); // stale
+  expect(stream.append(removal(["itx", "tab1"]))).toHaveLength(1);
+  expect(stream.coreReducedState.itxExpressionRewriteRules).toHaveProperty(["itx.x"]);
+  expect(() => stream.append(removal(["itx", "tab1"]))).toThrow(/stream paused/); // already held
+  stream.append({ type: "events.iterate.com/itx/resumed" });
+  expect(stream.coreReducedState.itxExpressionRewriteRules).toEqual({});
+});
+
 test("a raw subscription-configured lands at the stream: a name is normalizeControlEvent's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
   const stream = bareStream();
   const [event] = stream.append({
