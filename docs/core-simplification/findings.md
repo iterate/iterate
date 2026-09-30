@@ -7,11 +7,19 @@ proof-of-concept recommendation, tracked in draft PR
 `ce251e06c1c3c5894aebdc674e57b2196be0ae08` after #3442. Main observed at
 00:00 UTC on 30 September is `b6c8c7009`, including #3447's birth/configuration
 move, #3448's caller-supplied deployment, Docs, and #3455's RPC response-stream
-fix. Main subsequently reached `e9f059e8c` with #3460; the source candidate is
-rebased onto that revision and retains its delivery and facet-generation
-fixes. The measurements below use immutable revisions; they are not final
-candidate counts.
-Implementation is a separate, unmerged effort.
+fix. Main subsequently reached `e9f059e8c` with #3460.
+
+The first full-access Workers run started from a built working tree at
+`30875b8b9`. It completed: 2,284 tests passed, 14 were expected failures, and
+22 failed. The failures are source outcomes, not the earlier sandbox
+loopback/Wrangler `EPERM` startup problem. Follow-up edits are in the same
+working tree, so `30875b8b9` is provenance for that run rather than an
+immutable final candidate. A later focused Workers run had 83 passing tests,
+6 expected failures, and 12 failures. Neither run is release evidence; the
+candidate remains unmerged and under repair.
+
+The measurements below use immutable revisions where stated; they are not
+final candidate counts. Implementation is a separate, unmerged effort.
 
 The core does not need a large new type system to become simpler. It needs a
 smaller answer to one question: what is an Iterate context?
@@ -274,10 +282,10 @@ tests passed at that checkpoint. The resumed candidate additionally fences
 delayed configuration snapshots, preserves wakes after runner disposal, and
 continues fan-out admission beyond a single page. These are implementation
 changes with focused unit and TypeScript checks, not deployed performance
-evidence. Fresh Workers tests cannot start in the reconnected sandbox:
-loopback and Wrangler startup return `EPERM`. Runtime parity, the remaining
-baseline regression tests, preview latency, soak, and Cloudflare Logs still
-require a working validation environment.
+evidence. A restored-full-access Workers run has now completed, so the remaining
+runtime failures below are real candidate failures rather than startup or
+sandbox evidence. Runtime parity, preview latency, soak, and Cloudflare Logs
+remain required after the source repair is complete.
 
 ### Post-round-8 source review: the remaining ownership details
 
@@ -311,12 +319,12 @@ the next bounded retry free to invoke again; this needs no acknowledgement
 protocol or attempt taxonomy. The focused runner/model suite passes 27 tests,
 and full lint, typecheck, formatting, Knip and the OS build pass.
 
-The broad local suites remain unverified here: socket-dependent tests fail
-with sandbox `EPERM`. Two additional stale public-placement assertions were
-corrected to cover the reserved private facet; their focused suite passes 77
-tests. The three previous Workers baseline areas have candidate fixes but
-still need a fresh real Workers run. Publishing is pending the next turn,
-when the restored Full Access setting takes effect.
+The full root Workers run from this checkpoint completed under full access:
+22 failures, 2,284 passes, and 14 expected failures. Later focused repairs
+also ran under full access and still had 12 failures. Two stale public-placement
+assertions were corrected to cover the reserved private facet, but they do not
+turn either run into release evidence. A fresh complete Workers run is required
+once the in-flight fixes settle.
 
 Pinned counts are in
 [`latest-main.tsv`](measurements/latest-main.tsv) and
@@ -366,9 +374,138 @@ claimed by the current candidate.
 
 The shared architectural direction is narrower: keep body ownership in the
 context and use the trusted native channel for platform work, while ordinary
-user targets continue through `itx`. The source checkpoint under review is
-`abbdec539` with the round-8 durable-body work still dirty and in flight. No
-performance or throughput result follows from that comparison.
+user targets continue through `itx`. The source checkpoint under review was
+`abbdec539` when this comparison was written; subsequent working-tree changes
+and validation are recorded below. No performance or throughput result follows
+from that comparison.
+
+### Round 9: full-access failures and a second delivery audit
+
+[The ninth independent review](reviews/opus-root-round-9.md) read the
+mutable source tree beginning at `30875b8b9`. It used Claude Opus 5.5 with xhigh thinking:
+68,047 thinking tokens, 78,635 output tokens, and 797,074 ms of model duration.
+It did not run tests and could not find the Workers-level tests, so it is
+source analysis rather than a validation result. The model began with the
+`30875b8b9` checkpoint, and source repair continued during its request. It is
+not an immutable review of a final commit.
+
+The full-access root run establishes a useful boundary. The 22 failures include
+config birth delivery not settling, denied fan-out targets not reaching their
+terminal outcome, a forged relay failure not becoming observable, fan-out
+progress and replacement failures, wake and webhook-halt failures, and a
+number of unrelated baseline regressions. The later focused run still has 12
+failures: birth rows, fan-out target refusal, stale configuration/claim
+recovery, fan-out completion, wake causes, and webhook 410 halt are still in
+that set. Those grouped names are not a claim that every timeout has one cause;
+they are the failing observed outcomes that must be explained before release.
+
+Several concrete delivery faults were found while repairing and reviewing that
+source. They should be treated as fixes in progress until a fresh complete run
+passes.
+
+- Fan-out could leave the first completed batch in its pending cursor, so the
+  next batch was never admitted. The first eight calls could overlap while the
+  sixteen-call completion test timed out. The repair must persist the removed
+  pending items before admitting more work.
+- A settled-failure cache keyed only by row, resume marker, and source range
+  replayed one real target error for forty seconds. Each retry spent an attempt
+  without calling the target again. The cache has been narrowed to late
+  successes only; a flaky target must have a Workers regression proving its
+  second same-range attempt invokes it.
+- A manual core halt could race an old local attempt. The old attempt received
+  `GONE` and could publish a new attempt-one terminal view over the core's
+  attempt-fifteen halt. The runner now needs to adopt the core receipt and
+  advance its generation before older work can write state. The original
+  ordered halt/resume assertion remains a required regression, not an obsolete
+  expectation.
+- A retry for a still-active row could reread and reconstruct the durable
+  source page before discovering that the raw target call was already in
+  flight. A same-row busy check belongs before that reread; it removes needless
+  scratch-page work without restoring a global full-page gate.
+
+The body-local design remains the preferred simplification. The subscriptions
+facet carries selected offsets, ranges, retry state, and bounded ephemeral
+work. The context rereads durable events, verifies the selection under the
+current row, and holds selected bodies through the real target call. A durable
+body therefore never crosses the private facet boundary. An ephemeral body
+continues to use its one-event ring-validated path because it cannot be read
+back from the log. This removes facet page leases, full-page transfer, and
+body-accounting duplication while retaining the existing caller, jail,
+fixed-point resolution, platform processor route, and row-generation fences.
+
+The review identifies four small decisions that affect whether this remains a
+simple, bounded implementation:
+
+1. **Fan-out admission must continue past a backoff item.** If capacity remains
+   and the prior page was not at the head, read another page before scheduling
+   the backoff wake. Otherwise one failing event can hold a catch-up behind its
+   retry cap. This is a local loop condition, not a new delivery mechanism.
+2. **Busy work needs a bounded observable policy.** A target that never settles
+   must not create a one-second claim/alarm loop forever. Waiting for an active
+   call would spend attempts; retaining no-attempt busy retries requires a
+   backoff and a terminal/recovery limit. The current direction keeps ordinary
+   retry semantics and success-only late-result deduplication. It must expose
+   consecutive busy time and count and prove the selected behaviour.
+3. **A legal large page must make progress while idle.** The old admission test
+   accepted an over-8 MiB selection only when it contained one event. Two legal
+   roughly-4 MiB events can exceed the context envelope budget together and
+   otherwise stay busy forever. The small relaxation is to admit any one idle
+   request within the existing 32 MiB RPC ceiling, while retaining the normal
+   8 MiB aggregate bound during concurrent calls.
+4. **Ephemeral ordering and capacity remain deliberate limits.** The review
+   found a possible lower-offset ephemeral being delivered after a later durable
+   range and a single backlogged row monopolising facet ephemeral capacity.
+   Sending only ephemeral offsets would remove the facet body queue, but it
+   changes the ring and ordering contract. It is an option to test, not an
+   accepted deletion.
+
+The review also calls out stale cursor-key cleanup, resume-with-seek behaviour
+on a live row, equal configuration snapshots, duplicate push/claim work, and
+release-versus-pre-push-claim ordering. These are good deletion targets only
+where a native configuration pull or existing claim lifecycle gives the same
+recovery outcome. Removing the stored configuration copy is justified because
+core state is authoritative; removing the only durable recovery claim is not.
+
+The review confirmed several constraints that keep the design safe: row,
+resume, and halt fences before and after awaits; one active call per ordered row
+or fan-out offset; body release only when the raw target settles; terminal
+idempotency including the resume identity; and no cursor for ephemeral events.
+They remain required evidence, not reasons to relax the tests.
+
+### Full-access publication checkpoint
+
+Source `9c48a4a6f4314093c343f7851807b0afb033b1d7`, based on unchanged main
+`e9f059e8c`, passes the full local root test command. OS reports 2,311 passing
+tests and 14 expected failures across 151 passing files; all other package
+suites also pass, including socket-dependent suites. Full lint, typecheck,
+formatting, Knip and build pass. No socket tests were deleted to obtain green.
+
+This proves the local checkpoint, not the final design or a deployment.
+The confirmed fixes include fan-out persistence and row halt/resume, ephemeral
+JSON equality, corrupt-row reconstruction, new-name live attachment latency,
+captured claim release, cold retry recovery and obsolete placement fixtures.
+Attempts are persisted before target results, so recovery tests now wait for
+actual retry errors and forwarded deadlines before restarting the facet.
+
+The checkpoint still grows combined core and SDK by **391 physical runtime
+lines**: 18,399 core plus 7,612 SDK versus main's 18,806 plus 6,814. A passing
+replacement is not enough to call it the requested simplification.
+
+Two further experiments are isolated from that tested checkpoint. Requiring
+configured `urls.os` removes request-derived origin, header and loader-cache
+state. Hosting the existing trusted delivery runner beside the context log
+could remove the private delivery facet, bridge and competing claim writers.
+It preserves untrusted target workers/facets and public processor authoring;
+only the placement of trusted cursor state changes. Neither experiment counts
+as a deletion until its runtime parity is proven.
+
+[The tenth actual Opus 5.5 xhigh review](reviews/opus-round-10.md) confirms the earlier fixes and finds
+additional resume and private corrupt-read loops, ephemeral ordering and an
+unbounded busy policy. Its proposed native promise join preserves single-flight
+and at-least-once delivery; it cannot promise deduplication after a raw call has
+settled between timeout and retry. Preview, performance, 100-run soak and fresh
+log comparison remain pending. The implementation draft [#3461](https://github.com/iterate/iterate/pull/3461)
+is not ready to merge.
 
 ## What remains core
 
@@ -498,5 +635,6 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), and [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), and [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), and
+  [full-access source review, round 9](reviews/opus-root-round-9.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
