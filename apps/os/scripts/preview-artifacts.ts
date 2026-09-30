@@ -29,10 +29,11 @@ export const isCloudflareError = (error: unknown, status: number, code: number) 
   error.status === status &&
   (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
 
-/** How many rounds, 2 s apart, an empty namespace may answer "not empty" before it is reported
- *  stuck (~2 minutes). Accepted repo deletes land well inside that: 89 landed in under 15 s in the
- *  2026-09-24 sweep. */
-const STUCK_AFTER_REFUSED_ROUNDS = 60;
+/** How many rounds in a row an empty namespace may answer "not empty" (409/10202, or 409/10305)
+ *  before it is reported stuck. A round is a repos list, a DELETE and a 2 s wait: 60 took 3 min 39 s
+ *  (2026-09-30), so 5 is about 18 s. A namespace whose repo deletes are still landing answers the
+ *  same, for seconds: 89 landed in under 15 s (2026-09-24). */
+const STUCK_AFTER_REFUSED_ROUNDS = 5;
 
 /** An Artifacts namespace Cloudflare will not delete: its repos list reads empty, yet the namespace
  *  delete keeps answering 409/10202 "Namespace is not empty". A platform fault, not ours, and not
