@@ -1,14 +1,16 @@
 # Cook the context kernel back down
 
-**Status: draft finding report, 29 September 2026.** This is a breaking
+**Status: draft finding report, 30 September 2026.** This is a breaking
 proof-of-concept recommendation, tracked in draft PR
 [#3451](https://github.com/iterate/iterate/pull/3451). The audit baseline is
 `cfd8a1d3687c77755817d6c5ece586bc15a24bf6`; the later validation baseline is
 `ce251e06c1c3c5894aebdc674e57b2196be0ae08` after #3442. Main observed at
 00:00 UTC on 30 September is `b6c8c7009`, including #3447's birth/configuration
 move, #3448's caller-supplied deployment, Docs, and #3455's RPC response-stream
-fix. The measurements below use immutable revisions; the implementation must
-integrate these main changes before its final validation.
+fix. Main subsequently reached `e9f059e8c` with #3460; the source candidate is
+rebased onto that revision and retains its delivery and facet-generation
+fixes. The measurements below use immutable revisions; they are not final
+candidate counts.
 Implementation is a separate, unmerged effort.
 
 The core does not need a large new type system to become simpler. It needs a
@@ -228,9 +230,120 @@ before invoking the ordinary target. A retry reads the persisted range through
 the same private context channel. The review’s required Workers coverage,
 races, hung-target behaviour, and latency measurements remain prerequisites.
 
+### Round 7: the context owns a delivery body until its target settles
+
+[The seventh independent Opus review](reviews/opus-direct-private-delivery-round-7.md)
+accepts the direct private handoff direction, subject to focused proof. A
+provider deadline ends the facet’s wait; it does not cancel a native target
+call. The context therefore keeps the body reservation until that original call
+settles. A busy row or an exhausted reservation is retryable work, not a failed
+delivery attempt; a late success must be observed rather than retried.
+
+The review also requires the existing names and boundaries to hold: one active
+entry for an ordered row or a fan-out event, current resume data passed with
+each delivery rather than captured by a stale runner, the reserved
+`subscriptions` facet refused from raw configuration and ordinary facet
+operations, and one private claim helper shared with the existing processor
+lifecycle. It does not introduce a new public protocol.
+
+Two memory checks pass, but a test with 19 waiters behind one full page exposed
+head-of-line blocking. Treat memory and throughput as open: no performance
+result is claimed from those checks.
+
+### Round 8: durable bodies stay in the context
+
+[The eighth independent Opus review](reviews/opus-durable-bodies-round-8.md)
+agrees with the other independent reviews: durable event bodies stay in the
+context. The private `subscriptions` facet keeps only cursor/range or selected
+offsets. For a durable attempt, the context rereads the bounded range, filters
+under the current row, owns the one active target-body ledger, resolves and
+invokes the ordinary target, and releases bytes only when that call settles.
+
+The resumed source candidate implements that recommendation. It removes
+full-page facet leases, waiters, and durable-body round trips; ephemeral bodies
+remain on their separate one-event path
+because they cannot be reread. The required proof includes a large slow target
+beside small rows, overlapping fan-out, retry without metadata rereads,
+resume/replacement races, bounded ledger telemetry, and no durable work for an
+ephemeral-only commit.
+
+The later source checkpoint `abbdec539` derives subscriptions configuration
+from current core state on revive, removes the duplicate facet configuration
+cache, and invalidates disposed runner generations. Root typecheck and non-OS
+tests passed at that checkpoint. The resumed candidate additionally fences
+delayed configuration snapshots, preserves wakes after runner disposal, and
+continues fan-out admission beyond a single page. These are implementation
+changes with focused unit and TypeScript checks, not deployed performance
+evidence. Fresh Workers tests cannot start in the reconnected sandbox:
+loopback and Wrangler startup return `EPERM`. Runtime parity, the remaining
+baseline regression tests, preview latency, soak, and Cloudflare Logs still
+require a working validation environment.
+
+### Post-round-8 source review: the remaining ownership details
+
+A read-only source review of the current dirty candidate followed round 8. The
+attempted ninth independent Claude call produced no model output because its
+CLI was logged out and the pool was locked; this supplement is therefore not
+attributed to Claude or counted as an independent review.
+
+The source retains selected durable bodies only in the context's active ledger
+until the raw target settles. It uses one synchronous scratch source page to
+reconstruct and check those bodies, then releases that page before an await.
+There is no full-page waiter queue or global gate. The private facet continues
+to hold only offsets, ranges, cursor progress, retry state, and bounded
+one-event ephemerals.
+
+The follow-up source changes address the review's concrete races: a cold facet
+fetches current native configuration before accepting its first supplied push;
+an equal configuration offset carries ephemeral work without another KV write;
+a terminal receipt advances the runner generation before an older call can
+write local state; and fan-out continues across pages while there is pending
+capacity. These are source properties and focused test targets. Workers,
+latency, throughput, and soak evidence remain required.
+
+### #3460 guarantees retained by the source rewrite
+
+Main commit `e9f059e8c` fixed stale subscription writes after replacement,
+reconfiguration while a call is out, and excessive retained cause pages. The
+rewrite must retain their outcomes: a call that outlives its row cannot write
+an acknowledgement, route, memo, or fan-out state into its replacement; body
+memory is bounded across rows; and platform infrastructure does not resolve
+through owner-writable roots. Its fixed-point resolution is relevant to the
+queued alias-to-processor Workers proof.
+
+#3460 also preserves per-run facet end state. Keep that behaviour rather than
+replacing it with a compact lifecycle record. Its former live census rows are
+not carried forward because live attachment rows are no longer durable, not
+because the live pager lifecycle has been dropped. Old cursor/fan-out tests
+need named equal-or-higher-fidelity replacements; the ordered-to-fan-out
+mid-call Workers proof remains queued.
+
 React event-log/live-state hooks keep their current callback and gap-repair
 behaviour. The vanilla Iterate Cap'n Web client remains a vanilla Cap'n Web
 client.
+
+### Comparison with the persisted simplification sweep
+
+A separate persisted sweep plan was read as a design comparison, not as a live
+Herder status check or an expanded implementation assignment. Its red-first
+subscription fixes overlap #3460: exact row identity after replacement,
+bounded retained cause pages, and fixed-point resolution through the platform
+path. Those outcomes are now part of main and must survive the rewrite.
+
+The sweep also proposes deliberate cuts outside this delivery slice. Making the
+OS origin mandatory, consolidating ControlPlane/D1 failure boundaries, moving
+integration recovery forward, and client-only cleanup may be worthwhile
+separate changes. They are not evidence that this PR has removed their code or
+validated their new requirements. Its proposal that cursor rows receive durable
+events only is likewise a real behaviour change: it would remove best-effort
+cursor delivery of ephemerals and needs an explicit consumer audit. It is not
+claimed by the current candidate.
+
+The shared architectural direction is narrower: keep body ownership in the
+context and use the trusted native channel for platform work, while ordinary
+user targets continue through `itx`. The source checkpoint under review is
+`abbdec539` with the round-8 durable-body work still dirty and in flight. No
+performance or throughput result follows from that comparison.
 
 ## What remains core
 
@@ -360,5 +473,5 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), and [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
