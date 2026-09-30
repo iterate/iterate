@@ -55,5 +55,5 @@ jobs:
       # is applied — `npm pack` would ship the dev exports pointing at src/.
       # pkg.pr.new requires every monorepo package in one invocation. A preview deploy reads the
       # packages off this line and waits until pkg.pr.new serves each of them
-      # (apps/os/scripts/published-package-commit.ts `publishedPackagesOf`).
+      # (scripts/os/preview-packages.ts `publishedPackagesOf`).
       - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter ./packages/docs

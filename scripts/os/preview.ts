@@ -53,15 +53,12 @@ import { parseAppConfig, type AppConfig } from "../../apps/os/src/app-config.ts"
 import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
 import { buildOs } from "../../apps/os/scripts/build.ts";
 import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
-import {
-  awaitPublishedPackages,
-  checkoutPublishedPackageCommit,
-  publishedPackagesOf,
-} from "../../apps/os/scripts/published-package-commit.ts";
+import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
 import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
+import { awaitPublishedPackages, publishedPackagesOf } from "./preview-packages.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   renderStuckArtifactsNamespacesPage,
@@ -480,8 +477,8 @@ async function deployPreviewSteps(
   // passes, three rounds of eight in a row answering in full on this version (preview-readiness.ts
   // says why), and pkg.pr.new serves this deployment's packages at `packagesCommit`, which every
   // project it seeds installs through esm.sh. The same push's pkg-pr-new.yml run publishes them
-  // beside this deploy, and esm.sh must not be asked for them first (published-package-commit.ts
-  // `awaitPublishedPackages`). A commit pkg.pr.new already serves costs one HEAD per package.
+  // beside this deploy, and esm.sh must not be asked for them first (preview-packages.ts). A
+  // commit pkg.pr.new already serves costs one HEAD per package.
   await Promise.all([
     traceOperation("Readiness gate", () =>
       awaitPreviewReady(url, {

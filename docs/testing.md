@@ -141,8 +141,7 @@ Playwright or Vitest: the `deploy` job only succeeds once the readiness gate
 has seen the new deployment answer in full (its edge and brand-new contexts on
 the new version, `scripts/os/preview-readiness.ts`), every client
 answers `/healthz`, and pkg.pr.new serves the packages its projects install
-at its commit (`awaitPublishedPackages`,
-`apps/os/scripts/published-package-commit.ts`), and the `e2e` job only
+at its commit (`scripts/os/preview-packages.ts`), and the `e2e` job only
 starts after a successful deploy. This shared readiness time belongs to
 CI setup, not individual test durations. Both suites run concurrently once
 ready; browser installation overlaps the Vitest run. The specs run in enough
