@@ -646,9 +646,14 @@ export class Stream {
   }
 
   /** Internal durable delivery must make bounded forward progress past a corrupt historical row.
-   * Public `read` stays strict so callers see corruption rather than silently skipping it. */
-  readForDurableDelivery(afterOffset = 0, limit = 500): StreamPage {
-    return this.#read(afterOffset, limit, { includeEphemeral: false, skipUnreadable: true });
+   * `throughOffset` keeps a retry from reading past the range it admitted. Public `read` stays strict
+   * so callers see corruption rather than silently skipping it. */
+  readForDurableDelivery(afterOffset = 0, limit = 500, throughOffset?: number): StreamPage {
+    return this.#read(afterOffset, limit, {
+      includeEphemeral: false,
+      skipUnreadable: true,
+      throughOffset,
+    });
   }
 
   /** The context sweep reads durable rows before deciding whether to destroy an orphan. */
@@ -659,13 +664,14 @@ export class Stream {
   #read(
     afterOffset = 0,
     limit = 500,
-    options: { includeEphemeral?: boolean; skipUnreadable?: boolean } = {},
+    options: { includeEphemeral?: boolean; skipUnreadable?: boolean; throughOffset?: number } = {},
   ): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
       limit,
       READ_PAGE_BUDGET_BYTES,
+      options.throughOffset,
     );
     const events: StreamEvent[] = [];
     for (const row of rows) {
@@ -691,7 +697,10 @@ export class Stream {
     // scan reached the durable mark — never the in-memory head (the header's zero-write contract).
     // At head: the scan ran out of rows, or the page's last row IS the durable mark (an
     // exact-`limit` page at the head must say so — rule 5's caught-up pass rides it).
-    const highestDurableOffset = this.highestDurableOffset();
+    const highestDurableOffset = Math.min(
+      this.highestDurableOffset(),
+      options.throughOffset ?? Number.MAX_SAFE_INTEGER,
+    );
     const lastOffset = rows.length ? rows[rows.length - 1].offset : afterOffset;
     const atHead = !nextRowDidNotFit && (rows.length < limit || lastOffset >= highestDurableOffset);
     const scannedThroughOffset = atHead ? highestDurableOffset : lastOffset;
@@ -923,14 +932,15 @@ class StreamStorage {
     return { offset, body: this.#reassembleBody(offset, String(row.body)) };
   }
 
-  /** The rows after `afterOffset`: at most `limit`, and at most `budgetBytes` of bodies as SQLite
-   *  counts them (UTF-8). The cursor is ITERATED and each row's size comes back with it, so no body
-   *  is built and then dropped; a page always carries ≥ 1 row. `nextRowDidNotFit` says the budget,
-   *  not the log, ended the page. */
+  /** The rows after `afterOffset`, through `throughOffset` when one is given: at most `limit`, and
+   *  at most `budgetBytes` of bodies as SQLite counts them (UTF-8). The cursor is ITERATED and each
+   *  row's size comes back with it, so no body is built and then dropped; a page always carries ≥ 1
+   *  row. `nextRowDidNotFit` says the budget, not the log, ended the page. */
   readEventPage(
     afterOffset: number,
     limit: number,
     budgetBytes: number,
+    throughOffset = Number.MAX_SAFE_INTEGER,
   ): { rows: StoredEventRow[]; nextRowDidNotFit: boolean } {
     const rows: StoredEventRow[] = [];
     let pageBytes = 0;
@@ -938,8 +948,9 @@ class StreamStorage {
       `SELECT offset, body,
               length(CAST(body AS BLOB)) + COALESCE((SELECT SUM(length(CAST(chunk AS BLOB)))
                 FROM event_chunks WHERE event_chunks.offset = events.offset), 0) AS body_bytes
-         FROM events WHERE offset > ? ORDER BY offset LIMIT ?`,
+         FROM events WHERE offset > ? AND offset <= ? ORDER BY offset LIMIT ?`,
       afterOffset,
+      throughOffset,
       limit,
     )) {
       if (rows.length > 0 && pageBytes + Number(row.body_bytes) > budgetBytes)

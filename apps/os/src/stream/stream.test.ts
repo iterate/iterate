@@ -297,6 +297,18 @@ test("a CUT page carries only the ephemerals inside its proven span; `limit` cou
   expect(second).toMatchObject({ atHead: true });
 });
 
+test("durable delivery reads only its admitted range", () => {
+  const stream = bareStream();
+  stream.append({ type: "before" }); // 1
+  stream.append({ type: "ephemeral-gap", ephemeral: true }); // 2
+  stream.append({ type: "after" }); // 3
+
+  const page = stream.readForDurableDelivery(0, 100, 2);
+  expect(page.events.map((event) => event.type)).toEqual(["before"]);
+  // An admitted range ending at an ephemeral offset is complete at that mark, without reading 3.
+  expect(page).toMatchObject({ scannedThroughOffset: 2, atHead: true });
+});
+
 test("a refused batch leaves no phantom in the ring: an ephemeral is remembered only once its batch has landed", () => {
   const stream = bareStream();
   stream.append({ type: "seed" });

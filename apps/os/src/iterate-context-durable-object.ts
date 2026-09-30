@@ -143,6 +143,14 @@ import {
   type DurableSubscriptionRow,
 } from "./context/durable-subscription-delivery.ts";
 
+/** Delivery receipts describe a row's outcome. A durable row receives them only when it names the
+ * exact type, so the default durable selector cannot feed a receipt back to its own target. */
+const consumesConfiguredSubscriptionEvent = (row: Subscription, event: StreamEvent) =>
+  consumesEvent(row.consumes, event) &&
+  ((event.type !== "events.iterate.com/itx/subscription-delivery-failed" &&
+    event.type !== "events.iterate.com/itx/subscription-delivery-halted") ||
+    row.consumes?.includes(event.type) === true);
+
 type DeliveryIdentity = { name: string; configuredAtOffset: number; resumeAtOffset?: number };
 type SubscriptionDeliveryRequest = DeliveryIdentity & {
   range: { after: number; through: number };
@@ -954,7 +962,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const durableDeliveryDue = rows.some(
       (row) =>
         !row.halted &&
-        events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
+        events.some((event) => !event.ephemeral && consumesConfiguredSubscriptionEvent(row, event)),
     );
     if (configurationChanged || durableDeliveryDue)
       this.#setDurableDeliveryRecovery(Date.now() + 20_000);
@@ -963,7 +971,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       !durableDeliveryDue &&
       !events.some(
         (event) =>
-          event.ephemeral && rows.some((row) => !row.halted && consumesEvent(row.consumes, event)),
+          event.ephemeral &&
+          rows.some((row) => !row.halted && consumesConfiguredSubscriptionEvent(row, event)),
       )
     )
       return;
@@ -1020,7 +1029,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // before a target-resolution await can retain it.
     return {
       offsets: page.events
-        .filter((event) => consumesEvent(row.consumes, event))
+        .filter((event) => consumesConfiguredSubscriptionEvent(row, event))
         .map((event) => event.offset),
       scannedThroughOffset: page.scannedThroughOffset,
       atHead: page.atHead,
@@ -1076,21 +1085,32 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     row: Subscription,
   ): StreamEvent[] {
     if (request.range.through > this.#stream.highestDurableOffset())
-      throw codedError("GONE", "configured subscription source range is no longer durable");
-    const page = this.#stream.readForDurableDelivery(request.range.after, 100);
+      throw codedError(
+        "PERMANENT_FAILURE",
+        "configured subscription source range is no longer durable",
+      );
+    const page = this.#stream.readForDurableDelivery(
+      request.range.after,
+      100,
+      request.range.through,
+    );
     if (page.scannedThroughOffset < request.range.through)
-      throw codedError("GONE", "configured subscription source range is no longer available");
+      throw codedError(
+        "PERMANENT_FAILURE",
+        "configured subscription source range is no longer available",
+      );
     const events = page.events.filter(
-      (event) => event.offset <= request.range.through && consumesEvent(row.consumes, event),
+      (event) =>
+        event.offset <= request.range.through && consumesConfiguredSubscriptionEvent(row, event),
     );
     const offsets = events.map((event) => event.offset);
     if (
       offsets.length !== request.offsets.length ||
       offsets.some((offset, index) => offset !== request.offsets[index])
     )
-      throw codedError("GONE", "configured subscription source selection changed");
+      throw codedError("PERMANENT_FAILURE", "configured subscription source selection changed");
     if (events.length === 0)
-      throw codedError("GONE", "configured subscription source selection is empty");
+      throw codedError("PERMANENT_FAILURE", "configured subscription source selection is empty");
     // `events` owns only the selected references. Drop the full page before hashing, resolving, or
     // awaiting a target so unrelated durable bodies cannot survive this synchronous source proof.
     page.events.length = 0;
