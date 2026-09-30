@@ -1,4 +1,4 @@
-// ROOT `pnpm dev` (and the specs' local worker, playwright.config.ts): apps/os's dev server
+// ROOT `pnpm dev` (and the specs' local worker, test/playwright.config.ts): apps/os's dev server
 // (apps/os/scripts/dev.ts) on iterate's dev/preview account. A local worker proxies its Artifacts,
 // AI and Browser bindings to a real Cloudflare account, which wrangler takes from
 // CLOUDFLARE_ACCOUNT_ID. apps/os names no account, so a self-host's local dev uses its own; this is

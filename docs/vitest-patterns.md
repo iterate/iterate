@@ -14,7 +14,7 @@ Every new or edited test follows these nine rules.
    `expect(f(…))` on one `f` is a table.
 2. **One fixture home per suite.** Unit files use their domain harness
    (`iterate/stream/test-support`), Workers files `__workers-tests__/support.ts`,
-   e2e files `test/helpers/`, specs `specs/test-support/`. A helper two suites
+   e2e files `test/helpers/`, specs `test/helpers/`. A helper two suites
    need moves down a layer, never into a copy
    ([where test helpers live](testing.md#where-test-helpers-live)).
 3. **No casts in test bodies.** One typed builder at the bottom of the file,
@@ -71,7 +71,7 @@ Each kind of test has one shape:
 | Workers                  | `apps/os/__workers-tests__/<topic>.test.ts`          | Only cases that need `cloudflare:test` controls; `readLog` and `snapshot`; files named by topic, not by incident                                      |
 | OS e2e                   | `test/vitest/os/<topic>.e2e.test.ts`                 | One story per test on its own project (`freshCtx`); whole responses with `toMatchObject`; gates from `project-host.ts`                                |
 | Agents e2e               | `test/vitest/agents/`                                | As OS e2e; scenarios that differ only in the fake `itx.ai` are rows                                                                                   |
-| Browser spec             | `specs/<app>/*.spec.ts`                              | [specs/AGENTS.md](../specs/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table                                |
+| Browser spec             | `test/playwright/<app>/*.spec.ts`                    | [test/playwright/AGENTS.md](../test/playwright/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table            |
 | Perf                     | `test/vitest/os/perf/<topic>.perf.test.ts`           | Rows of `{ metric, load }`; budgets in `perf/latency.ts`                                                                                              |
 | CI script                | `scripts/**`, `apps/*/scripts/`                      | A table over the pure decision function, IO injected; no tests of argument parsing, log wording or another file's text                                |
 | Config conformance       | `depot-workflows.test.ts`, `lint/oxlintrc-*.test.ts` | Only invariants that guard cost or security, each a rule over every workflow or config                                                                |

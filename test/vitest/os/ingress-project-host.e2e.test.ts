@@ -6,7 +6,7 @@
 // a routing slug the config worker does not serve reaches it too, and its 404 is the config worker's;
 // and — deployed — an upgrade rides through the host to the config worker. The log never names a
 // hostname. WHO, on a host: an OAuth bearer stamps the verified principal; credentials never reach the
-// config worker. Browser cookie flows are in specs/os/auth.spec.ts.
+// config worker. Browser cookie flows are in test/playwright/os/auth.spec.ts.
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -213,7 +213,7 @@ deployedOnly(
   },
 );
 
-// THE MINI-APP EXAMPLE (examples/mini-app.ts, TS stripped and routed as specs/os/mini-app.spec.ts
+// THE MINI-APP EXAMPLE (examples/mini-app.ts, TS stripped and routed as test/playwright/os/mini-app.spec.ts
 // publishes it): its capnweb API lives as long as the page's WebSocket, and holds no scope for it —
 // `Notes` takes a `getItx` accessor, so each method is its own scope. The spec drives the page;
 // this row dials the API itself.

@@ -18,7 +18,7 @@ Publish [config-worker.ts](config-worker.ts) as the project's config worker
 (`itx/ingress-configured` with `["itx", "workers", ["get", { source }]]`): every host of the
 project reaches its `fetch`, and it serves only the `notes` routing slug (`x-iterate-routing-slug`),
 so `notes--<project>.iterate.app` reaches Notes (see
-[specs/notes/sessions.spec.ts](../../specs/notes/sessions.spec.ts)). The Worker's own URL
+[test/playwright/notes/sessions.spec.ts](../../test/playwright/notes/sessions.spec.ts)). The Worker's own URL
 (`notesEnvs` `baseUrl`) is only what the config worker fetches. Under paths ingress (every
 preview) it is `<platform>/projects/<project>/notes/`: the edge strips that base path and says it in
 `x-iterate-base-path`, and Notes puts it back on every path the browser addresses — links, assets,
@@ -61,4 +61,4 @@ does.
 Deploy: `pnpm --dir apps/notes run deploy --env prd` — after the platform its projects run on
 (`os.iterate.com`, which follows `main`) carries `itx.repos` and `itx.workspaces`. Deployment
 configuration lives in `notesEnvs` in the root `envs.ts`; the deployed browser proof is
-[specs/notes](../../specs/notes).
+[test/playwright/notes](../../test/playwright/notes).

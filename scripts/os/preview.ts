@@ -725,10 +725,10 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
 
 /** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
  *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
- *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
+ *  Playwright specs (test/playwright/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (test/helpers/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
- *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
+ *  the specs in test/playwright/global-setup.ts. Every spec project runs, the app projects against this
  *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
  *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their
  *  specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
@@ -767,7 +767,7 @@ async function runSuite(
             "playwright",
             "test",
             "--config",
-            "playwright.config.ts",
+            "test/playwright.config.ts",
             "--list",
             "--reporter=null",
           ],
@@ -781,7 +781,7 @@ async function runSuite(
     tests = await traceOperation({ name: "Set up the suite", phase: "setup" }, async () => {
       if (suite === "specs") {
         // The headless shell alone, which headless Chromium with no `channel`
-        // (playwright.config.ts) launches: a no-op when CI restored it.
+        // (test/playwright.config.ts) launches: a no-op when CI restored it.
         if (process.env.CI)
           await runAsync("pnpm", ["exec", "playwright", "install", "--only-shell", "chromium"], {
             cwd: REPO_ROOT,

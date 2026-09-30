@@ -298,7 +298,7 @@ The deployment's two secrets give you three ways in:
 
 **A new user has no organization.** A human creates one in the Dash's New
 project sheet, or on the consent page when a client such as Claude Code first
-asks for access (`specs/os/auth.spec.ts`). An agent that
+asks for access (`test/playwright/os/auth.spec.ts`). An agent that
 needs a project a particular user can reach creates it as that user through the
 operator session: `session().authenticate(adminCredentials({ email })).projects.create({ project })`,
 as `test/helpers/project-host.ts` does.
@@ -318,10 +318,10 @@ channels. The local values in `scripts/dev.ts` are public dev values.
 ### Playwright specs against local dev or previews
 
 The root Playwright config runs every app's browser specs from the root
-`specs/` directory, and `pnpm spec` runs them from the repo root. It has one
-project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
-with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
-skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
+`test/playwright/` directory, and `pnpm spec` runs them from the repo root. It has one
+project per app host: `os` (Desktop Chrome, `test/playwright/os/`), `os-phone` (Pixel 7,
+with touch, for the sign-in and consent specs), `notes` (`test/playwright/notes/`,
+skipped locally unless `NOTES_BASE_URL` is set), `voice` (`test/playwright/voice/`,
 skipped locally unless `VOICE_BASE_URL` is set), the other apps' projects and
 `suite` (the flake sentinel and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
@@ -343,7 +343,7 @@ WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
-pnpm spec specs/os/auth.spec.ts --headed
+pnpm spec test/playwright/os/auth.spec.ts --headed
 ```
 
 Against a deployment, the specs validate one env contract. The config reads
@@ -570,7 +570,7 @@ One spec, repeated, from the repo root (`pnpm spec` is the root's script):
 
 ```bash
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
-  pnpm spec specs/os/auth.spec.ts --repeat-each 25
+  pnpm spec test/playwright/os/auth.spec.ts --repeat-each 25
 ```
 
 After each run of the suite the soak runs the perf budgets (`test/vitest/os/perf`)

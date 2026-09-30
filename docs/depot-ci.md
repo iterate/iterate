@@ -578,7 +578,7 @@ Preview OS runs on every pull request with no `paths` filter, because GitHub lea
 check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
 `previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
-`playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
+`test/playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
 `scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
 none of them gets a green Deploy preview that deployed nothing, and two green suites that tested
@@ -653,7 +653,7 @@ fullest shard holds `ceil(specs / shards)`.
 
 - The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/11** to **11/11**.
   Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
-  `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
+  `SPECS_SHARDS`, test/playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
   blob report in place of the HTML one.
 - **Browser specs** (`specs`, the required check) runs no spec. It starts with the run on the
   smallest runner, decides whether there is a preview to test by the suites' own steps, and

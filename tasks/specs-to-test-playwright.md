@@ -10,7 +10,7 @@ PR 2 of 3 from the e2e plan, stacked on iterate/iterate#3479 (`test/` and the vi
 runner (`playwright/`, `vitest/`) and `helpers/` beside them, and `playwright.config.ts` inside
 `test/`.
 
-Status: not started.
+Status: code done and checked locally (typecheck, lint, knip, the lint and CI script tests, `pnpm spec --list` finds the same 63 tests in 25 files); CI's Browser specs run the moved suite against the preview.
 
 ## Moves
 
@@ -26,14 +26,14 @@ Status: not started.
 
 ## Checklist
 
-- [ ] the moves, every relative import and link recomputed from its file's new place
-- [ ] `test/package.json` gains `spec` and Playwright's dependencies; root `pnpm spec` runs it
-- [ ] typecheck: the vitest and Playwright programs each check what they import (DOM types for
+- [x] the moves, every relative import and link recomputed from its file's new place _the PR 1 script with a new table; the harness's `skipStackFrames` paths fixed by hand_
+- ~~`test/package.json` gains `spec` and Playwright's dependencies; root `pnpm spec` runs it~~ _Playwright stays a root dependency and runs from the root (`--config test/playwright.config.ts`): CI's evidence tooling reads test-results/ there. The config makes its output paths absolute from the root_
+- [x] typecheck: the vitest and Playwright programs each check what they import (DOM types for
       Playwright, Workers types for vitest); root `typecheck:specs` goes; root `knip.ts` keeps a program
-- [ ] CI and scripts: `scripts/os/preview.ts` runs the specs from `test/`, the shard runs, report and
+- [x] CI and scripts: `scripts/os/preview.ts` runs the specs from `test/`, the shard runs, report and
       artifact paths (`test-results/`, `playwright-report/`, blob reports), `specs-shards.ts`
-- [ ] lint, knip, `rules/` globs, `.gitignore` entries name the new paths
-- [ ] docs, AGENTS.md files, skills and comments name the new paths
+- [x] lint, knip, `rules/` globs, `.gitignore` entries name the new paths _no `rules/` or `.gitignore` entry named specs/_
+- [x] docs, AGENTS.md files, skills and comments name the new paths
 - [ ] lint, format, knip, typecheck, the specs' own helper specs locally, and CI's Browser specs
       against the preview
 
@@ -44,3 +44,22 @@ Status: not started.
   move files.
 
 ## Implementation notes
+
+- Playwright runs from the repository's root, as before, with only its config in `test/`.
+  Playwright resolves a config's relative paths against its folder, so the config names
+  `testDir`s relative to `test/`, runs the local worker (`webServer`) from the root, and writes
+  its output, HTML/blob/JSON reports under the root's `test-results/`.
+- Two tsconfigs in `test/`: the vitest program (Workers and Node types) and
+  `playwright/tsconfig.json` (DOM and Node), each checking the helpers it imports; the vitest one
+  excludes the Playwright harness's files. `test`'s `typecheck` runs both; root `typecheck:specs`
+  goes. Root `knip.ts`, which only `specs/tsconfig.json` typechecked, is the lint program's now.
+- `.oxlintrc.json`'s spec overrides name the Playwright harness's files in `test/helpers/`, so
+  the same files get the same rules as under `specs/`.
+- knip: the specs are the `test` workspace's; the root drops `@iterate-com/shared`, `capnweb` and
+  `esbuild` (only the specs used them). The lint workspace names `oxlint-plugin-iterate.ts` as an
+  entry: knip had reached it only through the root workspace's glob, which the move changed.
+- AGENTS.md: the vitest suite's moved to `test/vitest/`, `specs/AGENTS.md` to `test/playwright/`,
+  and a short `test/AGENTS.md` says what `test/` holds.
+- LOC report counts all of `test/**` as tests (PR 1's helpers had counted as code).
+- Left alone: `flake sentinel (specs)` and the flake suite named `specs` are labels, and the CI
+  scripts' test fixtures use example paths.

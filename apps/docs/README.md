@@ -45,7 +45,7 @@ What's next: [tasks/complete/2026-09-30-docs-app.md](../../tasks/complete/2026-0
 "Later".
 
 Local dev is Notes': `pnpm dev`, reached through a project behind `iterate tunnel`
-([Notes' README](../notes/README.md)). The browser proof is [specs/docs](../../specs/docs).
+([Notes' README](../notes/README.md)). The browser proof is [test/playwright/docs](../../test/playwright/docs).
 
 Deploy: `pnpm --dir apps/docs run deploy --env prd`. Docs has no secrets, so it deploys from
 `_shared`'s `prd` Doppler config (`dopplerProject` in [scripts/app.ts](scripts/app.ts)).

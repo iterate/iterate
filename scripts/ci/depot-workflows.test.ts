@@ -375,9 +375,8 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
     expect.arrayContaining([
       ".depot/workflows/deploy-os.yml",
       ".depot/workflows/deploy-notes.yml",
-      // the root Playwright suite (specs/AGENTS.md) runs only here
-      "specs/**",
-      "playwright.config.ts",
+      // the suites against a running system (test/AGENTS.md) run only here
+      "test/**",
     ]),
   );
 });

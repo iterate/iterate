@@ -194,7 +194,19 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "specs/**/*.ts"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "test/playwright/**/*.ts",
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "iterate/helpers-after-tests": "error",
         "iterate/no-describe": "error",
@@ -219,7 +231,17 @@
       "plugins": ["react"]
     },
     {
-      "files": ["specs/**/*.ts"],
+      "files": [
+        "test/playwright/**/*.ts",
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "iterate/spec-restricted-syntax": "error",
         "middlewright/prefer-locator-waits": "error",
@@ -230,13 +252,22 @@
           {
             "name": "@playwright/test",
             "importNames": ["test"],
-            "message": "Import test from the harness at specs/test-support/test.ts ('../test-support/test.ts' from an app folder such as specs/os/, './test-support/test.ts' from specs/ itself). It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
+            "message": "Import test from the harness at test/helpers/test.ts ('../../helpers/test.ts' from an app folder such as test/playwright/os/, '../helpers/test.ts' from test/playwright/ itself). It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
           }
         ]
       }
     },
     {
-      "files": ["specs/test-support/**"],
+      "files": [
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "no-restricted-imports": "off"
       }

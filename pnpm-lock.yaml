@@ -156,9 +156,6 @@ importers:
       '@iterate-com/docs':
         specifier: workspace:*
         version: link:packages/docs
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:packages/shared
       '@iterate-com/voice':
         specifier: workspace:*
         version: link:packages/voice
@@ -171,12 +168,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.13.6
-      capnweb:
-        specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
-      esbuild:
-        specifier: 'catalog:'
-        version: 0.28.2
       eslint-plugin-eslint-comments:
         specifier: ^3.2.0
         version: 3.2.0(eslint@9.39.5(jiti@2.7.0))

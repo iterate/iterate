@@ -18,7 +18,7 @@
 //               the raw samples
 // The worker is apps/os's: `pnpm e2e`, `pnpm perf` and `pnpm bench` run its Vite build first. apps/os's
 // own tests (unit, and workers inside workerd) are in apps/os/vitest.config.ts; the browser suite is
-// the root Playwright one (specs/AGENTS.md).
+// the root Playwright one (test/playwright/AGENTS.md).
 
 import { fileURLToPath } from "node:url";
 import {

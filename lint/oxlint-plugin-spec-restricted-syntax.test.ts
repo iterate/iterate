@@ -1,4 +1,4 @@
-// Tests for iterate/spec-restricted-syntax: the Playwright spec house style (specs/AGENTS.md).
+// Tests for iterate/spec-restricted-syntax: the Playwright spec house style (test/playwright/AGENTS.md).
 // Locators wait through loading UI, so an awaited `expect` on UI state is refused; so are
 // assertions that fail unhelpfully (toBe(true/false)), waitForURL, and baseURL spelled into goto.
 // Each case runs the real oxlint binary against a temp project with the plugin armed.
