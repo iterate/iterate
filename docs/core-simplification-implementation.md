@@ -117,9 +117,9 @@ previous attempt's error; if the final attempt is interrupted by a host reset,
 the terminal receipt says it did not settle before its host restarted. Final
 terminal errors remain until their receipt is acknowledged.
 
-A cold request drives every newly constructed durable runner, so an unrelated
+A cold request, including an ephemeral-only first push, drives every newly constructed durable runner, so an unrelated
 wildcard row cannot clear the context's recovery alarm while a filtered row has
-a persisted retry. Ephemeral commits never drive fan-out rows. Empty admission
+a persisted retry. After that one reconstruction, ephemeral commits do not drive warm fan-out rows. Empty admission
 pages do not rewrite the cursor. Resume clears old ephemeral descriptors, and
 row-halt receipts carry the selected source offset instead of borrowing a cause
 from the first unconsumed event or an offset beyond the head.
@@ -161,10 +161,10 @@ and its cancelled soak are historical evidence, not proof of this native head.
 The five malformed Server Function errors were intentional 400 probes; the
 133 live-stub retries and alarm recovery still require fresh comparison.
 
-Thirteen actual Opus reviews are recorded in the findings PR. The thirteenth
+Fifteen actual Opus reviews are recorded in the findings PR. The thirteenth
 review used immutable source 179629660f and identified the resume, receipt,
 wake, range and fan-out persistence faults now addressed in this checkpoint.
-It did not execute tests or review later source changes.
+It did not execute tests or review later source changes. The fifteenth reviewed immutable source 5eff1bf85 and found the remaining ephemeral-only cold-start wake loss, now covered by a regression that fails with the previous condition. It confirmed the generation, seek/resume, retry-bound and selected-cause paths by reading source; it did not run tests.
 
 The tracked working count is **18,081 core lines plus 7,497 SDK lines = 25,578**,
 versus main's **18,806 plus 6,814 = 25,620**. This is only **42 lines smaller**:
