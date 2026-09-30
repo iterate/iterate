@@ -469,12 +469,6 @@ export function secretMaterialStringOf(material: SecretMaterial, field?: string)
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** SHA-256 of a string, hex: exchange code's identity (the catalog's `refreshSourceSha256`). */
-export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /** Hex HMAC-SHA256 of `payload` under `key`. WebCrypto, present in every isolate. */
 export async function hmacSha256Hex(key: string, payload: string | Uint8Array): Promise<string> {
   const cryptoKey = await crypto.subtle.importKey(

@@ -1467,6 +1467,9 @@ importers:
       capnweb:
         specifier: 'catalog:'
         version: '@iterate-com/capnweb@0.12.3'
+      fflate:
+        specifier: 'catalog:'
+        version: 0.8.3
       iterate:
         specifier: workspace:*
         version: link:../packages/iterate

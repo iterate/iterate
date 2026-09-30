@@ -152,6 +152,46 @@ test("a changed file cannot be read: Jev and an LLM rule that selects skip it, t
   );
 });
 
+test("GitHub lists a changed file without its name: the others are linted, and the Check Run says one was not", async () => {
+  // 143 files listed over two pages, the second entry of page 2 without its filename and status
+  const github = fakeGithub({
+    alsoListed: Array.from({ length: 142 }, (_, index) =>
+      index === 100
+        ? {
+            sha: "c88986395d0cf995a15705159d1ed16459a6ef00",
+            additions: 21,
+            deletions: 17,
+            changes: 38,
+          }
+        : { filename: `data/${index}.json`, status: "modified" },
+    ),
+  });
+  const outcome = await lintHead(job, config, io({ github }).lintIo);
+  expect(outcome).toMatchObject({ status: "linted", findings: 3 });
+  const check = checkRunOf(github.posted);
+  expect(check).toMatchObject({
+    output: { title: "3 findings; incomplete: a file was not read" },
+  });
+  expect(check.output.summary).toMatch(
+    /- Not linted: 1 of the changed files GitHub listed came without a filename or status/,
+  );
+});
+
+test("a file GitHub lists without its name counts toward the 1,000 files read", async () => {
+  const github = fakeGithub({
+    alsoListed: [
+      { sha: "c88986395d0cf995a15705159d1ed16459a6ef00" },
+      ...Array.from({ length: 998 }, (_, index) => ({
+        filename: `data/${index}.json`,
+        status: "modified",
+      })),
+      { filename: "src/listed-1001st.ts", status: "modified" },
+    ],
+  });
+  await lintHead(job, config, io({ github }).lintIo);
+  expect(checkRunOf(github.posted).output.summary).not.toMatch(/listed-1001st/);
+});
+
 test("an LLM rule that selects comments reads only the comments' excerpts, and a pull request with none asks the LLM nothing", async () => {
   const far = Array.from({ length: 40 }, (_, index) => `export const far${index} = ${index};`);
   const source = [
@@ -338,16 +378,24 @@ const WHOLE_DIFF_RULE =
 
 /** GitHub's REST API as the lint reads it: the pull request, the rules folder (`rulesFolder`,
  *  `rules` by default) served from fixtures/rules plus `extraRules`, and one changed file holding
- *  `source`. `fail` answers a request instead, by method and path. */
+ *  `source`, listed with `alsoListed` after it, 100 a page. `fail` answers a request instead, by
+ *  method and path. */
 function fakeGithub(options: {
   source?: string;
   rulesFolder?: string;
   extraRules?: Record<string, string>;
+  alsoListed?: unknown[];
   fail?: (method: string, path: string) => Route | undefined;
 }) {
   const source = options.source || SOURCE;
   const rulesFolder = options.rulesFolder || "rules";
   const extraRules = options.extraRules || {};
+  const lines = source.split("\n");
+  const patch = `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`;
+  const listed = [
+    { filename: "src/read.ts", status: "added", patch },
+    ...(options.alsoListed || []),
+  ];
   const posted: Posted[] = [];
   const answer = (route: Route) => ({
     status: route.status,
@@ -367,15 +415,15 @@ function fakeGithub(options: {
       .map((name) => ({ path: name, type: "file" }));
     return { status: 200, body: [...entries, ...extraHere] };
   };
-  const get = (path: string, ref: string | null): Route => {
+  const get = (path: string, search: URLSearchParams): Route => {
+    const ref = search.get("ref");
     if (path === `${REPO}/pulls/7`)
       return { status: 200, body: { state: "open", draft: false, head: { sha: "head1" } } };
     if (path === `${REPO}/commits/head1/check-runs`)
       return { status: 200, body: { check_runs: [] } };
     if (path === `${REPO}/pulls/7/files`) {
-      const lines = source.split("\n");
-      const patch = `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`;
-      return { status: 200, body: [{ filename: "src/read.ts", status: "added", patch }] };
+      const page = Number(search.get("page"));
+      return { status: 200, body: listed.slice((page - 1) * 100, page * 100) };
     }
     if (path === `${REPO}/pulls/7/reviews`)
       return {
@@ -399,7 +447,7 @@ function fakeGithub(options: {
     const url = new URL(request.url);
     const failure = options.fail?.(request.method, url.pathname);
     if (failure) return answer(failure);
-    if (request.method === "GET") return answer(get(url.pathname, url.searchParams.get("ref")));
+    if (request.method === "GET") return answer(get(url.pathname, url.searchParams));
     // the lint posts JSON objects only: a review or a Check Run
     const body = (await request.json()) as Record<string, any>;
     const reviews = posted.filter((post) => post.path === `${REPO}/pulls/7/reviews`).length;

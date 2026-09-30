@@ -24,7 +24,7 @@
  */
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
 import { accountPicker, discoveryDocument, jwks, signIdToken } from "./oidc.ts";
-import { fakeUserIdOf, type ShopDeps } from "./state.ts";
+import { ACCESS_TOKEN_TTL_SECONDS, fakeUserIdOf, type ShopDeps } from "./state.ts";
 
 interface GoogleGrant {
   email: string;
@@ -99,10 +99,9 @@ export async function handleGoogleRequest(
       // a refresh answers no new refresh token, nor an ID token's nonce
       grant = { email: refresh.grant.email, scope: refresh.grant.scope };
     } else return googleError("unsupported_grant_type");
-    const ttlSeconds = client.client.accessTokenTtlSeconds;
     return Response.json({
-      access_token: await google.accessToken(client.clientId, grant, ttlSeconds),
-      expires_in: ttlSeconds,
+      access_token: await google.accessToken(client.clientId, grant, ACCESS_TOKEN_TTL_SECONDS),
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
       scope: grant.scope,
       token_type: "Bearer",
       ...(grant.consent && { refresh_token: await google.refreshToken(client.clientId, grant) }),

@@ -15,6 +15,7 @@ import {
   openSession,
   readLog,
   refused,
+  rule,
   stub,
   until,
 } from "./support.ts";
@@ -91,6 +92,19 @@ test("a deleted project's root is never born again: whatever reaches it is refus
   expect((await readLog(`${projectId}.iterate/`)).map((event) => event.type)).toContain(
     "events.iterate.com/project/create-requested",
   );
+});
+
+test("a project root's own mask at `itx.processors` does not stop its deletion: the platform enables the deletion's processor at the fixed point", async () => {
+  const admin = (await openSession()).authenticate(adminCredentials());
+  const slug = `masked-${crypto.randomUUID().slice(0, 8)}`;
+  const itx = await admin.projects.create({ project: slug });
+  const { projectId } = (await itx.whoami()) as { projectId: string };
+  await itx.append(rule("itx.processors", null));
+  await refused(() => itx.processors.enable("project"), "NO_ITX_EXPRESSION_MATCH");
+
+  await admin.projects.delete(slug);
+  expect(await controlPlane().getProject(projectId)).toBeNull();
+  expect(errorCode(await rootOnceDestroyed(projectId))).toBe("FORBIDDEN");
 });
 
 // The verb asks for the deletion before it drops the row, so the saga can reach the root while the

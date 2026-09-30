@@ -534,8 +534,8 @@ export type JevStats = {
 };
 
 /** A part of one lint that did not run, while the rest did and is published: the LLM rules' call,
- *  the Jev stage, the LLM's call on the units Jev left unsure, a rule file, a file Jev was to judge,
- *  or the review. */
+ *  the Jev stage, the LLM's call on the units Jev left unsure, a rule file, a file Jev was to judge
+ *  or GitHub listed without its name, or the review. */
 export type Problem =
   | { stage: "llm" | "jev"; error: string; rules: string[] }
   | { stage: "escalation"; error: string; units: number }

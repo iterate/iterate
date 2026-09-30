@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { z } from "zod";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { UNPROVISIONED } from "../../envs.ts";
 
 /**
  * An app's envs.ts entry and the name it was found by (envs.ts `getEnv`,
@@ -140,21 +139,6 @@ export function cloudflareApi(apiToken: string) {
     // nothing else, and deletes a namespace the same way.
     return body?.result as T;
   };
-}
-
-/**
- * Refuse to deploy an env whose resources were never created — the fix is
- * `pnpm os:ensure-resources --env <name>` followed by pasting the printed IDs
- * into envs.ts.
- */
-export function assertProvisioned(name: string, resources: Record<string, string>) {
-  const missing = Object.entries(resources).filter(([, id]) => id === UNPROVISIONED);
-  if (missing.length > 0) {
-    throw new Error(
-      `Environment ${name} has unprovisioned resources (${missing.map(([key]) => key).join(", ")}). ` +
-        `Run ensure-resources --env ${name}, paste the printed IDs into envs.ts, and retry.`,
-    );
-  }
 }
 
 /**

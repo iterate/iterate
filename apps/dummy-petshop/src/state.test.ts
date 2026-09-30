@@ -71,7 +71,7 @@ test("a state stored with more than the bounds keeps only the newest of each at 
   const state = await store.getState();
   for (let index = 0; index < 1_200; index += 1) {
     const clientId = `petshop-client-${index}`;
-    state.clients[clientId] = { clientSecret: "s", accessTokenTtlSeconds: 120 };
+    state.clients[clientId] = { clientSecret: "s" };
     state.accessTokenEpochs[`${clientId}:ada`] = 1;
     state.accessTokenEpochs[`tesco-login:${index}@example.com`] = 1;
     state.usedAuthorizationCodeIds.push(`code-${index}`);

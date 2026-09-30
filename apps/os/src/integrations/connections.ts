@@ -11,6 +11,7 @@ import type { StreamEventInput } from "iterate/stream/processor";
 import { z } from "zod";
 import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
 import { bytesFromBase64url, signClaims, type PlatformFactType } from "../caller.ts";
+import { facetStateOf } from "../context-stub.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import { ControlPlane, type Reach } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
@@ -239,13 +240,11 @@ export async function connectionRowOf(
   projectId: string,
   path: string,
 ): Promise<IntegrationConnectionRow | null> {
-  // The platform's own read of the project facet; `invoke` is untyped across the DO hop, and
-  // `snapshot` answers the project contract's state.
-  const { state } = (await env.ITERATE_CONTEXT.getByName(
-    DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-  ).invoke(["itx", "builtins", "facets", ["get", "project"], ["snapshot"]], [], {
-    principal: null,
-  })) as { state: ProjectState };
+  const state = await facetStateOf<ProjectState>(
+    env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.stringify({ projectId, path: "/" })),
+    "project",
+    { principal: null },
+  );
   return Object.hasOwn(state.integrations, path) ? state.integrations[path]! : null;
 }
 

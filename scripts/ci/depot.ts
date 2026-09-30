@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { unzipSync } from "fflate";
 import { z } from "zod";
 
 import { DEPOT_ORG, depotCiApi } from "@iterate-com/shared/depot-api";
@@ -128,7 +129,7 @@ export async function workflowArtifact(
     .parse(await depot("GetArtifactDownloadURL", { artifactId: artifact.artifactId }));
   const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error(`${artifact.name} download returned HTTP ${response.status}`);
-  return unzip(new Uint8Array(await response.arrayBuffer()));
+  return unzipSync(new Uint8Array(await response.arrayBuffer()));
 }
 
 /**
@@ -175,60 +176,4 @@ export async function saveNewestArtifactFile(
   await mkdir(dirname(input.out), { recursive: true });
   await writeFile(input.out, text);
   return `previous state: ${text.length} bytes`;
-}
-
-/**
- * Minimal zip reader on the runtime's own DecompressionStream — deliberately
- * not a dependency. The format surface is narrow by construction: one
- * producer (actions/upload-artifact, whose zips Depot stores), read via the
- * central directory (sizes come from there, so streaming-writer data
- * descriptors don't matter). No zip64: the artifacts CI reads, a job's test
- * results at the most (about 1 MB for a specs job, measured 2026-09-28), are far
- * under its 4 GiB and 65,535 entries. Anything unexpected throws.
- */
-async function unzip(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // The end-of-central-directory record sits at the tail, behind an optional
-  // comment (max 64KB): scan backwards for its signature.
-  let eocd = -1;
-  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
-    if (view.getUint32(i, true) === 0x06054b50) {
-      eocd = i;
-      break;
-    }
-  }
-  if (eocd < 0) throw new Error("not a zip: no end-of-central-directory record");
-  const entryCount = view.getUint16(eocd + 10, true);
-  const files: Record<string, Uint8Array> = {};
-  let offset = view.getUint32(eocd + 16, true);
-  for (let i = 0; i < entryCount; i++) {
-    if (view.getUint32(offset, true) !== 0x02014b50) {
-      throw new Error("corrupt zip: bad central directory entry signature");
-    }
-    const method = view.getUint16(offset + 10, true);
-    const compressedSize = view.getUint32(offset + 20, true);
-    const nameLength = view.getUint16(offset + 28, true);
-    const extraLength = view.getUint16(offset + 30, true);
-    const commentLength = view.getUint16(offset + 32, true);
-    const localHeaderOffset = view.getUint32(offset + 42, true);
-    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength));
-    // The local header's name/extra lengths can differ from the central
-    // directory's, so the data offset comes from the local header itself.
-    const localNameLength = view.getUint16(localHeaderOffset + 26, true);
-    const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
-    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-    // slice (not subarray): a copy backed by a plain ArrayBuffer, which both
-    // the DOM and Workers Response typings accept without assertions.
-    const data = bytes.slice(dataStart, dataStart + compressedSize);
-    if (method === 0) {
-      files[name] = data;
-    } else if (method === 8) {
-      const inflated = new Response(data).body!.pipeThrough(new DecompressionStream("deflate-raw"));
-      files[name] = new Uint8Array(await new Response(inflated).arrayBuffer());
-    } else {
-      throw new Error(`unsupported zip compression method ${method} for ${name}`);
-    }
-    offset += 46 + nameLength + extraLength + commentLength;
-  }
-  return files;
 }

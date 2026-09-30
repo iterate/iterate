@@ -26,7 +26,7 @@ test("a sign-in reads the person's account in the background, and answers withou
     calls: [
       {
         name: accountName(user.id),
-        expression: ["itx", "facets", ["get", "account"], ["snapshot"]],
+        expression: ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
       },
     ],
   });

@@ -13,6 +13,7 @@
     "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
     "capnweb": "catalog:",
+    "fflate": "catalog:",
     "iterate": "workspace:*",
     "undici": "catalog:",
     "yaml": "catalog:",
