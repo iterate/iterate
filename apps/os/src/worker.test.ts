@@ -178,7 +178,11 @@ const appConfigRows: {
     throws: /^APP_CONFIG login \(APP_CONFIG_LOGIN\): no sign-in mechanism/,
   },
   {
-    vars: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__PASSWORD: "  " },
+    vars: {
+      APP_CONFIG_URLS__OS: "https://os.test",
+      APP_CONFIG_SECRETS__KEY: "secrets-key",
+      APP_CONFIG_LOGIN__PASSWORD: "  ",
+    },
     throws: /no sign-in mechanism/,
   },
   // one of the other two mechanisms alone is enough
@@ -208,7 +212,11 @@ const appConfigRows: {
     },
   },
   {
-    vars: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
+    vars: {
+      APP_CONFIG_URLS__OS: "https://os.test",
+      APP_CONFIG_SECRETS__KEY: "secrets-key",
+      APP_CONFIG_LOGIN__CLOUDFLARE: "{}",
+    },
     throws: /no sign-in mechanism/,
     warns: 1,
   },

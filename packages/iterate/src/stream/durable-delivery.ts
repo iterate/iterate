@@ -181,7 +181,7 @@ export class DurableDeliveryProcessor {
     // live event after an asynchronous push arrives.
     if (
       event.offset <= cursor.confirmedOffset ||
-      (cursor.pending !== undefined && event.offset <= cursor.pending.through)
+      (cursor.pending && event.offset <= cursor.pending.through)
     ) {
       console.warn({
         event: "durable-delivery.ephemeral-overtaken",
@@ -439,7 +439,7 @@ export class DurableDeliveryProcessor {
         });
         try {
           if (pending.attempt >= this.#options.maxAttempts)
-            throw new Error(pending.error ?? "delivery did not settle before its host restarted");
+            throw new Error(pending.error || "delivery did not settle before its host restarted");
           await this.#deliverWithinDeadline({
             range: { after: pending.after, through: pending.through },
             offsets: pending.offsets,
@@ -649,7 +649,7 @@ export class DurableDeliveryProcessor {
     this.#putCursor({ ...cursor, fanOut });
     try {
       if (interruptedAtLimit)
-        throw new Error(current.error ?? "delivery did not settle before its host restarted");
+        throw new Error(current.error || "delivery did not settle before its host restarted");
       await this.#deliverWithinDeadline({
         range: { after: current.offset - 1, through: current.offset },
         offsets: [current.offset],

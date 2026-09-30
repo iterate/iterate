@@ -16,26 +16,6 @@ export default class Flaky extends WorkerEntrypoint {
 }`,
 };
 
-const workerTarget = (source: Record<string, string>) => [
-  "itx",
-  "workers",
-  ["get", { source }],
-  "processEventBatch",
-];
-
-async function configure(
-  context: string,
-  name: string,
-  target: unknown[],
-  consumes: string[],
-  ordered?: false,
-) {
-  await stub(context).append({
-    type: "events.iterate.com/itx/subscription-configured",
-    payload: { name, target, delivery: "durable", consumes, ...(ordered === false && { ordered }) },
-  });
-}
-
 test("a future retry survives eviction, alarms a cold context, and delivers once", async () => {
   const context = "prj_manager_cold_retry";
   const s = stub(context);
@@ -133,3 +113,23 @@ test("a removed held row cannot recreate a cursor or halt when its old target re
   });
   await releasePins(context);
 });
+
+const workerTarget = (source: Record<string, string>) => [
+  "itx",
+  "workers",
+  ["get", { source }],
+  "processEventBatch",
+];
+
+async function configure(
+  context: string,
+  name: string,
+  target: unknown[],
+  consumes: string[],
+  ordered?: false,
+) {
+  await stub(context).append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name, target, delivery: "durable", consumes, ...(ordered === false && { ordered }) },
+  });
+}

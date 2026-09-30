@@ -15,7 +15,7 @@ import { env, exports } from "cloudflare:workers";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
-import type { FacetSpec, WorkerSource } from "iterate/api";
+import type { FacetSpec } from "iterate/api";
 import type { ItxExpression, ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
@@ -46,7 +46,6 @@ import {
   freshProject,
   readLog,
   releasePins,
-  rowOf,
   signedInSession,
   snapshot,
   stub,

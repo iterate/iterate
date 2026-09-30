@@ -56,7 +56,7 @@ test.each([false, true])(
     const processor = new DurableDeliveryProcessor({
       slug: "interrupted",
       consumes: ["work"],
-      fanOut,
+      ...(fanOut && { fanOut: true }),
       maxAttempts: 2,
       runtime: host,
     });
@@ -67,12 +67,14 @@ test.each([false, true])(
       await drive(processor, 2);
       await settle();
     }
-    expect(host.terminals).toEqual([
-      expect.objectContaining({
-        attempts: 2,
-        error: "delivery did not settle before its host restarted",
-      }),
-    ]);
+    expect(host).toMatchObject({
+      terminals: [
+        expect.objectContaining({
+          attempts: 2,
+          error: "delivery did not settle before its host restarted",
+        }),
+      ],
+    });
   },
 );
 

@@ -144,7 +144,7 @@ import {
 } from "./context/durable-subscription-delivery.ts";
 
 type DeliveryIdentity = { name: string; configuredAtOffset: number; resumeAtOffset?: number };
-type SubscriptionDeliveryBridgeRequest = DeliveryIdentity & {
+type SubscriptionDeliveryRequest = DeliveryIdentity & {
   range: { after: number; through: number };
   offsets: number[];
 };
@@ -696,74 +696,52 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     );
     const headBeforeCommit = this.#stream.highestAssignedOffset();
     const committed = this.#appendAndRunCommittedEffects(events);
-    const supersededLiveAttachments = this.#liveAttachmentsSupersededBy(
-      committed.filter((event) => event.offset > headBeforeCommit),
-    );
-    const { matches, names } = supersededLiveAttachments;
-    const providers = this.#liveAttachmentIds(this.#rpcStubs.liveProvides(), matches, "match");
-    const subscriptions = this.#liveAttachmentIds(
-      this.#rpcStubs.liveSubscriptions(),
-      names,
-      "name",
-    );
+    const configurations = committed
+      .filter((event) => event.offset > headBeforeCommit)
+      .map(({ type, payload }) => ({
+        type,
+        payload: payload as {
+          match?: string;
+          name?: string;
+          target?: unknown;
+          ifTarget?: unknown;
+          ifConfiguredAtOffset?: unknown;
+        },
+      }));
+    // Capture attachment IDs before awaiting: a later re-provide must survive this older write.
+    // Conditional deletes belong to stale handles and cannot supersede a newer live attachment.
+    const providers = this.#rpcStubs
+      .liveProvides()
+      .filter(({ match }) =>
+        configurations.some(
+          ({ type, payload }) =>
+            type === "events.iterate.com/itx/rewrite-rule-configured" &&
+            payload.match === match &&
+            !(payload.target === null && payload.ifTarget !== undefined),
+        ),
+      );
+    const subscriptions = this.#rpcStubs
+      .liveSubscriptions()
+      .filter(({ name }) =>
+        configurations.some(
+          ({ type, payload }) =>
+            type === "events.iterate.com/itx/subscription-configured" &&
+            payload.name === name &&
+            !(payload.target === null && payload.ifConfiguredAtOffset !== undefined),
+        ),
+      );
     await this.#waitOutOlderSnapshots(
       before,
       events.some((event) => SNAPSHOT_ROW_TYPES.has(event.type)),
     );
-    if (providers.size || subscriptions.size) {
+    if (providers.length || subscriptions.length) {
       await this.#waitOutLiveAttachmentSnapshots(liveAttachmentLeaseUntil);
-      for (const [match, attachmentIds] of providers)
-        this.#rpcStubs.removeLiveProvide(match, attachmentIds);
-      for (const [name, attachmentIds] of subscriptions)
-        this.#rpcStubs.removeLiveSubscription(name, attachmentIds);
+      for (const { match, attachmentId } of providers)
+        this.#rpcStubs.removeLiveProvide(match, new Set([attachmentId]));
+      for (const { name, attachmentId } of subscriptions)
+        this.#rpcStubs.removeLiveSubscription(name, new Set([attachmentId]));
     }
     return committed;
-  }
-
-  /** Durable rows supersede an attached live provider or callback at the same public name. */
-  #liveAttachmentsSupersededBy(events: StreamEvent[]): { matches: string[]; names: string[] } {
-    const matches: string[] = [];
-    const names: string[] = [];
-    for (const event of events) {
-      // `normalizeControlEvent()` accepted this payload before `Stream.append()` made the event.
-      const payload = event.payload as {
-        match?: string;
-        name?: string;
-        target?: unknown;
-        ifTarget?: unknown;
-        ifConfiguredAtOffset?: unknown;
-      };
-      if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
-        if (!payload.match) continue;
-        // A stale handle's compare-and-set may remove an older durable row beneath a live provider.
-        if (payload.target === null && payload.ifTarget !== undefined) continue;
-        matches.push(payload.match);
-      }
-      if (event.type === "events.iterate.com/itx/subscription-configured") {
-        if (!payload.name) continue;
-        // A stale subscription handle must not remove a callback that replaced its row.
-        if (payload.target === null && payload.ifConfiguredAtOffset !== undefined) continue;
-        names.push(payload.name);
-      }
-    }
-    return { matches, names };
-  }
-
-  #liveAttachmentIds(
-    attachments: Array<{ attachmentId: string; match?: string; name?: string }>,
-    names: readonly string[],
-    field: "match" | "name",
-  ): Map<string, Set<string>> {
-    const wanted = new Set(names);
-    const byName = new Map<string, Set<string>>();
-    for (const attachment of attachments) {
-      const name = attachment[field];
-      if (!name || !wanted.has(name)) continue;
-      const attachmentIds = byName.get(name) ?? new Set<string>();
-      attachmentIds.add(attachment.attachmentId);
-      byName.set(name, attachmentIds);
-    }
-    return byName;
   }
 
   /** A write of what a snapshot carries answers its writer once the fence it must wait out has
@@ -1039,7 +1017,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const row = this.#configuredSubscriptionRow(request);
     const page = this.#stream.readForDurableDelivery(request.afterOffset, request.limit);
     // This synchronous filter is the source proof. Returning only offsets lets the page body die
-    // before Workers RPC or a target-resolution await can retain it in the subscriptions facet.
+    // before a target-resolution await can retain it.
     return {
       offsets: page.events
         .filter((event) => consumesEvent(row.consumes, event))
@@ -1051,7 +1029,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Reconstruct a durable attempt from the log. A runner can name an admitted range and selected
    * offsets, but cannot alter its bodies, cause, hash, or current row filter. */
-  async #deliverConfiguredSubscription(request: SubscriptionDeliveryBridgeRequest): Promise<void> {
+  async #deliverConfiguredSubscription(request: SubscriptionDeliveryRequest): Promise<void> {
     if (request.range.through <= request.range.after)
       throw codedError("INVALID_INPUT", "delivery range must advance past its after offset");
     this.#assertReconstructable();
@@ -1083,7 +1061,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         "fan-out configured subscriptions do not receive ephemeral delivery",
       );
     const events = this.#ephemeralSubscriptionDeliveryEvent(ephemeral, row);
-    const request: SubscriptionDeliveryBridgeRequest = {
+    const request: SubscriptionDeliveryRequest = {
       name: ephemeral.name,
       configuredAtOffset: ephemeral.configuredAtOffset,
       resumeAtOffset: ephemeral.resumeAtOffset,
@@ -1094,7 +1072,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #durableSubscriptionDeliveryEvents(
-    request: SubscriptionDeliveryBridgeRequest,
+    request: SubscriptionDeliveryRequest,
     row: Subscription,
   ): StreamEvent[] {
     if (request.range.through > this.#stream.highestDurableOffset())
@@ -1132,7 +1110,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #deliverConfiguredSubscriptionEvents(
-    request: SubscriptionDeliveryBridgeRequest,
+    request: SubscriptionDeliveryRequest,
     row: Subscription,
     readEvents: () => StreamEvent[],
     fanOut: boolean,
@@ -1162,7 +1140,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   async #invokeConfiguredSubscriptionDelivery(
-    request: SubscriptionDeliveryBridgeRequest,
+    request: SubscriptionDeliveryRequest,
     row: Subscription,
     events: StreamEvent[],
     fanOut: boolean,

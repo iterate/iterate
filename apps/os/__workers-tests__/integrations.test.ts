@@ -1472,9 +1472,9 @@ test.for([
   );
 });
 
-// A self-host names no `urls.os`: the platform origin is the one GitHub's redirect reached.
-test("GitHub on a deployment with no urls.os: connect, and the callback authorizes at the request's origin", async () => {
-  const scope = githubScopeWithoutUrlsOs();
+// The route supplies the deployment's configured origin to the project callback; an arbitrary request host cannot choose it.
+test("GitHub on a deployment with a configured origin: connect and callback use that origin", async () => {
+  const scope = githubScopeWithConfiguredOs();
   const { authorizationUrl } = await connectGithub(scope, {
     connection: "acme",
     client: "iterate",
@@ -1713,9 +1713,9 @@ async function webhooksOn(projectId: string, path: string) {
 
 const SELF_HOST = "https://iterate.self-host.test";
 
-/** GitHub's connect and callback run directly on a deployment whose APP_CONFIG names no `urls.os`
- *  (a self-host's), with an in-memory attempt store: the project facet's own env names one. */
-function githubScopeWithoutUrlsOs(): IntegrationScope {
+/** GitHub's connect and callback run directly with an in-memory attempt store and a configured
+ *  self-host origin; the project facet's own env names the deployment's origin too. */
+function githubScopeWithConfiguredOs(): IntegrationScope {
   const kept = new Map<string, unknown>();
   const storage = {
     get: async (key: string) => kept.get(key),
@@ -1723,11 +1723,9 @@ function githubScopeWithoutUrlsOs(): IntegrationScope {
     delete: async (key: string) => kept.delete(key),
   } as unknown as DurableObjectStorage;
   return {
-    // a self-host's shape: no urls.os, so neither fake providers nor admins beside the global password
-    // (app-config.ts refuses both off a preview, local or `.test` origin)
     env: {
       ...env,
-      APP_CONFIG_URLS__OS: "",
+      APP_CONFIG_URLS__OS: SELF_HOST,
       APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN: undefined,
       APP_CONFIG_ADMINS: undefined,
     },

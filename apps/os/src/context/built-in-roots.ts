@@ -1,7 +1,7 @@
 /** Built-in descriptions before context configuration adds masks or live providers. */
 export const BUILT_IN_ROOT_DESCRIPTIONS = {
   whoami: "who this context is: `itx.whoami()` → { projectId, path }",
-  url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",
+  url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; composed from this deployment's configured public origin",
   kv: "key-value strings, the project's own: `kv.get(k)` · `kv.put(k, v)` · `kv.list(prefix)` · `kv.delete(k)`",
   secrets:
     'names only, never values: `secrets.list()`; `secrets.collectFromUser({ path, egress, description?, fields? })` returns an authenticated collection link (`description` is markdown with links; `fields: [{ name, label }]` asks for a secret of several parts, saved as one JSON secret); a `getSecret("/secrets/x")` placeholder in an outbound request is substituted at egress; `secrets.verifyHmac(path, { payload, signature })` checks a webhook\'s HMAC-SHA256 hex signature without revealing the secret; `secrets.verifyEquals(path, { value })` checks a static header token a caller sent against the secret, constant-time, without revealing it; `secrets.beginOAuth(path, { authorizationEndpoint, tokenEndpoint, clientId, clientSecret, scope? })` → { authorizationUrl } (send the human there), its `clientSecret` a `getSecret("/secrets/x", { field })` placeholder for a client secret collected into a secret pinned to the token endpoint\'s origin (`clientId` is the ID itself)',

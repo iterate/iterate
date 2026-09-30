@@ -1,5 +1,4 @@
 import { expect, test, vi } from "vitest";
-import type { StreamEvent } from "iterate/stream/processor";
 import { DurableSubscriptionDelivery } from "./durable-subscription-delivery.ts";
 
 test("a cold context derives an immediate retry from a persisted in-flight cursor", async () => {
