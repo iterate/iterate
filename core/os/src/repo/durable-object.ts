@@ -359,6 +359,9 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // A commit is an act: past the loop limit nothing is pushed (../cause.ts).
     refuseActPastLimit(cause, "a commit");
     return this.#serialized(async () => {
+      // refused before the trailers below, which would make a blank message look like one
+      if (!input.message.trim())
+        throw new Error("repo.commitFiles: message must be a non-empty string");
       // a script's commit for someone is theirs (their email as name and address, as apps/docs
       // writes authors), and names the run that made it, and them when it names another author
       const onBehalfOf = await this.#onBehalfOfIn(cause);
@@ -399,8 +402,6 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     parent?: string | null;
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
     const path = await this.#created();
-    if (!input.message.trim())
-      throw new Error("repo.commitFiles: message must be a non-empty string");
     if (input.changes.length === 0) throw new Error("repo.commitFiles: changes must name a file");
     const parent = z
       .string()

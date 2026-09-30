@@ -387,6 +387,12 @@ test("a script's commit for Misha is his, committed by iterate, and names its ru
     }),
   );
   await repo.commitFiles({ message: "the seed", changes: [{ path: "c.md", content: "c\n" }] });
+  // a blank message is refused, not turned into a commit of trailers alone
+  await expect(
+    runningUnder(cause, () =>
+      repo.commitFiles({ message: " \n", changes: [{ path: "d.md", content: "d\n" }] }),
+    ),
+  ).rejects.toThrow("message must be a non-empty string");
 
   const iterate = { name: "iterate", email: "config@iterate.com" };
   expect((await repo.log({ limit: 3 })).reverse()).toMatchObject([
