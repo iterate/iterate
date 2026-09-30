@@ -28,7 +28,6 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml } from "yaml";
 import { iterateAppFromPrd, iterateAppToken } from "./iterate-app-token.ts";
@@ -393,4 +392,4 @@ function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": s
     );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "copybara" }).run();
+void createCli({ ...import.meta, name: "copybara" }).run();

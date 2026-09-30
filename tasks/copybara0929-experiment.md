@@ -118,6 +118,31 @@ Make the change that introducing `iterate/os` would really need, with `os0929` i
 
 Known wrinkle, not blocking: the named templates (`heartbeat`, `minimal`) are identified as `github:iterate/iterate#<copy commit>&path:configs/<name>`. Creation writes their baked files, so nothing downloads them. But in a copy's build the name points at a commit iterate/iterate doesn't have. A copy's build should name its own repo (`github:iterate/os0929#…`).
 
+## Round 5: Copybara pins the templates' packages (2026-09-30)
+
+Misha's decision on the default template (the explainer chip): no template moves and no released
+versions; Copybara rewrites `@main` to `@<40-character iterate/iterate sha>` in the copied
+`configs/*/package.json`, so the copy's templates name the pkg.pr.new build of the commit it was
+copied from (every main commit is published).
+
+- [x] `pin_template_packages` in copy.bara.sky, between the move and the message: `@main"` →
+      `@<sha>"` in `configs/*/package.json`, the sha being `ctx.changes.current[0].ref` (the one
+      change in ITERATIVE, the newest in the SQUASH the sync check runs)
+- [x] apps/os/scripts/build.ts pins only a template dependency that still names `@main`, and works
+      out the published commit only then. In iterate/iterate every template names `@main`, so
+      nothing changes; in a copy nothing does, so the build never asks git for a merge base
+- [x] the `GitOrigin-RevId` workaround in published-package-commit.ts is reverted to main's
+- [x] main merged (#3447–#3473): the copy's file list drops `envs.ts`, `scripts/lib/deploy-helpers.ts`
+      and `env-context.ts` (the build reaches none since #3448), takes `scripts/lib/vite-build.ts`
+      and `patches/**` (the vitest-plugin patch is 1.3.2 now; by folder, a bump never breaks the
+      copy again). `envs.ts` no longer goes public. The copy's root lockfile and workspace
+      regenerated (`root`, then `root --check`: current)
+- [x] Simulated locally (no Java here): the file list plus `copybara/os/`, the rewrite with main's
+      sha, a fresh `git init` with no origin: frozen install, `CLOUDFLARE_ENV=self-host pnpm --filter
+    os build`, `wrangler deploy --dry-run` all pass, and the baked template pins agents and voice
+      at that sha. In iterate/iterate the build still pins every `@main`
+- [ ] The branch's Copybara job syncs os0929 with the real transform and runs the self-host check
+
 ### What `iterate/os` contains, as input for `core/`
 
 What the self-host recipe needs today, and where each piece would sit in the call's layout:

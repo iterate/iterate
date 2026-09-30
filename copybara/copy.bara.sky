@@ -33,6 +33,19 @@ def copy_message(ctx):
             section.append(line)
     ctx.set_message("\n\n".join([title] + sections) + "\n")
 
+# THE TEMPLATES' PACKAGES AT THE COPIED COMMIT: configs/*/package.json name @iterate-com/agents,
+# @iterate-com/voice and iterate at pkg.pr.new's `@main`, which moves. .github/workflows/pkg-pr-new.yml
+# publishes every main commit, so the copy names the build of the commit it is a copy of, and a
+# self-host's templates are the ones that copy was built and checked with. `current[0]` is that
+# commit: the only change in ITERATIVE mode, and the newest in SQUASH, which lists newest first.
+def pin_template_packages(ctx):
+    sha = ctx.changes.current[0].ref
+    for manifest in ctx.run(glob(["configs/*/package.json"])):
+        content = ctx.read_path(manifest)
+        pinned = content.replace('@main"', '@' + sha + '"')
+        if pinned != content:
+            ctx.write_path(manifest, pinned)
+
 def copy_workflow(name, repo, files, exclude = []):
     core.workflow(
         name = name,
@@ -54,6 +67,7 @@ def copy_workflow(name, repo, files, exclude = []):
         authoring = authoring.pass_thru("iterate[bot] <233973017+iterate[bot]@users.noreply.github.com>"),
         transformations = [
             core.move("copybara/%s" % name, ""),
+            pin_template_packages,
             copy_message,
         ],
     )
@@ -71,15 +85,14 @@ copy_workflow(
         "packages/shared/**",
         "packages/ui/**",
         "configs/**",
-        "envs.ts",
-        "scripts/lib/deploy-helpers.ts",
-        "scripts/lib/env-context.ts",
+        "scripts/lib/vite-build.ts",
         "scripts/lib/wrangler-config.ts",
         "tsconfig.base.json",
         "tsconfig.app.json",
         ".nvmrc",
-        "patches/zod@4.6.5.patch",
-        "patches/@cloudflare__vitest-plugin@1.2.5.patch",
+        # every patch the copy's pnpm-workspace.yaml names (scripts/ci/copybara.ts `root` copies the
+        # root's patchedDependencies), by folder so a version bump never leaves the copy's behind
+        "patches/**",
     ],
 )
 copy_workflow(
