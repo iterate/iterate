@@ -1,4 +1,4 @@
-// The agents and voice apps installed as packages by the default template (configs/default).
+// The agents and voice apps installed as packages by the default template (core/configs/default).
 import { expect, test } from "vitest";
 import { createdProject, freshCtx, openItx, readAll, until } from "../../helpers/client.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
@@ -25,7 +25,7 @@ test(
       60_000,
     );
     expect(await root.voice.health()).toMatchObject({ ok: true });
-    // the default sets no schedule: an idle project sleeps (configs/heartbeat sets one)
+    // the default sets no schedule: an idle project sleeps (core/configs/heartbeat sets one)
     expect(await root.schedules.list()).toEqual([]);
     const path = "/agents/first";
     const agent = root.cd(path);

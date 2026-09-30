@@ -1,6 +1,6 @@
 # Agents
 
-Agents is an optional app. `apps/os` supplies contexts, streams, workers, facets, model access
+Agents is an optional app. `core/os` supplies contexts, streams, workers, facets, model access
 and storage; the agents runtime is the npm package `@iterate-com/agents` (packages/agents: the
 catalog, lifecycle and model loop), and voice is `@iterate-com/voice`
 (packages/voice), which runs on it. `itx.agents` is a durable rewrite to the installed collection
@@ -11,7 +11,7 @@ facet, not a platform built-in. This folder is the web app and the tests that dr
 - Its e2e and Workers tests live outside the app: `test/vitest/agents/` and `test/vitest/agents-workers/`.
 
 A project's config repo installs the app ([packages/agents/README.md](../../packages/agents/README.md#install);
-configs/default does). This app installs nothing: on a project without `itx.agents` it says so and
+core/configs/default does). This app installs nothing: on a project without `itx.agents` it says so and
 links to the config repo. `itx.agents.create(path)` installs an agent at that context;
 `get(path).message(text)` sends a message. The project owns the pin and its data.
 
@@ -33,7 +33,7 @@ to the newest** commits that pin and waits for the commit's publication (`upgrad
 
 ```sh
 pnpm --dir test exec vitest run --configLoader runner --project e2e vitest/agents
-pnpm --dir apps/os exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
+pnpm --dir core/os exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
 ```
 
 See [packages/voice/README.md](../../packages/voice/README.md) for voice setup. Run voice tools from this package:

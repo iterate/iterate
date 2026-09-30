@@ -11,8 +11,8 @@ badge, breadcrumb, button, card, checkbox, command, dialog, dropdown-menu, empty
 label, native-select, select, separator, sheet, sidebar, skeleton, sonner, spinner, table, tabs,
 textarea and tooltip in `src/components/`, plus `src/components/input-group.tsx` (command's
 dependency) and `src/hooks/use-mobile.ts` (sidebar's).
-apps/os keeps its own copies of the ones it uses (avatar, button, checkbox, field, input, label,
-native-select, separator and spinner) in `apps/os/src/components/ui/`, written through its own
+core/os keeps its own copies of the ones it uses (avatar, button, checkbox, field, input, label,
+native-select, separator and spinner) in `core/os/src/components/ui/`, written through its own
 `components.json`, and imports nothing from here. Everything below applies to both folders.
 `scripts/ci/shadcn-drift.ts` lists them (`VENDORINGS`).
 

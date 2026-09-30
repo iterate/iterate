@@ -2,7 +2,7 @@
 // cost the root at most a snapshot read per TTL, never a call each. Snapshots: rule-snapshots.test.ts.
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { SNAPSHOT_TTL_MS } from "../../../apps/os/src/context/rule-snapshots.ts";
+import { SNAPSHOT_TTL_MS } from "../../../core/os/src/context/rule-snapshots.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   adminCredentials,
@@ -98,7 +98,7 @@ const FILES_OF_SEEING_CONFIG = {
 export default class extends WorkerEntrypoint { files() { return ${JSON.stringify(SEEING_CONFIG)}; } }`,
 };
 
-/** The default template's homepage (configs/default/worker.ts): the slug from the root's whoami. */
+/** The default template's homepage (core/configs/default/worker.ts): the slug from the root's whoami. */
 const WHOAMI_HOMEPAGE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `

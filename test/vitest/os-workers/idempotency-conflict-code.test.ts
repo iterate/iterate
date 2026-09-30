@@ -8,7 +8,7 @@ import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import type { FacetSpec } from "iterate/api";
 import { errorCode } from "iterate/lib";
-import { appendPlatformFact } from "../../../apps/os/src/integrations/connections.ts";
+import { appendPlatformFact } from "../../../core/os/src/integrations/connections.ts";
 import { adminCredentials, openSession, stub } from "./support.ts";
 
 /** A loaded facet that appends under one key twice, with two bodies, through its own `env.ITX`, and

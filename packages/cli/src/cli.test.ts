@@ -485,7 +485,7 @@ function runCli(directory: string, args: string[]) {
 }
 
 /** A deployment whose /mcp 308s to a separate MCP origin, as prd's does, and a tools/list there
- *  that answers a personal access token over SSE, as apps/os/src/mcp.ts does. */
+ *  that answers a personal access token over SSE, as core/os/src/mcp.ts does. */
 async function mcpDeployment() {
   const listen = async (handler: Parameters<typeof createServer>[1]) => {
     const server = createServer(handler);

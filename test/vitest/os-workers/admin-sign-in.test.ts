@@ -9,14 +9,14 @@ import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
-import worker from "../../../apps/os/src/worker.ts";
+import worker from "../../../core/os/src/worker.ts";
 import {
   appConfigOf,
   platformAddressesOf,
   sessionSigningSecretOf,
-} from "../../../apps/os/src/app-config.ts";
-import { signClaims, verifyClaims } from "../../../apps/os/src/caller.ts";
-import { authorizationForToken } from "../../../apps/os/src/oauth.ts";
+} from "../../../core/os/src/app-config.ts";
+import { signClaims, verifyClaims } from "../../../core/os/src/caller.ts";
+import { authorizationForToken } from "../../../core/os/src/oauth.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import { authorizationRequest, call, helpers, issuerApprover } from "./oauth-support.ts";
 import { adminCredentials, loginPassword, openSession, ORIGIN } from "./support.ts";

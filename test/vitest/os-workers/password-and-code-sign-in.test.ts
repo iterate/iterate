@@ -4,12 +4,12 @@
 // refusing an address it does not name.
 import { env } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import type { Env } from "../../../apps/os/src/env.ts";
+import type { Env } from "../../../core/os/src/env.ts";
 import {
   finishLoginCode,
   signInWithPassword,
   startLoginCode,
-} from "../../../apps/os/src/password-and-code-sign-in.ts";
+} from "../../../core/os/src/password-and-code-sign-in.ts";
 import { loginPassword, ORIGIN } from "./support.ts";
 
 /** What password-and-code-sign-in.ts hands the mailbox: the builder shape of `SendEmail.send`. */

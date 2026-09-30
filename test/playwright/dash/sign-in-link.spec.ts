@@ -2,18 +2,18 @@
 // names the PR's test person. The link is public and grants nothing. An admin signed in to the
 // issuer opens it, the consent page opens on "Sign in as someone else" with that person filled in,
 // and one confirm signs the Dash in as them, inside their project, for an hour. On a preview a
-// reviewer signs in to the issuer through prd (apps/os/src/admin-sign-in.ts), which no spec can
+// reviewer signs in to the issuer through prd (core/os/src/admin-sign-in.ts), which no spec can
 // hold, so this spec signs in as the preview's test admin with the password; the second spec checks
 // that the sign-in page sends prd's admins to prd, asking only who they are.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
-import { TEST_EMAIL_DOMAIN } from "../../../apps/os/src/test-email-domain.ts";
+import { TEST_EMAIL_DOMAIN } from "../../../core/os/src/test-email-domain.ts";
 import { signInWithPassword } from "../../helpers/issuer.ts";
 import { openOperatorSession } from "../../helpers/operator.ts";
 import { test } from "../../helpers/test.ts";
 
 // the admin a per-commit deployment and local dev both list (envs.ts `previewDeployment`,
-// apps/os/scripts/generate-wrangler-config.ts)
+// core/os/scripts/generate-wrangler-config.ts)
 const ADMIN_EMAIL = `admin@${TEST_EMAIL_DOMAIN}`;
 
 test("the PR body's Sign in link: an admin confirms once, and the Dash is the test person's, inside their project", async ({

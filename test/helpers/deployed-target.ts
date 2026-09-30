@@ -5,7 +5,7 @@
 // the root Playwright suite's test/playwright/global-setup.ts both read it, each for its own workers.
 
 import { osEnvs, previewDeployment } from "../../envs.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
 
 export function deployedTarget(workerBaseUrl: string): {
   adminBearer: string;

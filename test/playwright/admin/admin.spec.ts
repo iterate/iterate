@@ -7,7 +7,7 @@ import { expect, type Page } from "@playwright/test";
 import { signInWithPassword } from "../../helpers/issuer.ts";
 import { test } from "../../helpers/test.ts";
 
-// the admin a per-commit deployment and local dev both list (apps/os/scripts/generate-wrangler-config.ts
+// the admin a per-commit deployment and local dev both list (core/os/scripts/generate-wrangler-config.ts
 // `PREVIEW_ADMIN_EMAIL`)
 const ADMIN_EMAIL = "admin@preview.iterate.test";
 

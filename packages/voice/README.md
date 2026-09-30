@@ -12,7 +12,7 @@ a project installs this package; the platform ships none of it.
 
 A project's config repo depends on the package, re-exports its service and relay class from
 `voice.ts`, and installs voice from its init case beside the agents app, which every call runs on
-(configs/default does all of it):
+(core/configs/default does all of it):
 
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" }
@@ -125,7 +125,7 @@ Run these commands from `apps/agents`. The project's config installs both apps.
 
 ```bash
 export WORKER_BASE_URL=https://os.iterate.com
-# a personal access token for prj-voice (apps/os/docs/credentials.md): the Dash's Sessions page, or
+# a personal access token for prj-voice (core/os/docs/credentials.md): the Dash's Sessions page, or
 # `pnpm exec iterate --config prd tokens create --name voice-scripts --project prj-voice`
 export ITERATE_BEARER_TOKEN=itk_…
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config prd --plain)

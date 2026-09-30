@@ -29,7 +29,7 @@ shrink the fixture.
 
 Use a personal access token for the chat's project as `ITERATE_BEARER_TOKEN`, or, for a project
 nobody at hand belongs to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
-([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)). Keep it in the
+([credentials](../../../core/os/docs/credentials.md#personal-access-tokens)). Keep it in the
 command's environment and never print it.
 
 Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in:

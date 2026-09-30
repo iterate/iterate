@@ -4,8 +4,8 @@ import path from "node:path";
 import { expect, onTestFinished, test } from "vitest";
 import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
 import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
-import { viteWranglerConfig } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
+import { viteWranglerConfig } from "../../core/os/scripts/generate-wrangler-config.ts";
 import {
   APPS,
   appSignInLink,
@@ -58,7 +58,7 @@ test("a deployment's name is its prefix and the tested commit's first 7 digits: 
   );
 });
 
-test("a deployment is derived from its name alone: eight plain workers on the dev/preview account, apps/os's resources named after its worker", () => {
+test("a deployment is derived from its name alone: eight plain workers on the dev/preview account, core/os's resources named after its worker", () => {
   expect(previewDeployment("pr3144-a1b2c3d")).toMatchObject({
     prefix: "pr3144",
     sha: "a1b2c3d",
@@ -288,7 +288,7 @@ test("the seed's route for a proxied app: the routing slug of its name, members 
   `);
 });
 
-test("every configs/ directory is a config template", () => {
+test("every core/configs/ directory is a config template", () => {
   expect(configTemplateNames(path.resolve(import.meta.dirname, "../.."))).toEqual(
     expect.arrayContaining(["default", "minimal"]),
   );
@@ -298,22 +298,22 @@ test.for([
   {
     name: "a template this PR changes is the PR head's copy, an unchanged one its name, and default the preview's own",
     changedPaths: [
-      "configs/default/AGENTS.md",
-      "configs/minimal/worker.ts",
-      "configs/other-v2/x.md",
+      "core/configs/default/AGENTS.md",
+      "core/configs/minimal/worker.ts",
+      "core/configs/other-v2/x.md",
     ],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       {
         name: "minimal",
         fromHead: "bbbbbbbbb0123456",
-        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fminimal`,
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Acore%2Fconfigs%2Fminimal`,
       },
     ],
   },
   {
     name: "a PR that changes no template links each by name",
-    changedPaths: ["apps/os/src/worker.ts", "configs/README.md"],
+    changedPaths: ["core/os/src/worker.ts", "core/configs/README.md"],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       { name: "minimal", next: `${DASH}/projects?new=1&template=minimal` },
@@ -334,19 +334,19 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   const [link] = templateQuickLaunches({
     dashUrl: DASH,
     templates: ["minimal"],
-    changedPaths: ["configs/minimal/AGENTS.md"],
+    changedPaths: ["core/configs/minimal/AGENTS.md"],
     headSha: "bbbbbbbbb0123456",
   });
   expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
     new: "1",
-    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/minimal",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:core/configs/minimal",
   });
 });
 
-// ── a deployment's wrangler config: the one prd's goes through (apps/os/scripts/generate-wrangler-config.ts) ──
+// ── a deployment's wrangler config: the one prd's goes through (core/os/scripts/generate-wrangler-config.ts) ──
 
 // iterate's deployments' Artifacts namespace, R2 bucket and D1: each `<resourceNamePrefix>-…`
-// (apps/os/scripts/os-env.ts `osResourceNames`), the prefix envs.ts gives it.
+// (core/os/scripts/os-env.ts `osResourceNames`), the prefix envs.ts gives it.
 test.for([
   { name: "prd", repos: "os-prd-repos", files: "os-prd-files", db: "os-prd-db" },
   { name: "preview", repos: "os-parent-repos", files: "os-parent-files", db: "os-parent-db" },
@@ -364,7 +364,7 @@ test.for([
   });
 });
 
-test("a deployment's apps/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
+test("a deployment's core/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
   const config = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(config).toMatchObject({
     name: "pr3144-a1b2c3d-os",
@@ -386,7 +386,7 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
   ]);
 });
 
-test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
+test("a deployment's core/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
   expect(
     viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" }),
   ).toMatchObject({
@@ -427,7 +427,7 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
   ).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__GITHUB");
 });
 
-test("a deployment's apps/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
+test("a deployment's core/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
   const { vars } = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(
     parseAppConfig({
@@ -455,7 +455,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__ADMIN_ISSUER");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
-  expect(() => getOsEnv("pr3144")).toThrow('apps/os: unknown env "pr3144"');
+  expect(() => getOsEnv("pr3144")).toThrow('core/os: unknown env "pr3144"');
 });
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then

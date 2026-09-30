@@ -3,7 +3,7 @@
 // the suite runs Vite's build of it). The augmentation pattern is workers-types' own
 // (`Cloudflare.Env` / `Cloudflare.GlobalProps`, node_modules/@cloudflare/workers-types/index.d.ts).
 import type { D1Migration } from "cloudflare:test";
-import type { Env as WorkerEnv } from "../../../apps/os/src/env.ts";
+import type { Env as WorkerEnv } from "../../../core/os/src/env.ts";
 
 declare global {
   namespace Cloudflare {
@@ -19,7 +19,7 @@ declare global {
       TEST_STORAGE: Fetcher;
     }
     interface GlobalProps {
-      mainModule: typeof import("../../../apps/os/src/worker.ts");
+      mainModule: typeof import("../../../core/os/src/worker.ts");
     }
   }
 }

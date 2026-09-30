@@ -206,7 +206,7 @@ export const LATENCY_METRICS = {
 } satisfies Record<
   string,
   {
-    /** The perf file whose row records it (under apps/os/): a metric a broken row left unrecorded
+    /** The perf file whose row records it (under core/os/): a metric a broken row left unrecorded
      *  is that row's breakage, not a second one (scripts/monitors/latency.ts). */
     file: `perf/${string}.perf.test.ts`;
     /** What one sample is. */

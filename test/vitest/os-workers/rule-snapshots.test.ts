@@ -6,7 +6,7 @@ import { expect, test, vi } from "vitest";
 import {
   SNAPSHOT_TTL_MS,
   type RulesSnapshotAnswer,
-} from "../../../apps/os/src/context/rule-snapshots.ts";
+} from "../../../core/os/src/context/rule-snapshots.ts";
 import {
   adminCredentials,
   census,

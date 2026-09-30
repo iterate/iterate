@@ -7,14 +7,14 @@ import {
   DEFAULT_GOOGLE_SIGN_IN_SCOPES,
   platformAddressesOf,
   sessionSigningSecretOf,
-} from "../../../apps/os/src/app-config.ts";
-import { signClaims, verifyClaims } from "../../../apps/os/src/caller.ts";
-import type { Env } from "../../../apps/os/src/env.ts";
-import { identityResponse } from "../../../apps/os/src/identity.ts";
-import { authorizationForToken } from "../../../apps/os/src/oauth.ts";
+} from "../../../core/os/src/app-config.ts";
+import { signClaims, verifyClaims } from "../../../core/os/src/caller.ts";
+import type { Env } from "../../../core/os/src/env.ts";
+import { identityResponse } from "../../../core/os/src/identity.ts";
+import { authorizationForToken } from "../../../core/os/src/oauth.ts";
 import { fakeUserIdOf } from "../../../apps/dummy-petshop/src/state.ts";
-import type { AccountState } from "../../../apps/os/src/account/contract.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
+import type { AccountState } from "../../../core/os/src/account/contract.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
 import {
   controlPlane,
   followConsent,

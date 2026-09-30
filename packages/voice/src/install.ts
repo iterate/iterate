@@ -78,7 +78,7 @@ export async function ensureVoiceAgent(
   // a config repo not created yet, or created but not yet seeded (no tip), is waited for below
   if (!rule?.target && tip && !voicePinIn(await repo.readFile("package.json", { commitOid: tip })))
     throw new Error(
-      `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as configs/default does`,
+      `This project's config repo does not install voice: its package.json lists no @iterate-com/voice, and its init case calls no installVoice(itx) (@iterate-com/voice/install), as core/configs/default does`,
     );
   if (!secrets.some((secret) => secret.path === "/secrets/openai")) {
     if (!openaiKey?.trim()) return "needs-openai-key";
@@ -144,7 +144,7 @@ async function voiceInstalled(
     afterOffset = event.offset;
   }
   throw new Error(
-    "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as configs/default does",
+    "Voice was not installed within a minute: the project's config repo pins @iterate-com/voice, and installs it with installVoice(itx) (@iterate-com/voice/install) in its init case, as core/configs/default does",
   );
 }
 

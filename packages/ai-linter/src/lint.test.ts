@@ -71,12 +71,12 @@ test("a rule file with a block list and suggestions forbidden", () => {
 test("globs: ** spans directories, * and ? stay in one segment, braces alternate", () => {
   const cases: [string, string, boolean][] = [
     ["**/*.ts", "a.ts", true],
-    ["**/*.ts", "apps/os/src/a.ts", true],
+    ["**/*.ts", "core/os/src/a.ts", true],
     ["**/*.ts", "a.tsx", false],
     ["*.ts", "src/a.ts", false],
     ["**/*.{ts,tsx}", "x/y.tsx", true],
-    ["**/{__tests__,e2e}/**", "apps/os/e2e/a.ts", true],
-    ["**/{__tests__,e2e}/**", "apps/os/e2e-helpers/a.ts", false],
+    ["**/{__tests__,e2e}/**", "core/os/e2e/a.ts", true],
+    ["**/{__tests__,e2e}/**", "core/os/e2e-helpers/a.ts", false],
     ["packages/ui/src/hooks/use-mobile.ts", "packages/ui/src/hooks/use-mobile.ts", true],
     ["a?.md", "ab.md", true],
     ["a?.md", "a/.md", false],
@@ -88,9 +88,9 @@ test("globs: ** spans directories, * and ? stay in one segment, braces alternate
 
 test("a rule applies to a path a positive glob matches and no ! glob does", () => {
   const rule = parseRule("r.md", RULE_FILE);
-  expect(ruleApplies(rule, "apps/os/src/worker.ts")).toBe(true);
-  expect(ruleApplies(rule, "apps/os/src/worker.test.ts")).toBe(false);
-  expect(ruleApplies(rule, "apps/os/e2e/client.ts")).toBe(false);
+  expect(ruleApplies(rule, "core/os/src/worker.ts")).toBe(true);
+  expect(ruleApplies(rule, "core/os/src/worker.test.ts")).toBe(false);
+  expect(ruleApplies(rule, "core/os/e2e/client.ts")).toBe(false);
   expect(ruleApplies(rule, "README.md")).toBe(false);
 });
 
@@ -385,8 +385,8 @@ test("the measured rules parse: five on Jev with the chosen band, the repeated-e
   ]);
   // generated files are nobody's to fix by hand
   for (const rule of fixtureRules) {
-    expect(ruleApplies(rule, "apps/os/src/routeTree.gen.ts"), rule.id).toBe(false);
-    expect(ruleApplies(rule, "apps/os/src/router.ts"), rule.id).toBe(true);
+    expect(ruleApplies(rule, "core/os/src/routeTree.gen.ts"), rule.id).toBe(false);
+    expect(ruleApplies(rule, "core/os/src/router.ts"), rule.id).toBe(true);
   }
 });
 

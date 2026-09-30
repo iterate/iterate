@@ -1,4 +1,4 @@
-# THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (the dispatched
+# THE FLAKE HUNT for core/os: run the e2e suite N times against one deployed worker (the dispatched
 # ref's deployment `<preview>-<sha7>`, `pnpm preview deploy --name <preview>`), each run followed by the
 # perf budgets (test/vitest/os/perf, alone on the wire), and tally every row that did not pass every time
 # (scripts/os/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:

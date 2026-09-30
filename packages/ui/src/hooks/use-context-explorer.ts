@@ -69,7 +69,7 @@ export function useContextExplorer({
 }
 
 /** Every path a project's context registry holds: the `project` facet's `contexts` on the
- *  project's root, live (apps/os/src/project/contract.ts), keyed by path. */
+ *  project's root, live (core/os/src/project/contract.ts), keyed by path. */
 export function useRegistryPaths(root: ContextStub | undefined) {
   const { value } = useFacetLiveState(root, "project");
   return useMemo(() => Object.keys(Registry.safeParse(value).data?.contexts || {}), [value]);

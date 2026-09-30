@@ -22,7 +22,7 @@ const addPagePlugins = (page: Page, testInfo: _TestInfo) => {
       hydrationWaiter({ timeout: 30_000 }),
       uiErrorReporter(),
       // A page that has not hydrated is loading: its controls do nothing until React owns it
-      // (`data-hydrated`, apps/os __root.tsx and packages/ui document.tsx). hydrationWaiter looks
+      // (`data-hydrated`, core/os __root.tsx and packages/ui document.tsx). hydrationWaiter looks
       // only when an action starts, so a page the action lands on by navigating (a client app's
       // redirect to consent) counts as a spinner until it hydrates.
       spinnerWaiter({

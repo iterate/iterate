@@ -11,8 +11,8 @@ import { expect } from "vitest";
 import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
-} from "../../../apps/os/scripts/preview-github-app.ts";
-import { PREVIEW_SLACK_APP } from "../../../apps/os/scripts/preview-slack-app.ts";
+} from "../../../core/os/scripts/preview-github-app.ts";
+import { PREVIEW_SLACK_APP } from "../../../core/os/scripts/preview-slack-app.ts";
 import { readAll, until, workerUrl } from "../../helpers/client.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
 import { SOURCES } from "../../helpers/sources.ts";

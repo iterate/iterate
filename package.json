@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/os-dev.ts",
-    "getin": "pnpm --dir apps/os getin",
+    "getin": "pnpm --dir core/os getin",
     "preview": "node scripts/os/preview.ts",
     "os:deploy": "node scripts/os/deploy.ts",
     "os:ensure-resources": "node scripts/os/ensure-resources.ts",
@@ -14,7 +14,7 @@
     "os:seed-instance-secrets": "node scripts/os/seed-instance-secrets.ts",
     "os:e2e-soak": "node scripts/os/e2e-soak.ts",
     "typecheck": "pnpm -r --parallel typecheck && pnpm typecheck:configs",
-    "typecheck:configs": "tsc -p configs/default && tsc -p configs/heartbeat && tsc -p configs/minimal",
+    "typecheck:configs": "tsc -p core/configs/default && tsc -p core/configs/heartbeat && tsc -p core/configs/minimal",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "lint": "oxlint . --threads 1 --deny-warnings --report-unused-disable-directives-severity error",

@@ -2,7 +2,7 @@
  *  (processor.ts; an operator's instructions are their own `agent/context-added` after). The
  *  capability surface is not here: processor.ts renders the agent's `rewriteRules.list()` every
  *  turn. What stays is the website work's rules of the road, which no row's one line can carry. */
-// This prompt belongs to the internal agent loop. MCP clients receive apps/os/src/mcp.ts instructions.
+// This prompt belongs to the internal agent loop. MCP clients receive core/os/src/mcp.ts instructions.
 export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "You are an agent on the iterate platform. This internal agent loop runs your scripts in the agent's own context. The CAPABILITY TREE message describes its current grants; use only those capabilities. The conversation and actions are recorded as events.",
   "HOW YOU ACT: respond with markdown, and embed AT MOST ONE `<codemode>` block when you want to run code:",

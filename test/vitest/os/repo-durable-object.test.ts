@@ -17,9 +17,9 @@ import {
   repoPathOf,
   type ArtifactRepoHandle,
   type ArtifactsNamespace,
-} from "../../../apps/os/src/context/cf-artifacts.ts";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
-import { RepoDurableObject } from "../../../apps/os/src/repo/durable-object.ts";
+} from "../../../core/os/src/context/cf-artifacts.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
+import { RepoDurableObject } from "../../../core/os/src/repo/durable-object.ts";
 
 const path = "/repos/config";
 

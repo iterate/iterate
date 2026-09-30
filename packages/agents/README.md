@@ -7,7 +7,7 @@ Userspace: a project installs this package; the platform ships none of it.
 ## Install
 
 A project's config repo depends on the package, re-exports its two classes from `agents.ts`, and
-installs the app from its init case (configs/default does all three):
+installs the app from its init case (core/configs/default does all three):
 
 ```text
 package.json   "dependencies": { "@iterate-com/agents": "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@<sha>" }

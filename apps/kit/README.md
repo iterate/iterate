@@ -32,7 +32,7 @@ picked project turns out to have none. It verifies voice health before minting a
 expiry, scoped to the chosen project, under the same OAuth client that was authorized. Existing
 voice services, secrets and project websites are preserved. Voice is the npm package
 `@iterate-com/voice`, on the agents app `@iterate-com/agents`, and the project's config repo
-installs both itself (configs/default does): a project whose config installs no voice is
+installs both itself (core/configs/default does): a project whose config installs no voice is
 refused. The check is `ensureVoiceAgent` (`@iterate-com/voice/install`), shared with
 voice.iterate.com, which sets voice up without a device.
 

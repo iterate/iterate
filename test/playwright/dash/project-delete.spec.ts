@@ -1,6 +1,6 @@
 // The Dash deletes a project (/projects/<slug>, `session.projects.delete`): its organization's owner
 // confirms, lands on the list without it, and the platform no longer names it. Its contexts and
-// storage go after, on the project's own deletion saga (apps/os/src/project/processor.ts), which the
+// storage go after, on the project's own deletion saga (core/os/src/project/processor.ts), which the
 // workers test (test/vitest/os-workers/project-deletion.test.ts) proves end to end.
 import { expect } from "@playwright/test";
 import { test } from "../../helpers/test.ts";

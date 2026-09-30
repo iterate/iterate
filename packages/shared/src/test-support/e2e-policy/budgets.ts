@@ -61,7 +61,7 @@ export const E2E_ROW_TIMEOUT_CEILING_MS = 90_000;
 export const E2E_SLEEP_CEILING_MS = 30_000;
 
 /**
- * The timeout of a row tagged `slow` (the tag's own, apps/os/vitest.config.ts), and the longest one
+ * The timeout of a row tagged `slow` (the tag's own, core/os/vitest.config.ts), and the longest one
  * such a row may declare: it waits real platform time, so it runs only where that costs no PR
  * (docs/testing.md#slow-rows).
  */

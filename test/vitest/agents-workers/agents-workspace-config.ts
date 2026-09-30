@@ -1,7 +1,7 @@
 // The agents app as a project's config over this checkout's source, no publish or esm.sh needed; it
 // imports nothing, so the e2e and Workers suites both load it. The published package is template.e2e's.
 
-/** A config shaped as configs/default: `worker.ts` ignores every event, `agents.ts` holds the classes. */
+/** A config shaped as core/configs/default: `worker.ts` ignores every event, `agents.ts` holds the classes. */
 export const agentsWorkspaceConfig: Record<string, string> = {
   "package.json": '{"main":"worker.ts"}',
   "worker.ts":

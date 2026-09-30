@@ -1,7 +1,7 @@
 // vitest/os-workers/named-facets.test.ts — a facet or worker named by the root's worker loads its
 // module under the manifest's identity (facet-host.ts `#workerOf`); name walls are unit rows.
 import { expect, test } from "vitest";
-import { configPointer } from "../../../apps/os/src/project/publication.ts";
+import { configPointer } from "../../../core/os/src/project/publication.ts";
 import { appendAsPlatform, freshProject, pointAt, refused, rule, stub } from "./support.ts";
 
 test("a facet named by the root's worker keeps running across a publication that leaves its module's identity, restarts on its next call when that changes, and never goes back to an older generation", async () => {

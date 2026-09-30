@@ -100,7 +100,7 @@ test("a script cannot choose its new agent's parent link: the child links to the
 // an agent any of them creates is linked to the root (or to whatever base it names), never to the
 // context that asked, as repos and workspaces are. Closing these needs the platform to hand a facet
 // the caller's originating context (`Caller.path`, which the library already uses for repos and
-// workspaces: apps/os/src/library.ts `entityRoot`).
+// workspaces: core/os/src/library.ts `entityRoot`).
 const linkedToTheRoot = async (name: string) => {
   const root = await openAgentItx(freshCtx(name));
   await root.workspaces.create("/child");

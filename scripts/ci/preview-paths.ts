@@ -38,8 +38,8 @@ export const previewPaths = [
   ".depot/workflows/deploy-voice.yml",
   ".depot/workflows/deploy-kit.yml",
   ".depot/workflows/preview-os.yml",
-  "apps/os/**",
-  "configs/**",
+  "core/os/**",
+  "core/configs/**",
   "apps/dash/**",
   "apps/agents/**",
   "apps/notes/**",
@@ -65,7 +65,7 @@ export const previewPaths = [
   "pnpm-workspace.yaml",
   "envs.ts",
   "scripts/lib/**",
-  // iterate's apps/os tooling: the preview deploy itself, prd's deploy, provisioning and erase
+  // iterate's core/os tooling: the preview deploy itself, prd's deploy, provisioning and erase
   "scripts/os/**",
   // the setup every preview job runs (docs/depot-ci.md#setup-on-depots-stock-image)
   ".depot/actions/**",
@@ -104,8 +104,8 @@ function changesPreview(): { preview: boolean; reason: string } {
         reason: `main's ${main} could not be fetched: ${fetched.stderr.trim()}`,
       };
   }
-  // --no-renames lists a rename's old path and its new one: moving a file out of apps/os changes
-  // apps/os.
+  // --no-renames lists a rename's old path and its new one: moving a file out of core/os changes
+  // core/os.
   const files = git("diff", "--name-only", "--no-renames", main, "HEAD")
     .split("\n")
     .filter(Boolean);

@@ -1,7 +1,7 @@
 // tunnel.e2e.test.ts — `iterate tunnel <port>` against the deployment, the CLI run as a person runs
 // it (the package's bin, operator credentials) and a tiny HTTP + WebSocket server on a local port.
 // The project is a fresh one on the default template, so its config worker is the template's router
-// (configs/default/worker.ts: `itx.fetchRoutes.match`, then `env.ITX.fetch` to the route's target).
+// (core/configs/default/worker.ts: `itx.fetchRoutes.match`, then `env.ITX.fetch` to the route's target).
 // Pins:
 //   • private (the default): an anonymous page load is sent to sign in, an anonymous fetch is 401,
 //     under paths (a per-PR preview) as under subdomains

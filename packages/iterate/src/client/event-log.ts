@@ -59,7 +59,7 @@ export const EMPTY_EVENT_LOG: EventLogSnapshot = {
   tableVersion: 0,
 };
 
-/** Offsets per read: the platform's page cap (apps/os `stream.ts` READ_PAGE_MAX_EVENTS). */
+/** Offsets per read: the platform's page cap (core/os `stream.ts` READ_PAGE_MAX_EVENTS). */
 const PAGE = 1000;
 
 export type EventLogConnection = {

@@ -1,5 +1,5 @@
 // scripts/ci/shadcn-drift.ts — THE VENDORED SHADCN FILES ARE UPSTREAM'S (packages/ui/AGENTS.md): each
-// folder that vendors shadcn's base-nova components (packages/ui, apps/os) keeps them byte for byte
+// folder that vendors shadcn's base-nova components (packages/ui, core/os) keeps them byte for byte
 // as `shadcn add <item> -o` writes them, and customises them at the call site or in a wrapper, never
 // in the file. This asks each folder's pinned CLI (its `shadcn` devDependency, reading its own
 // components.json) what `add` would write today, from shadcn's live registry:
@@ -64,7 +64,7 @@ export const VENDORINGS = [
     stylesheet: "src/styles/globals.css",
   },
   {
-    dir: "apps/os",
+    dir: "core/os",
     items: [
       "avatar",
       "button",

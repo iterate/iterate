@@ -69,7 +69,7 @@ Each kind of test has one shape:
 | Processor or reducer     | `processor.test.ts`, `core-processor.test.ts`        | Rows of `{ name, events, expected }`, events from short builders below the tests, and a re-reduce row ([ship-with rules](testing.md#ship-with-rules))                |
 | Stateful unit            | `rpc-stub-relay.test.ts`, `library.test.ts`          | One typed builder per collaborator, with defaults; a test passes only what differs                                                                                   |
 | Workers                  | `test/vitest/os-workers/<topic>.test.ts`             | Only cases that need `cloudflare:test` controls; `readLog` and `snapshot`; files named by topic, not by incident                                                     |
-| In-process platform      | `test/vitest/os/<topic>.test.ts`                     | The platform staged in this process or its children (a bare workerd, a memory-capped Node child, a Vite dev server); never in apps/os, which keeps simple unit tests |
+| In-process platform      | `test/vitest/os/<topic>.test.ts`                     | The platform staged in this process or its children (a bare workerd, a memory-capped Node child, a Vite dev server); never in core/os, which keeps simple unit tests |
 | OS e2e                   | `test/vitest/os/<topic>.e2e.test.ts`                 | One story per test on its own project (`freshCtx`); whole responses with `toMatchObject`; gates from `project-host.ts`                                               |
 | Agents e2e               | `test/vitest/agents/`                                | As OS e2e; scenarios that differ only in the fake `itx.ai` are rows                                                                                                  |
 | Browser spec             | `test/playwright/<app>/*.spec.ts`                    | [test/playwright/AGENTS.md](../test/playwright/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table                           |
@@ -112,7 +112,7 @@ is a model: each refusal case as a row of data with a literal expected status,
 `$name` as the title, and one assertion body.
 
 A `$field` title prints the row's value quoted and whole: every vitest config
-(each `apps/os` project too) sets `chaiConfig: { truncateThreshold: 0 }`, where
+(each `core/os` project too) sets `chaiConfig: { truncateThreshold: 0 }`, where
 Vitest's default cuts it at 40 characters with `…`. The same setting prints a
 failed assertion's values whole. `test.for`'s options apply to every row, so a
 per-row bound such as a timeout goes to the code it bounds

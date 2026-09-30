@@ -9,10 +9,10 @@
 
 // Loaded for its side effect: iterate-context.ts registers the native brands with the same module
 // instance as walkSteps. The deployed behavior is covered separately by the remote-capnweb E2E test.
-import "../../../apps/os/src/iterate-context.ts";
+import "../../../core/os/src/iterate-context.ts";
 import * as cloudflareWorkers from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { walkSteps } from "../../../apps/os/src/context/dispatch.ts";
+import { walkSteps } from "../../../core/os/src/context/dispatch.ts";
 import { stub } from "./support.ts";
 
 test("cloudflare:workers exports RpcPromise and native RPC calls are instanceof it", async () => {

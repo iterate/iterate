@@ -96,7 +96,8 @@ const depotWorkflowFiles = readdirSync(resolve(repoRoot, ".depot/workflows"))
 // Every production deploy workflow is `deploy-<app>.yml` for `apps/<app>`.
 const deploymentWorkflows = depotWorkflowFiles.flatMap((file) => {
   const app = /^\.depot\/workflows\/deploy-(.+)\.yml$/.exec(file)?.[1];
-  return app ? [{ file, app }] : [];
+  // the platform is core/os; every other deployed app is in apps/
+  return app ? [{ file, app, directory: app === "os" ? "core/os" : `apps/${app}` }] : [];
 });
 
 const workspaceDirectories = (
@@ -176,11 +177,11 @@ test.for([{ file: ".depot/workflows/test.yml" }, { file: ".depot/workflows/lint-
 
 test.each(deploymentWorkflows)(
   "$file redeploys when its app or a workspace package it depends on changes",
-  ({ file, app }) => {
+  ({ file, directory }) => {
     const workspaceByName = new Map(
       workspaceDirectories.map((directory) => [readPackageJson(directory).name, directory]),
     );
-    const packageJson = readPackageJson(`apps/${app}`);
+    const packageJson = readPackageJson(directory);
     const workspaceDependencies = Object.entries({
       ...packageJson.dependencies,
       ...packageJson.devDependencies,
@@ -191,7 +192,7 @@ test.each(deploymentWorkflows)(
     expect(loadWorkflow(file).on?.push?.paths).toEqual(
       expect.arrayContaining([
         file,
-        `apps/${app}/**`,
+        `${directory}/**`,
         ...workspaceDependencies.map((directory) => `${directory}/**`),
       ]),
     );
@@ -201,7 +202,7 @@ test.each(deploymentWorkflows)(
 test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
   "$file does not redeploy for the platform's source, which no client imports",
   ({ file }) => {
-    expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "apps/os/src/worker.ts")).toBe(false);
+    expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "core/os/src/worker.ts")).toBe(false);
   },
 );
 
@@ -224,7 +225,7 @@ test("deploy-spa.yml ignores the root manifests and lockfile: capnweb ships with
 
 test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {
   const paths = loadWorkflow(".depot/workflows/deploy-os.yml").on?.push?.paths ?? [];
-  const shipped = ["apps/os/src", "apps/os/public"].flatMap((directory) =>
+  const shipped = ["core/os/src", "core/os/public"].flatMap((directory) =>
     readdirSync(resolve(repoRoot, directory), { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile() && !entry.name.endsWith(".test.ts"))
       .map((entry) => relative(repoRoot, join(entry.parentPath, entry.name))),
@@ -233,24 +234,24 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
   expect(shipped.length).toBeGreaterThan(0);
   expect(shipped.filter((file) => !triggers(paths, file))).toEqual([]);
   for (const file of [
-    "apps/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
-    "apps/os/scripts/build.ts",
+    "core/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
+    "core/os/scripts/build.ts",
     "scripts/os/deploy.ts",
-    "apps/os/scripts/generate-wrangler-config.ts",
-    "apps/os/vite.config.ts",
-    "apps/os/wrangler.base.jsonc",
-    "configs/default/AGENTS.md", // build.ts bakes it into the Worker
+    "core/os/scripts/generate-wrangler-config.ts",
+    "core/os/vite.config.ts",
+    "core/os/wrangler.base.jsonc",
+    "core/configs/default/AGENTS.md", // build.ts bakes it into the Worker
     "scripts/lib/deploy-app.ts",
   ]) {
     expect(triggers(paths, file), `${file} deploys`).toBe(true);
   }
   for (const file of [
-    "apps/os/README.md",
-    "apps/os/SELF-HOSTING.md",
-    "apps/os/docs/project-seeds.md",
+    "core/os/README.md",
+    "core/os/SELF-HOSTING.md",
+    "core/os/docs/project-seeds.md",
     "test/AGENTS.md",
     "test/helpers/client.ts",
-    "apps/os/src/project/templates.test.ts",
+    "core/os/src/project/templates.test.ts",
     "test/vitest/os-workers/support.ts",
     "test/helpers/fake-artifacts.ts",
     "test/vitest/os/bench/api.bench.ts",
@@ -1275,7 +1276,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
     (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
-  // apps/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
+  // core/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
   // script builds it beside another's
   expect(readPackageJson(".").scripts?.test).toBe(
     "pnpm --filter os build && pnpm -r --parallel test",
@@ -1304,7 +1305,7 @@ test("the preview's e2e suite writes the canonical telemetry artifact", () => {
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
   // Core imports nothing outside it, so its workspaces take the reporter by path from the Test job.
-  const core = ["apps/os", "packages/iterate"];
+  const core = ["core/os", "packages/iterate"];
   const runTests = loadWorkflow(".depot/workflows/test.yml")
     .jobs.test?.steps?.flatMap((step) => step.parallel || [step])
     .find((step) => step.id === "tests");
