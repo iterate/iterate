@@ -10,7 +10,7 @@
 // caller passes; `finishIntegrationConnect` and a connect with `connectToProject` are the platform's
 // alone. An account another project holds (Slack, GitHub) is offered to move here, and
 // `confirmIntegrationMove` moves it.
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
+import { missingScopes } from "iterate/integration-scopes";
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";

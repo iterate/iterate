@@ -1,9 +1,5 @@
 import { insufficientScope, OAuthResourceServer } from "@cloudflare/workers-oauth-provider";
-import {
-  failureKind,
-  isPlatformFailureKind,
-  logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { reportIssue } from "iterate/lib";
 import { platformAddressesOf, type PlatformAddresses } from "./app-config.ts";
 import type { Env, Handler } from "./env.ts";

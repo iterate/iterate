@@ -3,11 +3,7 @@
 // the binding's `{ success, result }` Response envelope. Its shape is the published one (iterate/api
 // `CfBrowserApi`).
 
-import {
-  failureKind,
-  retryPlatformFailures,
-  UPSTREAM_ONCE,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, retryPlatformFailures, UPSTREAM_ONCE } from "iterate/platform-retry";
 import type { CfBrowserApi, CfBrowserQuickAction, CfBrowserQuickActionOptions } from "iterate/api";
 
 /**

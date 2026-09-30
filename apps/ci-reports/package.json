@@ -12,6 +12,7 @@
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
     "@zip.js/zip.js": "2.18.2",
+    "iterate": "workspace:*",
     "mime": "4.1.0",
     "zod": "catalog:"
   },

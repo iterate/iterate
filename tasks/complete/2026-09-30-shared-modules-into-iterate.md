@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -10,7 +10,7 @@ Pre-work item 3 for moving apps/os into `core/`, second slice (the first was ite
 nothing outside apps/os may import apps/os (packages/iterate/README.md "The SDK/platform line"), so
 a module both the platform and the apps need lives in `iterate`.
 
-Status: spec written, implementation not started.
+Status: done. All three are `iterate` subpaths; apps/os's remaining packages/shared imports are posthog, pkg-pr-new and the test policy helpers.
 
 ## What moves
 
@@ -22,12 +22,14 @@ Status: spec written, implementation not started.
 
 ## Checklist
 
-- [ ] one commit per module: `git mv` into packages/iterate/src, register the subpath (package
-      `exports`, `publishConfig.exports`, tsdown entry), repoint every importer, drop the shared export
-- [ ] apps/ci-reports depends on `iterate`; deploy-ci-reports.yml watches `packages/iterate/**`
-- [ ] comments and docs that name the old paths (engineering-invariants.md, platform-failures.ts,
+- [x] ~~one commit per module~~ one commit for the three: `git mv` into packages/iterate/src, register
+      the subpath (package `exports`, `publishConfig.exports`, tsdown entry), repoint every importer,
+      drop the shared export _they share package.json and tsdown.config.ts, so per-module commits
+      bought nothing; importers repointed: 4, 4 and 39_
+- [x] apps/ci-reports depends on `iterate`; deploy-ci-reports.yml watches `packages/iterate/**`
+- [x] comments and docs that name the old paths (engineering-invariants.md, platform-failures.ts,
       apps/os comments)
-- [ ] lint, typecheck, knip, and the tests of every touched workspace
+- [x] lint, typecheck, knip, and the tests of every touched workspace _packages/iterate (19 files, the three moved tests among them), packages/shared, apps/ci-reports, scripts (all but the macOS-bash toolchain and tracing tests), apps/os (2443 tests)_
 
 ## Assumptions (made without asking)
 
@@ -43,3 +45,6 @@ Status: spec written, implementation not started.
   policy helpers (wait on where the e2e suite lives).
 
 ## Implementation notes
+
+- packages/shared's depot-api.ts and pkg-pr-new.ts import `iterate/platform-retry` (shared already
+  depends on iterate since #3466).

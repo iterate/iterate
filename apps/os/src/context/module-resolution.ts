@@ -22,11 +22,7 @@
 //   keeps the platform packages external, so a library's zod is the SDK's.
 
 import { isPkgPrNewCommit, pkgPrNewVersionOf } from "@iterate-com/shared/pkg-pr-new";
-import {
-  failureKind,
-  httpFailureKind,
-  isPlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
@@ -404,7 +400,7 @@ function esmPackageBase(name: string, version: string, where: string): string {
 
 /** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. esm.sh out of
  *  reach, too slow (ESM_FETCH_TIMEOUT_MS) or answering 5xx, 429 or 408 is the platform's failure,
- *  code UNAVAILABLE of its kind (@iterate-com/shared/platform-retry `httpFailureKind`): a
+ *  code UNAVAILABLE of its kind (iterate/platform-retry `httpFailureKind`): a
  *  publication meets it again rather than refusing the commit. Any other answer is the source's. */
 async function fetchModuleText(url: string, fetchFn: typeof fetch): Promise<string> {
   let response: Response;

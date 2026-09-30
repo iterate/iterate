@@ -13,11 +13,7 @@
 // disposable the caller registers with its `SessionTeardown`).
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
-import {
-  failureKind,
-  RELAY_BURST,
-  retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, RELAY_BURST, retryPlatformFailures } from "iterate/platform-retry";
 import { codedError } from "iterate/lib";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { type ItxExpression, walkStepsOnRpcStub } from "iterate/expression";

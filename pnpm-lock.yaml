@@ -395,6 +395,9 @@ importers:
       '@zip.js/zip.js':
         specifier: 2.18.2
         version: 2.18.2
+      iterate:
+        specifier: workspace:*
+        version: link:../../packages/iterate
       mime:
         specifier: 4.1.0
         version: 4.1.0

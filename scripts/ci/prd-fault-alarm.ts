@@ -38,7 +38,7 @@ import {
   httpFailureFields,
   httpFailureKind,
   retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import {
   adminEnvs,
   agentsEnvs,

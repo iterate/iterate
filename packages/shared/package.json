@@ -5,7 +5,6 @@
   "type": "module",
   "exports": {
     "./depot-api": "./src/depot-api.ts",
-    "./integration-scopes": "./src/integration-scopes.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
     "./test-support/flake-test": "./src/test-support/flake-test.ts",
@@ -22,8 +21,6 @@
       "import": "./src/posthog/posthog.ts",
       "default": "./src/posthog/posthog.ts"
     },
-    "./config-repo-template/reference": "./src/config-repo-template/reference.ts",
-    "./platform-retry": "./src/platform-retry.ts",
     "./pkg-pr-new": "./src/pkg-pr-new.ts"
   },
   "scripts": {

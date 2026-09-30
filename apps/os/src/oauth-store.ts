@@ -25,7 +25,7 @@
 //     `completeAuthorization`'s revocation of earlier grants lists with metadata, and every call
 //     here passes `revokeExistingGrants: false`.
 //   • It calls these four members only, in the shapes below.
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import { ControlPlane } from "./control-plane/edge.ts";
 import type { Env } from "./env.ts";
 import { watchSlowStep } from "./sign-in-watch.ts";

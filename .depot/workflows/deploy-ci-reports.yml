@@ -14,6 +14,7 @@ on:
       - .depot/workflows/deploy-ci-reports.yml
       - apps/ci-reports/**
       - packages/shared/**
+      - packages/iterate/**
       - envs.ts
       - scripts/lib/**
       - pnpm-lock.yaml

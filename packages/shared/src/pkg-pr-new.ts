@@ -7,7 +7,7 @@
 // platform's seed of a config repo from a template (apps/os/src/project/processor.ts), the apps
 // that upgrade agents and voice to main's newest build (`buildStanding`), and the e2e rows.
 import { z } from "zod";
-import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";
+import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "iterate/platform-retry";
 
 /** A pkg.pr.new version of package `name`, in parts, or undefined for any other version: an npm
  *  range, an exact version or a dist-tag, and a pkg.pr.new URL of another shape or package. */
