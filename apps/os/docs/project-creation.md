@@ -68,9 +68,9 @@ and one placeholder, so an origin stored on the log never holds a token. A GitHu
 `https://github.com` as well as the API, for git over HTTP. The Dash's project overview links the
 config repo (Config repo). A project's own code, such as a processor on the GitHub connection's log,
 keeps the two in step: it pulls on a push webhook and pushes on `repo/commit-completed`.
-`src/repo/durable-object.test.ts` covers the verbs against a fake remote, and
-`e2e/repos.e2e.test.ts` covers real Artifacts and GitHub.
+`test/vitest/os/repo-durable-object.test.ts` covers the verbs against a fake remote, and
+`test/vitest/os/repos.e2e.test.ts` covers real Artifacts and GitHub.
 
 `src/project/templates.test.ts` covers template copying, ordering, failures, and recovery;
-`src/project/processor.test.ts` the publication; `e2e/session.e2e.test.ts` covers creation;
-`e2e/website-publication.e2e.test.ts` covers publishing.
+`src/project/processor.test.ts` the publication; `test/vitest/os/session.e2e.test.ts` covers creation;
+`test/vitest/os/website-publication.e2e.test.ts` covers publishing.

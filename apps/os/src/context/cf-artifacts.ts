@@ -5,17 +5,13 @@
 // GIT ITSELF — files, commits, the wire — lives in the repo facet (src/repo/durable-object.ts over
 // repo/git-wire.ts), the domain object `itx.repos.get(path)`: THAT is how a project interacts with
 // its repos, and the only thing that speaks git. This root is what the facet calls for its credential
-// and remote, and where a test lends a fake (`provide("itx.cfArtifacts", …)`, e2e/support/fake-artifacts.ts).
+// and remote, and where a test lends a fake (`provide("itx.cfArtifacts", …)`, test/helpers/fake-artifacts.ts).
 //
 // THE ISOLATION WALL is here, not in the binding: every repo is `${projectId}.` + the path's Artifacts
 // name (`repoArtifactName` — the ONE place a name is spelled; every itx surface speaks paths).
 
 import { RpcTarget } from "capnweb";
-import {
-  failureKind,
-  retryPlatformFailures,
-  UPSTREAM_ONCE,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, retryPlatformFailures, UPSTREAM_ONCE } from "iterate/platform-retry";
 import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { unavailableError } from "../unavailable.ts";

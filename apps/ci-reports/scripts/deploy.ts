@@ -14,9 +14,7 @@ export default async function deploy(options: { env: string }) {
   });
 }
 
-if (process.argv[1]?.endsWith("deploy.ts")) {
-  void createCli({ ...import.meta, name: "deploy" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "deploy" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

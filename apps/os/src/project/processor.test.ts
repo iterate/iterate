@@ -2,13 +2,14 @@
 // `{ events → state }` rows (iterate/stream/test-support `reduceProcessor`) — the project's own creation
 // and the catalog folded from cross-posted birth certificates. The saga — `session.projects.create`
 // landing the request, the processor landing the certificate on `/` — is pinned end to end in
-// e2e/session.e2e.test.ts.
+// test/vitest/os/session.e2e.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { runningCause, runningUnder } from "../cause.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
+import { ownershipRecordOf } from "./custom-hostnames.ts";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 
@@ -170,6 +171,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -180,7 +182,7 @@ const reduceRows: {
       hostname("add-requested"),
       addSettled(1, "active"),
       hostname("add-requested"),
-      addSettled(3, null, "boom"),
+      addSettled(3, null, "boom", true),
     ],
     state: {
       ...empty,
@@ -190,6 +192,7 @@ const reduceRows: {
           cloudflare: observation("active"),
           error: "boom",
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -221,6 +224,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: expect.any(String),
+          claimed: true,
         },
       },
     },
@@ -236,6 +240,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -257,6 +262,7 @@ const reduceRows: {
           cloudflare: null,
           error: null,
           connectedAt: null,
+          claimed: false,
         },
       },
     },
@@ -338,6 +344,7 @@ const reduceRows: {
           cloudflare: null,
           error: null,
           connectedAt: null,
+          claimed: false,
         },
       },
       primaryHostname: "www.acme.test",
@@ -354,6 +361,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -386,8 +394,34 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
+    },
+  },
+  {
+    name: "a hostname nobody has proven is not the project's: live at Cloudflare, it holds no claim and is refused as primary",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active", null, false),
+      primary("www.acme.test"),
+    ],
+    state: {
+      ...empty,
+      hostnames: { "www.acme.test": { ...liveHostname(), claimed: false } },
+    },
+  },
+  {
+    name: "an answer from before the ownership proof held its claim once it reached Cloudflare",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active", null, undefined),
+      primary("www.acme.test"),
+    ],
+    state: {
+      ...empty,
+      hostnames: { "www.acme.test": liveHostname() },
+      primaryHostname: "www.acme.test",
     },
   },
   {
@@ -677,6 +711,8 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
       reservedZones: [],
       claim: async () => {},
       release: async () => {},
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async (hostname) => void written.push(hostname),
       provider: null,
       connect: async () => null,
@@ -703,7 +739,7 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
 });
 
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
-test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
+test("ProjectProcessor — a hostname add claims once proven, provisions and answers keyed by its request; an unproven one is provisioned unclaimed; a refusal releases a claim it just took; a remove deletes then releases, leaving another project's custom hostname; a deployment that cannot provision refuses", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
@@ -714,6 +750,8 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
       reservedZones: ["iterate.app"],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async (name) => name.startsWith("taken."),
+      proof: async (name) => ({ ...(await proven(name)), proven: !/^(shop|done)\./.test(name) }),
       setPrimaryHostname: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
       dnsZone: async () => ({ zone: "acme.test", provider: "cloudflare" }),
@@ -721,7 +759,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
         provision: async (name) => {
           calls.push(`provision ${name}`);
           if (name.startsWith("new.")) throw new Error("Cloudflare says no");
-          return observation("pending");
+          return observation(name.startsWith("done.") ? "active" : "pending");
         },
         remove: async (name) => void calls.push(`remove ${name}`),
       },
@@ -729,17 +767,27 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   );
   const appended: {
     idempotencyKey?: string;
-    payload: { error?: string | null; cloudflare?: { connect: unknown } | null };
+    payload: {
+      error?: string | null;
+      claimed?: boolean;
+      cloudflare?: { connect: unknown; records: unknown[] } | null;
+    };
   }[] = [];
   const owe = async (
     name: string,
     verb: "add" | "remove",
     offset: number,
-    { on = processor, serving = false } = {},
+    { on = processor, held = false } = {},
   ) => {
-    const cloudflare = serving ? observation("active") : null;
+    const cloudflare = held ? observation("active") : null;
     const hostnames = {
-      [name]: { requested: { verb, offset }, cloudflare, error: null, connectedAt: null },
+      [name]: {
+        requested: { verb, offset },
+        cloudflare,
+        error: null,
+        connectedAt: null,
+        claimed: held,
+      },
     };
     deliver(on, { ...empty, hostnames }, async (...events) => {
       appended.push(...(events as typeof appended));
@@ -748,10 +796,12 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   };
   await owe("www.acme.test", "add", 4);
   await owe("new.acme.test", "add", 5);
-  await owe("new.acme.test", "add", 6, { serving: true }); // a failed re-check keeps a serving claim
+  await owe("new.acme.test", "add", 6, { held: true }); // a failed re-check keeps a held claim
   await owe("docs.iterate.app", "add", 7);
-  await owe("www.acme.test", "remove", 8);
-  await owe("www.acme.test", "add", 9, { on: processorWithoutHostnames() });
+  await owe("shop.acme.test", "add", 8); // no ownership record yet
+  await owe("www.acme.test", "remove", 9);
+  await owe("taken.acme.test", "remove", 10); // another project's custom hostname stays
+  await owe("www.acme.test", "add", 11, { on: processorWithoutHostnames() });
   expect(calls).toEqual([
     "claim www.acme.test",
     "provision www.acme.test",
@@ -760,20 +810,47 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
     "release new.acme.test",
     "claim new.acme.test",
     "provision new.acme.test",
+    "provision shop.acme.test",
     "remove www.acme.test",
     "release www.acme.test",
+    "release taken.acme.test",
   ]);
-  expect(appended.map((event) => [event.idempotencyKey, event.payload.error || null])).toEqual([
-    ["project/hostname-add:www.acme.test:4", null],
-    ["project/hostname-add:new.acme.test:5", "Cloudflare says no"],
-    ["project/hostname-add:new.acme.test:6", "Cloudflare says no"],
+  expect(
+    appended.map((event) => [
+      event.idempotencyKey,
+      event.payload.error || null,
+      event.payload.claimed,
+    ]),
+  ).toEqual([
+    ["project/hostname-add:www.acme.test:4", null, true],
+    ["project/hostname-add:new.acme.test:5", "Cloudflare says no", false],
+    ["project/hostname-add:new.acme.test:6", "Cloudflare says no", true],
     [
       "project/hostname-add:docs.iterate.app:7",
       "'docs.iterate.app' is under iterate.app, which this deployment serves itself.",
+      false,
     ],
-    ["project/hostname-remove:www.acme.test:8", null],
-    ["project/hostname-add:www.acme.test:9", "This deployment cannot add custom hostnames."],
+    ["project/hostname-add:shop.acme.test:8", null, false],
+    ["project/hostname-remove:www.acme.test:9", null, undefined],
+    ["project/hostname-remove:taken.acme.test:10", null, undefined],
+    [
+      "project/hostname-add:www.acme.test:11",
+      "This deployment cannot add custom hostnames.",
+      false,
+    ],
   ]);
+  // a hostname Cloudflare is done with but nobody has proven still carries where to add the record
+  await owe("done.acme.test", "add", 12);
+  expect(appended.at(-1)!.payload).toMatchObject({
+    claimed: false,
+    cloudflare: { status: "active", dns: { zone: "acme.test" } },
+  });
+  // the records to add end with the ownership record, which Domain Connect writes too
+  expect(appended[4]!.payload.cloudflare!.records.at(-1)).toEqual({
+    type: "TXT",
+    name: "_iterate.shop.acme.test",
+    value: "iterate-project=prj_test",
+  });
   // a hostname not yet live carries the one-click link its DNS provider offers
   expect(appended[0]!.payload.cloudflare).toMatchObject({
     status: "pending",
@@ -795,6 +872,8 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -818,6 +897,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
             cloudflare: null,
             error: null,
             connectedAt: null,
+            claimed: false,
           },
         },
       },
@@ -847,6 +927,8 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -872,6 +954,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
             cloudflare: null,
             error: null,
             connectedAt: null,
+            claimed: false,
           },
         },
       },
@@ -899,6 +982,8 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
       reservedZones: [],
       claim: async () => {},
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -934,6 +1019,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
         cloudflare: observation("active"),
         error: null,
         connectedAt: null,
+        claimed: true,
       },
     },
   };
@@ -1267,7 +1353,14 @@ function hostname(verb: "add-requested" | "remove-requested") {
   };
 }
 
-function addSettled(requestOffset: number, status: string | null, error: string | null = null) {
+/** An add's answer: `claimed` whether the project holds the claim after it (by default, when it
+ *  reached Cloudflare); `undefined` spells an answer from before the ownership proof. */
+function addSettled(
+  requestOffset: number,
+  status: string | null,
+  error: string | null = null,
+  claimed: boolean | undefined = Boolean(status),
+) {
   return {
     type: "events.iterate.com/project/hostname-add-settled",
     payload: {
@@ -1275,8 +1368,14 @@ function addSettled(requestOffset: number, status: string | null, error: string 
       requestOffset,
       cloudflare: status && observation(status),
       error,
+      claimed,
     },
   };
+}
+
+/** A fake `ProjectHostnames.proof`: the ownership record for project `prj_test`, found in DNS. */
+async function proven(hostname: string) {
+  return { record: ownershipRecordOf(hostname, "prj_test"), proven: true };
 }
 
 function primary(hostname: string | null) {
@@ -1284,7 +1383,13 @@ function primary(hostname: string | null) {
 }
 
 function liveHostname() {
-  return { requested: null, cloudflare: observation("active"), error: null, connectedAt: null };
+  return {
+    requested: null,
+    cloudflare: observation("active"),
+    error: null,
+    connectedAt: null,
+    claimed: true,
+  };
 }
 
 function removed(requestOffset: number) {
@@ -1322,7 +1427,7 @@ function observation(status: string) {
   return {
     status,
     sslStatus: status,
-    records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
+    records: [{ type: "CNAME" as const, name: "www.acme.test", value: "cname.iterate.app" }],
     connect: null,
     dns: null,
   };

@@ -18,8 +18,8 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
 - Outside apps/os, no package and no app imports apps/os. `import-js/no-restricted-paths` in
   `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
   imports, re-exports, dynamic `import()` and an app added later are covered, and
-  `lint/oxlintrc-platform-line.test.ts` pins it. Tests may import apps/os's two harnesses,
-  `apps/os/e2e/support/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
+  `lint/oxlintrc-platform-line.test.ts` pins it. The platform's tests live in `test/`, which
+  the rule does not cover: they may import apps/os, and apps/os keeps only simple unit tests.
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
@@ -33,12 +33,13 @@ Supabase, tRPC, Hono and Wrangler draw the same line:
 Code the platform loads for a project (the config entrypoint, a facet, a worker behind a rewrite rule)
 imports each symbol from one path, and the loader links this deployment's own build of it:
 
-| Path                       | What it holds                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors |
-| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too         |
-| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                              |
-| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                            |
+| Path                       | What it holds                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors                               |
+| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too                                       |
+| `iterate/stream/contract`  | `defineProcessorContract` and the contract types alone, which `iterate/stream/processor` re-exports. Code a browser loads imports it: the engine needs `node:async_hooks` |
+| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                                                            |
+| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                                                          |
 
 ```js
 import { StreamProcessorDurableObject } from "iterate/sdk";
@@ -98,12 +99,12 @@ The platform stamps `source.origin`, the context whose code or session wrote it,
 field a writer keeps is `source.processor`, the engine's label for which processor wrote it.
 
 ```js
-// A script in /agents/a/sandbox:
+// A script in /agents/a:
 await itx.cd("/agents/b").append({
   type: "events.iterate.com/agent/context-added",
   payload: { role: "user", content: "hello" },
 });
-// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello",
+// Stamped { origin: "/agents/a" }. Agent b's model reads "[from /agents/a] hello",
 // and the same from `itx.agents.get("/agents/b").message("hello")`.
 ```
 
@@ -128,7 +129,7 @@ jail confines the code that runs in it, not the contexts it creates through a gr
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// apps/os/e2e/support/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// test/helpers/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```

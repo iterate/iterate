@@ -86,6 +86,7 @@ const forged = {
   origin: "/",
   principal: { actor: "user_owner" },
   grant: "grant_forged",
+  onBehalfOf: { principal: { actor: "user_owner" }, run: "/@1" },
   platform: true as const,
   schedule: { key: "k", scheduledAtOffset: 1, at: "2026-01-01T00:00:00.000Z" },
 };
@@ -119,8 +120,8 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
   {
     name: "loaded code that crossed a hop: the context its call started at, whatever it claims",
     source: forged,
-    caller: { principal: null, app: true, path: "/agents/a/sandbox" },
-    stamped: { origin: "/agents/a/sandbox" },
+    caller: { principal: null, app: true, path: "/agents/a" },
+    stamped: { origin: "/agents/a" },
   },
   {
     name: "nobody (the kernel, an anonymous session): only where it came from",
@@ -133,6 +134,19 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
     source: { ...forged, processor: { slug: "p", version: "1" } },
     caller: { principal: null, app: true },
     stamped: { origin: "/agents/b", processor: { slug: "p", version: "1" } },
+  },
+  {
+    name: "a script a person asked for: loaded code, for them (its cause's token, verified by the append)",
+    source: forged,
+    caller: {
+      principal: null,
+      app: true,
+      onBehalfOf: { principal: { actor: "user_1", email: "a@b.c" }, grant: "g", run: "/@7" },
+    },
+    stamped: {
+      origin: "/agents/b",
+      onBehalfOf: { principal: { actor: "user_1", email: "a@b.c" }, grant: "g", run: "/@7" },
+    },
   },
   {
     name: "the platform writing a fact on a person's behalf: attributed to them, and stamped `platform`",

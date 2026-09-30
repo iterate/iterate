@@ -7,10 +7,6 @@
 import { newWebSocketRpcSession, RpcTarget } from "./capnweb.js";
 import { oauthClient } from "./oauth.js";
 
-// The toolbar action opens the side panel from now on (persisted; the first time, open the panel
-// from Chrome's side panel menu). No service worker needed for that.
-void chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-
 // ── Signing in: the SPA's oauth.js, through Chrome's identity window, everything kept in
 // chrome.storage.local until sign-out.
 
@@ -95,6 +91,17 @@ chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
 });
 
 class ChromeBrowser extends RpcTarget {
+  /** The tabs the project may drive, still open: how an agent finds a tab the person lent. The
+   *  `chrome/attached` event says the same, but only while the root context stays awake. */
+  async tabs() {
+    // The debugger's target list, not chrome.tabs: it carries each tab's URL and title without the
+    // `tabs` permission.
+    const targets = await chrome.debugger.getTargets();
+    return targets
+      .filter((target) => target.tabId !== undefined && tabs.has(target.tabId))
+      .map(({ tabId, url, title }) => ({ tabId, url, title, attached: tabs.get(tabId).attached }));
+  }
+
   /** Open an http(s) page in a new active tab the project may drive; answers once the page has
    *  loaded (or after ten seconds) with the tab's id and URL. */
   async openPage(input) {

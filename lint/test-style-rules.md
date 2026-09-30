@@ -27,15 +27,15 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 (`"session teardown: a handle disposes only what it registered"`) or a
 `// ── section ──` comment.
 
-- **Rows that must run in order.** `pnpm --dir apps/os e2e` runs every file's tests
+- **Rows that must run in order.** `pnpm --dir test e2e` runs every file's tests
   concurrently (`--sequence.concurrent`). Rows that share state they also
   measure or reset (one seeded context) are `test.sequential(...)`, and a table
   of them is `test.sequential.for(rows)(...)`. Sequential rows run one at a time,
   in file order, while the file's other rows stay concurrent.
-  `apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts` is the model. Prefer a row
+  `test/vitest/os/isolate-ceilings-deployed.e2e.test.ts` is the model. Prefer a row
   that owns its state over an ordered one: a test that creates its own project
   needs no ordering, and a row that reads worker logs boots its own worker
-  (`apps/os/e2e/push-delivery-no-dropped-warns.e2e.test.ts`, sequential only so
+  (`test/vitest/os/push-delivery-no-dropped-warns.e2e.test.ts`, sequential only so
   one extra workerd runs at a time).
 - **Gated suites.** `describe.skipIf(cond)` becomes `test.skipIf(cond)` on each
   test.
@@ -73,14 +73,14 @@ argument (`apps/os/src/context/rpc-stub-relay.test.ts` injects its `waitUntil`).
 
 For `cloudflare:workers`: the os unit project, packages/iterate, packages/ui and
 packages/voice alias it to
-[`cloudflare-workers-shim.ts`](../packages/shared/src/test-support/cloudflare-workers-shim.ts),
+[`cloudflare-workers-shim.ts`](../packages/iterate/src/test-support/cloudflare-workers-shim.ts),
 and the os unit project aliases Start's generated server entry to a stand-in page
 ([`src/test/start-server-entry-shim.ts`](../apps/os/src/test/start-server-entry-shim.ts)).
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
 test file. The shim's `env` starts empty; a test may fill it with the bindings
 the module reads (`packages/ui/src/apps/server.test.ts`). Behaviour that needs
-the real runtime belongs in the Workers suite (`apps/os/__workers-tests__/`).
+the real runtime belongs in the Workers suite (`test/vitest/os-workers/`).
 
 ## Exact equality
 

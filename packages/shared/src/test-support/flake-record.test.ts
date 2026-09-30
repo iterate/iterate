@@ -1,8 +1,8 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import { appendFlakeRecord, unknownFlakeRecordFromTelemetry } from "./flake-record.ts";
-import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("a plain test that passed after retry maps to an unknown-flake record", () => {
   expect(
@@ -89,7 +89,7 @@ test("vitest reports options only for tests that set any: a missing expectedStat
 });
 
 test("appendFlakeRecord writes one jsonl line per record into FLAKE_RECORD_DIR", async () => {
-  using dir = temporaryDirectory();
+  using dir = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("FLAKE_RECORD_DIR", dir.path);
   vi.stubEnv("GITHUB_WORKSPACE", "");
   await appendFlakeRecord({

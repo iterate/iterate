@@ -7,7 +7,7 @@
 // push checks inside the pack it forwards (`commitReaches`). Its callers: the platform's
 // repo facet (apps/os/src/repo/durable-object.ts), the anonymous GitHub config-template reader
 // (github-template.ts, which brings its own fetch) and, in Node, the local e2e run's fake
-// remote (apps/os/e2e/support/fake-git-server.ts) — so a pack the fake serves is a pack the client
+// remote (test/helpers/fake-git-server.ts) — so a pack the fake serves is a pack the client
 // parses. Text content only; a submodule pointer (mode 160000) is carried through a manifest but has
 // no blob.
 
@@ -17,7 +17,7 @@ import {
   httpFailureKind,
   retryPlatformFailures,
   UPSTREAM_ONCE,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);
@@ -821,6 +821,16 @@ export function commitReaches(
  *  objects beside it. A config repo's whole history is far less (iterate/config's: 0.6 MiB packed,
  *  9.6 MB inflated). */
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+/** How long one git request may go without its whole answer before it counts as a lost connection:
+ *  a read is then sent once more, and a push fails. Artifacts answers a config repo's reads in well
+ *  under a second. A request that never answers would otherwise hold the repo facet until its 60 s
+ *  watchdog (context/facet-host.ts) restarts it, failing every call queued behind it. */
+const GIT_REQUEST_TIMEOUT_MS = 20_000;
+
+/** A git request that got no whole answer within `GIT_REQUEST_TIMEOUT_MS`: a lost connection. */
+class GitRequestTimeout extends Error {
+  override name = "GitRequestTimeout";
+}
 export const MAX_INFLATED_BYTES = 24 * 1024 * 1024;
 
 /**
@@ -834,17 +844,17 @@ export const MAX_INFLATED_BYTES = 24 * 1024 * 1024;
  * in the credential is substituted.
  *
  * Artifacts answers a git request 5xx now and then, and the same request a moment later is fine.
- * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one answered 5xx, or whose
- * connection failed, is sent ONCE more a second later (`UPSTREAM_ONCE`), logged as
- * `repo.platform-failure-retry`; a second failure, a 429, and any other failure, throws. A
- * `git-receive-pack` is a push, never sent twice: the caller reads the tip again and decides.
+ * A `git-upload-pack` (`tipOf`, `fetchObjects`) only reads, so one answered 5xx, whose connection
+ * failed, or that got no whole answer in 20 s (`GIT_REQUEST_TIMEOUT_MS`), is sent ONCE more a
+ * second later (`UPSTREAM_ONCE`), logged as `repo.platform-failure-retry`; a second failure, a 429,
+ * and any other failure, throws. A `git-receive-pack` is a push, never sent twice: the caller reads
+ * the tip again and decides.
  */
 export function createGitWireTransport(input: {
   remote: string;
   authorization: string | null;
   fetch?: (request: Request) => Promise<Response>;
 }) {
-  const send = input.fetch || ((request: Request) => fetch(request));
   const post = async (service: string, body: Uint8Array<ArrayBuffer>): Promise<Uint8Array> => {
     return retryPlatformFailures(
       async () => {
@@ -855,30 +865,50 @@ export function createGitWireTransport(input: {
         });
         // A public remote takes no credential: no Authorization at all, never an empty one.
         if (input.authorization) headers.set("authorization", input.authorization);
-        const response = await send(
-          new Request(`${input.remote}/${service}`, {
-            body,
-            headers,
-            method: "POST",
-          }),
-        );
-        if (!response.ok) {
-          // The answer's first words say why (a refusal from GitHub, or from the caller's own rules
-          // for egress); read no further than a few KiB, since an unread body keeps its connection.
-          const why = await readCapped(response, 4_096).catch(() => new Uint8Array());
-          const text = textDecoder.decode(why.subarray(0, 200)).trim();
-          throw new HttpAnswerError(
-            `${service} responded ${response.status} for ${input.remote}${text ? `: ${text}` : ""}`,
-            response,
-          );
-        }
-        return readCapped(response, MAX_RESPONSE_BYTES);
+        const request = new Request(`${input.remote}/${service}`, {
+          body,
+          headers,
+          method: "POST",
+        });
+        // The isolate's own fetch is aborted when the request times out, so its connection closes.
+        // The context's egress takes no signal: an AbortSignal cannot cross Workers RPC.
+        const abandoned = new AbortController();
+        const answered = (async () => {
+          const response = await (input.fetch
+            ? input.fetch(request)
+            : fetch(request, { signal: abandoned.signal }));
+          if (!response.ok) {
+            // The answer's first words say why (a refusal from GitHub, or from the caller's own
+            // rules for egress); read no further than a few KiB, since an unread body keeps its
+            // connection.
+            const why = await readCapped(response, 4_096).catch(() => new Uint8Array());
+            const text = textDecoder.decode(why.subarray(0, 200)).trim();
+            throw new HttpAnswerError(
+              `${service} responded ${response.status} for ${input.remote}${text ? `: ${text}` : ""}`,
+              response,
+            );
+          }
+          return readCapped(response, MAX_RESPONSE_BYTES);
+        })();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timedOut = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            abandoned.abort();
+            reject(
+              new GitRequestTimeout(
+                `${service} for ${input.remote} answered nothing in ${GIT_REQUEST_TIMEOUT_MS / 1000} s`,
+              ),
+            );
+          }, GIT_REQUEST_TIMEOUT_MS);
+        });
+        return Promise.race([answered, timedOut]).finally(() => clearTimeout(timer));
       },
       {
         area: "repo",
         schedule: UPSTREAM_ONCE,
         idempotent: service === "git-upload-pack",
-        kind: httpFailureKind,
+        kind: (error) =>
+          error instanceof GitRequestTimeout ? "disconnected" : httpFailureKind(error),
         describe: (error) => ({
           name: service,
           status: error instanceof HttpAnswerError ? error.status : "network",

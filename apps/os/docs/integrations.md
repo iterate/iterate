@@ -89,7 +89,7 @@ for another team or installation is ignored. The status codes follow one rule (`
 signature is a 401. A delivery that is signed but unusable is a 200 with `ignored`. A failed append
 throws, so the provider retries. A deployment without the app answers 503. A per-PR preview's apps
 are the dummy pet shop's fakes (`scripts/preview-{slack,google,github}-app.ts`), which
-`e2e/integrations.e2e.test.ts` drives.
+`test/vitest/os/integrations.e2e.test.ts` drives.
 
 ## Sign-in keeps tokens · your accounts in a project
 
@@ -144,7 +144,7 @@ Only the person themselves connects an account of theirs: their own grant must h
 scope (a key bound to projects, an admin signed in as them, and the admin secret are refused), and
 the account is picked from their own connections alone. It is connected at once when it holds the
 scopes the project asks for: iterate's app's (`session.info().iterateAppScopes`), plus `scopes`
-(`@iterate-com/shared/integration-scopes` `missingScopes`). Otherwise the consent runs on the person's own connection; its
+(`iterate/integration-scopes` `missingScopes`). Otherwise the consent runs on the person's own connection; its
 callback finishes the attempt it completed (keyed by the OAuth nonce), records the scopes the token
 response says were granted (`grantedScopesOf`, never the ones asked), and connects the account to the
 project only when those cover what it needs, the human who consented is the person with the `account`

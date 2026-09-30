@@ -1,4 +1,4 @@
-// cause.test.ts — a cause as the wire carries it; the guard it drives: __workers-tests__/loop-guard.
+// cause.test.ts — a cause as the wire carries it; the guard it drives: test/vitest/os-workers/loop-guard.
 import { expect, test } from "vitest";
 import { causeHeader, causeOfDelivery, newChain, parseCause, storedCause } from "./cause.ts";
 
@@ -6,6 +6,15 @@ test("a chain begun from an origin of any length stays one a call and a mark car
   const chain = newChain("x".repeat(10_000));
   expect(parseCause(chain)).toMatchObject(chain);
   expect(parseCause(causeHeader(chain))).toMatchObject(chain);
+});
+
+test("who a script runs for rides a call, never a mark, a stored event or a delivery's cause", () => {
+  const cause = { chain: "c", depth: 1, onBehalfOf: "token.signature" };
+  expect(parseCause(cause)).toMatchObject({ onBehalfOf: "token.signature" });
+  expect(parseCause(JSON.stringify(cause))).not.toHaveProperty("onBehalfOf");
+  expect(causeHeader({ ...cause, hops: 0 })).not.toContain("token");
+  expect(storedCause(cause)).toEqual({ chain: "c", depth: 1 });
+  expect(causeOfDelivery([{ source: { cause } }])).not.toHaveProperty("onBehalfOf");
 });
 
 test("a mark never keys writes, and a bad write key is dropped alone", () => {

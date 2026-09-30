@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { cloudflareApi, dopplerSecret } from "./env-context.ts";
 import { fakeDoppler } from "./fake-doppler.ts";
@@ -79,7 +79,7 @@ test.for<{
 // The test evidence upload's: fetched beside the tests into the job's file, read after them from it.
 test("dopplerSecret with a fallback fetches the config into the file, then reads it offline", () => {
   using doppler = fakeDoppler({ secrets: { CLOUDFLARE_API_TOKEN: "token" } });
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const fallback = join(directory.path, "doppler-shared-preview");
   const read = () => dopplerSecret("_shared", "preview", "CLOUDFLARE_API_TOKEN", { fallback });
 

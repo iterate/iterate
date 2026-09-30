@@ -7,6 +7,7 @@ import {
   cloudflareCustomHostnameProvider,
   customHostnameProblem,
   customHostnameRecords,
+  ownershipRecordOf,
 } from "./custom-hostnames.ts";
 
 const reserved = ["iterate.com", "iterate.app", "garple.com"];
@@ -56,13 +57,22 @@ test("cloudflareCustomHostnameProvider: none without a token", () => {
 
 test("customHostnameRecords: the hostname and every name under it to the fallback origin, and _acme-challenge delegated to Cloudflare", () => {
   expect(customHostnameRecords("iterate.somedomain.com", SAAS)).toEqual([
-    { name: "iterate.somedomain.com", value: "cname.iterate.app" },
-    { name: "*.iterate.somedomain.com", value: "cname.iterate.app" },
+    { type: "CNAME", name: "iterate.somedomain.com", value: "cname.iterate.app" },
+    { type: "CNAME", name: "*.iterate.somedomain.com", value: "cname.iterate.app" },
     {
+      type: "CNAME",
       name: "_acme-challenge.iterate.somedomain.com",
       value: "iterate.somedomain.com.dcv-uuid.dcv.cloudflare.com",
     },
   ]);
+});
+
+test("ownershipRecordOf: a TXT record at _iterate.<hostname> naming the project, as Domain Connect's template writes it", () => {
+  expect(ownershipRecordOf("iterate.somedomain.com", "prj_1")).toEqual({
+    type: "TXT",
+    name: "_iterate.iterate.somedomain.com",
+    value: "iterate-project=prj_1",
+  });
 });
 
 test("cloudflareCustomHostnameProvider: provision finds or creates a wildcard custom hostname validated over TXT; remove deletes what exists", async () => {

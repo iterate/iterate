@@ -16,7 +16,7 @@ pnpm install
 pnpm dev
 pnpm typecheck
 pnpm test
-pnpm --dir apps/os e2e
+pnpm --dir test e2e
 pnpm spec
 ```
 
@@ -27,7 +27,7 @@ the platform:
 pnpm --dir apps/os build
 pnpm --dir apps/os typecheck
 pnpm --dir apps/os test
-pnpm --dir apps/os e2e
+pnpm --dir test e2e
 ```
 
 The Worker is a TanStack Start app built by Vite: `src/worker.ts` serves the platform, and the
@@ -35,7 +35,7 @@ pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered
 `src/routes/` using the shared `@iterate-com/ui` components. The build emits the Worker and its
 `dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects
 a deployed target for the integration tests and the browser tests (`pnpm spec`,
-[specs/](../../specs/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
+[test/playwright/](../../test/playwright/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
 suite boundary and required evidence.
 
 ## Configuration and deployment
@@ -184,7 +184,7 @@ that.
 The MCP endpoint is `/mcp` on each platform deployment (production also serves
 https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script` is an
 `async (itx) => …` function. The deployed integration test
-[shows runnable examples](e2e/mcp-project-root.e2e.test.ts). An MCP client signs in with OAuth or
+[shows runnable examples](../../test/vitest/os/mcp-project-root.e2e.test.ts). An MCP client signs in with OAuth or
 presents a personal access token; [credentials](docs/credentials.md) says which bearer works
 where, and why the operator bearer is `/api`'s alone.
 

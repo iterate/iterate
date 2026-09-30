@@ -9,7 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
-import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "iterate/platform-retry";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
@@ -363,5 +363,4 @@ async function dropD1Schema(d1: D1Query) {
 
 export { eraseDataWith, d1Query, dropD1Schema };
 
-if (process.argv[1]?.endsWith("erase-data.ts"))
-  void createCli({ ...import.meta, name: "erase-data" }).run();
+void createCli({ ...import.meta, name: "erase-data" }).run();

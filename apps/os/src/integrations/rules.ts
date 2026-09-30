@@ -1,7 +1,7 @@
 // src/integrations/rules.ts — the pure rules the providers' webhooks, GitHub's connect, an
 // incremental consent, a sign-in that keeps its token (identity.ts) and the one-token pointer behind
 // a person's account connected to a project (secret/durable-object.ts) apply, covered row by row in
-// rules.test.ts. What such an account lacks for the project is @iterate-com/shared's `missingScopes`.
+// rules.test.ts. What such an account lacks for the project is iterate/integration-scopes' `missingScopes`.
 //
 // THE WEBHOOK RESPONSE CODES. A Slack app or a GitHub App is one webhook URL for every workspace or
 // installation it is in, and Slack disables an app's deliveries to all of them once most of an

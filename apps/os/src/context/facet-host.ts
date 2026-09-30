@@ -37,7 +37,7 @@ import {
 } from "iterate/expression";
 import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
 import type { FacetSpec, WorkerSource } from "iterate/api";
-import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
 import {
   CoreContract,
@@ -93,7 +93,7 @@ const isFacetStartPlatformFailure = (error: unknown): error is Error =>
 /** How long one facet call may take before the facet is aborted (a call that never answers would
  *  hold the pins' release, and with it this actor, forever). */
 const FACET_CALL_WATCHDOG_MS = 60_000;
-/** WORKAROUND for a platform defect — e2e/facet-abort-storage-reset.e2e.test.ts pins it.
+/** WORKAROUND for a platform defect — test/vitest/os/facet-abort-storage-reset.e2e.test.ts pins it.
  *  On the edge (never in local workerd), a facet whose SQLite database took a few dozen pages of
  *  writes and then STOPS — aborted (`ctx.facets.abort`), or evicted with its context — makes one of
  *  the context's next storage commits fail with "Internal error in Durable Object storage caused
@@ -182,7 +182,7 @@ type FacetHostDeps = {
   ctx: Pick<DurableObjectState, "facets" | "storage" | "exports" | "blockConcurrencyWhile">;
   /** What `prepareConfinedWorker` reads of the env: the Worker Loader. Read at call time, off the
    *  DO's own `env` field — a workerd test swaps that field for a counting loader
-   *  (__workers-tests__/facets.test.ts). */
+   *  (test/vitest/os-workers/facets.test.ts). */
   env: () => { LOADER: WorkerLoader; ITX_KV: KVNamespace };
   deployId: string;
   /** The DO's name: a facet's props and the owner half of its loader identity. */
@@ -1042,7 +1042,7 @@ export class FacetHost {
     let recordLoadedIdentity: (() => void) | undefined;
     let materializedLoaderId: string | undefined;
     if (firstPartyClassName) {
-      // `ctx.exports.<Class>({ props })` mints the class (__workers-tests__/facets.test.ts).
+      // `ctx.exports.<Class>({ props })` mints the class (test/vitest/os-workers/facets.test.ts).
       const exportsOf = this.#deps.ctx.exports as unknown as Record<
         string,
         (options: { props: FacetProps }) => DurableObjectClass
@@ -1051,7 +1051,7 @@ export class FacetHost {
     } else {
       const memo = facetStartupMemo!;
       // THE LOADED IDENTITY, resolved — not loaded: `load` runs only for a facet that starts (below;
-      // __workers-tests__/facets.test.ts). The awaits are the named worker's resolution and a dead
+      // test/vitest/os-workers/facets.test.ts). The awaits are the named worker's resolution and a dead
       // id's recovery (worker-loader.ts).
       const resolved = await this.#workerOf(name, memo).then(
         (worker) => ({ worker }),

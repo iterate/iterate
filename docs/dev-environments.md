@@ -65,7 +65,7 @@ read secrets.
 - **Cloudflare account**: a local worker proxies Artifacts, AI and Browser to a
   real account: wrangler's `CLOUDFLARE_ACCOUNT_ID`, else your `wrangler login`'s.
   Root `pnpm dev` and the specs' local worker set the dev/preview account
-  (`scripts/os-dev.ts`). A command run in `apps/os` itself (`pnpm --dir apps/os e2e`)
+  (`scripts/os-dev.ts`). A command run in a package itself (`pnpm --dir test e2e`)
   takes your shell's: if your login spans several accounts, export
   `CLOUDFLARE_ACCOUNT_ID` as envs.ts `PREVIEW_AND_DEV_ACCOUNT_ID`.
 - **Config selection**: `pnpm dev` runs `apps/os/scripts/dev.ts` (through
@@ -154,7 +154,7 @@ read secrets.
   `apps/dash/README.md`) and `pnpm --dir apps/dash dev`.
 - Sign in as an agent/test: use the deployment's password or operator bearer
   (next section). Never script the OAuth dance by hand: the e2e fixture
-  `oauthSession` in `apps/os/e2e/support/principal.ts` runs the real flow
+  `oauthSession` in `test/helpers/principal.ts` runs the real flow
   (password sign-in, consent, code exchange) when a test needs a real grant.
 - Test emails: tests use the reserved test domains (`example.com`, `.test`,
   and the other RFC 2606/6761 names). No deployment ever mails them, because a
@@ -233,7 +233,7 @@ it). It needs only the selected environment's
 every project. It does not impersonate a customer unless you ask it to:
 `authenticate({ type: "admin-secret", secret, as: { email } })` acts as that
 user's session (the projects of their organizations). The e2e suite's
-`adminCredentials(as?)` in `apps/os/e2e/support/client.ts` is exactly this.
+`adminCredentials(as?)` in `test/helpers/client.ts` is exactly this.
 
 **Platform admins** are people, not the bearer: the exact emails in `APP_CONFIG`
 `admins` (`["jonas@iterate.com"]`; local dev lists `test@preview.iterate.test`).
@@ -289,7 +289,7 @@ The deployment's two secrets give you three ways in:
    `/mcp`.
 2. **Browser**: `POST /login` with an email and the deployment's password —
    the sign-in page's own form post — sets the issuer session cookie.
-   `issuerCookie` in `apps/os/e2e/support/principal.ts` does this for tests;
+   `issuerCookie` in `test/helpers/principal.ts` does this for tests;
    in a real browser, just use the `/login` page. This is THE way to point a
    browser at a local dev server or preview as a chosen identity.
 3. **Membership**: authorization follows the directory. A user reaches the
@@ -298,10 +298,10 @@ The deployment's two secrets give you three ways in:
 
 **A new user has no organization.** A human creates one in the Dash's New
 project sheet, or on the consent page when a client such as Claude Code first
-asks for access (`specs/os/auth.spec.ts`). An agent that
+asks for access (`test/playwright/os/auth.spec.ts`). An agent that
 needs a project a particular user can reach creates it as that user through the
 operator session: `session().authenticate(adminCredentials({ email })).projects.create({ project })`,
-as `apps/os/e2e/support/project-host.ts` does.
+as `test/helpers/project-host.ts` does.
 
 For local dev: `pnpm dev`, then `http://localhost:8788/login` with any email and
 password `dev`, or `pnpm getin -e <someone>@preview.iterate.test` for a browser
@@ -318,10 +318,10 @@ channels. The local values in `scripts/dev.ts` are public dev values.
 ### Playwright specs against local dev or previews
 
 The root Playwright config runs every app's browser specs from the root
-`specs/` directory, and `pnpm spec` runs them from the repo root. It has one
-project per app host: `os` (Desktop Chrome, `specs/os/`), `os-phone` (Pixel 7,
-with touch, for the sign-in and consent specs), `notes` (`specs/notes/`,
-skipped locally unless `NOTES_BASE_URL` is set), `voice` (`specs/voice/`,
+`test/playwright/` directory, and `pnpm spec` runs them from the repo root. It has one
+project per app host: `os` (Desktop Chrome, `test/playwright/os/`), `os-phone` (Pixel 7,
+with touch, for the sign-in and consent specs), `notes` (`test/playwright/notes/`,
+skipped locally unless `NOTES_BASE_URL` is set), `voice` (`test/playwright/voice/`,
 skipped locally unless `VOICE_BASE_URL` is set), the other apps' projects and
 `suite` (the flake sentinel and the harness's own specs). Select one with `pnpm spec --project=os-phone`.
 Playwright owns the server lifecycle: for a localhost target it runs
@@ -343,14 +343,14 @@ WORKER_BASE_URL=https://pr<n>-os.iterate-dev-preview.workers.dev \
   doppler run --project os --config preview -- pnpm spec
 
 # a single spec, headed, while working on it
-pnpm spec specs/os/auth.spec.ts --headed
+pnpm spec test/playwright/os/auth.spec.ts --headed
 ```
 
 Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
 `envs.ts`: the entry the URL is, or the per-commit deployment it names
-(`apps/os/e2e/support/deployed-target.ts`). `WORKER_BASE_URL` is the
+(`test/helpers/deployed-target.ts`). `WORKER_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.
 
@@ -552,14 +552,14 @@ when your checkout is the commit CI tests, a deployment of its own otherwise.
 `e2e` and `specs` test the PR's newest deployment.
 
 For a focused flake hunt, reuse the exact deployment and run one test file or
-one test repeatedly without redeploying (from `apps/os`):
+one test repeatedly without redeploying (from `test/`):
 
 ```bash
 PREVIEW=https://pr1234-a1b2c3d-os.iterate-dev-preview.workers.dev
 
-# one Vitest file, one test (paths are relative to apps/os)
+# one Vitest file, one test (paths are relative to test/)
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
-  pnpm e2e e2e/session.e2e.test.ts -t "projects.create"
+  pnpm e2e:run vitest/os/session.e2e.test.ts -t "projects.create"
 
 # the whole suite N times, tallying every row that did not pass every time
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
@@ -570,10 +570,10 @@ One spec, repeated, from the repo root (`pnpm spec` is the root's script):
 
 ```bash
 WORKER_BASE_URL=$PREVIEW doppler run --project os --config preview -- \
-  pnpm spec specs/os/auth.spec.ts --repeat-each 25
+  pnpm spec test/playwright/os/auth.spec.ts --repeat-each 25
 ```
 
-After each run of the suite the soak runs the perf budgets (`apps/os/perf`)
+After each run of the suite the soak runs the perf budgets (`test/vitest/os/perf`)
 alone. It runs sequentially and writes `output/soak/summary.json` plus a table:
 a row that fails once in a hundred is a flake, a row that fails every time is a
 bug. All requested runs complete, so the summary preserves the failure rate.

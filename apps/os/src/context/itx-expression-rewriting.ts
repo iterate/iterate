@@ -72,7 +72,7 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
     "durable future appends: `schedules.set({ key, when, events })` · `schedules.cancel(key)`",
   readEvents: "read this log: `(await itx.readEvents(afterOffset, limit)).events`",
   waitForEvent: "block until an event lands: `waitForEvent({ type, afterOffset, timeoutMs })`",
-  cd: "any context of the project, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./sandbox').append({ type, payload })`; a jail's bare null refuses what reaches in",
+  cd: "any context of the project, with every verb: `itx.cd('/').waitForEvent(…)`, `itx.cd('./child').append({ type, payload })`; a jail's bare null refuses what reaches in",
   fetch: "the internet through the project's egress: `itx.fetch(new Request(url))`",
   rpcStubs: "live values clients lent here: `rpcStubs.list()` · `rpcStubs.get(key)`",
   rewriteRules: "this table, described: `await rewriteRules.list()`",
@@ -140,7 +140,7 @@ const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set<string>(CONTEXT_ROOTS);
  *  the outside world — a kv, r2 or Artifacts prefix is the project's, a binding the deployment's,
  *  egress substitutes the project's secrets, a library verb takes the caller's origin. A SECURITY
  *  SURFACE: a root belongs here only if it answers identically at every context of a project but
- *  for whom it names as the caller. __workers-tests__/rule-snapshots.test.ts compares kv, r2, files
+ *  for whom it names as the caller. test/vitest/os-workers/rule-snapshots.test.ts compares kv, r2, files
  *  and fetch at a child against the root's answers, and email.test.ts has a child's mail name the
  *  child. */
 const PORTABLE_ROOTS = [
@@ -960,8 +960,8 @@ export class ItxExpressionResolver {
   #admit(expression: ItxExpression): void {
     const caller = this.#caller();
     // Only a trusted cd hop stamps path, after the whole input expression passed this check.
-    // The remaining expression now includes the owner's rewrites (e.g. the agent's sandbox
-    // redirect to builtins.run), not just loaded code's words. Keep app for row admission and
+    // The remaining expression now includes the owner's rewrites (e.g. a redirect of `run`
+    // to builtins.run), not just loaded code's words. Keep app for row admission and
     // attribution, but don't reject the owner's grant again at its destination.
     if (caller.app && !caller.path) admitLoadedCodeExpression(expression, this.#path);
   }

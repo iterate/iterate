@@ -5,7 +5,7 @@
  *
  *   await root.voice.setupVoiceAgent({ streamPath, activation, screen? })   // → { streamPath }
  *
- * The call is an agent: normal agent creation establishes the parent link, sandbox, catalog entry
+ * The call is an agent: normal agent creation establishes the parent link, catalog entry
  * and the agents app's processor, which answers every delegation. Then one append installs the
  * voice relay's subscription, starts the call (so the relay dials the provider before the first
  * microphone frame arrives) and gives the agent its spoken-conversation instructions. The device
@@ -161,7 +161,7 @@ export default class VoiceWorker extends IterateConfigEntrypoint implements Voic
       : undefined;
     // `itx.agents` is the rewrite rule the agents app mounts, installed by the same init case.
     using itx = this.getItx() as IterateContextApiWith<"agents"> & Disposable;
-    // Normal agent creation establishes the creator link, the script sandbox and the agent
+    // Normal agent creation establishes the creator link and the agent
     // that answers the call's delegations, before the relay needs project code or egress.
     await itx.agents.create(streamPath);
     /* The agent's instructions are its own `context-added` items, which start no turn: the

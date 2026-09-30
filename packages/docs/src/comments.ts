@@ -3,6 +3,8 @@
 // whole doc; its comments are the events that added and replied to it. Anyone on the project may
 // resolve or reopen a thread; only a comment's author may edit or delete it. The author is the
 // event's `source`, which the platform stamps: a person's email, or the context an agent wrote from.
+// A comment an agent wrote for a person (Claude Code over MCP, as that person) says so in `via`, the
+// agent's own word for itself; the event's `source.grant` is the connection it really came through.
 //
 //   docs/comment-added       a new thread: its id, its quote (or none, for the whole doc), its first comment
 //   docs/comment-replied     a comment on a thread
@@ -35,15 +37,20 @@ export const commentEvents = [
 
 export const Quote = z.object({ exact: z.string().min(1), prefix: z.string(), suffix: z.string() });
 
+/** The agent that wrote a comment on its person's behalf, as it names itself ("Claude Code"). */
+const Via = z.string().trim().min(1).max(40).optional();
+
 export const CommentAdded = z.object({
   thread: z.string().min(1),
   quote: Quote.nullable(),
   body: z.string().min(1),
+  via: Via,
 });
 export const CommentReplied = z.object({
   thread: z.string(),
   comment: z.string().min(1),
   body: z.string().min(1),
+  via: Via,
 });
 export const CommentEdited = z.object({
   thread: z.string(),
@@ -58,6 +65,9 @@ export const Comment = z.object({
   /** the thread's id for its first comment */
   id: z.string(),
   author: z.string(),
+  /** the agent that wrote it for its author, when one did; absent in a build before it, whose
+   *  live state a newer page still reads */
+  via: z.string().nullable().default(null),
   body: z.string(),
   at: z.string(),
   edited: z.boolean(),
@@ -75,9 +85,11 @@ export const CommentThread = z.object({
 });
 export type CommentThread = z.infer<typeof CommentThread>;
 
-/** Who wrote an event: the person, else the context it was written from (an agent's). */
+/** Who wrote an event: the person, or the person a script ran for (an agent over MCP, as them),
+ *  else the context it was written from (an agent's own). */
 export function authorOf(event: Pick<StreamEvent, "source">) {
-  return event.source.principal?.email || event.source.principal?.actor || event.source.origin;
+  const person = event.source.principal || event.source.onBehalfOf?.principal;
+  return person?.email || person?.actor || event.source.origin;
 }
 
 /** The threads after `event`; the same array when it changes nothing (not a comment event, a
@@ -98,7 +110,7 @@ export function reduceComments(threads: CommentThread[], event: StreamEvent): Co
       const added = CommentAdded.safeParse(event.payload);
       if (!added.success || threads.some((thread) => thread.id === added.data.thread))
         return threads;
-      const { thread, quote, body } = added.data;
+      const { thread, quote, body, via } = added.data;
       return [
         ...threads,
         {
@@ -106,14 +118,16 @@ export function reduceComments(threads: CommentThread[], event: StreamEvent): Co
           quote,
           detached: false,
           resolved: null,
-          comments: [{ id: thread, author, body, at: event.createdAt, edited: false }],
+          comments: [
+            { id: thread, author, via: via || null, body, at: event.createdAt, edited: false },
+          ],
         },
       ];
     }
     case COMMENT_REPLIED: {
       const reply = CommentReplied.safeParse(event.payload);
       if (!reply.success) return threads;
-      const { comment, body } = reply.data;
+      const { comment, body, via } = reply.data;
       return update(reply.data.thread, (thread) =>
         thread.comments.some((each) => each.id === comment)
           ? thread
@@ -121,7 +135,14 @@ export function reduceComments(threads: CommentThread[], event: StreamEvent): Co
               ...thread,
               comments: [
                 ...thread.comments,
-                { id: comment, author, body, at: event.createdAt, edited: false },
+                {
+                  id: comment,
+                  author,
+                  via: via || null,
+                  body,
+                  at: event.createdAt,
+                  edited: false,
+                },
               ],
             },
       );

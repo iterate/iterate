@@ -2,7 +2,7 @@
 // them, the manifest ⇄ tree round trip) and the wire's one refusal that matters: a TRUNCATED pkt-line
 // body is an outage, never an empty ref list. Pure: no DO, no bindings; `fetch` is stubbed where the
 // transport is exercised. The packs themselves are pinned against the real endpoint deployed
-// (apps/os/e2e/cfartifacts.e2e.test.ts), against the local fake remote (apps/os/e2e/support/
+// (test/vitest/os/cfartifacts.e2e.test.ts), against the local fake remote (test/helpers/
 // fake-git-server.ts) and, for GitHub's fetch, in github-template.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";
@@ -131,6 +131,65 @@ test.for([
       ...line,
     })),
   );
+});
+
+// ── no answer ── a request that gets no whole answer in time (`GIT_REQUEST_TIMEOUT_MS` in
+// ./git-wire.ts says why).
+
+test("a read that gets no answer in 20 s is aborted and sent once more", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(Math, "random").mockReturnValue(0.5); // a 1 s wait jittered to 750 ms
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const signals: AbortSignal[] = [];
+  vi.stubGlobal("fetch", async (_request: Request, init: RequestInit) => {
+    signals.push(init.signal!);
+    if (signals.length === 1) return new Promise<Response>(() => {});
+    return new Response(concat([pktLine(`${TIP} refs/heads/main`), FLUSH]));
+  });
+  onTestFinished(() => void vi.useRealTimers());
+  const transport = createGitWireTransport({
+    remote: "https://artifacts.example/prj.git",
+    authorization: "Basic eDp0",
+  });
+  const tip = transport.tipOf("refs/heads/main");
+  await vi.advanceTimersByTimeAsync(20_000 + 750);
+  expect(await tip).toBe(TIP);
+  expect(signals.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(warn.mock.calls.map(([line]) => line)).toEqual([
+    {
+      event: "repo.platform-failure-retry",
+      kind: "disconnected",
+      name: "git-upload-pack",
+      remote: "https://artifacts.example/prj.git",
+      status: "network",
+      attempt: 1,
+      retryInMs: 750,
+      message:
+        "GitRequestTimeout: git-upload-pack for https://artifacts.example/prj.git answered nothing in 20 s",
+    },
+  ]);
+});
+
+test("a push that gets no answer in 20 s fails, and is never sent twice", async () => {
+  vi.useFakeTimers();
+  const fetch = vi.fn(async () => new Promise<Response>(() => {}));
+  vi.stubGlobal("fetch", fetch);
+  onTestFinished(() => void vi.useRealTimers());
+  const transport = createGitWireTransport({
+    remote: "https://artifacts.example/prj.git",
+    authorization: "Basic eDp0",
+  });
+  const pushed = transport
+    .push({ newOid: TIP, oldOid: ZERO_OID, pack: new Uint8Array(), ref: "refs/heads/main" })
+    .then(
+      (answer) => ({ answer }),
+      (error: Error) => ({ error: error.message }),
+    );
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(await pushed).toEqual({
+    error: "git-receive-pack for https://artifacts.example/prj.git answered nothing in 20 s",
+  });
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 // ── the tree codec ── nested trees encode to git's OWN object ids. The expected ids were computed with

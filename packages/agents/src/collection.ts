@@ -1,16 +1,13 @@
-// The installed catalog delegates project capabilities to each agent and its script context.
+// The installed catalog delegates project capabilities to each agent.
 //
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
 // `#deleteFacet`); a verb on a dead agent answers from the catalog's `deleted` row on `/`
-// (catalog.ts), never by `facets.get("agent", spec)` on its context. That call hosted the facet
-// again — a new database folded from the whole log, a startup memo, an instance that can run on past
-// the context's incarnation — so the dead agent's context carried a loaded facet for good, and the
-// next birth aborted it (apps/os context/residency.ts, the birth reset). The e2e row "a deleted
-// agent's refusals keep neither the root nor the agent's context resident" failed about once in
-// fourteen CI runs (2026-09-23/24) on exactly that birth's first call: "Internal error in Durable
-// Object storage caused object to be reset". Aborting a running loaded facet is how Cloudflare comes
-// to reset a whole object (apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
+// (catalog.ts), never by `facets.get("agent", spec)` on its context. That call would host the facet
+// again (a new database folded from the whole log, an instance that can run on past the context's
+// incarnation), and aborting a running loaded facet resets a whole Durable Object (apps/os
+// context/residency.ts, the birth reset; apps/os e2e/facet-abort-storage-reset.e2e.test.ts
+// measures it).
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
@@ -71,7 +68,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     // reached it — and never to a context `create` names: a script could otherwise link its child
     // above its own masks. The base itself is still the caller's to choose through the public
     // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-    // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
+    // test/vitest/agents/inherited-capabilities.e2e.test.ts.
     const creator = resolveContextPath("/", this.base);
     // Writing a parent link on an ancestor would point back down to its child.
     // Refuse before loading a facet or changing any context rows.
@@ -106,9 +103,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     let requestedAtOffset: number;
     if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
     else {
-      // The collection owns the project scope and delegates it to this child. The
-      // processor and its scripts get distinct contexts so their grants can be narrowed separately.
-      const sandbox = `${path}/sandbox`;
+      // The collection owns the project scope and delegates it to this child. The agent's scripts
+      // run in its own context, under these rows.
       const rule = (match: string, target: string, key: string) => ({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         idempotencyKey: key,
@@ -116,23 +112,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       });
       await context.append(
         rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
-        rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
         rule(
           "itx.agents",
           `itx.cd('/').agents.at(${JSON.stringify(path)})`,
           `agent-collection:${path}`,
         ),
       );
-      await itx
-        .cd(sandbox)
-        .append(
-          rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-          rule(
-            "itx.agents",
-            `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-            `agent-collection:${sandbox}`,
-          ),
-        );
       // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
       // rationale.
       const [requested] = (await context.append({

@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOUDFLARE_API, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { CLOUDFLARE_API, retryPlatformFailures } from "iterate/platform-retry";
 import { type DeployableEnv, type EnvContext } from "./env-context.ts";
 import { runStreamingCaptured } from "./vite-build.ts";
 

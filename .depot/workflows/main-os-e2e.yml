@@ -57,8 +57,7 @@ on:
       - apps/kit/**
       # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
       - "!apps/kit/firmware/**"
-      - specs/**
-      - playwright.config.ts
+      - test/**
       - packages/cli/**
       - packages/iterate/**
       - packages/agents/**
@@ -188,7 +187,7 @@ jobs:
         id: suite
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # the agents rows' GitHub calls (apps/agents/e2e/support.ts `publishedPackage`)
+          # the agents rows' GitHub calls (test/vitest/agents/support.ts `publishedPackage`)
           GITHUB_TOKEN: ${{ github.token }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # the job whose end starts the suite (scripts/ci/await-deploy.ts)

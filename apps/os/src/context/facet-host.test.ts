@@ -2,7 +2,7 @@
 // Node over fakes: the name's resolution is the test's to answer and hold, the loader keys a class by
 // the identity its id names, and the host's restarts queue behind one another as
 // `blockConcurrencyWhile` queues them. The Workers suite drives the real publication
-// (__workers-tests__/named-facets.test.ts).
+// (test/vitest/os-workers/named-facets.test.ts).
 import { expect, test } from "vitest";
 import { codedError } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";

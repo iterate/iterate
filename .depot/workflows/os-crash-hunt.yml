@@ -1,5 +1,5 @@
 # OS isolate crash hunt — nightly, against prd. The load-dependent rows of
-# apps/os/e2e/isolate-ceilings-deployed.e2e.test.ts (concurrent readers, a large
+# test/vitest/os/isolate-ceilings-deployed.e2e.test.ts (concurrent readers, a large
 # ephemeral fan-out, concurrent big appends, a poison facet) drive one context's Durable
 # Object up to and past its 128 MiB isolate ceiling on purpose; they are opt-in
 # (RUN_ISOLATE_CRASH_HUNT=1) so the deploy's e2e run stays deterministic. This is where
@@ -32,13 +32,13 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Hunt isolate crashes on os.iterate.com
-        working-directory: apps/os
+        working-directory: test
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WORKER_BASE_URL: https://os.iterate.com
           RUN_ISOLATE_CRASH_HUNT: "1"
         # The credentials come out of the deployment's APP_CONFIG in the environment
-        # (apps/os/e2e/support/global-setup.ts).
+        # (test/helpers/global-setup.ts).
         run: doppler run --project os --config prd -- pnpm e2e isolate-ceilings --no-file-parallelism
   # A red run pages #error-pulse (one page while it stays red); the next green run resolves it.
   notify:

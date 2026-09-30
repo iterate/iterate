@@ -55,7 +55,7 @@ fingerprinted `/assets/*`.
 4. Inspect the production graph with `pnpm --dir apps/<app> exec vite build --manifest`, which
    writes `dist/client/.vite/manifest.json`. Count modulepreloads, bytes, and requests before
    FCP/LCP.
-5. Write a red user-facing test (`specs/`), make the narrowest change, prove the package tests,
+5. Write a red user-facing test (`test/playwright/`), make the narrowest change, prove the package tests,
    typecheck, lint and build, then repeat the same captures on the preview.
 6. Read the preview window's Workers Logs for the app's worker and the platform's
    (debug-os-worker skill). Explain every new warning or error.

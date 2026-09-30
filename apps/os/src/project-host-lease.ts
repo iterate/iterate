@@ -18,11 +18,7 @@
 // A cookie session's connection (a browser on an app's own host) is not held: a browser cannot put
 // a bearer on a WebSocket, and a personal access token is never a cookie session.
 import { reportIssue } from "iterate/lib";
-import {
-  failureKind,
-  isPlatformFailureKind,
-  logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import {
   DROPPED_CLOSE_CODE,
   relayedCloseCode,

@@ -112,5 +112,4 @@ async function createResources(ctx: EnvContext<OsDeployableEnv>) {
   return database.uuid;
 }
 
-if (process.argv[1]?.endsWith("deploy.ts"))
-  void createCli({ ...import.meta, name: "deploy" }).run();
+void createCli({ ...import.meta, name: "deploy" }).run();

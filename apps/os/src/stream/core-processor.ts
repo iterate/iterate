@@ -21,7 +21,7 @@
 // (context/itx-expression-rewriting.ts for the rules, `normalizeControlEvent` below normalizes literal rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/itx/paused', payload: { reason } })`
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
-// trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
+// trips the stream by appending `paused`. Core knows nothing about it; test/helpers/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //
@@ -220,7 +220,7 @@ export function rowsPushingFacet(state: CoreState, facetName: string) {
 
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
  *  in place from then on, so a page of N control events costs O(rows + N), not N copies of the whole
- *  table (the O(rows²) constructor re-reduce memory-budget.test.ts pins). The set is fresh per batch
+ *  table (the O(rows²) constructor re-reduce test/vitest/os/memory-budget.test.ts pins). The set is fresh per batch
  *  and never holds a published table, so the state a caller handed in stays immutable; only the
  *  batch's own intermediate states share a draft, and nothing observes those. */
 type DraftTables = WeakSet<object> | undefined;

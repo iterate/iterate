@@ -37,9 +37,9 @@ import {
 } from "../integrations/verbs.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
-import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
+import { cloudflareCustomHostnameProvider, ownershipRecordOf } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
-import { dnsZoneOf } from "./dns-provider.ts";
+import { dnsZoneOf, txtRecordsOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 import type { ProjectPublisher } from "./publication.ts";
 
@@ -173,6 +173,18 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       reservedZones: config.customHostnames?.reservedZones || [],
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
+      heldElsewhere: async (hostname) => {
+        const holder = await controlPlane.hostnameHolder(hostname);
+        return Boolean(holder) && holder !== projectId;
+      },
+      proof: async (hostname) => {
+        const record = ownershipRecordOf(hostname, projectId);
+        const texts = await txtRecordsOf(record.name).catch((caught: unknown): string[] => {
+          console.warn(`ownership proof for ${hostname}: ${String(caught)}`);
+          return [];
+        });
+        return { record, proven: texts.includes(record.value) };
+      },
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
       // back to the project's Domains page in the dash — addressed by the project's slug, as the

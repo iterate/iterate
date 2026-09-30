@@ -41,14 +41,13 @@ import type { IterateSessionApi } from "iterate/api";
 import { connectIterate, type IterateConnection } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   failureKind,
   isPlatformFailureKind,
   retryPlatformFailures,
   type FailureKind,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import { OS_DOPPLER_PROJECT, backupBucketEnvs, getEnv, osEnvs } from "../../envs.ts";
 import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
@@ -485,4 +484,4 @@ function required(name: string): string {
   return value;
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "context-sweep" }).run();
+void createCli({ ...import.meta, name: "context-sweep" }).run();

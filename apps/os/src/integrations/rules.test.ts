@@ -1,5 +1,5 @@
 // src/integrations/rules.test.ts — rules.ts as rows. The response codes themselves run through the
-// worker routes in __workers-tests__/integrations.test.ts.
+// worker routes in test/vitest/os-workers/integrations.test.ts.
 import { createHmac } from "node:crypto";
 import { expect, test } from "vitest";
 import { verifySecretHmac } from "../secrets.ts";

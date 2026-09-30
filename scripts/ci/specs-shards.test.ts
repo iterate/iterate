@@ -1,9 +1,9 @@
 // Browser specs in shards (./specs-shards.ts): how many shards the workflows run, and Browser
 // specs' collection of their blob reports, against the monitors' fake Depot on a fake clock.
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, mkdtempDisposableSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { fakeDepot } from "../monitors/fake-depot.ts";
@@ -23,7 +23,7 @@ test.for(["preview-os.yml", "main-os-e2e.yml"])(
     const listed = JSON.parse(
       execFileSync(
         resolve(repoRoot, "node_modules/.bin/playwright"),
-        ["test", "--config", "playwright.config.ts", "--list", "--reporter=json"],
+        ["test", "--config", "test/playwright.config.ts", "--list", "--reporter=json"],
         // CI's workers, and the whole suite rather than one shard of it
         { cwd: repoRoot, env: { ...process.env, CI: "1", SPECS_SHARD: "" }, encoding: "utf8" },
       ),
@@ -142,7 +142,7 @@ function shardedRun(
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.setTimerTickMode("nextTimerAsync");
   onTestFinished(() => void vi.useRealTimers());
-  const out = temporaryDirectory();
+  const out = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const shards = Object.entries(legs).map(([displayName, leg], index) => {
     const shard = displayName.split(" ").at(-1)!.split("/")[0]!;
     const attempts = leg.retried ? [1, 2] : [1];

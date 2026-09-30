@@ -223,7 +223,7 @@ test("the resolver releases a walk's answer that REJECTS — its caller gets the
 
 // ── an answer leaves a context holding nothing of its session ── what the context's RPC `invoke`
 // hands back (dispatch.ts `itxAnswerDetachedFromSession`): the table the careless-caller rows of
-// e2e/context-residency.e2e.test.ts prove on the deployed worker.
+// test/vitest/os/context-residency.e2e.test.ts prove on the deployed worker.
 const repoHandleExpression: ItxExpression = ["itx", "repos", ["get", "/repos/x"]];
 
 // Each row builds its answer when it runs: the classes it names are declared below the tests.

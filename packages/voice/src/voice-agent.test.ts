@@ -2,7 +2,7 @@
 // what each delegation hands the agent, and what of the agent's answers the live model is sent.
 // The relay runs bare, its provider a fake socket this file speaks for, the agent's side a log the
 // hand-overs and answers are committed to. Audio, the provider's real protocol and the agent's own
-// loop are out of scope: apps/agents/e2e/voice-agent.e2e.test.ts runs the whole call on a worker.
+// loop are out of scope: test/vitest/agents/voice-agent.e2e.test.ts runs the whole call on a worker.
 import { consumesEvent } from "iterate/stream/processor";
 import { expect, test } from "vitest";
 import { HANG_UP_GOODBYE_GRACE_MS, VoiceAgentProcessor } from "./voice-agent.ts";

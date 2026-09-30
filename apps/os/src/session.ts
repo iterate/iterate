@@ -11,7 +11,7 @@ import {
   normalizeConfigRepoTemplateReference,
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import type { IterateApi, StreamPage } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";

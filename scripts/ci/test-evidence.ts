@@ -5,7 +5,6 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node
 import { tmpdir } from "node:os";
 import { extname, join, relative, resolve } from "node:path";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { ciTelemetrySourceFromEnvironment } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
@@ -705,4 +704,4 @@ function failStep(command: keyof typeof stepFailureTitles, error: unknown): neve
   process.exit(1);
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "test-evidence" }).run();
+void createCli({ ...import.meta, name: "test-evidence" }).run();

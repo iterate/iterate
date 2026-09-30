@@ -55,7 +55,7 @@ facet is never reset.
 On the edge, a facet that wrote a few dozen pages and then stops — aborted, or evicted with its
 context — makes one of the context's next commits fail with "Internal error in Durable Object
 storage caused object to be reset", and the whole context resets
-([`e2e/facet-abort-storage-reset.e2e.test.ts`](../e2e/facet-abort-storage-reset.e2e.test.ts) pins
+([`test/vitest/os/facet-abort-storage-reset.e2e.test.ts`](../../../test/vitest/os/facet-abort-storage-reset.e2e.test.ts) pins
 it). A facet started again before the context commits anything more avoids it. So every abort the
 platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
 start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
@@ -125,20 +125,20 @@ preview, 2026-09-23). So:
   `src/context/dispatch.test.ts` (2).
 - Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
   decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.
-- Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
-  `__workers-tests__/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh
+- Workers suite: `test/vitest/os-workers/alarm-and-pins.test.ts` (4),
+  `test/vitest/os-workers/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh
   incarnation).
 - Workers suite, the sweep's clock: `facets.test.ts` also decides that loaded code's
   calls never restart it and a project host's HTTP always does.
-- Deployed: `e2e/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6, the
+- Deployed: `test/vitest/os/context-residency.e2e.test.ts` reads wakes across idles for 1–3, 5 and 6, the
   resets a birth names on its wake record, and that a careless facet is no longer running once its
   quiet minute is up.
-- Timed, opt-in: `perf/context-residency.perf.test.ts` (`RUN_RESIDENCY_TIMING=1`, or the soak's
+- Timed, opt-in: `test/vitest/os/perf/context-residency.perf.test.ts` (`RUN_RESIDENCY_TIMING=1`, or the soak's
   `residency-timing` input) measures what Cloudflare decides and the e2e rows only print: a facet
   the context no longer holds runs on past the context's eviction until the sweep, a context under
   5 s of project-host traffic keeps one instance, and a claimed attempt finishes on the instance
   that started it. Under the e2e run these sampled the platform: it stopped facets 0–25 s after
   their call and evicted a context mid-traffic while the control plane stalled (#2899, #2921,
   #2939). The latency guard never runs them.
-- Deployed: `e2e/facet-abort-storage-reset.e2e.test.ts` pins the raw fault (a `createFailing` tagged
+- Deployed: `test/vitest/os/facet-abort-storage-reset.e2e.test.ts` pins the raw fault (a `createFailing` tagged
   `slow`).

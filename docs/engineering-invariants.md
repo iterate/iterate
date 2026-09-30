@@ -43,7 +43,7 @@ signal. "Unavoidable error spam" is not a category.
 
 Every failure is one of five kinds. The hop that first sees it decides the
 kind (`failureKind` in
-[platform-retry.ts](../packages/shared/src/platform-retry.ts)), and the kind
+[platform-retry.ts](../packages/iterate/src/platform-retry.ts)), and the kind
 rides on as own properties, which Workers RPC and capnweb keep.
 
 | Kind           | Recognized by                                                                                                                                                                                                                                                                                                                                     | Repeated                                                                                                                                          | Answered as            |
@@ -60,7 +60,7 @@ rides on as own properties, which Workers RPC and capnweb keep.
   method that names its whole end state. A request answered 429 was refused
   unrun, so a script sends it again whatever its method, and so does the e2e
   transport with one Cloudflare answered not routed yet (`isNotRoutedYet`,
-  [not-routed.ts](../apps/os/e2e/support/not-routed.ts)). `contextStub`
+  [not-routed.ts](../test/helpers/not-routed.ts)). `contextStub`
   ([context-stub.ts](../apps/os/src/context-stub.ts)) applies this to every
   call the platform makes on a context Durable Object, whichever hop makes it.
 - **Schedules come from one short list**: `ONCE_NOW`, `UPSTREAM_ONCE`,

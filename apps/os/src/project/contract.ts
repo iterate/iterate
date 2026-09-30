@@ -28,8 +28,15 @@ export const CustomHostnameObservation = z.object({
   status: z.string(),
   /** The certificate's status: `pending_validation` … `active`. */
   sslStatus: z.string(),
-  /** The CNAMEs the owner adds (custom-hostnames.ts `customHostnameRecords`). */
-  records: z.array(z.object({ name: z.string(), value: z.string() })),
+  /** The records the owner adds: the CNAMEs (custom-hostnames.ts `customHostnameRecords`) and the
+   *  TXT record that proves the hostname is theirs (`ownershipRecordOf`). */
+  records: z.array(
+    z.object({
+      type: z.enum(["CNAME", "TXT"]).default("CNAME"),
+      name: z.string(),
+      value: z.string(),
+    }),
+  ),
   /** ONE-CLICK DNS (domain-connect.ts): the owner's DNS provider and the signed link that writes
    *  `records` there, when that provider has onboarded our Domain Connect template and the
    *  hostname is not live yet. Null otherwise: the owner adds the records by hand. */
@@ -44,7 +51,7 @@ export const ProjectContract = defineProcessorContract({
   slug: "project",
   // A checkpoint reduced under an older version is reused as-is by the engine, so bumping the version
   // is what re-reduces every existing root log.
-  version: "17",
+  version: "18",
   description:
     "The project: where its own creation and deletion stand, its custom hostnames, its integration connections, every context under it (from the announcements each lands on /), and the catalog of every repo, workspace and secret born under it (from the certificates cross-posted to /).",
   /** THE REDUCED STATE — what the reduce keeps between events: where the project's OWN creation
@@ -114,6 +121,11 @@ export const ProjectContract = defineProcessorContract({
           /** When the owner came back from their DNS provider's Domain Connect page having
            *  approved the records (ISO time), so the page says so while they are being seen. */
           connectedAt: z.string().nullable().default(null),
+          /** THE CLAIM: the project holds the hostname in the control plane's table, which routes
+           *  it here and keeps every other project from it — taken only once the ownership record
+           *  (custom-hostnames.ts `ownershipRecordOf`) names the project. Until then the hostname
+           *  is not the project's, whatever Cloudflare says. */
+          claimed: z.boolean().default(false),
         }),
       )
       .default({}),
@@ -167,7 +179,7 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-requested": {
       description:
-        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor claims it in the control plane's hostname table and creates the wildcard Cloudflare for SaaS custom hostname, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
+        "Serve this project on `hostname` — its apex there, and `<routingSlug>.<hostname>` with that routing slug. The processor creates the wildcard Cloudflare for SaaS custom hostname, claims it in the control plane's hostname table once the ownership TXT record `_iterate.<hostname>` names the project, then lands hostname-add-settled. Again for a hostname already added re-reads Cloudflare's status.",
       payloadSchema: z.object({
         hostname: z.string().min(1),
         /** Asked on the way back from the DNS provider's Domain Connect page. */
@@ -176,12 +188,15 @@ export const ProjectContract = defineProcessorContract({
     },
     "events.iterate.com/project/hostname-add-settled": {
       description:
-        "The answer to the add at `requestOffset`: Cloudflare's status and the DNS records the owner adds, or why it failed (taken, reserved, malformed, Cloudflare's refusal). A failed first add releases the claim.",
+        "The answer to the add at `requestOffset`: Cloudflare's status and the DNS records the owner adds, whether the project holds the hostname's claim, or why it failed (taken, reserved, malformed, Cloudflare's refusal). The claim is taken once the ownership TXT record names the project; a failed add releases a claim it just took.",
       payloadSchema: z.object({
         hostname: z.string().min(1),
         requestOffset: z.number().int().positive(),
         cloudflare: CustomHostnameObservation.nullable(),
         error: z.string().nullable(),
+        /** Whether the project holds the claim after this answer. An answer from before the
+         *  ownership proof says nothing: then every add that reached Cloudflare held its claim. */
+        claimed: z.boolean().optional(),
       }),
     },
     "events.iterate.com/project/hostname-remove-requested": {

@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import {
   appConfigSecretsOf,
@@ -44,7 +44,7 @@ test("rejects a nonzero child exit", async () => {
 // The waits run on a fake clock that moves on whenever nothing else is left to run: CLOUDFLARE_API's
 // schedule, kept, while the commands run for real.
 test("runs a command Cloudflare's rate limit ended again, with a warn, until it succeeds", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   using warn = fakeClockAndWarns();
   const attemptFile = join(directory.path, "attempts");
   const script = `

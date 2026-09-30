@@ -22,7 +22,7 @@ export const Route = createRootRoute({
  *  cookie joins this visit to them. */
 function RootDocument() {
   // `data-hydrated` is false in the server's HTML and true once React owns the page: the specs'
-  // hydration-waiter (specs/AGENTS.md) waits on it before touching controls that do nothing yet.
+  // hydration-waiter (test/playwright/AGENTS.md) waits on it before touching controls that do nothing yet.
   const hydrated = useHydrated();
   const apiKey = Route.useLoaderData();
   initPosthog(apiKey);

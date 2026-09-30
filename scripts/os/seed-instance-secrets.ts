@@ -9,7 +9,6 @@
 // `--env` names the target in envs.ts and is required: there is no default, and prd also needs
 // `--confirm-prd`.
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
@@ -88,5 +87,4 @@ export default async function seedInstanceSecrets(options: {
   }
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "seed-instance-secrets" }).run();
+void createCli({ ...import.meta, name: "seed-instance-secrets" }).run();

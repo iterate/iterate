@@ -6,8 +6,7 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { viteBuild } from "../../../scripts/lib/vite-build.ts";
 import type { OsDeployableEnv } from "./os-env.ts";
 import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
@@ -21,6 +20,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const PLATFORM_ENTRIES = [
   "iterate/sdk",
   "iterate/stream/processor",
+  "iterate/stream/contract",
   "iterate/stream/run",
   "iterate/email",
   "iterate/api",
@@ -105,13 +105,12 @@ export async function build() {
     cwd: root,
     encoding: "utf8",
   }).trim();
-  const packagesCommit = checkoutPublishedPackageCommit(
-    path.resolve(root, "../.."),
-    process.env.PREVIEW_HEAD_SHA,
-  );
+  // this checkout's build of the packages (published-package-commit.ts), worked out only when a
+  // template still names `@main`: a copy made by Copybara names the copied commit's build already
+  let packagesCommit: string | undefined;
   // A template as this checkout has it: its tracked files alone (not the node_modules/ an `npm
   // install` for a local `tsc` leaves there), its agents and voice at this checkout's build of each
-  // package (published-package-commit.ts), never `@main`.
+  // package, never `@main`, which moves.
   const filesOf = (name: string) =>
     execFileSync("git", ["ls-files", "-z"], {
       cwd: path.join(templatesRoot, name),
@@ -122,10 +121,20 @@ export async function build() {
       .map((file) => {
         const content = readFileSync(path.join(templatesRoot, name, file), "utf8");
         const manifest = file === "package.json" ? JSON.parse(content) : undefined;
-        const ours = ["@iterate-com/agents", "@iterate-com/voice"].filter(
-          (dependency) => manifest?.dependencies?.[dependency],
+        // every package of ours the template takes from pkg.pr.new's moving `@main`; `iterate` itself
+        // is not one: the loader links it to this deployment's own build (PLATFORM_ENTRIES)
+        const ours = Object.entries<string>(manifest?.dependencies || {}).flatMap(
+          ([dependency, version]) =>
+            dependency.startsWith("@iterate-com/") &&
+            /^https:\/\/pkg\.pr\.new\/.*@main$/.test(version)
+              ? [dependency]
+              : [],
         );
         if (!ours.length) return { path: file, content };
+        packagesCommit ||= checkoutPublishedPackageCommit(
+          path.resolve(root, "../.."),
+          process.env.PREVIEW_HEAD_SHA,
+        );
         for (const dependency of ours)
           manifest.dependencies[dependency] = pkgPrNewVersion(dependency, packagesCommit);
         return { path: file, content: `${JSON.stringify(manifest, null, 2)}\n` };
@@ -169,4 +178,4 @@ export async function buildOs(deployment: OsDeployableEnv) {
   await viteBuildOs(deployment);
 }
 
-if (isMainModule(import.meta.url)) await build();
+if (import.meta.main) await build();

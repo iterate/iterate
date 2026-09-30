@@ -112,7 +112,7 @@ export function entityLifecycle<const Slug extends "repo" | "workspace">(slug: S
  *  tolerates its own earlier success (a repo that already exists, one already gone). Pure: the host's
  *  `getItx` and the effects are its constructor arguments, so a unit test constructs it with `new`
  *  and reduces rows (entity-lifecycle.test.ts, in node); the sagas are proven on the worker
- *  (e2e/repos.e2e.test.ts, e2e/workspaces.e2e.test.ts). */
+ *  (test/vitest/os/repos.e2e.test.ts, test/vitest/os/workspaces.e2e.test.ts). */
 export class EntityLifecycleProcessor<
   State extends EntityCreationAndDeletionState = EntityCreationAndDeletionState,
 > extends StreamProcessor<State> {

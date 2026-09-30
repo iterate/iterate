@@ -15,7 +15,7 @@
 //   APP_CONFIG_URLS__VOICE=http://localhost:5174
 
 import { z } from "zod";
-import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "./app-config.ts";
+import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "iterate/app-config";
 
 /** THE SCHEMA. `urls` names the platform and every first-party app (scripts/lib/start-app.ts
  *  `FIRST_PARTY_APPS` is typed against it, so an app added there is added here). */
@@ -52,7 +52,7 @@ export const StartAppConfig = z.object({
    *  posthog-js with it. A public key, not a secret. Blank ⇒ no PostHog. */
   posthogProjectKey: z.string().trim().default(""),
   /** WHICH BUILD OF THIS REPOSITORY'S PACKAGES goes with this deployment, as pkg.pr.new names it
-   *  (@iterate-com/shared/pkg-pr-new): `main`, or the commit a per-commit deployment's packages are
+   *  (iterate/pkg-pr-new): `main`, or the commit a per-commit deployment's packages are
    *  published at (apps/os scripts/published-package-commit.ts). What an app installs in a project,
    *  pinned as it writes (Docs' "Install Docs"). A config written without it (a test's) goes with
    *  main's. */

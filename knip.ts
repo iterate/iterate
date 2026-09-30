@@ -30,7 +30,7 @@ export default {
       // agents.ts as the module the agents app's facets load their classes from, and voice.ts as
       // voice's service and relay.
       entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
-      project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
+      project: ["*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
@@ -52,17 +52,9 @@ export default {
     },
     "apps/os": {
       // The platform worker. Knip's vitest plugin reads vitest.config.ts (its global
-      // setups); the rest are entries here. The browser specs are the root suite (specs/AGENTS.md).
+      // setup); the rest are entries here. Every test beyond a simple unit test is test/'s.
       entry: [
         "src/worker.ts!",
-        // the e2e suite's test files are entries; e2e/support/** is project code, so an unused support
-        // export is reported
-        "e2e/**/*.e2e.test.ts",
-        // read as text and handed over as the presence facet's source (e2e/support/sources.ts)
-        "e2e/support/presence/durable-object.ts",
-        "perf/**/*.perf.test.ts",
-        "__workers-tests__/**/*.ts",
-        "bench/**/*.ts",
         "src/**/*.test.ts",
         // the node programs (build and dev; iterate's deploy and preview tooling is scripts/os at the
         // root) and their tests, so the library modules beside them (generate-wrangler-config) get
@@ -73,15 +65,7 @@ export default {
         "scripts/*.test.ts",
         "examples/**/*.ts",
       ],
-      project: [
-        "src/**/*.{ts,tsx,css}!",
-        "scripts/**/*.ts",
-        "examples/**/*.ts",
-        "e2e/**/*.ts",
-        "perf/**/*.ts",
-        "__workers-tests__/**/*.ts",
-        "bench/**/*.ts",
-      ],
+      project: ["src/**/*.{ts,tsx,css}!", "scripts/**/*.ts", "examples/**/*.ts"],
       // sqlfu writes these whole (`pnpm db:generate`): barrels and a migrations bundle the code
       // does not import, beside the query modules it does.
       ignore: ["src/control-plane/db/**/.generated/**"],
@@ -90,16 +74,33 @@ export default {
       ignoreDependencies: ["cloudflare", "tailwindcss"],
     },
     "apps/agents": {
-      entry: ["scripts/**/*.ts", "e2e/**/*.e2e.test.ts", "__workers-tests__/**/*.test.ts"],
-      project: [
-        "scripts/**/*.ts",
-        "src/**/*.{ts,tsx,css}!",
-        "e2e/**/*.ts",
-        "__workers-tests__/**/*.ts",
-      ],
+      entry: ["scripts/**/*.ts"],
+      project: ["scripts/**/*.ts", "src/**/*.{ts,tsx,css}!"],
       vite: false,
       wrangler: false,
       ignoreDependencies: ["tailwindcss", "cloudflare"],
+    },
+    lint: {
+      // oxlint loads it as a JS plugin (.oxlintrc.json `jsPlugins`), and with it lint/rules/*
+      entry: ["oxlint-plugin-iterate.ts"],
+    },
+    test: {
+      // The tests outside every app: in-process, the Workers pool, against a running worker, and in
+      // a browser. Knip's vitest and Playwright plugins read the two configs (their global setups,
+      // the in-process and Workers tests); the suites' files are entries, and helpers/** is project
+      // code, so an unused helper export is reported.
+      entry: [
+        "vitest/**/*.e2e.test.ts",
+        "vitest/os-workers/**/*.ts",
+        "vitest/agents-workers/**/*.ts",
+        "vitest/os/perf/**/*.perf.test.ts",
+        "vitest/os/bench/**/*.ts",
+        // read as text and handed over as the presence facet's source (helpers/sources.ts)
+        "helpers/presence/durable-object.ts",
+        "playwright/**/*.spec.ts",
+        "helpers/*.spec.ts",
+      ],
+      project: ["helpers/**/*.ts", "vitest/**/*.ts", "playwright/**/*.ts"],
     },
     // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
     ...Object.fromEntries(
@@ -130,9 +131,9 @@ export default {
       ignoreDependencies: ["@iterate-com/capnweb", "wrangler"],
     },
     "apps/browser-extension": {
-      // public/index.html loads panel.js; its ./capnweb.js and ./oauth.js are the ones the build
-      // copies into dist/.
-      entry: ["public/panel.js"],
+      // public/index.html loads panel.js and the manifest names background.js; panel.js's
+      // ./capnweb.js and ./oauth.js are the ones the build copies into dist/.
+      entry: ["public/panel.js", "public/background.js"],
       ignoreUnresolved: ["./capnweb.js", "./oauth.js"],
     },
     "packages/ui": {

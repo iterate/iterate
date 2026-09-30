@@ -1,9 +1,9 @@
 // scripts/monitors/latency.ts — THE LATENCY CHECK of the hourly health job (./health.ts). Every 3
 // hours .depot/workflows/os-latency.yml runs apps/os's perf suite against main redeployed to a preview
 // that nothing else touches and keeps Vitest's JSON report, where each row left its raw samples on its
-// meta (apps/os/perf/record.ts), as its `os-latency-report` artifact. The health job judges each
+// meta (test/vitest/os/perf/record.ts), as its `os-latency-report` artifact. The health job judges each
 // report it has not judged, in order, every metric's median against two lines:
-//   • its BUDGET (apps/os/perf/latency.ts, calibrated on main with headroom), and
+//   • its BUDGET (test/vitest/os/perf/latency.ts, calibrated on main with headroom), and
 //   • a sharp REGRESSION against the check's own rolling baseline, the last 10 main runs: more than
 //     3× their median (the calibration's runs of one commit spread up to 2.4× theirs: fan50.all,
 //     x10.answered) and 250 ms more (below that a round trip's weather decides, and the budget
@@ -34,7 +34,7 @@ import {
   LATENCY_METRICS,
   summarize,
   type LatencyMetricName,
-} from "../../apps/os/perf/latency.ts";
+} from "../../test/vitest/os/perf/latency.ts";
 import {
   depotWorkflowUrl,
   settledWorkflows,
@@ -62,7 +62,7 @@ const BASELINE_RUNS = 10;
 /** …and there is none below this many: a baseline of one or two runs is one or two samples of weather. */
 const BASELINE_MIN_RUNS = 5;
 /** A regression is more than this many times the baseline… (not 2: one commit's runs spread up to
- *  2.4× their median in the calibration, apps/os/perf/latency.ts) */
+ *  2.4× their median in the calibration, test/vitest/os/perf/latency.ts) */
 const REGRESSION_FACTOR = 3;
 /** …and, for a time, also more than this far above it: three times a 25 ms round trip is weather
  *  (the calibration's warm appends ran 25 ms on one preview and 72 ms on the next). */
@@ -94,8 +94,8 @@ export const LatencyMemory = z.object({
 });
 export type LatencyMemory = z.infer<typeof LatencyMemory>;
 
-/** What a perf row leaves on its meta (apps/os/perf/record.ts `TaskMeta`): its samples, and, when
- *  it failed, the causes and lost sockets behind the failure (perf/setup.ts) and the push row's
+/** What a perf row leaves on its meta (test/vitest/os/perf/record.ts `TaskMeta`): its samples, and, when
+ *  it failed, the causes and lost sockets behind the failure (test/vitest/os/perf/setup.ts) and the push row's
  *  subscribe round trips. */
 const RowMeta = z.object({
   latency: z.partialRecord(MetricName, z.array(z.number())).optional(),
@@ -116,7 +116,7 @@ const RowMeta = z.object({
 type RowMeta = z.infer<typeof RowMeta>;
 
 /** The parts of Vitest's JSON report (`--reporter=json`) the guard reads: every row's status, its
- *  failure messages and what perf/record.ts left on its meta; a file that failed to load has a
+ *  failure messages and what test/vitest/os/perf/record.ts left on its meta; a file that failed to load has a
  *  `failed` status and a message, and no rows. */
 const VitestReport = z.object({
   testResults: z.array(
@@ -180,7 +180,7 @@ export type BrokenProbe = {
    *  subscribe round trips. */
   evidence?: string;
   /** The report file it is in: a metric no row recorded is this row's breakage when it is this
-   *  file's (perf/latency.ts `file`). */
+   *  file's (test/vitest/os/perf/latency.ts `file`). */
   file?: string;
 };
 

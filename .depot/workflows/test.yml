@@ -58,10 +58,13 @@ jobs:
       - fail-fast: false
         parallel:
           # No secrets: no unit test reads one. The telemetry's kind and suite are the reporters'
-          # own `unit`, and its branch GitHub's head_ref or ref_name (ci-telemetry.ts).
+          # own `unit`, and its branch GitHub's head_ref or ref_name (ci-telemetry.ts). Core's
+          # workspaces (apps/os, packages/iterate) import no reporter: they add the ones
+          # VITEST_EXTRA_REPORTERS names, so they write the same telemetry.
           - name: Run Tests
             id: tests
             env:
+              VITEST_EXTRA_REPORTERS: ${{ github.workspace }}/packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts
               FLAKE_RECORD_DIR: test-results/flake-records/unit
               TEST_TELEMETRY_ARTIFACT_DIR: test-results/ci-telemetry/raw
               TEST_TELEMETRY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

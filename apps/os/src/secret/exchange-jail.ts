@@ -17,7 +17,7 @@
 //   • isolation: one isolate per (deployment, secret, pin, source), so module state never carries
 //     one secret's material into another's login, and a new pin is a new `globalOutbound`.
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { SecretMaterial } from "iterate/api";
 import { z } from "zod";
 import { sha256Hex } from "../caller.ts";

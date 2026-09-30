@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.ts";
 
@@ -215,12 +215,12 @@ test("the PR report explains the TypeScript runtime-line filter", () => {
 });
 
 test.for([
-  { path: "specs/test-support/test.ts", group: "Tests" },
-  { path: "specs/setup.ts", group: "Tests" },
-  { path: "specs/os/auth.spec.ts", group: "Tests" },
-  { path: "apps/os/__workers-tests__/support.ts", group: "Tests" },
-  { path: "apps/agents/__workers-tests__/agent-revive.test.ts", group: "Tests" },
-  { path: "apps/os/src/stream/memory-budget.test-support.ts", group: "Tests" },
+  { path: "test/helpers/test.ts", group: "Tests" },
+  { path: "test/playwright/global-setup.ts", group: "Tests" },
+  { path: "test/playwright/os/auth.spec.ts", group: "Tests" },
+  { path: "test/vitest/os-workers/support.ts", group: "Tests" },
+  { path: "test/vitest/agents-workers/agent-revive.test.ts", group: "Tests" },
+  { path: "test/vitest/os/memory-budget.test-support.ts", group: "Tests" },
   { path: "apps/os/src/stream/test-support.ts", group: "Tests" },
   { path: "apps/os/src/worker.ts", group: "Product" },
 ])("$path counts as $group", ({ path, group }) => {
@@ -239,7 +239,7 @@ test.for([
 });
 
 function createGitRepo() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const { path } = directory;
   execFileSync("git", ["init", "--quiet"], { cwd: path });
 

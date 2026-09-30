@@ -32,14 +32,13 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   HttpAnswerError,
   httpFailureFields,
   httpFailureKind,
   retryPlatformFailures,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import {
   adminEnvs,
   agentsEnvs,
@@ -896,13 +895,13 @@ const PINNED_LINES: { message: string; pin: string; pages: LogFilter[] }[] = [
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: FALSE_HUNG,
-    pin: "apps/agents/e2e/ai-stream-hung-request.e2e.test.ts",
+    pin: "test/vitest/agents/ai-stream-hung-request.e2e.test.ts",
     pages: [leaf("$metadata.message", "includes", FALSE_HUNG), notOn("ItxEntrypoint")],
   },
   {
     // The runtime's own line: always a message. The fault is its pin's.
     message: RPC_BODY_ENDED_EARLY,
-    pin: "apps/os/src/context/forwarded-rpc-body.test.ts",
+    pin: "test/vitest/os/forwarded-rpc-body.test.ts",
     pages: [
       leaf("$metadata.message", "includes", RPC_BODY_ENDED_EARLY),
       notOn("IterateContextDurableObject"),
@@ -1367,5 +1366,4 @@ export async function previousState(options: { out: string }) {
   });
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "prd-fault-alarm" }).run();
+void createCli({ ...import.meta, name: "prd-fault-alarm" }).run();

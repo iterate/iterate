@@ -1,7 +1,7 @@
 // scripts/ci/specs-shards.ts — BROWSER SPECS IN SHARDS, and their verdict. Preview OS and Main OS
 // e2e run the specs as SPECS_SHARDS jobs that start with the run, enough of them that every spec
 // has a worker from the start (./specs-shards.test.ts): the legs of the matrix job `specs-shard`,
-// Browser specs 1/11 to 11/11. Each runs its share (playwright.config.ts `shard`) and keeps its own
+// Browser specs 1/11 to 11/11. Each runs its share (test/playwright.config.ts `shard`) and keeps its own
 // evidence, with a Playwright blob report where an unsharded run writes its HTML one.
 //
 // `specs`, Browser specs, the required check, runs no spec itself: it starts with the run too, and
@@ -16,7 +16,6 @@ import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { createCli } from "trpc-cli";
 import {
@@ -160,4 +159,4 @@ export default class SpecsShards {
   }
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "specs-shards" }).run();
+void createCli({ ...import.meta, name: "specs-shards" }).run();

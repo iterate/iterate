@@ -1,22 +1,12 @@
 {
-  // Typecheck for the TEST TREES the base config's `include: ["src"]` never sees: the vitest E2E
-  // suite (e2e/**), its budgets (perf/**) and its benchmarks (bench/**), the loaded-code example (examples/**), the workers
-  // suite (__workers-tests__/**) and the scripts that import worker code (project-seed-format.ts;
-  // tsconfig.scripts.json has the other node scripts). Keeps workers-types (the tests import src, which needs them) and adds node
-  // types (the tests run in Node). `pnpm typecheck` runs all three configs.
+  // Typecheck for what the base config's `include: ["src"]` never sees: the loaded-code example
+  // (examples/**) and the scripts that import worker code (project-seed-format.ts;
+  // tsconfig.scripts.json has the other node scripts). Keeps workers-types (they import src, which
+  // needs them) and adds node types (they run in Node). `pnpm typecheck` runs all three configs.
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types", "node", "vite/client", "@cloudflare/vitest-plugin/types"]
+    "types": ["@cloudflare/workers-types", "node", "vite/client"]
   },
-  "include": [
-    "e2e",
-    "perf",
-    "bench",
-    "examples",
-    "../agents/e2e",
-    "../agents/__workers-tests__",
-    "__workers-tests__",
-    "scripts/project-seed*.ts"
-  ],
+  "include": ["examples", "scripts/project-seed*.ts"],
   "exclude": []
 }

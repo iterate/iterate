@@ -45,11 +45,7 @@ import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import type { RewriteRuleListEntry, StreamPage, SubscriptionListEntry } from "iterate/api";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { RunRequested, type RunSettlement } from "iterate/stream/run";
-import {
-  failureKind,
-  isPlatformFailureKind,
-  logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
@@ -61,6 +57,7 @@ import {
   type Caller,
 } from "./caller.ts";
 import { RpcStubHandle, itxAnswerDetachedFromSession } from "./context/dispatch.ts";
+import { mintOnBehalfOf, type OnBehalfOf } from "./on-behalf-of.ts";
 import { normalizeControlEvent, type CoreState } from "./stream/core-processor.ts";
 import {
   ITX_EXPRESSION_FETCH_HEADER,
@@ -873,7 +870,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  deadline, so re-deriving it writes nothing. In memory: a run a dead incarnation still owed is
    *  open in `scriptRuns`, and the next wake record settles it `interrupted`, as it does a run cut
    *  off mid-flight. */
-  readonly #runsOwedToTheAlarm = new Map<number, { code: string; requestedAt: number }>();
+  readonly #runsOwedToTheAlarm = new Map<
+    number,
+    { code: string; requestedAt: number; requester: Requester | undefined }
+  >();
 
   /** THE RUNNER, for every `run-requested` committed — whoever appended it: `itx.run` (library.ts:
    *  this request, then a wait for its settlement), a client's literal append, a schedule's
@@ -891,9 +891,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     for (const event of committedEvents) {
       if (event.type !== "events.iterate.com/itx/run-requested") continue;
       const { code } = event.payload as RunRequested; // parsed at the append boundary (normalizeControlEvent)
+      const requester = requesterOf(event);
       if (event.source?.processor)
-        this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now() });
-      else this.#startRun(event.offset, code);
+        this.#runsOwedToTheAlarm.set(event.offset, { code, requestedAt: Date.now(), requester });
+      else this.#startRun(event.offset, code, requester);
     }
   }
 
@@ -902,25 +903,30 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   #startRunsOwedToTheAlarm(): number {
     const owed = [...this.#runsOwedToTheAlarm];
     this.#runsOwedToTheAlarm.clear();
-    return owed.filter(([offset, { code }]) => this.#startRun(offset, code)).length;
+    return owed.filter(([offset, { code, requester }]) => this.#startRun(offset, code, requester))
+      .length;
   }
 
   /** Runs as the kernel: the loaded script's own `env.ITX` calls are principal-less anyway (loaded
    *  code speaks for the project), and the request event carries who asked. Not awaited — the
    *  settlement is the run's end, on the log, whether or not the requester is still listening.
    *  Answers whether it started: never a run already in flight or one already settled. */
-  #startRun(requestOffset: number, code: string): boolean {
+  #startRun(requestOffset: number, code: string, requester: Requester | undefined): boolean {
     if (
       this.#scriptRunsInFlight.has(requestOffset) ||
       !this.#stream.coreReducedState.scriptRuns[requestOffset]
     )
       return false;
     this.#scriptRunsInFlight.add(requestOffset);
-    void this.#executeRun(requestOffset, code);
+    void this.#executeRun(requestOffset, code, requester);
     return true;
   }
 
-  async #executeRun(requestOffset: number, code: string): Promise<void> {
+  async #executeRun(
+    requestOffset: number,
+    code: string,
+    requester: Requester | undefined,
+  ): Promise<void> {
     // WHY IT RUNS: the request's cause; the script one deeper, its settlement a receipt (cause.ts).
     const cause = this.#stream.coreReducedState.scriptRuns[requestOffset]?.cause;
     // The platform's own record (core-processor.ts `STREAM_RECORD_TYPES`), straight onto the
@@ -933,10 +939,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         source: cause && { cause },
       });
     try {
+      // WHO IT RUNS FOR: the requester, signed into the script's cause (on-behalf-of.ts), so what it
+      // writes is theirs as attribution while it still calls as loaded code. Never the settlement's.
+      const scriptCause =
+        cause && requester
+          ? {
+              ...cause,
+              onBehalfOf: await mintOnBehalfOf(
+                { ...requester, run: `${this.#durableObjectAddress.path}@${requestOffset}` },
+                this.#durableObjectAddress.projectId,
+                await sessionSigningSecretOf(this.#appConfig),
+                Date.now(),
+              ),
+            }
+          : cause;
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(
-        this.#callerStorage.run(this.#withPlatformOrigin({ principal: null, cause }), () =>
-          this.#scriptExecution(code),
+        this.#callerStorage.run(
+          this.#withPlatformOrigin({ principal: null, cause: scriptCause }),
+          () => this.#scriptExecution(code),
         ),
       );
       try {
@@ -968,9 +989,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** A requested script's execution. WHERE it runs is this context's own `itx.run` row: here by
-   *  default (the implicit row), elsewhere when a row REDIRECTS it — the agent's `itx.run ⇒
-   *  itx.builtins.cd('<agent>/sandbox').builtins.run` sends its scripts to a child whose table is the
-   *  scripts' alone (configured by the installed app). A redirect is one more request-and-settle
+   *  default (the implicit row), elsewhere when a row REDIRECTS it — `itx.run ⇒
+   *  itx.builtins.cd('<child>').builtins.run` sends its scripts to a child whose table is the
+   *  scripts' alone. A redirect is one more request-and-settle
    *  there. A mask on `run` (a jail's bare null) says what code HERE may spell — never where a
    *  request already on this log executes: it runs here. */
   async #scriptExecution(code: string): Promise<unknown> {
@@ -987,7 +1008,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
     // code run because of its request: one hand-off deeper (cause.ts)
     if (!redirect) {
-      const cause = causeOfDelivery([{ source: { cause: this.#caller.cause } }]);
+      // one deeper, still for whoever the run is for
+      const cause = {
+        ...causeOfDelivery([{ source: { cause: this.#caller.cause } }]),
+        onBehalfOf: this.#caller.cause?.onBehalfOf,
+      };
       return this.#callerStorage.run({ ...this.#caller, cause }, () =>
         executeScript(this.#libraryItx, code),
       );
@@ -1533,17 +1558,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#residency.outsideActivityEnded(); // a pass that did durable work restarts the sweep's quiet clock
   }
 
-  /** DO-only, for the tests that run inside workerd (`__workers-tests__/support.ts` `owedAlarm`): the
+  /** DO-only, for the tests that run inside workerd (`test/vitest/os-workers/support.ts` `owedAlarm`): the
    *  deadline on the one alarm that is this incarnation's alone and owes nothing — the
    *  unclaimed-facet sweep's. */
   inMemoryAlarmDeadlines(): (number | null)[] {
     return Object.values(this.#residency.deadlines());
   }
 
-  /** DO-only, for the tests that run inside workerd (`__workers-tests__`): the release, plus every
+  /** DO-only, for the tests that run inside workerd (`test/vitest/os-workers`): the release, plus every
    *  live facet aborted — workerd's harness keeps a facet-pinned actor resident (workerd#6800), so
    *  a test that must evict a facet-hosting context runs this first (`releasePins` in
-   *  __workers-tests__/support.ts). Never a facet mid-call (a
+   *  test/vitest/os-workers/support.ts). Never a facet mid-call (a
    *  reduce aborted midway is the stall its gap repair would have to heal). Aborted facets
    *  re-materialize from their startup memo on their next call. */
   releasePins(): void {
@@ -1931,4 +1956,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       stub: input.stub as BorrowedRpcStub, // unvalidatable by design (the docstring above)
     });
   }
+}
+
+/** Who asked for a run: the person and grant it is written for (on-behalf-of.ts). */
+type Requester = Omit<OnBehalfOf, "run">;
+
+/** Who asked for the run `event` requests. A person's request carries their stamped principal and
+ *  grant. A request a running script makes carries `source.onBehalfOf` instead: the script's own
+ *  `itx.cd(path).run(code)`, or a redirect of its run (`#scriptExecution`). The append stamped it
+ *  after verifying the script's token, so the new run is for the same person, with a token of its
+ *  own. None for a run no person asked for: an agent's loop, a schedule. */
+function requesterOf(event: StreamEvent): Requester | undefined {
+  const { principal, grant, onBehalfOf } = event.source;
+  if (principal) return { principal, grant };
+  if (onBehalfOf) return { principal: onBehalfOf.principal, grant: onBehalfOf.grant };
+  return undefined;
 }

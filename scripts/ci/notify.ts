@@ -25,7 +25,6 @@
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { depotWorkflowUrl } from "./depot.ts";
@@ -626,4 +625,4 @@ export async function workflowResolved(options: { testRun?: boolean } = {}) {
   await resolveWorkflowPage(slack, { ...input, now: new Date() });
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "notify" }).run();
+void createCli({ ...import.meta, name: "notify" }).run();

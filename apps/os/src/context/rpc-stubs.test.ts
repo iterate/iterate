@@ -1,6 +1,6 @@
 // context/rpc-stubs.test.ts — the directory's unit pins (the DO side: the borrowed table's lifetime
 // rule and the page timeout) and the fetch headers. The relay's are rpc-stub-relay.test.ts; the pager
-// layer's sockets, the Workers suite's (__workers-tests__/rpc-stub-pager-*.test.ts).
+// layer's sockets, the Workers suite's (test/vitest/os-workers/rpc-stub-pager-*.test.ts).
 
 import type { ItxExpression } from "iterate/expression";
 import { expect, onTestFinished, test, vi } from "vitest";

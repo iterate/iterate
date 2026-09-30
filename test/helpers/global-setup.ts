@@ -1,0 +1,98 @@
+// helpers/global-setup.ts — boots the REAL worker ONCE for the whole vitest E2E run
+// (one worker, addressed by URL, shared by every file — no per-file boot). It
+// builds through the production build hook, runs in local workerd with local KV / Durable
+// Objects / the Worker Loader, and tests speak to it EXACTLY like production clients — capnweb over
+// WebSocket at /api. The control plane is in-process (worker.ts's catch-all), so nothing else boots;
+// its database is the worker's local D1, migrated here once it is up (src/control-plane/db/).
+//
+// The URL is handed to tests via vitest `provide`/`inject` (see helpers/setup.ts + helpers/client.ts).
+
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { createTestHarness } from "wrangler";
+import type { TestProject } from "vitest/node";
+import { build } from "../../apps/os/scripts/build.ts";
+import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
+import { deployedTarget } from "./deployed-target.ts";
+import {
+  E2E_ADMIN_BEARER,
+  E2E_INGRESS_ROUTING,
+  E2E_LOGIN_PASSWORD,
+  e2eWorkerConfig,
+  PACKAGE_DIR,
+} from "./worker-config.ts";
+
+declare module "vitest" {
+  interface ProvidedContext {
+    /** Base URL of the one E2E worker, e.g. http://127.0.0.1:1234 — every test opens capnweb here. */
+    workerBaseUrl: string;
+    /** The worker's admin bearer — what the suite's default session authenticates with
+     *  (helpers/client.ts): the local worker's (worker-config.ts), a deployed worker's
+     *  `secrets.adminBearer`, read out of its APP_CONFIG (never in the tree). */
+    adminBearer: string;
+    /** The worker's sign-in password — what helpers/principal.ts mints a browser session with: the
+     *  local worker's (worker-config.ts), a deployed worker's `login.password`, read out of its
+     *  APP_CONFIG (never in the tree). */
+    loginPassword: string;
+    /** How the worker reaches projects (src/app-config.ts `urls.ingressRouting`), as JSON: subdomains
+     *  under `localhost` for the local worker, the deployed worker's routing otherwise. Injected into
+     *  the worker thread's env so helpers/project-host.ts reads it (vitest worker threads do NOT
+     *  inherit the run's process.env). */
+    ingressRouting: string;
+    /** Where MCP's protocol endpoint lives — the deployed worker's `urls.mcp` when it serves MCP on
+     *  its own origin, else `<worker>/mcp` (the local worker, and any deploy without a distinct MCP
+     *  origin). support/session tests POST here. */
+    mcpBaseUrl: string;
+    /** The run's id, folded into every identifier a test mints (client.ts `freshCtx`): E2E_RUN_ID
+     *  when the run pins one (CI: the workflow run and attempt), else minted here once per run. */
+    runId: string;
+    /** This checkout's pkg.pr.new commit (scripts/published-package-commit.ts), worked out once. */
+    publishedPackageCommit: string;
+  }
+}
+
+export default async function setup(project: TestProject): Promise<() => Promise<void>> {
+  // apps/os's generated modules (its scripts/build.ts), which the apps/os source the suites import
+  // reads. `pnpm e2e` builds the whole worker before vitest starts; `e2e:run` against a deployment
+  // builds nothing else.
+  await build();
+  project.provide("runId", process.env.E2E_RUN_ID || randomUUID().slice(0, 8));
+  project.provide(
+    "publishedPackageCommit",
+    checkoutPublishedPackageCommit(
+      path.resolve(PACKAGE_DIR, "../.."),
+      process.env.PREVIEW_HEAD_SHA,
+    ),
+  );
+  // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate.com pnpm e2e`
+  // runs the SAME suite against the deployed worker, no local boot. Its credentials and routing come
+  // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry
+  // (helpers/deployed-target.ts).
+  const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
+  if (deployedWorkerBaseUrl) {
+    const target = deployedTarget(deployedWorkerBaseUrl);
+    project.provide("workerBaseUrl", deployedWorkerBaseUrl);
+    project.provide("adminBearer", target.adminBearer);
+    project.provide("loginPassword", target.loginPassword);
+    project.provide("ingressRouting", target.ingressRouting);
+    project.provide("mcpBaseUrl", target.mcpBaseUrl);
+    return async () => {};
+  }
+  const server = createTestHarness({
+    root: PACKAGE_DIR,
+    workers: [{ config: e2eWorkerConfig() }],
+  });
+  const { url } = await server.listen();
+  await server.update({ root: PACKAGE_DIR, workers: [{ config: e2eWorkerConfig(url.origin) }] });
+  await server.getWorker().applyD1Migrations("DB");
+  project.provide("workerBaseUrl", url.href);
+  project.provide("adminBearer", E2E_ADMIN_BEARER);
+  project.provide("loginPassword", E2E_LOGIN_PASSWORD);
+  // The local worker's project hosts hang under `localhost` (worker-config.ts) and it serves MCP at
+  // `/mcp` (no distinct MCP origin).
+  project.provide("ingressRouting", JSON.stringify(E2E_INGRESS_ROUTING));
+  project.provide("mcpBaseUrl", new URL("/mcp", url.href).href);
+  return async () => {
+    await server.close();
+  };
+}

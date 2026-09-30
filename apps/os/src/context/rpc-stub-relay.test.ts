@@ -2,7 +2,7 @@
 // rpc-stub-relay.ts): the one onRpcBroken registration, the page's lend and its repeat [A], the lent
 // call's liveness probe [C], and the pager's keepalive and re-dial [B] (the recoveries are named in
 // rpc-stubs.ts). The pager is a fake socket; the Workers suite drops real ones
-// (__workers-tests__/rpc-stub-pager-drop.test.ts).
+// (test/vitest/os-workers/rpc-stub-pager-drop.test.ts).
 
 import type { StreamEventInput } from "iterate/stream/processor";
 import { expect, onTestFinished, test, vi } from "vitest";

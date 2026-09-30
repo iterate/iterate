@@ -28,7 +28,6 @@ import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs } from "../../envs.ts";
 import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } from "./slack.ts";
 
@@ -281,5 +280,4 @@ const get = (url: string) =>
     signal: AbortSignal.timeout(15_000),
   }).catch(() => null);
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "prd-post-deploy-check" }).run();
+void createCli({ ...import.meta, name: "prd-post-deploy-check" }).run();

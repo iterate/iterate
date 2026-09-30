@@ -28,7 +28,8 @@
 // with a failure's backoff folded into the same window. The script runs against this context's
 // `itx` as it is: no capability host, typecheck or preamble.
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
+// the contract module alone, never the engine: the Agents page loads this file
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/contract";
 import { RunEventCatalog } from "iterate/stream/run";
 
 /** Who put words into the context: a person, a script's result, or the loop itself (a format

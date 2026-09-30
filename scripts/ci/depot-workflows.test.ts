@@ -1,9 +1,15 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  mkdtempDisposableSync,
+} from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../os/preview-sweep.ts";
 import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
@@ -242,13 +248,14 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "apps/os/README.md",
     "apps/os/SELF-HOSTING.md",
     "apps/os/docs/project-seeds.md",
-    "apps/os/e2e/AGENTS.md",
-    "apps/os/e2e/support/client.ts",
+    "test/AGENTS.md",
+    "test/helpers/client.ts",
     "apps/os/src/project/templates.test.ts",
-    "apps/os/__workers-tests__/support.ts",
-    "apps/os/bench/api.bench.ts",
-    "apps/os/perf/push-delivery.perf.test.ts",
-    "apps/os/perf/latency.ts",
+    "test/vitest/os-workers/support.ts",
+    "test/helpers/fake-artifacts.ts",
+    "test/vitest/os/bench/api.bench.ts",
+    "test/vitest/os/perf/push-delivery.perf.test.ts",
+    "test/vitest/os/perf/latency.ts",
     "scripts/os/preview.ts",
     "scripts/os/preview-config.ts",
     "scripts/os/e2e-soak.ts",
@@ -369,9 +376,8 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
     expect.arrayContaining([
       ".depot/workflows/deploy-os.yml",
       ".depot/workflows/deploy-notes.yml",
-      // the root Playwright suite (specs/AGENTS.md) runs only here
-      "specs/**",
-      "playwright.config.ts",
+      // the suites against a running system (test/AGENTS.md) run only here
+      "test/**",
     ]),
   );
 });
@@ -451,7 +457,7 @@ test("uses only GitHub's job-scoped token for GitHub API calls", () => {
 });
 
 // The agents rows install the published build of the tested commit's merge base with main
-// (apps/agents/e2e/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
+// (test/vitest/agents/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
 // shallow checkout has no origin/main to find it in. (Preview OS names its tested head at run time.)
 test.for([
   {
@@ -701,7 +707,7 @@ test("the PR time-to-green check's checks are workflows by their names", () => {
 // The health job reads what other workflows keep (scripts/monitors): each is a workflow by its name
 // that uploads the artifact the check reads, whatever its tests' outcome, and the file in it.
 test.for([
-  { ...latencyReport, path: `apps/os/output/${latencyReport.file}` },
+  { ...latencyReport, path: `test/output/${latencyReport.file}` },
   { ...realModelTelemetry, path: "test-results/ci-telemetry" },
 ])("the health job reads $workflow's $artifact", ({ workflow, artifact, path }) => {
   const [measured] = depotWorkflowFiles
@@ -1269,7 +1275,11 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
     (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
-  expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
+  // apps/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
+  // script builds it beside another's
+  expect(readPackageJson(".").scripts?.test).toBe(
+    "pnpm --filter os build && pnpm -r --parallel test",
+  );
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();
@@ -1288,18 +1298,30 @@ test("the Lint check runs the root lint script that local runs use", () => {
 
 test("the preview's e2e suite writes the canonical telemetry artifact", () => {
   // The preview runs `e2e:run` alone (it must not rebuild the deployed dist/); the reporters are a
-  // root option of apps/os's vitest config, so every project's run writes it.
-  expect(readVitestConfig("apps/os")).toMatch(/^ {4}reporters: vitestReporters,$/m);
+  // root option of test/'s vitest config, so every project's run writes it.
+  expect(readVitestConfig("test")).toMatch(/^ {4}reporters: vitestReporters,$/m);
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
+  // Core imports nothing outside it, so its workspaces take the reporter by path from the Test job.
+  const core = ["apps/os", "packages/iterate"];
+  const runTests = loadWorkflow(".depot/workflows/test.yml")
+    .jobs.test?.steps?.flatMap((step) => step.parallel || [step])
+    .find((step) => step.id === "tests");
+  expect(runTests?.env?.VITEST_EXTRA_REPORTERS).toMatch(
+    /\/packages\/shared\/src\/test-support\/e2e-policy\/retry-telemetry-reporter\.ts$/,
+  );
   const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
     const packageJson = readPackageJson(directory);
     if (!packageJson.scripts?.test) return [];
     expect(
       readVitestConfig(directory),
       `${directory}/vitest.config.ts must install the canonical test telemetry reporter`,
-    ).toMatch(/reporters: vitestReporters/);
+    ).toMatch(
+      core.includes(directory)
+        ? /process\.env\.VITEST_EXTRA_REPORTERS/
+        : /reporters: vitestReporters/,
+    );
     return [packageJson.name];
   });
 
@@ -1513,7 +1535,7 @@ test("the CI telemetry sync's test evidence jobs are the jobs that upload a fold
 });
 
 test("the Test job's summary says which pnpm store its install started from and what main saved, warns on a failed restore or save, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (restore: string, primary: string, matched: string, save: string) => {
     writeFileSync(summary, "");
@@ -1577,9 +1599,9 @@ test("the Test job's summary says which pnpm store its install started from and 
 });
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // the job's workspace, where the manifest is test-results/manifest.json
-  using workspace = temporaryDirectory();
+  using workspace = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (write: string, upload: string) => {
     writeFileSync(summary, "");
@@ -1655,7 +1677,7 @@ test("the test jobs' flake records go into the test evidence folder", () => {
 
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const attempt = (jobUrl: string) => {
     const output = join(directory.path, "output");
     writeFileSync(output, "");

@@ -226,6 +226,7 @@ const ProjectHostnames = z.object({
         requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
         cloudflare: z.object({ status: z.string(), sslStatus: z.string() }).nullable(),
         error: z.string().nullable(),
+        claimed: z.boolean(),
       }),
     ),
   }),
@@ -239,9 +240,10 @@ async function projectHostnameState(root: SeedRoot) {
 async function projectHostnames(root: SeedRoot): Promise<ProjectHostnames> {
   return (await projectHostnameState(root)).hostnames;
 }
-/** Served: Cloudflare has provisioned it for the project, and no removal is pending. */
+/** Served: the project holds it (its ownership record named the project), Cloudflare has
+ *  provisioned it, and no removal is pending. */
 const serves = (entry: ProjectHostnames[string] | undefined) =>
-  !!entry?.cloudflare && entry.requested?.verb !== "remove";
+  !!entry?.claimed && !!entry.cloudflare && entry.requested?.verb !== "remove";
 
 /** What `capture` records: every hostname the project serves. A first add still in flight, or one
  *  refused, was never the project's; a hostname being removed is on its way out. */
@@ -295,10 +297,12 @@ export async function restoreHostnames(
     );
   return hostnames.map((hostname) => {
     const { status, sslStatus } = now[hostname]!.cloudflare!;
+    // provisioned, but not the project's until the owner's `_iterate` TXT record names it
+    const proof = now[hostname]!.claimed ? "" : ", ownership record missing";
     return {
       hostname,
       asked: ask.includes(hostname),
-      status: `${status}, certificate ${sslStatus}`,
+      status: `${status}, certificate ${sslStatus}${proof}`,
     };
   });
 }
@@ -313,7 +317,7 @@ export async function capturePrimaryHostname(root: SeedRoot): Promise<string | n
  *  processor to reduce it. The reduce takes only a hostname the project holds whose certificate is
  *  active; after an erase the zone still holds the custom hostname, so it usually is. One still
  *  pending is not made primary: `primary` answers false, and the owner makes it primary on the
- *  dash's Hostnames page once it serves. */
+ *  dash's Domains page once it serves. */
 export async function restorePrimaryHostname(
   root: SeedRoot,
   hostname: string,

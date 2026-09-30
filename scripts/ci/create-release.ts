@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
 
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getOctokit, getRepo } from "./github.ts";
 
 async function createRelease() {
@@ -17,6 +16,6 @@ async function createRelease() {
   });
 }
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   await createRelease();
 }
