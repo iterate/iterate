@@ -252,6 +252,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "test/helpers/client.ts",
     "apps/os/src/project/templates.test.ts",
     "apps/os/__workers-tests__/support.ts",
+    "apps/os/test-support/fake-artifacts.ts",
     "test/vitest/os/bench/api.bench.ts",
     "test/vitest/os/perf/push-delivery.perf.test.ts",
     "test/vitest/os/perf/latency.ts",
