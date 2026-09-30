@@ -1,15 +1,15 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
 # What a `run` script writes says who asked for it
 
-Status: nearly done, awaiting review. Events a `run` script appends carry `source.onBehalfOf`
-(the requester, their grant, the run), from a signed token on the run's cause; Docs reads it. A
-script's commit that names no `author` is authored by the requester. Runs a script requests (its own
-`itx.cd(path).run`, or a redirect) stay attributed; runs nobody asked for stay the project's. Left:
-Jonas's review; Docs seen on a live project.
+Status: done, in review (#3471). Events a `run` script appends carry `source.onBehalfOf` (the
+requester, their grant, the run), from a signed token on the run's cause; Docs reads it. A script's
+commit that names no `author` is authored by the requester. Runs a script requests (its own
+`itx.cd(path).run`, or a redirect) stay attributed; runs nobody asked for stay the project's. Not
+done: Docs checked on a live preview project (the unit test covers it).
 
 ## What we saw
 
@@ -137,3 +137,6 @@ that reads `source.principal` changes meaning. Old events stay as they were.
 - The repo facet does have the signing secret: first-party facets run with the worker's real env
   (first-party-facets.ts), and the secret facet already reads `appConfigOf(this.env)`. Only its
   declared `Env` type was narrow. It reads the config only when a cause carries a token.
+- The preview (`pr3471-d709093`) showed a real MCP run's note with `onBehalfOf` naming the person,
+  grant and `/@29`, and no `principal`. CI's MCP e2e covers the commit author against the next
+  preview. Docs on a live project wasn't checked: the push replaced the preview (and its data) mid-check.
