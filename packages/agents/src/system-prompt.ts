@@ -1,6 +1,6 @@
 /** What the model is told at birth — the system item the creation saga lands beside the certificate
- *  (processor.ts; an operator's instructions are their own `agent/context-added` after): mmkal's
- *  codemode-tag prompt (PR #2568) with this context's `itx`. The SURFACE is not here: it
+ *  (processor.ts; an operator's instructions are their own `agent/context-added` after): the
+ *  codemode-tag prompt with this context's `itx`. The SURFACE is not here: it
  *  is the agent's `rewriteRules.list()`, rendered into one system message on every turn
  *  (processor.ts `buildChatMessages`), so what the model is shown is exactly what its scripts can
  *  spell, described row by row — nothing taught that a jail does not grant. What stays is the

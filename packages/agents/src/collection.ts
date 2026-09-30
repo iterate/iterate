@@ -6,11 +6,9 @@
 // (catalog.ts), never by `facets.get("agent", spec)` on its context. That call hosted the facet
 // again — a new database folded from the whole log, a startup memo, an instance that can run on past
 // the context's incarnation — so the dead agent's context carried a loaded facet for good, and the
-// next birth aborted it (apps/os context/residency.ts, the birth reset). The e2e row "a deleted
-// agent's refusals keep neither the root nor the agent's context resident" failed about once in
-// fourteen CI runs (2026-09-23/24) on exactly that birth's first call: "Internal error in Durable
-// Object storage caused object to be reset". Aborting a running loaded facet is how Cloudflare comes
-// to reset a whole object (apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
+// next birth aborted it (apps/os context/residency.ts, the birth reset). Aborting a running loaded
+// facet is how Cloudflare comes to reset a whole object ("Internal error in Durable Object storage
+// caused object to be reset"; apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";
