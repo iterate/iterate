@@ -103,7 +103,21 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
       'async (itx) => { await itx.cd("/notes/mcp").append({ type: "note", payload: { ok: true } }); await itx.kv.put("mcp", "root"); return itx.kv.get("mcp"); }',
     ),
   ).toBe("root");
-  expect((await readAll(root.cd("/notes/mcp"))).some((e) => e.type === "note")).toBe(true);
+  // what the script wrote is for the person who asked for the run, through their grant; the
+  // script itself called as the project's code
+  expect((await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")).toMatchObject({
+    source: {
+      origin: "/",
+      onBehalfOf: {
+        principal: { actor: principal.actor },
+        grant: grantId,
+        run: expect.stringMatching(/^\/@\d+$/),
+      },
+    },
+  });
+  expect(
+    (await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")?.source,
+  ).not.toHaveProperty("principal");
 
   const changes = [
     { path: "app/page.js", content: 'export const html = "<h1>MCP config repo publication</h1>";' },
@@ -119,6 +133,12 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     `async (itx) => { const { commitOid } = await itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); const outcome = await itx.waitForEvent({ type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"], payload: { commitOid }, afterOffset: 0, timeoutMs: 120000 }); if (outcome.type.endsWith("worker-update-failed")) throw new Error(outcome.payload.error); return outcome.payload; }`,
   );
   expect(commit).toMatchObject({ commitOid: expect.any(String), generation: expect.any(Number) });
+  // the script named no author: the commit is the person's who asked for the run
+  expect(
+    (await root.repos.get("/repos/config").log({ limit: 5 })).find(
+      (entry: { oid: string }) => entry.oid === commit.commitOid,
+    ),
+  ).toMatchObject({ author: { name: member.email, email: member.email } });
   const published = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
   expect(published).toMatchObject({ status: 200, text: "<h1>MCP config repo publication</h1>" });
   expect(published.headers["content-type"]).toContain("text/html");

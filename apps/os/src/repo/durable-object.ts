@@ -29,10 +29,12 @@ import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate
 import type { RepoFileChange, RepoLogEntry, RepoSyncResult } from "iterate/api";
 import { codedError } from "iterate/lib";
 import type { EventInput, ReduceArgs } from "iterate/stream/processor";
-import { refuseActPastLimit, runningCause } from "../cause.ts";
+import { appConfigOf, sessionSigningSecretOf, type AppConfigEnv } from "../app-config.ts";
+import { refuseActPastLimit, runningCause, type Cause } from "../cause.ts";
 import { DurableObjectNameCodec } from "../context/paths.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { assertCreated, EntityLifecycleProcessor } from "../project/entity-lifecycle.ts";
+import { verifyOnBehalfOf } from "../on-behalf-of.ts";
 import { isSecretPlaceholder } from "../secrets.ts";
 import {
   ZERO_OID,
@@ -58,7 +60,7 @@ import { OriginSet, RepoContract, type CommitCompleted, type RepoState } from ".
 
 /** The one branch every repo operation addresses. */
 const REF = "refs/heads/main";
-/** The author of a commit whose caller named none. */
+/** The author of a commit whose caller named none, and that no person's script made. */
 const AUTHOR = { email: "config@iterate.com", name: "iterate" };
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
 const TOKEN_TTL_SECONDS = 300;
@@ -134,7 +136,7 @@ function originRefusal(origin: string): string | null {
 
 export class RepoDurableObject extends StreamProcessorDurableObject<
   RepoState,
-  { ITX?: ItxEntrypointService },
+  { ITX?: ItxEntrypointService } & AppConfigEnv,
   ItxEntrypointScope
 > {
   /** The processor's reads, and the repo's own verbs — what `itx.repos.get(path)` reaches (library.ts). */
@@ -352,9 +354,26 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     author?: { name: string; email: string };
     parent?: string | null;
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
+    const cause = runningCause();
     // A commit is an act: past the loop limit nothing is pushed (../cause.ts).
-    refuseActPastLimit(runningCause(), "a commit");
-    return this.#serialized(() => this.#commitFiles(input));
+    refuseActPastLimit(cause, "a commit");
+    return this.#serialized(async () =>
+      this.#commitFiles({ ...input, author: input.author || (await this.#authorFor(cause)) }),
+    );
+  }
+  /** The person a script commits for (../on-behalf-of.ts), from the token in its cause, as the
+   *  author of a commit that names none; none without an email, whose commit is the platform's. */
+  async #authorFor(cause: Cause | undefined) {
+    if (!cause?.onBehalfOf) return undefined;
+    const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
+    const onBehalfOf = await verifyOnBehalfOf(
+      cause.onBehalfOf,
+      projectId,
+      await sessionSigningSecretOf(appConfigOf(this.env)),
+      Date.now(),
+    );
+    const email = onBehalfOf?.principal.email;
+    return email ? { name: email, email } : undefined;
   }
   async #commitFiles(input: {
     message: string;
