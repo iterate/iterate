@@ -1,8 +1,5 @@
-import { existsSync, globSync, readFileSync } from "node:fs";
-import path from "node:path";
-import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test, vi } from "vitest";
-import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
+import { PRESET } from "../../vitest.global-setup.ts";
 import { templates } from "../generated/config-templates.js";
 import { ProjectProcessor } from "./processor.ts";
 import { ProjectContract, type ProjectState } from "./contract.ts";
@@ -10,59 +7,29 @@ import { ProjectContract, type ProjectState } from "./contract.ts";
 const reference = `github:example/config#${"a".repeat(40)}&path:starter`;
 const worker = "export default {fetch() {return new Response('My project')}}";
 const manifest = '{"main":"worker.ts"}';
-/** This checkout's build of the agents and voice (scripts/published-package-commit.ts), never
- *  `@main`. */
-const commit = checkoutPublishedPackageCommit(
-  path.resolve(import.meta.dirname, "../../../.."),
-  process.env.PREVIEW_HEAD_SHA,
-);
-const ourBuilds = {
-  "@iterate-com/agents": pkgPrNewVersion("@iterate-com/agents", commit),
-  "@iterate-com/voice": pkgPrNewVersion("@iterate-com/voice", commit),
-};
 
-test("omitting a template seeds the default project: the homepage, and the agents and voice apps pinned to one commit's build", async () => {
+test("omitting a template seeds core's minimal config: a homepage, and no packages", async () => {
   const fixture = project();
   await deliver(fixture, requested());
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
-  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
+  expect(JSON.parse(fixture.files()!["package.json"]!)).toEqual({
+    private: true,
+    type: "module",
     main: "worker.ts",
-    dependencies: ourBuilds,
   });
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
   // an unborn `main` is its own check (`parent: null`): no read of the tip comes first
   expect(fixture.repo.tip).not.toHaveBeenCalled();
 });
 
-test("a preset is seeded from the build, its agents and voice pinned as the default's are: nothing is downloaded", async () => {
+test("a preset the build was given is seeded from the build: nothing is downloaded", async () => {
+  expect(templates).toContainEqual({ label: "Starter", reference: PRESET.reference });
   const fixture = project();
-  await deliver(
-    fixture,
-    requested(templates.find(({ label }) => label === "Heartbeat")!.reference),
-  );
+  await deliver(fixture, requested(PRESET.reference));
   expect(fixture.downloadTemplate).not.toHaveBeenCalled();
-  expect(fixture.files()?.["worker.ts"]).toContain('key: "heartbeat"');
-  expect(JSON.parse(fixture.files()!["package.json"]!)).toMatchObject({
-    dependencies: ourBuilds,
-  });
-});
-
-test("every package.json under configs/ names its folder's main module", () => {
-  const configs = path.resolve(import.meta.dirname, "../../../../configs");
-  const manifests = globSync("*/**/package.json", {
-    cwd: configs,
-    exclude: (file) => file.includes("node_modules"),
-  });
-  expect(manifests).toEqual(
-    expect.arrayContaining(["default/package.json", "minimal/package.json"]),
+  expect(fixture.files()).toEqual(
+    Object.fromEntries(PRESET.files.map((file) => [file.path, file.content])),
   );
-  for (const manifest of manifests) {
-    const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
-      main?: string;
-    };
-    expect(main, manifest).toBeTruthy();
-    expect(existsSync(path.join(configs, path.dirname(manifest), main!)), manifest).toBe(true);
-  }
 });
 
 test("copies the pinned subdirectory into a fresh root commit before project/created", async () => {

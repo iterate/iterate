@@ -25,7 +25,7 @@ export async function routeDocs(itx: any, docsWorker: URL) {
 }
 
 /** @iterate-com/docs at the commit test/playwright/global-setup.ts sets as `PUBLISHED_PACKAGE_COMMIT`
- *  (core/os/scripts/published-package-commit.ts says which), once pkg.pr.new serves it. */
+ *  (scripts/os/published-package-commit.ts says which), once pkg.pr.new serves it. */
 export async function docsBuild() {
   const commit = process.env.PUBLISHED_PACKAGE_COMMIT;
   if (!commit)

@@ -5,10 +5,7 @@ import { publishedPackageCommit, publishPathsOf } from "./published-package-comm
 
 /** pkg-pr-new.yml's own `pull_request.paths`. */
 const publishPaths = publishPathsOf(
-  readFileSync(
-    path.resolve(import.meta.dirname, "../../../.github/workflows/pkg-pr-new.yml"),
-    "utf8",
-  ),
+  readFileSync(path.resolve(import.meta.dirname, "../../.github/workflows/pkg-pr-new.yml"), "utf8"),
 );
 const base = "b".repeat(40);
 const head = "h".repeat(40);

@@ -308,8 +308,8 @@
               {
                 "target": "./core",
                 "from": "./",
-                "except": ["./configs", "./core", "./node_modules"],
-                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The one exception until it is resolved: configs/, the project templates the build bakes in (tasks/core-minimal-template.md)."
+                "except": ["./core", "./node_modules"],
+                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. Project templates are the build's input (core/os/scripts/build.ts `--template`), never a folder core reads."
               },
               {
                 "target": "./core/lib",

@@ -1278,9 +1278,7 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
 
   // core/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
   // script builds it beside another's
-  expect(readPackageJson(".").scripts?.test).toBe(
-    "pnpm --filter os build && pnpm -r --parallel test",
-  );
+  expect(readPackageJson(".").scripts?.test).toBe("pnpm os:build && pnpm -r --parallel test");
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();

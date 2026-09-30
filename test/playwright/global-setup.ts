@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { deployedTarget } from "../helpers/deployed-target.ts";
-import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
+import { checkoutPublishedPackageCommit } from "../../scripts/os/published-package-commit.ts";
 import { OsPlaywrightAuthEnv } from "../helpers/auth-config.ts";
 import { workerBaseUrl } from "../helpers/worker-base-url.ts";
 

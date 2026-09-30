@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node scripts/dev.ts",
     "getin": "node scripts/getin.ts",
-    "build": "node scripts/build.ts && vite build",
+    "build": "node scripts/build.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.tests.json && tsc --noEmit -p tsconfig.scripts.json",
     "test": "vitest run --configLoader runner --silent=passed-only",
     "test:watch": "vitest --configLoader runner",

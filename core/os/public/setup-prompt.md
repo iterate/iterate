@@ -32,8 +32,17 @@ so say which flow a page is for when you open it.
 ```bash
 git clone --depth 1 https://github.com/iterate/iterate   # gitignored
 cd iterate && pnpm install
-CLOUDFLARE_ENV=self-host pnpm --filter os build  # writes core/os/dist/server/wrangler.json
+sha=$(git rev-parse HEAD)
+CLOUDFLARE_ENV=self-host pnpm --filter os build \
+  --template "github:iterate/iterate#$sha&path:configs/default" \
+  --template "github:iterate/iterate#$sha&path:configs/heartbeat" \
+  --template "github:iterate/iterate#$sha&path:configs/minimal"
+# writes core/os/dist/server/wrangler.json
 ```
+
+Each `--template` is a project template the deployment offers, downloaded from GitHub. A new
+project, the user's first included, starts from `default`: the agents and voice apps. Without any
+`--template`, every project starts with a bare homepage and nothing else.
 
 ## 2. Log in
 

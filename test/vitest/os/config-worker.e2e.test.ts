@@ -89,7 +89,7 @@ test("a config commit moves the worker's processEvent, and one made at depth 7 p
       { path: "worker.ts", content: source("v1") },
     ],
   });
-  await createdProject(root, "config-follows-tip");
+  await createdProject(root, "config-follows-tip", undefined);
   const [first] = await root.append(PING);
   expect((await pongFor(root, first)).payload).toMatchObject({ version: "v1" });
   // our own code calling the platform back seven hand-offs into a chain (src/cause.ts) commits v2

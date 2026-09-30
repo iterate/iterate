@@ -119,10 +119,13 @@ async function createOwnedProject(input: {
   // `project/created`: an app's page may open on a project still being created.
   return test.step("create project fixture over /api", async () => {
     // Created as that person, so it lands in an organization they own; its minted id is how a
-    // project is addressed — the slug only labels its hosts.
-    const { projectId } = await input.operator
-      .authenticate({ email: input.email })
-      .projects.create({ project: input.slug })
+    // project is addressed — the slug only labels its hosts. It is what the dash creates for a
+    // person who picks no template: the platform's Default preset (the agents and voice apps), when
+    // it offers one.
+    const projects = input.operator.authenticate({ email: input.email }).projects;
+    const preset = (await projects.templates()).find(({ label }) => label === "Default");
+    const { projectId } = await projects
+      .create({ project: input.slug, configRepoTemplate: preset?.reference })
       .whoami();
     return { id: projectId, slug: input.slug };
   });

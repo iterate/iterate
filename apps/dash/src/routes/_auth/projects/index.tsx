@@ -268,7 +268,7 @@ function NewProjectForm({
             value={template}
             onChange={(event) => setTemplate(event.target.value)}
           >
-            <NativeSelectOption value="">Default</NativeSelectOption>
+            <NativeSelectOption value="">Blank</NativeSelectOption>
             {templateOptions.map((option) => (
               <NativeSelectOption key={option.reference} value={option.reference}>
                 {option.label}
@@ -357,15 +357,18 @@ function NewProjectForm({
 }
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
- *  a name is the built-in whose path is `configs/<name>` — `default`, and a name that is none,
- *  is the default template (the default files). */
+ *  a name is the preset whose path is `configs/<name>`, and no name is `default` when the platform
+ *  offers one. A name that is none, like a platform built with no presets, is "Blank": the
+ *  platform's minimal config. */
 function templateFields(
   template: string | undefined,
   options: { reference: string }[],
 ): { template: string; customTemplate: string } {
   if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
   const builtIn = options.find(
-    (option) => parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
+    (option) =>
+      parseConfigRepoTemplateReference(option.reference).path ===
+      `configs/${template || "default"}`,
   );
   return { template: builtIn?.reference || "", customTemplate: "" };
 }

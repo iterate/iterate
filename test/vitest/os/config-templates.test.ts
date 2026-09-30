@@ -1,11 +1,33 @@
-// src/project/default-template.test.ts — the default and heartbeat templates' `processEvent` in Node.
+// config-templates.test.ts — iterate's project templates (configs/*, the platform's build input via
+// scripts/os/config-templates.ts): each names its main module, and the default and heartbeat
+// templates' `processEvent` installs what they promise, in Node.
+import { existsSync, globSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
 import type { StreamEvent } from "iterate/stream/processor";
-import DefaultTemplate from "../../../../configs/default/worker.ts";
-import HeartbeatTemplate from "../../../../configs/heartbeat/worker.ts";
-import { EmailProcessor } from "../email/processor.ts";
+import DefaultTemplate from "../../../configs/default/worker.ts";
+import HeartbeatTemplate from "../../../configs/heartbeat/worker.ts";
+import { EmailProcessor } from "../../../core/os/src/email/processor.ts";
+
+test("every package.json under configs/ names its folder's main module", () => {
+  const configs = path.resolve(import.meta.dirname, "../../../configs");
+  const manifests = globSync("*/**/package.json", {
+    cwd: configs,
+    exclude: (file) => file.includes("node_modules"),
+  });
+  expect(manifests).toEqual(
+    expect.arrayContaining(["default/package.json", "minimal/package.json"]),
+  );
+  for (const manifest of manifests) {
+    const { main } = JSON.parse(readFileSync(path.join(configs, manifest), "utf8")) as {
+      main?: string;
+    };
+    expect(main, manifest).toBeTruthy();
+    expect(existsSync(path.join(configs, path.dirname(manifest), main!)), manifest).toBe(true);
+  }
+});
 
 test.for([
   { template: "default", Template: DefaultTemplate, schedules: {} },

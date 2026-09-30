@@ -36,13 +36,14 @@ import {
 } from "iterate/stream/processor";
 import { pinPkgPrNewDependencies } from "iterate/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
-import { defaultFiles, templateFiles } from "../generated/config-templates.js";
+import { templateFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
 import type { WorkerManifest } from "../context/worker-manifest.ts";
 import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { unavailableError } from "../unavailable.ts";
+import { MINIMAL_CONFIG_FILES } from "./minimal-config.ts";
 import { ProjectContract, type CustomHostnameObservation, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
@@ -569,13 +570,14 @@ export class ProjectProcessor extends StreamProcessor<
     try {
       // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
       // build, and the loader refuses a ref that moves (iterate/pkg-pr-new). A ref
-      // that cannot be pinned fails the creation, like a download that fails. The default and the
-      // presets come from the build, their agents already at this deployment's own build.
+      // that cannot be pinned fails the creation, like a download that fails. A preset comes from
+      // the build (scripts/build.ts `--template`), with no GitHub request; no template is core's
+      // minimal config.
       const changes = await pinPkgPrNewDependencies(
         reference
           ? (templateFiles[reference] ??
               (await this.downloadTemplate(parseConfigRepoTemplateReference(reference))))
-          : defaultFiles,
+          : MINIMAL_CONFIG_FILES,
       );
       // The seed checks the template's entry with the loader's own rule (`readPackage`).
       readPackage(
