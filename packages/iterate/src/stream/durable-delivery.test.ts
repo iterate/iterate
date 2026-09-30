@@ -32,8 +32,8 @@ test("persists selected offsets with the scanned range for its first invoke", as
     }),
   );
   expect(store.values.get("durable-delivery/delivery")).toEqual({ confirmedOffset: 3 });
-  // One metadata read admits the range; the second observes the caught-up head.
-  expect(read).toHaveBeenCalledTimes(2);
+  // One pass admits and delivers one source page. The alarm owns the next head check.
+  expect(read).toHaveBeenCalledTimes(1);
 });
 
 test("a core terminal receipt invalidates an older in-flight runner generation", async () => {
@@ -195,9 +195,8 @@ test("retries a persisted ordered range without another metadata read", async ()
   expect(read).toHaveBeenCalledTimes(1);
   await engine.processEventBatch([committedEvent(2, "work")], { after: 1, through: 2 });
   await settle();
-  // The only second read is the caught-up check after successful delivery. The retry reused
-  // offsets persisted with the range instead of rereading source metadata.
-  expect(read).toHaveBeenCalledTimes(2);
+  // The retry reuses its persisted range; its next head check belongs to the alarm pass.
+  expect(read).toHaveBeenCalledTimes(1);
   expect(store.values.get("durable-delivery/retry-without-read")).toEqual({ confirmedOffset: 1 });
 });
 
@@ -306,6 +305,8 @@ test("fan-out persists bounded offsets then calls each event independently", asy
   const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle(40);
+  await engine.processEventBatch([], { after: 3, through: 3 });
+  await settle(40);
   expect(delivered.sort()).toEqual([1, 2, 3]);
   expect(high).toBe(2);
   expect(store.values.get("durable-delivery/fan")).toMatchObject({
@@ -313,33 +314,39 @@ test("fan-out persists bounded offsets then calls each event independently", asy
   });
 });
 
-test("fan-out continues from a non-head metadata page without another push", async () => {
+test("a 128-call fan-out takes two one-page alarm passes", async () => {
   const store = kv();
   const source = memoryStream();
-  await source.stream.append(...Array.from({ length: 101 }, () => ({ type: "work" })));
+  await source.stream.append(...Array.from({ length: 128 }, () => ({ type: "work" })));
   const delivered: number[] = [];
+  const wakes: (number | null)[] = [];
   const processor = new DurableDeliveryProcessor({
     slug: "fan-catch-up",
     consumes: ["work"],
     fanOut: true,
-    concurrency: 100,
+    concurrency: 128,
     maxPending: 100,
     runtime: {
       storage: store,
       read: durableRead(source.stream.read, ["work"]),
       deliver: async ({ offsets }) => void delivered.push(offsets[0]!),
       deliverEphemeral: async () => {},
-      scheduleWake: async () => {},
+      scheduleWake: async (at) => void wakes.push(at),
       terminal: async () => {},
     },
   });
   const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle(100);
-  expect(delivered).toHaveLength(101);
+  expect(delivered).toHaveLength(100);
+  expect(wakes.at(-1)).not.toBeNull();
+  await engine.processEventBatch([], { after: 100, through: 100 });
+  await settle(100);
   expect(store.values.get("durable-delivery/fan-catch-up")).toMatchObject({
-    fanOut: { admittedThrough: 101, pending: [] },
+    fanOut: { admittedThrough: 128, pending: [] },
   });
+  expect(delivered).toHaveLength(128);
+  expect(wakes.at(-1)).toBeNull();
 });
 
 test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes them", async () => {

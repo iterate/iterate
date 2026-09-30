@@ -337,7 +337,7 @@ export class DurableDeliveryProcessor {
         this.#requested = false;
         if (!this.#disposed && this.#again) {
           this.#again = false;
-          void this.#requestDrain(runInBackground);
+          await this.#options.runtime.scheduleWake(Date.now());
         }
       }
     });
@@ -347,6 +347,7 @@ export class DurableDeliveryProcessor {
     if (this.#disposed) return;
     if (this.#options.fanOut) return await this.#drainFanOut();
     for (;;) {
+      let atHead = false;
       let cursor = this.#cursor();
       if (cursor.halted) {
         await this.#reportHalted(cursor.halted);
@@ -373,7 +374,10 @@ export class DurableDeliveryProcessor {
         {
           if (!this.#isCurrent(stamp)) return;
           cursor = this.#cursor();
-          if (cursor.pending || cursor.halted) continue;
+          if (cursor.pending || cursor.halted) {
+            await this.#options.runtime.scheduleWake(Date.now());
+            return;
+          }
           const queuedOffset = this.#ephemeralQueue[0]?.offset;
           // An ephemeral between two durable offsets stays between their deliveries. The durable
           // read does not carry ephemeral bodies, so admit only the durable prefix before it.
@@ -390,10 +394,15 @@ export class DurableDeliveryProcessor {
             if (!this.#isCurrent(stamp)) return;
             continue;
           }
+          atHead =
+            page.atHead &&
+            through === page.scannedThroughOffset &&
+            this.#ephemeralQueue.length === 0;
           const offsets = page.offsets.filter((offset) => offset <= through);
           if (offsets.length === 0) {
             this.#putCursor({ confirmedOffset: through });
-            continue;
+            await this.#options.runtime.scheduleWake(atHead ? null : Date.now());
+            return;
           }
           const pending = {
             after: cursor.confirmedOffset,
@@ -433,6 +442,8 @@ export class DurableDeliveryProcessor {
           });
           if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
           this.#putCursor({ confirmedOffset: pending.through });
+          await this.#options.runtime.scheduleWake(atHead ? null : Date.now());
+          return;
         } catch (error) {
           if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
           // The host has an equivalent target call in flight. It has not accepted
@@ -460,28 +471,7 @@ export class DurableDeliveryProcessor {
               resumeAtOffset: stamp.resumeAtOffset,
             };
             this.#putCursor({ confirmedOffset: pending.after, halted });
-            try {
-              await this.#options.runtime.terminal({
-                afterOffset: pending.after,
-                attempts: attempt,
-                error: message,
-                resumeAtOffset: stamp.resumeAtOffset,
-              });
-              const current = this.#cursor().halted;
-              if (
-                this.#isCurrent(stamp) &&
-                current?.after === halted.after &&
-                current.attempts === halted.attempts &&
-                current.resumeAtOffset === halted.resumeAtOffset
-              )
-                this.#putCursor({
-                  ...this.#cursor(),
-                  halted: { ...current, terminalReported: true },
-                });
-            } catch {
-              if (this.#isCurrent(stamp))
-                await this.#options.runtime.scheduleWake(Date.now() + 1_000);
-            }
+            await this.#reportHalted(halted);
             return;
           }
           const nextAttemptAtMs =
@@ -531,26 +521,29 @@ export class DurableDeliveryProcessor {
     }
     const fanOut = cursor.fanOut || { admittedThrough: cursor.confirmedOffset, pending: [] };
     let admittedAtHead: boolean | undefined;
-    for (const item of fanOut.pending.filter((item) => item.terminal)) {
+    const terminal = fanOut.pending.find((item) => item.terminal);
+    if (terminal) {
       const stamp = this.#stamp();
       try {
         await this.#options.runtime.terminal({
-          afterOffset: item.offset - 1,
-          attempts: item.attempt,
-          error: item.error || "delivery exhausted",
+          afterOffset: terminal.offset - 1,
+          attempts: terminal.attempt,
+          error: terminal.error || "delivery exhausted",
           fanOut: true,
-          resumeAtOffset: item.resumeAtOffset,
+          resumeAtOffset: terminal.resumeAtOffset,
         });
         const current = this.#cursor().fanOut;
         const reported = current?.pending.find(
           (candidate) =>
-            candidate.offset === item.offset &&
+            candidate.offset === terminal.offset &&
             candidate.terminal &&
-            candidate.resumeAtOffset === item.resumeAtOffset,
+            candidate.resumeAtOffset === terminal.resumeAtOffset,
         );
         if (!this.#isCurrent(stamp) || !current || !reported) return;
         current.pending.splice(current.pending.indexOf(reported), 1);
         this.#putCursor({ ...this.#cursor(), fanOut: current });
+        await this.#options.runtime.scheduleWake(Date.now());
+        return;
       } catch {
         if (this.#isCurrent(stamp)) await this.#options.runtime.scheduleWake(Date.now() + 1_000);
         return;
@@ -578,8 +571,10 @@ export class DurableDeliveryProcessor {
           admittedThrough: cursor.confirmedOffset,
           pending: [],
         };
-        if (currentFanOut.admittedThrough !== fanOut.admittedThrough)
-          return await this.#drainFanOut();
+        if (currentFanOut.admittedThrough !== fanOut.admittedThrough) {
+          await this.#options.runtime.scheduleWake(Date.now());
+          return;
+        }
         const additions = page.offsets.map((offset) => ({
           offset,
           attempt: 0,
@@ -613,17 +608,18 @@ export class DurableDeliveryProcessor {
             : earliest,
         undefined,
       );
-    if (settled.pending.some((item) => item.terminal)) return await this.#drainFanOut();
+    if (settled.pending.some((item) => item.terminal))
+      return await this.#options.runtime.scheduleWake(Date.now());
     if (settled.pending.some((item) => !item.terminal && !item.nextAttemptAtMs))
-      return await this.#drainFanOut();
+      return await this.#options.runtime.scheduleWake(Date.now());
     // A backoff is per event. Keep admitting later pages while there is room so one slow webhook
     // cannot turn a catch-up into one page per retry delay.
     if (!admittedAtHead && settled.pending.length < this.#options.maxPending)
-      return await this.#drainFanOut();
+      return await this.#options.runtime.scheduleWake(Date.now());
     if (next !== undefined) await this.#options.runtime.scheduleWake(next);
     else if (settled.pending.length === 0) {
       if (admittedAtHead) await this.#options.runtime.scheduleWake(null);
-      else return await this.#drainFanOut();
+      else await this.#options.runtime.scheduleWake(Date.now());
     }
   }
 

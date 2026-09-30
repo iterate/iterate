@@ -163,6 +163,9 @@ test("a fan-out backoff still admits the following source page", async () => {
   });
   await drive(processor, 1);
   await settle(100);
+  expect(delivered).toHaveLength(99);
+  await drive(processor, 2);
+  await settle(100);
   expect(delivered).toHaveLength(100);
   expect(processor.snapshot()).toMatchObject({
     fanOut: { admittedThrough: 101, pending: [{ offset: 1, attempt: 1 }] },
@@ -184,6 +187,8 @@ test("a fan-out terminal is selectively resumed without replaying already acknow
     runtime: terminal,
   });
   await drive(processor, 1);
+  await settle();
+  await drive(processor, 2);
   await settle();
   expect(terminal).toMatchObject({
     terminals: [{ afterOffset: 0, attempts: 1, error: "only first fails", fanOut: true }],
