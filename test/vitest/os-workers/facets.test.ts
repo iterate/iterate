@@ -18,8 +18,8 @@ import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";
 import type { ItxExpression, ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
-import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../../../apps/os/src/context/facet-host.ts";
-import { hmacSha256Hex } from "../../../apps/os/src/secrets.ts";
+import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../../../core/os/src/context/facet-host.ts";
+import { hmacSha256Hex } from "../../../core/os/src/secrets.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   APP_FACET,

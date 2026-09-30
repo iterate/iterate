@@ -95,7 +95,7 @@ starts once what it needs is there. **Write the deploying status**,
 **Install wrangler** (then **Upload the Previews secrets**) and **Ensure the
 Artifacts namespace** run beside **Build OS** and the client apps' parallel
 **Build <app>** spans. **Deploy OS preview** starts once Build OS and those have
-finished, and holds its **Readiness gate**, apps/os's only smoke. Each
+finished, and holds its **Readiness gate**, core/os's only smoke. Each
 **Deploy <app>**, its app's smoke included, starts once its own build and the
 wrangler install have finished, beside Deploy OS preview. **Wait for
 pkg.pr.new** runs beside the gate, until pkg.pr.new serves the packages the

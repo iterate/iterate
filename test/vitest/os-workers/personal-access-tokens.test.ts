@@ -5,15 +5,15 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
-import type { PersonalAccessTokenMinted } from "../../../apps/os/src/account/contract.ts";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { accountStateOf, authorizationForToken } from "../../../apps/os/src/oauth.ts";
-import { sha256Hex } from "../../../apps/os/src/caller.ts";
+import type { PersonalAccessTokenMinted } from "../../../core/os/src/account/contract.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { accountStateOf, authorizationForToken } from "../../../core/os/src/oauth.ts";
+import { sha256Hex } from "../../../core/os/src/caller.ts";
 import {
   indexPersonalAccessToken,
   newPersonalAccessToken,
-} from "../../../apps/os/src/personal-access-token.ts";
-import type { IterateRpcTarget, SessionCredentials } from "../../../apps/os/src/session.ts";
+} from "../../../core/os/src/personal-access-token.ts";
+import type { IterateRpcTarget, SessionCredentials } from "../../../core/os/src/session.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
 

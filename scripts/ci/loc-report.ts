@@ -35,7 +35,7 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
   { name: "Docs", glob: "{docs/**,**/*.md}", priority: 7 },
   { name: "CI & scripts", glob: "{.depot/**,.github/**,scripts/**,**/scripts/**}", priority: 5 },
   { name: "Config", glob: "**/*.{json,jsonc,json5,yml,yaml,toml}", priority: 6 },
-  { name: "Product", glob: "{apps,packages}/**", priority: 1 },
+  { name: "Product", glob: "{apps,core,packages}/**", priority: 1 },
   // "Other" is the code-level fallback for anything unmatched (globs skip dotfiles, so a
   // literal `**` catch-all wouldn't actually catch everything).
   { name: "Other", glob: "", priority: 8 },

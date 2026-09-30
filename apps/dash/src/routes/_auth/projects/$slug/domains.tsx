@@ -1,10 +1,10 @@
 // /projects/<slug>/domains — where the project is served. First its DEFAULT DOMAIN under the
 // deployment's ingress (`projectHostOf`), which always works and can't be removed: primary until
-// another is made primary, then a page visit on it redirects there (apps/os
+// another is made primary, then a page visit on it redirects there (core/os
 // primary-hostname-redirect.ts), and its apps' addresses show which routing the deployment uses.
 // Then the project's own hostnames: `iterate.example.com` serves the project's
 // site and `<app>.iterate.example.com` its apps. The `project` facet's LIVE STATE on `/` is the list
-// (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
+// (core/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
 // and the CNAMEs the owner adds, and which live hostname is primary. Every act appends ONE event to
 // the root — add (`?add=1`, a sheet), check, remove, make primary — and the processor's answer lands
 // in the live state.
@@ -12,7 +12,7 @@
 // A hostname that is not live yet shows the three steps to live, each ticked from Cloudflare's own
 // words: DNS points at iterate (the custom hostname is `active`), the certificate is issued (its SSL
 // is `active`), live. Where the owner's DNS provider speaks Domain Connect and has our template, the
-// first step is one click (apps/os src/project/domain-connect.ts): "Connect with <provider>", and the
+// first step is one click (core/os src/project/domain-connect.ts): "Connect with <provider>", and the
 // provider sends the browser back with `?connected=<hostname>`, which checks it at once. While a
 // hostname is on its way the page checks it again every CHECK_EVERY_MS, so nobody has to.
 import { useEffect, useRef, useState, type FormEvent } from "react";

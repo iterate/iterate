@@ -13,20 +13,20 @@ fully-local server and never deploys. Scripts never branch on environment names;
 supply everything.
 
 Local dev is **fully local**: Durable Objects, D1, KV and R2 run in miniflare
-inside your worktree's `apps/os/.wrangler/state` (`pnpm dev` migrates the local D1 first,
-`pnpm --dir apps/os db:migrate`), the server listens on
+inside your worktree's `core/os/.wrangler/state` (`pnpm dev` migrates the local D1 first,
+`pnpm --dir core/os db:migrate`), the server listens on
 `http://localhost:8788` (or the `--port` you pass), and there is no external
 dependency at all: the OS worker is its own OAuth issuer, and `pnpm dev` hands
 it plain dev values instead of secrets. OS is a single worker (the edge,
 the issuer's pages, `/api`, `/mcp`, project ingress and every Durable Object
-class in one script; see the `description` in `apps/os/package.json`)
+class in one script; see the `description` in `core/os/package.json`)
 running inside wrangler's workerd — production-shaped by construction.
 Nothing is contested between worktrees: twenty agents on one machine each run
 their own isolated environment, each on its own port.
 
 Identity lives in the **platform's control plane** (users, organizations and
-projects in the deployment's D1, `apps/os/src/control-plane/db/`; see
-`apps/os/SELF-HOSTING.md`). A deployment signs people in with whichever
+projects in the deployment's D1, `core/os/src/control-plane/db/`; see
+`core/os/SELF-HOSTING.md`). A deployment signs people in with whichever
 mechanisms its `APP_CONFIG.login` enables: a global password, a mailed code,
 Google, or Cloudflare. Two deployment secrets let you act as anyone, instantly:
 the **password** (`login.password`) signs in as whatever email you type, and
@@ -38,7 +38,7 @@ who may sign in by any of them (`["*@iterate.com"]`, or the var
 personal access token for an address it stops naming is refused at its next
 use. The operator bearer is not limited by it. People, agents and MCP clients
 use a **personal access token** instead of the bearer:
-[credentials](../apps/os/docs/credentials.md) says which works where.
+[credentials](../core/os/docs/credentials.md) says which works where.
 
 ## Local dev
 
@@ -51,14 +51,14 @@ pnpm dev -- --port 8799   # a second worktree, alongside
 
 pnpm dev start --detach   # the same, in the background; returns once /version answers
 pnpm dev status           # pid, port, URL (exit 1: not running)
-pnpm dev attach           # follow its log, apps/os/.wrangler/dev.log
+pnpm dev attach           # follow its log, core/os/.wrangler/dev.log
 pnpm dev kill             # or `restart`
 pnpm getin                # a browser signed in as test@preview.iterate.test, on project `test`
 pnpm -s getin --print     # that sign-in URL alone, for Playwright and agents
 ```
 
 OS local dev needs no Doppler. `doppler.yaml` still maps each app directory to
-its Doppler project (`apps/os` → `os`), so `doppler setup` once per
+its Doppler project (`core/os` → `os`), so `doppler setup` once per
 worktree scopes the monorepo for the deploy, preview and seed commands that do
 read secrets.
 
@@ -68,7 +68,7 @@ read secrets.
   (`scripts/os-dev.ts`). A command run in a package itself (`pnpm --dir test e2e`)
   takes your shell's: if your login spans several accounts, export
   `CLOUDFLARE_ACCOUNT_ID` as envs.ts `PREVIEW_AND_DEV_ACCOUNT_ID`.
-- **Config selection**: `pnpm dev` runs `apps/os/scripts/dev.ts` (through
+- **Config selection**: `pnpm dev` runs `core/os/scripts/dev.ts` (through
   `scripts/os-dev.ts`, which sets the account), which builds
   once (`scripts/build.ts`: the generated `wrangler.jsonc` and modules) and then
   starts `wrangler dev` with the local deployment's configuration as plain
@@ -88,12 +88,12 @@ read secrets.
   drift.
 
 - **Detached and `getin`**: the running server is recorded in
-  `apps/os/.wrangler/dev-server.json` (`{pid, port, baseUrl, startedAt, detached}`), which
+  `core/os/.wrangler/dev-server.json` (`{pid, port, baseUrl, startedAt, detached}`), which
   is how `status`, `kill` and `pnpm getin` find it. Without `--port` the port is
   the worktree's last recorded one, else `8788`, else a free one. `pnpm getin`
-  (`apps/os/scripts/getin.ts`) starts the server if need be, creates the project as the
+  (`core/os/scripts/getin.ts`) starts the server if need be, creates the project as the
   person through the operator bearer (idempotent), and opens local dev's
-  one-click sign-in (`apps/os/src/local-sign-in.ts`; previews and prd have no
+  one-click sign-in (`core/os/src/local-sign-in.ts`; previews and prd have no
   such route). It signs the browser in as the person with no password and goes
   on to the project's page in a local Dash up at `http://localhost:5173` whose
   `APP_CONFIG_URLS__OS` is this server, else to `/login`. The Dash's consent
@@ -108,7 +108,7 @@ read secrets.
   the server. Playwright's `webServer` waits on the same URL. A second
   `pnpm dev` in the same worktree needs its own `--port`.
 - Dev server output is in the terminal that started it; a detached server's is
-  in `apps/os/.wrangler/dev.log` (`pnpm dev attach`).
+  in `core/os/.wrangler/dev.log` (`pnpm dev attach`).
 - Project hosts work in the browser as `<proj-slug>.localhost:<port>`
   (Chromium resolves `*.localhost` to loopback, and so does curl on current
   macOS). A client that does not should use `localhost:<port>` with a `Host`
@@ -163,7 +163,7 @@ read secrets.
 - PR sign-in links: every hosted client (Dash, Agents, Notes, Docs, Admin,
   Voice, Kit) is deployed next to the platform in each per-commit deployment and wired
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
-  (apps/os's into the Dash's project), and with the Dash one per `configs`
+  (core/os's into the Dash's project), and with the Dash one per `configs`
   template ("New project from template"), which lands in the Dash's New project
   sheet with that template chosen (`/projects?new=1&template=<name>`). A
   template the PR changes is linked at the PR head instead
@@ -191,7 +191,7 @@ read secrets.
   `admins`) plus the specs' `admin@preview.iterate.test`, and they sign in to
   the deployment as themselves with **Continue with os.iterate.com**: prd
   confirms who they are through an OAuth grant that can only read that (prd's
-  `/oauth2/userinfo` resource; `apps/os/src/admin-sign-in.ts`). The
+  `/oauth2/userinfo` resource; `core/os/src/admin-sign-in.ts`). The
   deployment's config sets `login.adminIssuer` in code (envs.ts
   `previewDeployment`'s `adminIssuer`), never in Doppler, and `parseAppConfig`
   refuses it off an https workers.dev or `.test` origin, so prd has no such
@@ -206,12 +206,12 @@ read secrets.
   `github:iterate/iterate#<branch-or-sha>&path:configs/<name>`. Dash's
   New project sheet has a custom GitHub template field for the same thing.
   The ref resolves to a commit before the request is recorded, so recovery
-  always uses the same source (`apps/os/docs/project-creation.md`). A template
+  always uses the same source (`core/os/docs/project-creation.md`). A template
   that cannot be fetched, or has no main module, fails the creation visibly
   (`project/create-failed`) instead of silently going stock.
 
 The issuer is part of the platform: there is no separate auth deployment to
-keep in step. Working on sign-in or consent means working on `apps/os`
+keep in step. Working on sign-in or consent means working on `core/os`
 (`issuer-pages.ts`, `oauth.ts`, `password-and-code-sign-in.ts`, `public/`).
 
 Each app deploys from its own workflow (Deploy OS, Deploy Dash, Deploy Agents,
@@ -224,7 +224,7 @@ and its clients.
 
 As yourself, on projects you belong to, use your own login
 (`iterate login`) or a personal access token (`ITERATE_BEARER_TOKEN`; locally
-`pnpm -s getin --token`); see [credentials](../apps/os/docs/credentials.md).
+`pnpm -s getin --token`); see [credentials](../core/os/docs/credentials.md).
 
 For automation, and for a project you are not a member of, use the operator
 bearer on `/api` (`/mcp`, project hosts and a secret's OAuth callback refuse
@@ -409,15 +409,15 @@ leased or redeployed in place.
 
 A deployment is a complete, isolated set of plain Workers on the dev/preview
 Cloudflare account, named `<prefix>-<sha7>`: `pr<n>` and the first 7 digits of
-the commit CI tests (the PR merged into main). apps/os is
+the commit CI tests (the PR merged into main). core/os is
 `https://pr<n>-<sha7>-os.iterate-dev-preview.workers.dev`, with Durable
 Objects, a D1, KV, R2 and an Artifacts namespace of its own. The seven hosted
 clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit) are `pr<n>-<sha7>-<app>`: each
-signs in against that apps/os, and every link between them names the same
+signs in against that core/os, and every link between them names the same
 deployment's apps. The name decides everything (`previewDeployment` in
 `envs.ts`), and the build and deploy are prd's (`scripts/os/deploy.ts`,
 `deployApp`). Deployments use workers.dev and have no project hosts: projects
-are paths on the one origin. Commands: `apps/os/README.md`.
+are paths on the one origin. Commands: `core/os/README.md`.
 
 ### The model: a fresh deployment per tested commit
 
@@ -472,7 +472,7 @@ whatever of its members exist, so a half-made one is deleted like a whole one
 | ------------------------------------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | deployed; its tests passed or failed             | a whole deployment                                          | this push's Clean up superseded, once this push's deployment is ready                                                                                 |
 | was cancelled halfway through deploying          | some of its D1, R2 bucket, Artifacts namespace, KV, workers | the same                                                                                                                                              |
-| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its apps/os worker as the PR's newest |
+| failed to deploy                                 | the same; the PR body says `deploy failed`                  | the same. Until then the push before it, the last to deploy, stays: the sweep never counts a deployment without its core/os worker as the PR's newest |
 | is still deploying when this push's cleanup runs | members created after this push's                           | nothing yet: the cleanup deletes only deployments made entirely before its own                                                                        |
 | had its own cleanup cancelled or failing         | the deployment before it                                    | this push's cleanup, else the nightly sweep an hour later                                                                                             |
 
@@ -511,7 +511,7 @@ worker (next story).
 Every push to a PR runs the **Preview OS** workflow. When the PR touches
 preview-relevant paths (`previewPaths` in `scripts/ci/preview-paths.ts`; see
 [Depot CI](depot-ci.md#which-prs-get-a-preview)), **Deploy preview** deploys
-the tested commit's apps/os and all seven clients. It folds the PR body's
+the tested commit's core/os and all seven clients. It folds the PR body's
 managed section into a `<details>` first, so the links there read as the
 previous commit's, and writes the new deployment's section once it lands: a
 row per worker with its `Sign in ↗` and Cloudflare dashboard links,
@@ -545,8 +545,8 @@ when the sweep could not act.
 ### Story 2: run what CI runs, locally
 
 The `pnpm preview` commands CI runs (`deploy`, `e2e`, `specs`, `delete`,
-`sweep`) run from `apps/os` under Doppler `os/preview`; they are in
-[apps/os/README.md](../apps/os/README.md). Given the PR's number, `deploy`
+`sweep`) run from `core/os` under Doppler `os/preview`; they are in
+[core/os/README.md](../core/os/README.md). Given the PR's number, `deploy`
 deploys your checkout's commit as `pr<n>-<sha7>`: the same deployment CI makes
 when your checkout is the commit CI tests, a deployment of its own otherwise.
 `e2e` and `specs` test the PR's newest deployment.
@@ -644,12 +644,12 @@ than guessing. Every deletion is logged in the job that made it.
 ### Deployment plumbing (secrets and clients)
 
 A deployment's configuration comes from `envs.ts` like any other environment's:
-`previewDeployment(name)` derives apps/os's env (its origin, its Dash, projects
+`previewDeployment(name)` derives core/os's env (its origin, its Dash, projects
 as paths, prd's admins signing in through prd beside one test admin, the pet
 shop's fakes) and each app's, and
 the deploy ships Doppler `os/preview`'s two secrets (`APP_CONFIG`,
-`APP_CONFIG_SECRETS__KEY`) with apps/os. Clients need no registration: each
-identifies itself by its client-metadata URL. The deploy creates apps/os's D1
+`APP_CONFIG_SECRETS__KEY`) with core/os. Clients need no registration: each
+identifies itself by its client-metadata URL. The deploy creates core/os's D1
 (then migrates it), R2 bucket and Artifacts namespace by name; wrangler
 provisions its KV namespaces on the first deploy.
 

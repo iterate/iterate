@@ -4,7 +4,7 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { IterateContextDurableObject } from "../../../apps/os/src/iterate-context-durable-object.ts";
+import type { IterateContextDurableObject } from "../../../core/os/src/iterate-context-durable-object.ts";
 import { stub, until } from "./support.ts";
 
 test("a context born at /a/b/c is announced to /, /a and /a/b — each ancestor it woke announces itself too — and it is sent once: remembered after it lands, deduped if sent again", async () => {

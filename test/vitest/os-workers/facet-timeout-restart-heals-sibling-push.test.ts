@@ -9,7 +9,7 @@
 //
 // Real time, the real 60 s watchdog (a copy below). Pinned in the `workers` vitest project because
 // it needs the real facet runtime (`ctx.facets`, its abort) and a hosted processor SDK facet.
-// Long by nature: ~62 s (a long pole, apps/os/vitest.config.ts).
+// Long by nature: ~62 s (a long pole, core/os/vitest.config.ts).
 
 import { errorCode } from "iterate/lib";
 import { expect, test, vi } from "vitest";

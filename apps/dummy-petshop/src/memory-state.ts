@@ -1,6 +1,6 @@
 /**
  * The pet shop's Slack, Google, Cloudflare and GitHub fakes over in-memory state, for tests
- * that import them instead of dialing the deployed shop (apps/os's workers
+ * that import them instead of dialing the deployed shop (core/os's workers
  * tests). Seeded like the deployed shop: the OAuth client `petshop-default` /
  * `petshop-default-secret` and the keyless `petshop-installation`. Nothing
  * here or below imports `cloudflare:workers` or Node, so it runs in workerd

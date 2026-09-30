@@ -14,7 +14,7 @@ test.for<{ headers: Record<string, string>; status: number }>([
 });
 
 // Signed out, every method answers the platform's sign-in challenge; the edge turns it into the
-// sign-in redirect for a page load (apps/os project-host-sign-in.ts), under any base path.
+// sign-in redirect for a page load (core/os project-host-sign-in.ts), under any base path.
 test.for<{ method: string; headers: Record<string, string> }>([
   { method: "GET", headers: { origin: "" } },
   { method: "HEAD", headers: {} },

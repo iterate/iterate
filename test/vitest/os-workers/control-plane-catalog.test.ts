@@ -13,10 +13,10 @@ import {
   type Caller,
   ControlPlaneDatabase,
   projectSlug,
-} from "../../../apps/os/src/control-plane/catalog.ts";
-import { listOAuthGrants } from "../../../apps/os/src/control-plane/db/queries/.generated/oauth-grants.sql.ts";
-import { updateUserEmail } from "../../../apps/os/src/control-plane/db/queries/.generated/users.sql.ts";
-import { OAuthGrantTable } from "../../../apps/os/src/control-plane/oauth-grants.ts";
+} from "../../../core/os/src/control-plane/catalog.ts";
+import { listOAuthGrants } from "../../../core/os/src/control-plane/db/queries/.generated/oauth-grants.sql.ts";
+import { updateUserEmail } from "../../../core/os/src/control-plane/db/queries/.generated/users.sql.ts";
+import { OAuthGrantTable } from "../../../core/os/src/control-plane/oauth-grants.ts";
 
 const admin: Caller = { principal: { actor: "admin" } };
 const c = new ControlPlaneDatabase(env.DB);

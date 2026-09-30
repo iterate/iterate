@@ -83,7 +83,7 @@ export async function unseal<T>(token: string, secret: string): Promise<T | null
  * Hex HMAC-SHA256 over a string body — the webhook signature primitive.
  * Deliberately the same "HMAC over raw bytes, hex digest" shape as GitHub's
  * `x-hub-signature-256`, which the OS side's secret `verifyHmac` checks
- * (apps/os/src/secrets.ts `verifySecretHmac`).
+ * (core/os/src/secrets.ts `verifySecretHmac`).
  */
 export async function hmacSha256Hex(secret: string, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey(

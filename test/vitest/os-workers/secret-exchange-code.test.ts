@@ -7,7 +7,7 @@
 // `PinnedOutbound` and the facet's dispatch both use this isolate's global `fetch`.
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
 import { adminSession, projectWithMember, stub } from "./support.ts";
 
 const SHOP = "https://tesco.test";

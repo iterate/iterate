@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/os-dev.ts",
-    "getin": "pnpm --dir apps/os getin",
+    "getin": "pnpm --dir core/os getin",
     "preview": "node scripts/os/preview.ts",
     "os:deploy": "node scripts/os/deploy.ts",
     "os:ensure-resources": "node scripts/os/ensure-resources.ts",

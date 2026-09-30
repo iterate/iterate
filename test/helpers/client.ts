@@ -8,9 +8,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import crypto from "node:crypto";
 import { newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
-import type { IterateRpcTarget, SessionCredentials } from "../../apps/os/src/session.ts";
-import { SNAPSHOT_TTL_MS } from "../../apps/os/src/context/rule-snapshots.ts";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../apps/os/src/project/context-birth-events.ts";
+import type { IterateRpcTarget, SessionCredentials } from "../../core/os/src/session.ts";
+import { SNAPSHOT_TTL_MS } from "../../core/os/src/context/rule-snapshots.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../core/os/src/project/context-birth-events.ts";
 
 const baseUrl = (): string => {
   const u = process.env.WORKER_BASE_URL;

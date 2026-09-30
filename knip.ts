@@ -46,11 +46,11 @@ export default {
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
-        // iterate's apps/os tooling, run by the root package.json's `preview` and `os:*` scripts
+        // iterate's core/os tooling, run by the root package.json's `preview` and `os:*` scripts
         "os/{deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,seed-instance-secrets,e2e-soak}.ts",
       ],
     },
-    "apps/os": {
+    "core/os": {
       // The platform worker. Knip's vitest plugin reads vitest.config.ts (its global
       // setup); the rest are entries here. Every test beyond a simple unit test is test/'s.
       entry: [
@@ -65,7 +65,7 @@ export default {
         "scripts/*.test.ts",
         "examples/**/*.ts",
         // shadcn's components, vendored whole and never edited (packages/ui/AGENTS.md): the exports
-        // apps/os does not use are upstream's
+        // core/os does not use are upstream's
         "src/components/ui/*.tsx",
       ],
       project: ["src/**/*.{ts,tsx,css}!", "scripts/**/*.ts", "examples/**/*.ts"],

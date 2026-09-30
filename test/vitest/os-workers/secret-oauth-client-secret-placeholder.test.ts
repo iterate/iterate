@@ -11,8 +11,8 @@
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { errorCode } from "iterate/lib";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
-import { hmacSha256Hex } from "../../../apps/os/src/secrets.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
+import { hmacSha256Hex } from "../../../core/os/src/secrets.ts";
 import { adminSession, ORIGIN, projectWithMember } from "./support.ts";
 
 const PROVIDER = "https://provider.test";

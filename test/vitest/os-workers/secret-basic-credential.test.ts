@@ -9,7 +9,7 @@
 // answered below for every `.test` origin, each request recorded as the upstream saw it.
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
 import { projectWithMember, stub } from "./support.ts";
 
 test("a Basic credential's placeholder is substituted for the pinned origin only, never echoed; one with no placeholder passes as it is", async () => {

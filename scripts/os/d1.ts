@@ -1,4 +1,4 @@
-// scripts/os/d1.ts — the control plane's D1 on a Cloudflare account (apps/os/src/control-plane/db/): found or
+// scripts/os/d1.ts — the control plane's D1 on a Cloudflare account (core/os/src/control-plane/db/): found or
 // created by name, and migrated by wrangler. `wrangler d1 migrations apply` sends each migration
 // file with its `d1_migrations` history row as ONE request, so a file lands whole or not at all
 // (https://developers.cloudflare.com/d1/reference/migrations/; workers-sdk
@@ -14,7 +14,7 @@ import { z } from "zod";
 import { runCloudflareCommandWith429Retry } from "../lib/deploy-helpers.ts";
 import type { Cf } from "./preview-artifacts.ts";
 
-const APP_ROOT = fileURLToPath(new URL("../../apps/os/", import.meta.url));
+const APP_ROOT = fileURLToPath(new URL("../../core/os/", import.meta.url));
 const MIGRATIONS_DIR = path.join(APP_ROOT, "src/control-plane/db/migrations");
 
 export type D1Row = { uuid: string; name: string; created_at?: string };

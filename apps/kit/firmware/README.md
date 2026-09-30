@@ -351,7 +351,7 @@ WORKER_BASE_URL=https://os.iterate.com ITERATE_BEARER_TOKEN=itk_… PROJECT=prj-
 
 `ITERATE_BEARER_TOKEN` is a personal access token for the device's project
 (the Dash's Sessions page, or `pnpm exec iterate --config prd tokens create`;
-[credentials](../../os/docs/credentials.md)).
+[credentials](../../../core/os/docs/credentials.md)).
 `voice-board.ts` asks the device to start a conversation (a remote press),
 speaks the prompt out of this Mac's speaker so the device's microphone has to
 hear it, watches the conversation for what the provider heard and said back,
