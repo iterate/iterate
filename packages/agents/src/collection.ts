@@ -3,12 +3,11 @@
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
 // `#deleteFacet`); a verb on a dead agent answers from the catalog's `deleted` row on `/`
-// (catalog.ts), never by `facets.get("agent", spec)` on its context. That call hosted the facet
-// again — a new database folded from the whole log, a startup memo, an instance that can run on past
-// the context's incarnation — so the dead agent's context carried a loaded facet for good, and the
-// next birth aborted it (apps/os context/residency.ts, the birth reset). Aborting a running loaded
-// facet is how Cloudflare comes to reset a whole object ("Internal error in Durable Object storage
-// caused object to be reset"; apps/os e2e/facet-abort-storage-reset.e2e.test.ts measures it).
+// (catalog.ts), never by `facets.get("agent", spec)` on its context. That call would host the facet
+// again (a new database folded from the whole log, an instance that can run on past the context's
+// incarnation), and aborting a running loaded facet resets a whole Durable Object (apps/os
+// context/residency.ts, the birth reset; apps/os e2e/facet-abort-storage-reset.e2e.test.ts
+// measures it).
 import { RpcTarget } from "cloudflare:workers";
 import type { StreamEvent } from "iterate/stream/processor";
 import { codedError, errorCode, resolveContextPath } from "iterate/lib";

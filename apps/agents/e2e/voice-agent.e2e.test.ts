@@ -49,7 +49,9 @@ deployedOnly(
         `const candidateSource = ${JSON.stringify(candidateSource)}; const projectUrl = ${JSON.stringify(websiteUrl)}; const response = ${candidateProbe}; const body = await response.text(); if (response.status !== 200 || !body.includes("bad stable manners")) throw new Error("candidate failed"); return body;`,
         `const { commitOid } = await itx.repos.get("/repos/config").writeFile("worker.ts", ${JSON.stringify(candidateSource)}); const outcome = ${outcomeWait}; if (outcome.payload.error) throw new Error(outcome.payload.error); return commitOid;`,
         'return await itx.repos.get("/repos/config").readFile("worker.ts");',
-        `const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); return {status: response.status, body: await response.text()};`,
+        // the edge serves a project's hosts from the root's rule snapshot, so the publication is
+        // live for it within SNAPSHOT_TTL_MS of the outcome, not at it: ask until it answers
+        `let attempts = 0; while (true) { const response = await itx.fetch(new Request(${JSON.stringify(websiteUrl)})); const body = await response.text(); attempts++; if (response.status === 200 || attempts >= 20) return {status: response.status, body, attempts}; await new Promise((resolve) => setTimeout(resolve, 1000)); }`,
       ];
       // The agent's model, played: it answers the newest hand-over from the script results after
       // it, one script a turn, with prose beside the first script that must never be spoken.
