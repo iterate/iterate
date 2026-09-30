@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.ts";
 
@@ -239,7 +239,7 @@ test.for([
 });
 
 function createGitRepo() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const { path } = directory;
   execFileSync("git", ["init", "--quiet"], { cwd: path });
 

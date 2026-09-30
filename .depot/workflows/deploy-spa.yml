@@ -13,6 +13,8 @@ on:
       - .depot/workflows/deploy-spa.yml
       - apps/spa/**
       - apps/browser-extension/**
+      # the compatibility date its Worker runs on (iterate/compatibility-date)
+      - packages/iterate/**
       - envs.ts
       - scripts/lib/**
   # `env=preview` deploys the dispatched ref to envs.ts spaEnvs.preview, to prove a branch; a push

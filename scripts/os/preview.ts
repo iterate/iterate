@@ -25,7 +25,6 @@ import process from "node:process";
 import { connectIterate } from "iterate/node";
 import type { IngressRouting } from "iterate/project-ingress";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { z } from "zod";
 import {
   TestEvidenceTarget,
@@ -1256,5 +1255,4 @@ async function main(command: Command, options: PreviewOptions) {
   return deployPreview(await accountContext(), name, pr, apps);
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });
+void createCli({ ...import.meta, name: "preview" }).run({ formatError: describe });

@@ -1,9 +1,10 @@
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectIterate } from "iterate/node";
 import { test } from "vitest";
@@ -25,7 +26,7 @@ test(
     const slug = freshDnsSafeProjectSlug("cli");
     const member = { email: `${slug}@example.com` };
     const project = await registerProject(slug, member);
-    using directory = temporaryDirectory();
+    using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const path = join(directory.path, "iterate/config.json");
     await mkdir(join(directory.path, "iterate"));
     await writeFile(

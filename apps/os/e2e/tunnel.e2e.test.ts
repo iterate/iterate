@@ -17,6 +17,8 @@
 // The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
 // and the subprotocol through the platform, e2e/fetch-routes.e2e.test.ts.
 
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { execFile, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdir, realpath, writeFile } from "node:fs/promises";
@@ -25,7 +27,6 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { connect as tlsConnect } from "node:tls";
 import { fileURLToPath } from "node:url";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
@@ -315,7 +316,7 @@ async function hmrSocket(url: URL) {
  *  under `base` — the tunnel's path, known once the tunnel runs — with its HMR socket on the same
  *  server, answering the page's `e2e:ping` with `e2e:pong`. */
 async function localViteServer() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // Vite keys its module graph by the real path
   const root = await realpath(directory.path);
   const mainJs = join(root, "main.js");
@@ -465,7 +466,7 @@ async function localServer() {
 /** A CLI config pointing at the worker under test, the operator's credentials in the environment,
  *  and `tunnel(args)`: the bin running `iterate tunnel …`, the URL it prints on stdout awaited. */
 async function cliConfig() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   await mkdir(join(directory.path, "iterate"));
   await writeFile(
     join(directory.path, "iterate/config.json"),

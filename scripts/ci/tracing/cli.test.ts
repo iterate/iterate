@@ -1,6 +1,7 @@
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test, vi } from "vitest";
 import { stringify } from "yaml";
 import { fakeDoppler } from "../../lib/fake-doppler.ts";
@@ -151,7 +152,7 @@ async function collectedTrace(
   attributes: Record<string, string>,
   artifacts: { artifactId: string; name: string; createdAt: string }[],
 ) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   await writeFile(
     join(directory.path, "trace.json"),
     JSON.stringify({
@@ -210,7 +211,7 @@ async function tracedWorkflow(workflow: {
   jobs: [key: string, status: string, startedAt: number, finishedAt: number][];
   needs: string[];
 }) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const at = (seconds: number) =>
     new Date(Date.UTC(2026, 8, 23, 12) + seconds * 1000).toISOString();
   const job = ([key, status, startedAt, finishedAt]: (typeof workflow.jobs)[number]) => ({

@@ -19,7 +19,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 
 /** The registry items packages/ui vendors: what `shadcn add` is asked for. Each writes
@@ -181,4 +180,4 @@ export function refresh() {
   if (run.status !== 0) throw new Error(`shadcn add exited ${run.status}`);
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "shadcn-drift" }).run();
+void createCli({ ...import.meta, name: "shadcn-drift" }).run();

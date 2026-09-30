@@ -36,6 +36,8 @@
     "./stream/test-support": "./src/stream/test-support.ts",
     "./oauth-scopes": "./src/oauth-scopes.ts",
     "./project-ingress": "./src/project-ingress.ts",
+    "./app-config": "./src/app-config.ts",
+    "./compatibility-date": "./src/compatibility-date.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
@@ -99,6 +101,14 @@
       "./project-ingress": {
         "types": "./dist/project-ingress.d.mts",
         "import": "./dist/project-ingress.mjs"
+      },
+      "./app-config": {
+        "types": "./dist/app-config.d.mts",
+        "import": "./dist/app-config.mjs"
+      },
+      "./compatibility-date": {
+        "types": "./dist/compatibility-date.d.mts",
+        "import": "./dist/compatibility-date.mjs"
       },
       "./oauth": {
         "types": "./dist/oauth.d.mts",

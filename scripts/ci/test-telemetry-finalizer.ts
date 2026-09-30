@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import {
@@ -140,5 +139,4 @@ export function unitRowBudget(artifacts: TestTelemetryArtifact[]) {
   ];
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "test-telemetry-finalizer" }).run();
+void createCli({ ...import.meta, name: "test-telemetry-finalizer" }).run();

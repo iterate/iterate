@@ -1,4 +1,3 @@
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { docsEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -11,4 +10,4 @@ export const docs = {
   root: new URL("..", import.meta.url),
   envs: docsEnvs,
 };
-if (isMainModule(import.meta.url)) void startAppCli(docs).run();
+if (import.meta.main) void startAppCli(docs).run();

@@ -1,13 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { existsSync, readFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
 import { unknownFlakeRecordFromTelemetry } from "@iterate-com/shared/test-support/flake-record";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { writeFlakeSuiteSummary } from "./flake-suite-summary.ts";
 
 test("a complete clean browser run publishes a summary even without flake records", async () => {
-  using output = temporaryDirectory();
+  using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   await writeFlakeSuiteSummary({
     directory: output.path,
     suite: "specs",
@@ -29,7 +29,7 @@ test("a complete clean browser run publishes a summary even without flake record
 });
 
 test("per-test evidence uses the retry record's identity and never counts retries or skips as clean", async () => {
-  using output = temporaryDirectory();
+  using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const artifact = browserResult();
   const base = artifact.tests[0]!;
   artifact.tests = [
@@ -67,7 +67,7 @@ test("per-test evidence uses the retry record's identity and never counts retrie
 });
 
 test("each row carries what the dashboard's Cost section reads", async () => {
-  using output = temporaryDirectory();
+  using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const artifact = browserResult();
   const base = artifact.tests[0]!;
   artifact.tests = [
@@ -115,7 +115,7 @@ test("each row carries what the dashboard's Cost section reads", async () => {
 test.for(["interrupted", "missing workspace", "wrong commit", "unexecuted test"])(
   "%s cannot publish a clean complete result",
   async (failure) => {
-    using output = temporaryDirectory();
+    using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const artifact = browserResult();
     artifact.context.testKind = "unit";
     if (failure === "interrupted") artifact.run.status = "interrupted";
@@ -143,7 +143,7 @@ test.for(["interrupted", "missing workspace", "wrong commit", "unexecuted test"]
 test.for(["specs", "preview-e2e"] as const)(
   "the %s summary counts only its own runner's result",
   async (suite) => {
-    using output = temporaryDirectory();
+    using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const browser = browserResult();
     const backend = TestTelemetryArtifact.parse({
       ...browser,
@@ -177,7 +177,7 @@ test.for([
 ])(
   "the preview e2e summary says whether its rows tagged slow ran: $states → $slowRows",
   async ({ states, slowRows }) => {
-    using output = temporaryDirectory();
+    using output = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const artifact = browserResult();
     const base = artifact.tests[0]!;
     artifact.producer = "vitest-retry-telemetry-reporter";

@@ -31,7 +31,7 @@
 // it). A deploy ships every `APP_CONFIG*` var of its Doppler config (scripts/lib/deploy-helpers.ts
 // `appConfigSecretsOf`), so a new key is set in Doppler alone. A blank var is unset. A key the schema does not name is warned about loudly at boot and
 // dropped, never silently kept. The mechanism is shared with the apps on top
-// (@iterate-com/shared/app-config); this module is the platform's schema and cross-field rules.
+// (iterate/app-config); this module is the platform's schema and cross-field rules.
 
 import { z } from "zod";
 import {
@@ -40,7 +40,7 @@ import {
   httpOrigin,
   optionalOrigin,
   parseAppConfigVars,
-} from "@iterate-com/shared/app-config";
+} from "iterate/app-config";
 import {
   projectAddressOf,
   projectWildcardHostOf,

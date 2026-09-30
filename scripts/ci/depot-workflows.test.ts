@@ -1,9 +1,15 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  mkdtempDisposableSync,
+} from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { CI_WORKFLOW_PREVIEWS } from "../os/preview-sweep.ts";
 import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
@@ -1513,7 +1519,7 @@ test("the CI telemetry sync's test evidence jobs are the jobs that upload a fold
 });
 
 test("the Test job's summary says which pnpm store its install started from and what main saved, warns on a failed restore or save, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (restore: string, primary: string, matched: string, save: string) => {
     writeFileSync(summary, "");
@@ -1577,9 +1583,9 @@ test("the Test job's summary says which pnpm store its install started from and 
 });
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // the job's workspace, where the manifest is test-results/manifest.json
-  using workspace = temporaryDirectory();
+  using workspace = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (write: string, upload: string) => {
     writeFileSync(summary, "");
@@ -1655,7 +1661,7 @@ test("the test jobs' flake records go into the test evidence folder", () => {
 
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const attempt = (jobUrl: string) => {
     const output = join(directory.path, "output");
     writeFileSync(output, "");

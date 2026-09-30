@@ -1,9 +1,9 @@
 // The prd fault alarm: how it reads prd's Workers Logs (a wire fixture of the calculations API) and
 // what it owes Slack (triageIncidents, pure, over readings shaped as prd logged them). Posting to a
 // real Slack is proven by the workflow's 🧪 TEST RUN, not here.
-import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import type { WebClient } from "@slack/web-api";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { fakeDoppler } from "../lib/fake-doppler.ts";
@@ -514,7 +514,7 @@ test.for([
   },
   { name: "a state that is not JSON starts over", content: "{", read: false },
 ])("$name", ({ content, read }) => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const path = join(directory.path, "state.json");
   writeFileSync(path, content);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -524,7 +524,7 @@ test.for([
 test("a run on main keeps its state after posting; a dispatch on a branch keeps none", async () => {
   workersLogs(serverErrorsOnly(0));
   using _doppler = fakeDoppler({ secrets: { CLOUDFLARE_API_TOKEN: credentials.apiToken } });
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const kept = await Promise.all(
     ["refs/heads/main", "refs/heads/a-branch"].map(async (ref) => {
       const stateOut = join(directory.path, `${ref.replaceAll("/", "-")}.json`);

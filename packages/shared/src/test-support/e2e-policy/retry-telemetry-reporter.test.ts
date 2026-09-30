@@ -1,12 +1,12 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "../ci-telemetry.ts";
-import { temporaryDirectory } from "../temporary-directory.ts";
 import { RetryTelemetryReporter } from "./retry-telemetry-reporter.ts";
 
 test("writes its pessimistic sentinel only when the Vitest run starts", () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
 
   const reporter = new RetryTelemetryReporter();
@@ -17,7 +17,7 @@ test("writes its pessimistic sentinel only when the Vitest run starts", () => {
 });
 
 test("preserves an interrupted Vitest run instead of reporting a test failure", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
 
   await new RetryTelemetryReporter().onTestRunEnd([], [], "interrupted");
@@ -26,7 +26,7 @@ test("preserves an interrupted Vitest run instead of reporting a test failure", 
 });
 
 test("records the first failed attempt when a retry passes", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const telemetryDir = join(directory.path, "telemetry");
   // Scoped: the flaky fixture below writes an unknown-flake record, which
   // must land here and never in the CI run's real FLAKE_RECORD_DIR.
@@ -95,7 +95,7 @@ test("records the first failed attempt when a retry passes", async () => {
 });
 
 test("a plain test that failed every attempt leaves an unexpected-error flake record", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const flakeRecordDir = join(directory.path, "flake-records");
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDir);
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", join(directory.path, "telemetry"));
@@ -152,7 +152,7 @@ test.for([
 ] as const)(
   "a test declared $mode that ended $state in a run $reason is recorded as expected to $expectedState",
   async ({ mode, state, reason, expectedState }) => {
-    using directory = temporaryDirectory();
+    using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
     vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
     vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");
@@ -175,7 +175,7 @@ test.for([
 );
 
 test("writes unit tests without performing network I/O", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
   vi.stubEnv("npm_package_name", "@iterate/example");
   vi.stubEnv("GITHUB_WORKSPACE", "/repo");
@@ -205,7 +205,7 @@ test("writes unit tests without performing network I/O", async () => {
 });
 
 test("prints the e2e rows that ran past the row budget's warning", async () => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", directory.path);
   vi.stubEnv("TEST_TELEMETRY_KIND", "e2e");
   vi.stubEnv("TEST_TELEMETRY_SUITE", "vitest");

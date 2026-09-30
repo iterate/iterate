@@ -16,7 +16,6 @@ import { appendFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
 import { createCli } from "trpc-cli";
 import {
@@ -160,4 +159,4 @@ export default class SpecsShards {
   }
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "specs-shards" }).run();
+void createCli({ ...import.meta, name: "specs-shards" }).run();

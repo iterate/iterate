@@ -37,7 +37,6 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import {
   previewDeploymentName,
@@ -293,4 +292,4 @@ function firstLine(message: string): string {
     : line;
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "e2e-soak" }).run();
+void createCli({ ...import.meta, name: "e2e-soak" }).run();

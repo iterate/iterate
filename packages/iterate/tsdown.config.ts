@@ -30,6 +30,8 @@ export default defineConfig([
       email: "src/email.ts",
       "oauth-scopes": "src/oauth-scopes.ts",
       "project-ingress": "src/project-ingress.ts",
+      "app-config": "src/app-config.ts",
+      "compatibility-date": "src/compatibility-date.ts",
       oauth: "src/client/oauth.ts",
     },
     format: "esm",

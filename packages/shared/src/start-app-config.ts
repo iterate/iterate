@@ -15,7 +15,7 @@
 //   APP_CONFIG_URLS__VOICE=http://localhost:5174
 
 import { z } from "zod";
-import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "./app-config.ts";
+import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "iterate/app-config";
 
 /** THE SCHEMA. `urls` names the platform and every first-party app (scripts/lib/start-app.ts
  *  `FIRST_PARTY_APPS` is typed against it, so an app added there is added here). */

@@ -29,7 +29,7 @@
 import { codedError, errorCode } from "iterate/lib";
 import { normalizedItxExpression, type ItxExpression } from "iterate/expression";
 import type { FacetSpec, WorkerSource } from "iterate/api";
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import { z } from "zod";
 import PLATFORM_MODULES from "../generated/platform-modules.js";

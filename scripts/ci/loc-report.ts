@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, matchesGlob } from "node:path";
 
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
 import { parseSync, Visitor } from "oxc-parser";
 import { transformSync } from "oxc-transform";
@@ -386,4 +385,4 @@ export default async function locReport(
   );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "loc-report" }).run();
+void createCli({ ...import.meta, name: "loc-report" }).run();

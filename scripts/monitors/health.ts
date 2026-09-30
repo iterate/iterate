@@ -33,7 +33,6 @@
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
@@ -493,4 +492,4 @@ export async function previousState(options: {
   );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "health" }).run();
+void createCli({ ...import.meta, name: "health" }).run();

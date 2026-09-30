@@ -661,7 +661,7 @@ function output(command: string, args: readonly string[], cwd: string) {
   return result.stdout;
 }
 
-if (process.argv[1]?.endsWith("firmware-release.ts")) {
+if (import.meta.main) {
   const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
   const { positionals, values } = parseArgs({
     allowPositionals: true,
