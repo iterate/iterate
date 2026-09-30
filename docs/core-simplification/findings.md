@@ -503,9 +503,68 @@ as a deletion until its runtime parity is proven.
 additional resume and private corrupt-read loops, ephemeral ordering and an
 unbounded busy policy. Its proposed native promise join preserves single-flight
 and at-least-once delivery; it cannot promise deduplication after a raw call has
-settled between timeout and retry. Preview, performance, 100-run soak and fresh
-log comparison remain pending. The implementation draft [#3461](https://github.com/iterate/iterate/pull/3461)
-is not ready to merge.
+settled between timeout and retry.
+
+### Published preview 9c and round 11
+
+The published `9c48a4a6f4314093c343f7851807b0afb033b1d7` checkpoint has a
+real local root result: all packages passed; the OS suite had 151 passing files,
+2,311 passing tests and 14 expected failures. This is a stronger local result than the earlier repair
+runs, but it does not make the candidate final or make a later native design
+green.
+
+The deployed preview is not healthy enough to merge. Its E2E job recorded 19
+failures in 9 files, alongside 311 passing tests, 9 expected failures, and 34
+skips. The failures include durable cursor resume, ephemeral delivery range,
+first-delivery error handling, live pager cleanup, and the old durable-route
+assumption in the tunnel/example tests. They are a mixture of product
+regressions and E2E expectations that now describe the wrong lifecycle, but
+all need a specific source fix or corrected assertion and a rerun. The preview
+browser suite is green: all 11 browser rows passed. That is useful surface
+coverage, not a substitute for the failed RPC and delivery rows.
+
+All 13 emitted latency budgets passed. Five residency rows were skipped by
+that run's selection, so no residency conclusion follows from the latency
+result. The 100-run soak was cancelled after its first deterministic repro; it
+is not a completed soak result. Its early failures include the same
+beyond-head cursor resume and ephemeral-range outcomes reported by E2E, so
+cancelling preserved a reproducible failure instead of averaging it away.
+
+A same-window preview-versus-main logs comparison found **14 additional error
+records** and **134 additional platform-failure recovery records**. The latter
+are mostly `lendRpcStub` recovery entries, with one context alarm re-arm. These
+counts are telemetry signals, not a fault attribution: the error messages and
+the repeated recoveries must be reduced or explained before deployment
+approval. They rule out describing preview validation as clean.
+
+[The eleventh independent review](reviews/opus-round-11.md) is promising as a
+simplification direction, not as a final implementation decision. It proposes
+hosting the trusted durable runner and its cursor beside the context log rather
+than in the separate private `subscriptions` facet. That could delete the
+facet, bridge RPCs, duplicated configuration pull/fence state, and the
+cross-object body handoff. Public `itx`, ordinary target resolution, jail,
+Cap'n Web authoring, and user processor/facet APIs would stay the same.
+
+The review was a mutable-tree read: it inspected
+`/private/tmp/iterate-core-simplification-resumed` at reported `ef90c40ba`,
+not the supplied frozen review source, and could not verify that tree against
+the manifest. It ran no tests. Its conclusion therefore does not establish a
+native context-cursor implementation, line reduction, or release readiness.
+The required conditions are concrete: an existing residency pin must keep a
+real target call alive; each durable row needs a persisted owed mark for the
+commit-to-admission gap; the raw call and its body reservation must survive the runner deadline; and no delivery write may precede facet
+birth initialization. The native design must also prove bounded per-pass CPU,
+subrequests, fan-out concurrency, eviction retry, old-facet deployment
+handling, and the same ordered/ephemeral contract. The review also suggested
+waiting indefinitely for a raw target. That part is rejected: retries remain
+bounded, and a retry can join the outstanding promise without removing its
+deadline or attempt limit.
+
+This is the cleanest remaining relaxation because cursor ownership follows
+log and target authority rather than creating another hosted object. It should
+be rejected if those recovery and residency outcomes require rebuilding the
+facet as a different keepalive or claim layer. The implementation draft
+[#3461](https://github.com/iterate/iterate/pull/3461) is not ready to merge.
 
 ## What remains core
 
@@ -635,6 +694,5 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), and [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), and
-  [full-access source review, round 9](reviews/opus-root-round-9.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), and [round 11](reviews/opus-round-11.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
