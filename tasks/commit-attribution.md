@@ -5,7 +5,10 @@ size: small
 
 # A commit says the platform made it, and who asked
 
-Status: spec'd, not started.
+Status: built, awaiting CI and review. Every commit the platform makes is committed by `iterate`;
+a script's commit for someone is authored by them and ends with `Iterate-Run:` (and `Requested-by:`
+when it names another author); agents are told to write their own `Via:`. Left: the MCP e2e
+asserting the committer, once #3479 has moved the e2e suites.
 
 ## Why
 
@@ -55,13 +58,19 @@ committer and no trailers.
 
 ## Plan
 
-- [ ] `encodeCommit` takes a committer; `parseCommit` and `RepoLogEntry` report it
-- [ ] the repo facet commits as `iterate`, and adds `Iterate-Run:` and `Requested-by:` for a
-      commit made on someone's behalf (a trailers helper beside it)
-- [ ] the MCP instructions and packages/docs/AGENTS.md tell an agent to end a commit message with
+- [x] `encodeCommit` takes a committer; `parseCommit` and `RepoLogEntry` report it _(repo/git-wire.ts; iterate/api `RepoLogEntry.committer`)_
+- [x] the repo facet commits as `iterate`, and adds `Iterate-Run:` and `Requested-by:` for a
+      commit made on someone's behalf (a trailers helper beside it) _(repo/durable-object.ts `commitFiles`; repo/commit-attribution.ts)_
+- [x] the MCP instructions and packages/docs/AGENTS.md tell an agent to end a commit message with
       `Via: <its name>`
-- [ ] tests: the trailers helper; git-wire's committer round trip; the repo facet committing under
+- [x] tests: the trailers helper; git-wire's committer round trip; the repo facet committing under
       a token (committer, author, trailers after an agent's `Via:`), naming another author
-      (`Requested-by:`), and under none (committer only)
+      (`Requested-by:`), and under none (committer only) _(repo/commit-attribution.test.ts, repo/durable-object.test.ts)_
+- [ ] once #3479 lands: the MCP e2e asserts an MCP script's commit is committed by `iterate` and names its run
 
 ## Implementation log
+
+- The repo facet's Node test signs a real token with the config's key (two `APP_CONFIG_*` vars in
+  its env) and commits under it with `runningUnder`; with the facet ignoring the token, it fails.
+- The one e2e file touched is `e2e/support/fake-git-server.ts`, one line: `encodeCommit` takes a
+  committer now. #3479 moves the file; git carries a one-line edit across a rename.
