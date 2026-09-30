@@ -39,7 +39,7 @@
 
 import type { ItxExpression } from "iterate/expression";
 import { releaseRpcSessions } from "iterate/lib";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { FetchRouteTable } from "../fetch-routes.ts";
 import { unavailable, unavailableError } from "../unavailable.ts";
 import type { ItxExpressionRewriteRule } from "./itx-expression-rewriting.ts";

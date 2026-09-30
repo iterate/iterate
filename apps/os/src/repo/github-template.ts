@@ -1,7 +1,7 @@
 import {
   isSafeConfigRepoTemplatePath,
   type ConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import {
   demuxFetchResponse,
   encodeFetchRequest,

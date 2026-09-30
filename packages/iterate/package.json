@@ -38,6 +38,9 @@
     "./project-ingress": "./src/project-ingress.ts",
     "./app-config": "./src/app-config.ts",
     "./compatibility-date": "./src/compatibility-date.ts",
+    "./platform-retry": "./src/platform-retry.ts",
+    "./config-repo-template": "./src/config-repo-template.ts",
+    "./integration-scopes": "./src/integration-scopes.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
@@ -109,6 +112,18 @@
       "./compatibility-date": {
         "types": "./dist/compatibility-date.d.mts",
         "import": "./dist/compatibility-date.mjs"
+      },
+      "./platform-retry": {
+        "types": "./dist/platform-retry.d.mts",
+        "import": "./dist/platform-retry.mjs"
+      },
+      "./config-repo-template": {
+        "types": "./dist/config-repo-template.d.mts",
+        "import": "./dist/config-repo-template.mjs"
+      },
+      "./integration-scopes": {
+        "types": "./dist/integration-scopes.d.mts",
+        "import": "./dist/integration-scopes.mjs"
       },
       "./oauth": {
         "types": "./dist/oauth.d.mts",

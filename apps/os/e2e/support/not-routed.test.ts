@@ -15,7 +15,7 @@ import {
   setGlobalDispatcher,
   WebSocket,
 } from "undici";
-import { CI_HTTP } from "@iterate-com/shared/platform-retry";
+import { CI_HTTP } from "iterate/platform-retry";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { resendNotRoutedYet } from "./not-routed.ts";
 

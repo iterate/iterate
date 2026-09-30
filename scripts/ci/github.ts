@@ -2,11 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { Octokit } from "@octokit/rest";
 
-import {
-  CI_HTTP,
-  retryPlatformFailures,
-  type FailureKind,
-} from "@iterate-com/shared/platform-retry";
+import { CI_HTTP, retryPlatformFailures, type FailureKind } from "iterate/platform-retry";
 
 export function getOctokit() {
   const auth = process.env.GITHUB_TOKEN;

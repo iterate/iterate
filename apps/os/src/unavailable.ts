@@ -8,7 +8,7 @@ import {
   logPlatformFailure,
   RETRY_AFTER_MS,
   type PlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import { LOOP_LIMIT_HEADER } from "iterate/lib";
 
 /** A failure of the platform's own, coded so a client and every later hop read its kind and when

@@ -7,7 +7,7 @@ import {
 import mime from "mime";
 import { z } from "zod";
 import { depotCiApi } from "@iterate-com/shared/depot-api";
-import { HttpAnswerError } from "@iterate-com/shared/platform-retry";
+import { HttpAnswerError } from "iterate/platform-retry";
 
 /**
  * `/<artifact-id>/<file>`: one file of a public Depot CI artifact of iterate/iterate, read out of

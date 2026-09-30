@@ -37,7 +37,7 @@ import {
 } from "iterate/expression";
 import type { FacetProps, StreamProcessorDurableObject } from "iterate/sdk";
 import type { FacetSpec, WorkerSource } from "iterate/api";
-import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { deepestCause, requestCausedBy, type Cause } from "../cause.ts";
 import {
   CoreContract,

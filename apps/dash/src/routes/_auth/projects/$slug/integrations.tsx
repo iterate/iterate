@@ -33,7 +33,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
+import { missingScopes } from "iterate/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,
   INTEGRATION_PROVIDERS,

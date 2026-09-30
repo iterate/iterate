@@ -21,11 +21,11 @@
 // catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { errorCode, resolveContextPath } from "iterate/lib";
-import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import {
   type ConsumedEvent,
   type EmittedEventInput,

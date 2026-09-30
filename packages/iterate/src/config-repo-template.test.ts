@@ -3,7 +3,7 @@ import {
   formatConfigRepoTemplateReference,
   normalizeConfigRepoTemplateReference,
   parseConfigRepoTemplateReference,
-} from "./reference.ts";
+} from "./config-repo-template.ts";
 
 test.for([
   ["github:iterate/iterate", { owner: "iterate", repo: "iterate" }],

@@ -19,7 +19,7 @@ import {
   isOpaqueInternalError,
   isPlatformFailureKind,
   logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { Env } from "../env.ts";

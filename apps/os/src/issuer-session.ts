@@ -6,7 +6,7 @@ import {
   failureKind,
   isPlatformFailureKind,
   type PlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import { clientDisplay } from "./client-display.ts";
 import { platformAddressesOf } from "./app-config.ts";
 import type { Env } from "./env.ts";

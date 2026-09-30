@@ -11,11 +11,7 @@
 // name (`repoArtifactName` — the ONE place a name is spelled; every itx surface speaks paths).
 
 import { RpcTarget } from "capnweb";
-import {
-  failureKind,
-  retryPlatformFailures,
-  UPSTREAM_ONCE,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, retryPlatformFailures, UPSTREAM_ONCE } from "iterate/platform-retry";
 import type { ArtifactToken, CfArtifactRepoApi, CfArtifactsApi } from "iterate/api";
 import { errorCode } from "iterate/lib";
 import { unavailableError } from "../unavailable.ts";

@@ -56,7 +56,7 @@
 //   [F] splice      A WebSocket upgrade through a lent stub's fetch outlives the DO's sockets
 //                   (fetch-upgrade-splice.ts).
 
-import { failureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind } from "iterate/platform-retry";
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";

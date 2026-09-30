@@ -33,7 +33,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
-import { isNotRoutedYet } from "@iterate-com/shared/platform-retry";
+import { isNotRoutedYet } from "iterate/platform-retry";
 import type { IterateApi } from "iterate/api";
 import { WebSocket } from "undici";
 
