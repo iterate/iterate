@@ -229,6 +229,7 @@ test("the tree codec against git's ids: hashObject is git's blob id; encodeCommi
   );
   const commit = encodeCommit({
     author: { name: "iterate", email: "config@iterate.com", date: new Date(1_700_000_000_000) },
+    committer: { name: "iterate", email: "config@iterate.com" },
     message: "first\n", // git's own commits end their message with a newline
     parents: [],
     tree: ROOT_TREE,
@@ -238,6 +239,7 @@ test("the tree codec against git's ids: hashObject is git's blob id; encodeCommi
     tree: ROOT_TREE,
     parents: [],
     author: { name: "iterate", email: "config@iterate.com" },
+    committer: { name: "iterate", email: "config@iterate.com" },
     timestamp: 1_700_000_000_000,
     message: "first",
   });
@@ -308,6 +310,7 @@ test("commitReaches: along every parent within the objects, and onto a parent th
   const commit = async (message: string, parents: string[]) => {
     const payload = encodeCommit({
       author: { name: "a", email: "a@example.com", date: new Date(0) },
+      committer: { name: "a", email: "a@example.com" },
       message,
       parents,
       tree: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",

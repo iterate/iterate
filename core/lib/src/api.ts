@@ -559,6 +559,8 @@ export type RepoLogEntry = {
   oid: string;
   message: string;
   author: { name: string; email: string };
+  /** who made the commit: `iterate` for every commit the platform makes, whoever wrote it */
+  committer: { name: string; email: string };
   timestamp: number;
   parents: string[];
 };

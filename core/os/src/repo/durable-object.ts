@@ -60,8 +60,9 @@ import { OriginSet, RepoContract, type CommitCompleted, type RepoState } from ".
 
 /** The one branch every repo operation addresses. */
 const REF = "refs/heads/main";
-/** The author of a commit whose caller named none, and that no person's script made. */
-const AUTHOR = { email: "config@iterate.com", name: "iterate" };
+/** The platform, as git names it: every commit's committer, and the author of a commit nobody
+ *  asked for. */
+const PLATFORM = { email: "config@iterate.com", name: "iterate" };
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
 const TOKEN_TTL_SECONDS = 300;
 /** Reuse a token only while this much of its life remains — an operation must not outlive it. */
@@ -357,23 +358,42 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     const cause = runningCause();
     // A commit is an act: past the loop limit nothing is pushed (../cause.ts).
     refuseActPastLimit(cause, "a commit");
-    return this.#serialized(async () =>
-      this.#commitFiles({ ...input, author: input.author || (await this.#authorFor(cause)) }),
-    );
+    return this.#serialized(async () => {
+      // refused before the trailers below, which would make a blank message look like one
+      if (!input.message.trim())
+        throw new Error("repo.commitFiles: message must be a non-empty string");
+      // a script's commit for someone is theirs (their email as name and address, as apps/docs
+      // writes authors), and names the run that made it, and them when it names another author
+      const onBehalfOf = await this.#onBehalfOfIn(cause);
+      const email = onBehalfOf?.principal.email;
+      const message = input.message.trimEnd();
+      const trailers: string[] = [];
+      if (onBehalfOf) {
+        // a blank line first, unless the message already ends in trailers (an agent's `Via:`, a
+        // `Co-authored-by:`): git and GitHub read only the last paragraph as trailers
+        if (!/\n\n(?:[\w-]+: .+\n?)+$/.test(message)) trailers.push("");
+        trailers.push(`Iterate-Run: ${onBehalfOf.run}`);
+        if (input.author && input.author.email !== email)
+          trailers.push(`Requested-by: ${email || onBehalfOf.principal.actor}`);
+      }
+      return this.#commitFiles({
+        ...input,
+        author: input.author || (email ? { name: email, email } : undefined),
+        message: [message, ...trailers].join("\n").trim(),
+      });
+    });
   }
-  /** The person a script commits for (../on-behalf-of.ts), from the token in its cause, as the
-   *  author of a commit that names none; none without an email, whose commit is the platform's. */
-  async #authorFor(cause: Cause | undefined) {
+  /** Who a script commits for (../on-behalf-of.ts), from the token in its cause; none for a commit
+   *  no person asked for. */
+  async #onBehalfOfIn(cause: Cause | undefined) {
     if (!cause?.onBehalfOf) return undefined;
     const { projectId } = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
-    const onBehalfOf = await verifyOnBehalfOf(
+    return await verifyOnBehalfOf(
       cause.onBehalfOf,
       projectId,
       await sessionSigningSecretOf(appConfigOf(this.env)),
       Date.now(),
     );
-    const email = onBehalfOf?.principal.email;
-    return email ? { name: email, email } : undefined;
   }
   async #commitFiles(input: {
     message: string;
@@ -382,8 +402,6 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     parent?: string | null;
   }): Promise<{ commitOid: string | null; changedPaths: string[] }> {
     const path = await this.#created();
-    if (!input.message.trim())
-      throw new Error("repo.commitFiles: message must be a non-empty string");
     if (input.changes.length === 0) throw new Error("repo.commitFiles: changes must name a file");
     const parent = z
       .string()
@@ -438,7 +456,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     for (const tree of trees)
       if (!objects.has(tree.oid)) toPush.push({ payload: tree.payload, type: "tree" });
     const commitBytes = encodeCommit({
-      author: { ...(input.author || AUTHOR), date: new Date() },
+      author: { ...(input.author || PLATFORM), date: new Date() },
+      committer: PLATFORM,
       message: input.message,
       parents: tip ? [tip] : [],
       tree: rootOid,
@@ -701,8 +720,8 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     while (oid && entries.length < limit) {
       const commit = objects.get(oid);
       if (commit?.type !== "commit") break; // past the shallow boundary
-      const { parents, author, timestamp, message } = parseCommit(commit.payload);
-      entries.push({ oid, message, author, timestamp, parents });
+      const { parents, author, committer, timestamp, message } = parseCommit(commit.payload);
+      entries.push({ oid, message, author, committer, timestamp, parents });
       oid = parents[0];
     }
     return entries;

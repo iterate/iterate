@@ -133,12 +133,17 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
     `async (itx) => { const { commitOid } = await itx.repos.get("/repos/config").commitFiles(${JSON.stringify({ message: "MCP root regression", changes })}); const outcome = await itx.waitForEvent({ type: ["events.iterate.com/project/worker-updated", "events.iterate.com/project/worker-update-failed"], payload: { commitOid }, afterOffset: 0, timeoutMs: 120000 }); if (outcome.type.endsWith("worker-update-failed")) throw new Error(outcome.payload.error); return outcome.payload; }`,
   );
   expect(commit).toMatchObject({ commitOid: expect.any(String), generation: expect.any(Number) });
-  // the script named no author: the commit is the person's who asked for the run
+  // the script named no author: the commit is the person's who asked for the run, committed by the
+  // platform, and names the run
   expect(
     (await root.repos.get("/repos/config").log({ limit: 5 })).find(
       (entry: { oid: string }) => entry.oid === commit.commitOid,
     ),
-  ).toMatchObject({ author: { name: member.email, email: member.email } });
+  ).toMatchObject({
+    author: { name: member.email, email: member.email },
+    committer: { name: "iterate", email: "config@iterate.com" },
+    message: expect.stringMatching(/^MCP root regression\n\nIterate-Run: \/@\d+$/),
+  });
   const published = await fetchProjectUrl(projectUrl({ project: slug, path: "/" }));
   expect(published).toMatchObject({ status: 200, text: "<h1>MCP config repo publication</h1>" });
   expect(published.headers["content-type"]).toContain("text/html");

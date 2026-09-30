@@ -179,6 +179,7 @@ export class FakeGitServer {
     for (const tree of trees) repo.objects.set(tree.oid, { ...tree, type: "tree" });
     const payload = encodeCommit({
       author: { ...AUTHOR, date: new Date() },
+      committer: AUTHOR,
       message,
       parents: repo.tip ? [repo.tip] : [],
       tree: rootOid,

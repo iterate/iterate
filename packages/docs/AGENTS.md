@@ -22,7 +22,8 @@ commits; your commit merges with it either way.
 
 Commit it, with the tip you read as `parent`. The doc's processor merges your commit into the open
 editors as if you'd typed it, so change what you mean to change and leave the rest of the text as
-it is.
+it is. End the message with `Via: <your name>`, as you say `via` on a comment: the commit is the
+person's who asked, committed by iterate, and this says which agent did the work.
 
 ```js
 async (itx) => {
@@ -32,7 +33,7 @@ async (itx) => {
   const next = text.replace("ship by Friday", "ship by Monday");
   if (next === text) throw new Error("the text to change isn't there");
   return repo.commitFiles({
-    message: "docs: tasks/q4.md, the ship date",
+    message: "docs: tasks/q4.md, the ship date\n\nVia: Claude Code",
     parent: tip,
     changes: [{ path: "tasks/q4.md", content: next }],
   });
