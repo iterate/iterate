@@ -39,6 +39,22 @@ test("a default-consuming permanent failure does not redeliver its own failed re
       (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
     ),
   ).toHaveLength(1);
+  await until("the failed receipt is scanned without a target call", async () => {
+    const current = await runInDurableObject(s, (instance) =>
+      instance.subscriptionDeliveryStatus(),
+    );
+    const fanOut = Object.values(current.snapshots)[0]?.fanOut;
+    const failures = (await readLog(context)).filter(
+      (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
+    );
+    return (
+      fanOut &&
+      failures[0] &&
+      fanOut.admittedThrough >= failures[0].offset &&
+      fanOut.pending.length === 0
+    );
+  });
+  expect(await s.invoke(["itx", "facets", ["get", "refusal"], ["tries"]])).toHaveLength(1);
   await releasePins(context);
 });
 
@@ -117,10 +133,14 @@ test("a fan-out selective resume of an ephemeral gap records one failure without
     { type: "ephemeral-gap", ephemeral: true },
     { type: "ignored-tail" },
   )) as { offset: number }[];
+  await s.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "selective", afterOffset: tail.offset },
+  });
   await until("fan-out admits the unconsumed range", async () => {
     const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
     const fanOut = Object.values(status.snapshots)[0]?.fanOut;
-    return fanOut?.admittedThrough === tail.offset && fanOut.pending.length === 0
+    return fanOut && fanOut.admittedThrough >= tail.offset && fanOut.pending.length === 0
       ? fanOut
       : undefined;
   });
@@ -140,7 +160,8 @@ test("a fan-out selective resume of an ephemeral gap records one failure without
     return failures.length === 1 && fanOut && fanOut.pending.length === 0 ? failures[0] : undefined;
   });
   expect(failure).toMatchObject({ payload: { offset: gap.offset } });
-  expect(failure.source).toBeUndefined();
+  const ignored = (await readLog(context)).find((event) => event.offset === unconsumed.offset);
+  expect(failure.source?.cause).not.toEqual(ignored?.source?.cause);
   expect((await rowOf(context, "selective"))?.halted).toBeUndefined();
   expect(unconsumed.offset).toBeLessThan(gap.offset);
   await releasePins(context);

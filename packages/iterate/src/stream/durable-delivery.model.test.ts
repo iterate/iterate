@@ -160,7 +160,11 @@ test("a resume fence discards a fan-out wave's late combined outcome", async () 
   const storage = kv();
   const releases: (() => void)[] = [];
   const processor = fanOut(
-    runtime(storage, source.stream.read, () => new Promise<void>((resolve) => releases.push(resolve))),
+    runtime(
+      storage,
+      source.stream.read,
+      () => new Promise<void>((resolve) => releases.push(resolve)),
+    ),
   );
   await drive(processor, 1);
   await vi.waitFor(() => expect(releases).toHaveLength(2));
@@ -170,6 +174,7 @@ test("a resume fence discards a fan-out wave's late combined outcome", async () 
   expect(processor.snapshot()).toEqual({
     confirmedOffset: 0,
     fanOut: { admittedThrough: 0, pending: [] },
+    resumeAtOffset: 99,
   });
 });
 
@@ -200,12 +205,14 @@ test("a fan-out wave combines success, busy, retry and terminal results", async 
       },
     }),
   );
-  expect(host.terminals).toEqual([]);
+  expect(host).toMatchObject({ terminals: [] });
   await drive(processor, 2);
   await vi.waitFor(() =>
-    expect(host.terminals).toEqual([
-      expect.objectContaining({ afterOffset: 3, attempts: 1, error: "terminal", fanOut: true }),
-    ]),
+    expect(host).toMatchObject({
+      terminals: [
+        expect.objectContaining({ afterOffset: 3, attempts: 1, error: "terminal", fanOut: true }),
+      ],
+    }),
   );
 });
 
@@ -474,9 +481,9 @@ test("a selective fan-out resume stamps retained terminal work before reporting 
   expect(processor.resume(undefined, 5, 100)).toBe(true);
   await drive(processor, 8);
   await settle();
-  expect(host.terminals).toEqual([
-    expect.objectContaining({ afterOffset: 6, fanOut: true, resumeAtOffset: 100 }),
-  ]);
+  expect(host).toMatchObject({
+    terminals: [expect.objectContaining({ afterOffset: 6, fanOut: true, resumeAtOffset: 100 })],
+  });
   await drive(processor, 9);
   await settle();
   expect(calls).toEqual([5]);

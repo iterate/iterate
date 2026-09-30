@@ -134,15 +134,11 @@ const configuredTargetFailure = (error: unknown): boolean =>
 
 /** Cursor state shares a KV cell with up to one thousand fan-out failures. */
 const deliveryErrorMessage = (error: unknown): string => {
-  const message = error instanceof Error ? error.message : String(error);
-  const bytes = new TextEncoder().encode(message);
-  if (bytes.byteLength <= 1024) return message;
-  let end = 1024;
-  let bounded = new TextDecoder().decode(bytes.subarray(0, end));
-  // A partial UTF-8 code point decodes to U+FFFD, which can be larger than the truncated tail.
-  while (new TextEncoder().encode(bounded).byteLength > 1024)
-    bounded = new TextDecoder().decode(bytes.subarray(0, --end));
-  return bounded;
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 1024);
+  // Streaming decode leaves an incomplete final code point out of the bounded UTF-8 prefix.
+  return new TextDecoder().decode(new TextEncoder().encode(message).subarray(0, 1024), {
+    stream: true,
+  });
 };
 
 /** The SDK replacement for one durable `subscribe` row. It stores only a cursor plus at most one
@@ -343,7 +339,8 @@ export class DurableDeliveryProcessor {
       } catch (error) {
         // The context keeps its recovery key from this wake. Do not let a storage failure between
         // an attempt claim and its outcome turn into a cursor that has no next alarm.
-        if (!this.#disposed) await this.#options.runtime.scheduleWake(Date.now() + busyRetryDelayMs);
+        if (!this.#disposed)
+          await this.#options.runtime.scheduleWake(Date.now() + busyRetryDelayMs);
         throw error;
       } finally {
         this.#requested = false;
@@ -657,30 +654,23 @@ export class DurableDeliveryProcessor {
   async #deliverFanOutWave(items: FanOutPending[]): Promise<void> {
     const stamp = this.#stamp();
     if (!this.#isCurrent(stamp)) return;
-    let cursor = this.#cursor();
-    let fanOut = cursor.fanOut;
+    const cursor = this.#cursor();
+    const fanOut = cursor.fanOut;
     if (!fanOut) return;
-    const wave = items.flatMap((item) => {
-      const current = fanOut!.pending.find(
-        (candidate) => candidate.offset === item.offset && !candidate.terminal,
-      );
-      if (!current) return [];
-      const interruptedAtLimit = current.attempt >= this.#options.maxAttempts;
-      if (!interruptedAtLimit) current.attempt += 1;
-      current.nextAttemptAtMs = Date.now() + callDeadlineMs;
-      current.resumeAtOffset = stamp.resumeAtOffset;
-      return [{
-        offset: current.offset,
-        attempt: current.attempt,
-        error: current.error,
-        interruptedAtLimit,
-      }];
-    });
+    const wave = fanOut.pending.filter(
+      (item) => !item.terminal && items.some(({ offset }) => offset === item.offset),
+    );
+    const interrupted = wave.map((item) => item.attempt >= this.#options.maxAttempts);
+    for (const [index, item] of wave.entries()) {
+      if (!interrupted[index]) item.attempt += 1;
+      item.nextAttemptAtMs = Date.now() + callDeadlineMs;
+      item.resumeAtOffset = stamp.resumeAtOffset;
+    }
     if (wave.length === 0) return;
     this.#putCursor({ ...cursor, fanOut });
     const outcomes = await Promise.allSettled(
-      wave.map(({ offset, error, interruptedAtLimit }) =>
-        interruptedAtLimit
+      wave.map(({ offset, error }, index) =>
+        interrupted[index]
           ? Promise.reject(new Error(error || "delivery did not settle before its host restarted"))
           : this.#withinDeadline(() =>
               this.#options.runtime.deliver({
@@ -692,9 +682,8 @@ export class DurableDeliveryProcessor {
       ),
     );
     if (!this.#isCurrent(stamp)) return;
-    cursor = this.#cursor();
-    fanOut = cursor.fanOut;
-    if (!fanOut) return;
+    // One drain owns this cursor. A halt, resume or disposal changes the generation, so the
+    // fence above also proves these claimed items still belong to the current wave.
     const refusedIndex = outcomes.findIndex(
       (outcome) =>
         outcome.status === "rejected" &&
@@ -704,14 +693,7 @@ export class DurableDeliveryProcessor {
     if (refusedIndex >= 0) {
       const refused = outcomes[refusedIndex]!;
       if (refused.status !== "rejected") return;
-      const item = wave[refusedIndex]!;
-      const current = fanOut.pending.find(
-        (candidate) =>
-          candidate.offset === item.offset &&
-          candidate.attempt === item.attempt &&
-          candidate.resumeAtOffset === stamp.resumeAtOffset,
-      );
-      if (!current) return;
+      const current = wave[refusedIndex]!;
       const halted = {
         after: fanOut.admittedThrough,
         attempts: current.attempt,
@@ -725,21 +707,14 @@ export class DurableDeliveryProcessor {
       return;
     }
     for (const [index, outcome] of outcomes.entries()) {
-      const item = wave[index]!;
-      const current = fanOut.pending.find(
-        (candidate) =>
-          candidate.offset === item.offset &&
-          candidate.attempt === item.attempt &&
-          candidate.resumeAtOffset === stamp.resumeAtOffset,
-      );
-      if (!current) continue;
+      const current = wave[index]!;
       if (outcome.status === "fulfilled") {
         fanOut.pending.splice(fanOut.pending.indexOf(current), 1);
         continue;
       }
       const error = outcome.reason;
       if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
-        current.attempt = item.attempt - 1;
+        current.attempt -= 1;
         current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
         current.error = undefined;
         continue;

@@ -53,9 +53,6 @@ import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
 import { runCausedBy } from "../cause.ts";
 import type { Principal } from "../principal.ts";
-import { BackgroundClaims } from "./background-claims.ts";
-
-export { BackgroundClaims } from "./background-claims.ts";
 
 /** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
  *  and its initial state. `defineProcessorContract` below is the one way to build one. */
@@ -241,8 +238,12 @@ export class ProcessorEngine<State> {
   readonly #waitUntilProcessedWaiters: { offset: number; resolve: () => void }[] = [];
   /** Born with the engine, so its epoch is minted once per incarnation. */
   readonly #liveState: LiveState<unknown>;
-  /** Rule 3's claims: first work claims, last work releases, and every request reaches the host in order. */
-  readonly #backgroundClaims: BackgroundClaims;
+  /** Rule 3's claim: attempts in flight, and how many revives found one still in flight (the
+   *  backoff of the next claim; reset when the last attempt settles). The claim calls ride ONE
+   *  chain, so a release never overtakes the claim of the attempt that followed it. */
+  #backgroundWorkInFlight = 0;
+  #revivesWhileBusy = 0;
+  #claimChain: Promise<unknown> = Promise.resolve();
   /** Whether the last batch this engine ran carried the at-head pass (rule 5) — what `revive()`
    *  reads to know if its catch-up already ran one. */
   #lastBatchAtHead = false;
@@ -275,12 +276,6 @@ export class ProcessorEngine<State> {
     this.#fedByPushes = deps.fedByPushes === true;
     this.#kv = deps.kv;
     this.#codeId = deps.codeId;
-    this.#backgroundClaims = new BackgroundClaims({
-      claim: async (at) => await this.#stream.claim(at),
-      report: (error) => reportIssue("processor.claim", error, { slug: this.#contract.slug }),
-      afterMs: REVIVE_AFTER_MS,
-      maxAfterMs: REVIVE_AFTER_MAX_MS,
-    });
     // ONE row, so cursor and state never disagree; one written under another contract version is
     // kept as #staleCheckpoint for the chain's first work.
     const { slug, version } = this.#contract;
@@ -569,24 +564,33 @@ export class ProcessorEngine<State> {
    *  landed when the host dies revives nothing either way, and the attempt must not wait on it);
    *  the last to settle releases the claim. */
   #runInBackground(work: () => Promise<unknown>): void {
-    const first = this.#backgroundClaims.inFlight === 0;
-    this.#backgroundClaims.started();
-    if (first) {
+    this.#backgroundWorkInFlight += 1;
+    if (this.#backgroundWorkInFlight === 1) {
       // THE STARTED MARKER: what tells a revive that this host died with work in flight.
       this.#kv?.put(STARTED, {
         deaths: this.#kv.get<Started>(STARTED)?.deaths ?? 0,
         codeId: this.#codeId,
       });
+      this.#claim(REVIVE_AFTER_MS);
     }
     void work()
       .catch(unlessLoopLimit)
       .catch((error) => reportIssue("processor.background", error, { slug: this.#contract.slug }))
       .finally(() => {
-        this.#backgroundClaims.settled();
-        if (this.#backgroundClaims.inFlight === 0) {
+        this.#backgroundWorkInFlight -= 1;
+        if (this.#backgroundWorkInFlight === 0) {
+          this.#revivesWhileBusy = 0;
           this.#kv?.delete(STARTED); // settled: the deaths start over
+          this.#claim(null);
         }
       });
+  }
+
+  #claim(afterMs: number | null): void {
+    const at = afterMs === null ? null : Date.now() + afterMs;
+    this.#claimChain = this.#claimChain
+      .then(() => this.#stream.claim(at))
+      .catch((error) => reportIssue("processor.claim", error, { slug: this.#contract.slug }));
   }
 
   /** THE REVIVE — the context's alarm pass calls this for a due claim (spent by then): catch up
@@ -599,7 +603,7 @@ export class ProcessorEngine<State> {
     // count over. At MAX_DEATHS the work is failed: the revive throws PERMANENT_FAILURE, the host
     // records it, and only what the processor next receives starts the work again.
     const started = this.#kv?.get<Started>(STARTED);
-    if (started && this.#backgroundClaims.inFlight === 0) {
+    if (started && this.#backgroundWorkInFlight === 0) {
       const deaths = started.codeId === this.#codeId ? started.deaths + 1 : 0;
       this.#kv!.put(STARTED, { deaths, codeId: this.#codeId });
       if (deaths >= MAX_DEATHS)
@@ -619,10 +623,12 @@ export class ProcessorEngine<State> {
         ).state;
         this.publishLiveState();
       });
-    if (this.#backgroundClaims.inFlight === 0) return;
+    if (this.#backgroundWorkInFlight === 0) return;
+    this.#revivesWhileBusy += 1;
+    this.#claim(Math.min(REVIVE_AFTER_MS * 2 ** this.#revivesWhileBusy, REVIVE_AFTER_MAX_MS));
     // Awaited: the pass that called this derives its next deadline as soon as it returns, so the
     // claim must have landed by then — one alarm write, not a delete and a set.
-    await this.#backgroundClaims.revivedWhileBusy();
+    await this.#claimChain;
   }
 
   /** THE GUARDED REDUCE, shared by the live flow and the version replay. A reducer that throws on an

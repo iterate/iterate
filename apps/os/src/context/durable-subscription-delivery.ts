@@ -3,7 +3,7 @@ import {
   type DurableDeliveryCursor,
   type DurableDeliveryRuntime,
 } from "iterate/stream/durable-delivery";
-import { consumesEvent, type ScannedRange, type StreamEvent } from "iterate/stream/processor";
+import { consumesEvent, type StreamEvent } from "iterate/stream/processor";
 
 export type DurableSubscriptionRow = {
   name: string;
@@ -17,7 +17,7 @@ export type DurableSubscriptionRow = {
   halted?: { afterOffset: number; attempts: number; error?: string };
 };
 
-type Page = { offsets: number[]; scannedThroughOffset: number; atHead: boolean };
+type Page = Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
 
 // Every durable target uses the same bounded ladder, so live rule edits cannot change the retry
 // policy for an admitted cursor.
@@ -30,21 +30,15 @@ type Deps = {
   read: (row: DurableSubscriptionRow, after: number, limit: number, resume?: number) => Page;
   deliver: (
     row: DurableSubscriptionRow,
-    input: { offsets: number[]; range: ScannedRange; resumeAtOffset?: number },
+    input: Parameters<DurableDeliveryRuntime["deliver"]>[0],
   ) => Promise<void>;
   deliverEphemeral: (
     row: DurableSubscriptionRow,
-    input: { offset: number; type: string; resumeAtOffset?: number },
+    input: Parameters<DurableDeliveryRuntime["deliverEphemeral"]>[0],
   ) => Promise<void>;
   terminal: (
     row: DurableSubscriptionRow,
-    input: {
-      afterOffset: number;
-      attempts: number;
-      error: string;
-      fanOut?: true;
-      resumeAtOffset?: number;
-    },
+    input: Parameters<DurableDeliveryRuntime["terminal"]>[0],
   ) => Promise<void>;
   run: (work: () => Promise<unknown>) => void;
   wakesChanged: () => void;
@@ -69,7 +63,14 @@ export class DurableSubscriptionDelivery {
   }
 
   snapshots(): Record<string, DurableDeliveryCursor> {
-    return Object.fromEntries([...this.#runners].map(([key, runner]) => [key, runner.snapshot()]));
+    return Object.fromEntries(
+      this.#deps.rows().map((row) => [
+        keyOf(row),
+        this.#deps.storage.get<DurableDeliveryCursor>(`durable-delivery/${keyOf(row)}`) ?? {
+          confirmedOffset: row.afterOffset ?? row.configuredAtOffset,
+        },
+      ]),
+    );
   }
 
   sync(): void {

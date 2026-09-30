@@ -91,8 +91,28 @@ dynamic argument composition moves from a rewrite row into an ordinary worker
 method, while named access, fixed calls, inheritance and jails remain.
 
 Explicit delivery removes target-brand inference. A target change no longer
-silently changes a subscription's lifetime or retry policy. The price is one
-declared delivery choice for raw configuration; convenience APIs choose it.
+silently changes a subscription's lifetime. The price is one declared delivery
+choice for raw configuration; convenience APIs choose it.
+
+Every context-owned durable target now gets the same 25-attempt ladder, with
+exponential retry delay capped at four hours. Relaxing different policy for
+webhook and ordinary targets removes target inspection and rule-dependent
+runner configuration. Ordinary targets receive ten more attempts; webhook
+retry capacity is preserved. The standalone SDK runner keeps its own defaults
+and overrides.
+
+One context recovery deadline covers cold starts and in-flight drains. Removing
+per-row wake reconstruction accepts recovery after a cold start on that bounded
+context wake, instead of introducing another persisted wake field. Resume
+acknowledgement is part of the cursor itself, so it cannot disagree with a
+separate KV marker. Fan-out persists each eight-call wave before invoking any
+target and writes its combined outcomes once, rather than rewriting the whole
+cursor for each item.
+
+Failure and halt receipts reach a durable target only when its consumes list
+names the exact event type. This relaxes implicit wildcard delivery of the
+subscription's own diagnostics and prevents a failed receipt from generating
+another failed receipt forever. Explicit receipt subscriptions remain possible.
 
 The larger possible relaxation is to stop giving every arbitrary target an
 automatic platform-owned durable broker. A consumer could own its forwarding,
@@ -105,26 +125,33 @@ current deletion.
 
 ## Validation boundary
 
-The native context-cursor work has 13 focused Workers regressions and 41 SDK
-model tests passing. They cover the new ownership and cursor rules; they do not
-replace full runtime validation. The current full root result has 2,301 passing
-tests, 14 expected failures, and one older missing-origin fixture failure under
-repair. It is not green yet.
+The runner and model suite has 48 passing tests, and the unchanged ordinary
+processor engine has 64 passing tests. Three new Workers fault probes pass:
+implicit failure-receipt reentry, a large retry range ending at an ephemeral
+position, and terminal acknowledgement of an invalid selective resume. Existing
+cold recovery, admission, halt/resume, replacement and ephemeral offset-reuse
+probes remain in the full Workers suite.
 
-The published 9c preview still has 19 E2E failures. Those failures and the
-later native work are separate checkpoints; neither is evidence that the native
-source is final. Latency, browser, soak, residency, and log evidence must be
-read against the eventual tested head rather than carried forward from a draft.
+The assembled checkpoint passes the full root test command, including socket
+suites: OS has 153 passing files, 2,308 passing tests and 14 existing expected
+failures. Lint, typecheck, formatting and Knip have passed. Local success does not replace
+the deployed slow residency rows, browser specs, latency/throughput budgets,
+100-run soak and same-window Workers Logs comparison.
 
-The twelfth actual Opus review finds the context-owned direction smaller and
-better aligned with authority, but identifies missing persisted recovery,
-reset-bounded retries, birth-alarm writes, cold fan-out wake ordering, and
-old-facet migration checks. The source now includes those fixes and the focused Worker probes; full
-deployed validation still remains required.
+The published 9c preview had 19 E2E failures. Its browser and performance results
+and its cancelled soak are historical evidence, not proof of this native head.
+The five malformed Server Function errors were intentional 400 probes; the
+133 live-stub retries and alarm recovery still require fresh comparison.
 
-The draft needs green full CI, deployed slow residency rows, latency and
-throughput budgets, soak results and a same-window Workers Logs comparison.
-Its measured runtime is **18,128 core lines plus 7,614 SDK lines = 25,742**,
-versus main's **18,806 plus 6,814 = 25,620**. It is still **122 lines larger**;
-moving responsibility does not yet achieve the requested reduction. No
-production deployment, merge or data erase is authorized by this proposal.
+Thirteen actual Opus reviews are recorded in the findings PR. The thirteenth
+review used immutable source 179629660f and identified the resume, receipt,
+wake, range and fan-out persistence faults now addressed in this checkpoint.
+It did not execute tests or review later source changes.
+
+The tracked working count is **18,073 core lines plus 7,546 SDK lines = 25,619**,
+versus main's **18,806 plus 6,814 = 25,620**. This is only **one line smaller**:
+core fell by 733 lines while the SDK grew by 732. Restoring the existing
+processor claim code removes the now single-caller `BackgroundClaims` class;
+moved responsibility and deleted tests do not count as runtime deletion. This
+is a real but inadequate combined reduction, and further simplification remains
+part of the task. No production deployment, merge or data erase is authorized.

@@ -449,20 +449,19 @@ test("D1 — the core checkpoint row lost: the constructor re-derives the mark f
 const RETRYING_WORKER_SRC = /* js */ `import { WorkerEntrypoint } from "cloudflare:workers";
 export default class extends WorkerEntrypoint { processEventBatch() { throw new Error("flaky sink: try again"); } }`;
 
-// CONTROL: the ladder is finite and the halt is OURS — 1 failure + 14 alarm wakes (1s·2ⁿ capped at
-// 30 min: ~7 hours of ladder clock, each rung a billed wake) then `subscription-delivery-halted` with
-// the message the loop threw, clipped, in the row.
-test("E1 — CONTROL: a RETRYABLE failure (a sink that throws a plain error) walks the whole ladder — 14 alarm wakes after the first failure — then halts with our message", async () => {
+// The durable ladder is finite: one initial failure and at most 24 alarm retries, with exponential
+// delay capped at four hours, then a halt fact records the sink's bounded error.
+test("E1 — CONTROL: a RETRYABLE failure (a sink that throws a plain error) walks the whole ladder — 24 alarm wakes after the first failure — then halts with our message", async () => {
   captureIssueLines();
   const ctx = "prj_ud_ladder_live";
   const first = await retryingCursorRow(ctx);
   expect(first?.cursor).toMatchObject({ attempt: 1 });
   expect(first?.halted).toBeUndefined();
-  const { fired, row } = await walkLadder(ctx, 20);
-  expect(fired).toBeLessThanOrEqual(14); // a real rung may have fired on its own in between
+  const { fired, row } = await walkLadder(ctx, 30);
+  expect(fired).toBeLessThanOrEqual(24); // a real rung may have fired on its own in between
   expect(row?.halted).toEqual({
     afterOffset: first!.cursor!.confirmedOffset,
-    attempts: 15,
+    attempts: 25,
     error: "flaky sink: try again",
   });
   // The ladder is not an issue line; the halt is a fact in the log. (Scoped to this row: an earlier
@@ -744,7 +743,8 @@ async function walkLadder(
   vi.useFakeTimers({ now: Date.now(), toFake: ["Date"] });
   try {
     for (let i = 0; i < fires; i++) {
-      vi.setSystemTime(Date.now() + 40 * 60_000);
+      row = await subscriptionRow(ctx, "u");
+      vi.setSystemTime((row?.cursor?.nextAttemptAtMs ?? Date.now()) + 1);
       if (await runDurableObjectAlarm(stub(ctx))) fired++;
       await sleep(30);
       row = await subscriptionRow(ctx, "u");

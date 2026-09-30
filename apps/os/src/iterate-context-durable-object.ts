@@ -144,7 +144,10 @@ import {
 
 /** Delivery receipts describe a row's outcome. A durable row receives them only when it names the
  * exact type, so the default durable selector cannot feed a receipt back to its own target. */
-const consumesConfiguredSubscriptionEvent = (row: Pick<Subscription, "consumes">, event: StreamEvent) =>
+const consumesConfiguredSubscriptionEvent = (
+  row: Pick<Subscription, "consumes">,
+  event: StreamEvent,
+) =>
   consumesEvent(row.consumes, event) &&
   ((event.type !== "events.iterate.com/itx/subscription-delivery-failed" &&
     event.type !== "events.iterate.com/itx/subscription-delivery-halted") ||
