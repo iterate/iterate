@@ -246,27 +246,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     this.#requestDrain(runInBackground);
   }
 
-  /** Core already appended this terminal receipt. Adopt it before an older target call can write
-   * a local failure, and mark it reported so the runner never appends a duplicate receipt. */
-  halt(afterOffset: number, attempts: number, error: string, resumeAtOffset?: number): boolean {
-    if (this.#disposed) return false;
-    const cursor = this.#cursor();
-    if (
-      cursor.halted?.after === afterOffset &&
-      cursor.halted.attempts === attempts &&
-      cursor.halted.error === error &&
-      cursor.halted.resumeAtOffset === resumeAtOffset &&
-      cursor.halted.terminalReported
-    )
-      return false;
-    this.#generation++;
-    this.#putCursor({
-      confirmedOffset: afterOffset,
-      halted: { after: afterOffset, attempts, error, terminalReported: true, resumeAtOffset },
-    });
-    return true;
-  }
-
   /** The subscriptions facet applies the existing resume control fact before calling drive. */
   resume(afterOffset?: number, offset?: number, resumeAtOffset?: number): boolean {
     if (this.#disposed) return false;
@@ -295,6 +274,36 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     }
     if (!cursor.halted) return false;
     this.#putCursor({ confirmedOffset: afterOffset ?? cursor.confirmedOffset });
+    return true;
+  }
+
+  /** Core already recorded this ordered row's terminal receipt. Invalidate any older call before
+   * replacing local progress so its late result cannot overwrite the receipt or schedule a wake. */
+  halt(afterOffset: number, attempts: number, error: string, resumeAtOffset?: number): boolean {
+    if (this.#disposed) return false;
+    const cursor = this.#cursor();
+    const halted = cursor.halted;
+    if (
+      halted?.after === afterOffset &&
+      halted.attempts === attempts &&
+      halted.error === error &&
+      halted.resumeAtOffset === resumeAtOffset &&
+      halted.terminalReported
+    )
+      return false;
+    this.#generation++;
+    this.#resumeAtOffset = resumeAtOffset;
+    while (this.#ephemeralQueue.length > 0) this.#discardOldestEphemeral();
+    this.#putCursor({
+      confirmedOffset: afterOffset,
+      halted: {
+        after: afterOffset,
+        attempts,
+        error,
+        terminalReported: true,
+        resumeAtOffset,
+      },
+    });
     return true;
   }
 

@@ -455,11 +455,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Context-local only: a facet restart cannot duplicate an unanswered target call. */
   readonly #configuredSubscriptionDeliveries = new Map<string, { startedAt: number }>();
-  /** A retry after its deadline observes a late success instead of invoking the target again. */
-  readonly #settledConfiguredSubscriptionDeliveries = new Map<
-    string,
-    { settledAt: number; error?: { code?: ReturnType<typeof errorCode>; message: string } }
-  >();
+  /** A late successful raw call is a receipt: repeat attempts observe it without invoking twice.
+   * Errors are deliberately not receipts; the bounded runner must make its next actual retry. */
+  readonly #settledConfiguredSubscriptionDeliveries = new Map<string, { settledAt: number }>();
   /** Bodies handed to a target may outlive the runner deadline. This reservation stays here, beside
    * the raw native call, until that target settles; a timed-out facet cannot release it early. */
   static readonly #configuredSubscriptionDeliveryBodyBudgetChars = 8 * 1024 * 1024;
@@ -1006,11 +1004,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (outcome.settledAt + 40_000 <= now)
         this.#settledConfiguredSubscriptionDeliveries.delete(key);
     const settled = this.#settledConfiguredSubscriptionDeliveries.get(requestKey);
-    if (settled) {
-      if (!settled.error) return;
-      if (settled.error.code) throw codedError(settled.error.code, settled.error.message);
-      throw new Error(settled.error.message);
-    }
+    if (settled) return;
     if (this.#configuredSubscriptionDeliveries.has(rowKey))
       throw codedError("UNAVAILABLE", "configured subscription delivery is busy", {
         deliveryBusy: true,
@@ -1020,19 +1014,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       await promise;
       this.#rememberConfiguredSubscriptionDelivery(requestKey, { settledAt: Date.now() });
-    } catch (error) {
-      const busy =
-        errorCode(error) === "UNAVAILABLE" &&
-        (error as { data?: { deliveryBusy?: unknown } }).data?.deliveryBusy === true;
-      if (!busy)
-        this.#rememberConfiguredSubscriptionDelivery(requestKey, {
-          settledAt: Date.now(),
-          error: {
-            code: errorCode(error),
-            message: error instanceof Error ? error.message : String(error),
-          },
-        });
-      throw error;
     } finally {
       this.#configuredSubscriptionDeliveries.delete(rowKey);
     }
@@ -1110,13 +1091,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     }
   }
 
-  #rememberConfiguredSubscriptionDelivery(
-    key: string,
-    outcome: {
-      settledAt: number;
-      error?: { code?: ReturnType<typeof errorCode>; message: string };
-    },
-  ): void {
+  #rememberConfiguredSubscriptionDelivery(key: string, outcome: { settledAt: number }): void {
     this.#settledConfiguredSubscriptionDeliveries.set(key, outcome);
     while (this.#settledConfiguredSubscriptionDeliveries.size > 128) {
       const oldest = this.#settledConfiguredSubscriptionDeliveries.keys().next().value;

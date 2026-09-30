@@ -192,6 +192,46 @@ test("the private durable-subscription bridge accepts no target, event, caller o
   });
 });
 
+test("a settled native delivery failure does not suppress the next same-range target call", async () => {
+  const context = "prj_do_delivery_failure_retry";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.deliveryAlias", target: "itx.missing" },
+  });
+  const [configured] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "retry",
+      target: "itx.deliveryAlias",
+      delivery: "durable",
+      consumes: ["retry-mark"],
+      // Keep automatic catch-up beyond this range so only the two explicit native calls run.
+      afterOffset: 1_000_000,
+    },
+  })) as unknown as [{ offset: number }];
+  const [mark] = (await s.append({ type: "retry-mark" })) as unknown as [{ offset: number }];
+  const request = {
+    name: "retry",
+    configuredAtOffset: configured.offset,
+    range: { after: configured.offset, through: mark.offset },
+    offsets: [mark.offset],
+  };
+  await runInDurableObject(s, async (instance) => {
+    expect(await rejected(instance.deliverConfiguredSubscription(request))).toMatchObject({
+      code: "NOT_A_METHOD",
+    });
+  });
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.deliveryAlias", target: "itx.whoami" },
+  });
+  await runInDurableObject(s, async (instance) => {
+    await expect(instance.deliverConfiguredSubscription(request)).resolves.toBeUndefined();
+  });
+  await releasePins(context);
+});
+
 test("a durable alias ending in a hosted processor method preserves the constrained platform batch route", async () => {
   const context = "prj_do_durable_alias_processor";
   const s = stub(context);
