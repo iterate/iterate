@@ -11,7 +11,7 @@ import { accountStateOf, authorizationForToken } from "../src/oauth.ts";
 import { sha256Hex } from "../src/caller.ts";
 import { indexPersonalAccessToken, newPersonalAccessToken } from "../src/personal-access-token.ts";
 import type { IterateRpcTarget, SessionCredentials } from "../src/session.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { adminSession, controlPlane, loginPassword, ORIGIN, stub } from "./support.ts";
 
 /** An app that answers with what the platform handed it (the principal stamp, the bearer), echoes

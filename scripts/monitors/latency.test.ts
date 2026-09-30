@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect, test } from "vitest";
-import { LATENCY_METRICS, type LatencyMetricName } from "../../apps/os/perf/latency.ts";
+import { LATENCY_METRICS, type LatencyMetricName } from "../../test/vitest/os/perf/latency.ts";
 import {
   baselineWindow,
   brokenEvents,
@@ -28,7 +28,7 @@ test("a report's metrics come off each row's meta; a row that missed only budget
     readReport({
       testResults: [
         {
-          name: "/w/apps/os/perf/rewrite-rules.perf.test.ts",
+          name: "/w/test/vitest/os/perf/rewrite-rules.perf.test.ts",
           status: "failed",
           assertionResults: [
             {
@@ -40,7 +40,7 @@ test("a report's metrics come off each row's meta; a row that missed only budget
           ],
         },
         {
-          name: "/w/apps/os/perf/contexts.perf.test.ts",
+          name: "/w/test/vitest/os/perf/contexts.perf.test.ts",
           status: "failed",
           assertionResults: [
             {
@@ -55,7 +55,7 @@ test("a report's metrics come off each row's meta; a row that missed only budget
           ],
         },
         {
-          name: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+          name: "/w/test/vitest/os/perf/sign-in-and-mcp.perf.test.ts",
           status: "failed",
           message: "Cannot find module",
           assertionResults: [],
@@ -67,14 +67,14 @@ test("a report's metrics come off each row's meta; a row that missed only budget
     broken: [
       {
         probe: "a context the platform evicted",
-        file: "/w/apps/os/perf/contexts.perf.test.ts",
+        file: "/w/test/vitest/os/perf/contexts.perf.test.ts",
         error: "AssertionError: evicted after 15 s idle: expected 1 to be >= 3",
         platform: undefined,
         evidence: undefined,
       },
       {
-        probe: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
-        file: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+        probe: "/w/test/vitest/os/perf/sign-in-and-mcp.perf.test.ts",
+        file: "/w/test/vitest/os/perf/sign-in-and-mcp.perf.test.ts",
         error: "Cannot find module",
       },
     ],
@@ -83,7 +83,7 @@ test("a report's metrics come off each row's meta; a row that missed only budget
 
 // THE RED RUNS OF MAIN, each one row broken by the platform with every budget fine: their failure
 // messages as the perf reports hold them, and the meta the rows now leave beside them
-// (perf/setup.ts, perf/push-delivery.perf.test.ts) with the values the job logs and Workers Logs
+// (test/vitest/os/perf/setup.ts, test/vitest/os/perf/push-delivery.perf.test.ts) with the values the job logs and Workers Logs
 // measured.
 const redRunsOfMain: {
   main: string;
@@ -131,7 +131,7 @@ const redRunsOfMain: {
     row: "200 push subscribers: one append reaches all 200 in under 2 s, and a whoami during it takes under 1.5 s",
     file: "push-delivery",
     failureMessages: [
-      "Error: until(warm round complete): timed out after 60000ms (1200 polls, 0 threw, the slowest 1ms): 167 of 200 callbacks had the warm ping; the subscribes took 3012, 3150, 3204, 3088, 3121, 3066, 3175, 3190 ms a batch of 25\n    at pushSubscribers (/home/runner/work/iterate/iterate/apps/os/e2e/support/push-load.ts:128:11)",
+      "Error: until(warm round complete): timed out after 60000ms (1200 polls, 0 threw, the slowest 1ms): 167 of 200 callbacks had the warm ping; the subscribes took 3012, 3150, 3204, 3088, 3121, 3066, 3175, 3190 ms a batch of 25\n    at pushSubscribers (/home/runner/work/iterate/iterate/test/helpers/push-load.ts:128:11)",
     ],
     meta: {
       failure: { causes: [], socketsLost: [] },
@@ -160,7 +160,7 @@ test.for(redRunsOfMain)(
     const report = readReport({
       testResults: [
         {
-          name: `/home/runner/work/iterate/iterate/apps/os/perf/${file}.perf.test.ts`,
+          name: `/home/runner/work/iterate/iterate/test/vitest/os/perf/${file}.perf.test.ts`,
           status: "failed",
           assertionResults: [{ fullName: row, status: "failed", failureMessages, meta }],
         },
@@ -211,7 +211,7 @@ test.for([
   const { broken } = readReport({
     testResults: [
       {
-        name: "/w/apps/os/perf/push-delivery.perf.test.ts",
+        name: "/w/test/vitest/os/perf/push-delivery.perf.test.ts",
         status: "failed",
         assertionResults: [{ fullName: "a row", status: "failed", failureMessages, meta }],
       },
@@ -223,7 +223,11 @@ test.for([
 
 test("a metric no row recorded is broken on its own unless a row or file of its perf file broke", () => {
   const broken: BrokenProbe[] = [
-    { probe: "the MCP row", file: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts", error: "x" },
+    {
+      probe: "the MCP row",
+      file: "/w/test/vitest/os/perf/sign-in-and-mcp.perf.test.ts",
+      error: "x",
+    },
   ];
   const readings = judgeRun({
     samples: everyMetricBut(["mcp.call", "sign-in", "rules.300.root"]),
@@ -306,7 +310,7 @@ test("PostHog counts every broken probe, recorded or red, deduplicated per run a
 test("every metric names the perf file that records it", () => {
   for (const [metric, { file }] of Object.entries(LATENCY_METRICS))
     expect(
-      readFileSync(resolve(import.meta.dirname, "../../apps/os", file), "utf8"),
+      readFileSync(resolve(import.meta.dirname, "../../test/vitest/os", file), "utf8"),
       `${file} records ${metric}`,
     ).toContain(`"${metric}"`);
 });
@@ -330,7 +334,7 @@ test.for([
     report: {
       testResults: [
         {
-          name: "/w/apps/os/perf/sign-in-and-mcp.perf.test.ts",
+          name: "/w/test/vitest/os/perf/sign-in-and-mcp.perf.test.ts",
           status: "failed",
           assertionResults: [
             {

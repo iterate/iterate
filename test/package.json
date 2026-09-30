@@ -1,0 +1,34 @@
+{
+  "name": "@iterate-com/test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --configLoader runner --project helpers --silent=passed-only",
+    "typecheck": "tsc --noEmit",
+    "e2e": "pnpm --filter os build && pnpm e2e:run",
+    "e2e:run": "vitest run --configLoader runner --project e2e --sequence.concurrent",
+    "perf": "pnpm --filter os build && pnpm perf:run",
+    "perf:run": "vitest run --configLoader runner --project perf",
+    "bench": "pnpm --filter os build && vitest bench --configLoader runner --run --project bench"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "@iterate-com/agents": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/voice": "workspace:*",
+    "@octokit/rest": "22.0.1",
+    "@slack/web-api": "7.14.1",
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "capnweb": "catalog:",
+    "esbuild": "catalog:",
+    "iterate": "workspace:*",
+    "typescript": "catalog:",
+    "undici": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
+  }
+}

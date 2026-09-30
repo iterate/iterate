@@ -21,7 +21,7 @@
 // (context/itx-expression-rewriting.ts for the rules, `normalizeControlEvent` below normalizes literal rows). Control is
 // ORDINARY EVENTS: `itx.append({ type: 'events.iterate.com/itx/paused', payload: { reason } })`
 // pauses — so a POLICY processor (a token-bucket breaker, a quota) runs as an ordinary facet and
-// trips the stream by appending `paused`. Core knows nothing about it; e2e/support/sources.ts's
+// trips the stream by appending `paused`. Core knows nothing about it; test/helpers/sources.ts's
 // BreakerProcessor is that pattern. created/woken come from the stream's birth record and the first
 // request or alarm of each incarnation (Stream.appendBirthRecord / appendWakeRecord); the pause exemptions are Stream.append's.
 //

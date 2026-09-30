@@ -89,7 +89,7 @@ for another team or installation is ignored. The status codes follow one rule (`
 signature is a 401. A delivery that is signed but unusable is a 200 with `ignored`. A failed append
 throws, so the provider retries. A deployment without the app answers 503. A per-PR preview's apps
 are the dummy pet shop's fakes (`scripts/preview-{slack,google,github}-app.ts`), which
-`e2e/integrations.e2e.test.ts` drives.
+`test/vitest/os/integrations.e2e.test.ts` drives.
 
 ## Sign-in keeps tokens · your accounts in a project
 

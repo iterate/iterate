@@ -37,7 +37,7 @@
 import { exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { adminCredentials, openSession, until } from "./support.ts";
 
 // ─────────────── the passing halves: plain fetch works; the failing hop is NAMED ───────────────

@@ -32,7 +32,7 @@ to the newest** commits that pin and waits for the commit's publication (`upgrad
 `pnpm test` runs app unit tests. From the repository root, integration tests run with:
 
 ```sh
-pnpm --dir apps/os exec vitest run --configLoader runner --project e2e ../agents/e2e
+pnpm --dir test exec vitest run --configLoader runner --project e2e vitest/agents
 pnpm --dir apps/os exec vitest run --configLoader runner --project workers ../agents/__workers-tests__
 ```
 

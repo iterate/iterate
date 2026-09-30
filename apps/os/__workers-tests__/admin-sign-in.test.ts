@@ -13,7 +13,7 @@ import worker from "../src/worker.ts";
 import { appConfigOf, platformAddressesOf, sessionSigningSecretOf } from "../src/app-config.ts";
 import { signClaims, verifyClaims } from "../src/caller.ts";
 import { authorizationForToken } from "../src/oauth.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { authorizationRequest, call, helpers, issuerApprover } from "./oauth-support.ts";
 import { adminCredentials, loginPassword, openSession, ORIGIN } from "./support.ts";
 

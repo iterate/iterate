@@ -1,0 +1,75 @@
+// Real issuer login, consent and code exchange. The identity proof is the sign-in page's own password
+// step (`POST /login` with the email and the deployment's password — the same post the page makes).
+import { newHttpBatchRpcSession } from "capnweb";
+import { authorizationCodeRequest } from "iterate/oauth";
+import type { IterateRpcTarget } from "../../apps/os/src/session.ts";
+import { loginPassword, publicSession, workerUrl } from "./client.ts";
+
+/** THE ISSUER SESSION for `email`: the sign-in page's password post, as the page itself makes it
+ *  (same-origin, a form) — the `Cookie` header value a browser would then carry. `issuer` is the
+ *  shared worker's origin unless a row booted its own (helpers/own-worker.ts). */
+export async function issuerCookie(
+  email: string,
+  next = "/",
+  issuer = new URL(workerUrl("/")).origin,
+): Promise<string> {
+  const login = await fetch(`${issuer}/login`, {
+    method: "POST",
+    headers: { Origin: issuer },
+    body: new URLSearchParams({ email, password: loginPassword(), next }),
+    redirect: "manual",
+  });
+  // The sign-in page answers what went wrong as a 303 back to itself, the reason in `?error=`.
+  if (login.status !== 302)
+    throw new Error(
+      `Sign-in fixture: ${login.status} ${login.headers.get("location") ?? ""} ${await login.text()}`,
+    );
+  const cookie = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  await login.body?.cancel();
+  return cookie;
+}
+
+/** A real OAuth grant for `user`, consented to the one project `projectId` (consent ticks projects
+ *  by their minted id, as the console does): the public session, its token, the principal it
+ *  stamps, and the issuer cookie the account itself speaks with. */
+export async function oauthSession(projectId: string, user: { email: string }) {
+  const issuer = new URL(workerUrl("/")).origin;
+  const headers = { Origin: issuer, Cookie: await issuerCookie(user.email) };
+  const clientId = "https://claude.ai/oauth/claude-code-client-metadata";
+  const redirectUri = "http://127.0.0.1/callback";
+  const flow = await authorizationCodeRequest({
+    issuer,
+    clientId,
+    redirectUri,
+    resources: [workerUrl("/api")],
+  });
+  // oxlint-disable-next-line iterate/no-capnweb-http-batch -- A bounded fixture call (the returned public client uses WebSocket): the same consent capability the browser calls, with an issuer session.
+  using issuerApi = newHttpBatchRpcSession<IterateRpcTarget>(
+    new Request(workerUrl("/api"), { headers }),
+  );
+  const approved = await issuerApi
+    .authenticate({ type: "from-server-cookie" })
+    .consent.approve({ query: flow.url.search, projects: [projectId] });
+  if (!("redirectTo" in approved)) throw new Error(JSON.stringify(approved));
+  const callback = new URL(approved.redirectTo);
+  if (callback.searchParams.get("state") !== flow.state) throw new Error("OAuth state changed");
+  const exchange = await fetch(workerUrl("/oauth2/token"), {
+    method: "POST",
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      code: callback.searchParams.get("code")!,
+      code_verifier: flow.verifier,
+      resource: workerUrl("/api"),
+    }),
+  });
+  if (!exchange.ok) throw new Error(`Token exchange: ${exchange.status} ${await exchange.text()}`);
+  const { access_token: token } = (await exchange.json()) as { access_token: string };
+  const api = publicSession(token);
+  const principal = await api.whoami();
+  return { api, token, principal, issuerHeaders: headers };
+}

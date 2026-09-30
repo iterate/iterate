@@ -12,10 +12,7 @@ import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
 } from "../../apps/os/scripts/preview-github-app.ts";
-import {
-  petshopBaseUrl,
-  petshopRegisterGithubInstallation,
-} from "../../apps/os/e2e/support/petshop.ts";
+import { petshopBaseUrl, petshopRegisterGithubInstallation } from "../../test/helpers/petshop.ts";
 import { openOperatorSession } from "../test-support/operator.ts";
 import { test } from "../test-support/test.ts";
 import { workerBaseUrl } from "../test-support/worker-base-url.ts";

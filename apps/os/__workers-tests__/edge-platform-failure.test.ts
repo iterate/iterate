@@ -5,7 +5,7 @@
 import { env, exports } from "cloudflare:workers";
 import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { ORIGIN, signedInSession } from "./support.ts";
 
 const LOST = Object.assign(new Error("Network connection lost."), { retryable: true });

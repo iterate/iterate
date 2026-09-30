@@ -1,9 +1,9 @@
 # THE LATENCY MEASUREMENT for apps/os: every 3 hours, deploy main's commit as `latency-<sha7>` (a
 # deployment of its own, which nothing else touches: Main OS e2e has its own, and a latency measured
 # beside another suite measures that suite; the same deployment again, in place, when main has not
-# moved since the last run), run the perf suite against it (apps/os/perf: concurrent project
+# moved since the last run), run the perf suite against it (test/vitest/os/perf: concurrent project
 # creation at 1, 10 and 25 people, sign-in, MCP, a context's first append, wake and processor cold
-# start, rule invocation, stream fan-out — every metric and its budget in apps/os/perf/latency.ts),
+# start, rule invocation, stream fan-out — every metric and its budget in test/vitest/os/perf/latency.ts),
 # and keep Vitest's JSON report as the `os-latency-report` artifact. The deploy's readiness gate
 # waits out a brand-new worker's first seconds (main-os-e2e.yml); the run then deletes the
 # workflow's deployments before it. Every perf row mints its own people and projects, so nothing it
@@ -76,13 +76,13 @@ jobs:
         run: doppler run --project os --config preview -- pnpm preview cleanup-superseded
       # The perf suite alone on the deployment; its verdict is the health job's, so a missed budget
       # does not stop the job here. Its credentials are Doppler os/preview's APP_CONFIG
-      # (e2e/support/global-setup.ts).
+      # (test/helpers/global-setup.ts).
       - name: Measure (the perf suite)
-        working-directory: apps/os
+        working-directory: test
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
-          export WORKER_BASE_URL="$(node -p 'require("./output/preview.json").url')"
+          export WORKER_BASE_URL="$(node -p 'require("../apps/os/output/preview.json").url')"
           doppler run --project os --config preview -- pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json \
             || echo "the perf suite exited $?: the health job judges its report"
       - name: Keep the perf report
@@ -90,6 +90,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: os-latency-report
-          path: apps/os/output/perf-report.json
+          path: test/output/perf-report.json
           if-no-files-found: ignore
           overwrite: true

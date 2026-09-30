@@ -3,8 +3,8 @@
 // `modules({ commitOid })` waits on the one read in flight, and a read that fails leaves nothing
 // behind for the next caller. THE GIT CREDENTIALS outlive an incarnation: a fresh one reuses the
 // stored remote and a token with life left, and asks the binding for nothing. The facet runs in Node
-// against the e2e's fake git remote (e2e/support/fake-artifacts.ts), which speaks the real wire and
-// counts the packs it served; the whole repo story is e2e/repos.e2e.test.ts. PULL AND PUSH keep a
+// against the e2e's fake git remote (test-support/fake-artifacts.ts), which speaks the real wire and
+// counts the packs it served; the whole repo story is test/vitest/os/repos.e2e.test.ts. PULL AND PUSH keep a
 // repo's main and a remote's main ONE history: the pack is forwarded unchanged, so commits keep their
 // oids and a picture its bytes; fast-forward only unless `force`; the remote is named, or origin. A
 // COMMIT A SCRIPT MAKES FOR SOMEONE is theirs, committed by iterate, and names its run.
@@ -12,7 +12,7 @@
 import { errorCode } from "iterate/lib";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { FakeArtifacts } from "../../e2e/support/fake-artifacts.ts";
+import { FakeArtifacts } from "../../test-support/fake-artifacts.ts";
 import {
   projectScopedArtifacts,
   repoPathOf,

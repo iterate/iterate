@@ -2,7 +2,7 @@
 // them, the manifest ⇄ tree round trip) and the wire's one refusal that matters: a TRUNCATED pkt-line
 // body is an outage, never an empty ref list. Pure: no DO, no bindings; `fetch` is stubbed where the
 // transport is exercised. The packs themselves are pinned against the real endpoint deployed
-// (apps/os/e2e/cfartifacts.e2e.test.ts), against the local fake remote (apps/os/e2e/support/
+// (test/vitest/os/cfartifacts.e2e.test.ts), against the local fake remote (test/helpers/
 // fake-git-server.ts) and, for GitHub's fetch, in github-template.test.ts.
 
 import { expect, onTestFinished, test, vi } from "vitest";

@@ -6,7 +6,7 @@ import { workerBaseUrl } from "./worker-base-url.ts";
 /**
  * The operator's capnweb session on the OS platform under test: `/api` over a WebSocket, opened
  * bare and authenticated in-band with the deployment's admin bearer (`secrets.adminBearer`, which
- * setup.ts reads out of APP_CONFIG), the way apps/os/e2e/support/client.ts opens every e2e session.
+ * setup.ts reads out of APP_CONFIG), the way test/helpers/client.ts opens every e2e session.
  * Specs seed state through it instead of the UI where the state is not their subject. Dispose it.
  */
 export function openOperatorSession() {

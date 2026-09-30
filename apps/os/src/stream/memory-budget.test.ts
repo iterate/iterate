@@ -3,7 +3,7 @@
 // run as a real workload (memory-budget.test-support.ts beside it: the real Stream / ProcessorEngine /
 // SubscriptionDelivery over node:sqlite) in a Node child process capped at the isolate budget.
 // Local workerd enforces no memory limit, so that child is the only local instrument; the deployed
-// twin is e2e/isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
+// twin is test/vitest/os/isolate-ceilings-deployed.e2e.test.ts (the proof that counts — a real DO on Cloudflare).
 //
 // A known-red row is a `createFailing` pin (docs/testing.md, "Pinned bugs") whose pattern is the
 // failure it dies of, so the suite stays green only while that exact failure holds; unwrapping a row
@@ -74,7 +74,7 @@ const rows: {
   // client-behaviour limit (a client only resets its OWN DO; the durable log survives; it
   // reconnects) — deliberately not defended, to keep `read()` synchronous. The reproduction and
   // the full rationale (why okay, how it would be fixed) live in the deployed e2e:
-  // e2e/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS.
+  // test/vitest/os/isolate-ceilings-deployed.e2e.test.ts CONCURRENT READERS.
 
   // ── the replay loops: a facet's loopback catch-up, the core re-reduce in the DO constructor ──
   {

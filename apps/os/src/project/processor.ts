@@ -17,8 +17,8 @@
 // repo tolerates existing, a born `main` refuses the seed, a publication is keyed by its generation,
 // the ingress and the certificate are keyed. Its reach is its constructor's arguments; a
 // unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or hands it a fake
-// download (templates.test.ts); the effects are proven on the worker (e2e/session.e2e.test.ts: the
-// catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
+// download (templates.test.ts); the effects are proven on the worker (test/vitest/os/session.e2e.test.ts: the
+// catalog, the apex answering the seed; test/vitest/os/website-publication.e2e.test.ts: a commit publishes).
 
 import { errorCode, resolveContextPath } from "iterate/lib";
 import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";

@@ -49,12 +49,14 @@ export const previewPaths = [
   "apps/kit/**",
   // Kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker.
   "!apps/kit/firmware/**",
+  // the vitest suites that drive the preview (test/AGENTS.md)
+  "test/**",
   "specs/**",
   "playwright.config.ts",
-  // apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI.
+  // test/vitest/os/iterate-cli.e2e.test.ts drives the built CLI.
   "packages/cli/**",
   "packages/iterate/**",
-  // the agents and voice rows install these (apps/agents/e2e), and the docs spec this one
+  // the agents and voice rows install these (test/vitest/agents), and the docs spec this one
   "packages/agents/**",
   "packages/voice/**",
   "packages/docs/**",

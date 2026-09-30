@@ -1,0 +1,10 @@
+{
+  // The suites that drive a running worker, and their helpers. They import apps/os's source, which
+  // needs the Workers types, and run in Node: both sets of types, as apps/os's tsconfig.tests.json.
+  "extends": "../apps/os/tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node", "vite/client"]
+  },
+  "include": ["helpers", "vitest", "vitest.config.ts"],
+  "exclude": []
+}

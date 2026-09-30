@@ -14,7 +14,7 @@
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with
   // no_nodejs_compat, so what runs inside a context stays portable across workerd builds.
   // allow_irrevocable_stub_storage (experimental, undocumented): lets loaded code STORE its env.ITX
-  // stub in its own durable storage and replay it (e2e/workers-and-facets.e2e.test.ts pins it); every worker
+  // stub in its own durable storage and replay it (test/vitest/os/workers-and-facets.e2e.test.ts pins it); every worker
   // in the chain needs it, so the loaded isolates carry it too (context/worker-loader.ts).
   // global_fetch_strictly_public: the OAuth provider's Client ID Metadata Documents (oauth.ts
   // `clientIdMetadataDocumentEnabled`) — its fetch of a client's metadata URL must reach the public

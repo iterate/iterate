@@ -714,7 +714,7 @@ test("console and project browsers use the same CIMD flow and independent grants
           : [[browserA.id, "browser-a"]],
       );
       // The cookie's authority is same-origin only: a cross-site request goes on BARE and meets the
-      // OAuth gate's 401 (a bare WebSocket would authenticate in-band instead — e2e/session).
+      // OAuth gate's 401 (a bare WebSocket would authenticate in-band instead — test/vitest/os/session.e2e.test.ts).
       expect(
         await exports.default.fetch(`${origin}/api`, {
           headers: { cookie, Origin: "https://evil.test" },

@@ -61,7 +61,6 @@ test("apps/os imports only these files outside apps/os and packages/", () => {
       "apps/dummy-petshop/src/state.ts <- apps/os/__workers-tests__/integrations.test.ts",
       "configs/default/worker.ts <- apps/os/src/project/default-template.test.ts",
       "configs/heartbeat/worker.ts <- apps/os/src/project/default-template.test.ts",
-      "envs.ts <- apps/os/e2e/support/deployed-target.ts",
       "scripts/lib/vite-build.ts <- apps/os/scripts/build.ts",
       "scripts/lib/wrangler-config.ts <- apps/os/scripts/generate-wrangler-config.ts",
     ]

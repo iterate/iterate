@@ -590,7 +590,7 @@ export class Stream {
    *  `scannedThroughOffset`, never an event's offset. SYNCHRONOUS: the stream's own single-turn
    *  scans call it inline, and cross-hop callers get a promise from Workers RPC regardless. The
    *  budget bounds ONE read; many large reads at once are an accepted client-behaviour limit
-   *  (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
+   *  (test/vitest/os/isolate-ceilings-deployed.e2e.test.ts, CONCURRENT READERS, says why). */
   read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(

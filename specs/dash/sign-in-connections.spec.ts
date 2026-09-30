@@ -12,10 +12,7 @@
 import { createPublicKey } from "node:crypto";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
 import type { Page } from "@playwright/test";
-import {
-  petshopBaseUrl,
-  petshopRegisterGithubInstallation,
-} from "../../apps/os/e2e/support/petshop.ts";
+import { petshopBaseUrl, petshopRegisterGithubInstallation } from "../../test/helpers/petshop.ts";
 import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,

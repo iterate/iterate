@@ -68,7 +68,7 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     // reached it — and never to a context `create` names: a script could otherwise link its child
     // above its own masks. The base itself is still the caller's to choose through the public
     // `at(base)`, and the root's is `/` for every context linked to it: both pinned in
-    // apps/agents/e2e/inherited-capabilities.e2e.test.ts.
+    // test/vitest/agents/inherited-capabilities.e2e.test.ts.
     const creator = resolveContextPath("/", this.base);
     // Writing a parent link on an ancestor would point back down to its child.
     // Refuse before loading a facet or changing any context rows.
