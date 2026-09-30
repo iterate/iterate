@@ -1,8 +1,7 @@
 // stream/background-claims.ts — the one claim ordering rule shared by processor hosts.
 
-export class BackgroundClaims<Captured = undefined> {
-  readonly #claim: (at: number | null, captured: Captured | undefined) => Promise<unknown>;
-  readonly #capture: (() => Captured) | undefined;
+export class BackgroundClaims {
+  readonly #claim: (at: number | null) => Promise<unknown>;
   readonly #report: (error: unknown) => void;
   readonly #afterMs: number;
   readonly #maxAfterMs: number;
@@ -11,15 +10,12 @@ export class BackgroundClaims<Captured = undefined> {
   #chain = Promise.resolve();
 
   constructor(options: {
-    claim: (at: number | null, captured: Captured | undefined) => Promise<unknown>;
-    /** Samples host state when a claim is requested, before another request can update it. */
-    capture?: () => Captured;
+    claim: (at: number | null) => Promise<unknown>;
     report: (error: unknown) => void;
     afterMs: number;
     maxAfterMs: number;
   }) {
     this.#claim = options.claim;
-    this.#capture = options.capture;
     this.#report = options.report;
     this.#afterMs = options.afterMs;
     this.#maxAfterMs = options.maxAfterMs;
@@ -43,23 +39,11 @@ export class BackgroundClaims<Captured = undefined> {
 
   /** Replace the host's one claim with this absolute deadline, behind every prior request. */
   at(at: number | null): void {
-    let captured: Captured | undefined;
-    try {
-      captured = this.#capture?.();
-    } catch (error) {
-      this.#report(error);
-      return;
-    }
     this.#chain = this.#chain
       .then(async () => {
-        await this.#claim(at, captured);
+        await this.#claim(at);
       })
       .catch((error) => this.#report(error));
-  }
-
-  /** Wait until every claim requested so far has reached the host. */
-  async flush(): Promise<void> {
-    await this.#chain;
   }
 
   /** A due claim found work still alive: re-arm it with bounded exponential recovery. */
