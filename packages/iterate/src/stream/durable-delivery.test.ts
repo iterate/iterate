@@ -275,6 +275,40 @@ test("named ephemeral events are best effort and never enter the durable cursor"
   expect(store.values.has("durable-delivery/delivery")).toBe(false);
 });
 
+test("an ephemeral-only gap does not write a cursor before the following durable admission", async () => {
+  const values = new Map<string, unknown>();
+  const writes: unknown[] = [];
+  const storage: EngineKv = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value) => {
+      writes.push(structuredClone(value));
+      values.set(key, structuredClone(value));
+    },
+    delete: (key) => values.delete(key),
+  };
+  const delivered: string[] = [];
+  const processor = new DurableDeliveryProcessor({
+    slug: "ephemeral-gap",
+    consumes: ["poke", "work"],
+    afterOffset: 10,
+    runtime: {
+      storage,
+      read: async () => ({ offsets: [14], scannedThroughOffset: 14, atHead: true }),
+      deliver: async ({ offsets }) => void delivered.push(`D${offsets[0]}`),
+      deliverEphemeral: async ({ offset }) => void delivered.push(`E${offset}`),
+      scheduleWake: async () => {},
+      terminal: async () => {},
+    },
+  });
+  for (const offset of [11, 12, 13])
+    processor.push({ ...committedEvent(offset, "poke"), ephemeral: true });
+  processor.drive((work) => void work());
+  await vi.waitFor(() => expect(delivered).toEqual(["E11", "E12", "E13", "D14"]));
+  expect(writes).toHaveLength(3);
+  expect(writes).not.toContainEqual(expect.objectContaining({ confirmedOffset: 11 }));
+  expect(writes).not.toContainEqual(expect.objectContaining({ confirmedOffset: 12 }));
+  expect(writes).not.toContainEqual(expect.objectContaining({ confirmedOffset: 13 }));
+});
 test("fan-out persists bounded offsets then calls each event independently", async () => {
   const store = kv();
   const source = memoryStream();

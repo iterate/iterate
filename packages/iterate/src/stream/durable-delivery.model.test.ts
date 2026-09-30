@@ -315,14 +315,57 @@ test("a resume seek replaces an in-flight ordered range", async () => {
   expect(delivered).toEqual([[2]]);
 });
 
-test("a fan-out resume can recreate an offset before it has admitted a page", () => {
-  const processor = fanOut(runtime(kv(), memoryStream().stream.read, () => {}));
-  expect(processor.resume(3, 4, 99)).toBe(true);
-  expect(processor.snapshot()).toMatchObject({
-    fanOut: { admittedThrough: 3, pending: [{ offset: 4, attempt: 0, resumeAtOffset: 99 }] },
+test("a fan-out resume leaves a future offset for normal admission", async () => {
+  const source = memoryStream();
+  await source.stream.append(
+    { type: "work" },
+    { type: "work" },
+    { type: "work" },
+    { type: "work" },
+  );
+  const storage = kv();
+  storage.put("durable-delivery/fan", {
+    confirmedOffset: 3,
+    fanOut: { admittedThrough: 3, pending: [] },
   });
+  const calls: number[] = [];
+  const processor = fanOut(
+    runtime(storage, source.stream.read, ({ offsets }) => void calls.push(offsets[0]!)),
+  );
+  expect(processor.resume(undefined, 4, 99)).toBe(true);
+  expect(processor.snapshot()).toMatchObject({ fanOut: { admittedThrough: 3, pending: [] } });
+  await drive(processor, 5);
+  await settle();
+  expect(calls).toEqual([4]);
 });
 
+test("a selective fan-out resume stamps retained terminal work before reporting it", async () => {
+  const source = memoryStream();
+  await source.stream.append(...Array.from({ length: 7 }, () => ({ type: "work" })));
+  const storage = kv();
+  storage.put("durable-delivery/fan", {
+    confirmedOffset: 7,
+    fanOut: {
+      admittedThrough: 7,
+      pending: [
+        { offset: 5, attempt: 1, terminal: true, error: "five" },
+        { offset: 7, attempt: 1, terminal: true, error: "seven" },
+      ],
+    },
+  });
+  const calls: number[] = [];
+  const host = runtime(storage, source.stream.read, ({ offsets }) => void calls.push(offsets[0]!));
+  const processor = fanOut(host);
+  expect(processor.resume(undefined, 5, 100)).toBe(true);
+  await drive(processor, 8);
+  await settle();
+  expect(host.terminals).toEqual([
+    expect.objectContaining({ afterOffset: 6, fanOut: true, resumeAtOffset: 100 }),
+  ]);
+  await drive(processor, 9);
+  await settle();
+  expect(calls).toEqual([5]);
+});
 test("a running ordered row adopts a plain resume fence before its next read", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" });

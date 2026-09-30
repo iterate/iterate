@@ -2,7 +2,7 @@
 // scanned range plus selected offsets and asks its host to invoke the configured expression under
 // ordinary delivery authority.
 
-import { errorCode } from "../lib.ts";
+import { errorCode, withTimeout } from "../lib.ts";
 import { consumesEvent, type EngineKv, type ScannedRange, type StreamEvent } from "./processor.ts";
 
 export type DurableDeliveryCursor = {
@@ -240,12 +240,16 @@ export class DurableDeliveryProcessor {
               nextAttemptAtMs: undefined,
               resumeAtOffset: this.#resumeAtOffset,
             }
-          : item,
+          : { ...item, resumeAtOffset: this.#resumeAtOffset },
       );
       // A terminal receipt is removed after the host acknowledges its dead-letter fact, so a
-      // selective operator resume recreates that one item even after a cold revive. Its offset is
-      // below admittedThrough and therefore cannot be rediscovered by normal admission.
-      if (offset !== undefined && !pending.some((item) => item.offset === offset))
+      // selective operator resume recreates that one item only when ordinary admission has already
+      // passed it. A future offset remains for normal admission and must not be delivered twice.
+      if (
+        offset !== undefined &&
+        offset <= fanOut.admittedThrough &&
+        !pending.some((item) => item.offset === offset)
+      )
         pending.push({ offset, attempt: 0, resumeAtOffset: this.#resumeAtOffset });
       const { halted: _halted, ...running } = cursor;
       this.#putCursor({ ...running, fanOut: { ...fanOut, pending } });
@@ -392,6 +396,15 @@ export class DurableDeliveryProcessor {
             through === page.scannedThroughOffset &&
             this.#ephemeralQueue.length === 0;
           const offsets = page.offsets.filter((offset) => offset <= through);
+          if (offsets.length === 0 && this.#ephemeralQueue.length > 0) {
+            await this.#drainEphemerals();
+            if (!this.#isCurrent(stamp)) return;
+            if (++ephemerals >= pageLimit) {
+              await this.#options.runtime.scheduleWake(Date.now());
+              return;
+            }
+            continue;
+          }
           if (offsets.length === 0) {
             this.#putCursor({ confirmedOffset: through });
             await this.#options.runtime.scheduleWake(atHead ? null : Date.now());
@@ -770,18 +783,6 @@ export class DurableDeliveryProcessor {
   }
 
   async #withinDeadline(deliver: () => Promise<void>): Promise<void> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const result = deliver();
-    const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error("durable delivery call timed out")),
-        callDeadlineMs,
-      );
-    });
-    try {
-      await Promise.race([result, deadline]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    await withTimeout(deliver(), callDeadlineMs, "durable delivery call");
   }
 }
