@@ -26,10 +26,13 @@ baseline. That is the current comparison, not the agent-stat count that includes
 tests. Tests and moved code are never credited as runtime deletions.
 
 A later read-only Round 15 review found a cold, ephemeral-only first push can
-lose another filtered row's persisted wake. The local repair is `0739e06e8`:
-it drives every freshly reconciled row once, preserves warm ephemeral fan-out
-suppression, and has nine passing focused units. Its full run and publication
-are pending, so it has no green or external-validation claim.
+lose another filtered row's persisted wake. Published
+`0739e06e8e01766b50015e2bc0b72d75acb50b6c` repairs it by driving every freshly
+reconciled row once while preserving warm ephemeral fan-out suppression. The
+old condition fails two regressions; the repair passes nine focused units and
+the full root suite: 154 OS files, 2,315 passing tests, and 14 expected
+failures, plus 51 SDK suites and full typecheck, lint, formatting, and Knip.
+This validates the source repair locally, not its external operation.
 
 External evidence for `5eff` is incomplete and does not pass release gates. The
 `lpdbw2tv6d` 100-run soak was cancelled and is invalid, not a passing soak. Its
@@ -799,10 +802,10 @@ remaining fan-out warnings concern intentionally at-least-once redelivery after
 a row-level target refusal and a generic interruption message after a fenced
 final attempt. They are not replacements for the new cold-start regression.
 
-The old condition fails both new cold-start tests; the `0739` condition passes
-nine focused units. No Round 15 test was run by the reviewer, and the full
-source run, publication, preview, latency, soak, and log evidence must attach
-to the next published revision before this report can call the repair complete.
+The old condition fails both new cold-start tests; the published `0739` condition
+passes nine focused units and the full local suite. No Round 15 test was run by
+the reviewer. Preview, performance, 100-run soak, and log evidence must still
+run from `0739` before this report can call the repair operationally complete.
 
 ## What remains core
 
