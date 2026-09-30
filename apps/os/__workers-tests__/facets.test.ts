@@ -1591,32 +1591,35 @@ export default class extends WorkerEntrypoint {
     async () => (await rowOf(ctx, "kept"))?.cursor?.confirmedOffset === first.offset,
   );
 
-  await expect(
-    s.append({
-      type: "events.iterate.com/itx/subscription-configured",
-      payload: {
+  // Catch inside the actor: an append refusal crossing the raw Durable Object test stub is reported
+  // as an unhandled remote rejection even when the outer promise is asserted.
+  const refusals = await runInDurableObject(s, async (instance) => {
+    const context = instance as { append: (...events: unknown[]) => Promise<unknown> };
+    const refusal = async (payload: unknown) => {
+      try {
+        await context.append({ type: "events.iterate.com/itx/subscription-configured", payload });
+        return null;
+      } catch (error) {
+        return String(error);
+      }
+    };
+    return {
+      directTarget: await refusal({
         name: "attack",
         target: "itx.builtins.facets.get('subscriptions').processEventBatch",
         delivery: "processor",
-      },
-    }),
-  ).rejects.toThrow(/private to durable delivery/);
-  await expect(
-    s.append({
-      type: "events.iterate.com/itx/subscription-configured",
-      payload: {
+      }),
+      reservedName: await refusal({
         name: "subscriptions",
         target: "itx.builtins.facets.get('subscriptions').processEventBatch",
         delivery: "processor",
-      },
-    }),
-  ).rejects.toThrow(/reserved as a subscription name/);
-  await expect(
-    s.append({
-      type: "events.iterate.com/itx/subscription-configured",
-      payload: { name: "subscriptions", target: null },
-    }),
-  ).rejects.toThrow(/reserved as a subscription name/);
+      }),
+      reservedRemoval: await refusal({ name: "subscriptions", target: null }),
+    };
+  });
+  expect(refusals.directTarget).toMatch(/private to durable delivery/);
+  expect(refusals.reservedName).toMatch(/reserved as a subscription name/);
+  expect(refusals.reservedRemoval).toMatch(/reserved as a subscription name/);
 
   // An alias can still resolve to this physical target after append normalization. It must never
   // acquire a hosted-facet marker: removing this caller-owned row must not delete durable delivery's

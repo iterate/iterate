@@ -246,6 +246,27 @@ export class HoldDurableObject extends StreamProcessorDurableObject {
   className: "HoldDurableObject",
 };
 
+/** A fan-out target that leaves each delivery outstanding until `release()` takes it. The count is
+ * the private facet's observable concurrency, so replacement tests can prove the eight-call bound. */
+export const FANOUT_HOLD: FacetSpec = {
+  source: {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": counter(/* js */ `
+export class FanoutHoldDurableObject extends StreamProcessorDurableObject {
+  static publicMethods = [...super.publicMethods, "deliverEvent", "holding", "release"];
+  processor = new CounterProcessor();
+  #releases = [];
+  async deliverEvent() {
+    await new Promise((resolve) => this.#releases.push(resolve));
+  }
+  holding() { return this.#releases.length; }
+  release() { this.#releases.shift()?.(); }
+}
+`),
+  },
+  className: "FanoutHoldDurableObject",
+};
+
 /** A person's own processor that counts the `events.iterate.com/test/ticked` events on its log. */
 export const TICK_TALLY: FacetSpec = {
   source: {

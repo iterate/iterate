@@ -6,7 +6,7 @@
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a release — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamPage, WorkerSource } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
@@ -49,28 +49,26 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   const highestDurableOffset = p0.events.at(-1)!.offset;
   expect(row0).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset } }); // acked on durable ground ✓
 
-  await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true }); // head = mark+2, mark unchanged
-  // An alarm pass, run directly (a caught-up cursor row and a live facet arm nothing, so there is
-  // no alarm to fire): its own trace is one more ephemeral at head, and deliverEveryCursorSubscription
-  // finds `dig` caught up. In MEMORY the cursor moved along past the ephemerals it does not consume
-  // (the head, ephemerals included, is what "caught up" means there); what kv holds is the mark,
-  // proven below through the eviction.
-  await runInDurableObject(s, (instance) => instance.alarm());
-  const row1 = (await s.invoke("itx.subscriptions.get('dig')")) as {
-    cursor?: { confirmedOffset: number };
-  };
-  expect(row1.cursor!.confirmedOffset).toBeGreaterThanOrEqual(highestDurableOffset + 2); // memory stands on the head
-
+  await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true });
+  // A nonconsumed ephemeral creates neither durable work nor an alarm claim. Its body is best
+  // effort, so a manually invoked context alarm has no contract to advance this private runner.
+  // The eviction below is the proof that matters: no ephemeral offset may survive in its cursor.
   await releasePins(ctx);
   await evictDurableObject(s);
-  const rowKv = (await s.invoke("itx.subscriptions.get('dig')")) as {
-    cursor?: { confirmedOffset: number };
-  };
-  // What kv held through the eviction was the mark; the fresh incarnation's woken@mark+1 is a
-  // durable commit `dig` does not consume, so the cursor moved along past it without a call.
+  // The next observation wakes a fresh context at the first ephemeral's offset. Its background
+  // runner scans that durable wake; wait for its actual progress rather than assuming an alarm's
+  // synchronous timing. This exact offset proves KV never retained either ephemeral offset.
+  const rowKv = await until("the fresh cursor scans its durable wake", async () => {
+    const row = (await s.invoke("itx.subscriptions.get('dig')")) as {
+      cursor?: { confirmedOffset: number };
+    };
+    return row.cursor?.confirmedOffset === highestDurableOffset + 1 ? row : undefined;
+  });
   expect(rowKv).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset + 1 } });
 
-  const secondMark = offsetOf(await s.append({ type: "mark" })); // woken@mark+1 (the constructor's), mark@mark+2 — durable
+  // The fresh append records this mark where the second ephemeral was. If the old cursor had
+  // persisted that ephemeral offset, this mark would be skipped.
+  const secondMark = offsetOf(await s.append({ type: "mark" }));
   // The cursor passing the second mark is the delivery settled. Had kv held a cursor past the durable
   // mark, it would already stand beyond this mark and the call would never have been made — the
   // assertion below, not this wait, is what fails then.

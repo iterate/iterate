@@ -32,6 +32,8 @@ export type DurableSubscriptionConfig = {
 };
 
 type ContextDeliveryBridge = {
+  /** Current core row identities after a push was lost between its durable claim and this facet. */
+  subscriptionDeliveryConfiguration(): Promise<DurableSubscriptionConfig[]>;
   readSubscriptionDelivery(
     afterOffset: number,
     limit: number,
@@ -67,12 +69,10 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   static override publicMethods = [...super.publicMethods];
 
   readonly #runners = new Map<string, DurableDeliveryProcessor>();
-  static readonly #configKey = "durable-subscription-config";
   static readonly #pageReservationChars = 8 * 1024 * 1024;
   static readonly #pendingEphemeralBudgetChars = 8 * 1024 * 1024;
   #pendingEphemeralChars = 0;
   readonly #wakeByRunner = new Map<string, number>();
-  #configurationFingerprint: string | undefined;
   /** One 8MiB source page at a time across all runners, before any page body is materialized. */
   #readReserved = false;
   readonly #readWaiters: Array<() => void> = [];
@@ -108,27 +108,23 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   /** The context alarm revives a pending cursor after a facet or context incarnation dies. */
   async revive(): Promise<void> {
     this.#wakeByRunner.clear(); // the alarm spent the prior claim; a runner reclaims only if it still needs one
-    this.#reconcile(
-      this.ctx.storage.kv.get<DurableSubscriptionConfig[]>(
-        SubscriptionDeliveryDurableObject.#configKey,
-      ) || [],
-    );
-    for (const row of this.ctx.storage.kv.get<DurableSubscriptionConfig[]>(
-      SubscriptionDeliveryDurableObject.#configKey,
-    ) || []) {
+    // A context claims this first-party facet before its asynchronous post-commit push. If that
+    // push died with the context, the claim revives us with no local configuration yet; core is
+    // the durable source of row identity, so pull it afresh rather than retaining a second table.
+    const rows = await this.#context().subscriptionDeliveryConfiguration();
+    this.#reconcile(rows);
+    for (const row of rows) {
       if (!row.halted)
         this.#runners.get(`${row.name}@${row.configuredAtOffset}`)?.processEvent(this.#args(null));
     }
   }
 
   /** Platform-only operational view: cursor offsets and bounded retry state, never event bodies. */
-  deliverySnapshots(): Record<string, ReturnType<DurableDeliveryProcessor["snapshot"]>> {
+  async deliverySnapshots(): Promise<
+    Record<string, ReturnType<DurableDeliveryProcessor["snapshot"]>>
+  > {
     if (this.#runners.size === 0)
-      this.#reconcile(
-        this.ctx.storage.kv.get<DurableSubscriptionConfig[]>(
-          SubscriptionDeliveryDurableObject.#configKey,
-        ) || [],
-      );
+      this.#reconcile(await this.#context().subscriptionDeliveryConfiguration());
     return Object.fromEntries([...this.#runners].map(([key, runner]) => [key, runner.snapshot()]));
   }
 
@@ -149,13 +145,8 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   }
 
   #reconcile(rows: DurableSubscriptionConfig[]): void {
-    // Facet JS state is discarded on hibernation; keep only immutable row identity/configuration,
-    // never a target, event, callback, or native RPC value.
-    const fingerprint = JSON.stringify(rows);
-    if (fingerprint !== this.#configurationFingerprint) {
-      this.ctx.storage.kv.put(SubscriptionDeliveryDurableObject.#configKey, rows);
-      this.#configurationFingerprint = fingerprint;
-    }
+    // The facet KV owns cursors only. Core remains the durable authority for row identity and
+    // configuration, which the caller supplies afresh on every push or revive.
     const live = new Set(rows.map((row) => `${row.name}@${row.configuredAtOffset}`));
     for (const [key] of this.#runners)
       if (!live.has(key)) {

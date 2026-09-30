@@ -52,6 +52,7 @@ import {
   isPlatformFailureKind,
   logPlatformFailure,
 } from "@iterate-com/shared/platform-retry";
+import type { DurableSubscriptionConfig } from "./subscription-delivery-durable-object.ts";
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
@@ -814,7 +815,38 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     events: StreamEvent[],
     range: { after: number; through: number },
   ): void {
-    const rows = Object.entries(this.#stream.coreReducedState.subscriptions)
+    const rows = this.subscriptionDeliveryConfiguration();
+    if (rows.length === 0) {
+      if (events.some((event) => event.type === "events.iterate.com/itx/subscription-configured"))
+        this.#facetHost.deleteFirstPartyFacet("subscriptions");
+      return;
+    }
+    // The facet's push is deliberately asynchronous, but durable work cannot be handed off only
+    // in memory. Claim before sending it: a reset in this window revives the facet, which pulls
+    // the same rows from core and scans the durable log. Ephemeral-only and unconsumed commits
+    // remain best-effort and never write a pointless durable claim.
+    const configurationChanged = events.some(
+      (event) =>
+        event.type === "events.iterate.com/itx/subscription-configured" ||
+        event.type === "events.iterate.com/itx/subscription-delivery-resumed",
+    );
+    const durableDeliveryDue = rows.some(
+      (row) =>
+        !row.halted &&
+        events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
+    );
+    if (configurationChanged || durableDeliveryDue)
+      this.#facetHost.claim("subscriptions", Date.now());
+    void this.#facetHost
+      .callFacetAsPlatform("subscriptions", [["processEventBatch", events, range, rows]])
+      .catch((error) => reportIssue("subscription-delivery.facet-push", error));
+  }
+
+  /** Core is the durable source of subscription identity. The private facet asks on a claim revive
+   * when an asynchronous post-commit push did not reach its KV before an incarnation ended. */
+  subscriptionDeliveryConfiguration(): DurableSubscriptionConfig[] {
+    this.#assertReconstructable();
+    return Object.entries(this.#stream.coreReducedState.subscriptions)
       .filter(([, row]) => row.delivery === "durable")
       .map(([name, row]) => ({
         name,
@@ -831,14 +863,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           retryCapMs: 4 * 60 * 60_000,
         }),
       }));
-    if (rows.length === 0) {
-      if (events.some((event) => event.type === "events.iterate.com/itx/subscription-configured"))
-        this.#facetHost.deleteFirstPartyFacet("subscriptions");
-      return;
-    }
-    void this.#facetHost
-      .callFacetAsPlatform("subscriptions", [["processEventBatch", events, range, rows]])
-      .catch((error) => reportIssue("subscription-delivery.facet-push", error));
   }
 
   /** Native infrastructure read for the private subscriptions facet. This deliberately avoids
@@ -1004,17 +1028,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     resumeAtOffset?: number;
   }): Subscription {
     const row = this.#stream.coreReducedState.subscriptions[request.name];
-    if (
-      !row ||
-      row.configuredAtOffset !== request.configuredAtOffset ||
-      row.delivery !== "durable" ||
-      row.halted
-    )
+    if (!row || row.configuredAtOffset !== request.configuredAtOffset || row.delivery !== "durable")
       throw codedError("GONE", "configured subscription no longer accepts delivery");
+    // A resumed row can halt again before a prior generation reaches this fence. That prior call
+    // remains stale, rather than becoming a fresh permanent failure because the new generation is
+    // now halted. The runner recognizes this private marker and leaves its old cursor untouched.
     if (row.resumed?.atOffset !== request.resumeAtOffset)
       throw codedError("GONE", "configured subscription delivery belongs to an older resume", {
         resumeAtOffset: row.resumed?.atOffset,
       });
+    if (row.halted) throw codedError("GONE", "configured subscription no longer accepts delivery");
     return row;
   }
 
@@ -1062,7 +1085,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Atomically record a runner's terminal outcome only while its configured row still stands. */
-  recordConfiguredSubscriptionTerminal(input: unknown): void {
+  async recordConfiguredSubscriptionTerminal(input: unknown): Promise<void> {
     const request = parseSubscriptionDeliveryTerminalRequest(input);
     this.#inboundRequestInOneTurn("recordConfiguredSubscriptionTerminal");
     const row = this.#stream.coreReducedState.subscriptions[request.name];

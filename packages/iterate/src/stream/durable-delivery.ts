@@ -147,6 +147,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     DurableDeliveryOptions;
   #requested = false;
   #again = false;
+  #disposed = false;
   #resumeAtOffset: number | undefined;
   #generation = 0;
   #ephemeralQueue: {
@@ -183,6 +184,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   }
 
   override processEvent(args: ProcessEventArgs<Record<string, never>>): undefined {
+    if (this.#disposed) return;
     // Ephemerals are intentionally best effort: the push carries their only body, and no KV write
     // turns them into durable work. A restart before this call begins loses them as it does today.
     if (
@@ -230,17 +232,23 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
 
   /** Releases bodies held only by this runner when its configured row is replaced. */
   [Symbol.dispose](): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#generation++;
+    this.#again = false;
     while (this.#ephemeralQueue.length > 0) this.#discardOldestEphemeral();
   }
 
   /** The subscriptions facet calls this after configuration and revive. It shares the normal
    * processor background/claim path without exposing a second delivery API to authors. */
   drive(runInBackground: (work: () => Promise<unknown>) => void): void {
+    if (this.#disposed) return;
     this.#requestDrain(runInBackground);
   }
 
   /** The subscriptions facet applies the existing resume control fact before calling drive. */
   resume(afterOffset?: number, offset?: number, resumeAtOffset?: number): boolean {
+    if (this.#disposed) return false;
     this.#resumeAtOffset = resumeAtOffset;
     this.#generation++;
     const cursor = this.#cursor();
@@ -289,6 +297,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   }
 
   #requestDrain(runInBackground: (work: () => Promise<unknown>) => void): void {
+    if (this.#disposed) return;
     if (this.#requested) {
       this.#again = true;
       return;
@@ -300,7 +309,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
         await this.#drain();
       } finally {
         this.#requested = false;
-        if (this.#again) {
+        if (!this.#disposed && this.#again) {
           this.#again = false;
           void this.#requestDrain(runInBackground);
         }
@@ -309,6 +318,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   }
 
   async #drain(): Promise<void> {
+    if (this.#disposed) return;
     if (this.#options.fanOut) return await this.#drainFanOut();
     await this.#drainEphemerals();
     for (;;) {
@@ -687,7 +697,11 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   }
 
   #isCurrent(stamp: { generation: number; resumeAtOffset: number | undefined }): boolean {
-    return this.#generation === stamp.generation && this.#resumeAtOffset === stamp.resumeAtOffset;
+    return (
+      !this.#disposed &&
+      this.#generation === stamp.generation &&
+      this.#resumeAtOffset === stamp.resumeAtOffset
+    );
   }
 
   #isCurrentPending(

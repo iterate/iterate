@@ -46,6 +46,50 @@ test("reuses a bounded source page for its first invoke with scanned proof", asy
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+test("a disposed runner cannot restore a deleted cursor after a late target result", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  for (const outcome of ["success", "failure"] as const) {
+    const store = kv();
+    let settleDelivery!: () => void;
+    const terminal = vi.fn(async () => {});
+    const scheduleWake = vi.fn(async () => {});
+    const processor = new DurableDeliveryProcessor({
+      slug: `disposed-${outcome}`,
+      consumes: ["work"],
+      maxAttempts: 1,
+      runtime: {
+        storage: store,
+        read: source.stream.read,
+        deliver: async () =>
+          await new Promise<void>((resolve, reject) => {
+            settleDelivery = () => (outcome === "success" ? resolve() : reject(new Error("late")));
+          }),
+        scheduleWake,
+        abort: (reason) => {
+          throw new Error(reason);
+        },
+        tryReservePendingEphemeral: testEphemeralReservation,
+        terminal,
+      },
+    });
+    const engine = new ProcessorEngine(processor, {
+      stream: memoryStream().stream,
+      storage: memoryStorage(),
+      kv: kv(),
+    });
+    await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+    await vi.waitFor(() => expect(settleDelivery).toBeTypeOf("function"));
+    processor[Symbol.dispose]();
+    store.values.delete(`durable-delivery/disposed-${outcome}`);
+    settleDelivery();
+    await settle();
+    expect(store.values.has(`durable-delivery/disposed-${outcome}`)).toBe(false);
+    expect(scheduleWake).not.toHaveBeenCalled();
+    expect(terminal).not.toHaveBeenCalled();
+  }
+});
+
 test("persists a pending scanned range, retries it, then halts through the terminal callback", async () => {
   const store = kv();
   const wakes: number[] = [];

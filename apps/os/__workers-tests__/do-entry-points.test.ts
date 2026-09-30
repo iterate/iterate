@@ -110,7 +110,9 @@ test("a pre-v18 core row refuses normal access yet remains sweepable and destroy
   await runInDurableObject(s, async (instance) => {
     // Workerd exposes even in-actor DO entry points as native RPC promises; await the refusal so
     // its expected INVALID_INPUT is not reported later as an unhandled test rejection.
-    await expect(instance.read(0)).rejects.toThrow(/cannot be reconstructed.*recreate the context/);
+    expect(await rejected(instance.read(0))).toThrow(
+      /cannot be reconstructed.*recreate the context/,
+    );
     expect(instance.readForSweep(0).events).toContainEqual(
       expect.objectContaining({
         offset: seed.offset,
@@ -159,24 +161,28 @@ test("the private durable-subscription bridge accepts no target, event, caller o
     payload: { name: "sink", target: "itx.whoami", delivery: "durable", consumes: ["never"] },
   });
   await runInDurableObject(stub(context), async (instance) => {
-    await expect(
-      instance.deliverConfiguredSubscription({
-        name: "sink",
-        configuredAtOffset: 1,
-        range: { after: 0, through: 1 },
-        target: "itx.attacker",
-        events: [{ type: "forged", offset: 1 }],
-        caller: { delivery: "forged" },
-      }),
-    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    await expect(
-      instance.deliverConfiguredSubscription({
-        name: "sink",
-        configuredAtOffset: 999,
-        range: { after: 0, through: 1 },
-        events: [{ offset: 1, type: "forged", path: "/" }],
-      }),
-    ).rejects.toMatchObject({ code: "GONE" });
+    expect(
+      await rejected(
+        instance.deliverConfiguredSubscription({
+          name: "sink",
+          configuredAtOffset: 1,
+          range: { after: 0, through: 1 },
+          target: "itx.attacker",
+          events: [{ type: "forged", offset: 1 }],
+          caller: { delivery: "forged" },
+        }),
+      ),
+    ).toMatchObject({ code: "INVALID_INPUT" });
+    expect(
+      await rejected(
+        instance.deliverConfiguredSubscription({
+          name: "sink",
+          configuredAtOffset: 999,
+          range: { after: 0, through: 1 },
+          events: [{ offset: 1, type: "forged", path: "/" }],
+        }),
+      ),
+    ).toMatchObject({ code: "GONE" });
   });
 });
 
@@ -259,18 +265,20 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "fanout", target: "itx.whoami", delivery: "durable", consumes: ["mark"] },
   })) as unknown as [{ offset: number }];
-  await expect(
-    runInDurableObject(s, (instance) =>
-      instance.recordConfiguredSubscriptionTerminal({
-        name: "fanout",
-        configuredAtOffset: configured.offset,
-        afterOffset: mark.offset - 1,
-        attempts: 15,
-        error: "late predecessor",
-        fanOut: true,
-      }),
-    ),
-  ).rejects.toMatchObject({ code: "GONE" });
+  await runInDurableObject(s, async (instance) => {
+    expect(
+      await rejected(
+        instance.recordConfiguredSubscriptionTerminal({
+          name: "fanout",
+          configuredAtOffset: configured.offset,
+          afterOffset: mark.offset - 1,
+          attempts: 15,
+          error: "late predecessor",
+          fanOut: true,
+        }),
+      ),
+    ).toMatchObject({ code: "GONE" });
+  });
   expect(
     (
       (await s.invoke("itx.subscriptions.list()")) as Array<{
@@ -284,17 +292,19 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
     type: "events.iterate.com/itx/subscription-delivery-resumed",
     payload: { name: "fanout", afterOffset: mark.offset },
   });
-  await expect(
-    runInDurableObject(s, (instance) =>
-      instance.recordConfiguredSubscriptionTerminal({
-        name: "fanout",
-        configuredAtOffset: replacement.offset,
-        afterOffset: mark.offset,
-        attempts: 15,
-        error: "late before resume",
-      }),
-    ),
-  ).rejects.toMatchObject({ code: "GONE" });
+  await runInDurableObject(s, async (instance) => {
+    expect(
+      await rejected(
+        instance.recordConfiguredSubscriptionTerminal({
+          name: "fanout",
+          configuredAtOffset: replacement.offset,
+          afterOffset: mark.offset,
+          attempts: 15,
+          error: "late before resume",
+        }),
+      ),
+    ).toMatchObject({ code: "GONE" });
+  });
   await releasePins(context);
 });
 
@@ -587,6 +597,17 @@ async function rewriteRuleEventCount(ctx: string): Promise<number> {
 /** The DO's in-memory socket census (a DO-only verb — physical facts, never event-derivable). */
 async function rpcStubPagersOf(ctx: string): Promise<number> {
   return ((await stub(ctx).rpcStubTransportState()) as { rpcStubPagers: number }).rpcStubPagers;
+}
+
+/** Attach the native DO rejection inside its actor turn. `expect(promise).rejects` observes it only
+ * after the test callback returns, which workerd reports as an unhandled native RPC rejection. */
+async function rejected(operation: Promise<unknown>): Promise<unknown> {
+  return await operation.then(
+    () => {
+      throw new Error("expected native Durable Object operation to reject");
+    },
+    (error: unknown) => error,
+  );
 }
 
 /** The code of a call that MUST reject — awaited over the capnweb session, not the raw DO stub: a

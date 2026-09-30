@@ -36,11 +36,6 @@ const CONTROL = { eventCount: 12, eventChars: 64 * 1024 };
 const RETRY_4_AT_CEILING = { eventCount: 4, eventChars: 8 * MiB - 256 };
 /** 200 × 1 MiB ephemeral commits behind facets that never answer, across 20 rows. */
 const STUCK_ROWS_20 = { rowCount: 20, batchCount: 200, batchChars: 1 * MiB };
-/** A 16 MiB log (16 × 1 MiB) every cursor row is behind by — two budgeted pages each. */
-const CURSOR_ROWS_BEHIND_16_MIB = { eventCount: 16, eventChars: 1 * MiB, calleeCopy: 0 };
-/** Cursor rows on disjoint event types, sinks that never answer, 900 KiB ephemerals (under the
- *  ring's 1 MiB) — two per row. */
-const CURSOR_ROWS_EPHEMERALS_FROM_RING = { batchChars: 900 * 1024 };
 
 // Every plain row runs its scenario in the capped child, killed after the row's `timeout` (60 s
 // unless named), asserts that it survived, then its `facts` (exact) and its `bounds` (a numeric fact
@@ -159,59 +154,11 @@ const rows: {
     scenario: "stuck-facet-rows",
     args: { ...STUCK_ROWS_20, disjointTypes: 1 },
   },
-  {
-    name: "control: 4 behind cursor rows (the alarm pass's concurrency) drain one commit within the budget",
-    scenario: "cursor-rows-behind-one-commit",
-    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 4 },
-    bounds: [["callsStarted", ">=", 4]], // every row called (a page may split under the read budget)
-  },
-  // One commit wakes every behind cursor row, and each holds a budgeted page across its awaited call:
-  // 20 at once would be 160 MiB. A cursor delivery waits for room in the in-flight ledger, so the rows
-  // drain a few at a time (`maxCallsInFlight` says how many; the callees here answer after 250 ms).
-  // The rows are behind the natural way — a fresh incarnation whose cursors were never acked — and
-  // the commit is one small append.
-  {
-    name: "cursor rows: 20 behind cursor rows and ONE commit — the commit path drains them under the in-flight budget, never a page per row at once",
-    scenario: "cursor-rows-behind-one-commit",
-    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 20 },
-    bounds: [
-      ["callsStarted", ">=", 20], // every row called (a 16 MiB log is two pages a row)
-      ["maxCallsInFlight", "<", 20], // the ledger, not the row count, sets the fan-out
-    ],
-  },
-  {
-    name: "control: an alarm owed by 4 due cursor rows reads what caused it within the budget",
-    scenario: "cursor-rows-owed-cause",
-    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 4 },
-    facts: { owedCauseDepth: 0 },
-  },
-  // An alarm's wake is caused by the deepest event its due rows owe, read before its pass as a page
-  // after each row's cursor: 20 pages held until the last is read would be 160 MiB.
-  {
-    name: "cursor rows: an alarm owed by 20 due cursor rows reads what caused it a page at a time, never a page per row at once",
-    scenario: "cursor-rows-owed-cause",
-    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 20 },
-    facts: { owedCauseDepth: 0 },
-  },
-  {
-    name: "control: 2 cursor rows fed 900 KiB ephemerals from the ring stay within the budget",
-    scenario: "cursor-rows-ephemerals-from-ring",
-    args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 2, batchCount: 4 },
-    bounds: [["callsStarted", ">=", 1]],
-  },
-  // A cursor row reads its ephemerals from the stream's recent-ephemerals ring (1 MiB) under the
-  // cursor-read budget, and a row waiting for room holds nothing, so what is retained is the in-flight
-  // batches (8 MiB) and the ring, whatever the row count. A pushed batch kept per row would be bounded
-  // by nothing but the row count: 160 rows × 900 KiB is 140 MiB.
-  {
-    name: "cursor rows: 160 cursor rows fed 900 KiB ephemerals retain the ring and the in-flight batches, never a batch per row",
-    scenario: "cursor-rows-ephemerals-from-ring",
-    args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 160, batchCount: 320 },
-    bounds: [
-      ["callsStarted", ">=", 2],
-      ["callsStarted", "<", 160], // the budget, not the row count, sets the fan-out
-    ],
-  },
+  // Durable rows now run in the private subscriptions facet rather than this in-process delivery
+  // harness. `__workers-tests__/subscription-delivery-memory.test.ts` proves the replacement
+  // invariant with twenty rows: one 8 MiB source-page reservation, nineteen waiters, at most 8 MiB
+  // of target bodies, and complete draining after the held target releases. The rows below remain
+  // the in-process proof for processor delivery, which still uses SubscriptionDelivery.
 
   // ── the history scan ──
   {
