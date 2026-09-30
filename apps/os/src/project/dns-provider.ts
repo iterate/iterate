@@ -8,7 +8,7 @@
 // Best effort like Domain Connect: every request bounded, a failure throws for the caller to log.
 
 import { z } from "zod";
-import { domainConnectZonesOf } from "./domain-connect.ts";
+import { domainConnectZonesOf, txtRecordText } from "./domain-connect.ts";
 
 /** The providers we recognise, by the nameserver names they hand their customers. Order matters
  *  only where patterns could overlap (none do today). */
@@ -37,7 +37,7 @@ const PROVIDERS: { id: string; nameservers: RegExp }[] = [
   { id: "spaceship", nameservers: /^launch\d\.spaceship\.(net|com)$/ },
 ];
 
-/** A DNS-over-HTTPS answer (RFC 8484's JSON form), as far as NS records go. */
+/** A DNS-over-HTTPS answer (RFC 8484's JSON form), as far as NS and TXT records go. */
 const DohNsAnswer = z.object({
   Status: z.number(),
   Answer: z.array(z.object({ name: z.string(), type: z.number(), data: z.string() })).optional(),
@@ -97,4 +97,24 @@ export async function dnsZoneOf(
       };
   }
   return null;
+}
+
+/** The texts of `name`'s own TXT records over DNS-over-HTTPS, none when it has none. Only records
+ *  AT `name`: a resolver follows a CNAME — the wildcard `*.<hostname>` answers `_iterate.<hostname>`
+ *  too — and the target's records are not the name's. Throws on a DNS error or a timeout.
+ *  `fetcher` reaches DNS-over-HTTPS (a test hands a fake). */
+export async function txtRecordsOf(
+  name: string,
+  fetcher: typeof fetch = (input, init) => fetch(input, init),
+): Promise<string[]> {
+  const response = await fetcher(
+    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=TXT`,
+    { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5_000) },
+  );
+  const dns = DohNsAnswer.parse(await response.json());
+  if (dns.Status !== 0 && dns.Status !== 3)
+    throw new Error(`DNS status ${dns.Status} for ${name} TXT`);
+  return (dns.Answer || [])
+    .filter((record) => record.type === 16 && record.name.replace(/\.$/, "").toLowerCase() === name)
+    .map((record) => txtRecordText(record.data));
 }

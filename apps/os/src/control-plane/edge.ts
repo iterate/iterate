@@ -488,6 +488,9 @@ export class ControlPlane {
   claimHostname(projectId: string, hostname: string): Promise<void> {
     return this.#call("claimHostname", () => this.#db.claimHostname(projectId, hostname));
   }
+  hostnameHolder(hostname: string): Promise<string | null> {
+    return this.#call("hostnameHolder", () => this.#db.hostnameHolder(hostname));
+  }
   /** Another project's claim, or none, is left alone. */
   releaseHostname(projectId: string, hostname: string): Promise<void> {
     return this.#call("releaseHostname", () => this.#db.releaseHostname(projectId, hostname));
