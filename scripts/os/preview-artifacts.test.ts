@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
+import { CloudflareApiError } from "../lib/env-context.ts";
 import {
   deleteArtifactsNamespace,
   ensureArtifactsNamespace,
@@ -41,7 +41,7 @@ test("a namespace that does not exist is the expected case: nothing deleted, no 
 
 // ── a namespace Cloudflare will not delete (pr2817's, measured 2026-09-24) ─────────────────────
 
-test("an empty namespace Cloudflare keeps refusing is reported stuck after ~2 minutes, not thrown", async () => {
+test("an empty namespace Cloudflare keeps refusing is reported stuck after 5 refused rounds (~18 s), not thrown", async () => {
   // repo_count 1, an empty repos list, and DELETE 409/10202, for a day and counting
   const api = fakeArtifactsApi(["prj_a.repos--config"], (method, path) => {
     if (path === ROUTE && method === "DELETE") return notEmpty(method, path);
@@ -60,12 +60,29 @@ test("an empty namespace Cloudflare keeps refusing is reported stuck after ~2 mi
       namespace: NAMESPACE,
       repoCount: 1,
       listedRepos: 0,
-      refusedRounds: 60,
+      refusedRounds: 5,
     },
   ]);
-  // bounded: 60 refusals 2 s apart, one round of repo deletes first
-  expect(outcome.waits.reduce((sum, ms) => sum + ms, 0)).toBe(118_000);
-  expect(api.requests.filter((request) => request === `DELETE ${ROUTE}`)).toHaveLength(60);
+  // bounded: 5 refusals 2 s apart, one round of repo deletes first
+  expect(outcome.waits.reduce((sum, ms) => sum + ms, 0)).toBe(8_000);
+  expect(api.requests.filter((request) => request === `DELETE ${ROUTE}`)).toHaveLength(5);
+});
+
+test("repo deletes still landing answer 409/10202 over an empty list for a few rounds: waited out, and the namespace is deleted, not reported stuck", async () => {
+  let deletes = 0;
+  const api = fakeArtifactsApi(["prj_a.repos--config", "prj_a.repos--main"], (method, path) =>
+    path === ROUTE && method === "DELETE" && deletes++ < 4 ? notEmpty(method, path) : undefined,
+  );
+
+  const outcome = await deleting(api.cf);
+
+  expect(outcome).toMatchObject({
+    error: undefined,
+    stuck: undefined,
+    stuckEvents: [],
+    logs: [`deleted Artifacts namespace ${NAMESPACE} (2 repos)`],
+  });
+  expect(api.state()).toEqual({ repos: [], namespaceExists: false });
 });
 
 test("a 10305 or a 404 while another delete is in flight is not taken for deleted", async () => {

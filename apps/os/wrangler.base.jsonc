@@ -24,10 +24,10 @@
     "allow_irrevocable_stub_storage",
     "global_fetch_strictly_public",
   ],
-  // No `account_id` here: the Vite config selects one — local is the dev/preview
-  // account (envs.ts PREVIEW_AND_DEV_ACCOUNT_ID), each deployment's its own. The account matters
-  // locally: wrangler's local runtime PROXIES the Artifacts, AI and Browser bindings to the real
-  // products on that account, under the developer's `wrangler login`.
+  // No `account_id` here: each deployment's config sets its own; locally it is wrangler's
+  // CLOUDFLARE_ACCOUNT_ID or the login's account (iterate's root `pnpm dev` sets the dev/preview
+  // account: scripts/os-dev.ts). The account matters locally: wrangler's local runtime PROXIES the
+  // Artifacts, AI and Browser bindings to the real products on that account.
   "observability": { "enabled": true, "logs": { "head_sampling_rate": 1 } },
   "workers_dev": true,
   // subrequests: a capnweb WebSocket session is pumped by ONE long-lived stateless invocation, and
@@ -60,7 +60,7 @@
   // local runs (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is
   // `<resourceNamePrefix>-repos` (scripts/os-env.ts `osResourceNames`, ensure-resources); a per-commit
-  // deployment's is `<name>-os-repos`, created by scripts/deploy.ts and deleted with the deployment.
+  // deployment's is `<name>-os-repos`, created by scripts/os/deploy.ts and deleted with the deployment.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-dev-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
@@ -99,8 +99,8 @@
   // invitations, custom hostnames and OAuth grants (src/control-plane/db/definitions.sql). This top
   // level is local dev's (`pnpm db:migrate` migrates it, scripts/dev.ts first thing); a deployment's
   // is `<resourceNamePrefix>-db` (envs.ts `resources.dbId`, ensure-resources) and a per-commit
-  // deployment's `<name>-os-db` (scripts/deploy.ts), each migrated by wrangler from `migrations_dir`
-  // before its code uploads (scripts/d1.ts).
+  // deployment's `<name>-os-db` (scripts/os/deploy.ts), each migrated by wrangler from `migrations_dir`
+  // before its code uploads (scripts/os/d1.ts).
   "d1_databases": [
     {
       "binding": "DB",

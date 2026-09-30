@@ -41,6 +41,7 @@ import {
   retryPlatformFailures,
 } from "@iterate-com/shared/platform-retry";
 import {
+  adminEnvs,
   agentsEnvs,
   cloudflareAccounts,
   dashEnvs,
@@ -73,6 +74,7 @@ const PRD_WORKERS = [
   agentsEnvs.prd,
   notesEnvs.prd,
   docsEnvs.prd,
+  adminEnvs.prd,
   voiceEnvs.prd,
   kitEnvs.prd,
   spaEnvs.prd,

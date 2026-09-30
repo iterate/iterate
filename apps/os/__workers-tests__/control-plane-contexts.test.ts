@@ -16,12 +16,23 @@
 // organization processors fold nothing else — a forged fact stays on the log, attributed to whoever
 // appended it, and changes nothing.
 import { runInDurableObject } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
 import { AccountProcessor } from "../src/account/processor.ts";
 import type { IterateRpcTarget } from "../src/session.ts";
 import { endGrantOnAccount } from "./oauth-support.ts";
-import { adminCredentials, openSession, readLog, refused, stub, until } from "./support.ts";
+import {
+  adminCredentials,
+  openSession,
+  ORIGIN,
+  readLog,
+  refused,
+  rule,
+  signedInMember,
+  stub,
+  until,
+} from "./support.ts";
 
 // ── shape — a global context is an ordinary context (passing) ──
 
@@ -312,6 +323,28 @@ test("a person cannot take the platform's keys first: `account/…` on their own
     ["append", { type: "note", idempotencyKey: "notes/account/1" }],
   ])) as { idempotencyKey?: string }[];
   expect(own).toMatchObject({ idempotencyKey: "notes/account/1" });
+});
+
+test("a person's own masks at `itx.facets` and `itx.processors` on their account mask their own calls alone: the platform still admits their session, lands its end and reads it at the next admission", async () => {
+  const { session, cookie } = await signedInMember("own-masks@sec.test");
+  await session.user.invoke([
+    "itx",
+    ["append", rule("itx.facets", null), rule("itx.processors", null)],
+  ]);
+  await expect(
+    session.user.invoke(["itx", "facets", ["get", "account"], ["snapshot"]]),
+  ).rejects.toThrow();
+  const admission = async () =>
+    (
+      await exports.default.fetch(`${ORIGIN}/api`, {
+        method: "POST",
+        body: "",
+        headers: { cookie, Origin: ORIGIN },
+      })
+    ).status;
+  expect(await admission()).toBe(200);
+  await session.logout();
+  expect(await admission()).toBe(401);
 });
 
 test("a user cannot reach the global ROOT context — not by cd, not through the project catalog", async () => {

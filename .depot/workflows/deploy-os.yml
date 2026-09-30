@@ -17,8 +17,8 @@ on:
       # `**` does not descend into a dot directory, and sqlfu's typed queries ship in the Worker
       - apps/os/src/**/.generated/**
       # Never in the Worker or its deploy: the app's docs (not public/setup-prompt.md, which prd
-      # serves), its tests, benches and perf suite, and the preview and soak scripts. Preview OS and
-      # Main OS e2e still run for them.
+      # serves), its tests, benches and perf suite, and the preview and soak scripts (scripts/os,
+      # below). Preview OS and Main OS e2e still run for them.
       - "!apps/os/*.md"
       - "!apps/os/docs/**"
       - "!apps/os/e2e/**"
@@ -27,13 +27,17 @@ on:
       - "!apps/os/bench/**"
       - "!apps/os/perf/**"
       - "!apps/os/scripts/preview*.ts"
-      - "!apps/os/scripts/e2e-soak.ts"
       - configs/**
       # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
       - packages/agents/**
       - packages/iterate/**
       - envs.ts
       - scripts/lib/**
+      # the deploy itself and what it provisions (scripts/os/deploy.ts, d1.ts)
+      - scripts/os/**
+      - "!scripts/os/preview*.ts"
+      - "!scripts/os/e2e-soak.ts"
+      - "!scripts/os/**/*.test.ts"
       - packages/shared/**
       - packages/ui/**
       # A root dependency resolution can change the Worker bundle even when no
@@ -73,10 +77,9 @@ jobs:
       # os-prd.
       - name: Deploy apps/os
         id: deploy
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: pnpm run-script deploy --env prd
+        run: pnpm os:deploy --env prd
       # READ-ONLY, right after the deploy (scripts/ci/prd-post-deploy-check.ts): once `/version` names
       # the new version (≤ 60 s), one GET of each production project host
       # (scripts/ci/prd-post-deploy-check.ts PRD_PROJECT_HOST_URLS), four tries 10 s apart while it looks down. A host still

@@ -1,20 +1,20 @@
-// scripts/e2e-soak.ts — THE FLAKE HUNT: run the e2e suite N times against one deployed worker and
+// scripts/os/e2e-soak.ts — THE FLAKE HUNT: run the e2e suite N times against one deployed worker and
 // tally every row that did not pass every time. A row that fails once in a hundred is a flake; a row
 // that fails every time is a bug; both are named by title, with the counts.
 //
-//   WORKER_BASE_URL=… pnpm e2e:soak --runs 100 [--filter <vitest filter>]
-//   pnpm e2e:soak --runs 100 --preview soak-mine     (this checkout's deployment of that name; WORKER_BASE_URL wins)
-//   pnpm e2e:soak --runs 10 --fresh-previews soak-fresh-<tag>
-//   pnpm e2e:soak --runs 10 --redeploy soak-<tag> [--gap <seconds>]
+//   WORKER_BASE_URL=… pnpm os:e2e-soak --runs 100 [--filter <vitest filter>]
+//   pnpm os:e2e-soak --runs 100 --preview soak-mine     (this checkout's deployment of that name; WORKER_BASE_URL wins)
+//   pnpm os:e2e-soak --runs 10 --fresh-previews soak-fresh-<tag>
+//   pnpm os:e2e-soak --runs 10 --redeploy soak-<tag> [--gap <seconds>]
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
-// e2e/support/global-setup.ts reads them out of it.
+// apps/os/e2e/support/global-setup.ts reads them out of it.
 //
 // THE FIRST MINUTES OF A DEPLOYMENT (`--fresh-previews <prefix>`): each run deploys a brand-new
-// deployment `<prefix>-<n>-<sha7>` (scripts/preview.ts deploy --apps none, its readiness gate
+// deployment `<prefix>-<n>-<sha7>` (scripts/os/preview.ts deploy --apps none, its readiness gate
 // included), runs the e2e project against it at once, and deletes it — the shape every PR and
 // main's e2e run has: a fresh set of workers per tested commit, behind the readiness gate
-// (scripts/preview-readiness.ts). A deploy that fails is counted and named, never a skipped run. No perf run in this mode: the budgets measure a
+// (scripts/os/preview-readiness.ts). A deploy that fails is counted and named, never a skipped run. No perf run in this mode: the budgets measure a
 // warm worker.
 //
 // AN IN-PLACE REDEPLOY (`--redeploy <name>`): each run deploys this checkout's deployment of the name
@@ -45,10 +45,11 @@ import {
   resolvePreviewPrefix,
 } from "./preview-config.ts";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
+// apps/os: the suite runs there and writes under its output/
+const ROOT = path.resolve(import.meta.dirname, "../../apps/os");
 const OUT = path.join(ROOT, "output/soak");
 
-/** apps/os's URL in the deployment scripts/preview.ts makes of this checkout for `--name <name>`
+/** apps/os's URL in the deployment scripts/os/preview.ts makes of this checkout for `--name <name>`
  *  (preview-config.ts `previewDeploymentName`: `<prefix>-<sha7>`). */
 function deploymentUrl(name: string) {
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
@@ -190,7 +191,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
   const perfWall: number[] = [];
   const deployFailures: { run: number; preview: string; status: number | null }[] = [];
   for (let n = 1; n <= runs; n++) {
-    // the name scripts/preview.ts deploys, with this checkout's sha appended (deploymentUrl)
+    // the name scripts/os/preview.ts deploys, with this checkout's sha appended (deploymentUrl)
     if (freshPreviews) {
       deployedRun(n, `${freshPreviews}-${n}`, { remove: true });
       continue;
@@ -251,7 +252,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
   function deployedRun(n: number, preview: string, { remove }: { remove: boolean }) {
     const pnpmPreview = (command: string, ...args: string[]) =>
       spawnSync("pnpm", ["preview", command, "--name", preview, ...args], {
-        cwd: ROOT,
+        cwd: path.resolve(ROOT, "../.."),
         env: process.env,
         stdio: ["ignore", "inherit", "inherit"],
       }).status;

@@ -1,5 +1,5 @@
-# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, apps/os/scripts/preview.ts), dev/preview account
-# only; what it deletes is apps/os/scripts/preview-sweep.ts's rules.
+# THE NIGHTLY PREVIEW SWEEP (`pnpm preview sweep`, scripts/os/preview.ts), dev/preview account
+# only; what it deletes is scripts/os/preview-sweep.ts's rules.
 #
 # When a run goes red, and what it pages to #error-pulse instead: the end of preview.ts's `sweep`.
 # Only a run on main pages; one on another ref prints its pages. test-run=true deletes nothing and
@@ -52,8 +52,7 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup
         uses: ./.depot/actions/setup
-      - name: Sweep stale deployments, legacy Worker Previews and former parents
-        working-directory: apps/os
+      - name: Sweep stale deployments
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -76,7 +75,6 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Erase main on dev's data, then deploy it again
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project os --config preview -- pnpm preview reset-parent

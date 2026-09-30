@@ -1,6 +1,6 @@
 // scripts/ci/pull-request-body.ts — CI's write of a managed section (markdown-annotator.ts) into a
 // pull request's body: the LOC report's (loc-report.ts) and the preview's
-// (apps/os/scripts/preview.ts). GitHub has no conditional update for a body: a PATCH replaces it
+// (scripts/os/preview.ts). GitHub has no conditional update for a body: a PATCH replaces it
 // whole, so a write spliced onto a body read a moment earlier undoes any version saved in between,
 // a person's, an agent's or another CI writer's. GitHub does keep every version it saved (GraphQL
 // `userContentEdits`, each with the whole body), so every write is checked against that history,

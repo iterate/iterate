@@ -8,7 +8,7 @@
 # waits out a brand-new worker's first seconds (main-os-e2e.yml); the run then deletes the
 # workflow's deployments before it. Every perf row mints its own people and projects, so nothing it
 # measures reads what earlier runs left. The deployment's D1 is created near whoever creates it
-# (apps/os/scripts/d1.ts), and every uncached control-plane read the suite times is a round trip to
+# (scripts/os/d1.ts), and every uncached control-plane read the suite times is a round trip to
 # it: this workflow's own deploy creates each one, never a laptop's `pnpm preview deploy --name
 # latency`, which would place the D1 near the laptop.
 #
@@ -44,7 +44,7 @@ concurrency:
 
 env:
   # THE PREFIX of the guard's deployments, `latency-<sha7>`: the deploy's `--name`
-  # (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  # (scripts/os/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   DEPLOYMENT_PREFIX: latency
 
 jobs:
@@ -60,18 +60,16 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # `<prefix>-<sha7>` of main's commit: a fresh deployment when main moved since the last run,
-      # the same one deployed again in place when it has not (apps/os/scripts/preview.ts)
+      # the same one deployed again in place when it has not (scripts/os/preview.ts)
       - name: Deploy main's commit
         id: deploy
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project os --config preview -- pnpm preview deploy --name "$DEPLOYMENT_PREFIX" --apps none
       # The workflow's deployments before this one, deleted now this one is ready
-      # (apps/os/scripts/preview.ts `cleanup-superseded`); never this run's verdict.
+      # (scripts/os/preview.ts `cleanup-superseded`); never this run's verdict.
       - name: Delete the superseded deployments
         continue-on-error: true
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}

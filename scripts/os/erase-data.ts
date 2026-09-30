@@ -1,5 +1,5 @@
 /** Erase all apps/os data while retaining the worker, routes and resource identities.
- * Run `pnpm erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
+ * Run `pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run` before the real erase.
  * The worker is parked and its Durable Objects retired first, stopping writers and alarms.
  * The control plane's D1 tables (users, organizations, projects, grants), both KV namespaces, R2
  * files and Artifacts repositories are then emptied and verified. The D1's schema and migration
@@ -10,15 +10,11 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
-import { OS_DOPPLER_PROJECT, getEnv, osEnvs, type OsDeployableEnv } from "../../../envs.ts";
-import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../../../scripts/lib/do-reset.ts";
-import {
-  CloudflareApiError,
-  resolveEnvContext,
-  type EnvContext,
-} from "../../../scripts/lib/env-context.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
-import { osResourceNames } from "./os-env.ts";
+import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
+import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../lib/do-reset.ts";
+import { CloudflareApiError, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
+import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { osResourceNames, type OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import { isCloudflareError } from "./preview-artifacts.ts";
 
 const Listing = z.object({
@@ -205,7 +201,7 @@ async function eraseDataWith(
 
   if (new Set(namespaces.map((namespace) => namespace.className)).size !== namespaces.length)
     throw new Error(
-      "Two of the worker's own Durable Object namespaces share a class name, and a retirement goes by class: refusing to guess which to erase. (Its Worker Previews' namespaces are not its own: getWorkerDoNamespaces leaves them out, and the erase leaves them alone.)",
+      "Two of the worker's own Durable Object namespaces share a class name, and a retirement goes by class: refusing to guess which to erase.",
     );
   const { compatibility_date: compatibilityDate } = z
     .object({ compatibility_date: z.string() })
@@ -214,7 +210,7 @@ async function eraseDataWith(
   await services.resetWorkerDurableObjects({
     ctx: context,
     workerName: env.workerName,
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
+    cwd: fileURLToPath(new URL("../../apps/os/", import.meta.url)),
     credentials: {
       CLOUDFLARE_API_TOKEN: context.secrets.CLOUDFLARE_API_TOKEN!,
       CLOUDFLARE_ACCOUNT_ID: env.cloudflareAccountId,

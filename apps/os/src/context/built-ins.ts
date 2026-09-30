@@ -39,9 +39,10 @@ import {
 import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Cause } from "../cause.ts";
-import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
+import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
 import { Kept } from "../kept.ts";
+import { facetStateOf } from "../context-stub.ts";
 import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -52,13 +53,7 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import {
-  assertSecretPath,
-  hmacSha256Hex,
-  normalizeSecretRecord,
-  originsOf,
-  sha256Hex,
-} from "../secrets.ts";
+import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { deliverToPlatformHook } from "../platform-hook.ts";
@@ -786,12 +781,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         path: `/users/${principal.actor}`,
       }),
     );
-    // `invoke` is untyped across the DO hop; the account facet's snapshot is its contract's state.
-    const { state } = (await person.invoke(
-      ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
-      [],
-      hopCaller(),
-    )) as { state: AccountState };
+    const state = await facetStateOf<AccountState>(person, "account", hopCaller());
     const accounts = Object.values(state.integrations).filter(
       (row) => row.provider === provider && row.account === input.account,
     );
@@ -826,12 +816,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       );
       return { connection: account.connection };
     }
-    // `invoke` is untyped across the DO hop; the project facet's snapshot is its contract's state.
-    const { state: project } = (await deps
-      .context(owner.rootPath)
-      .invoke(["itx", "facets", ["get", "project"], ["snapshot"]], [], hopCaller())) as {
-      state: ProjectState;
-    };
+    const project = await facetStateOf<ProjectState>(
+      deps.context(owner.rootPath),
+      "project",
+      hopCaller(),
+    );
     const { authorizationUrl } = (await person.invoke(
       [
         "itx",
@@ -918,12 +907,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const disconnectedFromProject = async (secretPath: string) => {
     if (owner.kind !== "project") return;
     const root = deps.context(owner.rootPath);
-    // `invoke` is untyped across the DO hop; the project facet's snapshot is its contract's state.
-    const { state } = (await root.invoke(
-      ["itx", "facets", ["get", "project"], ["snapshot"]],
-      [],
-      hopCaller(),
-    )) as { state: ProjectState };
+    const state = await facetStateOf<ProjectState>(root, "project", hopCaller());
     for (const row of Object.values(state.integrations))
       if (row.ownerUserId && tokenSecretPathOf(row.provider, row.connection) === secretPath)
         await root.invoke(
@@ -1369,12 +1353,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // The owner root's catalog — strongly consistent with `set` and `delete`, which cross-post
       // their facts there before they answer.
       list: async () => {
-        // `invoke` is untyped across the DO hop; the owner root facet's snapshot is its contract's state.
-        const { state } = (await deps
-          .context(owner.rootPath)
-          .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
-          state: { secrets: SecretCatalog };
-        };
+        const state = await facetStateOf<{ secrets: SecretCatalog }>(
+          deps.context(owner.rootPath),
+          ownerRootFacet(),
+          hopCaller(),
+        );
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },
       collectFromUser: async (input: CollectSecretInput): Promise<CollectSecretLink> => {
@@ -1511,12 +1494,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               );
             const project = projectRoot(projectId);
             if (input.onlyIfConnected) {
-              // `invoke` is untyped across the DO hop; the project facet's snapshot is its state.
-              const { state } = (await project.invoke(
-                ["itx", "builtins", "facets", ["get", "project"], ["snapshot"]],
-                [],
-                { ...hopCaller(), platform: true },
-              )) as { state: ProjectState };
+              const state = await facetStateOf<ProjectState>(project, "project", {
+                ...hopCaller(),
+                platform: true,
+              });
               const row =
                 state.integrations[connectionPathOf(connection.provider, connection.connection)];
               if (row?.ownerUserId !== owner.ownerId) return { connection: connection.connection };
@@ -1633,12 +1614,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "INVALID_CONTEXT",
             "itx.secrets.borrowEveryProjectLends: the deployment's lends are the global root's",
           );
-        // `invoke` is untyped across the DO hop; the instance facet's snapshot is its contract's state.
-        const { state } = (await deps
-          .context(owner.rootPath)
-          .invoke(["itx", "facets", ["get", "instance"], ["snapshot"]], [], hopCaller())) as {
-          state: InstanceState;
-        };
+        const state = await facetStateOf<InstanceState>(
+          deps.context(owner.rootPath),
+          "instance",
+          hopCaller(),
+        );
         const outcome: EveryProjectBorrows = { borrowed: 0, kept: [], failed: [] };
         for (const [secretPath, row] of Object.entries(state.secrets))
           for (const [lendId, lend] of Object.entries(row.lends || {}))

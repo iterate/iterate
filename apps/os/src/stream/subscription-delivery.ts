@@ -325,7 +325,8 @@ export class SubscriptionDelivery {
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
    *  loop drains a name at a time, and the loop that was draining a row when it was replaced goes on
-   *  to deliver the replacement once its call returns — so the lock outlives `#forgetSubscription`.
+   *  to deliver the replacement once its call returns, unless the replacement is a fan-out row, which
+   *  its pump delivers — so the lock outlives `#forgetSubscription`.
    *  The value is the running loop's promise, so a second kick JOINS it: the alarm's pass awaits a
    *  delivery already in flight and derives its deadline after the ack. Written before the loop's
    *  first turn and deleted by the loop itself, synchronously with its last act. */
@@ -389,11 +390,15 @@ export class SubscriptionDelivery {
   /** WHY AN ALARM COMES BACK FOR DELIVERY: the deepest cause among the events the loop owes by
    *  `dueBy` — each fan-out record due, and the next page after each row's cursor whose claim is
    *  (a cursor row's batch, a fan-out row's backlog), each at the cause it was stored with
-   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another. */
+   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another.
+   *  Each page is folded in as it is read, so one page is held at a time, never one per due row. */
   owedCause(dueBy: number): Cause | undefined {
     const state = this.#stream.coreReducedState;
     const now = Date.now();
-    const owed: StreamEvent[] = [];
+    let owed: Cause | undefined;
+    const owe = (events: StreamEvent[]) => {
+      owed = deepestCause([owed, ...events.map((event) => event.source?.cause)]);
+    };
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
       if (!row || row.halted) continue;
@@ -404,17 +409,16 @@ export class SubscriptionDelivery {
         cursor.confirmedOffset < this.#stream.highestDurableOffset()
       )
         try {
-          owed.push(...this.#stream.read(cursor.confirmedOffset, 100).events);
+          owe(this.#stream.read(cursor.confirmedOffset, 100).events);
         } catch {
           // an unreadable batch halts its row when the pass reaches it; it causes nothing here
         }
       for (const delivery of record.deliveries.values()) {
         const claim = fanOutClaim(record, delivery, now);
-        if (claim !== undefined && claim <= dueBy)
-          owed.push(...this.#readFanOutEvent(delivery.offset));
+        if (claim !== undefined && claim <= dueBy) owe(this.#readFanOutEvent(delivery.offset));
       }
     }
-    return deepestCause(owed.map((event) => event.source?.cause));
+    return owed;
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
@@ -536,11 +540,7 @@ export class SubscriptionDelivery {
    *  calls nothing; a lent rpc stub catches up by its own reads. */
   async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
     const { head } = await this.#evaluateItxExpressionTargetHead(name, row.target);
-    if (
-      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-      row.configuredAtOffset
-    )
-      return;
+    if (!this.#isStillTheRow(name, row)) return;
     if (!(head instanceof FacetHandle)) return;
     try {
       await this.#catchUpFacetFromLog(head, this.#causeAt(row.configuredAtOffset));
@@ -717,13 +717,9 @@ export class SubscriptionDelivery {
       // The row must still be THIS row on BOTH sides of the (async) evaluation — not removed
       // (evaluating a processor's load chain materializes its facet: a push racing a disable must
       // not resurrect what `facets.delete` just removed) and not REPLACED under this name.
-      if (!this.#stream.coreReducedState.subscriptions[name]) return;
+      if (!this.#isStillTheRow(name, row)) return;
       const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
-      if (
-        this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-        row.configuredAtOffset
-      )
-        return;
+      if (!this.#isStillTheRow(name, row)) return;
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, and a
         // stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign heal-by-pull case
@@ -911,11 +907,7 @@ export class SubscriptionDelivery {
     attempts: number,
     error: unknown,
   ): void {
-    if (
-      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-      row.configuredAtOffset
-    )
-      return;
+    if (!this.#isStillTheRow(name, row)) return;
     const { nextAttemptAtMs: _spent, ...settled } = cursor;
     this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
     this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempts, error);
@@ -939,6 +931,9 @@ export class SubscriptionDelivery {
     )
       return cached;
     const evaluated = await this.#evaluateItxExpressionTargetHead(name, row.target);
+    // A row removed or replaced meanwhile gets its answer and nothing more: the memo, the cursor
+    // and the fan-out state under `name` are the replacement's.
+    if (!this.#isStillTheRow(name, row)) return evaluated;
     this.#deliveryRecordFor(name).evaluatedTargetHead = {
       configuredAtOffset: row.configuredAtOffset,
       rewriteRulesRef,
@@ -1047,8 +1042,9 @@ export class SubscriptionDelivery {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
         if (!row) return this.#forgetSubscription(name);
-        // Re-pointed at a target that owns its progress meanwhile: cursor delivery no longer applies.
-        if (targetOwnsProgress(this.#stream.coreReducedState, row)) return;
+        // Replaced by a fan-out row (its pump delivers it) or re-pointed at a target that owns its
+        // progress meanwhile: cursor delivery no longer applies.
+        if (row.ordered === false || targetOwnsProgress(this.#stream.coreReducedState, row)) return;
         let cursor = this.cursor(name);
         if (!cursor) {
           // A subscription's FIRST cursor: born where the row asked (`afterOffset`; 0 = the whole
@@ -1206,11 +1202,7 @@ export class SubscriptionDelivery {
           // (#forgetSubscription cleared its cursor): this batch, offsets and `cursor` all belong to
           // the OLD target. Advancing now would write the old scan offset into the fresh row's cursor
           // — its afterOffset (a `0` = full history) never applied. Loop back to re-read and re-birth.
-          if (
-            this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-            row.configuredAtOffset
-          )
-            continue;
+          if (!this.#isStillTheRow(name, row)) continue;
           if (events.length === 0) {
             // A page the filter emptied: advanced without a call, no attempt spent; the loop goes
             // on to whatever is owed. A claim or a due ladder time that reached here is spent —
@@ -1226,7 +1218,10 @@ export class SubscriptionDelivery {
           const attemptStartedAt = Date.now();
           try {
             const { call } = await this.#evaluateTargetHeadForRow(name, row);
-            if (!this.cursor(name)) continue; // replaced while the target was evaluated
+            // Both checks, here and after the call: a replaced row is another row even when it
+            // brings a cursor of its own (a fan-out row does), and a row re-pointed at a target that
+            // owns its progress is the same row with its cursor dropped (`onCommit`).
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue;
             await withTimeout(
               this.#runAsDelivery(events, () => call(events, range)).catch(
                 // A loop refused (cause.ts): the batch is done, its one fact recorded — never a retry.
@@ -1235,9 +1230,9 @@ export class SubscriptionDelivery {
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
               `subscription "${name}"`,
             );
-            // Removed or replaced while the call was in flight? Its progress belonged to the old row —
-            // and so did the evaluation: the identity check above re-evaluates for the replacement.
-            if (!this.cursor(name)) continue;
+            // Removed, replaced or re-pointed while the call was in flight: its progress belonged to
+            // the old row, and the next turn starts over for whatever stands under the name now.
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue;
             // THE ACK: attempt 0, no time; a commit that landed during the call is owed by
             // derivation (the loop finds the row behind the mark and goes on). Memory takes the
             // whole span, a head ephemeral's offset included, so the next read returns only what is
@@ -1252,7 +1247,7 @@ export class SubscriptionDelivery {
               persist,
             );
           } catch (error) {
-            if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue; // the old row's failure
             // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
             // its `provide`, a rule since removed; a sibling context's rule missing at the call).
             // No rung, no halt, no attempt spent: the row waits for its rule — the commit that lands

@@ -7,10 +7,10 @@
 # while the deployment deploys and started once it has, then CI trace; after the deploy, Clean up
 # superseded deletes the `main-…` deployments before it. A BRAND-NEW worker's Durable Objects can
 # answer Cloudflare's `internal error; reference = …` for seconds after it is created, which the
-# deploy's readiness gate (apps/os/scripts/preview-readiness.ts) waits out. Every row mints its own
+# deploy's readiness gate (scripts/os/preview-readiness.ts) waits out. Every row mints its own
 # people and projects, so nothing reads what earlier runs left. The newest `main-…` deployment stays
 # for debugging a red main; the nightly sweep keeps it through quiet days
-# (apps/os/scripts/preview-sweep.ts rule 4).
+# (scripts/os/preview-sweep.ts rule 4).
 #
 # EVERY MAIN COMMIT GETS ITS OWN RUN, and runs never cancel each other, so every run that is not
 # cancelled by hand reaches a verdict, a job that hits its timeout counting as red. Runs of different
@@ -21,7 +21,7 @@
 # Nothing is written to any PR. The `trace` job posts the "CI trace" and "Playwright report"
 # statuses on the pushed commit, as a PR preview's does (docs/ci-traces.md).
 #
-# The script is apps/os/scripts/preview.ts (the same commands as a PR's preview, keyed by the
+# The script is scripts/os/preview.ts (the same commands as a PR's preview, keyed by the
 # prefix `main`).
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare credentials.
 
@@ -71,6 +71,7 @@ on:
       - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
+      - scripts/os/**
       - .depot/actions/**
       - scripts/ci/toolchain.sh
   workflow_dispatch:
@@ -85,7 +86,7 @@ concurrency:
 
 env:
   # THE PREFIX of every run's deployment, `main-<sha7>`: each `pnpm preview` step's `--name`
-  # (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  # (scripts/os/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   DEPLOYMENT_PREFIX: main
   # CI TRACE MARKERS (docs/ci-traces.md): every run step's start and exit, and the test reporters'
   # lifecycle records, as `@@ci-trace` lines in the Depot logs the trace job reads.
@@ -113,7 +114,6 @@ jobs:
         uses: ./.depot/actions/setup
       - name: Deploy the pushed commit's deployment
         id: deploy
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project os --config preview -- pnpm preview deploy --name "$DEPLOYMENT_PREFIX" --apps all
@@ -182,11 +182,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           NODE_COMPILE_CACHE: ${{ runner.temp }}/node-compile-cache
         run: node scripts/ci/test-evidence.ts fetch-upload-secrets
-      # Set up, wait for this run's deploy, then the suite (apps/os/scripts/preview.ts `runSuite`).
+      # Set up, wait for this run's deploy, then the suite (scripts/os/preview.ts `runSuite`).
       # The trace's Test phase is this step (scripts/ci/tracing/tracing.ts).
       - name: Run the suite against the preview
         id: suite
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           # the agents rows' GitHub calls (apps/agents/e2e/support.ts `publishedPackage`)
@@ -303,7 +302,7 @@ jobs:
           retention-days: 30
           overwrite: true
 
-  # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (apps/os/scripts/preview.ts
+  # THE `main-…` DEPLOYMENTS BEFORE THIS ONE, deleted once it is ready (scripts/os/preview.ts
   # `cleanup-superseded`), beside the suites and never gating them or the alert. One that a run still
   # in progress tests stays, for a later run's cleanup or the nightly sweep.
   cleanup:
@@ -319,7 +318,6 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Delete the superseded main deployments
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ needs.deploy.outputs.deployment }}
