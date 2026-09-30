@@ -72,3 +72,17 @@ Before making that change, split the performance recording into `context.append.
 - `latency-0739-metrics.json`: cross p50 117 ms, p95 138 ms, max 245 ms; loaded p50 21 ms; x10 257.7 events/s.
 - `latency-5eff-metrics.json`: earlier candidate cross p50 108 ms, p95 126 ms, max 137 ms; loaded and x10 pass.
 - Pinned baseline inspected: `e9f059e8cfd1b35185a4b005489c26720fba02ea`; no baseline timing artifact was supplied.
+
+## Completed isolated main comparison
+
+The same workflow measured pinned main `e9f059e8cfd1b35185a4b005489c26720fba02ea`
+on its own preview. Run `0w6h6gfg31`, attempt `294d6jg5l6`, report artifact
+`01a0f113-7cd3-7a5c-8cb9-804ad40aafdb`: cross append p50 **25 ms**,
+p95 72 ms, max 288 ms, n=40, versus this branch's p50 **117 ms**.
+Main's cross throughput is 166.4 events/s versus the branch's 257.7.
+The baseline perf suite reports five passing files and one skipped file.
+
+This comparison makes a source regression more likely; deployment differences
+and the proposed root-contention mechanism still require a traced comparison.
+The candidate does not pass its latency gate. The earlier no-baseline statements
+above describe the investigation before this result arrived, not the current state.

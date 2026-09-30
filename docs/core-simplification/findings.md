@@ -46,8 +46,10 @@ Loaded append is 21 ms against 60 ms; cross-context throughput is 257.7
 events/s against 50 events/s. All other recorded budgets pass. The report is
 Depot artifact `01a0f10c-f102-7042-b26d-39e68c3ddfd2`. The repeated cross-append
 miss needs a baseline comparison and source-path diagnosis, not reruns until
-green or a silently relaxed threshold. An isolated preview of pinned main
-`e9f059e8c` is being measured by `0w6h6gfg31`; no production state is written.
+green or a silently relaxed threshold. The completed isolated preview of pinned main
+`e9f059e8c`, run `0w6h6gfg31`, passes cross append at 25 ms p50 (p95 72 ms,
+n=40), versus the branch's 117 ms. This points toward a regression requiring
+a fix; no production state was written.
 
 The source-path investigation separates the fast sibling samples from the slow
 root samples and identifies possible contention from background config delivery.
