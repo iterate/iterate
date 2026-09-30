@@ -1980,6 +1980,14 @@ test("metrics: a fan-out ack is timed, a failure on the ladder counts a retry, a
   ]);
 });
 
+test("metrics: a fan-out row's burst is timed once, when the row catches up", async () => {
+  const rig = fanOutRig({});
+  rig.pings(...range(1, 20));
+  await drainDeliveries();
+  expect(rig.acked).toHaveLength(20);
+  expect(rig.measured.filter(({ name }) => name === "subscription.delivery_ms")).toHaveLength(1);
+});
+
 test("metrics: a cursor row's refused batch counts a retry, and its ack on the rung is timed from the batch's commit", async () => {
   const rig = refusingSinkRig();
   rig.modeRef.mode = "throw";

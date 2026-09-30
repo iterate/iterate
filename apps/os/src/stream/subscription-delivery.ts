@@ -180,6 +180,9 @@ type FanOutRow = {
   waitingForRoom: boolean;
   /** Admission alternates a due record and a new event, so neither starves the other. */
   preferRetry: boolean;
+  /** The longest wait, commit to answer, of an event answered since the row last had no call out:
+   *  its one `subscription.delivery_ms` once it has none. */
+  longestWaitMs: number | undefined;
 };
 
 /** One fan-out call the pump starts: the event, the in-flight room it holds, and its attempt. */
@@ -1389,6 +1392,7 @@ export class SubscriptionDelivery {
       pumpAgain: false,
       waitingForRoom: false,
       preferRetry: false,
+      longestWaitMs: undefined,
     };
     return record.fanOut;
   }
@@ -1640,14 +1644,27 @@ export class SubscriptionDelivery {
         await deliverEvent(call.event).catch((error: unknown) => this.#settleLoopLimit(error));
     })();
     // Registered before the watchdog's race, so it runs first: an outcome sees `settled` true.
-    const onSettled = () => {
+    const onSettled = (answered: boolean) => {
       settled = true;
       fanOut.slots.delete(offset);
       fanOut.overdue.delete(offset);
       this.#deliveryCharsInFlight.release(call.chars);
+      if (answered && !isWake(call.event))
+        fanOut.longestWaitMs = Math.max(
+          fanOut.longestWaitMs ?? 0,
+          Date.now() - Date.parse(call.event.createdAt),
+        );
       this.#pumpFanOut(name);
+      // ONE TIMING each time the row catches up, never one per event: its longest wait since.
+      if (fanOut.slots.size === 0 && fanOut.longestWaitMs !== undefined) {
+        this.#metrics.time("subscription.delivery_ms", fanOut.longestWaitMs, `row=${name}`);
+        fanOut.longestWaitMs = undefined;
+      }
     };
-    operation.then(onSettled, onSettled);
+    operation.then(
+      () => onSettled(true),
+      () => onSettled(false),
+    );
     const outcome = withTimeout(
       operation,
       CURSOR_DELIVERY_CALL_WATCHDOG_MS,
@@ -1693,8 +1710,6 @@ export class SubscriptionDelivery {
     const record = this.#deliveryRecordFor(name);
     if (record.deliveries.delete(call.event.offset))
       this.#stream.storage.deleteSubscriptionDelivery(name, call.event.offset);
-    const waitedMs = Date.now() - Date.parse(call.event.createdAt);
-    this.#metrics.time("subscription.delivery_ms", waitedMs, `row=${name}`);
     const {
       failingOffsets: _lifted,
       parkedProbes: _startOver,
