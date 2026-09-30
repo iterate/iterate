@@ -3,11 +3,12 @@
 **Status: draft finding report, 29 September 2026.** This is a breaking
 proof-of-concept recommendation, tracked in draft PR
 [#3451](https://github.com/iterate/iterate/pull/3451). The audit baseline is
-`cfd8a1d3687c77755817d6c5ece586bc15a24bf6`; the reproducible count baseline is
-`ce251e06c1c3c5894aebdc674e57b2196be0ae08` after #3442. Current main is
-`8615d4560`, which merged #3447 and moved OS birth/deployment shape and
-resource naming from root `envs.ts` into `apps/os`. The count remains pinned to
-`ce251e06c1` for comparability; #3447 is an integration input for any rewrite.
+`cfd8a1d3687c77755817d6c5ece586bc15a24bf6`; the later validation baseline is
+`ce251e06c1c3c5894aebdc674e57b2196be0ae08` after #3442. Main observed at
+00:00 UTC on 30 September is `b6c8c7009`, including #3447's birth/configuration
+move, #3448's caller-supplied deployment, Docs, and #3455's RPC response-stream
+fix. The measurements below use immutable revisions; the implementation must
+integrate these main changes before its final validation.
 Implementation is a separate, unmerged effort.
 
 The core does not need a large new type system to become simpler. It needs a
@@ -96,9 +97,9 @@ not a public universal object or an extensible policy taxonomy.
 
 The current implementation slice has already removed the public
 `TrustedBuiltInCapability` taxonomy and metadata-only availability projection.
-Private physical routing descriptors remain an implementation aid. They should
-stay private, be reduced where they duplicate factory wiring, and never become
-the public model or a general-purpose configuration format.
+The remaining private data is the existing root names, descriptions, and two
+root sets. Physical types reuse `IterateContextApi` plus the platform-only
+overrides. This does not introduce a descriptor or factory schema.
 
 ### Subscribe through ordinary RPC; repair durable work from the log
 
@@ -126,27 +127,29 @@ middle, while removing holes, argument-prefix matching, and repeated rewrite
 rules. This is an internal representation behind existing `itx`, `cd`, and
 `invoke` spelling, not a new public target-kind framework.
 
-`provide` becomes live-stub attachment only. Its pager attachment carries the
-name, optional `consumes`, optional fetch route, and description. Attaching and
-detaching a live stub writes no durable rule event. A live attachment shadows a
-durable name while connected; when it detaches, the durable name becomes visible
-again. This removes the current bug where detaching a live `provide` can remove
-the durable name it shadowed.
+Live `provide` becomes a pager attachment, carrying its name, optional fetch
+route, description, and declaration. Attaching and detaching a live stub writes
+no durable rule event. A live attachment shadows a durable name while connected;
+when it detaches, the durable name becomes visible again. This removes the
+current bug where detaching a live `provide` can remove the durable name it
+shadowed. Session-scoped expression and null provisions remain convenience
+wrappers around the ordinary rule event.
 
 The third independent Opus review estimates roughly 530 net product lines
 removed after the new lookup, temporary offer overlay, snapshot epoch, and
 reattach wake hook are added. It identifies deletable pieces: offer census,
 rule-based provider cleanup, live subscription rule branches,
-expression/null provision, hole/pinned-prefix rewrite handling, reduce-time
+hole/pinned-prefix rewrite handling, reduce-time
 target re-resolution, and the no-op platform birth hook. This is a review
 estimate for the proposed source slice, not a committed deletion or a whole
 repository line-count claim.
 
-Ordered cursor delivery remains in the core for this slice. No first-party
-writer currently uses it, but removal needs a production row count and a real
-consumer migration. A generic SDK outbox also remains a product convenience
-idea, not a core deletion claim: the current runner cannot replace config birth
-delivery authority, batching, wake behaviour, or retry semantics.
+The implementation is now testing durable cursor/retry delivery in an SDK
+processor hosted by a private facet. The old broker can be removed only when
+its outcomes have equal-or-higher-fidelity replacement coverage, including
+config birth delivery authority, batching, wake, halt/resume, and fan-out.
+Breaking state is permitted; losing these capabilities is not. The focused
+evidence below does not yet establish that replacement.
 
 The review caught a proof-of-concept state incompatibility: making `delivery`
 required while leaving `CoreContract` at `17.0.0` silently skipped existing
@@ -176,6 +179,55 @@ This table deliberately does not claim a line reduction, runtime parity, or
 soak result for the in-progress delivery work. It is an audit ledger, not a
 merge decision.
 
+### Round 5 delivery checkpoint: focused evidence is not release evidence
+
+[The fifth independent Opus review](reviews/opus-durable-delivery-round-5.md)
+was a no-go review of an in-flight snapshot. It found eight blockers spanning
+bundle loading, terminal receipts, omitted `consumes`, halted-runner resume,
+facet authority, live attachment admission, ephemeral delivery, and legacy
+state refusal. Later work has resolved parts of that snapshot, but the source
+PR remains blocked until the whole set is retested and independently reviewed.
+
+| Item                                                | Latest confirmed evidence                                                                                                                                                                      | Ledger status                                                                                                    |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Default `consumes` and terminal receipt append path | Owners report the original/full SDK focused suite **312/312 passing** and the runner/model suite **14/14 passing** after fixing default-all consumption and the terminal `Stream.append` path. | **Focused tests passing.** This does not establish end-to-end parity.                                            |
+| Ordinary live core behaviour                        | Owners report the focused live-core run **10/10 passing**.                                                                                                                                     | **Focused tests passing.**                                                                                       |
+| Preview-log utility                                 | Owners report its focused suite **3/3 passing**.                                                                                                                                               | **Focused tests passing.** It is evidence tooling, not runtime parity.                                           |
+| Pager lifecycle and attachment security             | The pager suite reached **17/18**; the remaining security test was corrected and passes alone **1/1**. The complete pager suite has not yet been rerun after that correction.                  | **Open.** Do not call pager coverage green from the isolated security result.                                    |
+| Durable Object integration and legacy refusal       | Owners report the focused DO run **12/12 passing**, but expected legacy-state refusal still produces an unhandled native rejection that is being fixed.                                        | **Open.** A correct refusal must leave normal lifecycle operations, including recreation, observable and usable. |
+| Durable alias ending at a processor method          | The alias is now routed through the actual processor target’s authority fixed point; Workers validation remains outstanding.                                                                   | **Open until Workers coverage passes.** A durable alias must not gain platform-only facet authority.             |
+| Fan-out exhaustion and resume                       | The SDK/model correction is passing, but it has not yet been demonstrated through the actual Worker deployment.                                                                                | **Open.** No core-delivery deletion or parity claim is justified.                                                |
+
+### Round 6: infrastructure must not resolve through a user rule
+
+[The sixth independent Opus review](reviews/opus-private-bridge-round-6.md)
+conditionally accepts passing an admitted page directly from the private
+subscriptions host to the context Durable Object. Its condition is simple:
+`subscriptions` must be reserved from ordinary processor/facet operations, and
+its read, claim, and delivery calls must use the context Durable Object’s
+private channel. They must not be ordinary `itx` expressions that a project can
+rewrite, provide, mask, or jail.
+
+This removes difficult states rather than adding a public abstraction. A user
+rule can no longer return a fabricated source page or advance a claim; disabling
+or aborting `subscriptions` cannot discard its cursor; a reconfigured, resumed,
+or halted row cannot invoke a stale target when the current-row check happens
+both before resolution and immediately before invocation; and a retry cannot
+overlap a still-running target when the context keeps one private in-flight
+entry for that row generation and resume state. Shared memory reservations must
+cover reads before materialization and retain target bodies until the original
+call settles: a deadline does not cancel native RPC work. Exact memory and
+cross-row throughput proofs are still required. These are implementation
+constraints below `subscribe`, `provide`, and
+processors, not a new capability kind or user-facing API.
+
+The direct handoff is not a generic privilege grant. It carries the named row,
+its configured/resume offsets, range, and one bounded page; the context checks
+that page’s order, range, event filter, durable/ephemeral rule, and current row
+before invoking the ordinary target. A retry reads the persisted range through
+the same private context channel. The review’s required Workers coverage,
+races, hung-target behaviour, and latency measurements remain prerequisites.
+
 React event-log/live-state hooks keep their current callback and gap-repair
 behaviour. The vanilla Iterate Cap'n Web client remains a vanilla Cap'n Web
 client.
@@ -196,10 +248,26 @@ as a large target/descriptor/type taxonomy.
 
 ## Measured audit evidence and priorities
 
-The reproducible narrow runtime count is **25,545 physical TypeScript/TSX
-lines**: 18,787 in the OS context runtime and a 6,758 SDK upper bound. Broader
-OS runtime is 45,012 lines. [`count-loc.sh`](count-loc.sh) records the exact
-selectors; these are physical counts, not a deletion promise.
+The reproducible narrow runtime count at the original `cfd8a1d368` audit is
+**25,545 physical TypeScript/TSX lines**: 18,787 in the OS context runtime and
+a 6,758 SDK upper bound. Broader OS runtime is 45,012 lines.
+
+The later validation baseline `ce251e06c1` contains 18,845 kernel lines and
+6,814 SDK lines. A source checkpoint at `1341cccea` contains 17,882 kernel
+lines and 7,162 SDK lines, including the new private subscriptions facet.
+Those checkpoints also include main's intervening changes, so subtracting
+them is not the source PR's net change. Its final measurement must compare
+its actual main base and tested head.
+
+[`count-loc.sh`](count-loc.sh) accepts a pinned revision and includes the
+private delivery host. The immutable outputs are recorded in
+[`initial-audit.tsv`](measurements/initial-audit.tsv),
+[`validation-baseline.tsv`](measurements/validation-baseline.tsv), and
+[`source-checkpoint.tsv`](measurements/source-checkpoint.tsv). The dirty
+source tree is not release evidence, and moving code into the SDK is not a
+whole-product deletion.
+
+All figures are physical lines, not a deletion promise.
 
 Three root causes account for the most concentrated complexity.
 
@@ -208,7 +276,8 @@ Three root causes account for the most concentrated complexity.
    wiring. Do not replace those lists with a public descriptor framework.
 2. Live callbacks and subscriptions already share a pager, but durable generic
    delivery separately infers guarantees from an evaluated target. Separate the
-   temporary live attachment from the durable name mapping; retain cursors now.
+   temporary live attachment from the durable name mapping; move durable
+   progress only after proving its replacement.
 3. One facet lifecycle spans durable keys, in-memory mirrors, worker identity,
    and recovery paths. Preserve tested abort/start and alarm pins; consolidate
    only after a replacement removes state transitions rather than repacks them.
@@ -273,10 +342,9 @@ equal-or-higher-fidelity replacement.
 3. Reject or recreate old `delivery`-less rows before enabling the new reducer;
    do not silently drop config-worker delivery. Test config publication switch,
    Garple jail grants, child/stateless attachments, and unchanged firmware C.
-4. Keep ordered cursors and their tests. A later removal needs a production row
-   count, a real consumer migration, and a named equal-or-higher-fidelity
-   replacement. Retain native RPC, hibernation, alarm, abort/reset, and Cap'n
-   Web e2e pins.
+4. Keep ordered delivery, halt/resume, fan-out, and their outcomes. Delete the
+   old broker's tests only with a named equal-or-higher-fidelity replacement.
+   Retain native RPC, hibernation, alarm, abort/reset, and Cap'n Web e2e pins.
 5. Keep project/global built-in assembly in private factories. Add descriptions
    to existing `provide`/list data only where they help; do not make metadata a
    second runtime.
@@ -291,5 +359,6 @@ authorized by this audit. Production rollout is not.
 - Current code inventory and test ownership: [`tests-inventory.md`](tests-inventory.md), [`core-userspace.md`](core-userspace.md), [`rpc-subscriptions.md`](rpc-subscriptions.md), and [`facets-loader.md`](facets-loader.md).
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
-- Archived first-pass framework and reviews: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), [`design-capabilities.md`](design-capabilities.md), [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), and [lean-model review](reviews/opus-lean-round-3.md), and [implementation review, round 4](reviews/opus-implementation-round-4.md).
+- Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).

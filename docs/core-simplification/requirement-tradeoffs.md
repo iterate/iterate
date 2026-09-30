@@ -11,6 +11,13 @@ application can implement the same behaviour as loaded code or an SDK service.
 They remove a convenience or an operational guarantee when the platform cannot
 provide it without owning the resulting state machine.
 
+**Current direction.** The durable-delivery work is moving plumbing into a
+private `subscriptions` host, not deleting durable delivery. Its behaviour,
+authority, lifecycle, and Workers evidence must be proved before this first
+ranked relaxation can be adopted. Because this proof of concept permits
+breaking state, removed rows should be explicitly refused or recreated; this
+report does not recommend a compatibility migration tool.
+
 ## Ranking
 
 | Rank | Requirement relaxed                                                                                                                                             |                                           Direct, non-overlapping core source | What remains possible                                                                                      | What is given up                                                                                          |

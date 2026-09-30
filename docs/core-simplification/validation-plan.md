@@ -30,7 +30,7 @@ This is the release evidence plan for the core-simplification draft. It preserve
 
 2. **Preview correctness**
 
-   The draft PR's normal `Preview OS` run supplies a fresh deployment, the e2e suite, and the browser-spec shards. Run slow rows whenever the candidate changes residency, facet lifetimes, alarms, claims, or Durable Object wake/hibernate behavior:
+   The draft PR's normal `Preview OS` run supplies a fresh deployment, the e2e suite, and the browser-spec shards. Main now has eight first-party preview Workers, including Docs; record all eight preview worker results rather than treating the platform worker alone as the preview. Run slow rows whenever the candidate changes residency, facet lifetimes, alarms, claims, or Durable Object wake/hibernate behavior:
 
    ```sh
    depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate \

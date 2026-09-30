@@ -2,7 +2,7 @@
 
 This is a ranked implementation input, based on the public Cloudflare OS source at `a9adc80` and the runtime review in [`cloudflare-os.md`](../../research_notes/Iterate%20core%20runtime%20review/cloudflare-os.md).
 
-1. **Make a serializable `ContextManifest` authoritative.** It declares each named capability/facet’s kind, code hash and version, compatibility date/flags, class or entrypoint, placement, public surface, and durable-versus-ephemeral status. Generate the `ITX` TypeScript surface, context description, access validation, and loader input from it. Cloudflare OS keeps its portable blueprint definition separate from live credentials/stubs; use the same separation here.
+1. **Keep durable declarations separate from live values.** Cloudflare OS distinguishes portable code/configuration from live credentials and stubs. Iterate should retain that distinction internally without adding a public manifest framework: a context stores ordinary events and durable configuration; factories assemble trusted bindings; the pager owns live values. A description is prose plus an optional TypeScript declaration, not a generated runtime surface.
 
 2. **Treat all loaded-worker and ordinary RPC handles as reconstructible implementation state.** A Worker Loader does not guarantee isolate identity, and a live callback/capability needs disposal and reconnect. Resolve a declared capability through a short-lived context-owned resolver; do not put a `Fetcher`, `RpcStub`, `RpcTarget`, secret, or closure in `ITX.Builtins` or durable context state.
 

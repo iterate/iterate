@@ -6,7 +6,9 @@ exercises a Cloudflare runtime behaviour.
 
 ## Measurement
 
-Run [`count-loc.sh`](count-loc.sh) from this checkout. It counts physical
+Run [`count-loc.sh`](count-loc.sh) from this checkout; pass a Git revision
+to count immutable source, for example `bash count-loc.sh cfd8a1d368`.
+It counts physical
 lines, including blanks and comments, in tracked TypeScript and TSX files. It
 does not pretend that a comment-aware count can reliably distinguish code from
 types, declarations, and multiline expressions. The selectors are in the
@@ -16,7 +18,8 @@ The core runtime definition is deliberately narrow:
 
 - `apps/os/src/context/`, excluding tests and test support;
 - `apps/os/src/stream/`, excluding tests and test support;
-- the eleven context shell files named in the script; and
+- the context shell files named in the script (eleven at the audit baseline,
+  plus the private subscription-delivery host in the current selector); and
 - `packages/iterate/src/`, excluding tests and test support, as the public SDK.
 
 The context engine and SDK are reported both separately and together. The SDK
@@ -45,7 +48,17 @@ kernel.
 The 50,000-line observation is therefore not reproduced by the narrow core
 runtime: that is 25,545 physical lines. It is close to the broader OS runtime
 of 45,012 lines, which includes product domains, identity, control plane,
-integrations, pages, and runtime-only test support. The narrow core plus the
+integrations, pages, and runtime-only test support.
+
+The updated **Narrow core runtime** selector includes the private
+`apps/os/src/subscription-delivery-durable-object.ts` host. Moving delivery
+there is core movement rather than a reported deletion. The pinned
+[`validation baseline`](measurements/validation-baseline.tsv) at `ce251e06c1`
+contains 18,845 kernel and 6,814 SDK lines; the pinned
+[`source checkpoint`](measurements/source-checkpoint.tsv) at `1341cccea`
+contains 17,882 kernel and 7,162 SDK lines. These are accounting checkpoints,
+not the source PR's net change: main advanced between them. The final source
+PR must compare its actual main base and tested head. The narrow core plus the
 three directly colocated unit suites is 42,677 lines before Workers and e2e
 coverage. The definition matters before setting a reduction target.
 
