@@ -8,19 +8,19 @@ test("THE CHAIN: a subagent two levels down resolves a capability provided at th
   const root = await openAgentItx(ctx);
   await root.provide("itx.tool", () => "hello-from-root", { description: "says hello" });
   await root.agents.create("/agents/a");
-  // /agents/a was linked to its creator (the root). An agent's scripts run in ITS SANDBOX
-  // (`/agents/a/sandbox`, linked to the agent), so a script there that creates `./b` births
-  // `/agents/a/sandbox/b`, linked to the sandbox — a child never holds more than its creator.
-  const sub = "/agents/a/sandbox/b";
+  // /agents/a was linked to its creator (the root). An agent's scripts run in its own context, so a
+  // script there that creates `./b` births `/agents/a/b`, linked to `/agents/a` — a child never
+  // holds more than its creator.
+  const sub = "/agents/a/b";
   expect(
     await root
       .cd("/agents/a")
       .run(
         "async (itx) => { await itx.agents.create('./b'); return (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); }",
       ),
-  ).toEqual(["itx.cd('/agents/a/sandbox')"]); // the child's own link, pointing at its creator
+  ).toEqual(["itx.cd('/agents/a')"]); // the child's own link, pointing at its creator
   expect(await root.cd(sub).builtins.rewriteRules.get("itx")).toMatchObject({
-    target: "itx.cd('/agents/a/sandbox')",
+    target: "itx.cd('/agents/a')",
   });
   // three hops down, the root's stub answers once snapshots catch up, and the list says where it came from
   expect(
@@ -82,14 +82,14 @@ test("a script cannot choose its new agent's parent link: the child links to the
   await root.provide("itx.tool", () => "hello-from-root");
   await root.agents.create("/agents/a");
   await root.cd("/agents/a").provide("itx.tool", null);
-  // The script runs in /agents/a/sandbox, beneath the mask, and names the root as the creator.
+  // The script runs in /agents/a, beneath the mask, and names the root as the creator.
   const { links, tool } = (await root
     .cd("/agents/a")
     .run(
       "async (itx) => { await itx.agents.create('./b', { creator: '/' }); const links = (await itx.cd('./b').rewriteRules.list()).filter((r) => r.match === 'itx').map((r) => r.target); const tool = await itx.cd('./b').tool().then((v) => v, (e) => String(e.message)); return { links, tool }; }",
     )) as { links: string[]; tool: string };
   expect(links, "the child's parent link should be its caller's own context").toEqual([
-    "itx.cd('/agents/a/sandbox')",
+    "itx.cd('/agents/a')",
   ]);
   expect(tool).toMatch(/is masked/);
 });

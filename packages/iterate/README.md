@@ -99,12 +99,12 @@ The platform stamps `source.origin`, the context whose code or session wrote it,
 field a writer keeps is `source.processor`, the engine's label for which processor wrote it.
 
 ```js
-// A script in /agents/a/sandbox:
+// A script in /agents/a:
 await itx.cd("/agents/b").append({
   type: "events.iterate.com/agent/context-added",
   payload: { role: "user", content: "hello" },
 });
-// Stamped { origin: "/agents/a/sandbox" }. Agent b's model reads "[from /agents/a/sandbox] hello",
+// Stamped { origin: "/agents/a" }. Agent b's model reads "[from /agents/a] hello",
 // and the same from `itx.agents.get("/agents/b").message("hello")`.
 ```
 

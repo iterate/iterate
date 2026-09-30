@@ -1,4 +1,4 @@
-// The installed catalog delegates project capabilities to each agent and its script context.
+// The installed catalog delegates project capabilities to each agent.
 //
 // A DELETED AGENT'S FACET IS NEVER HOSTED AGAIN. `delete` ends with the `agent` row gone and
 // `ctx.facets.delete` taking the facet's storage with it (apps/os context/facet-host.ts
@@ -106,9 +106,8 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
     let requestedAtOffset: number;
     if (state.creation?.status === "requested") requestedAtOffset = state.creation.offset;
     else {
-      // The collection owns the project scope and delegates it to this child. The
-      // processor and its scripts get distinct contexts so their grants can be narrowed separately.
-      const sandbox = `${path}/sandbox`;
+      // The collection owns the project scope and delegates it to this child. The agent's scripts
+      // run in its own context, under these rows.
       const rule = (match: string, target: string, key: string) => ({
         type: "events.iterate.com/itx/rewrite-rule-configured",
         idempotencyKey: key,
@@ -116,23 +115,12 @@ export class AgentCollectionRpcTarget extends RpcTarget implements AgentsApi {
       });
       await context.append(
         rule("itx", `itx.cd(${JSON.stringify(creator)})`, `agent-parent:${path}`),
-        rule("itx.run", `itx.cd(${JSON.stringify(sandbox)}).run`, `agent-sandbox:${path}`),
         rule(
           "itx.agents",
           `itx.cd('/').agents.at(${JSON.stringify(path)})`,
           `agent-collection:${path}`,
         ),
       );
-      await itx
-        .cd(sandbox)
-        .append(
-          rule("itx", `itx.cd(${JSON.stringify(path)})`, `agent-parent:${sandbox}`),
-          rule(
-            "itx.agents",
-            `itx.cd('/').agents.at(${JSON.stringify(sandbox)})`,
-            `agent-collection:${sandbox}`,
-          ),
-        );
       // Append-result cast: see apps/os/src/project/collection.ts for the loopback RPC typing
       // rationale.
       const [requested] = (await context.append({

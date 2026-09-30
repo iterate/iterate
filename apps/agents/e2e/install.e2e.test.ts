@@ -7,7 +7,7 @@ import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 import { installWorkspaceApps } from "./support.ts";
 
-test("installing again keeps agents, sandbox grants and history, and puts back a removed agents rewrite", async () => {
+test("installing again keeps agents, their grants and history, and puts back a removed agents rewrite", async () => {
   const itx = openItx(freshCtx("agents-install"));
   expect((await itx.rewriteRules.get("itx.agents"))?.target).toBeFalsy();
   await installWorkspaceApps(itx);
@@ -15,8 +15,7 @@ test("installing again keeps agents, sandbox grants and history, and puts back a
   const rootRows = await itx.processors.list();
   await itx.agents.create("/agents/support");
   const context = itx.cd("/agents/support");
-  const sandbox = context.cd("sandbox");
-  await sandbox.append({
+  await context.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.secrets", target: null },
   });
@@ -24,7 +23,7 @@ test("installing again keeps agents, sandbox grants and history, and puts back a
   await configureModel(context);
   await itx.agents.get("/agents/support").message("Remember this conversation.");
   await until("first reply", async () => assistantWords(await readAll(context)).length === 1);
-  const grants = await sandbox.rewriteRules.list();
+  const grants = await context.rewriteRules.list();
   const history = await readAll(context);
   const agentRows = await context.processors.list();
   await itx.append({
@@ -39,7 +38,7 @@ test("installing again keeps agents, sandbox grants and history, and puts back a
     { path: "/agents/support", createdAt: expect.any(String) },
   ]);
   expect(await context.processors.list()).toEqual(agentRows);
-  expect(await sandbox.rewriteRules.list()).toEqual(grants);
+  expect(await context.rewriteRules.list()).toEqual(grants);
   expect((await readAll(context)).slice(0, history.length)).toEqual(history);
   await itx.agents.get("/agents/support").message("Continue after the reinstall.");
   await until("second reply", async () => assistantWords(await readAll(context)).length === 2);

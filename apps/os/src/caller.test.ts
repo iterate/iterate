@@ -119,8 +119,8 @@ test.for<{ name: string; source?: object; caller: Caller; stamped: object }>([
   {
     name: "loaded code that crossed a hop: the context its call started at, whatever it claims",
     source: forged,
-    caller: { principal: null, app: true, path: "/agents/a/sandbox" },
-    stamped: { origin: "/agents/a/sandbox" },
+    caller: { principal: null, app: true, path: "/agents/a" },
+    stamped: { origin: "/agents/a" },
   },
   {
     name: "nobody (the kernel, an anonymous session): only where it came from",

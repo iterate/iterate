@@ -293,7 +293,7 @@ for (const kind of ["repo", "workspace"] as const)
   });
 
 // A SCRIPT BENEATH A MASK — `/masked`, a workspace linked to the root with the root's `itx.tool`
-// masked there, as an agent's sandbox is linked to its agent — meets each verb's own refusal:
+// masked there, as an agent is linked to its creator — meets each verb's own refusal:
 // loaded code removes no row, a batch it schedules meets the wall as it is scheduled, and it creates
 // and deletes only beneath itself. A mask is not a boundary; a jail is ("anyone reaches anywhere",
 // above).

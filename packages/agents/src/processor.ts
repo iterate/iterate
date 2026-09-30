@@ -83,7 +83,7 @@ export function buildChatMessages(
     if (parts.length === 0) return { role, content: text };
     return { role, content: [{ type: "text", text }, ...parts] };
   });
-  // THE TREE this turn — the sandbox's `rewriteRules.list()`, rendered — as one system message after
+  // THE TREE this turn — the agent's `rewriteRules.list()`, rendered — as one system message after
   // the journaled system items, before the conversation: what the model's scripts can spell.
   const rendered = renderCapabilityTree(tree);
   if (rendered) {
@@ -96,7 +96,7 @@ export function buildChatMessages(
   return messages;
 }
 
-/** The sandbox's table as the model reads it: one line per name it can spell (`match — description`,
+/** The agent's table as the model reads it: one line per name it can spell (`match — description`,
  *  a row without a description shows its target), grouped by the context each row came from when
  *  more than one; masks and the bare `itx` row are not names. Null when nothing is spellable (a jail
  *  with no grants yet): then no tree message at all. */
@@ -640,7 +640,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       }
       // The prose — beside a tag or on its own — is the message, appended directly on this context.
       // Where a reply GOES from here is a subscriber's business (events are the interface), never a
-      // script the model's sandbox would need a row for.
+      // script the model would need a row for.
       if ((outcome.kind === "script" || outcome.kind === "none") && outcome.prose)
         consequences.push({
           type: "events.iterate.com/agent/web-message-sent",
@@ -861,9 +861,9 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
       let tree: RewriteRuleListEntry[] = [];
       try {
         using itx = this.deps.getItx();
-        tree = await itx.cd(`${path}/sandbox`).rewriteRules.list();
+        tree = await itx.cd(path).rewriteRules.list();
       } catch (error) {
-        // A fully masked sandbox deliberately denies introspection too. Give the model no
+        // A fully masked agent deliberately denies introspection too. Give the model no
         // advertised tools; prose replies still work. Transport/runtime failures remain errors.
         if (errorCode(error) !== "NO_ITX_EXPRESSION_MATCH") throw error;
       }
