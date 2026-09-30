@@ -49,6 +49,11 @@ miss needs a baseline comparison and source-path diagnosis, not reruns until
 green or a silently relaxed threshold. An isolated preview of pinned main
 `e9f059e8c` is being measured by `0w6h6gfg31`; no production state is written.
 
+The source-path investigation separates the fast sibling samples from the slow
+root samples and identifies possible contention from background config delivery.
+That is a hypothesis pending the main comparison, not a demonstrated regression;
+see [the investigation](performance-investigation.md).
+
 The complete 100-run soak `5xq58s3spm` is still running on immutable ref
 `soak/core-simplification-0739e06`, distinct preview `soak-cs-3461-0739`,
 with residency timing enabled and no test filter. Partial runs do not count
