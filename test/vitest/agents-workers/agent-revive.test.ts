@@ -1,5 +1,5 @@
 // vitest/os-workers/agent-revive.test.ts — THE GUARANTEE: an agent's open LLM request survives the
-// death of its context. The model call runs in the facet's BACKGROUND (rule 3, packages/iterate
+// death of its context. The model call runs in the facet's BACKGROUND (rule 3, core/lib
 // stream/processor.ts: never awaited by a batch), so no batch, cursor or push remembers it; what does
 // is the CLAIM the engine holds on its context's alarm while any attempt is in flight (a kv row on
 // the context, `processors.claim` — facets cannot set alarms, workerd#6810). Killed mid-call, the

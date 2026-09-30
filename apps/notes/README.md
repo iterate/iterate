@@ -43,7 +43,7 @@ like the deployed Worker: behind a tunnel, hot module reloading included. Under 
 preview) a
 tunnel's URL is `<platform>/projects/<project>/<name>/`, so the dev server starts under that base
 path, then the tunnel lends it to the project
-([packages/cli](../../packages/cli/README.md#tunnel)):
+([core/lib/src/cli](../../core/lib/src/cli/README.md#tunnel)):
 
 ```sh
 pnpm dev --port 5173 --base /projects/my-project/notes-dev/

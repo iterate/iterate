@@ -1,13 +1,13 @@
 {
   "name": "iterate",
   "version": "0.4.1",
-  "description": "SDK for Iterate",
+  "description": "SDK and CLI for Iterate",
   "license": "Apache-2.0",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/iterate/iterate",
-    "directory": "packages/iterate"
+    "directory": "core/lib"
   },
   "homepage": "https://github.com/iterate/iterate#readme",
   "bugs": {
@@ -16,10 +16,11 @@
   "keywords": [
     "iterate",
     "sdk",
-    "capnweb"
+    "capnweb",
+    "cli"
   ],
   "engines": {
-    "node": ">=22.15"
+    "node": ">=22.18"
   },
   "exports": {
     "./sdk": "./src/sdk/index.ts",
@@ -156,21 +157,26 @@
     }
   },
   "files": [
+    "bin",
     "dist",
+    "menubar",
     "README.md"
   ],
   "scripts": {
     "build": "tsdown",
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json && tsc -p tsconfig.cli.json",
     "test": "vitest run",
     "prepack": "pnpm build"
   },
   "dependencies": {
+    "@clack/prompts": "^1.0.0",
+    "@orpc/server": "catalog:",
     "capnweb": "catalog:",
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
-    "zod": "catalog:",
-    "ws": "catalog:"
+    "trpc-cli": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
   },
   "peerDependencies": {
     "react": "^19.1.0"
@@ -189,5 +195,8 @@
     "typescript": "catalog:",
     "vitest": "catalog:",
     "@types/ws": "catalog:"
+  },
+  "bin": {
+    "iterate": "./bin/iterate.js"
   }
 }

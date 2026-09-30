@@ -58,8 +58,7 @@ on:
       # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
       - "!apps/kit/firmware/**"
       - test/**
-      - packages/cli/**
-      - packages/iterate/**
+      - core/lib/**
       - packages/agents/**
       - packages/voice/**
       - packages/docs/**

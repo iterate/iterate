@@ -24,7 +24,7 @@ test("the build reaches nothing outside core/", async () => {
   expect(Object.keys(metafile.inputs).filter((input) => !input.startsWith("core/"))).toEqual([]);
 });
 
-// A workspace package is outside too: packages/iterate is to become core/lib, and core/os keeps its
+// A workspace package is outside too: core/lib is to become core/lib, and core/os keeps its
 // own copies of the UI it uses (shadcn's and ours) instead of importing @iterate-com/ui.
 test("core/os depends on only these workspace packages", () => {
   const manifest: Record<"dependencies" | "devDependencies", Record<string, string>> = JSON.parse(

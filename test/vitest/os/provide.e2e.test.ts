@@ -6,8 +6,8 @@
 //   • the file's `description` is the lend's
 //   • a provide killed outright: the name answers NO_ITX_EXPRESSION_MATCH, as before it was lent
 //   • Ctrl-C exits 0 and recalls the lend the same way
-// Loading (.ts, .mjs, CommonJS .js), a missing dependency and reconnecting are packages/cli
-// src/provide.test.ts; the lend's own machinery, e2e/rpc-stubs-*.e2e.test.ts.
+// Loading (.ts, .mjs, CommonJS .js), a missing dependency and reconnecting are
+// core/lib/src/cli/provide.test.ts; the lend's own machinery, e2e/rpc-stubs-*.e2e.test.ts.
 
 import { tmpdir } from "node:os";
 import { execFile, type ChildProcess } from "node:child_process";
@@ -27,7 +27,7 @@ import {
   workerUrl,
 } from "../../helpers/client.ts";
 
-const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
+const bin = fileURLToPath(new URL("../../../core/lib/bin/iterate.js", import.meta.url).href);
 
 test(
   "iterate provide: a .ts file's functions are itx.<name> for the project's scripts, its itx reaches the project, its description is the lend's; killed or Ctrl-C, the name is unmatched again",

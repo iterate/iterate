@@ -13,10 +13,9 @@ packages:
   - apps/ci-reports
   - packages/agents
   - packages/ai-linter
-  - packages/cli
   - packages/github-sync
   - packages/docs
-  - packages/iterate
+  - core/lib
   - packages/petshop-sdk
   - packages/voice
   - packages/shared

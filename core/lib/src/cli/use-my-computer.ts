@@ -1,7 +1,7 @@
 import { hostname } from "node:os";
 import * as prompts from "@clack/prompts";
 import { RpcTarget } from "capnweb";
-import type { connectIterate } from "iterate/node";
+import type { connectIterate } from "../node.ts";
 import { run } from "./run-command.ts";
 
 type ComputerEvent =

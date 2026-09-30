@@ -15,7 +15,7 @@ on:
       - apps/notes/**
       - envs.ts
       - scripts/lib/**
-      - packages/iterate/**
+      - core/lib/**
       - packages/ui/**
       - packages/shared/**
       - package.json
