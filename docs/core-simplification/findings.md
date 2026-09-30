@@ -11,26 +11,25 @@ fix. Main subsequently reached `e9f059e8c` with #3460.
 
 ## Latest published checkpoint
 
-Source draft [#3461](https://github.com/iterate/iterate/pull/3461) is published at
-`b11b2ff13acebd99336f068f65df6e0bc8efaea1`. The full root suite passes,
-including sockets: OS has 153 passing files, 2,308 passing tests and 14 existing
-expected failures. Lint, typecheck, formatting and Knip pass. Fresh deployed
-preview, slow residency, performance, 100-run soak and log checks are still
-required. The first preview attempt exposed one stale Wrangler declaration for
-the removed private delivery class; that source configuration is being repaired.
+Source draft [#3461](https://github.com/iterate/iterate/pull/3461) is published
+at `7cdbc4f00944951f919fa6b0d0b26d32821ae94f`. It is a checkpoint, not release
+proof. The prior private `subscriptions` facet was an intermediate experiment
+and is not a claimed net deletion from main; durable delivery now belongs in the
+context alongside the log, cursor, target authority, and recovery wake.
 
-The remaining architecture has one owner for durable delivery: the context
-holds the log, cursor, resume acknowledgement, native target authority and
-recovery deadline. It does not send event bodies through a private facet.
-Generation fences and mark-before-call attempts remain. Fan-out persists one
-eight-call wave and its combined outcomes; ephemerals retain a separate bounded
-live path. Live providers and callback subscriptions use the same existing
-pager. The original processor claim code replaces a now single-caller helper.
+The latest fully tested local source, `8eb`, measures 18,066 core runtime lines
+and 7,527 SDK runtime lines: 25,593 combined, 27 below main's 25,620 baseline.
+That is the only current line-count comparison. A local `8d` fixture/doc-comment
+revision has a full rerun in progress, so it has no green-suite or net-line
+claim here. Published `7c` was eight lines below the same baseline. Tests and
+moved code are never credited as runtime deletions.
 
-Measured runtime is 18,073 core + 7,546 SDK = 25,619, versus main's 18,806 +
-6,814 = 25,620. That is only one line smaller combined, despite a 733-line core
-reduction. It is inadequate as the requested larger reduction; tests and moved
-code are not credited as runtime deletions.
+The remaining architecture keeps the existing pager for live providers and
+callbacks. The context owns durable delivery's log, cursor, resume
+acknowledgement, native target authority, and recovery wake. Fan-out persists
+one eight-call wave and its combined outcomes; ephemerals use their bounded
+live path. Processor authoring, React integration, ordinary facets, and vanilla
+Cap'n Web remain unchanged.
 
 Concrete requirement relaxations implemented in the second PR are fixed-prefix
 names plus ordinary adapter code, explicit configured origin and delivery,
@@ -693,6 +692,61 @@ they do not establish its frequency or CPU cost without the proposed fault
 injection. See [Cloudflare alarm semantics](https://developers.cloudflare.com/durable-objects/api/alarms/)
 and [the Durable Object rules](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/).
 
+### Round 14: the generation proof permits real cuts, but cold recovery still loses rows
+
+[The fourteenth independent review](reviews/opus-round-14.md) read immutable
+source `7cdbc4f00944951f919fa6b0d0b26d32821ae94f`, made no changes, and ran no
+tests. It completed successfully with Claude Opus 5.5 xhigh: 101,849 thinking
+tokens, 107,666 output tokens, and 1,054,672 ms of model duration.
+
+Its positive result is narrow and useful: every cursor writer other than the
+single delivery drain advances the captured generation first. That proves a
+late wave cannot clobber a later resume, halt, dispose, or reconciliation. The
+proof makes several defensive cursor rereads and stamps redundant, so deleting
+them is justified once the ordering that supplies the current resume remains
+independent from effects that can throw. It does not prove that a runner has
+already observed the core's current resume; the existing stale-resume fence
+must remain until that ordering is made reliable.
+
+The clear release verdict is still no. The review finds a cold request can
+start only rows relevant to its first committed event, then clear the shared
+wake while another row retains a backoff, interrupted attempt, or terminal
+receipt. It also finds fan-out rows being driven by ephemerals they cannot
+receive, empty fan-out admission rewriting a whole cursor, and terminal
+receipts being emitted one alarm pass at a time while blocking new work. These
+are source-backed P1/P2 defects. The review also reports stale ephemeral
+descriptors after resume and halt receipts that often lose their source cause.
+The per-item resume stamp defect from Round 13 was fixed after `7c`; that is a
+separate repair and does not make the `7c` review's remaining P1/P2 findings
+obsolete.
+
+The review describes four concrete simplifications, each with a stated
+relaxation:
+
+1. **Append a terminal receipt in the same context-store turn and let the core
+   row be the only halt state.** This could delete terminal-pending cursor
+   state, its retry/wake pass, and related list fallbacks. It requires a
+   synchronous terminal operation using the same store as the cursor. It is a
+   promising major reduction, not an implemented replacement for the current
+   generic SDK-hosted terminal path.
+2. **Use the captured generation proof consistently.** Delete redundant
+   rereads, pending checks, wave rereads, and terminal refinds after preserving
+   the independent resume-order guarantee.
+3. **Persist only a final interruption error.** This can reduce fan-out cursor
+   payload by roughly tenfold, but a reset during the final attempt reports the
+   generic interruption text instead of the previous target error. It changes
+   diagnostics, not delivery behaviour.
+4. **Use `confirmedOffset` as the sole fan-out admission mark.** This removes
+   the wrapper and fallback constructions, with a cursor-shape migration cost
+   limited to this branch.
+
+The active repair plan covers cold-row recovery and irrelevant ephemeral
+fan-out work in native code, and resume descriptor clearing, empty admission
+writes, and terminal-path cleanup in the SDK. The receipt-cause correction is
+still pending. The review's suggested removals are candidates only until the
+Workers regressions cover recovery, alarm behaviour, fan-out terminal handling,
+and source-cause preservation.
+
 ## What remains core
 
 Core owns the append-only durable log, bounded ephemerals, `itx` name
@@ -821,5 +875,5 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), [round 11](reviews/opus-round-11.md), [round 12](reviews/opus-round-12.md), and [round 13](reviews/opus-round-13.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), [round 11](reviews/opus-round-11.md), [round 12](reviews/opus-round-12.md), [round 13](reviews/opus-round-13.md), and [round 14](reviews/opus-round-14.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
