@@ -417,8 +417,8 @@ test("A BORROW RACES THE RELEASE: a stub invoke fired concurrently with the pins
 test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; the fan-out reaches EXACTLY the survivors", async () => {
   // Extends hibernation-at-scale's "eviction preserves the fleet" with a provider disposing one of
   // its own provides before the wake. PINS: the drop is honored across the eviction (the dropped
-  // stub's hibernatable pager socket is gone, not resurrected; its rewrite rule is un-set) and the
-  // post-wake fan-out reaches every survivor and only the survivors.
+  // stub's hibernatable pager socket is gone, not resurrected) and the post-wake fan-out reaches
+  // every survivor and only the survivors.
   const ctx = "prj_scale_drop";
   const K = 6;
   const clientItx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
@@ -428,10 +428,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   const caller = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
 
   // The drop must come from the PROVIDER'S OWN handle: disposing it recalls the stub THIS session
-  // lent under `itx.k3` (its pager socket closes) AND un-sets the rule at `itx.k3`. A
-  // `caller.provide("itx.k3", null)` would un-set the rule only — pure data never touches a
-  // transport, and `caller` lent nothing under `itx.k3`, so the stub would stay in the census
-  // (unreachable dotted, rule gone).
+  // lent under `itx.k3` (its pager socket closes). A `caller.provide("itx.k3", null)` would write
+  // a durable mask only — pure data never touches a transport, and `caller` lent nothing under
+  // `itx.k3`, so the live stub would stay in the census.
   providedRpcStubs[3][Symbol.dispose]();
   const dropped = await untilStubs(ctx, K - 1); // the relay's close lands at the DO a beat later
   expect(dropped).toMatchObject({ rpcStubPagers: K - 1 });
@@ -446,17 +445,9 @@ test("SCALE DROP + QUIESCE + EVICT + WAKE: a DISPOSED live provide stays gone; t
   const evicted = await stateOf(ctx);
   expect(evicted).toMatchObject({ rpcStubPagers: K - 1 }); // survivors' hibernatable sockets rode the eviction; k3 stayed gone
 
-  // The rule at itx.k3 is gone from the table (the dispose un-set it), and the survivors' rules
-  // stayed — the table is data, untouched by the eviction.
-  const snap = (await caller.invoke("itx.facets.get('core').snapshot()")) as {
-    state: { itxExpressionRewriteRules: Record<string, unknown> };
-  };
-  const rewriteRuleMatches = Object.keys(snap.state.itxExpressionRewriteRules);
-  expect(rewriteRuleMatches).not.toContain("itx.k3");
-  for (let i = 0; i < K; i++) if (i !== 3) expect(rewriteRuleMatches).toContain(`itx.k${i}`);
-  // fan-out = PRESENCE (`itx.rpcStubs.list()` — the keys whose hibernated pager sockets rode
-  // the eviction; k3's did not) + map over the keys (each was provided with a rewrite at the same
-  // spelling, so every key is callable dotted; no built-in `each`); the caller owns the allSettled.
+  // A live provide has no durable rewrite row. Its pager attachment is the source of the effective
+  // rule, so this census proves exactly which rules survived the eviction and disposal.
+  // Fan out over the surviving keys; every one remains callable at its provided spelling.
   const rpcStubKeys = (await caller.invoke("itx.rpcStubs.list()")) as string[];
   expect(rpcStubKeys).toHaveLength(K - 1);
   expect(rpcStubKeys).not.toContain("itx.k3");

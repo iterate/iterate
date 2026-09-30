@@ -50,18 +50,24 @@ private native channel or reach the reserved facet name.
 
 Only selected bodies survive a target-resolution or target-call await. Their
 aggregate reservation normally has an 8 MiB character budget; one legal larger
-event may run alone, bounded by the RPC ceiling. Reservations end when the raw
+selection may run alone, bounded by the RPC ceiling. Reservations end when the raw
 target promise settles, even if the runner's wait has timed out. One bounded
 synchronous source page can coexist with those retained bodies; the diagnostic
 `targetBodyChars` measures retained target input, not total isolate memory.
 There is no full-page waiter queue that serializes unrelated small deliveries.
 
-Ephemerals have a separate, bounded one-event body path. They share an ordered
-row's chain and cannot overtake an admitted durable range. Their bodies never
+Ephemerals have a separate, bounded one-event body path. Their bodies never
 become persisted retry work. Busy admission does not spend a delivery attempt.
-Target failures, read failures and claim recovery have bounded retries and
-observable outcomes. A durable configuration high-water fences delayed pushes;
-equal snapshots still admit ephemeral-only pushes without rewriting it.
+Target failures and claim recovery have bounded retries and observable
+outcomes. Configuration fences delayed pushes; each cold facet pulls current
+core configuration instead of storing another copy. Equal snapshots still
+admit ephemeral-only pushes.
+
+Claim requests capture the accepted offset before entering their serialized
+queue. A release cannot clear a later meaningful commit's recovery claim. The
+context keeps that handoff offset in memory and uses its durable head after a
+restart. Unconsumed commits need no redundant facet push. Cold recovery restores
+persisted retry deadlines before returning to the context.
 
 ## What relaxing requirements yields
 
@@ -89,11 +95,16 @@ current deletion.
 
 ## Validation boundary
 
-The focused runner/model tests and source/test TypeScript checks pass locally.
-Workers regressions cover generation fencing, resume, replacement, private
-authority, pager lifecycle, memory fairness and configuration recovery.
-After reconnect, the sandbox prevents the Workers runtime from starting.
-Those new runtime tests have not passed in this environment.
+Full Access is restored. The real socket suites run, and focused Workers
+regressions pass for generation fencing, resume, replacement, private
+authority, pager lifecycle, memory fairness and configuration recovery. The
+full suite is being rerun at the publication checkpoint; individual passing
+rows do not replace that gate.
+
+The ninth actual Opus 5.5 xhigh review identified further simplification and
+correctness work: bounded waiting for an unsettled native call and ephemeral
+offset ordering. This draft remains an implementation under review until
+those concerns and the runtime gates below are resolved.
 
 The draft needs green full CI, deployed slow residency rows, latency and
 throughput budgets, soak results and a same-window Workers Logs comparison.

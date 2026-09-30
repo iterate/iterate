@@ -1,7 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { codedError } from "../lib.ts";
 import { DurableDeliveryProcessor } from "./durable-delivery.ts";
-import { ProcessorEngine, type EngineKv } from "./processor.ts";
-import { committedEvent, memoryStorage, memoryStream, settle } from "./test-support.ts";
+import { type EngineKv } from "./processor.ts";
+import { committedEvent, memoryStream, settle } from "./test-support.ts";
 
 type Runtime = ReturnType<typeof runtime>;
 
@@ -38,7 +39,7 @@ test("an ordered runner replays its persisted pending range after interruption a
   releaseFirst();
 });
 
-test("omitting consumes keeps the normal subscription default: every durable event", async () => {
+test("omitting consumes delivers every durable event", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "alpha" }, { type: "beta" });
   const received: number[] = [];
@@ -49,7 +50,6 @@ test("omitting consumes keeps the normal subscription default: every durable eve
   await drive(processor, 1);
   await settle();
   expect(received).toEqual([1, 2]);
-  expect(processor.contract).toMatchObject({ consumes: ["*"] });
 });
 
 test("fan-out recovery replays only pending source offsets after interruption", async () => {
@@ -82,6 +82,31 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   });
 });
 
+test("a fan-out backoff still admits the following source page", async () => {
+  const source = memoryStream();
+  await source.stream.append(...Array.from({ length: 101 }, () => ({ type: "work" })));
+  const shared = kv();
+  const delivered: number[] = [];
+  const delayed = runtime(shared, source.stream.read, ({ offsets }) => {
+    if (offsets[0] === 1) throw new Error("first event retries later");
+    delivered.push(offsets[0]!);
+  });
+  const processor = new DurableDeliveryProcessor({
+    slug: "fan-backoff",
+    consumes: ["work"],
+    fanOut: true,
+    concurrency: 100,
+    retryDelayMs: () => 60_000,
+    runtime: delayed,
+  });
+  await drive(processor, 1);
+  await settle(100);
+  expect(delivered).toHaveLength(100);
+  expect(processor.snapshot()).toMatchObject({
+    fanOut: { admittedThrough: 101, pending: [{ offset: 1, attempt: 1 }] },
+  });
+});
+
 test("a fan-out terminal is selectively resumed without replaying already acknowledged offsets", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" }, { type: "work" });
@@ -109,6 +134,37 @@ test("a fan-out terminal is selectively resumed without replaying already acknow
   expect(replayed).toEqual([1]);
 });
 
+test("a fan-out target 410 halts the row and a resume retries its admitted offsets", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const shared = kv();
+  const failed = runtime(shared, source.stream.read, () => {
+    throw codedError("GONE", "receiver returned 410");
+  });
+  const processor = fanOut(failed);
+  await drive(processor, 1);
+  await settle();
+  expect(failed).toMatchObject({
+    terminals: [expect.objectContaining({ afterOffset: 1, attempts: 1 })],
+  });
+  expect(failed.terminals[0]?.fanOut).toBeUndefined();
+  expect(processor.snapshot()).toMatchObject({
+    halted: { after: 1, attempts: 1 },
+    fanOut: { admittedThrough: 1, pending: [{ offset: 1, attempt: 1 }] },
+  });
+
+  const replayed: number[] = [];
+  failed.deliver = async ({ offsets }) => void replayed.push(offsets[0]!);
+  expect(processor.resume(undefined, undefined, 77)).toBe(true);
+  await drive(processor, 2);
+  await settle();
+  expect(replayed).toEqual([1]);
+  expect(processor.snapshot()).toMatchObject({
+    fanOut: { admittedThrough: 1, pending: [] },
+  });
+  expect(processor.snapshot().halted).toBeUndefined();
+});
+
 test("terminal ordered work stays halted until an explicit resume, then replays from the fenced offset", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" });
@@ -129,6 +185,42 @@ test("terminal ordered work stays halted until an explicit resume, then replays 
   await settle();
   expect(replayed).toEqual([1]);
   expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
+});
+
+test("a resume seek replaces an in-flight ordered range", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" }, { type: "work" });
+  const shared = kv();
+  let releaseFirst!: () => void;
+  let first = true;
+  const delivered: number[][] = [];
+  const delayed = runtime(shared, source.stream.read, async ({ offsets }) => {
+    if (first) {
+      first = false;
+      await new Promise<void>((resolve) => (releaseFirst = resolve));
+      return;
+    }
+    delivered.push(offsets);
+  });
+  const processor = ordered(delayed);
+  await drive(processor, 1);
+  await vi.waitFor(() => expect(releaseFirst).toBeTypeOf("function"));
+  expect(processor.resume(1, undefined, 99)).toBe(true);
+  releaseFirst();
+  await settle();
+  expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
+
+  await drive(processor, 2);
+  await settle();
+  expect(delivered).toEqual([[2]]);
+});
+
+test("a fan-out resume can recreate an offset before it has admitted a page", () => {
+  const processor = fanOut(runtime(kv(), memoryStream().stream.read, () => {}));
+  expect(processor.resume(3, 4, 99)).toBe(true);
+  expect(processor.snapshot()).toMatchObject({
+    fanOut: { admittedThrough: 3, pending: [{ offset: 4, attempt: 0, resumeAtOffset: 99 }] },
+  });
 });
 
 test("a delayed ordered terminal carries the resume fence that was current when it was created", async () => {
@@ -252,15 +344,8 @@ function fanOut(runtime: Runtime) {
   });
 }
 async function drive(processor: DurableDeliveryProcessor, offset: number) {
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
-  await engine.processEventBatch([committedEvent(offset, "work")], {
-    after: offset - 1,
-    through: offset,
-  });
+  processor.push(committedEvent(offset, "work"));
+  processor.drive((work) => void work());
 }
 type RuntimeRead = (
   after: number,

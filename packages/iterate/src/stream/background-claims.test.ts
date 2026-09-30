@@ -52,3 +52,27 @@ test("first work claims, last work releases, and a busy revive backs off then re
     vi.useRealTimers();
   }
 });
+
+test("captures claim fencing state when a request is queued", async () => {
+  const landed: { at: number | null; throughOffset: number | undefined }[] = [];
+  let throughOffset = 4;
+  const claims = new BackgroundClaims<number>({
+    claim: async (at, captured) => {
+      landed.push({ at, throughOffset: captured });
+    },
+    capture: () => throughOffset,
+    report: () => {},
+    afterMs: 20,
+    maxAfterMs: 80,
+  });
+
+  claims.at(null);
+  throughOffset = 9;
+  claims.at(10);
+
+  await claims.flush();
+  expect(landed).toEqual([
+    { at: null, throughOffset: 4 },
+    { at: 10, throughOffset: 9 },
+  ]);
+});

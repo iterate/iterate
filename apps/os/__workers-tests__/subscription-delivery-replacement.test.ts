@@ -41,18 +41,23 @@ test("an ordered bridge call settling after replacement cannot acknowledge or ov
 
   const fanout = (step: unknown[]) =>
     s.invoke(["itx", "facets", ["get", "fanout-hold", FANOUT_HOLD], step]);
-  // The replacement lands while the old raw bridge call is held; it has no admission state yet.
-  expect(
-    (
+  // The replacement owns a distinct runner and can admit its own fan-out work while the old raw
+  // call remains held. Its progress must not be mistaken for an acknowledgement by that old call.
+  const admitted = await until("the replacement admits its own fan-out work", async () => {
+    const row = (
       (await s.invoke("itx.subscriptions.list()")) as Array<{
         name: string;
         configuredAtOffset: number;
-        cursor?: { confirmedOffset: number };
+        ordered?: boolean;
+        pending?: number;
       }>
-    ).find((row) => row.name === "swap"),
-  ).toMatchObject({
+    ).find((row) => row.name === "swap");
+    return row?.configuredAtOffset === replacement.offset && row.pending === 16 ? row : false;
+  });
+  expect(admitted).toMatchObject({
     configuredAtOffset: replacement.offset,
-    cursor: { confirmedOffset: replacement.offset },
+    ordered: false,
+    pending: 16,
   });
 
   // This completes the OLD raw bridge call. Its stale settlement must not acknowledge the
@@ -81,7 +86,14 @@ test("an ordered bridge call settling after replacement cannot acknowledge or ov
     pending: 16,
   });
 
-  for (let i = 0; i < events.length; i++) await fanout(["release"]);
+  // Releases are not credits: the target has no queued release when all eight first-wave calls
+  // are still settling. Wait for the second bounded admission before releasing that wave too.
+  for (let i = 0; i < 8; i++) await fanout(["release"]);
+  await until(
+    "the successor admits its second bounded fan-out wave",
+    async () => (await fanout(["holding"])) === 8,
+  );
+  for (let i = 0; i < 8; i++) await fanout(["release"]);
   await until("the replacement alone confirms every fan-out event", async () => {
     const row = (
       (await s.invoke("itx.subscriptions.list()")) as Array<{
@@ -93,7 +105,8 @@ test("an ordered bridge call settling after replacement cannot acknowledge or ov
     ).find((candidate) => candidate.name === "swap");
     return (
       row?.configuredAtOffset === replacement.offset &&
-      row.cursor?.confirmedOffset === events.at(-1)?.offset &&
+      row.cursor?.confirmedOffset !== undefined &&
+      row.cursor.confirmedOffset >= events.at(-1)!.offset &&
       row.pending === 0
     );
   });

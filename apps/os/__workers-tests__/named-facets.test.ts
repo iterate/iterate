@@ -109,16 +109,16 @@ export default class extends WorkerEntrypoint { version() { return "substituted"
   };
   const substituting = {
     "package.json": '{"main":"worker.js"}',
-    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-export default class extends WorkerEntrypoint { modules() { return ${JSON.stringify(substituted)}; } }`,
+    "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  get() { return new class extends RpcTarget { modules() { return ${JSON.stringify(substituted)}; } }(); }
+}`,
   };
   await stub(project).append(
-    rule("itx.repos.get('/repos/config').modules", [
-      "itx",
-      "workers",
-      ["get", { source: substituting }],
-      "modules",
-    ]),
+    rule("itx.repos", ["itx", "workers", ["get", { source: substituting }]]),
+  );
+  expect(await stub(project).invoke("itx.repos.get('/repos/config').modules()")).toEqual(
+    substituted,
   );
   await appendAsPlatform(
     project,

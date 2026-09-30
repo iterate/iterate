@@ -1,8 +1,8 @@
 import { expect, test, vi } from "vitest";
 import { codedError } from "../lib.ts";
 import { DurableDeliveryProcessor } from "./durable-delivery.ts";
-import { ProcessorEngine, type EngineKv, type StreamEvent } from "./processor.ts";
-import { committedEvent, memoryStorage, memoryStream, settle } from "./test-support.ts";
+import { type EngineKv, type StreamEvent } from "./processor.ts";
+import { committedEvent, memoryStream, settle } from "./test-support.ts";
 
 test("persists selected offsets with the scanned range for its first invoke", async () => {
   const store = kv();
@@ -23,11 +23,7 @@ test("persists selected offsets with the scanned range for its first invoke", as
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(delivered).toHaveBeenCalledWith(
@@ -62,11 +58,7 @@ test("a core terminal receipt invalidates an older in-flight runner generation",
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await vi.waitFor(() => expect(rejectDelivery).toBeTypeOf("function"));
   expect(processor.halt(0, 15, "core terminal")).toBe(true);
@@ -103,11 +95,7 @@ test("a disposed runner cannot restore a deleted cursor after a late target resu
         terminal,
       },
     });
-    const engine = new ProcessorEngine(processor, {
-      stream: memoryStream().stream,
-      storage: memoryStorage(),
-      kv: kv(),
-    });
+    const engine = driver(processor);
     await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
     await vi.waitFor(() => expect(settleDelivery).toBeTypeOf("function"));
     processor[Symbol.dispose]();
@@ -139,11 +127,7 @@ test("a disposed runner does not reclaim a wake when its source read rejects lat
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await vi.waitFor(() => expect(rejectRead).toBeTypeOf("function"));
   processor[Symbol.dispose]();
@@ -177,11 +161,7 @@ test("persists a pending scanned range, retries it, then halts through the termi
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(terminal).toHaveBeenCalledWith(
@@ -215,11 +195,7 @@ test("retries a persisted ordered range without another metadata read", async ()
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(read).toHaveBeenCalledTimes(1);
@@ -249,11 +225,7 @@ test("a metadata read failure schedules a bounded wake without an attempt or ter
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(wakes).toHaveLength(1);
@@ -278,11 +250,7 @@ test("named ephemeral events are best effort and never enter the durable cursor"
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([{ ...committedEvent(7, "poke"), ephemeral: true }], {
     after: 6,
     through: 7,
@@ -322,11 +290,7 @@ test("fan-out persists bounded offsets then calls each event independently", asy
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle(40);
   expect(delivered.sort()).toEqual([1, 2, 3]);
@@ -357,11 +321,7 @@ test("fan-out continues from a non-head metadata page without another push", asy
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle(100);
   expect(delivered).toHaveLength(101);
@@ -387,11 +347,7 @@ test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes 
     consumes: ["poke"],
     runtime,
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch(
     [
       { ...committedEvent(1, "poke"), ephemeral: true },
@@ -420,11 +376,7 @@ test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes 
     fanOut: true,
     runtime: { ...runtime, deliver: fanOutDeliver },
   });
-  const fanEngine = new ProcessorEngine(fanOut, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const fanEngine = driver(fanOut);
   await fanEngine.processEventBatch([{ ...committedEvent(3, "poke"), ephemeral: true }], {
     after: 2,
     through: 3,
@@ -458,11 +410,7 @@ test("ordered ephemerals share the persisted delivery chain", async () => {
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([{ ...committedEvent(2, "poke"), ephemeral: true }], {
     after: 1,
     through: 2,
@@ -500,11 +448,7 @@ test("deliveryBusy reschedules ordered work without spending an attempt", async 
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/busy")).toMatchObject({
@@ -514,7 +458,7 @@ test("deliveryBusy reschedules ordered work without spending an attempt", async 
   expect(terminal).not.toHaveBeenCalled();
 });
 
-test("a target that is temporarily unavailable retries through the configured attempt bound", async () => {
+test("an unresolved expression retries through the configured attempt bound", async () => {
   const store = kv();
   const source = memoryStream();
   await source.stream.append({ type: "work" });
@@ -528,7 +472,7 @@ test("a target that is temporarily unavailable retries through the configured at
       storage: store,
       read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
-        throw codedError("NOT_A_METHOD", "target is not ready");
+        throw codedError("NO_ITX_EXPRESSION_MATCH", "target is not ready");
       },
       deliverEphemeral: async () => {},
       scheduleWake: async () => {},
@@ -536,11 +480,7 @@ test("a target that is temporarily unavailable retries through the configured at
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/target-retry")).toMatchObject({
@@ -575,11 +515,7 @@ test("a context resume fence does not turn a stale ordered call into a halt", as
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/stale-resume")).toMatchObject({
@@ -611,11 +547,7 @@ test("a context resume fence does not dead-letter stale fan-out work", async () 
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/fanout-stale-resume")).toMatchObject({
@@ -649,11 +581,7 @@ test("deliveryBusy reschedules fan-out work without spending an attempt", async 
       terminal,
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/fanout-busy")).toMatchObject({
@@ -689,11 +617,7 @@ test("queued ephemeral reservations remain held through delivery and release aft
       terminal: async () => {},
     },
   });
-  const engine = new ProcessorEngine(processor, {
-    stream: memoryStream().stream,
-    storage: memoryStorage(),
-    kv: kv(),
-  });
+  const engine = driver(processor);
   await engine.processEventBatch([{ ...committedEvent(1, "poke"), ephemeral: true }], {
     after: 0,
     through: 1,
@@ -706,6 +630,14 @@ test("queued ephemeral reservations remain held through delivery and release aft
 });
 
 const testEphemeralReservation = (): Disposable => ({ [Symbol.dispose]: () => {} });
+
+/** The subscriptions facet feeds pushes directly into the private runner. */
+const driver = (runner: DurableDeliveryProcessor) => ({
+  processEventBatch: async (events: StreamEvent[], _range?: unknown) => {
+    for (const event of events) runner.push(event);
+    runner.drive((work) => void work());
+  },
+});
 
 const durableRead =
   (

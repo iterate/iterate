@@ -219,7 +219,7 @@ test("a settled native delivery failure does not suppress the next same-range ta
   };
   await runInDurableObject(s, async (instance) => {
     expect(await rejected(instance.deliverConfiguredSubscription(request))).toMatchObject({
-      code: "NOT_A_METHOD",
+      code: "NO_ITX_EXPRESSION_MATCH",
     });
   });
   await s.append({

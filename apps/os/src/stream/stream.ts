@@ -20,7 +20,7 @@
 // its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
 // them into a page — under the same proof, which never names one.
 
-import { codedError, errorCode, reportIssue } from "iterate/lib";
+import { codedError, reportIssue } from "iterate/lib";
 import type { ItxExpressionInput } from "iterate/expression";
 import type { StreamPage, WaitForEventFilter } from "iterate/api";
 import {
@@ -226,25 +226,14 @@ export class Stream {
       this.#coreReducedState = checkpoint.state || CoreContract.initialState();
       this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
-      this.#reconstructionRefusal = this.#removedCoreSyntaxRefusal();
       this.#coreReducedState = CoreContract.initialState();
       this.#coreReducedThroughOffset = 0;
-      if (this.#reconstructionRefusal) return;
       // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
-        let page: StreamPage;
-        try {
-          page = this.read(this.#coreReducedThroughOffset, 500);
-        } catch (error) {
-          // An unreadable row must not brick the context on every wake: report it, skip it, go on.
-          if (errorCode(error) !== "EVENT_UNREADABLE") throw error;
-          // EVENT_UNREADABLE's one producer is `read` below, which codes it with `{ offset }`.
-          const { offset } = (error as { data: { offset: number } }).data;
-          reportIssue("stream.core-rereduce", error, { offset });
-          this.#coreReducedThroughOffset = offset;
-          continue;
-        }
+        const page = this.#read(this.#coreReducedThroughOffset, 500, { skipUnreadable: true });
+        this.#reconstructionRefusal = this.#removedCoreSyntaxRefusal(page.events);
+        if (this.#reconstructionRefusal) return;
         this.#coreReducedState = this.#reduceEventsIntoCoreReducedState(
           page.events,
           this.#coreReducedState,
@@ -258,29 +247,24 @@ export class Stream {
   /** A v18 reconstruction does not reinterpret the removed rewrite language or an implicit
    *  subscription delivery. Keep the refusal on the Stream so a context can still be inspected or
    *  destroyed; ordinary calls throw it before reading, appending, or reducing the old log. */
-  #removedCoreSyntaxRefusal(): Error | null {
-    let afterOffset = 0;
-    for (;;) {
-      const page = this.#read(afterOffset, 500);
-      for (const event of page.events) {
-        const payload = event.payload as Record<string, unknown> | undefined;
-        const removedDelivery =
-          event.type === "events.iterate.com/itx/subscription-configured" &&
-          payload?.target !== null &&
-          !Object.hasOwn(payload || {}, "delivery");
-        const removedRewriteSyntax =
-          event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
-          hasRemovedRewriteSyntax(payload);
-        if (removedDelivery || removedRewriteSyntax)
-          return codedError(
-            "INVALID_INPUT",
-            `context ${this.#path} cannot be reconstructed by CoreContract ${CoreContract.version}: event at offset ${event.offset} uses a removed core shape; recreate the context`,
-            { offset: event.offset, type: event.type },
-          );
-      }
-      if (page.atHead) return null;
-      afterOffset = page.scannedThroughOffset;
+  #removedCoreSyntaxRefusal(events: StreamEvent[]): Error | null {
+    for (const event of events) {
+      const payload = event.payload as Record<string, unknown> | undefined;
+      const removedDelivery =
+        event.type === "events.iterate.com/itx/subscription-configured" &&
+        payload?.target !== null &&
+        !Object.hasOwn(payload || {}, "delivery");
+      const removedRewriteSyntax =
+        event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
+        hasRemovedRewriteSyntax(payload);
+      if (removedDelivery || removedRewriteSyntax)
+        return codedError(
+          "INVALID_INPUT",
+          `context ${this.#path} cannot be reconstructed by CoreContract ${CoreContract.version}: event at offset ${event.offset} uses a removed core shape; recreate the context`,
+          { offset: event.offset, type: event.type },
+        );
     }
+    return null;
   }
 
   /** A persisted core row this version deliberately cannot reconstruct, if there is one. */
@@ -666,14 +650,19 @@ export class Stream {
     return this.#read(afterOffset, 500);
   }
 
-  #read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
+  #read(
+    afterOffset = 0,
+    limit = 500,
+    options: { includeEphemeral?: boolean; skipUnreadable?: boolean } = {},
+  ): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
       limit,
       READ_PAGE_BUDGET_BYTES,
     );
-    const events: StreamEvent[] = rows.map((row) => {
+    const events: StreamEvent[] = [];
+    for (const row of rows) {
       // Written only by `append`: the input as it committed, its origin stamped, plus `createdAt`.
       let body: Omit<StreamEvent, "offset" | "path">;
       try {
@@ -681,22 +670,24 @@ export class Stream {
       } catch (error) {
         // A stored body that is not JSON is storage corruption; name the offset so a reader can
         // skip past it (`read(offset)`), instead of the platform's parse error naming nothing.
-        throw codedError(
+        const unreadable = codedError(
           "EVENT_UNREADABLE",
           `read: the stored body at offset ${row.offset} is not JSON (${error instanceof Error ? error.message : String(error)}) — read on from that offset to skip it`,
           { offset: row.offset },
         );
+        if (!options.skipUnreadable) throw unreadable;
+        reportIssue("stream.core-rereduce", unreadable, { offset: row.offset });
+        continue;
       }
-      return { ...body, offset: row.offset, path: this.#path };
-    });
+      events.push({ ...body, offset: row.offset, path: this.#path });
+    }
     // The proof: a CUT page is contiguously known through its last row; a complete page proves the
     // scan reached the durable mark — never the in-memory head (the header's zero-write contract).
     // At head: the scan ran out of rows, or the page's last row IS the durable mark (an
     // exact-`limit` page at the head must say so — rule 5's caught-up pass rides it).
     const highestDurableOffset = this.highestDurableOffset();
-    const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
-    const atHead =
-      !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
+    const lastOffset = rows.length ? rows[rows.length - 1].offset : afterOffset;
+    const atHead = !nextRowDidNotFit && (rows.length < limit || lastOffset >= highestDurableOffset);
     const scannedThroughOffset = atHead ? highestDurableOffset : lastOffset;
     if (options.includeEphemeral) {
       const ceiling = atHead ? Infinity : scannedThroughOffset;

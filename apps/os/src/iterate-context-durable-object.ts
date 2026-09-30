@@ -26,6 +26,7 @@ import {
   codedError,
   errorCode,
   ITERATE_CAUSE_HEADER,
+  jsonEqual,
   releaseRpcSessions,
   reportIssue,
 } from "iterate/lib";
@@ -83,6 +84,7 @@ import {
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
   RPC_STUB_PAGER_KEEPALIVE_RESPONSE,
+  RPC_STUB_PAGER_WEBSOCKET_HEADER,
   type BorrowedRpcStub,
 } from "./context/rpc-stubs.ts";
 import { RpcStubFetchServer } from "./context/fetch-upgrade.ts";
@@ -455,6 +457,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Context-local only: a facet restart cannot duplicate an unanswered target call. */
   readonly #configuredSubscriptionDeliveries = new Map<string, { startedAt: number }>();
+  /** A newer durable handoff must retain its recovery claim until that push is acknowledged. */
+  #subscriptionDeliveryThroughOffset: number | undefined;
   /** A late successful raw call is a receipt: repeat attempts observe it without invoking twice.
    * Errors are deliberately not receipts; the bounded runner must make its next actual retry. */
   readonly #settledConfiguredSubscriptionDeliveries = new Map<string, { settledAt: number }>();
@@ -663,8 +667,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** A live attachment can replace a durable rule without a stream commit. Do not acknowledge that
    * replacement while a snapshot served before the attachment can still route through its old
    * authority. */
-  async #waitOutLiveAttachmentSnapshots(): Promise<void> {
-    const until = Math.max(this.#snapshotLeaseUntil, this.#pendingFence()?.until ?? 0);
+  async #waitOutLiveAttachmentSnapshots(until: number): Promise<void> {
     for (let wait; (wait = until - Date.now()) > 0;)
       await new Promise((resolve) => setTimeout(resolve, wait));
   }
@@ -828,12 +831,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         !row.halted &&
         events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
     );
-    if (configurationChanged || durableDeliveryDue)
-      this.#facetHost.claim("subscriptions", Date.now());
+    if (configurationChanged || durableDeliveryDue) {
+      this.#subscriptionDeliveryThroughOffset = configuration.throughOffset;
+      // The push drives delivery immediately. This claim is recovery if that handoff is lost,
+      // rather than a second immediate driver for every committed event.
+      const recoveryAt = Date.now() + 20_000;
+      const claimedAt = this.#facetHost
+        .deadlines()
+        .find((claim) => claim.name === "subscriptions")?.at;
+      if (claimedAt === undefined || claimedAt > recoveryAt)
+        this.#facetHost.claim("subscriptions", recoveryAt);
+    }
     const ephemeralEvents = events.filter(
       (event) =>
         event.ephemeral && rows.some((row) => !row.halted && consumesEvent(row.consumes, event)),
     );
+    if (!configurationChanged && !durableDeliveryDue && ephemeralEvents.length === 0) return;
     void this.#facetHost
       .callFacetAsPlatform("subscriptions", [
         ["processEventBatch", ephemeralEvents, range, rows, configuration.throughOffset],
@@ -894,8 +907,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Native claim for the private subscriptions facet, kept outside every user-owned namespace. */
-  claimSubscriptionDelivery(at: number | null): void {
+  claimSubscriptionDelivery(input: { at: number | null; throughOffset: number }): void {
     this.#assertReconstructable();
+    const { rows, throughOffset } = this.subscriptionDeliveryConfiguration();
+    // An old facet cannot revive removed rows or release a later commit's recovery claim.
+    if (rows.length === 0 || input.throughOffset > throughOffset) return;
+    const requiredThroughOffset = this.#subscriptionDeliveryThroughOffset ?? throughOffset;
+    if (input.at === null && input.throughOffset < requiredThroughOffset) return;
+    let at = input.at;
+    if (at !== null && input.throughOffset < requiredThroughOffset) {
+      const current = this.#facetHost
+        .deadlines()
+        .find((claim) => claim.name === "subscriptions")?.at;
+      if (current !== undefined) at = Math.min(at, current);
+    }
     this.#facetHost.claim("subscriptions", at);
     this.#alarmCoordinator.reconcile();
   }
@@ -982,11 +1007,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const actual = this.#stream
       .read(request.event.offset - 1, 1, { includeEphemeral: true })
       .events.find((event) => event.offset === request.event.offset && event.ephemeral);
-    if (
-      !actual ||
-      !consumesEvent(row.consumes, actual) ||
-      JSON.stringify(actual) !== JSON.stringify(request.event)
-    )
+    if (!actual || !consumesEvent(row.consumes, actual) || !jsonEqual(actual, request.event))
       throw codedError("GONE", "ephemeral subscription source event is no longer available");
     return [actual];
   }
@@ -1029,7 +1050,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Promise.race may finish the facet attempt while this native target call still owns the body.
     const bodyChars = JSON.stringify(events).length;
     const admittedAlone =
-      events.length === 1 &&
       this.#configuredSubscriptionDeliveryBodyChars === 0 &&
       bodyChars <= IterateContextDurableObject.#configuredSubscriptionDeliveryMaximumBodyChars;
     if (
@@ -1085,6 +1105,33 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ? (await walkSteps({ value, receiver: undefined }, [[method, ...args]])).value
           : await callOn(value, undefined, args);
       });
+    } catch (error) {
+      // Wake notifications are at most once. Unpublished config owes no history, unless the
+      // resolver snapshot predates this event and needs a fresh resolution on the next attempt.
+      if (fanOut && events[0].type === "events.iterate.com/itx/woken") return;
+      const refusal = error as {
+        unpublishedConfig?: unknown;
+        validUntil?: unknown;
+        data?: unknown;
+      } | null;
+      const code = errorCode(error);
+      if (
+        fanOut &&
+        code === "NO_ITX_EXPRESSION_MATCH" &&
+        refusal?.unpublishedConfig === true &&
+        !(
+          typeof refusal.validUntil === "number" &&
+          refusal.validUntil - SNAPSHOT_TTL_MS < Date.parse(events[0].createdAt)
+        )
+      )
+        return;
+      if (code)
+        throw codedError(
+          code,
+          error instanceof Error ? error.message : String(error),
+          refusal?.data,
+        );
+      throw error;
     } finally {
       this.#configuredSubscriptionDeliveryBodyChars -= bodyChars;
       releaseRpcSessions([value, result]);
@@ -1788,7 +1835,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         // oxlint-disable-next-line iterate/simple-truthiness-check -- the `itx.subscriptions` wire view: an absent optional field must stay ABSENT, not `field: undefined` (capnweb / Workers RPC serialize an undefined-valued key as present, and readers test presence)
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         ...(s.ordered === false && { ordered: false as const }),
-        ...(snapshot?.fanOut && { pending: snapshot.fanOut.pending.length, paused: false }),
+        ...(s.ordered === false && {
+          pending: snapshot?.fanOut?.pending.length ?? 0,
+          paused: false,
+        }),
         // an absent facet stays ABSENT on the wire, like the fields around it
         ...(s.hostedFacet && {
           hostedFacet: { ...s.hostedFacet, restarts: this.#facetHost.restarts(s.hostedFacet.name) },
@@ -2158,14 +2208,42 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // expression runs as app code.
     const app = request.headers.get(ITX_APP_HEADER) !== null;
     if (!app) {
-      // A lend's row rides its pager: the attach is answered like a rule write (a re-dial's rule is
-      // a repeat, and a lent callback's row waits a pending fence out with it — at most once).
-      const before = this.#stream.coreReducedState;
-      const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
-      if (pager) {
-        await this.#waitOutOlderSnapshots(before, true);
-        await this.#waitOutLiveAttachmentSnapshots();
-        return pager;
+      if (request.headers.has(RPC_STUB_PAGER_WEBSOCKET_HEADER)) {
+        // A lend's row rides its pager: the attach is answered like a rule write (a re-dial's rule is
+        // a repeat, and a lent callback's row waits a pending fence out with it — at most once).
+        const before = this.#stream.coreReducedState;
+        const beforeRules = Object.fromEntries(
+          this.#effectiveRewriteRules(Object.values(before.itxExpressionRewriteRules)).map(
+            (rule) => [canonicalItxExpressionPrefix(rule.match), rule],
+          ),
+        );
+        const beforeRoutes = this.#effectiveFetchRoutes(before.fetchRoutes);
+        const leaseUntil = this.#snapshotLeaseUntil;
+        const pendingFence = this.#pendingFence();
+        const pager = this.#rpcStubs.acceptRpcStubPagerWebSocket(request);
+        if (pager) {
+          const afterRules = Object.fromEntries(
+            this.#effectiveRewriteRules(
+              Object.values(this.#stream.coreReducedState.itxExpressionRewriteRules),
+            ).map((rule) => [canonicalItxExpressionPrefix(rule.match), rule]),
+          );
+          const waits =
+            !jsonEqual(
+              beforeRoutes,
+              this.#effectiveFetchRoutes(this.#stream.coreReducedState.fetchRoutes),
+            ) ||
+            rulesChangeNeedsCommitWait(
+              beforeRules,
+              afterRules,
+              this.#implicitRoots,
+              pendingFence?.takenAway,
+            );
+          await this.#waitOutOlderSnapshots(before, true);
+          await this.#waitOutLiveAttachmentSnapshots(
+            Math.max(pendingFence?.until ?? 0, waits ? leaseUntil : 0),
+          );
+          return pager;
+        }
       }
       const upgradeLeg = this.#rpcStubFetch.acceptFetchUpgradeLeg(request);
       if (upgradeLeg) return upgradeLeg;

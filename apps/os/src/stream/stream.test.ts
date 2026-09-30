@@ -78,6 +78,64 @@ test("a pre-v18 checkpoint with a pinned rewrite match blocks append instead of 
   expect(rebuilt.highestDurableOffset()).toBe(1);
 });
 
+test.for([1, 2])(
+  "an unreadable row at offset %i does not hide a removed subscription shape during reconstruction",
+  (unreadableOffset) => {
+    const storage = nodeSqliteDurableObjectStorage();
+    const first = bareStream({ storage });
+    const legacy = JSON.stringify({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: { name: "legacy", target: "itx.worker.processEventBatch" },
+    });
+    for (const offset of [1, 2])
+      first.storage.insertEvent(offset, offset === unreadableOffset ? "not json" : legacy, null);
+    first.storage.reduceCheckpoints.write(
+      CoreContract.slug,
+      { reducerVersion: "17.0.0", reducedThroughOffset: 2 },
+      undefined,
+      false,
+    );
+
+    const rebuilt = bareStream({ storage });
+    expect(errorCode(rebuilt.reconstructionRefusal)).toBe("INVALID_INPUT");
+    expect(() => rebuilt.append({ type: "new" })).toThrow(/recreate the context/);
+  },
+);
+
+test("reconstruction skips only the unreadable row and retains rules on both sides", () => {
+  const storage = nodeSqliteDurableObjectStorage();
+  const first = bareStream({ storage });
+  for (const [offset, name] of [
+    [1, "before"],
+    [3, "after"],
+  ] as const)
+    first.storage.insertEvent(
+      offset,
+      JSON.stringify({
+        type: "events.iterate.com/itx/rewrite-rule-configured",
+        payload: { match: `itx.${name}`, target: "itx.builtins.whoami" },
+      }),
+      null,
+    );
+  first.storage.insertEvent(2, "not json", null);
+  first.storage.reduceCheckpoints.write(
+    CoreContract.slug,
+    { reducerVersion: "0.0.0", reducedThroughOffset: 3 },
+    undefined,
+    false,
+  );
+
+  const rebuilt = bareStream({ storage });
+  expect(rebuilt.reconstructionRefusal).toBeNull();
+  expect(Object.keys(rebuilt.coreReducedState.itxExpressionRewriteRules)).toEqual([
+    "itx.before",
+    "itx.after",
+  ]);
+  expect(() => rebuilt.read()).toThrow(/stored body at offset 2 is not JSON/);
+  expect(rebuilt.read(2).events).toMatchObject([{ offset: 3 }]);
+  expect(rebuilt.append({ type: "new" })[0]).toMatchObject({ offset: 4 });
+});
+
 test("waitForEvent: the type filter holds a waiter through non-matching commits", async () => {
   const stream = bareStream();
   stream.append({ type: "seed" });

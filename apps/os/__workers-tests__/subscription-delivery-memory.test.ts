@@ -11,7 +11,14 @@ const MiB = 1024 * 1024;
 type Status = {
   targetBodyChars: number;
   activeTargetDeliveries: number;
-  snapshots: Record<string, { confirmedOffset?: number; pending?: { attempt?: number } }>;
+  snapshots: Record<
+    string,
+    {
+      confirmedOffset?: number;
+      pending?: { attempt?: number };
+      fanOut?: { admittedThrough: number; pending: unknown[] };
+    }
+  >;
 };
 
 test("a held 7MiB selected target leaves twenty disjoint tiny rows free to settle", async () => {
@@ -57,7 +64,10 @@ test("a held 7MiB selected target leaves twenty disjoint tiny rows free to settl
   const during = (await runInDurableObject(s, (instance) =>
     instance.subscriptionDeliveryStatus(),
   )) as Status;
-  expect(during.activeTargetDeliveries).toBeGreaterThan(1);
+  // Tiny rows already confirmed while the independent large target remains held. They need not
+  // remain in flight: fairness is their progress beside the hold, not artificial overlap.
+  expect(await s.invoke(["itx", "facets", ["get", "slow-hold", HOLD], ["holding"]])).toBe(true);
+  expect(during).toMatchObject({ activeTargetDeliveries: 1 });
   expect(during.targetBodyChars).toBeLessThanOrEqual(8 * MiB);
   await s.invoke(["itx", "facets", ["get", "slow-hold", HOLD], ["release"]]);
   await until("the held 7MiB body settles", async () => {
@@ -145,7 +155,13 @@ test("a fan-out target has exactly eight overlapping calls", async () => {
     instance.subscriptionDeliveryStatus(),
   )) as Status;
   expect(during).toMatchObject({ activeTargetDeliveries: 8 });
-  for (let i = 0; i < events.length; i++) await target(["release"]);
+  for (let wave = 0; wave < 2; wave++) {
+    await until(
+      "a fan-out wave is actually holding eight calls",
+      async () => (await target(["holding"])) === 8,
+    );
+    for (let i = 0; i < 8; i++) await target(["release"]);
+  }
   await until("all fan-out calls settle", async () => {
     const status = (await runInDurableObject(s, (instance) =>
       instance.subscriptionDeliveryStatus(),
@@ -153,8 +169,9 @@ test("a fan-out target has exactly eight overlapping calls", async () => {
     const cursor = Object.entries(status.snapshots).find(([key]) => key.startsWith("fanout@"))?.[1];
     return (
       status.activeTargetDeliveries === 0 &&
-      cursor?.confirmedOffset !== undefined &&
-      cursor.confirmedOffset >= events.at(-1)!.offset
+      cursor?.fanOut &&
+      cursor.fanOut.admittedThrough >= events.at(-1)!.offset &&
+      cursor.fanOut.pending.length === 0
     );
   });
   await releasePins(context);

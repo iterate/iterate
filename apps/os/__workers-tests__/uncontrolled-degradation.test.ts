@@ -34,7 +34,7 @@ import { expect, test, vi } from "vitest";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
 import type { ItxExpression } from "iterate/expression";
 import { errorCode } from "iterate/lib";
-import { readLog, snapshot, stub, until } from "./support.ts";
+import { owedAlarmOf, readLog, snapshot, stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
 /** The workers project's own test timeout (vitest.config.ts): a pin gets the same budget. */
@@ -707,9 +707,12 @@ async function retryingCursorRow(ctx: string): Promise<SubscriptionRow> {
     },
   });
   await s.append({ type: "mark" });
-  return until("the first ladder attempt", async () => {
+  return until("the first persisted ladder failure and its retry alarm", async () => {
     const row = await subscriptionRow(ctx, "u");
-    return (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+    const retryAt = row?.cursor?.nextAttemptAtMs;
+    if ((row?.cursor?.attempt ?? 0) < 1 || !retryAt || retryAt <= Date.now()) return undefined;
+    const alarm = await owedAlarmOf(s);
+    return alarm !== null && alarm <= retryAt ? row : undefined;
   });
 }
 
@@ -723,9 +726,9 @@ async function uncallableCursorRow(ctx: string): Promise<SubscriptionRow> {
     payload: { name: "u", target: "itx.kv", delivery: "durable", consumes: ["mark"] },
   });
   await s.append({ type: "mark" });
-  return until("the first failure (a halt or a ladder attempt)", async () => {
+  return until("the deterministic first-failure halt", async () => {
     const row = await subscriptionRow(ctx, "u");
-    return row?.halted || (row?.cursor?.attempt ?? 0) >= 1 ? row : undefined;
+    return row?.halted ? row : undefined;
   });
 }
 

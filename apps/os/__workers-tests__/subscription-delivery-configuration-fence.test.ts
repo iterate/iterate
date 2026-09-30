@@ -69,8 +69,14 @@ test("a stale configuration push after replacement and facet restart retains the
       : undefined;
   });
   expect(before.cursor.confirmedOffset).toBeLessThan(event.offset);
-  const claimBefore = await alarm(context);
-  expect(claimBefore).not.toBeNull();
+  // The cursor is written before its asynchronous facet claim is forwarded to the context. Wait
+  // for that observable wake obligation rather than sampling in the intervening turn.
+  const claimBefore = await until("replacement's retry wake is claimed", async () => {
+    const claimedAt = await alarm(context);
+    return claimedAt !== null && claimedAt <= before.cursor.pending!.nextAttemptAtMs!
+      ? claimedAt
+      : undefined;
+  });
 
   // The stale platform call is deliberately delivered only after a fresh facet incarnation starts.
   // It must neither restore A nor clear B's retry claim.
@@ -150,6 +156,62 @@ test("the first cold-facet push after deletion rejects an older snapshot using c
     staleA,
   );
   expect(await privateSnapshots(context)).toEqual({});
+  await releasePins(context);
+});
+
+test("an older facet release cannot clear a later durable commit's recovery claim", async () => {
+  const context = "prj_subscription_delivery_claim_release_fence";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "retry",
+      target: ["itx", "workers", ["get", { source: FLAKY_TARGET }], "processEventBatch"],
+      delivery: "durable",
+      consumes: ["test/claim"],
+    },
+  });
+  const older = await configuration(context);
+  await s.append({ type: "test/claim" });
+  await until("the later commit has a persisted retry", async () => {
+    const status = await deliveryStatus(context);
+    return Object.values(status.snapshots).some((cursor) => cursor.pending?.attempt === 1);
+  });
+  await runInDurableObject(s, (instance, state) => {
+    const current = instance.subscriptionDeliveryConfiguration();
+    const at = Date.now() + 60_000;
+    instance.claimSubscriptionDelivery({ at, throughOffset: current.throughOffset });
+    const claim = state.storage.kv.get("facet-claim:subscriptions");
+    instance.claimSubscriptionDelivery({ at: null, throughOffset: older.throughOffset });
+    expect(state.storage.kv.get("facet-claim:subscriptions")).toEqual(claim);
+    instance.claimSubscriptionDelivery({ at: at + 60_000, throughOffset: older.throughOffset });
+    expect(state.storage.kv.get("facet-claim:subscriptions")).toEqual(claim);
+  });
+  await releasePins(context);
+});
+
+test("a late facet claim after the last durable row is removed cannot recreate it", async () => {
+  const context = "prj_subscription_delivery_claim_after_removal";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "removed",
+      target: "itx.whoami",
+      delivery: "durable",
+      consumes: ["test/claim"],
+    },
+  });
+  const older = await configuration(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "removed", target: null },
+  });
+  await runInDurableObject(s, (instance, state) => {
+    instance.claimSubscriptionDelivery({ at: Date.now(), throughOffset: older.throughOffset });
+    expect(state.storage.kv.get("facet-claim:subscriptions")).toBeUndefined();
+    expect(state.storage.kv.get("facet-ran:subscriptions")).toBeUndefined();
+  });
   await releasePins(context);
 });
 

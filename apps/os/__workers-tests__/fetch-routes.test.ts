@@ -25,13 +25,19 @@ test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a 
   const project = "fetch-routes-tunnel";
   const itx = await createProject(project);
   const site = new LiveSite();
-  const provision = await itx.provide("itx.tunnels.blog", site);
-  expect(
-    await itx.fetchRoutes.set("tunnel-blog", {
+  const provision = await itx.provide("itx.tunnels.blog", site, {
+    fetchRoute: {
+      fetchRouteName: "tunnel-blog",
       requestMatcher: { routingSlug: "blog" },
-      target: "itx.tunnels.blog",
-    }),
-  ).toEqual({ fetchRouteName: "tunnel-blog" });
+    },
+  });
+  const privateProvision = await itx.provide("itx.tunnels.private", site, {
+    fetchRoute: {
+      fetchRouteName: "tunnel-private",
+      requestMatcher: { routingSlug: "private" },
+      authRequirement: { visitors: "project-members" },
+    },
+  });
   await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_FETCH_ROUTER }]]);
 
   // HTTP: the matched host reaches the stub, path and query as the eyeball sent them
@@ -61,17 +67,12 @@ test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a 
   eyeball.close(1000, "done");
 
   // private: an anonymous visitor gets the sign-in challenge (a navigation, the edge's redirect)
-  await itx.fetchRoutes.set("tunnel-blog", {
-    requestMatcher: { routingSlug: "blog" },
-    target: "itx.tunnels.blog",
-    authRequirement: { visitors: "project-members" },
-  });
-  const anonymous = await exports.default.fetch(`https://blog--${project}.projects.test/`, {
+  const anonymous = await exports.default.fetch(`https://private--${project}.projects.test/`, {
     redirect: "manual",
   });
   expect(anonymous).toMatchObject({ status: 401 });
   expect(anonymous.headers.get("www-authenticate")).toBe('Bearer realm="iterate"');
-  const navigation = await exports.default.fetch(`https://blog--${project}.projects.test/`, {
+  const navigation = await exports.default.fetch(`https://private--${project}.projects.test/`, {
     redirect: "manual",
     headers: { Accept: "text/html", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document" },
   });
@@ -80,11 +81,8 @@ test("a config worker routes by `itx.fetchRoutes.match` to a lent stub: HTTP, a 
 
   // the lend recalled: the rule its target named and the route go with it — the host is the
   // config worker's own again
-  await itx.fetchRoutes.set("tunnel-blog", {
-    requestMatcher: { routingSlug: "blog" },
-    target: "itx.tunnels.blog",
-  });
   provision[Symbol.dispose]();
+  privateProvision[Symbol.dispose]();
   await expect.poll(async () => await itx.fetchRoutes.list()).toEqual([]);
   expect(await exports.default.fetch(`https://blog--${project}.projects.test/`)).toMatchObject({
     status: 404,

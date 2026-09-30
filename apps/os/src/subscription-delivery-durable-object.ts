@@ -9,12 +9,7 @@ import {
   DurableDeliveryProcessor,
   type DurableDeliveryRuntime,
 } from "iterate/stream/durable-delivery";
-import {
-  BackgroundClaims,
-  type ProcessEventArgs,
-  type ScannedRange,
-  type StreamEvent,
-} from "iterate/stream/processor";
+import { BackgroundClaims, type ScannedRange, type StreamEvent } from "iterate/stream/processor";
 
 export type DurableSubscriptionConfig = {
   name: string;
@@ -70,7 +65,7 @@ type ContextDeliveryBridge = {
     fanOut?: true;
     resumeAtOffset?: number;
   }): Promise<void>;
-  claimSubscriptionDelivery(at: number | null): Promise<void>;
+  claimSubscriptionDelivery(input: { at: number | null; throughOffset: number }): Promise<void>;
 };
 
 /** A first-party facet, reached by the context only through FacetHost's platform call. */
@@ -82,11 +77,17 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
 
   readonly #runners = new Map<string, DurableDeliveryProcessor>();
   #configurationThroughOffset: number | undefined;
+  #needsCursorSweep = true;
   static readonly #pendingEphemeralBudgetChars = 8 * 1024 * 1024;
   #pendingEphemeralChars = 0;
   readonly #wakeByRunner = new Map<string, number>();
-  readonly #backgroundClaims = new BackgroundClaims({
-    claim: async (at) => await this.#context().claimSubscriptionDelivery(at),
+  readonly #backgroundClaims = new BackgroundClaims<number>({
+    claim: async (at, throughOffset) => {
+      if (throughOffset === undefined)
+        throw new Error("subscription delivery claimed before configuration was accepted");
+      await this.#context().claimSubscriptionDelivery({ at, throughOffset });
+    },
+    capture: () => this.#claimThroughOffset(),
     report: (error) =>
       reportIssue("subscription-delivery.facet-claim", error, {
         context: this.ctx.props.iterateContextName,
@@ -94,6 +95,17 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     afterMs: 20_000,
     maxAfterMs: 20_000,
   });
+
+  constructor(
+    ctx: DurableObjectState,
+    env: {
+      ITERATE_CONTEXT: DurableObjectNamespace;
+      ITX?: never;
+    },
+  ) {
+    super(ctx, env);
+    this.ctx.storage.kv.delete("durable-delivery/configuration-through-offset");
+  }
 
   /** One context commit and its current durable-row identities. The rows are configuration only:
    * target expressions and event bodies never enter this facet or its storage. */
@@ -103,11 +115,11 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     rows: DurableSubscriptionConfig[],
     configurationThroughOffset: number,
   ): Promise<void> {
-    if (this.#acceptedConfigurationThroughOffset() === undefined) {
-      // A deleted facet has no local high-water. Pull once before accepting a retried platform
-      // call, so an older push cannot recreate removed configuration after a cold start.
+    const cold = this.#acceptedConfigurationThroughOffset() === undefined;
+    if (cold) {
+      // A deleted facet has no local high-water. Pull current core configuration before reconciling
+      // a delayed platform call, so an older push cannot recreate removed configuration.
       const current = await this.#context().subscriptionDeliveryConfiguration();
-      if (configurationThroughOffset < current.throughOffset) return;
       rows = current.rows;
       configurationThroughOffset = current.throughOffset;
     }
@@ -115,11 +127,18 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     // the prior one when every cursor is caught up.
     if (!this.#reconcile(rows, configurationThroughOffset)) return;
     this.#wakeByRunner.clear();
+    this.#restorePersistedWakes(rows);
     for (const row of rows) {
       if (row.halted) continue;
       const runner = this.#runners.get(`${row.name}@${row.configuredAtOffset}`)!;
-      for (const event of events) runner.processEvent(this.#args(event));
-      runner.processEvent(this.#args(null));
+      for (const event of events) runner.push(event);
+      runner.drive((work) => this.#runInBackground(work));
+    }
+    // A stale first push can be the only route back to a persisted retry after this facet died.
+    // Its claim must reach the context before the platform call returns.
+    if (cold) {
+      this.#syncClaim();
+      await this.#backgroundClaims.flush();
     }
   }
 
@@ -129,12 +148,20 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     // A context claims this first-party facet before its asynchronous post-commit push. If that
     // push died with the context, the claim revives us with no local configuration yet; core is
     // the durable source of row identity, so pull it afresh rather than retaining a second table.
+    const cold = this.#acceptedConfigurationThroughOffset() === undefined;
     const configuration = await this.#context().subscriptionDeliveryConfiguration();
     if (!this.#reconcile(configuration.rows, configuration.throughOffset)) return;
     this.#wakeByRunner.clear(); // the alarm spent the prior claim; a runner reclaims only if it still needs one
+    this.#restorePersistedWakes(configuration.rows);
     for (const row of configuration.rows) {
       if (!row.halted)
-        this.#runners.get(`${row.name}@${row.configuredAtOffset}`)?.processEvent(this.#args(null));
+        this.#runners
+          .get(`${row.name}@${row.configuredAtOffset}`)
+          ?.drive((work) => this.#runInBackground(work));
+    }
+    if (cold) {
+      this.#syncClaim();
+      await this.#backgroundClaims.flush();
     }
   }
 
@@ -163,8 +190,6 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     const acceptedThroughOffset = this.#acceptedConfigurationThroughOffset();
     if (acceptedThroughOffset !== undefined && throughOffset < acceptedThroughOffset) return false;
     this.#configurationThroughOffset = throughOffset;
-    if (acceptedThroughOffset !== throughOffset)
-      this.ctx.storage.kv.put("durable-delivery/configuration-through-offset", throughOffset);
     // The facet KV owns cursors only. Core remains the durable authority for row identity and
     // configuration, which the caller supplies afresh on every push or revive.
     const live = new Set(rows.map((row) => `${row.name}@${row.configuredAtOffset}`));
@@ -178,6 +203,10 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
         this.ctx.storage.kv.delete(`durable-delivery/${key}`);
         this.ctx.storage.kv.delete(`durable-delivery-resumed/${key}`);
       }
+    if (this.#needsCursorSweep) {
+      this.#deleteUnownedCursorKeys(live);
+      this.#needsCursorSweep = false;
+    }
     for (const row of rows) {
       const key = `${row.name}@${row.configuredAtOffset}`;
       let runner = this.#runners.get(key);
@@ -217,13 +246,43 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     return true;
   }
 
+  /** A cold facet has no in-memory predecessor to remove, so core configuration owns this one-time sweep. */
+  #deleteUnownedCursorKeys(live: Set<string>): void {
+    for (const [key] of this.ctx.storage.kv.list({ prefix: "durable-delivery/" })) {
+      const slug = key.slice("durable-delivery/".length);
+      if (!live.has(slug)) this.ctx.storage.kv.delete(key);
+    }
+    for (const [key] of this.ctx.storage.kv.list({ prefix: "durable-delivery-resumed/" })) {
+      const slug = key.slice("durable-delivery-resumed/".length);
+      if (!live.has(slug)) this.ctx.storage.kv.delete(key);
+    }
+  }
+
+  #restorePersistedWakes(rows: DurableSubscriptionConfig[]): void {
+    for (const row of rows) {
+      const key = `${row.name}@${row.configuredAtOffset}`;
+      const cursor = this.#runners.get(key)?.snapshot();
+      const fanOutWake = cursor?.fanOut?.pending.reduce<number | undefined>(
+        (earliest, item) =>
+          item.nextAttemptAtMs === undefined ||
+          (earliest !== undefined && earliest <= item.nextAttemptAtMs)
+            ? earliest
+            : item.nextAttemptAtMs,
+        undefined,
+      );
+      const wakeAt = cursor?.pending?.nextAttemptAtMs ?? fanOutWake;
+      if (wakeAt !== undefined) this.#wakeByRunner.set(key, wakeAt);
+    }
+  }
+
   #acceptedConfigurationThroughOffset(): number | undefined {
-    if (this.#configurationThroughOffset !== undefined) return this.#configurationThroughOffset;
-    const persisted = this.ctx.storage.kv.get<number>(
-      "durable-delivery/configuration-through-offset",
-    );
-    if (persisted !== undefined) this.#configurationThroughOffset = persisted;
-    return persisted;
+    return this.#configurationThroughOffset;
+  }
+
+  #claimThroughOffset(): number {
+    if (this.#configurationThroughOffset === undefined)
+      throw new Error("subscription delivery claimed before configuration was accepted");
+    return this.#configurationThroughOffset;
   }
 
   #runtimeFor(row: DurableSubscriptionConfig): DurableDeliveryRuntime {
@@ -299,18 +358,6 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     };
   }
 
-  #args(event: StreamEvent | null): ProcessEventArgs<Record<string, never>> {
-    return {
-      event,
-      state: {},
-      previousState: {},
-      append: async () => [],
-      blockProcessorWhile: (work) => this.#runInBackground(work),
-      runInBackground: (work) => this.#runInBackground(work),
-      delivery: { caughtUp: true },
-    };
-  }
-
   #runInBackground(work: () => Promise<unknown>): void {
     this.#backgroundClaims.started();
     this.ctx.waitUntil(
@@ -333,6 +380,9 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
       (earliest, at) => (earliest === null || at < earliest ? at : earliest),
       null,
     );
-    this.#backgroundClaims.at(this.#backgroundClaims.inFlight > 0 ? Date.now() + 20_000 : wakeAt);
+    const busyAt = this.#backgroundClaims.inFlight > 0 ? Date.now() + 20_000 : null;
+    this.#backgroundClaims.at(
+      busyAt === null || wakeAt === null ? (busyAt ?? wakeAt) : Math.min(busyAt, wakeAt),
+    );
   }
 }
