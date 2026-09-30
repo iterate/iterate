@@ -9,6 +9,41 @@ proof-of-concept recommendation, tracked in draft PR
 move, #3448's caller-supplied deployment, Docs, and #3455's RPC response-stream
 fix. Main subsequently reached `e9f059e8c` with #3460.
 
+## Latest published checkpoint
+
+Source draft [#3461](https://github.com/iterate/iterate/pull/3461) is published at
+`b11b2ff13acebd99336f068f65df6e0bc8efaea1`. The full root suite passes,
+including sockets: OS has 153 passing files, 2,308 passing tests and 14 existing
+expected failures. Lint, typecheck, formatting and Knip pass. Fresh deployed
+preview, slow residency, performance, 100-run soak and log checks are still
+required. The first preview attempt exposed one stale Wrangler declaration for
+the removed private delivery class; that source configuration is being repaired.
+
+The remaining architecture has one owner for durable delivery: the context
+holds the log, cursor, resume acknowledgement, native target authority and
+recovery deadline. It does not send event bodies through a private facet.
+Generation fences and mark-before-call attempts remain. Fan-out persists one
+eight-call wave and its combined outcomes; ephemerals retain a separate bounded
+live path. Live providers and callback subscriptions use the same existing
+pager. The original processor claim code replaces a now single-caller helper.
+
+Measured runtime is 18,073 core + 7,546 SDK = 25,619, versus main's 18,806 +
+6,814 = 25,620. That is only one line smaller combined, despite a 733-line core
+reduction. It is inadequate as the requested larger reduction; tests and moved
+code are not credited as runtime deletions.
+
+Concrete requirement relaxations implemented in the second PR are fixed-prefix
+names plus ordinary adapter code, explicit configured origin and delivery,
+one 25-attempt/four-hour-capped durable retry policy, bounded recovery on the
+context wake, and explicit opt-in to delivery failure receipts. They remove
+separate configuration languages, target inspection and reconstructed wake
+state without reducing available capabilities. The much larger potential cut
+is to make consumers own their durable forwarding policy as ordinary processors;
+that changes a platform guarantee and is still a proposal, not a current deletion.
+
+The history below retains each earlier checkpoint and its failures rather than
+presenting old green performance or cancelled soak work as evidence for this head.
+
 The first full-access Workers run started from a built working tree at
 `30875b8b9`. It completed: 2,284 tests passed, 14 were expected failures, and
 22 failed. The failures are source outcomes, not the earlier sandbox
@@ -566,6 +601,98 @@ be rejected if those recovery and residency outcomes require rebuilding the
 facet as a different keepalive or claim layer. The implementation draft
 [#3461](https://github.com/iterate/iterate/pull/3461) is not ready to merge.
 
+### Round 12: native cursor ownership has five release blockers
+
+[The twelfth independent review](reviews/opus-round-12.md) read the immutable
+`24f762f6b` native context-cursor experiment. It used Claude Opus 5.5 with
+xhigh thinking: 79,184 thinking tokens, 87,930 output tokens, and 884,849 ms
+of model duration. It found the ownership model simpler: the context now owns
+the log, target authority, cursor, and alarm, and a terminal cursor update and
+its terminal event can land in one synchronous turn. That is a real advantage
+over a separate facet and bridge, but it is not a passing implementation.
+
+The five blockers are source-backed rather than general cautions:
+
+1. **Commit-to-admission recovery is only in memory.** A reset after a commit
+   and before a pending cursor write can lose the only wake that would admit
+   the event. Persist the existing-style recovery mark on the idle-to-active
+   transition and restore it at birth.
+2. **A reset during a target call can retry forever.** Attempts increment before
+   the call, but the maximum was checked only in the catch path. A reset skips
+   that path and can repeat every deadline. Check the persisted attempt before
+   every call and take the normal terminal outcome at the existing bound.
+3. **Construction writes an alarm too early.** Restoring wake state reconciles
+   before the guarded birth rearm. That can leave an empty alarm pass and wake
+   an orphan reached only by id. Let the existing post-birth callers reconcile
+   instead.
+4. **Cold fan-out lets one backoff hide ready work.** A long retry deadline can
+   win over cold recovery even when unattempted items are waiting. Prefer the
+   cold recovery wake so ready work starts promptly.
+5. **The migration check misses an idle old facet.** Its marker is cleared after
+   a clean birth, so an old durable row may look new and replay history. Refuse
+   ownerless durable rows and do not write `deleteAlarm()` before facet birth.
+
+These are small repairs, but they preserve guarantees the removed facet used to
+supply: a durable recovery claim, a bounded death/restart path, and safe birth
+ordering. The review also identifies cheap follow-on cuts: avoid deriving and
+driving every row on every commit, reject exhausted body budget before reading
+a page, and use the live ephemeral ring by offset rather than parsing a durable
+body and comparing JSON. The reviewed source must still prove its residency,
+CPU, subrequest, memory, fan-out, and old-data behaviour on Workers.
+
+### Round 13: default fan-out delivery still has correctness and cost gaps
+
+[The thirteenth independent review](reviews/opus-round-13.md) read immutable
+source `179629660f` without making changes or running tests. It completed
+successfully with Claude Opus 5.5 xhigh: 120,872 thinking tokens, 129,783 output
+tokens, and 1,301,706 ms of model duration. It reports that Round 12's five
+release blockers were repaired, but identifies further source-backed work on
+the default project `config` fan-out row.
+
+The material findings are: a selective fan-out resume can leave another
+terminal item with an old resume marker and wake once per second forever; a
+row that consumes everything can consume its own durable failed/halts facts;
+and recovery can repeatedly arm an alarm in the past while a slow fan-out drain
+is already running. The same review also identifies unnecessary cursor writes
+for ephemerals below the durable head, delivery rereads that are not bounded by
+the admitted range, source-selection errors that halt an entire fan-out row,
+and retry policy captured only when a runner is created. These are concrete
+repair and Workers-test requirements, not evidence that the architecture is
+ready to merge.
+
+The review's D8 storage conclusion needs a precise platform boundary. This
+context is configured as a SQLite-backed Durable Object, for which Cloudflare
+limits a key and its value together to 2 MB. The older 128 KiB value limit is
+for legacy KV-backed Durable Objects and does not apply here.
+[Cloudflare's limits](https://developers.cloudflare.com/durable-objects/platform/limits/)
+also measure the limit in bytes, while the current fan-out error truncation is
+1,024 JavaScript string code units. One thousand ASCII snippets are about 1 MB
+before cursor structure; non-Latin text can take materially more UTF-8 bytes.
+Cloudflare does not document the exact serialized representation used for this
+limit, so an asserted overflow at exactly 1,000 Unicode snippets would be
+unsupported without a Workers probe. The supported conclusion is that the
+cursor has no byte budget that can be compared to the platform limit. It may
+violate that limit depending on serialization and its pending-item structure,
+while rewriting the whole value per item is expensive even below the limit.
+
+The safe repair is a byte-bounded cursor diagnostic, rather than a
+character-bounded one: retain a short UTF-8-safe synopsis in each pending item
+and preserve fuller bounded detail in the terminal fact or logs when that is
+needed for operators. A 256-character cap reduces the likely footprint, but it
+is not itself a byte guarantee and loses diagnostic detail unless the full
+terminal record remains available. This does not change delivery semantics; it
+changes how much failure text survives in the cursor. A Workers test must cover
+1,000 pending entries with non-Latin errors, actual storage writes, and the
+terminal diagnostic retained for inspection.
+
+Cloudflare also documents a single alarm per Durable Object, at-least-once
+alarm handling with automatic retries when the handler throws, and advises
+scheduling alarms only when work is due because each invocation incurs cost.
+Those facts support measuring and eliminating the reported past-due alarm loop;
+they do not establish its frequency or CPU cost without the proposed fault
+injection. See [Cloudflare alarm semantics](https://developers.cloudflare.com/durable-objects/api/alarms/)
+and [the Durable Object rules](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/).
+
 ## What remains core
 
 Core owns the append-only durable log, bounded ephemerals, `itx` name
@@ -694,5 +821,5 @@ authorized by this audit. Production rollout is not.
 - Paused delivery-removal proposal: [`design-delivery.md`](design-delivery.md). It remains useful evidence, but cannot justify a current cursor deletion.
 - Requirement tradeoffs and Cloudflare comparison: [`requirement-tradeoffs.md`](requirement-tradeoffs.md), [`cloudflare-os-comparison.md`](cloudflare-os-comparison.md), and [`validation-plan.md`](validation-plan.md).
 - Archived first-pass framework: [`archived-first-design.md`](archived-first-design.md), [`archived-first-design-full.md`](archived-first-design-full.md), [`exports-not-expressions.md`](exports-not-expressions.md), and [`design-capabilities.md`](design-capabilities.md).
-- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), and [round 11](reviews/opus-round-11.md).
+- Independent review records: [facet review](reviews/facets-plan-opus.md), [facet experiment](reviews/facets-control-experiment.md), [exports review](reviews/opus-exports-round-2.md), [lean-model review](reviews/opus-lean-round-3.md), [implementation review, round 4](reviews/opus-implementation-round-4.md), [durable-delivery review, round 5](reviews/opus-durable-delivery-round-5.md), and [private bridge review, round 6](reviews/opus-private-bridge-round-6.md), [direct private delivery review, round 7](reviews/opus-direct-private-delivery-round-7.md), [durable bodies review, round 8](reviews/opus-durable-bodies-round-8.md), [full-access source review, round 9](reviews/opus-root-round-9.md), [round 10](reviews/opus-round-10.md), [round 11](reviews/opus-round-11.md), [round 12](reviews/opus-round-12.md), and [round 13](reviews/opus-round-13.md).
 - Cloudflare, workerd, Cap'n Web, and Kenton Varda research synthesis: [`reports/Iterate core runtime review.md`](../../reports/Iterate%20core%20runtime%20review.md) and [targeted primary-source notes](../../research_notes/Iterate%20core%20runtime%20review/).
