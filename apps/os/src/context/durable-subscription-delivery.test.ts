@@ -254,7 +254,7 @@ test("a cold commit drives every new row so another row keeps its persisted back
   expect(delivery).toMatchObject({ deadline: retryAt });
 });
 
-test("an ephemeral-only commit does not drive a warm fan-out row", () => {
+test("an ephemeral-only commit does not drive a fresh fan-out row", () => {
   const values = new Map<string, unknown>();
   const storage = {
     get: <T>(key: string) => values.get(key) as T | undefined,
@@ -265,6 +265,7 @@ test("an ephemeral-only commit does not drive a warm fan-out row", () => {
   } as unknown as DurableObjectStorage["kv"];
   const rows = [
     { name: "fanout", configuredAtOffset: 1, ordered: false as const, consumes: ["tick"] },
+    { name: "ordered", configuredAtOffset: 2, consumes: ["tick"] },
   ];
   const run = vi.fn();
   const delivery = new DurableSubscriptionDelivery({
@@ -279,9 +280,8 @@ test("an ephemeral-only commit does not drive a warm fan-out row", () => {
     wakesChanged: () => {},
   });
 
-  delivery.sync();
-  delivery.push(rows, [{ offset: 2, type: "tick", ephemeral: true } as StreamEvent], false);
-  expect(run).not.toHaveBeenCalled();
+  delivery.push(rows, [{ offset: 3, type: "tick", ephemeral: true } as StreamEvent], false);
+  expect(run).toHaveBeenCalledOnce();
 });
 
 test("a running retry consumes its past wake instead of rearming it while the target is held", async () => {
