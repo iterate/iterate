@@ -102,10 +102,12 @@ import {
 } from "./preview-sweep.ts";
 import { chooseSlowRows, slowRowsTagsFilter, type SlowRows } from "./slow-rows.ts";
 
-// apps/os: its suites run there and write under its output/
+// apps/os: the deployment's record (preview.json) goes under its output/
 const ROOT = path.resolve(import.meta.dirname, "../../apps/os");
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const OUTPUT_DIR = path.join(ROOT, "output");
+// test/: the vitest e2e suite runs there (the Playwright specs from the repository's root)
+const TEST_ROOT = path.join(REPO_ROOT, "test");
 
 const Command = z.enum([
   "config",
@@ -612,7 +614,7 @@ function signInLinks(preview: {
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
- *  the same idempotent call as apps/os/e2e/support/project-host.ts `registerProject`, so the Dash link
+ *  the same idempotent call as test/helpers/project-host.ts `registerProject`, so the Dash link
  *  lands inside it. Then what a proxied app's link needs: a fetch route per proxied app to the
  *  deployment's own Worker (preview-config.ts `proxiedAppRoute`), and the deployment's `admins`
  *  members of the project's organization, so a reviewer signed in as themselves opens it. Each admin
@@ -724,14 +726,14 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
 /** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
  *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
- *  derives the deployed target itself (apps/os/e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
+ *  derives the deployed target itself (test/helpers/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
  *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
  *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
  *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their
  *  specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
  *  label and paths say (scripts/os/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
- *  each row to its timeout ceiling (apps/os/e2e/support/setup.ts), and the PR's number as
+ *  each row to its timeout ceiling (test/helpers/setup.ts), and the PR's number as
  *  PREVIEW_PR_NUMBER, by which the pkg.pr.new rows find the PR's own builds. */
 async function runSuite(
   suite: "e2e" | "specs",
@@ -840,7 +842,7 @@ async function runSuite(
   } catch (error) {
     throw failed(error);
   }
-  const run = { cwd: suite === "specs" ? REPO_ROOT : ROOT, env: tests.env };
+  const run = { cwd: suite === "specs" ? REPO_ROOT : TEST_ROOT, env: tests.env };
   try {
     // A job that waited for its deploy has the wait's bound in its timeout, and bounds the suite
     // itself to what is left of it.

@@ -7,7 +7,7 @@
 
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import { adminCredentials, openSession } from "./support.ts";
 
 /** A config worker whose `body` routing slug streams the body back, and every other host ignores it. */

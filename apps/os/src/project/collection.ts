@@ -25,7 +25,7 @@ const TERMINAL_WAIT_MS = 30_000;
  *  2026-09-24: 3 of the 8 creations that failed in ~1,470; the config repo's `repo/created` landed
  *  on the new incarnation at +23 s, and `create` failed at +31 s with WAIT_TIMEOUT all the same).
  *  A reset the platform is asked for — `ctx.abort()`, a storage reset — fails the call instead
- *  (e2e/context-abort.e2e.test.ts). Each slice is a fresh call, which reaches the active instance,
+ *  (test/vitest/os/context-abort.e2e.test.ts). Each slice is a fresh call, which reaches the active instance,
  *  and that instance's birth revives the claim the old one left (FacetHost), so the creation goes
  *  on within seconds. Remove when a call on a replaced instance fails. */
 const TERMINAL_WAIT_SLICE_MS = 5_000;
@@ -144,7 +144,7 @@ export class EntityCollectionRpcTarget extends RpcTarget {
       await context.processors.enable(this.slug);
       // The link is written HERE, never by the entity's processor from the request: whoever may
       // append on a path may append a request, so a creator it named would be the appender's
-      // choice (e2e/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
+      // choice (test/vitest/os/loaded-code.e2e.test.ts). `creator` is the library's, from the caller's
       // originating context (library.ts `entityRoot`); any other caller reaches this facet only
       // at `/`, from where it may write the same row itself. It lands with the request, before the
       // certificate: a born context is never re-pointed, and an owner's later row is the last word.

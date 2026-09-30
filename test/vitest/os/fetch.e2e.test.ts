@@ -1,0 +1,369 @@
+// fetch.e2e.test.ts — the ONE fetch, in and out. IN: a PROJECT HOST — a GET and a WebSocket
+// upgrade on `<routingSlug>--<project>.<base>` reach the project's config worker fetch(): a LOADED
+// WORKER published as the config worker (the site fixture — workerd-native WebSocketPair + 101), or a
+// config worker that routes the `device` routing slug in plain code to a LENT RPC STUB provided by a
+// plain NODE capnweb client (the device/ESP32 shape: `new WebSocketPair()` +
+// `upgradeWebSocketResponse(pair[0])`, capnweb's universal pair + sender-side answer), forwarding the
+// Request through its own `env.ITX.fetch` with `x-itx-expression` naming the stub. OUT:
+// `itx.fetch(request)` is THE egress path (the tutorial's chapter 8), a Request through the context's
+// own terminal — the LAST hop that owns the project scope. Layered so a regression names its hop. Pins:
+//   • a loaded worker as the config worker: GET → 200 HTML; WebSocket upgrade → 101 echo, clean close
+//   • a lent stub's plain HTTP fetch (eyeball → the project host → DO's expression fetch → the config
+//     worker → its env.ITX.fetch → DO's expression fetch → rule → the rpcStubs registry → relay →
+//     capnweb → the Node provider and back, the request crossing intact — the URL as the eyeball
+//     spelled it) and its WebSocket upgrade (101, echo, close through the Node provider)
+//   • egress: a `getSecret("/secrets/NAME")` placeholder that survives substitution means no such
+//     secret is stored, and forwarding it would leak the secret's NAME and send a garbage credential
+//     — the egress scans the request (URL first, then every header) as it substitutes and answers 502
+//     BEFORE the terminal fetch, naming the placeholder and where it sat to US, never to the destination
+//   • DYNAMIC WORKER ⇄ DYNAMIC WORKER over a lent fetch-shaped stub, every hop native Workers RPC /
+//     native fetch: within the provider's invocation a dyn-provided stub serves PLAIN fetch through
+//     env.ITX (a real Fetcher, the ItxEntrypoint loopback); RED (`createFailing`): its WebSocket upgrade
+//     dies on the Workers-RPC return leg, and a dyn-provided stub dies with the providing invocation
+//     (the detached-provider question)
+// (The workerd-provider half of the upgrade leg is __workers-tests__/ws-fetch-live-101.test.ts; a
+// tunnel — `iterate tunnel bla 3000` — is the same lent stub proxying to localhost, the same hops.)
+
+import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
+import { expect, test } from "vitest";
+import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
+import { createFailing } from "@iterate-com/shared/test-support/failing-test";
+import { adminCredentials, freshCtx, openItx, session, workerUrl } from "../../helpers/client.ts";
+import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import {
+  appSeesUrl,
+  fetchProjectUrl,
+  freshDnsSafeProjectSlug,
+  projectUrl,
+  registerProject,
+  wsRoundTripOnProjectUrl,
+} from "../../helpers/project-host.ts";
+import { SOURCES } from "../../helpers/sources.ts";
+
+// ── the project host: HTTP and WebSocket, a loaded worker and a lent stub ──
+
+/** A config worker that routes the `device` routing slug to the lent stub at `itx.device` in plain
+ *  code: the Request, upgrade and body intact, forwarded through its own `env.ITX.fetch` with
+ *  `x-itx-expression` naming the stub — a native fetch hop, which carries a WebSocket (Workers RPC
+ *  does not). */
+const SRC_DEVICE_ROUTER = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Router extends WorkerEntrypoint {
+  fetch(request) {
+    if (request.headers.get("x-iterate-routing-slug") !== "device")
+      return new Response("Not found\\n", { status: 404 });
+    const headers = new Headers(request.headers);
+    headers.set("x-itx-expression", "itx.device");
+    return this.env.ITX.fetch(new Request(request, { headers }));
+  }
+}`,
+};
+
+test("a project host serves a LOADED WORKER as the config worker: GET → 200 HTML, WebSocket upgrade → 101 echo, clean close", async () => {
+  const slug = freshDnsSafeProjectSlug("capcode");
+  const projectId = await registerProject(slug);
+  // The config worker is a stateless dynamic worker (its .fetch serves every host of the project) —
+  // the target is an itx EXPRESSION (workers.get({ source })), same as every other target.
+  const itx = openItx(projectId);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SOURCES.site }]]);
+  const site = projectUrl({ project: slug, routingSlug: "site", path: "/" });
+
+  const page = await fetchProjectUrl(site);
+  expect(page, page.text).toMatchObject({ status: 200 });
+  expect(page.text).toContain("dynamic web capability");
+
+  const ws = await wsRoundTripOnProjectUrl(site, "hello-from-eyeball", 15_000);
+  expect(ws.error).toBeUndefined();
+  expect(ws).toMatchObject({ opened: true, echo: "site-echo:hello-from-eyeball", closeCode: 1000 });
+
+  // observability is the core reduce's snapshot (the publication above already committed, so the
+  // wake record has reduced)
+  const snap = await itx.invoke("itx.facets.get('core').snapshot()");
+  expect(typeof snap.state.incarnation).toBe("number");
+});
+
+test("lent stub HTTP fetch: an eyeball POST on the project host reaches the config worker, which routes it to the Node provider's fetch(), and its Response rides back out", async () => {
+  const slug = freshDnsSafeProjectSlug("caplivehttp");
+  const projectId = await registerProject(slug);
+  const device = new HttpDevice();
+  const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+  await itx.provide("itx.device", device);
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_DEVICE_ROUTER }]]);
+  const target = { project: slug, routingSlug: "device", path: "/hunt?probe=1" };
+
+  const res = await fetchProjectUrl(projectUrl(target), {}, { method: "POST", body: "ping" });
+  expect(res, res.text).toMatchObject({ status: 201 });
+  expect(res).toMatchObject({ text: "pong-from-node-provider" });
+  expect(res.headers["x-device"]).toBe("node-live-cap");
+  // the URL as the eyeball spelled it (under paths: with the project prefix stripped, as the config
+  // worker sees it)
+  const seen = appSeesUrl(target);
+  expect(device).toMatchObject({
+    saw: [`POST ${seen.host}${seen.pathname}${seen.search} body=ping`],
+  });
+});
+
+test("lent stub WebSocket fetch: a plain eyeball WebSocket on the project host opens (101), echoes, and closes through the config worker and the Node provider", async () => {
+  const slug = freshDnsSafeProjectSlug("caplivews");
+  const projectId = await registerProject(slug);
+  const itx = session().authenticate(adminCredentials()).projects.get(projectId);
+  await itx.provide("itx.device", new WsDevice());
+  await publishConfigWorker(itx, ["itx", "workers", ["get", { source: SRC_DEVICE_ROUTER }]]);
+  const device = projectUrl({ project: slug, routingSlug: "device", path: "/" });
+  // Sanity: the route still answers plain HTTP (so the assertions below are about the UPGRADE).
+  const plain = await fetchProjectUrl(device);
+  expect(plain).toMatchObject({ text: "http-fallback" });
+
+  const ws = await wsRoundTripOnProjectUrl(device, "hello-device");
+  expect(ws.error).toBeUndefined();
+  expect(ws).toMatchObject({ opened: true, echo: "device-echo:hello-device", closeCode: 1000 });
+});
+
+// The workerd-provider half of the same leg is pinned in __workers-tests__/ws-fetch-live-101
+// .test.ts (the dedicated fetch-upgrade leg; the DO mints the eyeball pair natively). A tunnel
+// (`iterate tunnel bla 3000`) is this same lent stub proxying to localhost — the same three hops.
+
+test("unknown issuer server functions answer 404 instead of Start's internal 500", async () => {
+  for (const id of ["bogus", "0".repeat(64)]) {
+    const response = await fetch(workerUrl(`/_serverFn/${id}`), { redirect: "manual" });
+    expect(response, id).toMatchObject({ status: 404 });
+  }
+});
+
+// ── egress: a missing project secret is a 502 at egress ──
+
+test("a missing project secret in a HEADER is a loud 502 naming the header and the placeholder", async () => {
+  const res = await egress("", { "x-hunt-auth": 'Bearer getSecret("/secrets/GHOST")' });
+  expect(res).toMatchObject({ status: 502 });
+  const body = await res.text();
+  expect(body).toMatch(/no stored project secret/);
+  expect(body).toContain('getSecret("/secrets/GHOST")'); // the placeholder is named to US, not the destination
+  expect(body).toContain('header "x-hunt-auth"'); // …and WHERE it sat, so the caller can fix it
+});
+
+test("a missing project secret in the URL query is a loud 502 naming the URL — checked FIRST, before the headers", async () => {
+  const res = await egress('&access_token=getSecret("/secrets/GHOST")', {
+    "x-hunt-auth": 'getSecret("/secrets/GHOST")',
+  });
+  expect(res).toMatchObject({ status: 502 });
+  const body = await res.text();
+  expect(body).toMatch(/no stored project secret/);
+  expect(body).toContain('getSecret("/secrets/GHOST")');
+  expect(body).toContain("in the request URL");
+  expect(body).not.toContain("x-hunt-auth");
+});
+
+// ── dynamic worker ⇄ dynamic worker over a lent fetch-shaped stub, WebSocket included. Provider worker
+// A (loaded via `itx.workers.get({ source })`) PROVIDES a live RpcTarget whose fetch() upgrades
+// WebSockets, behind the rewrite rule `itx.wsdyn`; consumer worker B fetches it through its own env.ITX
+// binding with the x-itx-expression header, riding the DO's expression fetch; no capnweb client anywhere ──
+
+const SRC_PROVIDER = {
+  "package.json": '{"main":"worker.js"}',
+  // oxlint-disable-next-line iterate/no-raw-itx-get -- the provider's scope and lend are held on globalThis on purpose: the rows below pin a lent stub's lifetime
+  "worker.js": `import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+class WsDevice extends RpcTarget {
+  fetch(request) {
+    if ((request.headers.get("Upgrade") || "").toLowerCase() === "websocket") {
+      const pair = new WebSocketPair();
+      pair[1].accept();
+      pair[1].addEventListener("message", (e) => pair[1].send("dyn-echo:" + e.data));
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+    return new Response("dyn live site", { headers: { "content-type": "text/plain" } });
+  }
+}
+export default class Provider extends WorkerEntrypoint {
+  async run(mode) {
+    const itx = await this.env.ITX.get();
+    const device = new WsDevice();
+    const provided = await itx.provide("itx.wsdyn", device);
+    // Held on globalThis so nothing GC-recalls DURING this invocation; note it does NOT keep the
+    // lent stub alive past the invocation (see the lifetime test below).
+    globalThis.__keep = { itx, provided, device };
+    if (mode === "self-plain") {
+      const res = await this.env.ITX.fetch(
+        new Request("https://cap.internal/", { headers: { "x-itx-expression": "itx.wsdyn" } }),
+      );
+      return { status: res.status, body: (await res.text()).slice(0, 300) };
+    }
+    if (mode === "self-ws") {
+      const res = await this.env.ITX.fetch(
+        new Request("https://cap.internal/", {
+          headers: { "x-itx-expression": "itx.wsdyn", Upgrade: "websocket" },
+        }),
+      );
+      if (res.status !== 101 || !res.webSocket)
+        return { status: res.status, body: (await res.text()).slice(0, 400) };
+      const ws = res.webSocket;
+      ws.accept();
+      const echo = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve("TIMEOUT"), 8000);
+        ws.addEventListener("message", (e) => {
+          clearTimeout(timer);
+          resolve(String(e.data));
+        });
+        ws.send("hi-self");
+      });
+      ws.close(1000, "done");
+      return { status: 101, echo };
+    }
+    return "provided";
+  }
+}`,
+};
+
+const SRC_CONSUMER = {
+  "package.json": '{"main":"worker.js"}',
+  "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Consumer extends WorkerEntrypoint {
+  async run(kind) {
+    if (kind === "plain") {
+      const res = await this.env.ITX.fetch(
+        new Request("https://cap.internal/", { headers: { "x-itx-expression": "itx.wsdyn" } }),
+      );
+      return { status: res.status, body: (await res.text()).slice(0, 300) };
+    }
+    const res = await this.env.ITX.fetch(
+      new Request("https://cap.internal/", {
+        headers: { "x-itx-expression": "itx.wsdyn", Upgrade: "websocket" },
+      }),
+    );
+    if (res.status !== 101 || !res.webSocket)
+      return { status: res.status, body: (await res.text()).slice(0, 400) };
+    const ws = res.webSocket;
+    ws.accept();
+    const echo = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("TIMEOUT"), 8000);
+      ws.addEventListener("message", (e) => {
+        clearTimeout(timer);
+        resolve(String(e.data));
+      });
+      ws.send("hi-from-B");
+    });
+    ws.close(1000, "done");
+    return { status: 101, echo };
+  }
+}`,
+};
+
+test("within the provider's invocation: a dyn-provided lent stub serves PLAIN fetch", async () => {
+  const itx = openItx(freshCtx("dynliveself"));
+  const out = (await runProvider(itx, "self-plain")) as { status: number; body: string };
+  // dyn-worker → env.ITX (Fetcher) → DO's expression fetch → rewrite rule → lent stub's terminal fetch →
+  // back into the SAME dyn-worker's device — a socketless Response crosses every native hop.
+  expect(out).toEqual({ status: 200, body: "dyn live site" });
+});
+
+// BUG (VERIFIED, measured 2026-08-31): the fetch-upgrade dial assumes a hop that can carry
+// a webSocket-bearing Response. For a CAPNWEB provider (browser/Node/workerd client over /api)
+// that hop tunnels sockets (the fork's socket-as-streams) — ws-fetch-live-101 is green. For a
+// NATIVE provider (a dynamic worker providing over env.ITX.get(), where the lent stub is a
+// plain jsrpc stub), the dial's `provider.fetch(upgrade)` return leg IS Workers RPC — and the
+// provider's genuine 101 dies there:
+//   500 'expression fetch error: Could not serialize object of type "WebSocket". …' (at dialRpcStubFetch)
+// EXPECTED: parity with capnweb providers — 101 + echo. Fix directions: the
+// symmetric dial-back (the provider opens its OWN upgrade leg via its env.ITX Fetcher — it HAS
+// one) or an SDK-side provider shim; the plain-fetch half (test above) already works everywhere.
+createFailing(
+  test,
+  /answered 500: expression fetch error: Could not serialize object of type "WebSocket"/,
+  {
+    timeoutMs: 60_000,
+    retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  },
+)("within the provider's invocation: WEBSOCKET fetch of the dyn-provided lent stub", async () => {
+  const itx = openItx(freshCtx("dynlivewsself"));
+  const out = (await runProvider(itx, "self-ws")) as {
+    status: number;
+    echo?: string;
+    body?: string;
+  };
+  expect(
+    out,
+    `a native provider's 101 should cross the Workers-RPC return leg; it answered ${out.status}: ${out.body}`,
+  ).toEqual({ status: 101, echo: "dyn-echo:hi-self" });
+});
+
+// BUG-OR-CONTRACT (VERIFIED, re-measured 2026-09-01): a dyn-provided lent STUB DIES WITH THE
+// PROVIDING INVOCATION. The IterateContext scope a dynamic worker gets from env.ITX.get() lives in the
+// ItxEntrypoint loopback's request context; the lend relay + pager socket holding the provider
+// transport die when that context ends (the run() call chain completing), so the DO drops the
+// stub from its `itx.rpcStubs` registry and un-sets its rewrite rule when the key's last pager
+// closes (src/context/rpc-stubs.ts). Worker B then finds no rule and gets
+//   404 'expression fetch error: no rewrite rule matches "itx.wsdyn.fetch({})" (default-deny; …)'
+// (re-measured 2026-09-24), or, if B arrives before the un-set lands, the offline registry entry's
+//   500 'expression fetch error: … rpc stub "itx.wsdyn" is offline' (RPC_STUB_OFFLINE).
+// (holding the itx stub on the provider's globalThis does NOT keep the remote context alive).
+// EXPECTED (the scenario this pins): provide in one invocation, fetch from another worker later.
+// Whether the fix is a detached-provider primitive (session-shaped lending for dyn workers) or a
+// doctrine ruling ("lent stubs are invocation-scoped; detached fetch-shaped things must be LOADED
+// code — itx.workers.get({ source: ... }) / a named durable facet, both of which already serve WS")
+// is an owner call.
+createFailing(
+  test,
+  /answered (?:404: expression fetch error: no rewrite rule matches "itx\.wsdyn|500: .*rpc stub "itx\.wsdyn" is offline)/,
+  {
+    timeoutMs: 60_000,
+    retries: process.env.CI ? E2E_CI_RETRIES : 0,
+  },
+)(
+  "ACROSS invocations: worker B fetches the stub A provided (the detached-provider question)",
+  async () => {
+    const itx = openItx(freshCtx("dynlivex"));
+    expect(await runProvider(itx, "provide")).toBe("provided");
+    const out = (await itx.invoke([
+      "itx",
+      "workers",
+      ["get", { source: SRC_CONSUMER }],
+      ["run", "plain"],
+    ])) as { status: number; body: string };
+    expect(
+      out,
+      `worker B should reach the stub A provided in an earlier invocation; it answered ${out.status}: ${out.body}`,
+    ).toEqual({ status: 200, body: "dyn live site" });
+  },
+);
+
+/** A fetch-shaped live rpc stub that records what it saw (method, path AND query, body — the
+ *  request must cross intact, not just some response come back) and answers a distinctive Response. */
+class HttpDevice extends RpcTarget {
+  saw: string[] = [];
+  async fetch(request: Request) {
+    const url = new URL(request.url);
+    this.saw.push(
+      `${request.method} ${url.host}${url.pathname}${url.search} body=${await request.text()}`,
+    );
+    return new Response("pong-from-node-provider", {
+      status: 201,
+      headers: { "x-device": "node-live-cap" },
+    });
+  }
+}
+
+/** The device: a fetch-shaped live rpc stub that upgrades WebSockets — the workerd fetch-handler
+ *  idiom verbatim, running in Node. */
+class WsDevice extends RpcTarget {
+  async fetch(request: Request) {
+    const upgrade = String(request?.headers?.get?.("upgrade") ?? "");
+    if (upgrade.toLowerCase() !== "websocket") return new Response("http-fallback");
+    const pair = new WebSocketPair();
+    pair[1].accept();
+    pair[1].addEventListener("message", (e: { data: unknown }) =>
+      pair[1].send(`device-echo:${e.data}`),
+    );
+    return upgradeWebSocketResponse(pair[0]);
+  }
+}
+
+/** Send a Request through a fresh context's egress terminal, with test query/headers. (The URL
+ *  parser percent-encodes the placeholder's quotes in the query; the egress matches that form too.)
+ *  The Response rides back over capnweb. */
+const egress = (query: string, headers?: Record<string, string>): Promise<Response> =>
+  openItx(freshCtx("egress")).fetch(
+    new Request(`https://egress.invalid/hunt?probe=1${query}`, { headers }),
+  );
+
+const runProvider = (itx: ReturnType<typeof openItx>, mode: string): Promise<unknown> =>
+  itx.invoke(["itx", "workers", ["get", { source: SRC_PROVIDER }], ["run", mode]]);

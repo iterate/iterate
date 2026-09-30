@@ -9,7 +9,7 @@
 // operator's APP_CONFIG_SECRETS__ADMIN_BEARER. The visitor's path is forwarded as-is: under paths routing
 // (`<origin>/projects/<project>/<routingSlug>/…`, a per-PR preview) the platform strips that base and
 // names it in `x-iterate-base-path`, so a local server that serves under it (Vite: `--base`) needs it
-// put back in front. Pinned by apps/os e2e/serve-localhost-example.e2e.test.ts.
+// put back in front. Pinned by test/vitest/os/serve-localhost-example.e2e.test.ts.
 import {
   newWebSocketRpcSession,
   RpcTarget,

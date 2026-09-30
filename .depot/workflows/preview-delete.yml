@@ -48,6 +48,7 @@ on:
       - apps/voice/**
       - apps/kit/**
       - "!apps/kit/firmware/**"
+      - test/**
       - specs/**
       - playwright.config.ts
       - packages/cli/**

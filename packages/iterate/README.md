@@ -19,7 +19,7 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
   `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
   imports, re-exports, dynamic `import()` and an app added later are covered, and
   `lint/oxlintrc-platform-line.test.ts` pins it. Tests may import apps/os's two harnesses,
-  `apps/os/e2e/support/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
+  `test/helpers/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
@@ -129,7 +129,7 @@ jail confines the code that runs in it, not the contexts it creates through a gr
 ```ts
 import { reduceProcessor } from "iterate/stream/test-support";
 
-// apps/os/e2e/support/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
+// test/helpers/presence/processor.test.ts: durable ticks are reduced, ephemeral pokes are not
 const state = reduceProcessor(new PresenceProcessor(), [{ type: "tick" }, { type: "poke" }]);
 // state.ticks === 1
 ```

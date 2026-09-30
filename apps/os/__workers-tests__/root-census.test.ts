@@ -3,7 +3,7 @@
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
 import { SNAPSHOT_TTL_MS } from "../src/context/rule-snapshots.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import {
   adminCredentials,
   at,

@@ -7,7 +7,7 @@
 // push checks inside the pack it forwards (`commitReaches`). Its callers: the platform's
 // repo facet (apps/os/src/repo/durable-object.ts), the anonymous GitHub config-template reader
 // (github-template.ts, which brings its own fetch) and, in Node, the local e2e run's fake
-// remote (apps/os/e2e/support/fake-git-server.ts) — so a pack the fake serves is a pack the client
+// remote (apps/os/test-support/fake-git-server.ts) — so a pack the fake serves is a pack the client
 // parses. Text content only; a submodule pointer (mode 160000) is carried through a manifest but has
 // no blob.
 

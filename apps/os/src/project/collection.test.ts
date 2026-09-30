@@ -2,7 +2,7 @@
 // (collection.ts `#terminalFact`), driven with a fake context: the entity's certificate is waited for
 // 30 s in 5 s slices, each a fresh call, so a wait the platform left on a replaced instance — which
 // never sees the new instance's appends — costs one slice, not the creation. The sagas themselves
-// are the e2e's (e2e/repos.e2e.test.ts, e2e/workspaces.e2e.test.ts).
+// are the e2e's (test/vitest/os/repos.e2e.test.ts, test/vitest/os/workspaces.e2e.test.ts).
 
 import { errorCode } from "iterate/lib";
 import { expect, onTestFinished, test, vi } from "vitest";

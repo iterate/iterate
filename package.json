@@ -22,6 +22,7 @@
     "lint:fix": "oxlint . --fix --threads 1",
     "knip": "knip",
     "prepare": "is-ci || (husky && node scripts/lockfile-stamp.ts)",
+    "e2e": "pnpm --dir test e2e",
     "spec": "playwright test --config playwright.config.ts",
     "test": "pnpm -r --parallel test"
   },

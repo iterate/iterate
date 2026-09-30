@@ -4,7 +4,7 @@
 // concurrent one, fired together: each is one statement or one batch with its guard in SQL
 // (catalog.ts), so either order of two must leave the invariant standing. Delivery of the entity
 // streams' activity and a project's own creation saga are the session's (session.ts), proven on the
-// worker (control-plane.test.ts, e2e/organizations.e2e.test.ts).
+// worker (control-plane.test.ts, test/vitest/os/organizations.e2e.test.ts).
 import { env } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { expect, test } from "vitest";

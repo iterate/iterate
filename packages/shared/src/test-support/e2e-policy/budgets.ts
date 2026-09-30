@@ -69,7 +69,7 @@ export const E2E_SLOW_ROW_TIMEOUT_MS = 300_000;
 
 /**
  * The longest timeout an e2e row may declare: `E2E_SLOW_ROW_TIMEOUT_MS` when it is tagged `slow`,
- * else `E2E_ROW_TIMEOUT_CEILING_MS`. apps/os/e2e/support/setup.ts holds each row of a run against a
+ * else `E2E_ROW_TIMEOUT_CEILING_MS`. test/helpers/setup.ts holds each row of a run against a
  * preview to it before the row starts.
  */
 export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
@@ -81,10 +81,10 @@ export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
  * that changes one runs the slow rows, as does one that turns them on (scripts/os/slow-rows.ts).
  */
 export const SLOW_ROW_PATHS = [
-  "apps/agents/e2e/install.e2e.test.ts",
-  "apps/agents/e2e/voice-install.e2e.test.ts",
-  "apps/os/e2e/context-residency.e2e.test.ts",
-  "apps/os/e2e/facet-abort-storage-reset.e2e.test.ts",
+  "test/vitest/agents/install.e2e.test.ts",
+  "test/vitest/agents/voice-install.e2e.test.ts",
+  "test/vitest/os/context-residency.e2e.test.ts",
+  "test/vitest/os/facet-abort-storage-reset.e2e.test.ts",
 ];
 
 /**

@@ -20,7 +20,7 @@ import type { ItxExpression, ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
 import { hmacSha256Hex } from "../src/secrets.ts";
-import { publishConfigWorker } from "../e2e/support/config-worker.ts";
+import { publishConfigWorker } from "../test-support/config-worker.ts";
 import {
   APP_FACET,
   CLONE_VERSION_TEXT,
@@ -490,7 +490,7 @@ test("a processor no row pushes reads its log on every read — the host's word 
 // startup memo and is never reset. A reset is an abort and a start, of the facets called since their
 // last start only. What it ENDS — a careless facet billed after its context was evicted — is a
 // deployed fact (workerd cannot evict a context whose facet is live, workerd#6800):
-// e2e/context-residency.e2e.test.ts and e2e/facet-abort-storage-reset.e2e.test.ts.
+// test/vitest/os/context-residency.e2e.test.ts and test/vitest/os/facet-abort-storage-reset.e2e.test.ts.
 
 test("a context's birth resets its loaded facets that hold no claim, names them on its wake record, and spares a claimed one", async () => {
   const ctx = "prj_facet_birth_reset";
@@ -1183,7 +1183,7 @@ test("a burst of 20 concurrent callers after a loaded worker's failed cold load 
 // facet HELD would die with it, 1006, unseen by the parent. The `secret` facet is reached by
 // EGRESS instead: it dials the pinned host with the bearer substituted and hands the 101 straight
 // back, holding no socket of its own. Its upstream is in-process (`serveShop`); the dial over the
-// real network to a real third party is e2e/secrets.e2e.test.ts's deployed row.
+// real network to a real third party is test/vitest/os/secrets.e2e.test.ts's deployed row.
 
 const SHOP = "https://petshop.test";
 

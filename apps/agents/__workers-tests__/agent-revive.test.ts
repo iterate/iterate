@@ -12,7 +12,6 @@ import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
 import { installAgents } from "@iterate-com/agents/install";
-import { agentsWorkspaceConfig } from "../e2e/agents-workspace-config.ts";
 import {
   adminCredentials,
   openSession,
@@ -22,6 +21,7 @@ import {
   stub,
   until,
 } from "../../os/__workers-tests__/support.ts";
+import { agentsWorkspaceConfig } from "./agents-workspace-config.ts";
 
 const PROJECT = "prj_agent_revive";
 /** The agent's own context — the facet is hosted there, and so is everything it schedules. */

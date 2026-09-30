@@ -1,0 +1,544 @@
+// stream.e2e.test.ts — THE EVENT LOG through `itx.append` / `itx.readEvents` / `itx.waitForEvent`
+// (`Stream` in stream/stream.ts, whose mechanics are src/stream/stream.test.ts; this file proves the
+// entry points end to end through the real DO). Pins:
+//   • the WAKE RECORD: the DO's constructor appends `itx/created` @1, `itx/woken` @2 and the
+//     deployment's birth rows (src/project/context-birth-events.ts) before any call is served,
+//     and the first user append lands after them; the core reduce carries identity + incarnation;
+//     woken exactly once per incarnation, created once ever
+//   • append's runtime guards; idempotency at the commit point (an in-batch hit reduced ONCE
+//     by the commit-point reduce, a mid-batch conflict rolling the whole batch back and burning no
+//     offset, a hit interleaved with fresh events, two sessions' concurrent appends keeping offsets
+//     unique)
+//   • payload depth near the codec's budget (64-deep, an idempotent retry of it, the JSON5 string half)
+//   • the pause slice (control is ordinary events; enforcement reads the reduce — the policy that
+//     DECIDES to pause is processor-facets.e2e's breaker): a bare `itx/paused` pauses; durable AND
+//     ephemeral appends refuse, mixed batches wholesale, the resume always lands; a subscribe REFUSED
+//     while paused recalls nothing it lent
+//   • read paging's scanned-offset-range proof: a full page stops at its last row, a short page proves
+//     the DURABLE mark (never the ephemeral tail), a read beyond head claims no unassigned offsets
+//   • row CHUNKING: a >2 MB body commits as ONE dense event and round-trips byte-identically through
+//     the real DO SQLite (event_chunks), an idempotent chunked retry dedupes, a mid-batch conflict rolls
+//     the chunk rows back, chunk rows stay invisible to paging, a surrogate pair straddling a chunk
+//     boundary survives (the JSON is sliced by UTF-16 code units)
+//   • `waitForEvent` through a LOADED worker's `this.getItx()` — the scope's method waits on
+//     the DO and returns the committed event (the Workers-RPC path no other suite drives)
+
+import { expect, test } from "vitest";
+import { EVENT_CHUNK_SIZE } from "../../../apps/os/src/stream/stream.ts";
+import {
+  freshCtx,
+  openItx,
+  readAll,
+  readHead,
+  rejection,
+  sleep,
+  until,
+} from "../../helpers/client.ts";
+import { enableFixtureProcessor } from "../../helpers/sources.ts";
+
+// ── the wake record ──
+
+test("any call materializes a fresh context: readEvents(0) starts with created, woken and the deployment's birth rows; the first append lands past them; core's reduced state carries identity + incarnation", async () => {
+  const ctx = freshCtx("woken");
+  const itx = openItx(ctx);
+  // A bare read sees the birth and wake records and the rows every context is born with.
+  const page = await itx.invoke("itx.readEvents(0)");
+  expect(page.events[0]).toMatchObject({ offset: 1, payload: { projectId: ctx, path: "/" } });
+  const incarnation = page.events[1].payload.incarnation;
+  expect(incarnation).toBeGreaterThanOrEqual(1);
+
+  // The first user append follows the birth rows: a root with no config pointer passes its events
+  // over, so nothing of its `config` row's lands in between.
+  const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0]).toMatchObject({ offset: 5, type: "hello" });
+
+  // the core reduce reduced both records — runtime state IS reduced state
+  const snap = await itx.invoke("itx.facets.get('core').snapshot()");
+  expect(snap.state).toMatchObject({ projectId: ctx, path: "/", incarnation });
+  expect(snap.state).toMatchObject({ createdAt: page.events[0].createdAt });
+
+  // woken exactly once per incarnation, born exactly once ever: the durable log is exactly this
+  await itx.invoke(`itx.append({ type: 'again' })`);
+  const names = (await itx.invoke("itx.readEvents(0)")).events.map(
+    (e: { type: string; payload?: { name?: string } }) => e.payload?.name || e.type,
+  );
+  expect(names).toEqual([
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
+    "config",
+    "platform",
+    "hello",
+    "again",
+  ]);
+});
+
+// ── the commit point: guards, idempotency, depth, the pause slice, paging ──
+
+// ── append's runtime guards ──
+
+test("the runtime guard rejects a non-string or blank type, committing nothing", async () => {
+  // There is no TS-type allow-list on the RPC boundary; the ONE explicit runtime guard in
+  // Stream.append is the sole enforcement.
+  const itx = openItx(freshCtx("guards"));
+  const before = (await readAll(itx)).length;
+  expect((await rejection(itx.append({ type: 12345 }))).message).toMatch(/non-empty type/i);
+  expect((await rejection(itx.append({ type: "" }))).message).toMatch(/non-empty type/i);
+  expect((await rejection(itx.append({ type: "   " }))).message).toMatch(/non-empty type/i);
+  expect((await readAll(itx)).length).toBe(before); // nothing committed
+});
+
+test("an in-batch idempotency dedupe hit is processed ONCE, not twice", async () => {
+  // append derives a per-offset `distinct` view (first-wins) that feeds the inline core reduce AND
+  // the delivery, so each durable event is processed ONCE — while the returned `committed` keeps one
+  // receipt per input. Core's own slices are maps (a double reduce of a rewrite-rule set is
+  // invisible), so the zero-distance witness is a counting facet processor fed by the same distinct
+  // view: an event duplicated in one batch under one idempotencyKey must be counted exactly ONCE.
+  const itx = openItx(freshCtx("dupbatch"));
+  await enableFixtureProcessor(itx, "tally");
+  const duplicated = { type: "dup", payload: { n: 1 }, idempotencyKey: "dup-in-batch" };
+  const pair = await itx.append(duplicated, duplicated);
+  // The dedupe itself is right: both entries answer with the ONE committed offset…
+  expect(pair).toHaveLength(2);
+  expect(pair[1]).toMatchObject({ offset: pair[0].offset });
+  const page = await read(itx);
+  expect(page.events.filter((e) => e.idempotencyKey === "dup-in-batch")).toHaveLength(1);
+  // …and the distinct view reached the facet exactly ONCE: one `dup` counted, at the head.
+  const head = await readHead(itx);
+  const snap: any = await until("tally at head", async () => {
+    const s: any = await itx.invoke("itx.facets.get('tally').snapshot()");
+    return s.offset >= head && s;
+  });
+  expect(snap.state.counts).toMatchObject({ dup: 1 });
+});
+
+test("a mid-batch idempotency conflict rolls the whole batch back atomically", async () => {
+  const itx = openItx(freshCtx("rollback"));
+  const [seed] = await itx.append({ type: "seed", payload: { v: 1 }, idempotencyKey: "kc" });
+  // fresh insert, THEN the conflict (same key, different body), then more fresh — the earlier
+  // insert must not survive the throw (transactionSync rolls sql + kv together).
+  const err = await rejection(
+    itx.append(
+      { type: "fresh-before", payload: { n: 1 } },
+      { type: "seed", payload: { v: 2 }, idempotencyKey: "kc" },
+      { type: "fresh-after", payload: { n: 2 } },
+    ),
+  );
+  expect(err.message).toContain('idempotency key "kc" already names a different event');
+  // No orphaned rows above the recorded max offset (platform events — woken — share the log,
+  // so assert presence/absence, not the exact row list)…
+  const types = (await readAll(itx)).map((e) => e.type);
+  expect(types).toContain("seed");
+  expect(types).not.toContain("fresh-before");
+  expect(types).not.toContain("fresh-after");
+  expect(seed.offset).toBeGreaterThan(0);
+  // …and no orphaned OFFSETS either: from a marker right before a second refused batch to a probe
+  // right after, every offset holds an event and nothing durable lands between them (a leaked
+  // max-offset would open a hole; a leaked row would collide on the primary key).
+  const [marker] = await itx.append({ type: "marker", payload: {} });
+  await rejection(
+    itx.append({ type: "fresh-again" }, { type: "seed", payload: { v: 3 }, idempotencyKey: "kc" }),
+  );
+  const [probe] = await itx.append({ type: "probe", payload: {} });
+  expect(await offsetSpan(itx, marker.offset, probe.offset)).toEqual({
+    holes: [],
+    durableTypes: ["marker", "probe"],
+  });
+});
+
+test("a dedupe hit interleaved with fresh events assigns no double offsets", async () => {
+  const itx = openItx(freshCtx("dedupemix"));
+  const [orig] = await itx.append({ type: "note", payload: { v: 1 }, idempotencyKey: "kd" });
+  const batch = await itx.append(
+    { type: "fresh", payload: { n: 1 } },
+    { type: "note", payload: { v: 1 }, idempotencyKey: "kd" }, // dedupe hit — consumes NO offset
+    { type: "fresh", payload: { n: 2 } },
+  );
+  expect(batch[1]).toMatchObject({ offset: orig.offset }); // the hit answers with the ORIGINAL identity
+  expect(batch[2]).toMatchObject({ offset: batch[0].offset + 1 }); // the hit did not burn an offset in between
+  const page = await read(itx);
+  const offsets = page.events.map((e) => e.offset);
+  expect(offsets).toEqual([...new Set(offsets)]); // no offset assigned twice
+  // the original and both fresh events are each in the log exactly once
+  expect(offsets).toEqual(expect.arrayContaining([orig.offset, batch[0].offset, batch[2].offset]));
+  expect(page.events.filter((e) => e.idempotencyKey === "kd")).toHaveLength(1);
+});
+
+test("concurrent appends from two sessions to one ctx keep offsets unique", async () => {
+  const ctx = freshCtx("concurrent");
+  const a = openItx(ctx);
+  const b = openItx(ctx); // same ctx, second live session
+  const results = await Promise.all([
+    ...Array.from({ length: 10 }, (_, i) => a.append({ type: "race", payload: { from: "a", i } })),
+    ...Array.from({ length: 10 }, (_, i) => b.append({ type: "race", payload: { from: "b", i } })),
+  ]);
+  const offsets = results.map(([e]) => e.offset);
+  expect(offsets).toEqual([...new Set(offsets)]); // 20 receipts, no offset twice
+  // and the log agrees: exactly 20 race rows, offsets unique and matching the receipts
+  // (platform events — woken, live-state deltas — share the sequence, so the race offsets
+  // need not be 1..20; uniqueness and receipt/log agreement are the property)
+  const raceOffsets = (await readAll(a)).filter((e) => e.type === "race").map((e) => e.offset);
+  expect(raceOffsets).toHaveLength(20);
+  expect([...raceOffsets].sort((x, y) => x - y)).toEqual([...offsets].sort((x, y) => x - y));
+});
+
+// ── expression/value depth near the codec's parse budget ──
+
+test("a 64-deep nested-array payload (the structured half) appends and reads back byte-identically", async () => {
+  const itx = openItx(freshCtx("depth"));
+  const payload = { d: nested(64) }; // the value-depth budget is 64 — this is AT the edge
+  const [committed] = await itx.append({ type: "deep", payload });
+  expect(committed.offset).toBeGreaterThanOrEqual(1);
+  const page = await read(itx, committed.offset - 1, 1);
+  expect(page.events).toHaveLength(1);
+  expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify(payload));
+});
+
+test("string-half expressions: deeply nested payloads parse and round-trip (JSON5, no parse budget)", async () => {
+  const itx = openItx(freshCtx("depthstr"));
+  // JSON5 is iterative — there is no artificial parse budget; a deep arg parses and round-trips.
+  for (const depth of [58, 70]) {
+    const [committed] = await itx.invoke(
+      `itx.append({type:'deepstr',payload:{d:${nestedLiteral(depth)}}})`,
+    );
+    const page = await read(itx, committed.offset - 1, 1);
+    expect(JSON.stringify(page.events[0].payload)).toBe(JSON.stringify({ d: nested(depth) }));
+  }
+});
+
+test("an idempotent RETRY of a 64-deep payload dedupes instead of tripping the depth guard", async () => {
+  // Idempotency keys are the crash-recovery story; a payload near the depth budget must not turn
+  // the retry the key exists to make safe into the one call that fails.
+  const itx = openItx(freshCtx("depthkey"));
+  const build = () => ({
+    type: "deep-keyed",
+    payload: { d: nested(64) },
+    idempotencyKey: "deep-once",
+  });
+  const [first] = await itx.append(build());
+  const [retry] = await itx.append(build());
+  expect(retry).toMatchObject({ offset: first.offset }); // same key + same body = same event
+});
+
+// ── the core reduce's pause slice (control is ordinary events; enforcement reads the reduce) ──
+
+test("a bare itx/paused event (no payload) actually pauses the stream", async () => {
+  // the core reduce defaults `event.payload ?? {}` — a pause that silently doesn't pause
+  // would be an operator trap (the control fact is in the log while writes keep landing).
+  const itx = openItx(freshCtx("barepause"));
+  await itx.append({ type: "events.iterate.com/itx/paused" });
+  const err = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
+  expect(err.message).toContain("stream paused");
+});
+
+test("pause refuses durable AND ephemeral appends, mixed batches wholesale — control passes", async () => {
+  const itx = openItx(freshCtx("pause"));
+  await itx.append({
+    type: "events.iterate.com/itx/paused",
+    payload: { reason: "maintenance" },
+  });
+  // durable → refused, with the reason on the message
+  const durableErr = await rejection(itx.append({ type: "mark", payload: { n: 1 } }));
+  expect(durableErr.message).toContain("stream paused: maintenance");
+  // ephemerals are non-control — refused too (a paused stream is paused for everything)
+  const ephErr = await rejection(itx.append({ type: "blip", payload: {}, ephemeral: true }));
+  expect(ephErr.message).toContain("stream paused");
+  // a batch MIXING the resume with a non-control event is refused WHOLESALE (enforcement is
+  // batch-atomic at append — no partial admission)
+  const mixedErr = await rejection(
+    itx.append(
+      { type: "events.iterate.com/itx/resumed", payload: {} },
+      { type: "mark", payload: { n: 2 } },
+    ),
+  );
+  expect(mixedErr.message).toContain("stream paused");
+  // the bare resume passes — a paused stream must always accept its own resume
+  await itx.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  const [after] = await itx.append({ type: "mark", payload: { resumed: true } });
+  expect(after.offset).toBeGreaterThan(0);
+});
+
+test("a subscribe REFUSED by a paused stream leaves the live same-name subscription lent — the row is appended before the session recalls what it lent under the name", async () => {
+  // iterate-context.ts `subscribe`: an expression target appends its row FIRST and only then
+  // recalls the callback this session lent under `subscription:<name>` — a refusal changes nothing.
+  // The other order recalled the callback (its pager closed, the stub returned) and THEN met the
+  // refusal: a refused subscribe had silently destroyed the subscription it failed to replace.
+  const itx = openItx(freshCtx("pausesub"));
+  await itx.subscribe({ name: "watch", target: () => undefined });
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch");
+  await itx.append({
+    type: "events.iterate.com/itx/paused",
+    payload: { reason: "maintenance" },
+  });
+  const refused = await rejection(itx.subscribe({ name: "watch", target: "itx.kv.get('k')" }));
+  expect(refused.message).toContain("stream paused");
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // still lent: nothing was recalled
+  await itx.append({ type: "events.iterate.com/itx/resumed", payload: {} });
+  expect(await itx.rpcStubs.list()).toContain("subscription:watch"); // and the resume un-sets nothing: the key has its transport
+});
+
+// ── read paging: the scanned-offset-range proof ──
+
+test("read paging: a full page stops at its last row; a short page proves the durable log through its mark, never the ephemeral tail", async () => {
+  const itx = openItx(freshCtx("paging"));
+  const durables = await itx.append(
+    { type: "d", payload: { n: 1 } },
+    { type: "d", payload: { n: 2 } },
+    { type: "d", payload: { n: 3 } },
+  );
+  const eph = await itx.append(
+    { type: "e", payload: {}, ephemeral: true },
+    { type: "e", payload: {}, ephemeral: true },
+  );
+  const base = durables[0].offset - 1;
+  // FULL page (events.length === limit): only contiguously known through its LAST ROW —
+  // scannedThroughOffset must not overshoot past the ephemeral holes to the head
+  const full = await read(itx, base, 3);
+  expect(full.events).toHaveLength(3);
+  expect(full).toMatchObject({ scannedThroughOffset: durables[2].offset });
+  // SHORT page from there: proves the scan reached the DURABLE mark — never the in-memory head,
+  // whose ephemeral offsets a later incarnation may hand to durables (a reader that persisted one
+  // would skip them). The ephemerals took offsets (eph[1] > durables[2]) but are not proven.
+  const short = await read(itx, durables[2].offset, 3);
+  expect(short.events).toHaveLength(0);
+  expect(eph[1].offset).toBeGreaterThan(durables[2].offset);
+  expect(short).toMatchObject({ scannedThroughOffset: durables[2].offset });
+  // one more durable AFTER the holes: a full page whose last row IS the head lands exactly on it
+  const [d4] = await itx.append({ type: "d", payload: { n: 4 } });
+  const exact = await read(itx, base, 4);
+  expect(exact.events).toHaveLength(4);
+  expect(exact).toMatchObject({ scannedThroughOffset: d4.offset });
+  // and a default-limit read across the holes returns just the row beyond them
+  const across = await read(itx, durables[2].offset);
+  expect(across.events.map((e) => e.offset)).toEqual([d4.offset]);
+  expect(across).toMatchObject({ scannedThroughOffset: d4.offset });
+});
+
+test("readEvents(afterOffset beyond head) never claims a scan of unassigned offsets", async () => {
+  // Scanned ranges are the contiguity currency of every consumer (facet cursors, subscription
+  // healing, the operator's delivery-resumed seek): a scanned range can only cover offsets that
+  // exist, or a cursor seeded from it would sit beyond head and skip every later event forever.
+  const itx = openItx(freshCtx("readbeyond"));
+  await itx.append({ type: "mark", payload: { n: 1 } }, { type: "mark", payload: { n: 2 } });
+  // The TRUE head comes from a short-page read (platform events — woken, live-state deltas —
+  // consume offsets beyond the last receipt, so a receipt offset under-approximates it).
+  const head = (await read(itx)).scannedThroughOffset;
+  const page = await read(itx, head + 100);
+  expect(page).toMatchObject({ events: [] });
+  expect(page.scannedThroughOffset).toBeLessThanOrEqual(head);
+});
+
+// ── row chunking ──
+
+test("a ~256KB payload round-trips byte-identically (the in-bounds control)", async () => {
+  const itx = openItx(freshCtx("chunkctl"));
+  const blob = "x".repeat(256 * 1024);
+  const [committed] = await itx.append({ type: "mid", payload: { blob } });
+  expect((await readOne(itx, committed.offset)).payload.blob === blob).toBe(true);
+});
+
+test("5MB chunked body: single dense event, byte-identical round-trip, idempotent dedupe", async () => {
+  const ctx = freshCtx("chunk");
+  const itx = openItx(ctx);
+
+  // A small event, then a 5MB body, then a small event — dense offsets on both sides: the chunk
+  // rows hold no offset of their own and are invisible to paging.
+  const [before] = await itx.append({ type: "small-before" });
+  const blob = "y".repeat(5 * 1024 * 1024);
+  const big = await itx.append({ type: "big", payload: { blob } });
+  const [after] = await itx.append({ type: "small-after" });
+  expect(big.length).toBe(1); // 5MB body committed as ONE event (not split)
+  expect(await offsetSpan(itx, before.offset, after.offset)).toEqual({
+    holes: [],
+    durableTypes: ["small-before", "big", "small-after"],
+  });
+
+  // Read it back through a FRESH session (same ctx) — a real storage reassembly, not an echo.
+  const back = await readOne(openItx(ctx), big[0].offset);
+  expect(back?.type).toBe("big");
+  expect(back?.payload?.blob === blob).toBe(true); // byte-identical (identity check — never a 5MB diff)
+
+  // An idempotent RETRY of a large chunked payload dedupes to the same offset.
+  const keyed = { type: "big-keyed", payload: { blob }, idempotencyKey: "chunk-once" };
+  const [k1] = await itx.append(keyed);
+  const [k2] = await itx.append(keyed);
+  expect(k2).toMatchObject({ offset: k1.offset });
+});
+
+test("a chunked append followed by an idempotency CONFLICT in the same batch rolls back ALL chunk rows", async () => {
+  // Chunk rows are the first multi-row write in the commit path; a torn mid-batch failure leaving
+  // orphan chunk rows (or half a body) is the corruption class chunking introduces — the rollback
+  // must be provably whole, and the allocator must burn no offsets for the refused batch.
+  const itx = openItx(freshCtx("chunkrb"));
+  const [pin] = await itx.append({ type: "pin", payload: { v: 1 }, idempotencyKey: "pin" });
+  const blob = "r".repeat(3 * 1024 * 1024);
+  await expect(
+    itx.append(
+      { type: "big-victim", payload: { blob } },
+      { type: "pin", payload: { v: 2 }, idempotencyKey: "pin" }, // same key, DIFFERENT body → conflict
+    ),
+  ).rejects.toThrow(/idempotency key "pin" already names a different event/);
+  // Nothing partial survived the rollback (presence/absence — woken shares the log)…
+  const types = (await readAll(itx)).map((e) => e.type as string);
+  expect(types.filter((t) => t === "pin")).toHaveLength(1);
+  expect(types).not.toContain("big-victim");
+  expect(pin.offset).toBeGreaterThan(0);
+  // …and the allocator did not burn offsets for a rolled-back batch: from a marker before a second
+  // refused chunked batch to a probe after it, every offset holds an event and nothing durable lands
+  // between them.
+  const [marker] = await itx.append({ type: "marker" });
+  await expect(
+    itx.append(
+      { type: "big-victim", payload: { blob } },
+      { type: "pin", payload: { v: 3 }, idempotencyKey: "pin" },
+    ),
+  ).rejects.toThrow(/idempotency key "pin" already names a different event/);
+  const [next] = await itx.append({ type: "after-rollback" });
+  expect(await offsetSpan(itx, marker.offset, next.offset)).toEqual({
+    holes: [],
+    durableTypes: ["marker", "after-rollback"],
+  });
+}, 60_000);
+
+test("read paging across a chunked event keeps the scanned-offset-range proof honest", async () => {
+  // Every processor cursor and gap repair trusts the scanned-offset-range proof; if chunk rows ever
+  // leaked into the page arithmetic, cursors would advance to phantom offsets and repairs would
+  // skip real events. A limit-N page counts EVENTS, its scannedThroughOffset is the last EVENT row's
+  // offset when the page is full (never a chunk boundary), and consecutive pages chain.
+  const itx = openItx(freshCtx("chunkpg"));
+  const blob = "p".repeat(3 * 1024 * 1024);
+  const [, e2] = await itx.append({ type: "e1" }, { type: "e2" });
+  const [big] = await itx.append({ type: "big", payload: { blob } });
+  const [e4, e5] = await itx.append({ type: "e4" }, { type: "e5" });
+  // Page 1: a FULL page (limit 2 from just before e2) lands exactly ON the chunked event.
+  const page1 = await itx.invoke(["itx", ["readEvents", e2.offset - 1, 2]]);
+  expect(page1.events.map((e: { offset: number }) => e.offset)).toEqual([e2.offset, big.offset]);
+  expect(page1).toMatchObject({ scannedThroughOffset: big.offset }); // the EVENT offset — never a chunk row's
+  expect(page1.events[1].payload.blob === blob).toBe(true); // the body rode the page whole
+  // Page 2 chains contiguously from the proof.
+  const page2 = await itx.invoke(["itx", ["readEvents", page1.scannedThroughOffset, 500]]);
+  expect(page2.events.map((e: { offset: number }) => e.offset)).toEqual([e4.offset, e5.offset]);
+  expect(page2).toMatchObject({ scannedThroughOffset: e5.offset });
+}, 60_000);
+
+const EMOJI = String.fromCodePoint(0x1f600); // "grinning face" = high+low surrogate pair
+
+test("a surrogate pair straddling a chunk boundary round-trips byte-identically", async () => {
+  // The serialized JSON is sliced every EVENT_CHUNK_SIZE UTF-16 code units into TEXT cells; a
+  // surrogate pair split across the boundary would be two LONE surrogates in two cells, which
+  // SQLite's UTF-8 TEXT binding cannot hold — reassembly would hand back U+FFFD.
+  const ctx = freshCtx("chunksur");
+  const itx = openItx(ctx);
+
+  // Where does the blob's first char land inside the server's serialized JSON? The server
+  // serializes `{ ...input, createdAt }`; createdAt is appended AFTER, so the prefix before the
+  // blob content equals this sample's prefix (index of MARKER = blob[0]'s position).
+  const prefixLen = JSON.stringify({ type: "big", payload: { blob: "MARKER" } }).indexOf("MARKER");
+  expect(prefixLen).toBeGreaterThan(0);
+
+  // Put the HIGH surrogate at server-JSON index EVENT_CHUNK_SIZE-1 (last unit of chunk 0) so the
+  // LOW surrogate lands at index EVENT_CHUNK_SIZE (first unit of chunk 1): the pair is split.
+  const highAtBlobIndex = EVENT_CHUNK_SIZE - 1 - prefixLen;
+  const blob = "a".repeat(highAtBlobIndex) + EMOJI + "a".repeat(64);
+  const hi = blob.charCodeAt(highAtBlobIndex);
+  expect(hi).toBeGreaterThanOrEqual(0xd800);
+  expect(hi).toBeLessThanOrEqual(0xdbff);
+
+  const [committed] = await itx.append({ type: "big", payload: { blob } });
+  expect(committed.payload).toMatchObject({ blob }); // the echo is the in-memory object — always intact
+
+  // Read back through a FRESH session → a real reassembly from event_chunks, not an echo.
+  const back = await readOne(openItx(ctx), committed.offset);
+  expect(back).toBeTruthy();
+  const got: string = back.payload.blob;
+  const window = (s: string) =>
+    JSON.stringify(
+      [...s.slice(highAtBlobIndex - 1, highAtBlobIndex + 2)].map((c) =>
+        c.codePointAt(0)?.toString(16),
+      ),
+    );
+  expect(
+    got === blob,
+    `blob NOT byte-identical around the split boundary — expected code units ${window(blob)}, ` +
+      `got ${window(got)} (U+fffd = replacement char)`,
+  ).toBe(true);
+});
+
+// ── waitForEvent through a loaded worker ──
+
+test("waitForEvent through a LOADED worker's env.ITX — the scope's dotted method waits on the DO and returns the event", async () => {
+  const ctx = freshCtx("waitload");
+  const itxA = openItx(ctx);
+  const itxB = openItx(ctx);
+  // The method under test is `waitForEvent` on the itx scope a loaded worker reaches (`this.getItx()`
+  // — the ItxEntrypoint has no stream verbs of its own: `get` and `fetch` only). A real entrypoint is
+  // loaded: its `run` opens the wait through the scope, a second session appends, and the loaded
+  // worker returns the committed event — the Workers-RPC path no other suite drives.
+  const SRC_WAITER = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+export default class Waiter extends WorkerEntrypoint {
+  async run(afterOffset) {
+    using itx = this.getItx();
+    return await itx.waitForEvent({ type: "ping", afterOffset, timeoutMs: 20000 });
+  }
+}`,
+  };
+  const head = (await itxA.invoke("itx.readEvents(0)")).scannedThroughOffset;
+  const pending = itxA.invoke(["itx", "workers", ["get", { source: SRC_WAITER }], ["run", head]]);
+  await sleep(500); // let the loaded worker start waiting before the append (the anchored afterOffset makes either order correct)
+  await itxB.invoke(`itx.append({ type: 'ping', payload: { via: 'entrypoint' } })`);
+  const got = await pending;
+  expect(got).toMatchObject({ type: "ping" });
+  expect(got).toMatchObject({ payload: { via: "entrypoint" } });
+  expect(got.offset).toBeGreaterThan(head);
+});
+
+const read = (
+  itx: any,
+  afterOffset?: number,
+  limit?: number,
+): Promise<{ events: any[]; scannedThroughOffset: number }> =>
+  itx.invoke([
+    "itx",
+    [
+      "readEvents",
+      ...(afterOffset === undefined
+        ? []
+        : limit === undefined
+          ? [afterOffset]
+          : [afterOffset, limit]),
+    ],
+  ]);
+
+/** n-deep nested array with a 0 at the bottom: [[[…0…]]]. */
+const nested = (n: number): unknown => {
+  let v: unknown = 0;
+  for (let i = 0; i < n; i++) v = [v];
+  return v;
+};
+
+/** The same shape in the STRING half of the codec. */
+const nestedLiteral = (n: number): string => "[".repeat(n) + "0" + "]".repeat(n);
+
+const readOne = async (itx: any, offset: number) =>
+  (await itx.invoke(["itx", ["readEvents", offset - 1, 1]])).events[0];
+
+/** From offset `first` through `last`: the offsets no event holds, and the durable events' types in
+ *  order. Ephemerals are read too, since an alarm pass writes its traces into the same offset
+ *  sequence as appends: two appends made in turn need not land on adjacent offsets. */
+const offsetSpan = async (itx: any, first: number, last: number) => {
+  const { events } = await itx.readEvents(first - 1, 500, { includeEphemeral: true });
+  const held = new Set(events.map((event: { offset: number }) => event.offset));
+  return {
+    holes: Array.from({ length: last - first + 1 }, (_, i) => first + i).filter(
+      (offset) => !held.has(offset),
+    ),
+    durableTypes: events
+      .filter(
+        (event: { offset: number; ephemeral?: boolean }) =>
+          event.offset <= last && !event.ephemeral,
+      )
+      .map((event: { type: string }) => event.type),
+  };
+};
