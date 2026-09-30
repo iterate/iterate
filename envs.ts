@@ -85,8 +85,8 @@ export const telemetryEnvs = {
     namespace: "telemetry",
     streams: {
       events: {
-        id: "6f363296ec4d4fc6ba02eb5118f1fe7e",
-        endpoint: "https://6f363296ec4d4fc6ba02eb5118f1fe7e.ingest.cloudflare.com",
+        id: "3dad6126791a4641928ad2dca104a1d2",
+        endpoint: "https://3dad6126791a4641928ad2dca104a1d2.ingest.cloudflare.com",
       },
       logs: {
         id: "2cef1503b98b4d618bb317381e957930",

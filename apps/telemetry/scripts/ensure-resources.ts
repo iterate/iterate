@@ -162,8 +162,8 @@ export default async function ensureResources(options: { env: string }) {
       headers: { "x-telemetry-secret": secret },
     };
     const exists = destinations.some((destination) => destination.slug === name);
-    // A fresh Worker's hostname reaches Cloudflare's servers one by one, and a preflight answered
-    // by one that has not learned it yet changed nothing: it is sent again.
+    // A fresh Worker's hostname, and a new version's secret, reach Cloudflare's servers one by one:
+    // a preflight answered by one that has not learned them yet changed nothing, and is sent again.
     await retryPlatformFailures(
       () =>
         exists
@@ -183,7 +183,7 @@ export default async function ensureResources(options: { env: string }) {
         area: "telemetry",
         schedule: CLOUDFLARE_API,
         idempotent: true,
-        kind: (error) => (preflightNotRoutedYet(error) ? "disconnected" : "failed"),
+        kind: (error) => (preflightMetAStaleServer(error) ? "disconnected" : "failed"),
         describe: () => ({ name: `destination ${name}` }),
       },
     );
@@ -209,13 +209,14 @@ async function tokenIsActive(account: string, token: string) {
   return verified?.status === "active";
 }
 
-/** Whether a destination's create or update failed on Cloudflare's own not-found for a workers.dev
- *  hostname it does not route yet (`isNotRoutedYet`), which its preflight met. */
-function preflightNotRoutedYet(error: unknown) {
-  const preflight = /Pre-flight check failed: HTTP (\d+): (error code: \d+)/.exec(String(error));
-  return (
-    !!preflight && isNotRoutedYet({ status: Number(preflight[1]), headers: {}, body: preflight[2] })
-  );
+/** Whether a destination's create or update failed on a preflight a server answered before it
+ *  learned the Worker: Cloudflare's own not-found for a workers.dev hostname it does not route yet
+ *  (`isNotRoutedYet`), or the previous version's 503 to the secret it does not know yet. */
+function preflightMetAStaleServer(error: unknown) {
+  const preflight = /Pre-flight check failed: HTTP (\d+): (.*?)'?$/m.exec(String(error));
+  if (!preflight) return false;
+  const status = Number(preflight[1]);
+  return status === 503 || isNotRoutedYet({ status, headers: {}, body: preflight[2] });
 }
 
 /** `command` with `input` on its stdin: its output, which echoes the secret, goes nowhere. */
