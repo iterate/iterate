@@ -32,6 +32,7 @@ test("a cold context drives a persisted in-flight cursor from the context recove
   });
 
   delivery.sync();
+  expect(delivery).toMatchObject({ deadline: null });
   expect(values.has("durable-delivery/orphan@1")).toBe(false);
 
   delivery.revive();
