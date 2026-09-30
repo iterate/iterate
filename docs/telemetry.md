@@ -159,8 +159,8 @@ clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
 
 - `apps/telemetry` answers 5xx when a send fails, so Cloudflare retries the batch (it did through a
   12-minute outage); it answers 503, not 401, to a wrong secret, so rotating the secret loses
-  nothing. A retried batch can land twice: dedupe on each table's key (`metrics` has none, and
-  its hours are copied once).
+  nothing. A retried batch can land twice: dedupe on each table's key (`metrics` has none: see
+  its copy below).
 - It sends in chunks under 5 MB. A stream accepts a row that breaks its schema and drops it
   silently, so tests check every row the flattening makes against its schema, and the health job
   alerts on dropped rows.
