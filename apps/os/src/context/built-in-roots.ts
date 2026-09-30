@@ -31,8 +31,6 @@ export const BUILT_IN_ROOT_DESCRIPTIONS = {
   subscriptions: "the rows delivered each commit: `subscriptions.list()`",
   processors: "hosted processors: `processors.enable(name, spec)` · `list()` · `disable(name)`",
   workers: "load code as a stateless worker: `workers.get({ source }).run()`",
-  platformHook:
-    "the platform's own subscriber of every durable event here: a fan-out row's target, called by the delivery loop alone",
   webhooks:
     'an HTTP webhook as a fan-out row\'s target: `subscribe({ target: "itx.webhooks.get({ url, signingSecret? }).deliverEvent", ordered: false })` POSTs each event, signed with the secret when one is named',
   run: 'a fresh confined run of a script you write as text: `itx.run("async (itx) => …")`',

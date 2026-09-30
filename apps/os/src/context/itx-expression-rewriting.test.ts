@@ -1407,9 +1407,7 @@ const platformRow = (root: string, context: string): RewriteRuleListEntry => ({
   match: `itx.${root}`,
   target: `itx.builtins.${root}`,
   description: BUILT_IN_ROOT_DESCRIPTIONS[root as keyof typeof BUILT_IN_ROOT_DESCRIPTIONS],
-  ...(root !== "platformHook" && {
-    declaration: `IterateContextApi[${JSON.stringify(root)}]`,
-  }),
+  declaration: `IterateContextApi[${JSON.stringify(root)}]`,
   context,
 });
 

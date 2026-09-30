@@ -48,7 +48,6 @@ import type { LibraryRoots } from "../library.ts";
 import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
-import { deliverToPlatformHook } from "../platform-hook.ts";
 import { IntegrationConnectionRow, IntegrationProvider } from "../integrations/contract.ts";
 import {
   connectionPathOf,
@@ -221,7 +220,6 @@ type BuiltInScopeOverrides = {
   facets: Omit<IterateContextApi["facets"], "get"> & {
     get(name: string, spec?: FacetSpec): FacetHandle;
   };
-  platformHook: { deliverEvent(event: StreamEvent): Promise<void> };
 };
 
 export type BuiltInScope = PublicBuiltInScope & LibraryRoots & BuiltInScopeOverrides;
@@ -237,12 +235,12 @@ type RootsAreTheSameSet = [Exclude<keyof BuiltInScope, "builtins">] extends [Bui
 const _rootsAreTheSameSet: RootsAreTheSameSet = true;
 void _rootsAreTheSameSet;
 
-// THE PUBLISHED LIST: every built-in root but the platform's own hook is a root of iterate/api's
+// THE PUBLISHED LIST: every built-in root is a root of iterate/api's
 // `IterateContextApi`, and every root declared there is a built-in but the edge's own verbs
 // (iterate-context.ts `invoke`, `subscribe`, `provide`) — a root published and never implemented, or
 // implemented and never published, fails to typecheck right here.
 type EdgeOnlyRoot = "invoke" | "subscribe" | "provide";
-type PublishedRoot = Exclude<BuiltInRoot, "platformHook">;
+type PublishedRoot = BuiltInRoot;
 type RootsArePublished = [PublishedRoot] extends [Exclude<keyof IterateContextApi, EdgeOnlyRoot>]
   ? [Exclude<keyof IterateContextApi, EdgeOnlyRoot>] extends [PublishedRoot]
     ? true
@@ -1817,16 +1815,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       cause: () => deps.caller().cause,
       namedWorker: deps.namedWorker,
     }),
-    platformHook: {
-      deliverEvent: async (event) => {
-        await assertDeliveryCaller(
-          deps.caller().delivery,
-          "platformHook.deliverEvent",
-          JSON.stringify(event),
-        );
-        await deliverToPlatformHook(env, event);
-      },
-    },
     webhooks: {
       // A genuine InvokeHandle, as `workers.get`'s: across a `cd` hop it is the expression that
       // names it (dispatch.ts), so the delivery's call reaches it whole, its authority carried.

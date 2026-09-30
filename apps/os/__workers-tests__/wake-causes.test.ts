@@ -74,28 +74,6 @@ test("wake handlers that ping each other's context and then fail are told of eac
   }
 });
 
-test("a fan-out row on the platform hook takes every durable event of its context, one call each, and settles", async () => {
-  const ctx = at(freshProject(), "/x");
-  await stub(ctx).append({
-    type: "events.iterate.com/itx/subscription-configured",
-    payload: {
-      name: "platform",
-      target: "itx.builtins.platformHook.deliverEvent",
-      delivery: "durable",
-      afterOffset: 0,
-      ordered: false,
-    },
-  });
-  for (let n = 0; n < 5; n++) await stub(ctx).append({ type: "test/fact", payload: { n } });
-  const head = (await readLog(ctx)).at(-1)!.offset;
-  const row = await until("the platform hook settled every event", async () => {
-    const row = await rowOf(ctx, "platform");
-    return row?.cursor?.confirmedOffset === head && row.pending === 0 && row;
-  });
-  expect(row).toMatchObject({ ordered: false, pending: 0, paused: false });
-  expect(row).not.toHaveProperty("halted");
-});
-
 /** Records each wake it is told of on `/sink`, pings the other context, then fails. */
 const WAKE_HANDLER = deliverEventWorker(/* js */ `
       if (event.type !== "events.iterate.com/itx/woken") return;

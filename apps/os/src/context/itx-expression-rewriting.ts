@@ -613,9 +613,7 @@ export async function describeRewriteRules(args: {
         match: `itx.${root}`,
         target: `itx.builtins.${root}`,
         description: BUILT_IN_ROOT_DESCRIPTIONS[root as BuiltInRoot],
-        ...(root !== "platformHook" && {
-          declaration: `IterateContextApi[${JSON.stringify(root)}]`,
-        }),
+        declaration: `IterateContextApi[${JSON.stringify(root)}]`,
         context: ownPath,
       }));
   const bare = rules.find((rule) => rule.match.length === 1);

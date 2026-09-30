@@ -35,9 +35,9 @@ export const ORIGIN = "https://control.test";
 export const stub = (ctx: string) =>
   env.ITERATE_CONTEXT.getByName(DurableObjectNameCodec.parse(ctx).name);
 
-/** A context born as a deployment's are: its birth rows (`PROJECT_CONTEXT_BIRTH_EVENTS`,
- *  the config entrypoint's fan-out row and the platform hook's) appended as its first commit. This
- *  suite's contexts are born with none: each of their calls holds a lease on the alarm while it is
+/** A context born with a deployment's rows has `PROJECT_CONTEXT_BIRTH_EVENTS`, including the config
+ *  entrypoint's fan-out row, appended as its first commit. This suite's contexts are born with none:
+ *  each call holds a lease on the alarm while it is
  *  out (subscription-delivery.ts, the fan-out section), which every row that pins an alarm would
  *  see. */
 export async function bornWithBirthRows(ctx: string): Promise<void> {

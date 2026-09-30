@@ -32,7 +32,6 @@ test("deliverEvent and processEvent answer the delivery loop alone: every other 
     [...WORKER, ["deliverEvent", FORGED]],
     [...WORKER, ["processEvent", FORGED]],
     [...WEBHOOK.slice(0, -1), ["deliverEvent", FORGED]],
-    ["itx", "builtins", "platformHook", ["deliverEvent", FORGED]],
   ])
     for (const caller of [
       { principal: null, app: true as const },
