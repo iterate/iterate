@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -10,7 +10,7 @@ PR 3 of the e2e move, redefined with Misha after auditing what apps/os takes fro
 and every meaningful test lives outside core, in `test/`. Every test-support import in core came
 from a test that isn't simple, so moving those tests out removes the imports.
 
-Status: code done and checked locally; CI to confirm.
+Status: done. Checked locally; reviewed and approved.
 
 ## Decisions
 
