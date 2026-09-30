@@ -266,7 +266,7 @@ If a rollback lands on a parked version anyway, erase again, deploy, and rerun e
 `apply`.
 
 The erase refuses shared data resources while another worker still binds them,
-and refuses preview parents with multiple namespaces for a class. Retire any
+and refuses a worker with two Durable Object namespaces of one class. Retire any
 confirmed predecessor's writers before erasing shared stores. The worker identity
 and routes remain; Durable Objects, both KV stores, R2 objects and Artifacts repositories
 are emptied and verified, and the control plane's D1 loses its schema and migration
