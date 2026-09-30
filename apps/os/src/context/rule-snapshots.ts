@@ -7,7 +7,8 @@
 // by the owner's Durable Object name, and used for SNAPSHOT_TTL_MS from when the read was SENT —
 // checked after every wait for one, and again before a route assembled from several runs. Reads are
 // lazy (only when a resolution needs the table), conditional on the version the isolate holds (an
-// unchanged table answers its version alone) and single-flight per owner.
+// unchanged table answers its version alone) and single-flight per owner, and no call waits on one
+// past its lifetime (`RuleSnapshotCache.get` says why).
 //
 // A CONTEXT'S OWN TABLE: its Durable Object reads it live. Its loaded code, through the stateless
 // entrypoint, reads it as a snapshot like any other table — and a call that snapshot refuses goes
@@ -79,14 +80,17 @@ export type RuleSnapshot = {
 export const MAX_HELD_SNAPSHOTS = 1_000;
 
 /** How many times one call reads a table again whose snapshot expired before it could be used —
- *  an owner slower than SNAPSHOT_TTL_MS to answer, a route assembled from several — before it is
- *  UNAVAILABLE. */
+ *  an owner slower than SNAPSHOT_TTL_MS to answer, a read that never answers, a route assembled
+ *  from several — before it is UNAVAILABLE. */
 export const SNAPSHOT_REREADS = 3;
+
+/** A read of an owner in flight: its answer, and when that answer can no longer be used. */
+type SnapshotRead = { answer: Promise<RuleSnapshot>; expiresAt: number };
 
 /** One isolate's snapshots, by the owner's Durable Object name. `read` asks the owner. */
 export class RuleSnapshotCache {
   readonly #held = new Map<string, RuleSnapshot>();
-  readonly #reading = new Map<string, Promise<RuleSnapshot>>();
+  readonly #reading = new Map<string, SnapshotRead>();
   readonly #now: () => number;
 
   constructor({ now = () => Date.now() } = {}) {
@@ -95,7 +99,7 @@ export class RuleSnapshotCache {
 
   /** The owner's table, usable now: the one held while it lasts, else the read in flight, else a
    *  new read naming the version held. A snapshot is used only while it lasts, checked after every
-   *  wait for one — a read in flight may answer after its lifetime. */
+   *  wait for one — a read in flight may answer after its lifetime, or never (`#answerInTime`). */
   async get(
     name: string,
     read: (ifVersion: string | undefined) => Promise<RulesSnapshotAnswer>,
@@ -103,13 +107,41 @@ export class RuleSnapshotCache {
     for (let reads = 0; reads < SNAPSHOT_REREADS; reads++) {
       const held = this.#held.get(name);
       if (held && this.#now() < held.expiresAt) return held;
-      const snapshot = await (this.#reading.get(name) || this.#read(name, read, held));
-      if (this.#now() < snapshot.expiresAt) return snapshot;
+      const reading = this.#reading.get(name) || this.#read(name, read, held);
+      const snapshot = await this.#answerInTime(name, reading);
+      if (snapshot && this.#now() < snapshot.expiresAt) return snapshot;
     }
     throw unavailableError(
       "overloaded",
       `the rule snapshot of ${name} arrived expired ${SNAPSHOT_REREADS} times: its owner answers slower than a snapshot lasts`,
     );
+  }
+
+  /** The read's answer, or undefined once its lifetime has passed without one: the read is then
+   *  shared no more, logged as `rule-snapshot.platform-failure-read-deadline`, and the caller reads
+   *  again. A read can outlive the request that sent it and never answer: a request cancelled or a
+   *  context aborted while its read is out takes the answer with it, and workerd never settles
+   *  that promise for any other request (__workers-tests__/rule-snapshot-cut-off.test.ts). Waited
+   *  on without this bound, one such read would hold every call through its table in this isolate
+   *  for as long as the isolate lives. */
+  async #answerInTime(name: string, reading: SnapshotRead): Promise<RuleSnapshot | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lifetimeOver = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), Math.max(0, reading.expiresAt - this.#now()));
+    });
+    const snapshot = await Promise.race([reading.answer, lifetimeOver]).finally(() =>
+      clearTimeout(timer),
+    );
+    // Only the first caller to give up on a read drops and logs it.
+    if (snapshot || this.#reading.get(name) !== reading) return snapshot;
+    this.#reading.delete(name);
+    console.warn({
+      event: "rule-snapshot.platform-failure-read-deadline",
+      name: "rulesSnapshot",
+      context: name,
+      waitedMs: SNAPSHOT_TTL_MS,
+    });
+    return undefined;
   }
 
   /** One read of the owner, shared by every call that needs it while it is in flight, and held —
@@ -120,7 +152,7 @@ export class RuleSnapshotCache {
     name: string,
     read: (ifVersion: string | undefined) => Promise<RulesSnapshotAnswer>,
     held: RuleSnapshot | undefined,
-  ): Promise<RuleSnapshot> {
+  ): SnapshotRead {
     const expiresAt = this.#now() + SNAPSHOT_TTL_MS;
     const answer = retryPlatformFailures(() => read(held?.version), {
       area: "rule-snapshot",
@@ -146,15 +178,20 @@ export class RuleSnapshotCache {
             `the rule snapshot of ${name} answered version ${answered.version} without its rows`,
           );
         const snapshot = { version: answered.version, rules, routing, expiresAt };
+        // A read given up on may answer after a later one: its snapshot never replaces the newer.
+        if ((this.#held.get(name)?.expiresAt || 0) > expiresAt) return snapshot;
         this.#held.delete(name);
         this.#held.set(name, snapshot);
         if (this.#held.size > MAX_HELD_SNAPSHOTS)
           this.#held.delete(this.#held.keys().next().value!);
         return snapshot;
       })
-      .finally(() => this.#reading.delete(name));
-    this.#reading.set(name, answer);
-    return answer;
+      .finally(() => {
+        if (this.#reading.get(name) === reading) this.#reading.delete(name);
+      });
+    const reading = { answer, expiresAt };
+    this.#reading.set(name, reading);
+    return reading;
   }
 }
 
