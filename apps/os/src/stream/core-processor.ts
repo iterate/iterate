@@ -175,14 +175,6 @@ function elideHostedFacetSource(
   };
 }
 
-/** Does a row's target resolve, through the rules alone, to an HTTP webhook
- *  (`itx.builtins.webhooks.get(…)`, context/built-ins.ts)? Its fan-out events climb a longer ladder
- *  (subscription-delivery.ts). */
-export function targetIsWebhook(state: CoreState, row: Subscription): boolean {
-  const resolved = resolveThroughState(state, row.target);
-  return resolved?.[1] === "builtins" && resolved[2] === "webhooks";
-}
-
 /** The names of the live rows that PUSH this context's facet `facetName` every commit they consume —
  *  rows not halted that the delivery loop reads as the facet's push (subscription-delivery.ts
  *  `#evaluateItxExpressionTargetHead`): a trailing `processEventBatch` past the root and one more

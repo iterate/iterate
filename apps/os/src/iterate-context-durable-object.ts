@@ -72,7 +72,6 @@ import {
 import {
   CoreContract,
   normalizeControlEvent,
-  targetIsWebhook,
   type CoreState,
   type Subscription,
 } from "./stream/core-processor.ts";
@@ -145,7 +144,7 @@ import {
 
 /** Delivery receipts describe a row's outcome. A durable row receives them only when it names the
  * exact type, so the default durable selector cannot feed a receipt back to its own target. */
-const consumesConfiguredSubscriptionEvent = (row: Subscription, event: StreamEvent) =>
+const consumesConfiguredSubscriptionEvent = (row: Pick<Subscription, "consumes">, event: StreamEvent) =>
   consumesEvent(row.consumes, event) &&
   ((event.type !== "events.iterate.com/itx/subscription-delivery-failed" &&
     event.type !== "events.iterate.com/itx/subscription-delivery-halted") ||
@@ -413,10 +412,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       await this.#residency.resetUnclaimedFacetsAtBirth();
       if (!this.ctx.storage.kv.get("durable-delivery-owner"))
         this.ctx.storage.kv.put("durable-delivery-owner", CoreContract.version);
-      // Runners may create or prune cursor keys only after any facet that the prior incarnation
-      // used has been started. This direct owner rebuilds its retry deadlines before the overdue
-      // watch derives the one context alarm.
-      this.#durableSubscriptionDelivery.sync();
+      // The persisted context recovery wake owns cold durable delivery. Its alarm rebuilds runners
+      // and sweeps obsolete cursors only after prior facets have been reset above.
       this.#durableDeliveryRecoveryAt =
         this.ctx.storage.kv.get<number>(IterateContextDurableObject.#durableDeliveryWakeKey) ??
         null;
@@ -956,20 +953,16 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #durableSubscriptionRowsCache:
-    | {
-        subscriptions: CoreState["subscriptions"];
-        rules: CoreState["itxExpressionRewriteRules"];
-        rows: DurableSubscriptionRow[];
-      }
+    | { subscriptions: CoreState["subscriptions"]; rows: DurableSubscriptionRow[] }
     | undefined;
 
   /** Core is the durable source of subscription identity. A cold context rebuilds its runners from
    * these rows before it drives an alarm or post-commit delivery. */
   #durableSubscriptionRows(): DurableSubscriptionRow[] {
     this.#assertReconstructable();
-    const { subscriptions, itxExpressionRewriteRules: rules } = this.#stream.coreReducedState;
+    const { subscriptions } = this.#stream.coreReducedState;
     const cached = this.#durableSubscriptionRowsCache;
-    if (cached?.subscriptions === subscriptions && cached.rules === rules) return cached.rows;
+    if (cached?.subscriptions === subscriptions) return cached.rows;
     const rows = Object.entries(subscriptions)
       .filter(([, row]) => row.delivery === "durable")
       .map(([name, row]) => ({
@@ -982,12 +975,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         resumedAfterOffset: row.resumed?.afterOffset,
         resumedOffset: row.resumed?.offset,
         halted: row.halted,
-        ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
-          maxAttempts: 25,
-          retryCapMs: 4 * 60 * 60_000,
-        }),
       }));
-    this.#durableSubscriptionRowsCache = { subscriptions, rules, rows };
+    this.#durableSubscriptionRowsCache = { subscriptions, rows };
     return rows;
   }
 

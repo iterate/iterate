@@ -15,11 +15,14 @@ export type DurableSubscriptionRow = {
   resumedAfterOffset?: number;
   resumedOffset?: number;
   halted?: { afterOffset: number; attempts: number; error?: string };
-  maxAttempts?: number;
-  retryCapMs?: number;
 };
 
 type Page = { offsets: number[]; scannedThroughOffset: number; atHead: boolean };
+
+// Targets resolve through live rules. One ladder for every durable row keeps a rule edit from
+// changing a persisted cursor's attempt bound: non-webhooks receive ten extra attempts and the
+// webhook four-hour retry cap.
+const durableDeliveryMaxAttempts = 25;
 
 type Deps = {
   storage: DurableObjectStorage["kv"];
@@ -126,10 +129,8 @@ export class DurableSubscriptionDelivery {
           consumes: row.consumes,
           afterOffset: row.afterOffset ?? row.configuredAtOffset,
           resumeAtOffset: row.resumedAtOffset,
-          maxAttempts: row.maxAttempts,
-          retryDelayMs: row.retryCapMs
-            ? (attempt) => Math.min(1_000 * 2 ** (attempt - 1), row.retryCapMs ?? 30 * 60_000)
-            : undefined,
+          maxAttempts: durableDeliveryMaxAttempts,
+          retryDelayMs: (attempt) => Math.min(1_000 * 2 ** (attempt - 1), 4 * 60 * 60_000),
           ...(row.ordered === false && { fanOut: true }),
           runtime: this.#runtime(row),
         });

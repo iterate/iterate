@@ -158,3 +158,52 @@ test("a halted fan-out cursor never re-arms from its retained pending retry", ()
   delivery.sync();
   expect(delivery.deadline).toBeNull();
 });
+
+test("every durable row uses the stable 25-attempt, four-hour-capped ladder", async () => {
+  const values = new Map<string, unknown>([
+    [
+      "durable-delivery/policy@1",
+      {
+        confirmedOffset: 0,
+        pending: { after: 0, through: 1, offsets: [1], attempt: 19 },
+      },
+    ],
+  ]);
+  const storage = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    delete: (key: string) => values.delete(key),
+    list: ({ prefix }: { prefix: string }) =>
+      new Map([...values].filter(([key]) => key.startsWith(prefix))),
+  } as unknown as DurableObjectStorage["kv"];
+  const runs: Promise<unknown>[] = [];
+  const before = Date.now();
+  const delivery = new DurableSubscriptionDelivery({
+    storage,
+    rows: () => [{ name: "policy", configuredAtOffset: 1, consumes: ["work"] }],
+    currentHead: () => 1,
+    read: () => ({ offsets: [], scannedThroughOffset: 1, atHead: true }),
+    deliver: async () => {
+      throw new Error("temporary");
+    },
+    deliverEphemeral: async () => {},
+    terminal: async () => {},
+    run: (work) => runs.push(work()),
+    wakesChanged: () => {},
+  });
+
+  // Replacing live rewrite rules cannot change this row's policy: rows contain only row identity.
+  delivery.revive();
+  await vi.waitFor(() => expect(runs).toHaveLength(1));
+  await Promise.all(runs);
+  expect(values.get("durable-delivery/policy@1")).toMatchObject({
+    pending: {
+      attempt: 20,
+      nextAttemptAtMs: expect.any(Number),
+    },
+  });
+  const cursor = values.get("durable-delivery/policy@1") as {
+    pending: { nextAttemptAtMs: number };
+  };
+  expect(cursor.pending.nextAttemptAtMs).toBeGreaterThanOrEqual(before + 4 * 60 * 60_000);
+});
