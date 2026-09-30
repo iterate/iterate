@@ -139,7 +139,7 @@ copied from (every main commit is published).
       regenerated (`root`, then `root --check`: current)
 - [x] Simulated locally (no Java here): the file list plus `copybara/os/`, the rewrite with main's
       sha, a fresh `git init` with no origin: frozen install, `CLOUDFLARE_ENV=self-host pnpm --filter
-    os build`, `wrangler deploy --dry-run` all pass, and the baked template pins agents and voice
+os build`, `wrangler deploy --dry-run` all pass, and the baked template pins agents and voice
       at that sha. In iterate/iterate the build still pins every `@main`
 - [ ] The branch's Copybara job syncs os0929 with the real transform and runs the self-host check
 
