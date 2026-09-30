@@ -29,7 +29,9 @@ import {
   releaseRpcSessions,
   reportIssue,
 } from "iterate/lib";
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, tracing } from "cloudflare:workers";
+import type { Pipeline } from "cloudflare:pipelines";
+import { metrics } from "iterate/metrics";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
   canonicalItxExpressionPrefix,
@@ -225,6 +227,14 @@ export interface Env extends AppConfigEnv {
    *  `itx.email` (context/built-ins.ts). Simulated by wrangler dev and the test configs; absent where
    *  a deployment has no mailbox. */
   EMAIL?: SendEmail;
+  /** This Worker's own name, which the runtime does not tell it: every config names it
+   *  (scripts/generate-wrangler-config.ts), and every telemetry row carries it. */
+  WORKER_NAME: string;
+  /** The telemetry lake (docs/telemetry.md): the `events` stream the platform hook sends every
+   *  durable event to (platform-hook.ts), and the Analytics Engine dataset iterate/metrics writes.
+   *  Bound where a deployment exports telemetry; local dev and the tests bind neither. */
+  EVENTS?: Pipeline;
+  METRICS?: AnalyticsEngineDataset;
 }
 
 /** How far the clock of the machine a context wakes on may be from the one it last ran on: a wake
@@ -758,9 +768,19 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  `call` wake record, of the census's kind, naming the entry point `call`, caused by `cause` when
    *  the call names one. */
   #inboundRequestInOneTurn(call: string, cause?: Cause): void {
+    this.#nameActiveSpan();
     if (this.#unborn) throw this.#unborn;
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord({ cause: "call", caller: "other", call }, cause);
+  }
+
+  /** THE ACTIVE SPAN NAMES THIS CONTEXT, at each entry point: Cloudflare's spans of the invocation
+   *  become this project's and path's `spans` rows (docs/telemetry.md#spans). */
+  #nameActiveSpan(): void {
+    const { projectId, path } = this.#durableObjectAddress;
+    tracing
+      .getActiveSpan()
+      ?.setAttributes({ "iterate.project_id": projectId, "iterate.path": path });
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
@@ -1228,6 +1248,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
+    metrics: metrics(this.env.METRICS, {
+      worker: this.env.WORKER_NAME,
+      projectId: this.#durableObjectAddress.projectId,
+      path: this.#durableObjectAddress.path,
+    }),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
@@ -1415,6 +1440,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
    *  alone and does nothing else. */
   async alarm(): Promise<void> {
+    this.#nameActiveSpan();
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
@@ -1593,6 +1619,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     args: unknown[] = [],
     caller: Caller = { principal: null },
   ): Promise<unknown> {
+    this.#nameActiveSpan();
     if (this.#unborn) throw await this.#unbornStill(this.#unborn);
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
@@ -1703,6 +1730,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
   async fetch(request: Request): Promise<Response> {
+    this.#nameActiveSpan();
     // a project host's answer for a project it does not serve, as the edge's admission gives it
     if (this.#unborn) {
       const { message } = await this.#unbornStill(this.#unborn);

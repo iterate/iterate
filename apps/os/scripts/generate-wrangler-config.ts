@@ -130,11 +130,23 @@ function deploymentWranglerConfig(env: OsEnv) {
     d1_databases: [localDatabase],
   } = readWranglerBase();
   const names = osResourceNames(env.resourceNamePrefix);
+  const { telemetry } = env;
   return {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
     workers_dev: true,
-    observability: OBSERVABILITY,
+    // its traces and logs exported to its account's lake as well (docs/telemetry.md)
+    observability: telemetry
+      ? {
+          ...OBSERVABILITY,
+          traces: { ...OBSERVABILITY.traces, destinations: [telemetry.destinations.traces] },
+          logs: { ...OBSERVABILITY.logs, destinations: [telemetry.destinations.logs] },
+        }
+      : OBSERVABILITY,
+    ...(telemetry && {
+      pipelines: [{ binding: "EVENTS", stream: telemetry.streams.events.id }],
+      analytics_engine_datasets: [{ binding: "METRICS", dataset: telemetry.metricsDataset }],
+    }),
     routes: [
       ...routedHostnames(env).map(({ hostname, zone }) => ({
         pattern: `${hostname}/*`,
@@ -156,7 +168,7 @@ function deploymentWranglerConfig(env: OsEnv) {
       { binding: "OAUTH_KV", ...(env.resources && { id: env.resources.oauthKvId }) },
       { binding: "ITX_KV", ...(env.resources && { id: env.resources.itxKvId }) },
     ],
-    vars: configVars(env),
+    vars: { WORKER_NAME: env.workerName, ...configVars(env) },
   };
 }
 
@@ -190,11 +202,13 @@ export function viteWranglerConfig(
 ) {
   if (deployment === "self-host") return selfHostWranglerConfig();
   const local = localWranglerConfig();
+  const localName = options.localDev ? local.name : "os-local-build";
   if (!deployment)
     return {
       ...local,
-      name: options.localDev ? local.name : "os-local-build",
+      name: localName,
       vars: {
+        WORKER_NAME: localName,
         APP_CONFIG_URLS__OS: `http://localhost:${options.port}`,
         APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({
           type: "subdomains",
@@ -256,6 +270,7 @@ function selfHostWranglerConfig() {
       },
     ],
     vars: {
+      WORKER_NAME: "iterate",
       APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify({ type: "paths" }),
       APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
       // iterate's own dash (envs.ts `osEnvs.prd.dashBaseUrl`)

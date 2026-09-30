@@ -11,6 +11,7 @@
 // Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
 // `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
 
+import type { Pipeline } from "cloudflare:pipelines";
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
@@ -551,6 +552,9 @@ export interface BuildBuiltInsDeps {
     DB: D1Database;
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
     EMAIL?: SendEmail;
+    /** The telemetry lake's `events` stream and this Worker's name (the platform hook). */
+    EVENTS?: Pipeline;
+    WORKER_NAME: string;
   };
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
@@ -2038,7 +2042,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           "platformHook.deliverEvent",
           JSON.stringify(event),
         );
-        await deliverToPlatformHook(env, event);
+        deliverToPlatformHook(env, projectId, event);
       },
     },
     webhooks: {

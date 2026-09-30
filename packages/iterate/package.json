@@ -30,6 +30,7 @@
     "./react": "./src/client/react.tsx",
     "./api": "./src/api.ts",
     "./lib": "./src/lib.ts",
+    "./metrics": "./src/metrics.ts",
     "./expression": "./src/expression.ts",
     "./principal": "./src/principal.ts",
     "./stream/processor": "./src/stream/processor.ts",
@@ -82,6 +83,10 @@
       "./lib": {
         "types": "./dist/lib.d.mts",
         "import": "./dist/lib.mjs"
+      },
+      "./metrics": {
+        "types": "./dist/metrics.d.mts",
+        "import": "./dist/metrics.mjs"
       },
       "./expression": {
         "types": "./dist/expression.d.mts",

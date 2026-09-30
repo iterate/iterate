@@ -39,6 +39,7 @@
 
 import type { ItxExpression } from "iterate/expression";
 import { errorCode, jsonEqual, reportIssue, withTimeout } from "iterate/lib";
+import type { Metrics } from "iterate/metrics";
 import {
   durableLadderDelayMs,
   failureKind,
@@ -307,6 +308,9 @@ type SubscriptionDeliveryDeps = {
   /** Ends this incarnation (the DO's `ctx.abort`, after its writes are durable): a fan-out row
    *  whose every slot holds a call that will not settle. */
   abortIncarnation: (reason: string) => void;
+  /** This context's metrics (iterate/metrics): what each row still owes after an alarm's pass, how
+   *  long an event waits from its commit to its ack, and each retry a failure puts on the ladder. */
+  metrics: Metrics;
 };
 
 /** One cursor row's claim on the DO's alarm, for `deadlines()` and the trace: the persisted
@@ -321,6 +325,7 @@ export class SubscriptionDelivery {
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
   readonly #abortIncarnation: SubscriptionDeliveryDeps["abortIncarnation"];
+  readonly #metrics: Metrics;
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
@@ -344,6 +349,7 @@ export class SubscriptionDelivery {
     this.#reconcileAlarm = deps.reconcileAlarm;
     this.#runAsDelivery = deps.runAsDelivery;
     this.#abortIncarnation = deps.abortIncarnation;
+    this.#metrics = deps.metrics;
     // The persisted cursors and fan-out delivery records seed memory once, here — after this,
     // memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
@@ -657,6 +663,16 @@ export class SubscriptionDelivery {
             ),
       ),
     );
+    // WHAT EACH ROW STILL OWES once the pass is done, one gauge per row: the durable offsets past its
+    // cursor (a fan-out row's admission cursor), and a fan-out row's deliveries not yet acked.
+    const head = this.#stream.highestDurableOffset();
+    for (const [name] of rows) {
+      const record = this.#deliveryRecordByName.get(name);
+      const watermark = record?.fanOut?.admittedThroughOffset ?? record?.cursor?.confirmedOffset;
+      if (!record || watermark === undefined) continue; // removed during the pass
+      const pending = Math.max(0, head - watermark) + record.deliveries.size;
+      this.#metrics.gauge("subscription.pending", pending, `row=${name}`);
+    }
   }
 
   /** READ-YOUR-WRITES for a facet's reads: settles once every delivery already queued on the rows
@@ -1246,6 +1262,9 @@ export class SubscriptionDelivery {
               },
               persist,
             );
+            // one timing per batch: its oldest event's wait, from its commit to this ack
+            const waitedMs = Date.now() - Date.parse(events[0].createdAt);
+            this.#metrics.time("subscription.delivery_ms", waitedMs, `row=${name}`);
           } catch (error) {
             if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue; // the old row's failure
             // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
@@ -1285,6 +1304,7 @@ export class SubscriptionDelivery {
             const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
+            this.#metrics.count("subscription.retries", 1, `row=${name}`);
             return;
           }
         } finally {
@@ -1673,6 +1693,8 @@ export class SubscriptionDelivery {
     const record = this.#deliveryRecordFor(name);
     if (record.deliveries.delete(call.event.offset))
       this.#stream.storage.deleteSubscriptionDelivery(name, call.event.offset);
+    const waitedMs = Date.now() - Date.parse(call.event.createdAt);
+    this.#metrics.time("subscription.delivery_ms", waitedMs, `row=${name}`);
     const {
       failingOffsets: _lifted,
       parkedProbes: _startOver,
@@ -1739,7 +1761,7 @@ export class SubscriptionDelivery {
         attempts: attempt,
         error,
       });
-    else
+    else {
       this.#writeFanOutDelivery(name, {
         ...delivery,
         attempt,
@@ -1747,6 +1769,8 @@ export class SubscriptionDelivery {
         leased: false,
         error: errorMessage(error),
       });
+      this.#metrics.count("subscription.retries", 1, `row=${name}`);
+    }
     this.#pumpFanOut(name);
   }
 

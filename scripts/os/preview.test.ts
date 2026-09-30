@@ -2,7 +2,13 @@ import { tmpdir } from "node:os";
 import { mkdirSync, utimesSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import path from "node:path";
 import { expect, onTestFinished, test } from "vitest";
-import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
+import {
+  getOsEnv,
+  osEnvs,
+  PREVIEW_DEPLOYMENT_APPS,
+  previewDeployment,
+  telemetryEnvs,
+} from "../../envs.ts";
 import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { viteWranglerConfig } from "../../apps/os/scripts/generate-wrangler-config.ts";
@@ -456,6 +462,34 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
   expect(() => getOsEnv("pr3144")).toThrow('apps/os: unknown env "pr3144"');
+});
+
+test.for([
+  { name: "main on dev", env: "preview", worker: "os" },
+  { name: "a per-commit deployment", env: "pr3144-a1b2c3d", worker: "pr3144-a1b2c3d-os" },
+])(
+  "$name binds the dev/preview account's telemetry lake and exports its traces and logs there",
+  ({ env, worker }) => {
+    expect(viteWranglerConfig(getOsEnv(env), { localDev: false, port: "0" })).toMatchObject({
+      pipelines: [{ binding: "EVENTS", stream: telemetryEnvs.preview.streams.events.id }],
+      analytics_engine_datasets: [
+        { binding: "METRICS", dataset: telemetryEnvs.preview.metricsDataset },
+      ],
+      observability: {
+        traces: { destinations: [telemetryEnvs.preview.destinations.traces] },
+        logs: { destinations: [telemetryEnvs.preview.destinations.logs] },
+      },
+      vars: { WORKER_NAME: worker },
+    });
+  },
+);
+
+test("prd binds no telemetry and exports nowhere: its account has no lake yet", () => {
+  const config = viteWranglerConfig(getOsEnv("prd"), { localDev: false, port: "0" });
+  expect(config).not.toHaveProperty("pipelines");
+  expect(config).not.toHaveProperty("analytics_engine_datasets");
+  expect(config.observability.traces).not.toHaveProperty("destinations");
+  expect(config.observability.logs).not.toHaveProperty("destinations");
 });
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then

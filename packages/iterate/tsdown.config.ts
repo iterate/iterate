@@ -23,6 +23,7 @@ export default defineConfig([
       react: "src/client/react.tsx",
       api: "src/api.ts",
       lib: "src/lib.ts",
+      metrics: "src/metrics.ts",
       expression: "src/expression.ts",
       principal: "src/principal.ts",
       "stream/processor": "src/stream/processor.ts",

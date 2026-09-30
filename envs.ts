@@ -67,6 +67,20 @@ export const kitEnvs = {
   },
 } satisfies Record<string, KitEnv>;
 
+/** THE TELEMETRY LAKE of each account (docs/telemetry.md), which `pnpm --dir apps/telemetry
+ *  ensure-resources --env <env>` creates: the `events` stream, the Analytics Engine dataset, and the
+ *  OTLP destinations Workers export their traces and logs to. The dev/preview account's alone: prd's
+ *  resources do not exist yet, so no prd Worker binds any. */
+export const telemetryEnvs = {
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    // TODO: the stream id and dataset ensure-resources creates on the dev/preview account
+    streams: { events: { id: "TODO-events-stream-id" } },
+    metricsDataset: "TODO-metrics-dataset",
+    destinations: { traces: "telemetry-traces", logs: "telemetry-logs" },
+  },
+};
+
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
   // main, beside the apps' main-on-dev workers, which sign in against it; its data is erased
@@ -89,6 +103,7 @@ export const osEnvs: Record<string, OsEnv> = {
       itxKvId: "a5b73c18d78f4cafaa4fa5e67d7daadc",
       dbId: "0189bd9e-baa4-48f5-b39c-f57b8829d864",
     },
+    telemetry: telemetryEnvs.preview,
   },
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
@@ -309,6 +324,7 @@ export function previewDeployment(name: string) {
     testEmailDomain: TEST_EMAIL_DOMAIN,
     petshopOrigin: dummyPetshopEnvs.prd!.baseUrl,
     resourceNamePrefix: osWorker,
+    telemetry: telemetryEnvs.preview,
   };
   const apps = Object.fromEntries(
     PREVIEW_DEPLOYMENT_APPS.map((app) => [

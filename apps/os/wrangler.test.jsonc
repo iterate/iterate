@@ -9,6 +9,8 @@
   // takes any hostname — no DNS), and its secrets are test values (control-plane.test.ts and
   // project-host-routing.test.ts sign in with the password and authenticate with the admin bearer).
   "vars": {
+    // the Worker's own name, which every config names (scripts/generate-wrangler-config.ts)
+    "WORKER_NAME": "os",
     "APP_CONFIG_URLS__OS": "https://control.test",
     // the landing page's pointer (control-plane.test.ts)
     "APP_CONFIG_URLS__DASH": "https://dash.test",

@@ -78,6 +78,16 @@ export const OsEnv = z.object({
    *  envs.ts records. Unset for a per-commit deployment (envs.ts `previewDeployment`), whose own
    *  deploy creates them by name (./deploy.ts). */
   resources: z.object({ oauthKvId: z.string(), itxKvId: z.string(), dbId: z.string() }).optional(),
+  /** Its account's telemetry lake (docs/telemetry.md, envs.ts `telemetryEnvs`): the `events` stream
+   *  the platform hook sends to (binding `EVENTS`), the Analytics Engine dataset iterate/metrics
+   *  writes (`METRICS`), and the OTLP destinations its traces and logs export to. Unset ⇒ none. */
+  telemetry: z
+    .object({
+      streams: z.object({ events: z.object({ id: z.string() }) }),
+      metricsDataset: z.string(),
+      destinations: z.object({ traces: z.string(), logs: z.string() }),
+    })
+    .optional(),
 });
 export type OsEnv = z.infer<typeof OsEnv>;
 

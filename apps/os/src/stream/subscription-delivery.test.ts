@@ -1964,6 +1964,45 @@ test("fan-out, the wake rule: a wake handler appending work that fails climbs on
   expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
 });
 
+// ── metrics: what a row owes, how long a delivery takes, how often one is retried ──
+
+test("metrics: a fan-out ack is timed, a failure on the ladder counts a retry, and the alarm's pass gauges what the row owes", async () => {
+  const rig = fanOutRig({ behave: ({ n }) => (n === 2 ? "fail" : "ack") });
+  rig.pings(1);
+  await drainDeliveries();
+  rig.pings(2);
+  await drainDeliveries();
+  await rig.pass(); // before ping 2's rung: it is still owed
+  expect(rig.measured).toMatchObject([
+    { kind: "timing", name: "subscription.delivery_ms", labels: "row=f" },
+    { kind: "count", name: "subscription.retries", value: 1, labels: "row=f" },
+    { kind: "gauge", name: "subscription.pending", value: 1, labels: "row=f" },
+  ]);
+});
+
+test("metrics: a cursor row's refused batch counts a retry, and its ack on the rung is timed from the batch's commit", async () => {
+  const rig = refusingSinkRig();
+  rig.modeRef.mode = "throw";
+  const [ping] = rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  await rig.pass(); // before the rung: the batch is still owed
+  rig.modeRef.mode = "deliver";
+  const ackedAt = rig.delivery.cursor("s")!.nextAttemptAtMs! + 1;
+  fakeClock(ackedAt);
+  await rig.pass();
+  expect(rig.measured).toMatchObject([
+    { kind: "count", name: "subscription.retries", value: 1, labels: "row=s" },
+    { kind: "gauge", name: "subscription.pending", value: 1, labels: "row=s" },
+    {
+      kind: "timing",
+      name: "subscription.delivery_ms",
+      value: ackedAt - Date.parse(ping.createdAt),
+      labels: "row=s",
+    },
+    { kind: "gauge", name: "subscription.pending", value: 0, labels: "row=s" },
+  ]);
+});
+
 function nextMacrotask() {
   return new Promise((r) => setImmediate(r));
 }
@@ -2016,6 +2055,8 @@ function incarnation(
   const evaluated: string[] = [];
   /** Every reset the loop asked for (`abortIncarnation`): a test builds the next incarnation. */
   const aborts: string[] = [];
+  /** Every metric the loop wrote, in order (iterate/metrics). */
+  const measured: { kind: string; name: string; value: number; labels?: string }[] = [];
   let delivery!: SubscriptionDelivery;
   const coordinator = new AlarmCoordinator({
     setAlarm: async (at) => void alarms.push(at),
@@ -2062,6 +2103,12 @@ function incarnation(
     // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
     runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
     abortIncarnation: (reason) => void aborts.push(reason),
+    metrics: {
+      count: (name, value, labels) =>
+        void measured.push({ kind: "count", name, value: value ?? 1, labels }),
+      gauge: (name, value, labels) => void measured.push({ kind: "gauge", name, value, labels }),
+      time: (name, value, labels) => void measured.push({ kind: "timing", name, value, labels }),
+    },
   });
   // created + woken on a fresh store, the wake alone on one with rows, as the DO's first handler
   // records it — an alarm's caused by the deepest delivery it came back for
@@ -2078,6 +2125,7 @@ function incarnation(
     deletes,
     evaluated,
     aborts,
+    measured,
     /** An alarm pass, as the DO runs it: the stream-kept cursors under the coordinator's hold. */
     pass: () => coordinator.pass(() => delivery.deliverEveryCursorSubscription()),
   };

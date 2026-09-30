@@ -21,6 +21,7 @@ import { memoryUsage } from "node:process";
 import { deserialize, serialize } from "node:v8";
 import { z } from "zod";
 import { errorCode } from "iterate/lib";
+import { metrics } from "iterate/metrics";
 import {
   defineProcessorContract,
   type ScannedRange,
@@ -46,6 +47,9 @@ const facetHostPlatformEntries = {
   ) => facetHandle.invoke([["processEventBatch", events, range]]),
   catchUpFacetFromLog: async (facetHandle: FacetHandle) => facetHandle.invoke([["catchUpFromLog"]]),
 };
+
+/** No dataset bound, as in local dev: the loop's metrics write nothing. */
+const unboundMetrics = metrics(undefined, { worker: "memory-budget" });
 
 /** These workloads run no background work, so the engine never claims the alarm: a stub that must
  *  never be reached. */
@@ -458,6 +462,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
+      metrics: unboundMetrics,
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
@@ -516,6 +521,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
+      metrics: unboundMetrics,
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
@@ -581,6 +587,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       stream,
       evaluateItxExpression: () => Promise.reject(new Error("an alarm's cause calls nothing")),
       ...facetHostPlatformEntries,
+      metrics: unboundMetrics,
       reconcileAlarm: () => {},
       runAsDelivery: (_events, call) => call(),
       abortIncarnation: () => {},
@@ -647,6 +654,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
+      metrics: unboundMetrics,
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
@@ -687,6 +695,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
+      metrics: unboundMetrics,
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
