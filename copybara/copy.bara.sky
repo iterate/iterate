@@ -36,10 +36,14 @@ def copy_message(ctx):
 # THE TEMPLATES' PACKAGES AT THE COPIED COMMIT: configs/*/package.json name @iterate-com/agents,
 # @iterate-com/voice and iterate at pkg.pr.new's `@main`, which moves. .github/workflows/pkg-pr-new.yml
 # publishes every main commit, so the copy names the build of the commit it is a copy of, and a
-# self-host's templates are the ones that copy was built and checked with. `current[0]` is that
-# commit: the only change in ITERATIVE mode, and the newest in SQUASH, which lists newest first.
+# self-host's templates are the ones that copy was built and checked with. A migration's commit is
+# `current[0]`, its only change in ITERATIVE mode. A --to-folder run lists none, so the sync check
+# (scripts/ci/copybara.ts) names the commit the copy's head was copied from:
+# `--labels copied_commit:<sha>`, which Copybara exposes as FLAG_COPIED_COMMIT.
 def pin_template_packages(ctx):
-    sha = ctx.changes.current[0].ref
+    sha = ctx.find_label("FLAG_COPIED_COMMIT")
+    if not sha:
+        sha = ctx.changes.current[0].ref
     for manifest in ctx.run(glob(["configs/*/package.json"])):
         content = ctx.read_path(manifest)
         pinned = content.replace('@main"', '@' + sha + '"')

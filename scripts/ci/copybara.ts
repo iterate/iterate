@@ -101,7 +101,10 @@ export async function sync(options: {
         throw new Error(`Copybara's ${workflow} exited with ${migrate.status || migrate.signal}`);
 
       // What the copy should hold at `sha`: Copybara writes it to a folder, with the same file
-      // selection and moves as the migration.
+      // selection and transformations as the migration. The templates name the packages of the
+      // commit the copy's head was copied from (copy.bara.sky `pin_template_packages`), which a
+      // --to-folder run cannot see, so it is handed that commit.
+      const copy = fetchCopyHead({ repo, credentials, work });
       const expected = join(work, `${workflow}-expected`);
       const toFolder = copybaraRun([
         workflow,
@@ -110,12 +113,14 @@ export async function sync(options: {
         "--folder-dir",
         expected,
         "--squash",
+        "--labels",
+        `copied_commit:${copy.copiedCommit}`,
       ]);
       if (toFolder.status !== 0) {
         process.stdout.write(toFolder.stderr);
         throw new Error(`Copybara's ${workflow} --to-folder exited with ${toFolder.status}`);
       }
-      checkCopy({ repo, sha: options.sha, expected, credentials, work });
+      checkCopy({ sha: options.sha, expected, copy });
     }
     checkSelfHost({ repo: COPIES.os, credentials, work });
   } finally {
@@ -175,12 +180,23 @@ function checkSelfHost(input: { repo: string; credentials: string; work: string 
  * same, and a file added by hand shows up too. Only the copy's commits and trees are fetched.
  */
 function checkCopy(input: {
-  repo: string;
   sha: string;
   expected: string;
-  credentials: string;
-  work: string;
+  copy: ReturnType<typeof fetchCopyHead>;
 }) {
+  const { git, url, head, tree } = input.copy;
+  git("--work-tree", input.expected, "add", "--all", ".");
+  const expectedTree = git("write-tree");
+  if (tree !== expectedTree)
+    throw new Error(
+      `${url}/commit/${head} is not what ${input.sha} should copy: ${git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
+    );
+  console.log(`[copybara] in sync: ${url}/commit/${head} is ${input.sha}'s (tree ${tree})`);
+}
+
+/** The copy's main as it is now: its head, its tree and the iterate/iterate commit its
+ *  `GitOrigin-RevId` trailer names. Only the head's commit and trees are fetched. */
+function fetchCopyHead(input: { repo: string; credentials: string; work: string }) {
   const gitDir = join(input.work, `${input.repo}.git`);
   const git = (...args: string[]) =>
     execFileSync("git", ["--git-dir", gitDir, ...args], {
@@ -188,8 +204,6 @@ function checkCopy(input: {
       env: { ...process.env, GIT_INDEX_FILE: join(input.work, `${input.repo}.index`) },
     }).trim();
   execFileSync("git", ["init", "--quiet", "--bare", gitDir]);
-  git("--work-tree", input.expected, "add", "--all", ".");
-  const expectedTree = git("write-tree");
   const url = `https://github.com/iterate/${input.repo}`;
   git(
     "-c",
@@ -202,13 +216,21 @@ function checkCopy(input: {
     url,
     "main",
   );
-  const copyHead = git("rev-parse", "FETCH_HEAD");
-  const copyTree = git("rev-parse", "FETCH_HEAD^{tree}");
-  if (copyTree !== expectedTree)
-    throw new Error(
-      `${url}/commit/${copyHead} is not what ${input.sha} should copy: ${git("diff-tree", "-r", "--name-status", expectedTree, copyTree)}`,
-    );
-  console.log(`[copybara] in sync: ${url}/commit/${copyHead} is ${input.sha}'s (tree ${copyTree})`);
+  const copiedCommit = git(
+    "log",
+    "-1",
+    "--format=%(trailers:key=GitOrigin-RevId,valueonly)",
+    "FETCH_HEAD",
+  );
+  if (!/^[0-9a-f]{40}$/.test(copiedCommit))
+    throw new Error(`${url}'s main names no GitOrigin-RevId: ${JSON.stringify(copiedCommit)}`);
+  return {
+    git,
+    url,
+    head: git("rev-parse", "FETCH_HEAD"),
+    tree: git("rev-parse", "FETCH_HEAD^{tree}"),
+    copiedCommit,
+  };
 }
 
 /** The pinned Copybara release's jar, downloaded once per machine and checked against its SHA-256. */
