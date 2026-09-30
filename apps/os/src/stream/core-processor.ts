@@ -92,7 +92,7 @@ export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
   const getStep = builtInsGetStep(resolvedTarget, "facets");
-  if (!getStep || getStep[1] === "subscriptions") return undefined;
+  if (!getStep) return undefined;
   // A FIRST-PARTY facet hosts this worker's own class: the target names it and carries no spec.
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
@@ -357,10 +357,6 @@ function parseSubscriptionName(name: string): string {
     throw new Error(
       `"${CoreContract.slug}" is reserved as a subscription name: it is the core reduce, never a configurable subscription`,
     );
-  if (name === "subscriptions")
-    throw new Error(
-      '"subscriptions" is reserved as a subscription name: durable delivery owns its private facet',
-    );
   return name;
 }
 
@@ -373,7 +369,7 @@ export const CoreContract = {
   // the reducer below rejects old rows rather than silently treating their missing delivery as a
   // subscription that no runner selects. Existing persisted contexts must be recreated for this
   // deliberately breaking core shape.
-  version: "18.0.0",
+  version: "19.0.0",
   /** THE EVENTS THIS CONTRACT OWNS beyond its control events, as two catalogs: CoreEventCatalog
    *  (core-events.ts) and RunEventCatalog (iterate/stream/run). A processor that consumes them names
    *  the catalog in its `processorDeps` (the Project names CoreEventCatalog, the agent RunEventCatalog);
@@ -708,8 +704,6 @@ function normalizeSubscriptionConfigured(input: {
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
-  if (target && builtInsGetStep(target, "facets")?.[1] === "subscriptions")
-    throw new Error("the subscriptions facet is private to durable delivery");
   return {
     name,
     target,

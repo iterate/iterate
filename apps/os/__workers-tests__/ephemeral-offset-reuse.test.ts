@@ -54,7 +54,7 @@ test("a stream-kept durable cursor never persists an ephemeral offset across evi
   await evictDurableObject(s);
 
   // This native diagnostic begins the new incarnation but records no wake. It observes the private
-  // facet's persisted KV before an external request can create a replacement `itx/woken` record or
+  // context's persisted delivery KV before an external request can create a replacement `itx/woken` record or
   // asynchronous alarm traces. The cursor must still name the old durable mark exactly.
   const beforeWake = await runInDurableObject(s, (instance) =>
     instance.subscriptionDeliveryStatus(),

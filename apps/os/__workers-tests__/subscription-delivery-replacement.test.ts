@@ -1,12 +1,12 @@
 // A durable delivery that began for an ordered row may finish only after that name has become a
-// fan-out row. Its old bridge call is then stale: it cannot acknowledge the replacement or disturb
+// fan-out row. Its old direct target call is then stale: it cannot acknowledge the replacement or disturb
 // the replacement's eight-call fan-out admission.
 
 import { expect, test } from "vitest";
 import { FANOUT_HOLD, HOLD } from "./sources.ts";
 import { readLog, releasePins, stub, until } from "./support.ts";
 
-test("an ordered bridge call settling after replacement cannot acknowledge or overwrite its fan-out successor", async () => {
+test("an ordered target call settling after replacement cannot acknowledge or overwrite its fan-out successor", async () => {
   const context = "prj_delivery_ordered_to_fanout_replacement";
   const s = stub(context);
   const orderedTarget = ["itx", "facets", ["get", "ordered-hold", HOLD], "processEventBatch"];
@@ -21,7 +21,7 @@ test("an ordered bridge call settling after replacement cannot acknowledge or ov
     },
   });
   await s.append({ type: "test/held" });
-  await until("the old ordered bridge call is held at its target", async () =>
+  await until("the old ordered target call is held at its target", async () =>
     Boolean(await s.invoke(["itx", "facets", ["get", "ordered-hold", HOLD], ["holding"]])),
   );
 
@@ -60,7 +60,7 @@ test("an ordered bridge call settling after replacement cannot acknowledge or ov
     pending: 16,
   });
 
-  // This completes the OLD raw bridge call. Its stale settlement must not acknowledge the
+  // This completes the OLD raw target call. Its stale settlement must not acknowledge the
   // successor or overwrite the successor's fan-out admission records.
   await s.invoke(["itx", "facets", ["get", "ordered-hold", HOLD], ["release"]]);
   await until(

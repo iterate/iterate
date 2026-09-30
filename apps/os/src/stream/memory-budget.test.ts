@@ -154,11 +154,9 @@ const rows: {
     scenario: "stuck-facet-rows",
     args: { ...STUCK_ROWS_20, disjointTypes: 1 },
   },
-  // Durable rows now run in the private subscriptions facet rather than this in-process delivery
-  // harness. `__workers-tests__/subscription-delivery-memory.test.ts` proves the replacement
-  // invariant with twenty rows: one 8 MiB source-page reservation, nineteen waiters, at most 8 MiB
-  // of target bodies, and complete draining after the held target releases. The rows below remain
-  // the in-process proof for processor delivery, which still uses SubscriptionDelivery.
+  // Context-owned durable rows are exercised by `__workers-tests__/subscription-delivery-memory.test.ts`:
+  // one 8 MiB source-page reservation, nineteen waiters, bounded target bodies, and complete draining
+  // after a held target releases. These rows remain the in-process proof for processor delivery.
 
   // ── the history scan ──
   {

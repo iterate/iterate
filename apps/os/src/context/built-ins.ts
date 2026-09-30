@@ -296,16 +296,6 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
   };
 }
 
-/** The durable subscription runner is a private first-party facet. Its context-native bridge owns
- * its cursor and target call, so no ordinary expression may host, reset, claim, or call it. */
-function refuseSubscriptionsFacet(name: string, verb: string): void {
-  if (name !== "subscriptions") return;
-  throw codedError(
-    "FORBIDDEN",
-    `itx.${verb}(${JSON.stringify(name)}): the subscriptions facet is private to durable delivery`,
-  );
-}
-
 /** A reset's reason (`abort`, `facets.abort`): absent, or one line a person reads — it lands in the
  *  fact and in the message every call the reset cuts off rejects with. */
 function abortReasonOf(reason: unknown, verb: string): string | undefined {
@@ -1720,14 +1710,12 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     rpcStubs: deps.rpcStubs,
     facets: {
       get: (name, spec) => {
-        refuseSubscriptionsFacet(name, "facets.get");
         return deps.facets.get(name, spec);
       },
       // The reset, then its fact: the host's abort and restart hold every other event off
       // (facet-host.ts `#restart`), so the fact's own delivery to a processor facet meets the fresh
       // instance, never the one going away.
       abort: async (name, reasonInput) => {
-        refuseSubscriptionsFacet(name, "facets.abort");
         const reason = abortReasonOf(reasonInput, "itx.facets.abort");
         const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
         await deps.facets.abort(name, reason);
@@ -1741,7 +1729,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     subscriptions: deps.subscriptions,
     processors: {
       enable: async (name, spec) => {
-        refuseSubscriptionsFacet(name, "processors.enable");
         // Refused HERE, before anything is appended. A FIRST-PARTY name (first-party-facets.ts) hosts
         // this worker's own class: `consumes` at most, never a source; any other name's spec names
         // the source's host class, and its literal source is under the ceiling. Either is hosted
@@ -1806,7 +1793,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return { name };
       },
       disable: async (name) => {
-        refuseSubscriptionsFacet(name, "processors.disable");
         await append({
           type: "events.iterate.com/itx/subscription-configured",
           payload: { name, target: null },
@@ -1814,7 +1800,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       },
       list: async () => (await deps.subscriptions.list()).filter((row) => row.hostedFacet),
       claim: async (name, at) => {
-        refuseSubscriptionsFacet(name, "processors.claim");
         return deps.claimFacetAlarm(name, at);
       },
     },

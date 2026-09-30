@@ -634,7 +634,7 @@ test("subscriptions table: a replayed pre-delivery row is rejected and reported,
     target: "itx.config.processEventBatch",
   });
   expect(() => reduceCoreEvent({ event: legacy, state: CoreContract.initialState() })).toThrow(
-    /predates CoreContract 18\.0\.0 and must be recreated/,
+    /predates CoreContract 19\.0\.0 and must be recreated/,
   );
   const reported: unknown[] = [];
   const state = reduceCoreEventBatch([legacy], CoreContract.initialState(), (error) =>
@@ -1266,7 +1266,7 @@ test("a platform-equivalent target beneath a broader mask re-opens exactly that 
 
 // ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, the reserved `core` or `subscriptions`, a target not rooted at itx) THROWS on append, nothing
+// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS on append, nothing
 // appended. A subscription is PURE DATA — a name, a target expression stored in its parsed form,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, read here from the real
@@ -1444,7 +1444,7 @@ test("configure: the target must be rooted at `itx` (a bare built-in root is uns
   expect(events).toHaveLength(0);
 });
 
-test("configure: a name is ONE segment, never a prototype key, `core`, or `subscriptions` — a dotted, spaced, `__proto__`, `constructor`, `core`, or `subscriptions` name is refused on append, nothing appended", () => {
+test("configure: a name is ONE segment, never a prototype key or `core` — a dotted, spaced, `__proto__`, `constructor`, or `core` name is refused on append, nothing appended", () => {
   const { configure, events } = setup();
   expect(() => configure({ name: "a.b", target: "itx.whoami", delivery: "durable" })).toThrow(
     /one segment/,
@@ -1466,18 +1466,17 @@ test("configure: a name is ONE segment, never a prototype key, `core`, or `subsc
     /reserved/,
   );
   expect(() => configure({ name: "core", target: null })).toThrow(/reserved/);
-  expect(() =>
-    configure({ name: "subscriptions", target: "itx.whoami", delivery: "durable" }),
-  ).toThrow(/reserved/);
-  expect(() => configure({ name: "subscriptions", target: null })).toThrow(/reserved/);
-  expect(() =>
-    configure({
-      name: "attacker",
-      target: "itx.builtins.facets.get('subscriptions').processEventBatch",
-      delivery: "processor",
-    }),
-  ).toThrow(/private to durable delivery/);
   expect(events).toHaveLength(0);
+});
+
+test("configure: `subscriptions` is an ordinary application-owned processor name and target", () => {
+  const { configure, rows } = setup();
+  const target = "itx.builtins.facets.get('subscriptions').processEventBatch";
+  configure({ name: "subscriptions", target, delivery: "processor" });
+  expect(rows().subscriptions).toMatchObject({
+    target: ["itx", "builtins", "facets", ["get", "subscriptions"], "processEventBatch"],
+    delivery: "processor",
+  });
 });
 
 test("configure: the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed); `{ '@': true }` is ordinary call data", () => {

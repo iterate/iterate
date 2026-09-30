@@ -53,7 +53,6 @@ import {
   isPlatformFailureKind,
   logPlatformFailure,
 } from "@iterate-com/shared/platform-retry";
-import type { DurableSubscriptionConfig } from "./subscription-delivery-durable-object.ts";
 import { causeOfDelivery, deepestCause, newChain, parseCause, type Cause } from "./cause.ts";
 import {
   ITX_APP_HEADER,
@@ -71,6 +70,7 @@ import {
   itxAnswerDetachedFromSession,
 } from "./context/dispatch.ts";
 import {
+  CoreContract,
   normalizeControlEvent,
   targetIsWebhook,
   type CoreState,
@@ -139,12 +139,22 @@ import { egress } from "./context/egress.ts";
 import { SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./context/rule-snapshots.ts";
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 import {
-  parseSubscriptionDeliveryBridgeRequest,
-  parseSubscriptionDeliveryEphemeralRequest,
-  parseSubscriptionDeliveryReadRequest,
-  parseSubscriptionDeliveryTerminalRequest,
-  type SubscriptionDeliveryBridgeRequest,
-} from "./context/subscription-delivery-bridge.ts";
+  DurableSubscriptionDelivery,
+  type DurableSubscriptionRow,
+} from "./context/durable-subscription-delivery.ts";
+
+type DeliveryIdentity = { name: string; configuredAtOffset: number; resumeAtOffset?: number };
+type SubscriptionDeliveryBridgeRequest = DeliveryIdentity & {
+  range: { after: number; through: number };
+  offsets: number[];
+};
+type DeliveryEphemeralRequest = DeliveryIdentity & { event: StreamEvent };
+type DeliveryTerminalRequest = DeliveryIdentity & {
+  afterOffset: number;
+  attempts: number;
+  error: string;
+  fanOut?: true;
+};
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
  *  id alone — the context sweep (scripts/ci/context-sweep.ts), which knows only the ids Cloudflare
@@ -203,6 +213,8 @@ export type AlarmTrace = {
   alarm: { before: number | null; after: number | null };
   deadlines: {
     schedule: number | null;
+    /** Context-owned durable delivery's next retry or cold-recovery pass. */
+    delivery: number | null;
     /** The hosted processors holding a claim (`processors.claim`): a revive owed by `at`. */
     claims: { name: string; at: number }[];
     /** The unclaimed-facet sweep's deadline — in memory, so null in a fresh incarnation. */
@@ -315,6 +327,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     contextAbortedOffset: () =>
       this.#stream.coreReducedState.wokenAfterContextAbortedOffset ?? null,
   });
+  /** A direct runner must not reinterpret an old private-facet cursor as offset zero. */
+  #durableDeliveryMigrationRefusal: Error | null = null;
   readonly #rpcStubs = new RpcStubDirectory({
     rpcStubFetch: this.#rpcStubFetch,
     ctx: this.ctx,
@@ -363,9 +377,34 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return;
       }
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
+      // The removed private facet kept its cursor in another Durable Object. Its marker means a
+      // missing context-KV cursor would silently replay a durable target, so this breaking contract
+      // requires explicit recreation. New direct contexts write their owner marker after birth.
+      if (
+        !this.ctx.storage.kv.get("durable-delivery-owner") &&
+        this.ctx.storage.kv.get("facet-ran:subscriptions") &&
+        !this.ctx.storage.kv.get("facet:subscriptions")
+      ) {
+        this.#durableDeliveryMigrationRefusal = codedError(
+          "INVALID_INPUT",
+          `context ${this.#durableObjectAddress.path} has a removed private subscription cursor; recreate the context for CoreContract ${CoreContract.version}`,
+        );
+        reportIssue(
+          "iterate-context.removed-private-subscription-cursor",
+          this.#durableDeliveryMigrationRefusal,
+          { path: this.#durableObjectAddress.path },
+        );
+        await this.ctx.storage.deleteAlarm();
+        return;
+      }
       // Before this incarnation writes anything: the facets the last one ran are started (and the
       // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
       await this.#residency.resetUnclaimedFacetsAtBirth();
+      this.ctx.storage.kv.put("durable-delivery-owner", CoreContract.version);
+      // Runners may create or prune cursor keys only after any facet that the prior incarnation
+      // used has been started. This direct owner rebuilds its retry deadlines before the overdue
+      // watch derives the one context alarm.
+      this.#durableSubscriptionDelivery.sync();
       this.#stream.storage.countIncarnation();
       if (this.#stream.highestDurableOffset() > 0)
         this.#snapshotLeaseUntil = Date.now() + SNAPSHOT_TTL_MS + SNAPSHOT_CLOCK_SLACK_MS;
@@ -437,8 +476,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   /** Context-local only: a facet restart cannot duplicate an unanswered target call. */
   readonly #configuredSubscriptionDeliveries = new Map<string, { startedAt: number }>();
-  /** A newer durable handoff must retain its recovery claim until that push is acknowledged. */
-  #subscriptionDeliveryThroughOffset: number | undefined;
   /** A late successful raw call is a receipt: repeat attempts observe it without invoking twice.
    * Errors are deliberately not receipts; the bounded runner must make its next actual retry. */
   readonly #settledConfiguredSubscriptionDeliveries = new Map<string, { settledAt: number }>();
@@ -449,6 +486,61 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    * page ledger by its committed offset/path envelope, so one such event runs alone. */
   static readonly #configuredSubscriptionDeliveryMaximumBodyChars = 32 * 1024 * 1024;
   #configuredSubscriptionDeliveryBodyChars = 0;
+  #durableDeliveryRecoveryAt: number | null = null;
+  #durableDeliveryInFlight = 0;
+
+  /** The durable runner lives directly beside its log and target authority. */
+  readonly #durableSubscriptionDelivery = new DurableSubscriptionDelivery({
+    storage: this.ctx.storage.kv,
+    rows: () => this.#durableSubscriptionRows(),
+    currentHead: () => this.#stream.highestDurableOffset(),
+    read: (row, afterOffset, limit, resumeAtOffset) =>
+      this.#readSubscriptionDelivery({
+        name: row.name,
+        configuredAtOffset: row.configuredAtOffset,
+        resumeAtOffset,
+        afterOffset,
+        limit,
+      }),
+    deliver: (row, { offsets, range, resumeAtOffset }) =>
+      this.#deliverConfiguredSubscription({
+        name: row.name,
+        configuredAtOffset: row.configuredAtOffset,
+        resumeAtOffset,
+        offsets,
+        range,
+      }),
+    deliverEphemeral: (row, { event, resumeAtOffset }) =>
+      this.#deliverConfiguredEphemeralSubscription({
+        name: row.name,
+        configuredAtOffset: row.configuredAtOffset,
+        resumeAtOffset,
+        event,
+      }),
+    terminal: (row, input) =>
+      this.#recordConfiguredSubscriptionTerminal({
+        name: row.name,
+        configuredAtOffset: row.configuredAtOffset,
+        ...input,
+      }),
+    run: (work) => this.#runDurableDelivery(work),
+    wakesChanged: () => this.#alarmCoordinator.reconcile(),
+  });
+
+  #runDurableDelivery(work: () => Promise<unknown>): void {
+    this.#durableDeliveryInFlight++;
+    this.#durableDeliveryRecoveryAt = Date.now() + 20_000;
+    this.ctx.waitUntil(
+      Promise.resolve()
+        .then(work)
+        .catch((error) => reportIssue("subscription-delivery.context-background", error))
+        .finally(() => {
+          this.#durableDeliveryInFlight--;
+          if (this.#durableDeliveryInFlight === 0) this.#durableDeliveryRecoveryAt = null;
+          this.#alarmCoordinator.reconcile();
+        }),
+    );
+  }
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
@@ -476,7 +568,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (events.length === 0) return;
       this.#callerStorage.run({ principal: null }, () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
-        this.#pushDurableSubscriptionFacet(events, { after: afterOffset, through: throughOffset });
+        this.#pushDurableSubscriptionDelivery(events);
         this.#startRequestedRuns(events);
       });
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
@@ -767,6 +859,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
 
   #assertReconstructable(): void {
     if (this.#stream.reconstructionRefusal) throw this.#stream.reconstructionRefusal;
+    if (this.#durableDeliveryMigrationRefusal) throw this.#durableDeliveryMigrationRefusal;
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit and its effects. */
@@ -810,14 +903,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
-  /** Native operational telemetry for the private durable-delivery facet. It is for host
+  /** Native operational telemetry for context-owned durable delivery. It is for host
    * observability and Workers state proofs; no itx expression or client route exposes it. */
   async subscriptionDeliveryStatus(): Promise<{
     pendingEphemeralChars: number;
     targetBodyChars: number;
     activeTargetDeliveries: number;
     oldestTargetDeliveryAgeMs: number | null;
-    /** Persisted cursor/retry state from the private facet, with no event bodies or RPC values. */
+    /** Persisted cursor/retry state in context KV, with no event bodies or RPC values. */
     snapshots: Record<string, DurableDeliveryCursor>;
   }> {
     const hasDurable = Object.values(this.#stream.coreReducedState.subscriptions).some(
@@ -837,36 +930,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         oldestTargetDeliveryAgeMs,
         snapshots: {},
       };
-    const [resources, snapshots] = await Promise.all([
-      this.#facetHost.callFacetAsPlatform("subscriptions", [["deliveryResourceSnapshot"]]),
-      this.#facetHost.callFacetAsPlatform("subscriptions", [["deliverySnapshots"]]),
-    ]);
     return {
-      ...(resources as { pendingEphemeralChars: number }),
+      ...this.#durableSubscriptionDelivery.resources(),
       targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
       activeTargetDeliveries,
       oldestTargetDeliveryAgeMs,
-      snapshots: snapshots as Record<string, DurableDeliveryCursor>,
+      snapshots: this.#durableSubscriptionDelivery.snapshots(),
     };
   }
 
-  /** All durable rows share one private cursor facet. It sees identities and source batches, never
-   * a target or delivery authority; the bridge below derives both again from this context. */
-  #pushDurableSubscriptionFacet(
-    events: StreamEvent[],
-    range: { after: number; through: number },
-  ): void {
-    const configuration = this.subscriptionDeliveryConfiguration();
-    const { rows } = configuration;
+  /** All durable rows run in this context, beside their log, target authority and one alarm. */
+  #pushDurableSubscriptionDelivery(events: StreamEvent[]): void {
+    const rows = this.#durableSubscriptionRows();
     if (rows.length === 0) {
-      if (events.some((event) => event.type === "events.iterate.com/itx/subscription-configured"))
-        this.#facetHost.deleteFirstPartyFacet("subscriptions");
+      this.#durableSubscriptionDelivery.sync();
       return;
     }
-    // The facet's push is deliberately asynchronous, but durable work cannot be handed off only
-    // in memory. Claim before sending it: a reset in this window revives the facet, which pulls
-    // the same rows from core and scans the durable log. Ephemeral-only and unconsumed commits
-    // remain best-effort and never write a pointless durable claim.
     const configurationChanged = events.some(
       (event) =>
         event.type === "events.iterate.com/itx/subscription-configured" ||
@@ -878,69 +957,53 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
     );
     if (configurationChanged || durableDeliveryDue) {
-      this.#subscriptionDeliveryThroughOffset = configuration.throughOffset;
-      // The push drives delivery immediately. This claim is recovery if that handoff is lost,
-      // rather than a second immediate driver for every committed event.
-      const recoveryAt = Date.now() + 20_000;
-      const claimedAt = this.#facetHost
-        .deadlines()
-        .find((claim) => claim.name === "subscriptions")?.at;
-      if (claimedAt === undefined || claimedAt > recoveryAt)
-        this.#facetHost.claim("subscriptions", recoveryAt);
+      this.#durableDeliveryRecoveryAt = Date.now() + 20_000;
     }
-    const ephemeralEvents = events.filter(
-      (event) =>
-        event.ephemeral && rows.some((row) => !row.halted && consumesEvent(row.consumes, event)),
-    );
-    if (!configurationChanged && !durableDeliveryDue && ephemeralEvents.length === 0) return;
-    void this.#facetHost
-      .callFacetAsPlatform("subscriptions", [
-        ["processEventBatch", ephemeralEvents, range, rows, configuration.throughOffset],
-      ])
-      .catch((error) => reportIssue("subscription-delivery.facet-push", error));
+    if (
+      !configurationChanged &&
+      !durableDeliveryDue &&
+      !events.some(
+        (event) =>
+          event.ephemeral && rows.some((row) => !row.halted && consumesEvent(row.consumes, event)),
+      )
+    )
+      return;
+    this.#durableSubscriptionDelivery.push(events);
   }
 
-  /** Core is the durable source of subscription identity. The private facet asks on a claim revive
-   * when an asynchronous post-commit push did not reach its KV before an incarnation ended. */
-  subscriptionDeliveryConfiguration(): {
-    rows: DurableSubscriptionConfig[];
-    /** Monotonic core source fence for asynchronous push/revive reconciliation. */
-    throughOffset: number;
-  } {
+  /** Core is the durable source of subscription identity. A cold context rebuilds its runners from
+   * these rows before it drives an alarm or post-commit delivery. */
+  #durableSubscriptionRows(): DurableSubscriptionRow[] {
     this.#assertReconstructable();
-    return {
-      rows: Object.entries(this.#stream.coreReducedState.subscriptions)
-        .filter(([, row]) => row.delivery === "durable")
-        .map(([name, row]) => ({
-          name,
-          configuredAtOffset: row.configuredAtOffset,
-          consumes: row.consumes,
-          afterOffset: row.afterOffset,
-          ordered: row.ordered,
-          resumedAtOffset: row.resumed?.atOffset,
-          resumedAfterOffset: row.resumed?.afterOffset,
-          resumedOffset: row.resumed?.offset,
-          halted: row.halted,
-          ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
-            maxAttempts: 25,
-            retryCapMs: 4 * 60 * 60_000,
-          }),
-        })),
-      throughOffset: this.#stream.highestDurableOffset(),
-    };
+    return Object.entries(this.#stream.coreReducedState.subscriptions)
+      .filter(([, row]) => row.delivery === "durable")
+      .map(([name, row]) => ({
+        name,
+        configuredAtOffset: row.configuredAtOffset,
+        consumes: row.consumes,
+        afterOffset: row.afterOffset,
+        ordered: row.ordered,
+        resumedAtOffset: row.resumed?.atOffset,
+        resumedAfterOffset: row.resumed?.afterOffset,
+        resumedOffset: row.resumed?.offset,
+        halted: row.halted,
+        ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
+          maxAttempts: 25,
+          retryCapMs: 4 * 60 * 60_000,
+        }),
+      }));
   }
 
-  /** Native infrastructure reads only metadata for the private subscriptions facet. The core row
-   * is the authority for its identity and filter; durable source bodies never cross this RPC. */
-  readSubscriptionDelivery(input: unknown): {
+  /** Context-local delivery reads only metadata. The core row is the authority for its identity
+   * and filter; a runner reconstructs selected bodies only for its direct target call. */
+  #readSubscriptionDelivery(request: DeliveryIdentity & { afterOffset: number; limit: number }): {
     offsets: number[];
     scannedThroughOffset: number;
     atHead: boolean;
   } {
-    const request = parseSubscriptionDeliveryReadRequest(input);
     this.#assertReconstructable();
     const row = this.#configuredSubscriptionRow(request);
-    const page = this.#stream.read(request.afterOffset, request.limit, { includeEphemeral: false });
+    const page = this.#stream.readForDurableDelivery(request.afterOffset, request.limit);
     // This synchronous filter is the source proof. Returning only offsets lets the page body die
     // before Workers RPC or a target-resolution await can retain it in the subscriptions facet.
     return {
@@ -952,29 +1015,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     };
   }
 
-  /** Native claim for the private subscriptions facet, kept outside every user-owned namespace. */
-  claimSubscriptionDelivery(input: { at: number | null; throughOffset: number }): void {
-    this.#assertReconstructable();
-    const { rows, throughOffset } = this.subscriptionDeliveryConfiguration();
-    // An old facet cannot revive removed rows or release a later commit's recovery claim.
-    if (rows.length === 0 || input.throughOffset > throughOffset) return;
-    const requiredThroughOffset = this.#subscriptionDeliveryThroughOffset ?? throughOffset;
-    if (input.at === null && input.throughOffset < requiredThroughOffset) return;
-    let at = input.at;
-    if (at !== null && input.throughOffset < requiredThroughOffset) {
-      const current = this.#facetHost
-        .deadlines()
-        .find((claim) => claim.name === "subscriptions")?.at;
-      if (current !== undefined) at = Math.min(at, current);
-    }
-    this.#facetHost.claim("subscriptions", at);
-    this.#alarmCoordinator.reconcile();
-  }
-
-  /** Reconstruct a durable attempt from the log. The facet can name an admitted range and selected
+  /** Reconstruct a durable attempt from the log. A runner can name an admitted range and selected
    * offsets, but cannot alter its bodies, cause, hash, or current row filter. */
-  async deliverConfiguredSubscription(input: unknown): Promise<void> {
-    const request = parseSubscriptionDeliveryBridgeRequest(input);
+  async #deliverConfiguredSubscription(request: SubscriptionDeliveryBridgeRequest): Promise<void> {
     if (request.range.through <= request.range.after)
       throw codedError("INVALID_INPUT", "delivery range must advance past its after offset");
     this.#assertReconstructable();
@@ -996,10 +1039,11 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     await this.#deliverConfiguredSubscriptionEvents(request, row, events, fanOut);
   }
 
-  /** The one body-bearing private handoff. Ephemerals never enter a retry cursor: this validates
+  /** The one body-bearing context-local handoff. Ephemerals never enter a retry cursor: this validates
    * that the exact event is still in the current incarnation's ring before invoking it. */
-  async deliverConfiguredEphemeralSubscription(input: unknown): Promise<void> {
-    const ephemeral = parseSubscriptionDeliveryEphemeralRequest(input);
+  async #deliverConfiguredEphemeralSubscription(
+    ephemeral: DeliveryEphemeralRequest,
+  ): Promise<void> {
     this.#assertReconstructable();
     const row = this.#configuredSubscriptionRow(ephemeral);
     if (row.ordered === false)
@@ -1024,7 +1068,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   ): StreamEvent[] {
     if (request.range.through > this.#stream.highestDurableOffset())
       throw codedError("GONE", "configured subscription source range is no longer durable");
-    const page = this.#stream.read(request.range.after, 100, { includeEphemeral: false });
+    const page = this.#stream.readForDurableDelivery(request.range.after, 100);
     if (page.scannedThroughOffset < request.range.through)
       throw codedError("GONE", "configured subscription source range is no longer available");
     const events = page.events.filter(
@@ -1045,7 +1089,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #ephemeralSubscriptionDeliveryEvent(
-    request: ReturnType<typeof parseSubscriptionDeliveryEphemeralRequest>,
+    request: DeliveryEphemeralRequest,
     row: Subscription,
   ): StreamEvent[] {
     if (request.event.path !== this.#durableObjectAddress.path)
@@ -1076,6 +1120,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       throw codedError("UNAVAILABLE", "configured subscription delivery is busy", {
         deliveryBusy: true,
       });
+    this.#residency.pinCallStarted();
     const promise = this.#invokeConfiguredSubscriptionDelivery(request, row, events, fanOut);
     this.#configuredSubscriptionDeliveries.set(rowKey, { startedAt: now });
     try {
@@ -1083,6 +1128,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#rememberConfiguredSubscriptionDelivery(requestKey, { settledAt: Date.now() });
     } finally {
       this.#configuredSubscriptionDeliveries.delete(rowKey);
+      this.#residency.pinCallEnded();
     }
   }
 
@@ -1214,9 +1260,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Atomically record a runner's terminal outcome only while its configured row still stands. */
-  async recordConfiguredSubscriptionTerminal(input: unknown): Promise<void> {
-    const request = parseSubscriptionDeliveryTerminalRequest(input);
-    this.#inboundRequestInOneTurn("recordConfiguredSubscriptionTerminal");
+  async #recordConfiguredSubscriptionTerminal(request: DeliveryTerminalRequest): Promise<void> {
     const row = this.#stream.coreReducedState.subscriptions[request.name];
     if (!row || row.configuredAtOffset !== request.configuredAtOffset || row.delivery !== "durable")
       throw codedError("GONE", "configured subscription no longer exists");
@@ -1243,7 +1287,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return;
     }
     if (row.halted) return;
-    const source = this.#stream.read(request.afterOffset, 1).events[0]?.source;
+    const source = this.#stream.readForDurableDelivery(request.afterOffset, 1).events[0]?.source;
     this.#stream.append({
       type: "events.iterate.com/itx/subscription-delivery-halted",
       idempotencyKey: `itx/subscription-delivery-halted:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${request.afterOffset}`,
@@ -1737,10 +1781,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     },
   });
 
-  /** Schedules and facet claims are the context alarm's durable sources. Subscription retries live
-   *  in the private subscriptions facet and claim this same alarm through FacetHost. */
+  /** Schedules, context-owned delivery and hosted-facet claims derive the one context alarm. */
   #durableAlarmDeadlines(): (number | null)[] {
-    return [this.#stream.nextScheduledAppendAt(), this.#facetHost.deadlines()[0]?.at ?? null];
+    return [
+      this.#stream.nextScheduledAppendAt(),
+      this.#durableSubscriptionDelivery.deadline,
+      this.#durableDeliveryInFlight > 0 ? this.#durableDeliveryRecoveryAt : null,
+      this.#facetHost.deadlines()[0]?.at ?? null,
+    ];
   }
 
   // ── THE FACETS (context/facet-host.ts): the hosted classes' lifecycle and their alarm claims, wired to this DO ──
@@ -1792,6 +1840,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       alarm: { before, after: this.#alarmCoordinator.snapshot().armedAt },
       deadlines: {
         schedule: this.#stream.nextScheduledAppendAt(),
+        delivery: this.#durableSubscriptionDelivery.deadline,
         claims: this.#facetHost.deadlines(),
         ...this.#residency.deadlines(),
       },
@@ -1830,27 +1879,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     ].join("; ");
   }
 
-  /** The `itx.subscriptions` view: durable cursor state lives with the private subscriptions facet. */
+  /** The `itx.subscriptions` view joins core rows to context-owned durable cursors. */
   async #subscriptionList(): Promise<SubscriptionListEntry[]> {
     const subscriptions = {
       ...this.#stream.coreReducedState.subscriptions,
       ...this.#liveSubscriptions(),
     };
     const durable = Object.entries(subscriptions).filter(([, row]) => row.delivery === "durable");
-    const snapshots =
-      durable.length === 0
-        ? {}
-        : ((await this.#facetHost.callFacetAsPlatform("subscriptions", [
-            ["deliverySnapshots"],
-          ])) as Record<
-            string,
-            {
-              confirmedOffset: number;
-              pending?: { attempt: number; nextAttemptAtMs?: number };
-              halted?: { after: number; attempts: number; error: string };
-              fanOut?: { admittedThrough: number; pending: unknown[] };
-            }
-          >);
+    const snapshots: Record<
+      string,
+      {
+        confirmedOffset: number;
+        pending?: { attempt: number; nextAttemptAtMs?: number };
+        halted?: { after: number; attempts: number; error: string };
+        fanOut?: { admittedThrough: number; pending: unknown[] };
+      }
+    > = durable.length === 0 ? {} : this.#durableSubscriptionDelivery.snapshots();
     return Object.entries(subscriptions).map(([name, s]) => {
       const snapshot = snapshots[`${name}@${s.configuredAtOffset}`];
       const cursor = snapshot
@@ -1911,7 +1955,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
    *  alone and does nothing else. */
   async alarm(): Promise<void> {
-    if (this.#stream.reconstructionRefusal) return;
+    if (this.#stream.reconstructionRefusal || this.#durableDeliveryMigrationRefusal) return;
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
@@ -1923,13 +1967,14 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const wakeRecordSettlesARun =
       !this.#stream.wakeRecorded() &&
       Object.keys(this.#stream.coreReducedState.scriptRuns).length > 0;
-    const [schedule, facetClaim] = this.#durableAlarmDeadlines().map((at) =>
-      at ? at <= wokeAt : false,
-    );
+    const [schedule, deliveryRetry, deliveryRecovery, ...claims] =
+      this.#durableAlarmDeadlines().map((at) => (at ? at <= wokeAt : false));
+    const deliveryDue = deliveryRetry || deliveryRecovery;
+    const facetClaim = claims.some(Boolean);
     if (
       this.#runsOwedToTheAlarm.size === 0 &&
       !wakeRecordSettlesARun &&
-      !(schedule || facetClaim)
+      !(schedule || deliveryDue || facetClaim)
     ) {
       await this.#alarmCoordinator.pass(async () => this.#residency.alarmPassStarted(wokeAt));
       return;
@@ -1947,6 +1992,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             cause: "alarm",
             due: [
               ...(schedule ? ["schedule" as const] : []),
+              ...(deliveryDue ? ["retry" as const] : []),
               ...(facetClaim ? ["claim" as const] : []),
               ...(this.#runsOwedToTheAlarm.size > 0 || wakeRecordSettlesARun
                 ? ["run" as const]
@@ -2040,6 +2086,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
         // revive may make is the one derived below.
+        this.#durableDeliveryRecoveryAt = null;
+        this.#durableSubscriptionDelivery.revive();
         await this.#facetHost.reviveDueClaims();
       });
     } catch (error) {

@@ -1,4 +1,4 @@
-// A private durable delivery read must be shared across rows: twenty rows may inspect one
+// A context-owned durable delivery read must be shared across rows: twenty rows may inspect one
 // near-limit page, but they cannot materialize twenty copies before handing their tiny matches to
 // a target. This is the replacement for the removed cursor-row memory-budget scenario.
 

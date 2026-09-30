@@ -79,10 +79,6 @@ const FIRST_PARTY_FACET_PLACEMENT_RULES = {
     mayBeHostedOn: ({ projectId, path }) =>
       SECRET_PATH.test(pathUnderOwner(resourceScope(projectId, path), path)),
   },
-  subscriptions: {
-    where: "any context",
-    mayBeHostedOn: () => true,
-  },
   // 5.
   repo: {
     where: "a project's context",

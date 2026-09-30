@@ -54,7 +54,6 @@ import { OrganizationDurableObject } from "../organization/durable-object.ts";
 import { ProjectDurableObject } from "../project/durable-object.ts";
 import { RepoDurableObject } from "../repo/durable-object.ts";
 import { SecretDurableObject } from "../secret/durable-object.ts";
-import { SubscriptionDeliveryDurableObject } from "../subscription-delivery-durable-object.ts";
 import type { Stream } from "../stream/stream.ts";
 import { WorkspaceDurableObject } from "../workspace/durable-object.ts";
 import {
@@ -173,7 +172,6 @@ const FIRST_PARTY_FACET_PUBLIC_METHODS = {
   project: ProjectDurableObject.publicMethods,
   repo: RepoDurableObject.publicMethods,
   secret: SecretDurableObject.publicMethods,
-  subscriptions: SubscriptionDeliveryDurableObject.publicMethods,
   workspace: WorkspaceDurableObject.publicMethods,
 } satisfies Record<keyof typeof FIRST_PARTY_FACET_CLASSES, readonly string[]>;
 

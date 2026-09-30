@@ -236,7 +236,6 @@ export { OrganizationDurableObject } from "./organization/durable-object.ts";
 export { ProjectDurableObject } from "./project/durable-object.ts";
 export { RepoDurableObject } from "./repo/durable-object.ts";
 export { SecretDurableObject } from "./secret/durable-object.ts";
-export { SubscriptionDeliveryDurableObject } from "./subscription-delivery-durable-object.ts";
 export { WorkspaceDurableObject } from "./workspace/durable-object.ts";
 export { ItxEntrypoint } from "./iterate-context.ts";
 // Workers AI for a context's `itx.ai`, minted per project with the project as props.

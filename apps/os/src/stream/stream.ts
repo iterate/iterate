@@ -645,6 +645,12 @@ export class Stream {
     return this.#read(afterOffset, limit, options);
   }
 
+  /** Internal durable delivery must make bounded forward progress past a corrupt historical row.
+   * Public `read` stays strict so callers see corruption rather than silently skipping it. */
+  readForDurableDelivery(afterOffset = 0, limit = 500): StreamPage {
+    return this.#read(afterOffset, limit, { includeEphemeral: false, skipUnreadable: true });
+  }
+
   /** The context sweep reads durable rows before deciding whether to destroy an orphan. */
   readForSweep(afterOffset = 0): StreamPage {
     return this.#read(afterOffset, 500);

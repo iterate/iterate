@@ -254,7 +254,7 @@ export class HoldDurableObject extends StreamProcessorDurableObject {
 };
 
 /** A fan-out target that leaves each delivery outstanding until `release()` takes it. The count is
- * the private facet's observable concurrency, so replacement tests can prove the eight-call bound. */
+ * context-owned delivery's observable concurrency, so replacement tests can prove the eight-call bound. */
 export const FANOUT_HOLD: FacetSpec = {
   source: {
     "package.json": '{"main":"worker.js"}',

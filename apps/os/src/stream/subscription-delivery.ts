@@ -1,5 +1,5 @@
 // subscription-delivery.ts — post-commit delivery for live providers and processor facets.
-// Durable subscription progress, retries, and dead letters live in the private subscriptions facet.
+// Context-owned runners keep durable subscription progress, retries, and dead letters.
 // Pushes preserve a shared in-flight body budget and a per-row serialized chain.
 //
 // A FACET IS PUSHED THE PLATFORM'S WAY: a row's target evaluates to the facet's FacetHandle, and the
