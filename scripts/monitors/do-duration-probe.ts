@@ -1,5 +1,5 @@
 // Defense-in-depth probe for the Durable Objects billable-duration leak class of
-// bug (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).
+// bug (see https://github.com/iterate/iterate/tree/6a9a48e2a/core/os/tasks/do-duration-leak).
 // Two independent checks against Cloudflare's GraphQL analytics, each of which
 // reports what it found:
 //
@@ -278,7 +278,7 @@ export async function probeAccount(options: {
       `🚨 DO active-time probe: ${breachedHours.length} hour(s) in the last ${lookbackHours}h ` +
         `exceeded ${maxAccountDoHours} account-wide DO-hours — the runaway-fleet signature ` +
         `(alarm/wake loops keeping whole DO populations resident; see the 2026-09-01 preview ` +
-        `incident, https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak). At $12.50/M GB-s, 1000 DO-hours ≈ $5.60.`,
+        `incident, https://github.com/iterate/iterate/tree/6a9a48e2a/core/os/tasks/do-duration-leak). At $12.50/M GB-s, 1000 DO-hours ≈ $5.60.`,
     );
     for (const row of breachedHours) {
       console.log(
@@ -345,7 +345,7 @@ export async function probeAccount(options: {
     console.log(
       `🚨 DO duration probe: ${flagged.length} ${prefix}* script-day(s) show a DO invocation running ` +
         `longer than ${thresholdHours}h of wall-clock — the signature of a leaked cross-isolate RPC ` +
-        `session pinning a Durable Object resident (see https://github.com/iterate/iterate/tree/6a9a48e2a/apps/os/tasks/do-duration-leak).`,
+        `session pinning a Durable Object resident (see https://github.com/iterate/iterate/tree/6a9a48e2a/core/os/tasks/do-duration-leak).`,
     );
     for (const row of flagged) {
       console.log(

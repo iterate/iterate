@@ -7,10 +7,10 @@ import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession, RpcStub, RpcTarget } from "capnweb";
 import { expect, onTestFinished } from "vitest";
 import { appSession } from "iterate/app-server";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import type { GrantEnded } from "../../../apps/os/src/account/contract.ts";
-import { oauthHelpers } from "../../../apps/os/src/oauth.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import type { GrantEnded } from "../../../core/os/src/account/contract.ts";
+import { oauthHelpers } from "../../../core/os/src/oauth.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import {
   adminSession,
   controlPlane,

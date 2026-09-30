@@ -1,7 +1,7 @@
 // Why a context woke, and the wake rule on a real handler; unit rows: src/stream/subscription-delivery.test.ts
 import { evictDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import { ITX_EXPRESSION_FETCH_HEADER } from "../../../apps/os/src/context/rpc-stubs.ts";
+import { ITX_EXPRESSION_FETCH_HEADER } from "../../../core/os/src/context/rpc-stubs.ts";
 import { deliverEventWorker } from "./sources.ts";
 import { at, freshProject, owedAlarmOf, PERSON, readLog, rowOf, stub, until } from "./support.ts";
 

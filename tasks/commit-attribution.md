@@ -46,7 +46,7 @@ committer and no trailers.
 
 ## Decisions (option 2 of the discussion; the verified-client version was #3480, closed)
 
-- **Only `apps/os/src/repo/` changes in core**, plus the MCP instructions' text. A platform-verified
+- **Only `core/os/src/repo/` changes in core**, plus the MCP instructions' text. A platform-verified
   client name needs it carried from the OAuth admission through the caller, the run request and
   the token (#3480): a core decision for another day.
 - **No e2e changes at first**: #3479 was moving the e2e suites to `test/`. The repo facet's own Node test

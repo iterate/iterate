@@ -1,4 +1,4 @@
-// THE vitest config for the suites outside apps/os (never in its public copy); pick a project with
+// THE vitest config for the suites outside core/os (never in its public copy); pick a project with
 // `--project` (`pnpm test` runs node + workers; `pnpm e2e`, `pnpm perf` and `pnpm bench` the others).
 // Five PROJECTS (vitest's own word), each a genuinely different execution context:
 //   • node    — in-process: the helpers' own tests, and the platform staged in this process or its
@@ -6,7 +6,7 @@
 //               dev server, the repo facet against the fake git server)
 //   • workers — INSIDE workerd next to the worker via @cloudflare/vitest-plugin, for the hibernation
 //               cases that genuinely need cloudflare:test controls (vitest/os-workers/**,
-//               vitest/agents-workers/**). The worker under test is apps/os's Vite-built
+//               vitest/agents-workers/**). The worker under test is core/os's Vite-built
 //               dist/server/index.js — `exports.default.fetch` from cloudflare:workers, never a source
 //               import of the Start entry.
 //   • e2e     — ONE real worker booted once by helpers/global-setup.ts (local workerd by default;
@@ -23,8 +23,8 @@
 //   • bench   — vitest's benchmark runner (tinybench) over the same client + worker (`pnpm bench`),
 //               files one at a time so scenarios never share the wire; `BENCH_OUT=<file.json>` writes
 //               the raw samples
-// The workers project runs apps/os's built worker: root `pnpm test` builds it first, and `pnpm e2e`,
-// `pnpm perf` and `pnpm bench` do. apps/os's own unit tests are apps/os/vitest.config.ts's; the
+// The workers project runs core/os's built worker: root `pnpm test` builds it first, and `pnpm e2e`,
+// `pnpm perf` and `pnpm bench` do. core/os's own unit tests are core/os/vitest.config.ts's; the
 // browser suite is test/playwright.config.ts's.
 
 import { generateKeyPairSync } from "node:crypto";
@@ -40,11 +40,11 @@ import {
 import JSON5 from "json5";
 import { configDefaults, defineConfig } from "vitest/config";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
-import { readWranglerBase } from "../apps/os/scripts/generate-wrangler-config.ts";
+import { readWranglerBase } from "../core/os/scripts/generate-wrangler-config.ts";
 import { vitestReporters } from "../packages/shared/src/test-support/e2e-policy/vitest-reporters.ts";
 
-/** apps/os, whose source, built worker and migrations the in-process and Workers suites run. */
-const APP_OS = new URL("../apps/os/", import.meta.url);
+/** core/os, whose source, built worker and migrations the in-process and Workers suites run. */
+const APP_OS = new URL("../core/os/", import.meta.url);
 
 /** Teardown/async-transport noise only: disposing a capnweb session whose peer still delivers (a
  *  deliberate move in the reconnect/unsubscribe tests, and pager sockets still parked at teardown)
@@ -94,7 +94,7 @@ const LONG_POLES = [
 /** FIRST OF ALL, IN A RUNTIME NOTHING RAN IN YET. agent-revive evicts a context whose facet it has
  *  just aborted mid model call. In a runtime an earlier file warmed, that eviction can wait out the
  *  claim's 20 s alarm or `evictDurableObject`'s 30 s bound: a race in the eviction, not state an
- *  earlier file left, since it fails as often with fresh-file.ts doing nothing. Repro, in apps/os
+ *  earlier file left, since it fails as often with fresh-file.ts doing nothing. Repro, in core/os
  *  with the unit project looping beside it (3 runs in 8 failed, measured 2026-09-27):
  *  `vitest run --project workers --maxWorkers=1 --sequence.seed=7
  *  -t "^(a key bound to projects|KILLED MID-CALL)" vitest/os-workers/connect-your-account.test.ts
@@ -174,7 +174,7 @@ function workersWranglerConfigPath() {
   const fromApp = (path: string) => fileURLToPath(new URL(path, APP_OS).href);
   if (!existsSync(fromApp("./dist/server/index.js")))
     throw new Error(
-      "The Workers suite runs apps/os's built worker: `pnpm --filter os build` first (root `pnpm test` does)",
+      "The Workers suite runs core/os's built worker: `pnpm --filter os build` first (root `pnpm test` does)",
     );
   const dir = mkdtempSync(join(tmpdir(), "os-workers-config-"));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
@@ -265,8 +265,8 @@ export default defineConfig({
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
         },
-        // Node stand-ins, as apps/os's unit tests use: packages/iterate/src/test-support/
-        // cloudflare-workers-shim.ts and apps/os/src/test/start-server-entry-shim.ts say why.
+        // Node stand-ins, as core/os's unit tests use: packages/iterate/src/test-support/
+        // cloudflare-workers-shim.ts and core/os/src/test/start-server-entry-shim.ts say why.
         resolve: {
           alias: {
             "cloudflare:workers": fileURLToPath(
@@ -344,7 +344,7 @@ export default defineConfig({
           environment: "node",
           include: ["vitest/**/*.e2e.test.ts"],
           chaiConfig: { truncateThreshold: 0 },
-          // Builds apps/os's generated modules, boots the one shared worker and provides its URL
+          // Builds core/os's generated modules, boots the one shared worker and provides its URL
           // (helpers/setup.ts injects it per file).
           globalSetup: ["./helpers/global-setup.ts"],
           setupFiles: ["./helpers/setup.ts"],

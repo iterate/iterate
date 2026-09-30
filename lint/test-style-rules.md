@@ -68,14 +68,14 @@ shared closure state and lifecycle hooks grow. Put the group in the title
 Module mocking replaces an import for the whole file, so the test proves the
 code against a module that does not exist. Pass the dependency in instead: a
 `fetch`, a clock, a downloader or a `waitUntil` as a parameter or constructor
-argument (`apps/os/src/context/rpc-stub-relay.test.ts` injects its `waitUntil`).
+argument (`core/os/src/context/rpc-stub-relay.test.ts` injects its `waitUntil`).
 `vi.fn()`, `vi.spyOn(...)` and `vi.stubGlobal(...)` are not module mocks.
 
 For `cloudflare:workers`: the os unit project, packages/iterate, packages/ui and
 packages/voice alias it to
 [`cloudflare-workers-shim.ts`](../packages/iterate/src/test-support/cloudflare-workers-shim.ts),
 and the os unit project aliases Start's generated server entry to a stand-in page
-([`src/test/start-server-entry-shim.ts`](../apps/os/src/test/start-server-entry-shim.ts)).
+([`src/test/start-server-entry-shim.ts`](../core/os/src/test/start-server-entry-shim.ts)).
 A module whose only platform dependency is a base class (`RpcTarget`,
 `WorkerEntrypoint`, `DurableObject`) loads in node with no `vi.mock` in the
 test file. The shim's `env` starts empty; a test may fill it with the bindings

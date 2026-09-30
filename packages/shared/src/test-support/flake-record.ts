@@ -116,7 +116,7 @@ function failedOutright(test: RetriedTestTelemetry) {
  */
 export async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
   // Outside Node (a Workers or browser test runner) there is no `process` global at all, and a
-  // program typed for the Workers suite alone (apps/os's tsconfig.tests.json) declares none either.
+  // program typed for the Workers suite alone (core/os's tsconfig.tests.json) declares none either.
   const { process } = globalThis as {
     process?: { env: Record<string, string | undefined>; pid: number };
   };

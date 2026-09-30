@@ -1,11 +1,11 @@
-// api.ts — THE API AN APP DIALS: the shapes of apps/os's `/api` root, the session it vends and a
+// api.ts — THE API AN APP DIALS: the shapes of core/os's `/api` root, the session it vends and a
 // context's surface, as a capnweb client sees them. DECLARED here, never generated, and never the
-// platform's classes: in apps/os `IterateRpcTarget implements IterateApi` and
+// platform's classes: in core/os `IterateRpcTarget implements IterateApi` and
 // `IterateContextRpcTarget implements IterateContextApi` (src/session.ts, src/iterate-context.ts),
 // so an app built against this package types against exactly what the deployment answers. A context
 // has ONE method — `invoke(call, ...args)`, a dotted itx expression — and a capnweb stub proxies the
 // dotted spelling (`itx.repos.get(path).readFile(file)`) onto it. THIS FILE IS THE SOURCE OF TRUTH
-// for every root app code reaches: apps/os derives its built-in record's type from these members
+// for every root app code reaches: core/os derives its built-in record's type from these members
 // (context/built-ins.ts `BuiltInScope`, library.ts `LibraryRoots`), so a root or a verb the platform
 // implements and this file does not declare — or declares differently — fails to typecheck there.
 // The roots installed apps add are NOT here: each app registers its own on `InstalledAppRoots` from
@@ -575,7 +575,7 @@ export type RepoSyncResult = {
   commitOid: string | null;
   previousOid: string | null;
 };
-/** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in apps/os). A
+/** `itx.repos.get(path)`: the repo's verbs, branch `main` only (the repo facet in core/os). A
  *  `commitOid` pins a read to that commit; without one, a read is of the tip. */
 export type RepoHandle = InvokeHandle & {
   tip(): Promise<string | null>;
@@ -614,7 +614,7 @@ export type WorkspaceChange = { path: string; change: "added" | "deleted" | "mod
 /** One mount as `gitStatus` reports it: its path, its repo, and the overlay's changes under it. */
 export type WorkspaceMountStatus = { path: string; repo: string; changes: WorkspaceChange[] };
 /** `itx.workspaces.get(path)`: a private overlay over the project's repos, each repo mounted at its
- *  path (the workspace facet in apps/os). Reads see the overlay, then the mounted repo's tip. */
+ *  path (the workspace facet in core/os). Reads see the overlay, then the mounted repo's tip. */
 export type WorkspaceHandle = InvokeHandle & {
   mounts(): Promise<Record<string, { repo: string }>>;
   /** The overlay's copy (a deletion reads null), else the mounted repo's file at its tip. */
@@ -1001,7 +1001,7 @@ export interface IterateContextApi {
     get(path: string): InvokeHandle & FileHandle;
     list(prefix?: string): Promise<FileRecord[]>;
   };
-  /** The project's email, `<slug>@iterate.app` (apps/os/src/email/contract.ts has its events and
+  /** The project's email, `<slug>@iterate.app` (core/os/src/email/contract.ts has its events and
    *  threads). `send` answers the `email/sent` event. */
   email: {
     send(input: EmailSendInput): Promise<StreamEvent>;

@@ -1,7 +1,7 @@
 // The Pretty half of the processors panel's Pretty / Raw toggle: a state read as fields instead of
 // YAML. `PrettyFields` reads ANY state (a hosted processor's is the app's own shape): its top-level
 // fields one line each, a nested object one level in, a long list folded behind its count.
-// `CorePrettyState` reads the core reduce (apps/os `CoreState`): where the context is, its rewrite
+// `CorePrettyState` reads the core reduce (core/os `CoreState`): where the context is, its rewrite
 // rules, schedules, fetch routes and open script runs, the pause. Every read is defensive: the state
 // crosses the wire untyped, and a shape miss degrades to the generic fields, never a crash.
 import type { ReactNode } from "react";

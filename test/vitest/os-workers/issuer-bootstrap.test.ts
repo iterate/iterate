@@ -4,11 +4,11 @@ import { newWebSocketRpcSession } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { appSession } from "iterate/app-server";
 import { authorizationCodeRequest } from "iterate/oauth";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import type { UserRecord } from "../../../apps/os/src/control-plane/catalog.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
-import { startIssuerSession } from "../../../apps/os/src/issuer-session.ts";
-import { oauthHelpers } from "../../../apps/os/src/oauth.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import type { UserRecord } from "../../../core/os/src/control-plane/catalog.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
+import { startIssuerSession } from "../../../core/os/src/issuer-session.ts";
+import { oauthHelpers } from "../../../core/os/src/oauth.ts";
 import { adminSession, catalog, controlPlane, fetchReachesThisWorker, ORIGIN } from "./support.ts";
 test("first consent creates organization and project through the ordinary session, then grants only the chosen project", async () => {
   fetchReachesThisWorker();

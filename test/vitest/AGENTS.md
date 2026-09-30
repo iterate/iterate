@@ -1,6 +1,6 @@
 # Vitest suites
 
-Paths below are relative to `test/`. `vitest.config.ts` has five projects: `node` (in-process: `os/*.test.ts` stage the platform in this process or its children, and the helpers' own tests), `workers` (`os-workers/`, `agents-workers/`: inside workerd via `@cloudflare/vitest-plugin`, for cases that need `cloudflare:test` controls), and `e2e`, `perf` and `bench` against a running worker. apps/os keeps only simple unit tests.
+Paths below are relative to `test/`. `vitest.config.ts` has five projects: `node` (in-process: `os/*.test.ts` stage the platform in this process or its children, and the helpers' own tests), `workers` (`os-workers/`, `agents-workers/`: inside workerd via `@cloudflare/vitest-plugin`, for cases that need `cloudflare:test` controls), and `e2e`, `perf` and `bench` against a running worker. core/os keeps only simple unit tests.
 
 ## E2E rows
 

@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { deployedTarget } from "../helpers/deployed-target.ts";
-import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
+import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
 import { OsPlaywrightAuthEnv } from "../helpers/auth-config.ts";
 import { workerBaseUrl } from "../helpers/worker-base-url.ts";
 
@@ -35,7 +35,7 @@ export default function setup() {
   console.log(`[playwright] auth setup complete (${Date.now() - startedAt}ms)`);
 }
 
-/** A local worker (apps/os/scripts/dev.ts) has fixed dev credentials and routes projects by
+/** A local worker (core/os/scripts/dev.ts) has fixed dev credentials and routes projects by
  *  subdomain under localhost. A deployment's come out of its own `APP_CONFIG` under `doppler run`
  *  (test/helpers/deployed-target.ts, which the vitest e2e suite reads too). */
 function osTargetEnv(): Record<string, string> {

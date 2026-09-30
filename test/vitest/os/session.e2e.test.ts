@@ -4,7 +4,7 @@ import { newHttpBatchRpcSession, newWebSocketRpcSession } from "capnweb";
 import { WebSocket as UndiciWebSocket } from "undici";
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import {
   adminCredentials,
   freshCtx,

@@ -16,7 +16,7 @@ export function openOperatorSession() {
   const api = newWebSocketRpcSession<IterateApi>(url.href);
   return {
     /** Every project (`{ actor: "admin" }`); with `as`, that person, found or created, with every
-     *  scope: how a fixture makes a project the person owns (apps/os/src/session.ts). */
+     *  scope: how a fixture makes a project the person owns (core/os/src/session.ts). */
     authenticate: (as?: { email: string }) =>
       api.authenticate({ type: "admin-secret", secret, as }),
     [Symbol.dispose]: () => api[Symbol.dispose](),

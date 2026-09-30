@@ -223,7 +223,7 @@ deployedOnly(
     const slug = freshDnsSafeProjectSlug("mini-app");
     const itx = openItx(await registerProject(slug));
     const miniApp = transformSync(
-      readFileSync(resolve(import.meta.dirname, "../../../apps/os/examples/mini-app.ts"), "utf8"),
+      readFileSync(resolve(import.meta.dirname, "../../../core/os/examples/mini-app.ts"), "utf8"),
       { loader: "ts", format: "esm" },
     ).code;
     const router = `import { WorkerEntrypoint } from "cloudflare:workers";

@@ -308,7 +308,7 @@ other suite green, and from `main` it posts on main's head. From the PR's branch
 `deploy`. Either way the dispatch updates the suite's line in the PR body and posts the CI trace
 statuses on the PR's head. A preview by name may be redeployed under the dispatch by its own
 workflow (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview specs` do the same
-([apps/os/README.md](../apps/os/README.md)). `preview-delete.yml`
+([core/os/README.md](../core/os/README.md)). `preview-delete.yml`
 (`--input pull-request-number=<pr-number>`) deletes a preview now, `preview-sweep.yml` sweeps now.
 
 Deploy a branch manually, or roll back by pushing a branch at the old commit first:
@@ -577,7 +577,7 @@ commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockf
 Preview OS runs on every pull request with no `paths` filter, because GitHub leaves a required
 check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
-`previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
+`previewPaths` (`core/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
 `test/playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
 `scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
@@ -594,11 +594,11 @@ workspace packages it depends on, `envs.ts`, `scripts/lib` and `pnpm-lock.yaml`,
 hosted clients the root `package.json` and `pnpm-workspace.yaml`. `scripts/ci/depot-workflows.test.ts`
 pins the exceptions:
 
-- No client deploy runs for `apps/os`: no client imports it.
+- No client deploy runs for `core/os`: no client imports it.
 - Deploy Kit and Deploy Voice run for `packages/voice`: their pages run its voice check
   (`@iterate-com/voice/install`).
-- Deploy OS skips what never reaches the Worker: the markdown at the app root, `apps/os/docs`,
-  `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
+- Deploy OS skips what never reaches the Worker: the markdown at the app root, `core/os/docs`,
+  `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `core/os/public/setup-prompt.md`
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 
@@ -716,7 +716,7 @@ the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
 
 ## Main OS e2e deploys each commit fresh
 
-Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (apps/os and every
+Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (core/os and every
 app on top, envs.ts `previewDeployment`), tests it, and deletes the `main-…` deployments before it
 (Clean up superseded). The latency guard does the same under `latency`, and the real-model suite
 under `real-model` (`CI_WORKFLOW_PREVIEWS` in `scripts/os/preview-sweep.ts`); when main has not

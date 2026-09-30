@@ -7,7 +7,7 @@ test.for([
     case: "a PR that changes the code the slow rows prove, but neither turns them on nor edits one, skips them",
     pullRequest: pullRequest(
       ["infra"],
-      ["apps/os/src/context/facet-host.ts", "apps/os/src/iterate-context-durable-object.ts"],
+      ["core/os/src/context/facet-host.ts", "core/os/src/iterate-context-durable-object.ts"],
     ),
     slowRows: "skip",
     reason: "PR #7 carries no slow-e2e label and changes no slow row's file",

@@ -20,7 +20,7 @@ Don't use fancy names - just use names that clearly describe what something is. 
 ## Slugs and IDs
 
 - We use "slugs" as unique identifiers in many places, because they are url-safe
-- Project slugs come from `projectSlug` in `apps/os/src/control-plane/catalog.ts`
+- Project slugs come from `projectSlug` in `core/os/src/control-plane/catalog.ts`
 - On a technical level, slugs CAN be changed! Esp project slugs.
 - So for stable identifiers (e.g. for durable object names), always use IDs
-- IDs are minted with a type prefix (`user_<hex>`, `org_<hex>`, `prj_<hex>`) by `newId` in `apps/os/src/control-plane/catalog.ts`. The deployment's own organization has the fixed id `org_admin` (`ADMIN_ORG_ID`).
+- IDs are minted with a type prefix (`user_<hex>`, `org_<hex>`, `prj_<hex>`) by `newId` in `core/os/src/control-plane/catalog.ts`. The deployment's own organization has the fixed id `org_admin` (`ADMIN_ORG_ID`).

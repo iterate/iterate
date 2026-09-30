@@ -1,6 +1,6 @@
 // /users — every person on the platform (`api.users`, a platform admin's). To use an app as one of
 // them, sign in to that app again (its account menu's Switch account…) and pick them at the
-// issuer's consent: "Sign in as someone else…" (apps/os consent.ts `#impersonate`).
+// issuer's consent: "Sign in as someone else…" (core/os consent.ts `#impersonate`).
 import { createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/_auth/users")({

@@ -1,12 +1,12 @@
 import { expect, test } from "vitest";
-import { encryptSecretMaterial } from "../../apps/os/src/secret-at-rest.ts";
+import { encryptSecretMaterial } from "../../core/os/src/secret-at-rest.ts";
 import {
   compareStructure,
   configTree,
   openProjectSeed,
   restorableHostnames,
   type DeploymentStructure,
-} from "../../apps/os/scripts/project-seed-format.ts";
+} from "../../core/os/scripts/project-seed-format.ts";
 
 const keys = { current: "seed-encryption-key" };
 test("current encrypted cells open with the deployment key without plaintext in the archive", async () => {
@@ -57,7 +57,7 @@ test("hostnames: a well-formed one is kept; a malformed or repeated one is refus
   expect((await openProjectSeed({ ...seed, hostnames: ["garple.com"] }, keys)).seed).toMatchObject({
     hostnames: ["garple.com"],
   });
-  // the processor's own rule (apps/os/src/project/custom-hostnames.ts HOSTNAME): two labels or more, no empty one
+  // the processor's own rule (core/os/src/project/custom-hostnames.ts HOSTNAME): two labels or more, no empty one
   for (const hostname of ["https://garple.com/", "a..b", "localhost", "-garple.com"])
     await expect(openProjectSeed({ ...seed, hostnames: [hostname] }, keys)).rejects.toThrow();
   await expect(

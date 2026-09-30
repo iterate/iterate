@@ -15,10 +15,10 @@ import { codedError } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { exports } from "cloudflare:workers";
 import { expect, onTestFinished, test } from "vitest";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
-import type { IntegrationScope } from "../../../apps/os/src/integrations/connections.ts";
-import { disconnectIntegration } from "../../../apps/os/src/integrations/verbs.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
+import type { IntegrationScope } from "../../../core/os/src/integrations/connections.ts";
+import { disconnectIntegration } from "../../../core/os/src/integrations/verbs.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import {
   adminSession,
   followConsent,

@@ -11,7 +11,7 @@
 // `pushFromOutside` — is for a test's eyes, and is never on the real proxy.
 import { RpcTarget } from "capnweb";
 import type { RepoFileChange } from "iterate/api";
-import { repoArtifactName, repoPathOf } from "../../apps/os/src/context/cf-artifacts.ts";
+import { repoArtifactName, repoPathOf } from "../../core/os/src/context/cf-artifacts.ts";
 import { FakeGitServer } from "./fake-git-server.ts";
 
 /** What the fake's `get(path)` hands back — an `RpcTarget` like the real `ScopedArtifactRepoRpcTarget`, so it
