@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 import {
   adminEnvs,
@@ -29,11 +29,11 @@ import {
   previewDeployment,
   voiceEnvs,
 } from "../../envs.ts";
+import { viteBuild } from "../../core/os/scripts/vite-build.ts";
+import { OBSERVABILITY, registrableDomainOf } from "../../core/os/scripts/wrangler-config.ts";
 import { deployApp } from "./deploy-app.ts";
 import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext } from "./env-context.ts";
-import { viteBuild } from "./vite-build.ts";
-import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
  *  project named for the app), the worker and its origin. */
@@ -115,7 +115,7 @@ export function ownZones(): string[] {
 export function startAppWorkerConfig(
   app: StartApp,
   envName: string | undefined,
-  /** The commit a per-commit deployment's packages are published at (apps/os
+  /** The commit a per-commit deployment's packages are published at (core/os
    *  scripts/published-package-commit.ts), which preview.ts works out once for all its builds;
    *  unused by any other env. */
   packagesCommit: string | undefined,
@@ -171,7 +171,7 @@ export function startAppWorkerConfig(
 
 /** The app's own env and THE ENVIRONMENT ITS LINKS POINT INTO: a deployed app's own — prd's apps
  *  sign in against prd's platform, main on the dev/preview account's (`preview`) against its
- *  platform, and a per-commit deployment's against that deployment's apps/os, linking to its apps
+ *  platform, and a per-commit deployment's against that deployment's core/os, linking to its apps
  *  — and prd's for local dev, which names a local issuer in a gitignored .dev.vars
  *  (`APP_CONFIG_URLS__OS=http://localhost:8788`, merged on top). */
 function linkedEnvironment(

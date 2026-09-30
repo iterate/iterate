@@ -1,0 +1,70 @@
+// Read Vite's built Worker config with Wrangler's parser and patch it for createTestHarness.
+// Shared by the E2E global setup and helpers/own-worker.ts.
+
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
+import type { IngressRouting } from "iterate/project-ingress";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../core/os/src/project/context-birth-events.ts";
+
+/** core/os, whose Vite-built worker the suite boots. */
+export const PACKAGE_DIR = fileURLToPath(new URL("../../core/os", import.meta.url).href);
+
+/** The e2e worker's admin bearer — what the suite's default session authenticates with
+ *  (helpers/client.ts `adminCredentials`; global-setup hands it to every file). */
+export const E2E_ADMIN_BEARER = "e2e-admin-api-secret";
+/** The e2e worker's sign-in password — what a browser session is minted with (helpers/principal.ts:
+ *  `POST /login` with an email and this). */
+export const E2E_LOGIN_PASSWORD = "e2e-password";
+/** The local worker's ingress: project hosts hang under `localhost` (helpers/project-host.ts reaches
+ *  them with a Host header). */
+export const E2E_INGRESS_ROUTING: NonNullable<IngressRouting> = {
+  type: "subdomains",
+  hostname: "localhost",
+};
+
+/** Vite's local built config patched with absolute paths and test credentials. The control plane's
+ *  D1 and OAuth KV remain local, the D1 migrated once the worker is up (`applyD1Migrations`, in
+ *  global-setup.ts and own-worker.ts). `ingressRouting` chooses subdomains or paths for project
+ *  requests. */
+export function e2eWorkerConfig(
+  platformOrigin = "http://127.0.0.1",
+  ingressRouting: NonNullable<IngressRouting> = E2E_INGRESS_ROUTING,
+): Unstable_RawConfig {
+  const {
+    rawConfig: { env: _deployments, ...rawConfig },
+  } = experimental_readRawConfig({ config: join(PACKAGE_DIR, "dist/server/wrangler.json") });
+  if (rawConfig.name !== "os-local-build")
+    throw new Error(
+      `local e2e needs a local Vite build (found ${rawConfig.name}); run pnpm e2e to rebuild first`,
+    );
+  // Configuration (src/app-config.ts): the `APP_CONFIG_<PATH>__<KEY>` spellings of the one object —
+  // the local block's vars replaced wholesale (a blank var is unset; a stale one would be warned
+  // about), the secrets plain test values.
+  const vars = Object.fromEntries(
+    Object.entries(rawConfig.vars ?? {}).filter(([name]) => !name.startsWith("APP_CONFIG")),
+  );
+  return {
+    ...rawConfig,
+    main: join(PACKAGE_DIR, "dist/server", String(rawConfig.main)),
+    // the issuer's pages (public/), an absolute directory like `main`
+    assets: {
+      ...rawConfig.assets,
+      directory: join(PACKAGE_DIR, "dist/server", String(rawConfig.assets?.directory)),
+    },
+    // the control plane's migrations, as absolute as `main`: the built value is dist/server's
+    d1_databases: rawConfig.d1_databases?.map((database: { migrations_dir?: string }) => ({
+      ...database,
+      migrations_dir: join(PACKAGE_DIR, "dist/server", String(database.migrations_dir)),
+    })),
+    vars: {
+      ...vars,
+      APP_CONFIG_URLS__OS: platformOrigin,
+      APP_CONFIG_URLS__INGRESS_ROUTING: JSON.stringify(ingressRouting),
+      APP_CONFIG_LOGIN__PASSWORD: E2E_LOGIN_PASSWORD,
+      APP_CONFIG_SECRETS__KEY: "e2e-secrets-key",
+      APP_CONFIG_SECRETS__ADMIN_BEARER: E2E_ADMIN_BEARER,
+      APP_CONFIG_CONTEXT_BIRTH_EVENTS: JSON.stringify(PROJECT_CONTEXT_BIRTH_EVENTS),
+    },
+  };
+}

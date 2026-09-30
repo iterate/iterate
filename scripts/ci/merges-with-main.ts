@@ -117,7 +117,7 @@ function report(verdict: Verdict): void {
   else console.log(verdict.message);
 }
 
-if (process.argv[1]?.endsWith("merges-with-main.ts")) {
+if (import.meta.main) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

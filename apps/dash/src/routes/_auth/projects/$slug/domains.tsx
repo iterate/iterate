@@ -1,10 +1,10 @@
 // /projects/<slug>/domains — where the project is served. First its DEFAULT DOMAIN under the
 // deployment's ingress (`projectHostOf`), which always works and can't be removed: primary until
-// another is made primary, then a page visit on it redirects there (apps/os
+// another is made primary, then a page visit on it redirects there (core/os
 // primary-hostname-redirect.ts), and its apps' addresses show which routing the deployment uses.
 // Then the project's own hostnames: `iterate.example.com` serves the project's
 // site and `<app>.iterate.example.com` its apps. The `project` facet's LIVE STATE on `/` is the list
-// (apps/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
+// (core/os/src/project/contract.ts `hostnames`): what the processor still owes, Cloudflare's status
 // and the CNAMEs the owner adds, and which live hostname is primary. Every act appends ONE event to
 // the root — add (`?add=1`, a sheet), check, remove, make primary — and the processor's answer lands
 // in the live state.
@@ -12,7 +12,7 @@
 // A hostname that is not live yet shows the three steps to live, each ticked from Cloudflare's own
 // words: DNS points at iterate (the custom hostname is `active`), the certificate is issued (its SSL
 // is `active`), live. Where the owner's DNS provider speaks Domain Connect and has our template, the
-// first step is one click (apps/os src/project/domain-connect.ts): "Connect with <provider>", and the
+// first step is one click (core/os src/project/domain-connect.ts): "Connect with <provider>", and the
 // provider sends the browser back with `?connected=<hostname>`, which checks it at once. While a
 // hostname is on its way the page checks it again every CHECK_EVERY_MS, so nobody has to.
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -54,21 +54,26 @@ const HostnamesLive = z.looseObject({
         .object({
           status: z.string(),
           sslStatus: z.string(),
-          records: z.array(z.object({ name: z.string(), value: z.string() })),
+          records: z.array(
+            z.object({ type: z.string().default("CNAME"), name: z.string(), value: z.string() }),
+          ),
           connect: z.object({ provider: z.string(), url: z.string() }).nullish(),
           dns: z.object({ zone: z.string(), provider: z.string().nullable() }).nullish(),
         })
         .nullable(),
       error: z.string().nullable(),
       connectedAt: z.string().nullish(),
+      /** the project holds the hostname: its ownership record named the project */
+      claimed: z.boolean().default(false),
     }),
   ),
 });
 type Hostname = z.infer<typeof HostnamesLive>["hostnames"][string];
 
-/** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active. */
+/** Whether a hostname serves: the project holds it, and Cloudflare says its hostname and its
+ *  certificate are both active. */
 const isLive = (entry: Hostname) =>
-  entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
+  entry.claimed && entry.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
 
 /** Whether the owner came back from their DNS provider having approved the records in the last
  *  ten minutes: long enough for them to be seen, and a crafted or failed return can't hide the
@@ -84,6 +89,8 @@ function standingOf(entry: Hostname) {
   if (!entry.cloudflare && entry.requested) return { label: "Adding…", dot: waiting };
   if (entry.error && !entry.cloudflare) return { label: "Failed", dot: "bg-destructive" };
   if (isLive(entry)) return { label: "Live", dot: "bg-emerald-500" };
+  if (entry.cloudflare?.status === "active" && !entry.claimed)
+    return { label: "Prove it's yours", dot: "bg-amber-500" };
   if (entry.cloudflare?.status === "active") return { label: "Issuing certificate", dot: waiting };
   if (recentlyConnected(entry)) return { label: "Waiting for DNS", dot: waiting };
   return { label: "Connect your DNS", dot: "bg-amber-500" };
@@ -443,7 +450,23 @@ function HostnameRow({
       {cloudflare && !live && entry.requested?.verb !== "remove" && (
         <div className="flex max-w-2xl flex-col gap-4 pl-5">
           <Progress dns={dns} certificate={cloudflare.sslStatus === "active"} />
-          {dns ? (
+          {dns && !entry.claimed ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-[15px]">
+                One record left: it proves <code>{hostname}</code> is yours, so no other project can
+                take it.
+              </p>
+              <ManualRecords
+                records={cloudflare.records.filter((record) => record.type === "TXT")}
+                zone={zone}
+                guide={guide}
+              />
+              <p className="text-sm text-muted-foreground">
+                Checked every 30 seconds while this page is open.{" "}
+                <CheckNow onCheck={onCheck} checking={Boolean(entry.requested)} />
+              </p>
+            </div>
+          ) : dns ? (
             <Waiting
               lead={
                 <>
@@ -581,7 +604,7 @@ function ManualRecords({
   zone,
   guide,
 }: {
-  records: { name: string; value: string; type?: string }[];
+  records: { type: string; name: string; value: string }[];
   zone: string | undefined;
   guide: DnsProviderGuide | undefined;
 }) {
@@ -618,11 +641,13 @@ function ManualRecords({
           </thead>
           <tbody className="font-mono text-[13px]">
             {records.map((record) => {
-              const value = guide?.trailingDot ? `${record.value}.` : record.value;
+              // a target name takes the provider's final dot; a TXT record's text never does
+              const value =
+                guide?.trailingDot && record.type === "CNAME" ? `${record.value}.` : record.value;
               return (
                 <tr key={record.name} className="border-t align-top">
                   <td className="py-2 pr-4 break-all">{nameOf(record.name)}</td>
-                  <td className="py-2 pr-4 text-muted-foreground">{record.type || "CNAME"}</td>
+                  <td className="py-2 pr-4 text-muted-foreground">{record.type}</td>
                   <td className="py-2 break-all">
                     {value}
                     <CopyButton text={value} />
@@ -633,6 +658,12 @@ function ManualRecords({
           </tbody>
         </table>
       </div>
+      {records.some((record) => record.type === "TXT") && (
+        <p className="text-xs text-muted-foreground">
+          Add each record with the type it shows: the TXT record's value is its text, exactly as
+          here.
+        </p>
+      )}
       {guide?.notes?.map((note) => (
         <p key={note} className="text-xs text-muted-foreground">
           {note}

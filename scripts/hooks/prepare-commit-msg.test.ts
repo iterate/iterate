@@ -1,8 +1,8 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
@@ -107,7 +107,7 @@ test.for<Record<string, string>>([{}, { CLAUDE_CODE_CHILD_SESSION: "1" }, { AGEN
 // detector it loads from the same path as in this repo. The environment keeps none of this
 // process's agent markers or GIT_* variables.
 function scratchRepo(marker: Record<string, string | undefined>) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const dir = directory.path;
   mkdirSync(join(dir, "hooks"));
   copyFileSync(

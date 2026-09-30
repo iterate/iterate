@@ -76,7 +76,7 @@ attachment the default.
 
 ## Automated browser specs
 
-The automated browser suite is `pnpm spec` ([specs/AGENTS.md](../specs/AGENTS.md); against a
+The automated browser suite is `pnpm spec` ([test/playwright/AGENTS.md](../test/playwright/AGENTS.md); against a
 deployment: [Testing](testing.md#running-a-suite-against-an-environment)).
 
 Use a disposable project and verify the resulting state. Do not reuse
@@ -88,9 +88,9 @@ setup.
 Use this to prove that a PR's deployed preview works through the real browser,
 the issuer's sign-in, routing and the app UI. The automated smoke is the Preview
 OS workflow's Browser specs job (the browser specs against the PR's preview,
-beside its E2E tests job). Re-run it from `apps/os` with
+beside its E2E tests job). Re-run it from `core/os` with
 `doppler run --project os --config preview -- pnpm preview specs --pr <number>`,
-or from CI without redeploying (see its [README](../apps/os/README.md)).
+or from CI without redeploying (see its [README](../core/os/README.md)).
 
 For a hands-on smoke, take the preview URL from the PR body and sign in as in
 [Disposable sessions](#disposable-sessions), with the preview's password kept

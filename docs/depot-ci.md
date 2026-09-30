@@ -308,7 +308,7 @@ other suite green, and from `main` it posts on main's head. From the PR's branch
 `deploy`. Either way the dispatch updates the suite's line in the PR body and posts the CI trace
 statuses on the PR's head. A preview by name may be redeployed under the dispatch by its own
 workflow (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview specs` do the same
-([apps/os/README.md](../apps/os/README.md)). `preview-delete.yml`
+([core/os/README.md](../core/os/README.md)). `preview-delete.yml`
 (`--input pull-request-number=<pr-number>`) deletes a preview now, `preview-sweep.yml` sweeps now.
 
 Deploy a branch manually, or roll back by pushing a branch at the old commit first:
@@ -329,8 +329,8 @@ one-line `node scripts/ci/<script>.ts …`), and validate with `depot ci run` fr
 branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
 - A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
-  `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with its
-  `isMainModule` footer ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with
+  `createCli({ ...import.meta })` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
   `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
   not install.
@@ -577,8 +577,8 @@ commit whose stamp is not its lockfile's hash. The reasons are in `scripts/lockf
 Preview OS runs on every pull request with no `paths` filter, because GitHub leaves a required
 check "Pending" forever when a `paths` filter skips its workflow. Deploy preview decides instead:
 `node scripts/ci/preview-paths.ts changes` diffs the tested merge commit against main and matches
-`previewPaths` (`apps/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
-`playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
+`previewPaths` (`core/os`, `configs`, the hosted clients but Kit's firmware, `specs` and
+`test/playwright.config.ts`, `packages/cli`, `packages/iterate`, `packages/shared`, `packages/ui`, the
 root manifests and lockfile, `envs.ts`, `scripts/lib`, the setup (`.depot/actions`,
 `scripts/ci/toolchain.sh`), and its own and the production deploy workflows). A PR that touches
 none of them gets a green Deploy preview that deployed nothing, and two green suites that tested
@@ -594,12 +594,11 @@ workspace packages it depends on, `envs.ts`, `scripts/lib` and `pnpm-lock.yaml`,
 hosted clients the root `package.json` and `pnpm-workspace.yaml`. `scripts/ci/depot-workflows.test.ts`
 pins the exceptions:
 
-- No client deploy runs for `apps/os`: no client imports it.
+- No client deploy runs for `core/os`: no client imports it.
 - Deploy Kit and Deploy Voice run for `packages/voice`: their pages run its voice check
   (`@iterate-com/voice/install`).
-- Deploy OS skips what never reaches the Worker: the markdown at the app root, `apps/os/docs`,
-  `apps/os/e2e`, `apps/os/__workers-tests__`, `*.test.ts`, `apps/os/bench`, and the preview and
-  soak scripts. Markdown that ships still deploys: `apps/os/public/setup-prompt.md`
+- Deploy OS skips what never reaches the Worker: the markdown at the app root, `core/os/docs`,
+  `*.test.ts`, and the preview and soak scripts. Markdown that ships still deploys: `core/os/public/setup-prompt.md`
   and everything in `configs`. Preview OS and Main OS e2e still run for all of it.
 - Deploy SPA ignores the root manifests and lockfile: it has no npm dependency inside.
 
@@ -654,7 +653,7 @@ fullest shard holds `ceil(specs / shards)`.
 
 - The shards are the legs of the matrix job `specs-shard`, **Browser specs 1/11** to **11/11**.
   Each sets up and waits for the deploy like any suite job, then runs its share (`SPECS_SHARD` of
-  `SPECS_SHARDS`, playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
+  `SPECS_SHARDS`, test/playwright.config.ts `shard`), and keeps its own evidence, with a Playwright
   blob report in place of the HTML one.
 - **Browser specs** (`specs`, the required check) runs no spec. It starts with the run on the
   smallest runner, decides whether there is a preview to test by the suites' own steps, and
@@ -717,7 +716,7 @@ the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
 
 ## Main OS e2e deploys each commit fresh
 
-Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (apps/os and every
+Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (core/os and every
 app on top, envs.ts `previewDeployment`), tests it, and deletes the `main-…` deployments before it
 (Clean up superseded). The latency guard does the same under `latency`, and the real-model suite
 under `real-model` (`CI_WORKFLOW_PREVIEWS` in `scripts/os/preview-sweep.ts`); when main has not

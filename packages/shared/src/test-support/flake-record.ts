@@ -115,9 +115,13 @@ function failedOutright(test: RetriedTestTelemetry) {
  * the repo root — would find nothing.
  */
 export async function appendFlakeRecord(record: FlakeRecord): Promise<void> {
-  // Outside Node (a Workers or browser test runner) there is no `process` global at all.
-  const dir = globalThis.process?.env.FLAKE_RECORD_DIR;
-  if (!dir) return;
+  // Outside Node (a Workers or browser test runner) there is no `process` global at all, and a
+  // program typed for the Workers suite alone (core/os's tsconfig.tests.json) declares none either.
+  const { process } = globalThis as {
+    process?: { env: Record<string, string | undefined>; pid: number };
+  };
+  const dir = process?.env.FLAKE_RECORD_DIR;
+  if (!process || !dir) return;
   try {
     const { appendFileSync, mkdirSync } = await import("node:fs");
     const { join, resolve } = await import("node:path");

@@ -3,7 +3,7 @@ import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { dashEnvs, docsEnvs, kitEnvs, notesEnvs } from "../../envs.ts";
 import { ownZones, startAppWorkerConfig } from "./start-app.ts";
 
-test("a per-commit deployment's app is a worker of its own, signs in against that deployment's apps/os and links to its apps", () => {
+test("a per-commit deployment's app is a worker of its own, signs in against that deployment's core/os and links to its apps", () => {
   const config = startAppWorkerConfig(
     {
       name: "notes",
@@ -20,7 +20,7 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
     workers_dev: true,
   });
   expect(config).not.toHaveProperty("routes");
-  // its own deployment's apps/os and apps, none of main on dev's or prd's
+  // its own deployment's core/os and apps, none of main on dev's or prd's
   expect(startAppConfigOf({ ...config.vars })).toMatchObject({
     urls: {
       os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev",
@@ -85,7 +85,7 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
   });
 });
 
-test("main on dev (the app's `preview` build) signs in against main on dev's apps/os and links to its other apps", () => {
+test("main on dev (the app's `preview` build) signs in against main on dev's core/os and links to its other apps", () => {
   const { vars } = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
     "preview",

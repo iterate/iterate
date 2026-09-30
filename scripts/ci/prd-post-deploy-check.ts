@@ -28,13 +28,12 @@ import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { osEnvs } from "../../envs.ts";
 import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } from "./slack.ts";
 
 /** Production's project hosts people rely on: the iterate project's apex (envs.ts
  *  `osEnvs.prd.projectWildcard`) and projects' own custom hostnames, which live in the control plane
- *  (apps/os src/project/custom-hostnames.ts) — named here, since this check reads nothing but pages. */
+ *  (core/os src/project/custom-hostnames.ts) — named here, since this check reads nothing but pages. */
 export const PRD_PROJECT_HOST_URLS = [
   osEnvs.prd!.projectWildcard!.hostname,
   "garple.com",
@@ -42,7 +41,7 @@ export const PRD_PROJECT_HOST_URLS = [
   "templestein.com",
 ].map((hostname) => `https://${hostname}/`);
 
-/** `<version id> <origin>` (apps/os/src/worker.ts): the Cloudflare version prd serves. */
+/** `<version id> <origin>` (core/os/src/worker.ts): the Cloudflare version prd serves. */
 const VERSION_URL = `${osEnvs.prd!.baseUrl}/version`;
 
 /** Waits for `/version` to name a version other than --previous-version (the id it named before the
@@ -281,5 +280,4 @@ const get = (url: string) =>
     signal: AbortSignal.timeout(15_000),
   }).catch(() => null);
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "prd-post-deploy-check" }).run();
+void createCli({ ...import.meta, name: "prd-post-deploy-check" }).run();

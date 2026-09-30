@@ -21,8 +21,8 @@ export const PLATFORM_FAILURES = {
   /** workerd's DISCONNECTED failure, handed back through a session that stayed open: a Workers RPC
    *  connection under the call, from our Worker to a Durable Object or between two objects, was cut
    *  inside Cloudflare. Our code never throws it, and a reset of our own objects fails with a
-   *  message of its own (packages/shared/src/platform-retry.ts `failureKind`). The edge sends an
-   *  idempotent call it cut once more (apps/os/src/context-stub.ts `IDEMPOTENT_CALLS`), so what
+   *  message of its own (packages/iterate/src/platform-retry.ts `failureKind`). The edge sends an
+   *  idempotent call it cut once more (core/os/src/context-stub.ts `IDEMPOTENT_CALLS`), so what
    *  reaches a row is a write, or a second cut. */
   "transport-cut": "a Workers RPC connection under the call was lost inside Cloudflare",
   /** Cloudflare's words for a call in flight on a Durable Object instance it shut down, to host the

@@ -1,4 +1,4 @@
-// iterate/no-raw-durable-object-binding-access: inside apps/os/src, a raw `env.X.getByName(...)`
+// iterate/no-raw-durable-object-binding-access: inside core/os/src, a raw `env.X.getByName(...)`
 // is privileged platform authority, allowed only in Durable Objects, entrypoints, capability files,
 // iterate-context.ts and the edge entry points. Rows are files in one temp project linted once by the real
 // oxlint binary; `reported` says whether the rule flags that file.
@@ -6,60 +6,60 @@
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
 
-test("raw env.X.getByName is allowed only in apps/os's edge entry points and Durable Objects", () => {
+test("raw env.X.getByName is allowed only in core/os's edge entry points and Durable Objects", () => {
   const rows = [
     {
-      path: "apps/os/src/new-route.ts",
+      path: "core/os/src/new-route.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: true,
     },
     {
-      path: "apps/os/src/project/processor.ts",
+      path: "core/os/src/project/processor.ts",
       source: 'class P { f() { return this.env.ITERATE_CONTEXT.getByName("p:/"); } }',
       reported: true,
     },
     {
-      path: "apps/os/src/session-helper.ts",
+      path: "core/os/src/session-helper.ts",
       source: 'namespace.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/src/worker.ts",
+      path: "core/os/src/worker.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/src/mcp.ts",
+      path: "core/os/src/mcp.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/src/secret-oauth-callback.ts",
+      path: "core/os/src/secret-oauth-callback.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/src/integrations/slack.ts",
+      path: "core/os/src/integrations/slack.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/src/iterate-context.ts",
+      path: "core/os/src/iterate-context.ts",
       source: 'class E { f() { return this.env.ITERATE_CONTEXT.getByName("p:/"); } }',
       reported: false,
     },
     {
-      path: "apps/os/src/iterate-context-durable-object.ts",
+      path: "core/os/src/iterate-context-durable-object.ts",
       source: 'class D { f() { return this.env.ITERATE_CONTEXT.getByName("p:/"); } }',
       reported: false,
     },
     {
-      path: "apps/os/src/workspace/durable-object.ts",
+      path: "core/os/src/workspace/durable-object.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },
     {
-      path: "apps/os/__workers-tests__/support.ts",
+      path: "test/vitest/os-workers/support.ts",
       source: 'env.ITERATE_CONTEXT.getByName("p:/");',
       reported: false,
     },

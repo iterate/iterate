@@ -1,0 +1,12 @@
+{
+  // Typecheck for what the base config's `include: ["src"]` never sees: the loaded-code example
+  // (examples/**) and the scripts that import worker code (project-seed-format.ts;
+  // tsconfig.scripts.json has the other node scripts). Keeps workers-types (they import src, which
+  // needs them) and adds node types (they run in Node). `pnpm typecheck` runs all three configs.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types", "node", "vite/client"]
+  },
+  "include": ["examples", "scripts/project-seed*.ts"],
+  "exclude": []
+}

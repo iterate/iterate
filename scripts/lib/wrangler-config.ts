@@ -1,15 +1,5 @@
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
-
-/**
- * The one observability posture every Iterate worker deploys with: full
- * sampling, persistent logs and traces. Shared by every app's Worker config.
- */
-export const OBSERVABILITY = {
-  enabled: true,
-  head_sampling_rate: 1,
-  logs: { enabled: true, head_sampling_rate: 1, persist: true, invocation_logs: true },
-  traces: { enabled: true, persist: true, head_sampling_rate: 1 },
-};
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
+import { OBSERVABILITY } from "../../core/os/scripts/wrangler-config.ts";
 
 /** A plain Worker's config (dummy-petshop, ci-reports) for one envs.ts environment — or, with none,
  *  local dev: what every plain Worker shares. Its vite.config.ts adds its own bindings and secrets
@@ -36,13 +26,4 @@ export function plainWorkerConfig(
     observability: OBSERVABILITY,
     ...(env && { account_id: env.cloudflareAccountId, workers_dev: true }),
   };
-}
-
-/** The registrable domain of a URL or hostname — its last two labels (`os.iterate.com` ⇒ `iterate.com`;
- *  a workers.dev origin ⇒ `<subdomain>.workers.dev`, the account's own). The zone a hostname routes
- *  on: the start apps' routes and the OS platform's wrangler config and ensure-resources. */
-export function registrableDomainOf(urlOrHostname: string) {
-  const hostname = urlOrHostname.includes("://") ? new URL(urlOrHostname).hostname : urlOrHostname;
-  const labels = hostname.split(".");
-  return labels.slice(hostname.endsWith(".workers.dev") ? -3 : -2).join(".");
 }

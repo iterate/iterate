@@ -5,7 +5,7 @@ app (`@iterate-com/agents`, created through `itx.agents`), with this package's r
 it and the project's `itx.voice` worker answering the press. The relay holds the live model; each
 request the live model delegates goes to the agent as a message through the agents app
 (`itx.agents.get(path).message(words)`), and the agent's answer goes back to the live model to
-speak. One agent loop answers the call: the agents app's, on its model and its sandbox. Userspace:
+speak. One agent loop answers the call: the agents app's, on its model. Userspace:
 a project installs this package; the platform ships none of it.
 
 ## Install
@@ -125,7 +125,7 @@ Run these commands from `apps/agents`. The project's config installs both apps.
 
 ```bash
 export WORKER_BASE_URL=https://os.iterate.com
-# a personal access token for prj-voice (apps/os/docs/credentials.md): the Dash's Sessions page, or
+# a personal access token for prj-voice (core/os/docs/credentials.md): the Dash's Sessions page, or
 # `pnpm exec iterate --config prd tokens create --name voice-scripts --project prj-voice`
 export ITERATE_BEARER_TOKEN=itk_…
 export OPENAI_API_KEY=$(doppler secrets get OPENAI_API_KEY --project os --config prd --plain)

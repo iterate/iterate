@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { viteBuild } from "../../core/os/scripts/vite-build.ts";
 import {
   collectSecrets,
   deployWithSecrets,
@@ -6,7 +7,6 @@ import {
   smoke,
 } from "./deploy-helpers.ts";
 import { resolveEnvContext, type DeployableEnv, type EnvContext } from "./env-context.ts";
-import { viteBuild } from "./vite-build.ts";
 
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
@@ -37,7 +37,7 @@ export async function deployApp<
     dopplerProject: string;
     /** Absolute app root (wrangler/vite commands run here). */
     appRoot: string;
-    /** e.g. "apps/os" — used in log lines. */
+    /** e.g. "core/os" — used in log lines. */
     appLabel: string;
     /** Secret names the deploy fails without; each ships with the code. */
     requiredSecrets?: readonly string[];

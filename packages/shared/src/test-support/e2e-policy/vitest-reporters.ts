@@ -5,5 +5,5 @@ import { fileURLToPath } from "node:url";
  *  `test` script is plain `vitest run`. */
 export const vitestReporters = [
   "default",
-  fileURLToPath(new URL("./retry-telemetry-reporter.ts", import.meta.url)),
+  fileURLToPath(new URL("./retry-telemetry-reporter.ts", import.meta.url).href),
 ];

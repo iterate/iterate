@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { expect, test, vi } from "vitest";
 import { resetWorkerDurableObjects } from "./do-reset.ts";
 
@@ -68,7 +68,7 @@ function resetCtx(workers: string[], namespaces: unknown[]) {
  *  version's tag and message, the credentials it was handed, and the config and module it would
  *  upload. */
 function fakeWrangler() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const dir = directory.path;
   writeFileSync(
     join(dir, "pnpm"),

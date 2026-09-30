@@ -1,0 +1,76 @@
+// examples/serve-localhost.mjs — `iterate tunnel` without the CLI: serve a local port on a project
+// host, WebSockets included, in one capnweb session. Lend the project a fetch-shaped RpcTarget with a
+// fetch route to it, print the URL; Ctrl-C deletes the route (the lend's end would too).
+//
+//   npm install capnweb@npm:@iterate-com/capnweb
+//   ITERATE_BEARER_TOKEN=… node serve-localhost.mjs https://os.iterate.com my-project blog 5173
+//
+// Credentials come from the environment: ITERATE_BEARER_TOKEN (a personal access token), or an
+// operator's APP_CONFIG_SECRETS__ADMIN_BEARER. The visitor's path is forwarded as-is: under paths routing
+// (`<origin>/projects/<project>/<routingSlug>/…`, a per-PR preview) the platform strips that base and
+// names it in `x-iterate-base-path`, so a local server that serves under it (Vite: `--base`) needs it
+// put back in front. Pinned by test/vitest/os/serve-localhost-example.e2e.test.ts.
+import {
+  newWebSocketRpcSession,
+  RpcTarget,
+  upgradeWebSocketResponse,
+  WebSocketPair,
+} from "capnweb";
+
+const [origin, projectSlug, routingSlug, port] = process.argv.slice(2);
+const api = newWebSocketRpcSession(`${origin.replace(/^http/, "ws")}/api`);
+const session = api.authenticate(
+  process.env.ITERATE_BEARER_TOKEN
+    ? { type: "bearer", token: process.env.ITERATE_BEARER_TOKEN }
+    : { type: "admin-secret", secret: process.env.APP_CONFIG_SECRETS__ADMIN_BEARER },
+);
+const project = session.projects.get(projectSlug);
+
+class LocalSite extends RpcTarget {
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      const protocols = (request.headers.get("sec-websocket-protocol") ?? "")
+        .split(",")
+        .map((protocol) => protocol.trim())
+        .filter(Boolean);
+      const local = new WebSocket(`ws://localhost:${port}${url.pathname}${url.search}`, protocols);
+      local.binaryType = "arraybuffer";
+      await new Promise((resolve, reject) => {
+        local.onopen = resolve;
+        local.onerror = reject;
+      });
+      const pair = new WebSocketPair(); // not iterable
+      const [visitor, ours] = [pair[0], pair[1]];
+      ours.accept();
+      ours.addEventListener("message", (event) => local.send(event.data));
+      ours.addEventListener("close", () => local.close());
+      local.onmessage = (event) => ours.send(event.data);
+      local.onclose = () => ours.close();
+      return upgradeWebSocketResponse(visitor, {
+        headers: { "Sec-WebSocket-Protocol": local.protocol },
+      });
+    }
+    // Node's fetch decodes a compressed body but keeps its content-encoding: ask for none
+    const headers = new Headers(request.headers);
+    headers.set("accept-encoding", "identity");
+    return fetch(`http://localhost:${port}${url.pathname}${url.search}`, {
+      method: request.method,
+      headers,
+      body: request.body,
+      duplex: "half",
+    });
+  }
+}
+
+const fetchRouteName = `tunnel-${routingSlug}`;
+// the route rides the lend: set again when the platform re-attaches it, gone when it ends
+await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
+  fetchRoute: { fetchRouteName, requestMatcher: { routingSlug }, authRequirement: null },
+});
+console.log(await project.url({ routingSlug }));
+process.once("SIGINT", async () => {
+  await project.fetchRoutes.set(fetchRouteName, null);
+  api[Symbol.dispose]();
+  process.exit(0);
+});

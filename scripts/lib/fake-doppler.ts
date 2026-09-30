@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { vi } from "vitest";
 
 /**
@@ -15,7 +15,7 @@ export function fakeDoppler(
     | { secrets: Record<string, string>; refusal?: never }
     | { refusal: string; secrets?: never },
 ) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const path = (name: string) => join(directory.path, name);
   writeFileSync(path("answer.json"), JSON.stringify(answer));
   writeFileSync(

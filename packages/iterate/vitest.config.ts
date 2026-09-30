@@ -1,18 +1,22 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import { vitestReporters } from "../shared/src/test-support/e2e-policy/vitest-reporters.ts";
 
 export default defineConfig({
   resolve: {
     alias: {
       // app-session.ts's only platform import is the DurableObject base class.
       "cloudflare:workers": fileURLToPath(
-        new URL("../shared/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
+        new URL("./src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
     },
   },
   test: {
-    reporters: vitestReporters,
+    // The console's reporter, and whichever others the environment names by path: iterate's CI
+    // adds its telemetry reporter (.depot/workflows/test.yml), which lives outside packages/iterate.
+    reporters: [
+      "default",
+      ...(process.env.VITEST_EXTRA_REPORTERS || "").split(",").filter(Boolean),
+    ],
     include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true,
     unstubGlobals: true,

@@ -4,7 +4,7 @@ import type { SecretMaterial } from "iterate/api";
 /** Where every secret's path starts: `/secrets/<name>`, what `getSecret("/secrets/<name>")` spells. */
 export const SECRETS_PREFIX = "/secrets/";
 
-/** The name's grammar, mirroring `SECRET_NAME` in apps/os/src/secrets.ts: `[a-zA-Z0-9._-]+`, never
+/** The name's grammar, mirroring `SECRET_NAME` in core/os/src/secrets.ts: `[a-zA-Z0-9._-]+`, never
  *  `.` or `..` — what `getSecret("/secrets/<name>")` can spell. Its source is the Secrets page's
  *  input `pattern`, so the browser says so before the platform has to. The hyphen is escaped because
  *  browsers compile `pattern` with the `v` flag, where a bare `-` in a class is invalid and silently

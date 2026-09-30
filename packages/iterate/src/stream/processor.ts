@@ -8,7 +8,8 @@
 //   events             — `StreamEventInput` / `StreamEvent`, the envelope, and the idempotency rules
 //   reduce checkpoint  — `ReduceCheckpointTable`, THE ONE spelling of a persisted reduce checkpoint
 //   live state         — `LiveState`, one value, its revision chain and the diff→emit delta
-//   processor contract — `defineProcessorContract`, the zod contract helper (zod is a platform module)
+//   processor contract — `defineProcessorContract`, the zod contract helper, from contract.ts, which a
+//                        browser can load without this engine
 //
 // THE CONCURRENCY CONTRACT:
 //   1. ONE SERIAL CHAIN per processor — batches never interleave.
@@ -40,7 +41,7 @@
 // log. So an idle processor a row pushes reads its log once per incarnation, not on every read; one
 // nothing pushes learns of a new event only by reading, and reads every time. A head shown is only
 // as fresh as the pushes that have ARRIVED, so the host holds a read back until the pushes it
-// already owes the processor have landed (apps/os SubscriptionDelivery `deliveriesQueuedFor`): a
+// already owes the processor have landed (core/os SubscriptionDelivery `deliveriesQueuedFor`): a
 // read that follows a commit holds it.
 //
 // `reduce` is a PURE reduce (new object out, its arguments immutable), CHECKPOINTED
@@ -49,31 +50,12 @@
 // over durable rows only, which is why durable product truth must never derive from an ephemeral.
 
 import type { SqlStorageValue } from "@cloudflare/workers-types";
-import { z } from "zod";
 import { reportIssue, jsonEqual, codedError, diff, errorCode } from "../lib.ts";
 import { runCausedBy } from "../cause.ts";
 import type { Principal } from "../principal.ts";
+import type { EmittedEventInput, ProcessorContract } from "./contract.ts";
 
-/** What a processor declares: its checkpoint slug and reducer version, what it consumes and emits,
- *  and its initial state. `defineProcessorContract` below is the one way to build one. */
-export type ProcessorContract<State = unknown> = {
-  slug: string;
-  /** Bumping this re-reduces state from offset 0 (reduce only — side effects never re-run). */
-  version: string;
-  description?: string;
-  /** What it reacts to: type strings, or "*" for every DURABLE event. Ephemeral events are
-   *  delivered ONLY when their type is named here — `"*"` never sweeps them. */
-  consumes: readonly string[];
-  /** What its `append` is allowed to emit. */
-  emits: readonly string[];
-  /** The schema-initial state ("{} with every field defaulted" for zod contracts). */
-  initialState: () => State;
-  /** The zod payload schema for a consumed event type (owned or a dep's), or undefined if the type
-   *  is unknown or the contract declares no `events` catalog. The engine validates a consumed event's
-   *  payload against it before reducing (a malformed payload for a KNOWN event is skipped, never
-   *  folded). */
-  payloadSchemaFor: (type: string) => z.ZodType | undefined;
-};
+export * from "./contract.ts";
 
 /** The stream a processor reduces. `read` answers durable rows plus the proof: `scannedThroughOffset`
  *  is how far the read is CONTIGUOUSLY known (never past the durable mark — stream.ts), and `atHead`
@@ -150,7 +132,7 @@ export function consumesEvent(
   return !consumes || consumes.includes("*") || consumes.includes(event.type);
 }
 
-/** A failure that is a LOOP_LIMIT refusal the platform recorded (apps/os src/cause.ts
+/** A failure that is a LOOP_LIMIT refusal the platform recorded (core/os src/cause.ts
  *  `recordRefusal`) settles as done: the loop ends there, with its one fact, and nothing is retried
  *  or reported. Any other — an unrecorded one too — is rethrown. */
 const unlessLoopLimit = (error: unknown): void => {
@@ -717,7 +699,7 @@ export class ProcessorEngine<State> {
       }
       return emittedEvents;
     };
-    // A PROCESSOR'S EFFECTS (apps/os src/cause.ts), each bound to its event's cause — an eventless
+    // A PROCESSOR'S EFFECTS (core/os src/cause.ts), each bound to its event's cause — an eventless
     // pass, the newest one's — with that event as their parent: what it appends to its own log keeps
     // that depth, so an agent's own turns stay flat, and anything else it does is code reacting to
     // code, one hand-off deeper.
@@ -778,7 +760,7 @@ export class ProcessorEngine<State> {
 }
 
 // ── events ── the stream event envelope + idempotency rules. Zod-FREE: the envelope carries no
-// runtime validator (the processor contract section below has the zod half).
+// runtime validator (contract.ts has the zod half).
 
 /** Why an event happened (`source.cause`): its chain, its depth, and the event whose handling wrote
  *  it (`<path>@<offset>`), if any. */
@@ -792,7 +774,7 @@ export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
-  /** PROVENANCE, stamped by the platform as the event commits (apps/os caller.ts `stampCaller`): a
+  /** PROVENANCE, stamped by the platform as the event commits (core/os caller.ts `stampCaller`): a
    *  writer's own `source` is dropped but for `processor`, the engine's label. */
   source?: {
     /** WHERE IT CAME FROM: the context whose code or session wrote it — the context a call started
@@ -825,6 +807,11 @@ export type StreamEventInput = {
      *  connected client (a Claude Code install, a dash sign-in, a personal token). Stamped beside
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
+    /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
+     *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
+     *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
+     *  how: core/os/src/on-behalf-of.ts. */
+    onBehalfOf?: { principal: Principal; grant?: string; run: string };
     /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
      *  append any type to a context it holds, never this. */
@@ -842,7 +829,7 @@ export type StreamEventInput = {
 };
 
 /** A committed event: the input plus the identity the stream assigned at its commit point, and the
- *  platform's `source`, whose `origin` every commit carries (apps/os stream.ts). */
+ *  platform's `source`, whose `origin` every commit carries (core/os stream.ts). */
 export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   offset: number;
   createdAt: string;
@@ -850,7 +837,7 @@ export type StreamEvent = Omit<StreamEventInput, "offset" | "source"> & {
   source: NonNullable<StreamEventInput["source"]> & { origin: string };
 };
 
-// ── idempotency ── the one conflict message, which apps/os stream.ts and test-support's
+// ── idempotency ── the one conflict message, which core/os stream.ts and test-support's
 // `memoryStream` both throw under code IDEMPOTENCY_CONFLICT; a caller checks the code, never the text.
 
 export function idempotencyConflictMessage(idempotencyKey: string, existingOffset: number): string {
@@ -1084,204 +1071,4 @@ export class LiveState<S> {
       .then(emitDelta)
       .catch(() => {});
   }
-}
-
-// ── processor contract ── the focused Zod contract helper; zod
-// rides the SDK bundle with it. A contract declares its
-// identity, reduced-state schema, the events it OWNS (`events`, keyed by the durable type string,
-// each with a zod payload schema — so the type strings and payload shapes are visible right here),
-// the events it `consumes`/`emits`, and optional `processorDeps` (other contracts whose events it may
-// consume without owning). The reduce's event union and the state type are DERIVED from the contract
-// (`ConsumedEvent` / `ProcessorState`) — no hand-kept discriminated union to drift.
-
-/** One owned event: its description and the zod schema for its payload. `ephemeral: true` marks a
- *  non-durable event (delivered only when its type is named in `consumes`). */
-export type EventDefinition = { description: string; payloadSchema: z.ZodType; ephemeral?: true };
-/** A durable event type string → its definition. */
-export type EventCatalog = Record<string, EventDefinition>;
-
-/** A `processorDeps` entry's own event catalog. */
-type DepCatalog<Dep> = Dep extends { events: infer Events extends EventCatalog } ? Events : never;
-/** The definition owning `Type` — local events win, then each dep. */
-type DefinitionForType<
-  Events extends EventCatalog,
-  Deps extends readonly unknown[],
-  Type extends string,
-> = Type extends keyof Events
-  ? Events[Type]
-  : Deps[number] extends infer Dep
-    ? Dep extends unknown
-      ? Type extends keyof DepCatalog<Dep>
-        ? DepCatalog<Dep>[Type]
-        : never
-      : never
-    : never;
-
-/** The committed event for one resolved type: `StreamEvent` narrowed to its `{ type, payload }`. */
-type EventForType<
-  Events extends EventCatalog,
-  Deps extends readonly unknown[],
-  Type extends string,
-> = Type extends unknown
-  ? DefinitionForType<Events, Deps, Type> extends { payloadSchema: infer Schema extends z.ZodType }
-    ? StreamEvent & { type: Type; payload: z.output<Schema> }
-    : never
-  : never;
-
-/** The reduce union for a `consumes` tuple — `"*"` alone means any `StreamEvent`. */
-type EventForTypes<
-  Events extends EventCatalog,
-  Deps extends readonly unknown[],
-  Types extends readonly string[],
-> = "*" extends Types[number] ? StreamEvent : EventForType<Events, Deps, Types[number]>;
-
-/** A contract's `processorDeps` tuple, defaulting to empty. */
-type DepsOf<Contract> = Contract extends { processorDeps: infer Deps extends readonly unknown[] }
-  ? Deps
-  : readonly [];
-
-/** A contract's reduced-state type, inferred from its `stateSchema`. */
-export type ProcessorState<Contract> = Contract extends {
-  stateSchema: infer Schema extends z.ZodType;
-}
-  ? z.output<Schema>
-  : never;
-
-/** The committed-event union a contract's `consumes` list can deliver to `reduce`/`processEvent`. */
-export type ConsumedEvent<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
-  consumes: infer Consumes extends readonly string[];
-}
-  ? EventForTypes<Events, DepsOf<Contract>, Consumes>
-  : never;
-
-/** The input for ONE event type as a catalog spells it (`EventInput`'s row) — or, for a type no
- *  catalog defines (a core control event a processor emits, `itx/ingress-configured`), the plain
- *  input: it widens the whole union, so a contract that emits one undefined type appends untyped
- *  until that type is in a catalog it depends on. */
-type EventInputForType<
-  Events extends EventCatalog,
-  Deps extends readonly unknown[],
-  Type extends string,
-> = Type extends unknown
-  ? [DefinitionForType<Events, Deps, Type>] extends [never]
-    ? StreamEventInput
-    : DefinitionForType<Events, Deps, Type> extends {
-          payloadSchema: infer Schema extends z.ZodType;
-        }
-      ? {
-          type: Type;
-          payload: z.input<Schema>;
-          idempotencyKey?: string;
-          metadata?: Record<string, unknown>;
-        } & (DefinitionForType<Events, Deps, Type> extends { ephemeral: true }
-          ? { ephemeral: true }
-          : { ephemeral?: never })
-      : never
-  : never;
-
-/** What a processor's `append` takes: one input per type the contract `emits` — its own
- *  events and its deps' as their catalogs spell them (`z.input`), a type no catalog defines as the
- *  plain input under that name. A contract whose `emits` is not a literal tuple gets every input. */
-export type EmittedEventInput<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
-  emits: infer Emits extends readonly string[];
-}
-  ? string[] extends Emits
-    ? StreamEventInput
-    : Emits extends readonly []
-      ? StreamEventInput // emits nothing: no call to type, and `never` would break the host's variance
-      : EventInputForType<Events, DepsOf<Contract>, Emits[number]>
-  : StreamEventInput;
-
-/** What a caller APPENDS for one of a contract's OWNED events — the typed write on an entity
- *  (`itx.repos.get(path).append(…)`, library.ts): the type string, the payload as its schema takes
- *  it (`z.input`), a key and metadata; `ephemeral` only where the definition says so. Derived from
- *  the catalog, so a payload field renamed in the contract is a type error at every call site. */
-export type EventInput<Contract> = Contract extends { events: infer Events extends EventCatalog }
-  ? {
-      [Type in keyof Events & string]: {
-        type: Type;
-        payload: z.input<Events[Type]["payloadSchema"]>;
-        idempotencyKey?: string;
-        metadata?: Record<string, unknown>;
-      } & (Events[Type] extends { ephemeral: true } ? { ephemeral: true } : { ephemeral?: never });
-    }[keyof Events & string]
-  : never;
-
-/** What `defineProcessorContract` returns: the base the engine reads, plus the events catalog and the
- *  resolved deps. (Events are written LITERALLY at the call site — `itx.append({ type, payload })` —
- *  so there is no event-builder here; the engine validates the payload against `payloadSchemaFor` at
- *  reduce, and `ConsumedEvent`/`ProcessorState` give the reduce its types.) */
-export type DefinedProcessorContract<
-  StateSchema extends z.ZodType,
-  Events extends EventCatalog,
-  Consumes extends readonly string[],
-  Deps extends readonly unknown[],
-  Emits extends readonly string[] = readonly string[],
-> = ProcessorContract<z.output<StateSchema>> & {
-  stateSchema: StateSchema;
-  events: Events;
-  // The literal consumes and emits tuples are preserved (not widened to string[]) so `ConsumedEvent`
-  // and `EmittedEventInput` can map each type to its event; the base ProcessorContract only needs
-  // `readonly string[]`.
-  consumes: Consumes;
-  emits: Emits;
-  processorDeps: Deps;
-};
-
-export function defineProcessorContract<
-  const StateSchema extends z.ZodType,
-  const Events extends EventCatalog = Record<string, never>,
-  const Consumes extends readonly string[] = readonly string[],
-  const Deps extends readonly { events: EventCatalog }[] = readonly [],
-  const Emits extends readonly string[] = readonly string[],
->(contract: {
-  slug: string;
-  version: string;
-  description: string;
-  /** Must parse `{}` — the initial state is `stateSchema.parse({})` (all fields defaulted). */
-  stateSchema: StateSchema;
-  /** The events this contract OWNS, keyed by durable type string. Omit for a kernel-generic
-   *  processor that types its own reduce through the `Event` param instead of an events catalog. */
-  events?: Events;
-  /** Other processors' contracts whose events this one may `consumes`/`emits` without owning. */
-  processorDeps?: Deps;
-  consumes: Consumes;
-  emits: Emits;
-}): DefinedProcessorContract<StateSchema, Events, Consumes, Deps, Emits> {
-  if (!contract.stateSchema.safeParse({}).success)
-    throw new Error(`contract "${contract.slug}": stateSchema must parse {} (default every field)`);
-  const events = (contract.events ?? {}) as Events;
-  const processorDeps = (contract.processorDeps ?? []) as Deps;
-  // One owner per event type: a local event may not shadow a dep's event, and two deps may not both
-  // declare one. Otherwise `resolve` (and the runtime payload validation it backs) would pick just the
-  // first while `ConsumedEvent`'s type union includes BOTH payload types — a second dep's events would
-  // then validate against the wrong schema.
-  const depEventTypes = new Set<string>();
-  for (const dep of processorDeps as readonly { events: EventCatalog }[])
-    for (const type of Object.keys(dep.events)) {
-      if (type in events)
-        throw new Error(`contract "${contract.slug}": event "${type}" is already owned by a dep`);
-      if (depEventTypes.has(type))
-        throw new Error(`contract "${contract.slug}": event "${type}" is declared by two deps`);
-      depEventTypes.add(type);
-    }
-  const resolve = (type: string): EventDefinition | undefined =>
-    events[type] ??
-    (processorDeps as readonly { events: EventCatalog }[])
-      .map((dep) => dep.events[type])
-      .find(Boolean);
-  return {
-    slug: contract.slug,
-    version: contract.version,
-    description: contract.description,
-    consumes: contract.consumes,
-    emits: contract.emits,
-    stateSchema: contract.stateSchema,
-    events,
-    processorDeps,
-    initialState: () => contract.stateSchema.parse({}) as z.output<StateSchema>,
-    payloadSchemaFor: (type: string) => resolve(type)?.payloadSchema,
-  };
 }

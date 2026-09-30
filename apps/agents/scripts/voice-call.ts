@@ -15,7 +15,6 @@
 import type {} from "@iterate-com/agents";
 import type {} from "@iterate-com/voice";
 import { readFileSync, writeFileSync } from "node:fs";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { startVoiceCall } from "@iterate-com/voice/call";
 import type { RpcPromise } from "capnweb";
 import type { IterateContextApiWith } from "iterate/api";
@@ -215,4 +214,4 @@ export default async function voiceCall(
   );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-call" }).run();
+void createCli({ ...import.meta, name: "voice-call" }).run();

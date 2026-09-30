@@ -145,8 +145,8 @@ test("people comment, reply and resolve, an agent replies for one of them, and o
     quote: quoteAt(text, at, at + "Tuesday".length),
     body: "Wednesday?",
   });
-  // Jonas's Claude Code, over MCP as Jonas
-  jonas.append(COMMENT_REPLIED, {
+  // Jonas's Claude Code, over MCP: a script run for Jonas, which calls as the project's code
+  doc.appendAsScriptFor("jonas@iterate.com", COMMENT_REPLIED, {
     thread: "t1",
     comment: "c2",
     body: "Flights are cheaper.",
@@ -329,6 +329,14 @@ function openDoc(
     get engine() {
       return current.engine;
     },
+    /** What a `run` script appends for `email` (core/os on-behalf-of.ts): no principal, the person
+     *  it runs for in `onBehalfOf`. */
+    appendAsScriptFor: (email: string, type: string, payload: Record<string, unknown>) =>
+      log.stream.append({
+        type,
+        payload,
+        source: { onBehalfOf: { principal: { actor: email, email }, run: "/@1" } },
+      }),
     /** What the root's docs processor appends when a commit changed the doc. */
     notice: () =>
       log.stream.append({ type: COMMIT_NOTICED, ephemeral: true, payload: { commitOid: "?" } }),

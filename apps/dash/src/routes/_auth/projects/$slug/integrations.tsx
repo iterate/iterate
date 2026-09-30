@@ -1,7 +1,7 @@
 // /projects/<slug>/integrations — the project's connections (the `project` facet's live state on
 // `/`), each provider's Connect sheet and the forms it leads to. The flows themselves — a person's own
 // account, iterate's app or your own, moving an account another project holds — are in
-// apps/os/docs/integrations.md. The sheet is one URL: `?connect=<provider>` (`&scopes=` from an agent's
+// core/os/docs/integrations.md. The sheet is one URL: `?connect=<provider>` (`&scopes=` from an agent's
 // `requestFromUser`), `?own=<provider>&connection=<name>`, `?move=<offer>`.
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
@@ -33,7 +33,7 @@ import {
 } from "@iterate-com/ui/components/sheet";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
+import { missingScopes } from "iterate/integration-scopes";
 import {
   INTEGRATION_PROVIDER_NAMES,
   INTEGRATION_PROVIDERS,
@@ -87,7 +87,7 @@ const PROVIDERS = INTEGRATION_PROVIDERS.map((provider) => ({
   noun: provider === "slack" ? "workspace" : "account",
 }));
 
-/** The providers a person has an account of their own with by signing in (apps/os identity.ts). */
+/** The providers a person has an account of their own with by signing in (core/os identity.ts). */
 const SIGN_IN_PROVIDERS: readonly SignInProvider[] = ["google", "cloudflare", "github"];
 
 export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
@@ -99,11 +99,11 @@ export const Route = createFileRoute("/_auth/projects/$slug/integrations")({
     own: OwnAppProvider.optional().catch(undefined),
     connection: z.string().optional().catch(undefined),
     /** A provider's callback's offer to move an account another project holds here (signed by the
-     *  platform, apps/os integrations/connections.ts `IntegrationMoveOffer`). */
+     *  platform, core/os integrations/connections.ts `IntegrationMoveOffer`). */
     move: z.string().optional().catch(undefined),
     /** Another service: how to connect one this page has no row for. */
     other: z.literal(1).optional().catch(undefined),
-    /** Why the issuer refused to add a GitHub sign-in (apps/os identity.ts, "ADD A SIGN-IN"). */
+    /** Why the issuer refused to add a GitHub sign-in (core/os identity.ts, "ADD A SIGN-IN"). */
     error: z.string().optional().catch(undefined),
   }),
   staticData: { page: "Integrations" },
@@ -1204,7 +1204,7 @@ function agentPromptOf(service: string, projectSlug: string, platformOrigin: str
 }
 
 /** ANOTHER SERVICE: the easiest way is the person's own coding agent, connected to this project over
- *  MCP and asked to connect it by the platform's recipe (apps/os/public/connect-a-service.md). */
+ *  MCP and asked to connect it by the platform's recipe (core/os/public/connect-a-service.md). */
 function OtherService({
   projectSlug,
   mcpServer,

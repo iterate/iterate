@@ -25,7 +25,6 @@
  *     node scripts/ci/sync-ci-telemetry.ts --dry-run --since <ISO time>
  */
 import { readFile, readdir } from "node:fs/promises";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
@@ -599,5 +598,4 @@ type WorkflowDetail = z.infer<typeof WorkflowDetail>;
 /** GetJobSummary's answer for one attempt: its steps' summaries joined, empty when none wrote one. */
 const JobSummary = z.object({ markdown: z.string().default("") });
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "sync-ci-telemetry" }).run();
+void createCli({ ...import.meta, name: "sync-ci-telemetry" }).run();

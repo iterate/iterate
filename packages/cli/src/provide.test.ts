@@ -3,13 +3,13 @@
 // loaded by Node itself, their bare imports resolved from their own folder, their functions lent at
 // itx.<name> and called back through the lent stub, the itx they were handed reaching the project;
 // a missing dependency named before any sign-in; and `runProvide` lending again over each new
-// connection. The platform half (the lend through a deployment) is apps/os e2e/provide.e2e.test.ts.
+// connection. The platform half (the lend through a deployment) is core/os e2e/provide.e2e.test.ts.
+import { tmpdir } from "node:os";
 import { execFile, type ChildProcess } from "node:child_process";
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
@@ -22,7 +22,7 @@ test(
   { timeout: 30_000 },
   async () => {
     await using deployment = await fakeDeployment();
-    using folder = temporaryDirectory();
+    using folder = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     // the file's folder is a package with its own dependency, which this CLI does not have
     writeFileSync(join(folder.path, "package.json"), JSON.stringify({ type: "module" }));
     mkdirSync(join(folder.path, "node_modules/greeting"), { recursive: true });
@@ -109,7 +109,7 @@ test(
 );
 
 test("a file whose dependency is not installed names the folder to install in, before any sign-in; a file with no default export says what to export", async () => {
-  using temporary = temporaryDirectory();
+  using temporary = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // Node names the file by its real path (macOS's temp dir is a symlink into /private)
   const folder = { path: realpathSync(temporary.path) };
   writeFileSync(join(folder.path, "package.json"), JSON.stringify({ type: "module" }));
@@ -256,7 +256,7 @@ async function fakeDeployment() {
 /** A config naming `baseUrl` with a stored token, and `provide` run as a child process: `live`
  *  answers the line it prints once lent, `stop` sends Ctrl-C and answers the exit code. */
 function cliConfig(baseUrl: string) {
-  const config = temporaryDirectory();
+  const config = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   mkdirSync(join(config.path, "iterate"));
   writeFileSync(
     join(config.path, "iterate/config.json"),

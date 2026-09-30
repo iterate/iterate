@@ -1,11 +1,11 @@
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { mkdirSync, utimesSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import path from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test } from "vitest";
 import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
 import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
-import { viteWranglerConfig } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
+import { viteWranglerConfig } from "../../core/os/scripts/generate-wrangler-config.ts";
 import {
   APPS,
   appSignInLink,
@@ -58,7 +58,7 @@ test("a deployment's name is its prefix and the tested commit's first 7 digits: 
   );
 });
 
-test("a deployment is derived from its name alone: eight plain workers on the dev/preview account, apps/os's resources named after its worker", () => {
+test("a deployment is derived from its name alone: eight plain workers on the dev/preview account, core/os's resources named after its worker", () => {
   expect(previewDeployment("pr3144-a1b2c3d")).toMatchObject({
     prefix: "pr3144",
     sha: "a1b2c3d",
@@ -313,7 +313,7 @@ test.for([
   },
   {
     name: "a PR that changes no template links each by name",
-    changedPaths: ["apps/os/src/worker.ts", "configs/README.md"],
+    changedPaths: ["core/os/src/worker.ts", "configs/README.md"],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       { name: "minimal", next: `${DASH}/projects?new=1&template=minimal` },
@@ -343,10 +343,10 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   });
 });
 
-// ── a deployment's wrangler config: the one prd's goes through (apps/os/scripts/generate-wrangler-config.ts) ──
+// ── a deployment's wrangler config: the one prd's goes through (core/os/scripts/generate-wrangler-config.ts) ──
 
 // iterate's deployments' Artifacts namespace, R2 bucket and D1: each `<resourceNamePrefix>-…`
-// (apps/os/scripts/os-env.ts `osResourceNames`), the prefix envs.ts gives it.
+// (core/os/scripts/os-env.ts `osResourceNames`), the prefix envs.ts gives it.
 test.for([
   { name: "prd", repos: "os-prd-repos", files: "os-prd-files", db: "os-prd-db" },
   { name: "preview", repos: "os-parent-repos", files: "os-parent-files", db: "os-parent-db" },
@@ -364,7 +364,7 @@ test.for([
   });
 });
 
-test("a deployment's apps/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
+test("a deployment's core/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
   const config = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(config).toMatchObject({
     name: "pr3144-a1b2c3d-os",
@@ -386,7 +386,7 @@ test("a deployment's apps/os config: its own worker, KV binding-only for wrangle
   ]);
 });
 
-test("a deployment's apps/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
+test("a deployment's core/os config: vars are its own origin, its dash, projects as paths, prd's admins signing in through prd beside one test admin, and the pet shop's fakes as iterate's integrations, which test people sign in with too", () => {
   expect(
     viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" }),
   ).toMatchObject({
@@ -427,7 +427,7 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
   ).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__GITHUB");
 });
 
-test("a deployment's apps/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
+test("a deployment's core/os config parses as its worker parses it, with the two secrets every deploy ships", () => {
   const { vars } = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
   expect(
     parseAppConfig({
@@ -455,7 +455,7 @@ test("an envs.ts deployment's config still names its resources by id, and turns 
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__ADMIN_ISSUER");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_LOGIN__TEST_EMAIL_DOMAIN");
   expect(config.vars).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__SLACK");
-  expect(() => getOsEnv("pr3144")).toThrow('apps/os: unknown env "pr3144"');
+  expect(() => getOsEnv("pr3144")).toThrow('core/os: unknown env "pr3144"');
 });
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then
@@ -491,7 +491,7 @@ const later = new Date("2026-09-24T00:42:00Z");
 /** A checkout: its lockfile, and node_modules as pnpm leaves it (`.modules.yaml`, and the
  *  lockfile it installed from as `.pnpm/lock.yaml`), each file with its mtime. */
 function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [string, Date] }) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(path.join(tmpdir(), "iterate-test-"));
   onTestFinished(directory[Symbol.dispose]);
   const root = directory.path;
   writeFileSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[0]);

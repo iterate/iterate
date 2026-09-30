@@ -29,7 +29,7 @@ shrink the fixture.
 
 Use a personal access token for the chat's project as `ITERATE_BEARER_TOKEN`, or, for a project
 nobody at hand belongs to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
-([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)). Keep it in the
+([credentials](../../../core/os/docs/credentials.md#personal-access-tokens)). Keep it in the
 command's environment and never print it.
 
 Save this in your scratchpad as `dump-agent.js`, with the agent's path filled in:
@@ -101,13 +101,13 @@ provider error the loop recovered from is usually not the complaint.
 Pick the narrowest layer that shows the complaint. Every layer here runs in node, with no
 deployment and no real model.
 
-| The complaint is about…                                               | Test next to                                                                                                  |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets             |
-| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                         |
-| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                               |
-| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent           |
-| an effect: a model call, a script run, the birth or death sagas       | `apps/agents/e2e/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
+| The complaint is about…                                               | Test next to                                                                                                     |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| what the chat shows (missing, duplicated or wrong rows)               | `apps/agents/src/lib/agent-events.test.ts`: `toAgentEvent` → `reduceAgentFeed`, with real offsets                |
+| the reducer behind the agent UI                                       | `apps/agents/src/lib/events/agent-ui-reducer.test.ts`                                                            |
+| what the loop decides (a missing request, a stuck trigger, a breaker) | `packages/agents/src/processor.test.ts`: `reduceProcessor` rows                                                  |
+| a voice call                                                          | `packages/voice/src/voice-agent.test.ts`: what a delegation hands the agent, what the voice is sent              |
+| an effect: a model call, a script run, the birth or death sagas       | `test/vitest/agents/agents.e2e.test.ts`, with a fake `itx.ai` lent by rule (commands in `apps/agents/README.md`) |
 
 - Save the dump as a JSON fixture beside the test, named for the complaint
   (`<complaint>.repro.json`, with the test in `<complaint>.repro.test.ts`). At dump time,

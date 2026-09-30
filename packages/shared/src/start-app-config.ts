@@ -1,5 +1,5 @@
 // start-app-config.ts — THE CONFIGURATION OF AN APP ON TOP of the platform: dash, agents, notes,
-// docs, admin, voice and kit, TanStack Start apps that are each an OAuth client of apps/os and nothing
+// docs, admin, voice and kit, TanStack Start apps that are each an OAuth client of core/os and nothing
 // else — but notes and docs, which a project's config worker serves under its hosts, on the host's sign-in. The platform's mechanism (app-config.ts): one `APP_CONFIG` object, and any key set alone
 // as an `APP_CONFIG_*` var merged on top.
 //
@@ -15,14 +15,14 @@
 //   APP_CONFIG_URLS__VOICE=http://localhost:5174
 
 import { z } from "zod";
-import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "./app-config.ts";
+import { dnsName, httpOrigin, optionalOrigin, parseAppConfigVars } from "iterate/app-config";
 
 /** THE SCHEMA. `urls` names the platform and every first-party app (scripts/lib/start-app.ts
  *  `FIRST_PARTY_APPS` is typed against it, so an app added there is added here). */
 export const StartAppConfig = z.object({
   urls: z
     .object({
-      /** THE PLATFORM this app signs in against (apps/os): the default issuer, and `/api` on it the
+      /** THE PLATFORM this app signs in against (core/os): the default issuer, and `/api` on it the
        *  resource. Kit can also sign a device in to another platform a link names (device-auth.ts). */
       os: httpOrigin,
       // THE FIRST-PARTY APPS, what a link from one app to another follows: the dash's directory of
@@ -52,8 +52,8 @@ export const StartAppConfig = z.object({
    *  posthog-js with it. A public key, not a secret. Blank ⇒ no PostHog. */
   posthogProjectKey: z.string().trim().default(""),
   /** WHICH BUILD OF THIS REPOSITORY'S PACKAGES goes with this deployment, as pkg.pr.new names it
-   *  (@iterate-com/shared/pkg-pr-new): `main`, or the commit a per-commit deployment's packages are
-   *  published at (apps/os scripts/published-package-commit.ts). What an app installs in a project,
+   *  (iterate/pkg-pr-new): `main`, or the commit a per-commit deployment's packages are
+   *  published at (core/os scripts/published-package-commit.ts). What an app installs in a project,
    *  pinned as it writes (Docs' "Install Docs"). A config written without it (a test's) goes with
    *  main's. */
   pkgPrNewRef: z.string().trim().default("main"),

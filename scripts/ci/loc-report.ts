@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { extname, join, matchesGlob } from "node:path";
 
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { decode } from "@jridgewell/sourcemap-codec";
 import { parseSync, Visitor } from "oxc-parser";
 import { transformSync } from "oxc-transform";
@@ -25,18 +24,18 @@ export const groups: Array<{ name: string; glob: string; priority: number }> = [
   // routeTree.gen.ts) also land here, ahead of every glob - see computeReport.
   { name: "Generated", glob: "{**/.generated/**,**/generated/**,**/*.generated.*}", priority: 9 },
   {
-    // the root spec suite with its harness (specs/test-support, specs/setup.ts), the Workers
+    // the root spec suite with its harness (test/helpers, test/playwright/global-setup.ts), the Workers
     // suites and support, and a unit test's support beside it (src/stream/test-support.ts,
     // src/stream/memory-budget.test-support.ts)
     name: "Tests",
-    glob: "{**/*.{test,spec,test-support}.*,**/test-support.*,**/{e2e,tests,__tests__,__workers-tests__,test-helpers,test-support}/**,specs/**}",
+    glob: "{**/*.{test,spec,test-support}.*,**/test-support.*,**/{e2e,tests,__tests__,__workers-tests__,test-helpers,test-support}/**,test/**}",
     priority: 4,
   },
   { name: "UI components", glob: "{packages/ui/**,**/components/**}", priority: 3 },
   { name: "Docs", glob: "{docs/**,**/*.md}", priority: 7 },
   { name: "CI & scripts", glob: "{.depot/**,.github/**,scripts/**,**/scripts/**}", priority: 5 },
   { name: "Config", glob: "**/*.{json,jsonc,json5,yml,yaml,toml}", priority: 6 },
-  { name: "Product", glob: "{apps,packages}/**", priority: 1 },
+  { name: "Product", glob: "{apps,core,packages}/**", priority: 1 },
   // "Other" is the code-level fallback for anything unmatched (globs skip dotfiles, so a
   // literal `**` catch-all wouldn't actually catch everything).
   { name: "Other", glob: "", priority: 8 },
@@ -386,4 +385,4 @@ export default async function locReport(
   );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "loc-report" }).run();
+void createCli({ ...import.meta, name: "loc-report" }).run();

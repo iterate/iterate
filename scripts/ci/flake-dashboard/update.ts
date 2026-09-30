@@ -12,10 +12,9 @@
 // this repository. The Depot app's job token has no Issues permission.
 import { createSign } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { parseAppConfig } from "../../../apps/os/src/app-config.ts";
+import { parseAppConfig } from "../../../core/os/src/app-config.ts";
 import { ciBucketEnvs, getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { dopplerSecret, resolveEnvContext } from "../../lib/env-context.ts";
 import { createOctokit } from "../github.ts";
@@ -158,5 +157,4 @@ async function findDashboardIssue(github: Octokit, repository: { owner: string; 
   return issues.find((issue) => !issue.pull_request && issue.body?.startsWith(DASHBOARD_MARKER));
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "flake-dashboard-update" }).run();
+void createCli({ ...import.meta, name: "flake-dashboard-update" }).run();

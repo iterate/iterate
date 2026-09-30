@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { readFileSync, symlinkSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const projectDir = join(import.meta.dirname, "..", "..");
@@ -104,7 +104,7 @@ function currentHash() {
 // tools. Each hash tool runs whichever SHA-1 tool this machine has (macOS ships `shasum`, Arch
 // Linux only `sha1sum`), so both of the hook's branches hash for real on every machine.
 function pathWith(hashTools: string[]) {
-  const bin = temporaryDirectory();
+  const bin = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   for (const tool of ["cat", "cut"]) symlinkSync(which(tool), join(bin.path, tool));
   const sha1 = which("sha1sum", "shasum");
   for (const tool of hashTools) {

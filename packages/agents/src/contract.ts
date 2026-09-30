@@ -12,7 +12,7 @@
 //   EventInput<typeof AgentContract>                                           what `itx.cd(path).append(…)` takes
 //
 // Its birth is the saga `itx.agents.create(path)` opens: `create-requested`, then `created` — the
-// certificate, cross-posted to `/` for the project catalog (apps/os/src/project/) — with the
+// certificate, cross-posted to `/` for the project catalog (core/os/src/project/) — with the
 // default system prompt beside it; an operator's instructions are their own `context-added` after.
 // From then on everything is THE LOOP: a `context-added` from outside (a person) or from a script's
 // result raises the ONE pending trigger; the loop records the request (`llm-request-requested`),
@@ -28,7 +28,8 @@
 // with a failure's backoff folded into the same window. The script runs against this context's
 // `itx` as it is: no capability host, typecheck or preamble.
 import { z } from "zod";
-import { defineProcessorContract, type ProcessorState } from "iterate/stream/processor";
+// the contract module alone, never the engine: the Agents page loads this file
+import { defineProcessorContract, type ProcessorState } from "iterate/stream/contract";
 import { RunEventCatalog } from "iterate/stream/run";
 
 /** Who put words into the context: a person, a script's result, or the loop itself (a format

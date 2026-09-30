@@ -1,7 +1,7 @@
 // tunnel.test.ts — the tunnel's local proxy, `LocalPortRpcTarget`, against real local servers: what
 // the project host's request becomes on `localhost:<port>`, a WebSocket that keeps the subprotocol
 // the local server chose, and the 502 when nothing listens; and the route `runTunnel` sets. The
-// platform half (the route, the host, the lent stub) is apps/os e2e/tunnel.e2e.test.ts.
+// platform half (the route, the host, the lent stub) is core/os e2e/tunnel.e2e.test.ts.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";

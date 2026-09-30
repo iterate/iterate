@@ -1,0 +1,1364 @@
+// src/secret/durable-object.ts — THE SECRET: the `secret` facet on the context at `/secrets/<name>`
+// (contract.ts) — the material's ONE keeper (this facet's own storage: the record with its material
+// ENCRYPTED, a write counter, the pending OAuth attempt) and the one code that ever sees it in the
+// clear: `fetch(request)`. A request naming this secret arrives from a context's egress
+// (iterate-context-durable-object.ts `#egress`: forwarded to this path, and there to this facet), the
+// placeholder is substituted HERE, the pin checked, the request dispatched — and when the pinned host
+// answers 401, or the material has no `accessToken` yet, the refresh strategy re-mints in this same
+// trusted code and the request is retried ONCE. One facet = one writer: a rotating refresh token is
+// never raced by two contexts. A WebSocket upgrade is a dispatch like any other: the 101 and its
+// socket ride the fetch channel back through the parent to the caller — this facet HOLDS no socket,
+// it dials one and hands it back, so the socket lives as long as the dial does (measured 2026-09-21,
+// test/vitest/os-workers/facets.test.ts: the frames round-trip; the facet's abort
+// closes it, 1006). The one exception is an upgrade whose FRAMES carry the credential (Discord's
+// IDENTIFY; secrets.ts `SECRET_FRAMES_HEADER`): this facet holds the upstream socket and pumps
+// frames, substituting its placeholder in client text frames (`proxyFrames`,
+// test/vitest/os-workers/secret-sockets-over-lends.test.ts).
+//
+// The verbs `itx.secrets` runs (context/built-ins.ts — ON THIS PATH, so the log's order is the
+// storage's, and through the facet host's platform entry: a caller's itx expression reaches the reads
+// alone, `publicMethods`): `write(record)` and `clear()` store and forget the value; the FACTS (`secret/set`,
+// `secret/deleted`, on this path and cross-posted to the owner's root) are the built-in's, attributed
+// to the caller — a facet's own appends speak for the project, so they are not made here.
+// `beginOAuth` keeps the pending attempt and hands back the authorize URL; `completeOAuth` exchanges
+// the code into the record (secret-oauth.ts). A client secret another of the owner's secrets holds is
+// read from that secret's facet at the exchange and at every refresh (`clientSecretFor`), never
+// stored here. The deployment's own app at a provider (an integration's
+// `client: { platform }`, APP_CONFIG `integrations.<provider>`) is attached here, where APP_CONFIG is,
+// and only ever toward that app's own provider; a project's own app is this secret's material. The
+// two facts this facet appends itself, best-effort:
+// `secret/used` per dispatch and `secret/refreshed` per refresh outcome. It hosts the secret processor
+// (processor.ts): `snapshot()` says whether material was set and whether the secret was deleted, by
+// the offsets of the facts that say so. Hosted from `ctx.exports` (first-party-facets.ts): ordinary
+// bundled worker code with the worker's real env — the at-rest key and the signing secret among it.
+// A secret refreshed by EXCHANGE CODE (`refresh: { kind: "worker", source }`) is the one place loaded
+// code runs under this facet, in its jail (exchange-jail.ts): no env, the pin as its only egress.
+
+import { createPrivateKey } from "node:crypto";
+import { createAppAuth } from "@octokit/auth-app";
+import { StreamProcessorDurableObject, type ItxEntrypointService } from "iterate/sdk";
+import type { EventInput } from "iterate/stream/processor";
+import type {
+  SecretEqualsVerification,
+  SecretHmacVerification,
+  SecretMaterial,
+  SecretRefresh,
+} from "iterate/api";
+import { codedError, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
+import { signClaims, verifyAdminSecret } from "../caller.ts";
+import {
+  appConfigOf,
+  atRestKeysOf,
+  sessionSigningSecretOf,
+  type AppConfigEnv,
+} from "../app-config.ts";
+import { contextStub } from "../context-stub.ts";
+import { DurableObjectNameCodec, pathUnderOwner, resourceScope } from "../context/paths.ts";
+import { DROPPED_CLOSE_CODE, relayedCloseCode } from "../context/websocket-close.ts";
+import type { ItxEntrypointScope } from "../iterate-context.ts";
+import { ControlPlane } from "../control-plane/edge.ts";
+import type { IterateContextDurableObject } from "../iterate-context-durable-object.ts";
+import { MOVE_OFFER_TTL_MS, type HeldToken } from "../integrations/connections.ts";
+import { grantedScopesOf, lendVerdict, slackTeamOfTokenResponse } from "../integrations/rules.ts";
+import { xEndpointsOf, XUserResponse } from "../integrations/x.ts";
+import { googleEndpointsOf } from "../integrations/google.ts";
+import { githubApiOriginOf } from "../integrations/github.ts";
+import { cloudflareEndpointsOf } from "../integrations/cloudflare.ts";
+import {
+  decryptSecretMaterial,
+  encryptSecretMaterial,
+  type EncryptedMaterial,
+  type MaterialKeys,
+} from "../secret-at-rest.ts";
+import {
+  beginSecretOAuth,
+  completeSecretOAuth,
+  secretOAuthCallbackPathOf,
+  SECRET_OAUTH_TTL_MS,
+  type NormalizedSecretOAuthOptions,
+  type PendingSecretOAuth,
+  type SecretOAuthState,
+} from "../secret-oauth.ts";
+import {
+  clientSecretReferenceOf,
+  isRecord,
+  LEND_USE_HEADER,
+  LENT_AS_HEADER,
+  oauthTokenRequest,
+  oauthTokensOf,
+  originPinned,
+  pinRefusal,
+  SecretRefused,
+  refreshSecretMaterial,
+  SECRET_FRAMES_HEADER,
+  secretMaterialStringOf,
+  secretPathsIn,
+  signLendUse,
+  substituteProjectSecrets,
+  substituteSecretInFrame,
+  verifySecretEquals,
+  verifySecretHmac,
+  type SecretRecord,
+} from "../secrets.ts";
+import { SecretContract, type LendRevokedReason, type SecretState } from "./contract.ts";
+import { runExchangeCode } from "./exchange-jail.ts";
+import { SecretProcessor } from "./processor.ts";
+
+/** The deployment's apps a strategy names as its client (`{ platform }`, secrets.ts). */
+type OAuthPlatform = NonNullable<
+  Extract<SecretRefresh, { kind: "oauth-refresh-token" }>["client"]
+>["platform"];
+
+/** What sits in storage. `stored` is the record with the revision it was written at — its material
+ *  ENCRYPTED (secret-at-rest.ts), bound to this context, the pin and that revision; `revision` is
+ *  THE WRITE COUNTER every change bumps (`write`, `clear`, `beginOAuth`) — a refresh commits only
+ *  against the revision it read, and a code exchange only against the counter it started at, so a
+ *  write or a clear racing either never has its outcome overwritten by a mint or an exchange from
+ *  before it. The counter is never reset: a `clear` bumps it too, so a delete followed by a new
+ *  write can never present the number a stale mint is waiting for. `pending` is the OAuth attempt in
+ *  flight; `completed` the last one finished (its nonce and the revision it wrote), so its callback
+ *  completes idempotently instead of exchanging twice. */
+type Stored = {
+  record: Omit<SecretRecord, "material"> & { material: EncryptedMaterial };
+  revision: number;
+};
+
+/** A CONSENT'S EXCHANGE HELD ASIDE (storage `held`): iterate's Slack app's token for a workspace
+ *  another project's connection holds, never stored here (`completeOAuth`'s gate) — it waits,
+ *  unused, until that workspace's move here admits it (`admitHeldToken`), before `until`. Its
+ *  material encrypted like `stored`'s, at the revision it was held at: any write since (`write`,
+ *  `clear`, a new `beginOAuth`) drops it, and so do the move's failure (`dropHeldToken`) and its
+ *  expiry (`revive`, on the context's alarm). */
+type HeldExchange = Stored & {
+  nonce: string;
+  scopes: string[];
+  until: number;
+  team: { id: string; name: string };
+};
+
+/** THE LENDS of this secret (storage `lends`), by lend id: the project it is lent to (or
+ *  `every-project`) and the path it is lent as there. A revoked lend is gone. A lend to every project
+ *  keeps each project that borrows it under its own key (`borrowerKey`), so a revocation reaches
+ *  them all and one project's return ends the lend for it alone. */
+type Lends = Record<string, { to: string; as: string }>;
+
+/** A project that borrows a lend to every project: its storage key. */
+const borrowerKey = (lendId: string, projectId: string) => `borrower:${lendId}:${projectId}`;
+
+/** The lends a `clear` or an `endLend` ended, each with the projects it reached. */
+type EndedLends = Record<string, { to: string; as: string; borrowers: string[] }>;
+
+/** THE LENDS ENDED HERE WHOSE OTHER SIDE IS NOT DONE (storage `ending`): each one's fact and the
+ *  projects it reached still to be told (context/built-ins.ts `finishEndedLend`), kept until they are,
+ *  so a retry of the revocation or the delete that ended it finishes it. Admission refuses them:
+ *  they are no longer in `lends`. */
+type EndingLends = Record<
+  string,
+  { to: string; as: string; borrowers: string[]; reason: LendRevokedReason }
+>;
+
+/** A BORROWED secret's record (storage `borrowed`, instead of `stored`): the lender's secret context
+ *  (its Durable Object name), its path under the lender's root and the lend. No material. */
+type Borrowed = { lender: string; lenderPath: string; lendId: string };
+
+/** THE FIELDS A REFRESH STRATEGY MINTS into a secret's material (secrets.ts `refreshSecretMaterial`,
+ *  `#githubInstallationToken`, exchange code's `accessToken`): a merge that changes the strategy
+ *  drops them (`write`). */
+const MINTED_FIELDS: string[] = ["accessToken", "expiresAt"];
+
+/** How long a use trusts an installation's route read for an earlier use (`#assertInstallationRouted`):
+ *  the most a project that lost an installation keeps using a token it had minted. */
+const INSTALLATION_ROUTE_RECHECK_MS = 30_000;
+
+export class SecretDurableObject extends StreamProcessorDurableObject<
+  SecretState,
+  {
+    ITX?: ItxEntrypointService;
+    DB: D1Database;
+    ITERATE_CONTEXT: DurableObjectNamespace<IterateContextDurableObject>;
+    LOADER: WorkerLoader;
+  } & AppConfigEnv,
+  ItxEntrypointScope
+> {
+  /** The secret's READS alone — whether material was set and whether it was deleted, by the offsets
+   *  of the facts that say so. Everything else here is the platform's: `write`, `clear`,
+   *  `beginOAuth`, `completeOAuth`, `verifyHmac` and `clientSecretFor` are `itx.secrets`'s
+   *  (context/built-ins.ts, whose verbs append the attributed facts), `fetch` is egress's and
+   *  `exportForProjectSeed` the operator's native RPC — each reaches this facet through the facet
+   *  host's platform entry. */
+  static override publicMethods = ["snapshot", "liveSnapshot", "waitUntilProcessed"];
+
+  processor = new SecretProcessor();
+
+  /** The one refresh in flight, keyed by the revision it read (single-flight: N callers who 401
+   *  together on the same material share ONE mint). A caller holding a NEWER revision — a write
+   *  landed while a mint for the old material was running, and the fence will drop that mint — is
+   *  never coalesced onto it: its own mint queues behind the running one. */
+  #refreshing: { revision: number; promise: Promise<void> } | undefined;
+
+  /** When each iterate-App installation's route to this project was last read for a use
+   *  (`#assertInstallationRouted`), by installation id. */
+  readonly #installationRouteReadAt = new Map<string, number>();
+  /** When each iterate-Slack-app workspace's route was last read for a use (`#assertWorkspaceNotMoved`). */
+  readonly #workspaceRouteReadAt = new Map<string, number>();
+
+  /** This facet's identity, from its context's name (`ctx.props`, sdk/index.ts): the context, and
+   *  the PATH THE PLACEHOLDER SPELLS — the context's path relative to the resource owner's root
+   *  (context/paths.ts `resourceScope`): `/secrets/shop` for a project's `/secrets/shop` and for a
+   *  user's `/users/<id>/secrets/shop` alike. */
+  #address(): { context: string; path: string } {
+    const context = this.ctx.props.iterateContextName;
+    const { projectId, path } = DurableObjectNameCodec.parse(context);
+    return { context, path: pathUnderOwner(resourceScope(projectId, path), path) };
+  }
+
+  /** Replace the record whole — material always travels with its complete policy, so a value
+   *  never inherits a pin or a strategy it was not set with — or, with `merge`, the record's fields
+   *  over the stored material's, under the same pin. What a strategy MINTED belongs to that
+   *  strategy: a merge that changes or removes `refresh` drops it (`MINTED_FIELDS`), so a token
+   *  minted under one strategy — an installation's, which its route guards — never outlives it
+   *  under another, or under none. The caller (`itx.secrets.set`) has appended the fact already;
+   *  this is the value. */
+  async write(record: SecretRecord, merge = false): Promise<void> {
+    const stored = merge ? await this.ctx.storage.get<Stored>("stored") : undefined;
+    if (stored) {
+      // the pin travels with the material it guards: a merge never moves stored material elsewhere
+      if ([...stored.record.urls].sort().join() !== [...record.urls].sort().join())
+        throw new Error(`secrets: a merge keeps the pin ${stored.record.urls.join(", ")}`);
+      const opened = await this.#opened(stored);
+      const kept = isRecord(opened.material) ? { ...opened.material } : {};
+      if (!jsonEqual(opened.refresh || null, record.refresh || null))
+        for (const field of MINTED_FIELDS) delete kept[field];
+      // the workspace a token is refused for travels with it, like the pin
+      record = {
+        ...record,
+        material: { ...kept, ...(isRecord(record.material) && record.material) },
+        routedAccount: opened.routedAccount,
+      };
+    }
+    const revision = await this.#bump();
+    await this.ctx.storage.put<Stored>("stored", await this.#sealed(record, revision));
+    // A write supersedes any OAuth attempt in flight, a held one included: its callback must not
+    // overwrite this material; and material of its own replaces a borrowed record.
+    await this.ctx.storage.delete(["pending", "held", "borrowed"]);
+  }
+
+  /** The record as storage holds it: the material encrypted under the deployment's key, bound to
+   *  this context, the pin and the revision it is written at. */
+  async #sealed(record: SecretRecord, revision: number): Promise<Stored> {
+    const material = await encryptSecretMaterial(
+      record.material,
+      { context: this.#address().context, urls: record.urls, revision },
+      this.#keys(),
+    );
+    return { record: { ...record, material }, revision };
+  }
+
+  /** The stored record with its material in the clear, for this facet's own use only. A record
+   *  the previous key opened (a rotation in progress) is written back under the current key here,
+   *  so a rotation completes one read at a time. A record neither key opens — one under a key that
+   *  is gone, or bound elsewhere — is a refusal that names the fix. */
+  async #opened(stored: Stored): Promise<SecretRecord> {
+    const { context, path } = this.#address();
+    const binding = { context, urls: stored.record.urls, revision: stored.revision };
+    let opened: Awaited<ReturnType<typeof decryptSecretMaterial>>;
+    try {
+      opened = await decryptSecretMaterial(stored.record.material, binding, this.#keys());
+    } catch {
+      throw new SecretRefused(
+        `itx.fetch: the stored material of ${path} cannot be opened (a rotated key, or another context's record) — set the secret again`,
+      );
+    }
+    const record = { ...stored.record, material: opened.material };
+    if (opened.rotated) {
+      const current = await this.ctx.storage.get<Stored>("stored");
+      if (current?.revision === stored.revision)
+        await this.ctx.storage.put<Stored>("stored", {
+          ...stored,
+          ...(await this.#sealed(record, stored.revision)),
+        });
+    }
+    return record;
+  }
+
+  #keys(): MaterialKeys {
+    return atRestKeysOf(appConfigOf(this.env));
+  }
+
+  /** Operator recovery exports only the current encrypted value, with its original AAD.
+   * The credential arrives over native RPC, never through project-authored rewrites. Ordinary
+   * facet callers cannot export a cell, even if they own the project. */
+  async exportForProjectSeed(adminSecret: unknown) {
+    if (
+      typeof adminSecret !== "string" ||
+      !(await verifyAdminSecret(
+        adminSecret,
+        appConfigOf(this.env).secrets.adminBearer.exposeSecret(),
+      ))
+    )
+      throw codedError("FORBIDDEN", "Secret recovery exports require operator authority.");
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored)
+      throw codedError("INVALID_INPUT", "This secret has no current material to back up.");
+    const { context, path } = this.#address();
+    return { context, path, revision: stored.revision, ...stored.record };
+  }
+
+  /** The write counter, bumped: the number the write that follows is fenced by. */
+  async #bump(): Promise<number> {
+    const revision = ((await this.ctx.storage.get<number>("revision")) ?? 0) + 1;
+    await this.ctx.storage.put("revision", revision);
+    return revision;
+  }
+
+  /** Forget the record and any attempt — a write like any other (the counter moves on, so a mint or
+   *  an exchange started before the clear cannot land after it, even under a new write). */
+  async clear(): Promise<{ lends: EndedLends; borrowed: Borrowed | null }> {
+    await this.#bump();
+    const lends: EndedLends = {};
+    const ending = (await this.ctx.storage.get<EndingLends>("ending")) ?? {};
+    for (const [lendId, lend] of Object.entries(
+      (await this.ctx.storage.get<Lends>("lends")) ?? {},
+    )) {
+      lends[lendId] = { ...lend, borrowers: await this.#takeBorrowers(lendId, lend) };
+      ending[lendId] = { ...lends[lendId]!, reason: "lender" };
+    }
+    const borrowed = (await this.ctx.storage.get<Borrowed>("borrowed")) ?? null;
+    await this.ctx.storage.put<EndingLends>("ending", ending);
+    await this.ctx.storage.delete(["stored", "pending", "held", "completed", "lends", "borrowed"]);
+    // what the clear ended, for the built-in to end on the other side (context/built-ins.ts `delete`)
+    return { lends, borrowed };
+  }
+
+  /** The projects a lend reaches, forgotten here: a lend to every project's borrowers, or the one
+   *  project it is lent to. */
+  async #takeBorrowers(lendId: string, lend: { to: string }): Promise<string[]> {
+    if (lend.to !== "every-project") return [lend.to];
+    const prefix = borrowerKey(lendId, "");
+    const keys = [...(await this.ctx.storage.list({ prefix })).keys()];
+    for (let at = 0; at < keys.length; at += 128)
+      await this.ctx.storage.delete(keys.slice(at, at + 128));
+    return keys.map((key) => key.slice(prefix.length));
+  }
+
+  // ── LENDS: a person's account connected to a project, or the deployment's own secret (the
+  // operator's) lent to projects — used by the project, the material never leaving this facet. The
+  // platform's `connectToProject` or the operator's `itx.secrets.lend` keeps the lend here (`lend`)
+  // and the borrower's path keeps only `{ lender, lendId }` (`borrow`); a use of the borrowed path is
+  // forwarded to the lender's context over its `fetch` with the lend signed
+  // (iterate-context-durable-object.ts `#lentFetch`), admitted here (`admitLend`:
+  // integrations/rules.ts `lendVerdict`) and run by this facet's own dispatch (`fetch` with
+  // `LENT_AS_HEADER`). The facts are the built-ins' (context/built-ins.ts).
+
+  /** Keep a lend: the pin of the material it lends, for the borrower's catalog. */
+  async lend(input: { lendId: string; to: string; as: string }): Promise<{ urls: string[] }> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored)
+      throw codedError(
+        "INVALID_INPUT",
+        `${this.#address().path} holds no material of its own to lend`,
+      );
+    const lends = (await this.ctx.storage.get<Lends>("lends")) ?? {};
+    await this.ctx.storage.put<Lends>("lends", {
+      ...lends,
+      [input.lendId]: { to: input.to, as: input.as },
+    });
+    return { urls: stored.record.urls };
+  }
+
+  /** The live lend of this secret to `projectId`, as `as`, or null: a person's account connected to
+   *  that project already (context/built-ins.ts `connectToProject`, which keeps it again). */
+  async lendOf(projectId: string, as: string): Promise<{ lendId: string } | null> {
+    const lends = (await this.ctx.storage.get<Lends>("lends")) ?? {};
+    const lendId = Object.keys(lends).find(
+      (id) => lends[id]!.to === projectId && lends[id]!.as === as,
+    );
+    return lendId ? { lendId } : null;
+  }
+
+  /** The lend this path borrows, or null (context/built-ins.ts `dropLend`). */
+  async borrowedLendId(): Promise<string | null> {
+    return (await this.ctx.storage.get<Borrowed>("borrowed"))?.lendId ?? null;
+  }
+
+  /** A project borrows a lend to every project (`borrowed`), or its borrow failed and it does not
+   *  (`!borrowed`). The lend and the path it is lent as, or null when the lend is gone. */
+  async everyProjectBorrower(
+    lendId: string,
+    projectId: string,
+    borrowed: boolean,
+  ): Promise<{ as: string; urls: string[] } | null> {
+    const lend = ((await this.ctx.storage.get<Lends>("lends")) ?? {})[lendId];
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!lend || lend.to !== "every-project" || !stored) return null;
+    if (borrowed) await this.ctx.storage.put(borrowerKey(lendId, projectId), true);
+    else await this.ctx.storage.delete(borrowerKey(lendId, projectId));
+    return { as: lend.as, urls: stored.record.urls };
+  }
+
+  /** The lend ended: what it was and the projects it ended for, or null when it is already gone. A
+   *  `borrower` named (the borrower's own delete) must be the one it was lent to — or, a lend to
+   *  every project, ends for that project alone and the lend stands. */
+  async endLend(
+    lendId: string,
+    borrower?: string,
+    reason: LendRevokedReason = "lender",
+  ): Promise<{ to: string; as: string; borrowers: string[] } | null> {
+    const { [lendId]: lend, ...rest } = (await this.ctx.storage.get<Lends>("lends")) ?? {};
+    if (!lend) return null;
+    if (borrower && lend.to === "every-project") {
+      if (!(await this.ctx.storage.get(borrowerKey(lendId, borrower)))) return null;
+      await this.ctx.storage.delete(borrowerKey(lendId, borrower));
+      return { ...lend, borrowers: [borrower] };
+    }
+    if (borrower && lend.to !== borrower) throw new Error("this lend is to another project");
+    const ended = { ...lend, borrowers: await this.#takeBorrowers(lendId, lend) };
+    const ending = (await this.ctx.storage.get<EndingLends>("ending")) ?? {};
+    await this.ctx.storage.put<EndingLends>("ending", {
+      ...ending,
+      [lendId]: { ...ended, reason },
+    });
+    await this.ctx.storage.put<Lends>("lends", rest);
+    return ended;
+  }
+
+  /** The lends ended here whose other side is not done yet (`EndingLends`). */
+  async endingLends(): Promise<EndingLends> {
+    return (await this.ctx.storage.get<EndingLends>("ending")) ?? {};
+  }
+
+  /** A lend's end is done on every side: forgotten — or, with projects still `untold`, kept with
+   *  them alone, for a retry. */
+  async finishEndingLend(lendId: string, untold: string[] = []): Promise<void> {
+    const { [lendId]: ended, ...rest } = (await this.ctx.storage.get<EndingLends>("ending")) ?? {};
+    await this.ctx.storage.put<EndingLends>(
+      "ending",
+      ended && untold.length ? { ...rest, [lendId]: { ...ended, borrowers: untold } } : rest,
+    );
+  }
+
+  /** This path borrows: it holds the lend alone, and every use is forwarded to the lender. */
+  async borrow(borrowed: Borrowed): Promise<void> {
+    // coded: a lend to every project skips a project that keeps its own (built-ins.ts `lendInto`)
+    if (await this.ctx.storage.get<Stored>("stored"))
+      throw codedError(
+        "INVALID_INPUT",
+        `${this.#address().path} holds a secret of its own — delete it first`,
+      );
+    // one lend per path: a second would leave the first live at its lender, unseen
+    const held = await this.ctx.storage.get<Borrowed>("borrowed");
+    if (held && held.lendId !== borrowed.lendId)
+      throw new Error(`${this.#address().path} borrows another lend already — delete it first`);
+    await this.#bump();
+    await this.ctx.storage.put<Borrowed>("borrowed", borrowed);
+  }
+
+  /** The lend this path borrows ended at the lender: forget it. False when this path borrows
+   *  another lend, or none. */
+  async dropBorrowed(lendId: string): Promise<boolean> {
+    const borrowed = await this.ctx.storage.get<Borrowed>("borrowed");
+    if (borrowed?.lendId !== lendId) return false;
+    await this.#bump();
+    await this.ctx.storage.delete("borrowed");
+    return true;
+  }
+
+  /** Whether `borrower` may use this secret under the lend: the path it borrows as, or why not. */
+  async admitLend(input: {
+    lendId: string;
+    borrower: string;
+  }): Promise<{ as: string } | { refused: string; revoke?: "membership-ended" }> {
+    const lend = ((await this.ctx.storage.get<Lends>("lends")) ?? {})[input.lendId] ?? null;
+    const { projectId, path } = DurableObjectNameCodec.parse(this.#address().context);
+    const owner = resourceScope(projectId, path);
+    const borrowing =
+      lend?.to === "every-project" &&
+      Boolean(await this.ctx.storage.get(borrowerKey(input.lendId, input.borrower)));
+    const lender =
+      owner.kind === "global"
+        ? ("instance" as const)
+        : {
+            reachesBorrower:
+              lend?.to === input.borrower &&
+              owner.kind === "users" &&
+              (await new ControlPlane(this.env).reachesProject(
+                { userId: owner.ownerId },
+                input.borrower,
+              )),
+          };
+    return lendVerdict({ lend, borrower: input.borrower, borrowing, lender });
+  }
+
+  /** THE VERIFY OPERATION (for webhooks): is `signature` the HMAC-SHA256
+   *  of `payload` under this secret's material? The material is opened HERE and the answer is one
+   *  bit — nothing comes out, and no request goes anywhere, so the pin is not consulted. The
+   *  candidate arrives from an unauthenticated caller (a webhook): a secret never set, or a material
+   *  with no key at the field, answers false rather than describing itself; the comparison is
+   *  constant-time. */
+  async verifyHmac(input: SecretHmacVerification): Promise<boolean> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) return false;
+    const { material } = await this.#opened(stored);
+    return verifySecretHmac(material, input);
+  }
+
+  /** THE EQUALS OPERATION: is `value` this secret's string (at `field`)? Opened HERE, one bit out,
+   *  the pin not consulted, exactly as `verifyHmac`: a secret never set or a material with no string
+   *  at the field answers false, and the comparison is constant-time. */
+  async verifyEquals(input: SecretEqualsVerification): Promise<boolean> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored) return false;
+    const { material } = await this.#opened(stored);
+    return verifySecretEquals(material, input);
+  }
+
+  /** OAUTH, step one: keep the pending attempt, hand back the authorize URL. The `state` is a
+   *  platform-signed claim naming this context, a nonce only this attempt knows and `next`; the
+   *  redirect URI is the platform's callback for the client (secret-oauth.ts). A new attempt replaces an unfinished one;
+   *  the record, if any, stays until the exchange writes over it. Nothing lands on any log until the
+   *  exchange succeeds — an abandoned attempt leaves no trace. */
+  async beginOAuth(
+    options: NormalizedSecretOAuthOptions,
+    /** the platform origin the callback hangs under — the caller's (a facet knows none itself) */
+    platformOrigin: string,
+  ): Promise<{ authorizationUrl: string; nonce: string }> {
+    const config = appConfigOf(this.env);
+    const nonce = crypto.randomUUID();
+    const state: SecretOAuthState = {
+      kind: "secret-oauth",
+      context: this.#address().context,
+      nonce,
+      exp: Date.now() + SECRET_OAUTH_TTL_MS,
+      next: options.next,
+    };
+    const { clientId, clientSecret } = await this.#oauthClientOf(options);
+    // a placeholder that cannot resolve is refused now, before a human is sent to consent
+    await this.#clientSecretOf(clientSecret, options.tokenEndpoint);
+    const { pending, authorizationUrl } = await beginSecretOAuth(
+      { ...options, clientId },
+      {
+        redirectUri: `${platformOrigin}${secretOAuthCallbackPathOf(options.client)}`,
+        state: await signClaims(state, await sessionSigningSecretOf(config)),
+        nonce,
+      },
+    );
+    await this.#bump(); // a new attempt is a write: an exchange started before it will not land
+    await this.ctx.storage.put<PendingSecretOAuth>("pending", pending);
+    await this.ctx.storage.delete("held");
+    // the nonce names this attempt to whoever finishes it (integrations/verbs.ts): the callback
+    // carries it, signed, in `state`
+    return { authorizationUrl, nonce };
+  }
+
+  /** The OAuth client an attempt exchanges with, and the material kept beside its tokens: the one
+   *  passed in the clear; the deployment's app (`{ platform }`), refused toward any endpoint but its
+   *  own provider's — the exchange, and every refresh after it, would carry its secret there; or
+   *  the project's own app, which this secret's material holds (`{ project }`). */
+  async #oauthClientOf(options: {
+    client: NormalizedSecretOAuthOptions["client"] | { platform: OAuthPlatform };
+    clientId: string;
+    clientSecret: string;
+    authorizationEndpoint?: string;
+    tokenEndpoint: string;
+  }): Promise<{ clientId: string; clientSecret: string; kept: Record<string, unknown> }> {
+    const { client } = options;
+    if (!client)
+      return { clientId: options.clientId, clientSecret: options.clientSecret, kept: {} };
+    if ("platform" in client) {
+      const app = this.#platformOAuthApp(client.platform);
+      for (const endpoint of [options.authorizationEndpoint, options.tokenEndpoint])
+        if (endpoint && !app.origins.includes(new URL(endpoint).origin))
+          throw new Error(
+            `secrets: the platform's ${client.platform} app is at ${app.origins.join(", ")} — not ${new URL(endpoint).origin}`,
+          );
+      return { clientId: app.clientId, clientSecret: app.clientSecret, kept: {} };
+    }
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    const kept = stored ? (await this.#opened(stored)).material : undefined;
+    if (!isRecord(kept) || typeof kept.clientId !== "string" || !kept.clientId)
+      throw new Error(
+        `${this.#address().path} holds no ${client.project} app — set it to { clientId, clientSecret, … } first`,
+      );
+    const clientSecret = typeof kept.clientSecret === "string" ? kept.clientSecret : "";
+    return { clientId: kept.clientId, clientSecret, kept };
+  }
+
+  /** The deployment's app at a provider (APP_CONFIG `integrations.<provider>`) and the origins its
+   *  provider's OAuth endpoints answer on; refused when the deployment has none. GitHub's is the
+   *  App's user-authorization client (a GitHub sign-in's token refreshes with it). */
+  #platformOAuthApp(provider: OAuthPlatform) {
+    const { slack, google, cloudflare, github, x } = appConfigOf(this.env).integrations;
+    const googleEndpoints = googleEndpointsOf(google?.googleOrigin);
+    const app =
+      provider === "x"
+        ? x && {
+            app: x,
+            origins: [
+              new URL(xEndpointsOf(x.xOrigin).authorizationEndpoint).origin,
+              new URL(xEndpointsOf(x.xOrigin).tokenEndpoint).origin,
+            ],
+          }
+        : provider === "slack"
+          ? slack && { app: slack, origins: [slack.slackOrigin] }
+          : provider === "google"
+            ? google && {
+                app: google,
+                origins: [
+                  ...new Set(
+                    [googleEndpoints.authorizationEndpoint, googleEndpoints.tokenEndpoint].map(
+                      (endpoint) => new URL(endpoint).origin,
+                    ),
+                  ),
+                ],
+              }
+            : provider === "cloudflare"
+              ? cloudflare && {
+                  app: cloudflare,
+                  origins: [
+                    new URL(cloudflareEndpointsOf(cloudflare.cloudflareOrigin).tokenEndpoint)
+                      .origin,
+                  ],
+                }
+              : github && { app: github, origins: [github.githubOrigin] };
+    if (!app)
+      throw new Error(
+        `secrets: this deployment has no ${provider} app (APP_CONFIG integrations.${provider} is unset)`,
+      );
+    return {
+      clientId: app.app.oauthClientId,
+      clientSecret: app.app.oauthClientSecret.exposeSecret(),
+      origins: app.origins,
+    };
+  }
+
+  /** THE CLIENT SECRET AS SENT to `tokenEndpoint` by the code exchange and every refresh: the one
+   *  held, or, when it is a placeholder (secrets.ts `clientSecretReferenceOf`), the value the secret
+   *  it names holds now. That secret is under this one's owner, never this one, and answers only
+   *  for an origin it is pinned to (`clientSecretFor`). The value is read at each request and
+   *  stored nowhere here, so a rotation takes effect at the next one. */
+  readonly #clientSecretOf = async (clientSecret: string, tokenEndpoint: string) => {
+    const reference = clientSecretReferenceOf(clientSecret);
+    if (!reference) return clientSecret;
+    const { context, path } = this.#address();
+    if (reference.path === path)
+      throw codedError(
+        "INVALID_INPUT",
+        `secrets: the client secret getSecret("${reference.path}") names ${path} itself — collect the client secret into a secret of its own`,
+      );
+    const { projectId, path: contextPath } = DurableObjectNameCodec.parse(context);
+    const owner = resourceScope(projectId, contextPath);
+    const address = DurableObjectNameCodec.address({
+      projectId,
+      path: resolveContextPath(owner.rootPath, `.${reference.path}`),
+    });
+    const input = { origin: new URL(tokenEndpoint).origin, field: reference.field };
+    // The platform-only built-in answers the named secret's facet's `clientSecretFor`: a string.
+    return (await contextStub(this.env.ITERATE_CONTEXT, address, "secret.client-secret").invoke(
+      ["itx", "builtins", "secrets", ["clientSecretFor", reference.path, input]],
+      [],
+      { principal: null, platform: true },
+    )) as string;
+  };
+
+  /** A CLIENT SECRET THIS SECRET HOLDS, for another secret's token request to `origin`
+   *  (`#clientSecretOf`, over the platform-only `itx.secrets.clientSecretFor`) or a webhook's
+   *  signature to it (context/built-ins.ts `webhookSigningKey`): the value, or the
+   *  string at `field` of a JSON one, while `origin` is in the pin, which binds this use as it binds
+   *  every other. Only material of its own: a borrowed secret is refused. Never in `publicMethods`. */
+  async clientSecretFor(input: { origin: string; field?: string }): Promise<string> {
+    const { path } = this.#address();
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (!stored)
+      throw codedError(
+        "INVALID_INPUT",
+        (await this.ctx.storage.get<Borrowed>("borrowed"))
+          ? `secrets: ${path} is borrowed — a client secret is one of the owner's own secrets`
+          : `secrets: ${path} holds no secret — collect the client secret there first (itx.secrets.collectFromUser)`,
+      );
+    if (!originPinned(input.origin, stored.record.urls))
+      throw codedError(
+        "INVALID_INPUT",
+        `secrets: the secret ${path} is pinned to ${stored.record.urls.join(", ")}, not ${input.origin} — the token endpoint's origin — so it is never sent there as a client secret`,
+      );
+    let record: SecretRecord;
+    try {
+      record = await this.#opened(stored);
+      await this.#assertInstallationRouted(record.refresh);
+      await this.#assertWorkspaceNotMoved(record.routedAccount);
+    } catch (error) {
+      // the refusals egress answers 502 are this caller's expected outcomes too
+      if (!(error instanceof SecretRefused)) throw error;
+      throw codedError("INVALID_INPUT", error.message.replace(/^itx\.fetch: /, "secrets: "));
+    }
+    const value = secretMaterialStringOf(record.material, input.field);
+    if (value) return value;
+    throw codedError(
+      "INVALID_INPUT",
+      input.field
+        ? `secrets: ${path} has no string at field "${input.field}"`
+        : typeof record.material === "string"
+          ? `secrets: ${path} is empty`
+          : `secrets: ${path} is a JSON object: name its field, getSecret("${path}", { field: "…" })`,
+    );
+  }
+
+  /** OAUTH, step two (the callback, through `itx.secrets.completeOAuth` on this path): the code for
+   *  the pending attempt the nonce names → the exchange → the record, as a write. A stale or foreign
+   *  callback (a back button, an older authorize URL, a replay with a junk code) fails without
+   *  touching the live attempt; the attempt is consumed only when its exchange succeeds. The
+   *  exchange lands only if nothing else wrote this facet while the provider was answering: a write
+   *  or a clear in that window wins and the tokens are discarded (from the fence to the completion
+   *  mark only storage awaits follow, which the input gate holds together). Answers the pin and the
+   *  strategy kind the record was stored with — what the fact carries; never the material. IDEMPOTENT for the attempt
+   *  it completed: the same callback again (a refreshed tab, or the built-in retrying after its fact
+   *  append failed) runs no second exchange and answers the same pin, as long as the record is still
+   *  the one this attempt wrote — so the log can always catch up with a live facet. `exchanged` says
+   *  which happened: THIS call wrote the record (the caller may undo it if its fact append fails), or
+   *  a replay found it. `held` says the record was NOT written: iterate's Slack app's token for a
+   *  workspace another project holds waits aside (`HeldExchange`) — the same callback again answers
+   *  it again. */
+  async completeOAuth(input: { code: string; nonce: string }): Promise<{
+    urls: string[];
+    refresh?: SecretRefresh["kind"];
+    exchanged: boolean;
+    scopes: string[];
+    held?: HeldToken;
+  }> {
+    const replayed = await this.#completed(input.nonce);
+    if (replayed) return { ...replayed, exchanged: false };
+    const kept = await this.ctx.storage.get<HeldExchange>("held");
+    if (kept?.nonce === input.nonce && kept.until > Date.now())
+      return {
+        urls: kept.record.urls,
+        refresh: kept.record.refresh?.kind,
+        exchanged: false,
+        scopes: kept.scopes,
+        held: { externalId: kept.team.id, account: kept.team.name, until: kept.until },
+      };
+    const pending = await this.ctx.storage.get<PendingSecretOAuth>("pending");
+    if (!pending || pending.nonce !== input.nonce)
+      throw new Error("no pending attempt matches this callback — begin again");
+    if (pending.until <= Date.now()) {
+      await this.ctx.storage.delete("pending");
+      throw new Error("the attempt expired — begin again");
+    }
+    const started = await this.ctx.storage.get<number>("revision");
+    const credentials = await this.#oauthClientOf(pending.options);
+    // What the provider says it granted, and the Slack workspace, off the token response (rules.ts).
+    let scopes: string[] = [];
+    const answered: { team: ReturnType<typeof slackTeamOfTokenResponse> } = { team: null };
+    const { client, expectAccount } = pending.options;
+    const xClient = client && ("platform" in client ? client.platform : client.project) === "x";
+    const record = await completeSecretOAuth(
+      xClient ? { ...pending, options: { ...pending.options, expectAccount: null } } : pending,
+      input.code,
+      async (exchange) => {
+        if (!originPinned(exchange.url, pending.options.urls))
+          throw new Error(`the token endpoint ${new URL(exchange.url).origin} is outside the pin`);
+        const response = await dispatch(exchange);
+        const answer: unknown = await response
+          .clone()
+          .json()
+          .catch(() => null);
+        scopes = grantedScopesOf(answer, pending.options.scope || "");
+        answered.team = slackTeamOfTokenResponse(answer);
+        return response;
+      },
+      credentials,
+      this.#clientSecretOf,
+    );
+    // X has no ID token: verify the new credential before the revision fence and the write.
+    // https://docs.x.com/x-api/users/get-my-user
+    if (xClient && expectAccount) {
+      const endpoint = xEndpointsOf(new URL(pending.options.tokenEndpoint).origin).userEndpoint;
+      if (!originPinned(endpoint, record.urls))
+        throw new Error("X identity endpoint is outside the pin");
+      const identity = await dispatch(
+        new Request(endpoint, {
+          headers: {
+            authorization: `Bearer ${secretMaterialStringOf(record.material, "accessToken")}`,
+          },
+          redirect: "manual",
+        }),
+      );
+      if (!identity.ok) {
+        await identity.body?.cancel();
+        throw new Error(`X account lookup answered ${identity.status}`);
+      }
+      const { data } = XUserResponse.parse(await identity.json());
+      if (data.id !== expectAccount)
+        throw codedError(
+          "IDENTITY_CONFLICT",
+          "X authorized a different account; connect it as a new connection instead.",
+        );
+    }
+    const slackTeam =
+      client && "platform" in client && client.platform === "slack" ? answered.team : null;
+    if (slackTeam) record.routedAccount = { provider: "slack", externalId: slackTeam.id };
+    // read before the fence, which only storage awaits may follow
+    const hold = Boolean(slackTeam && (await this.#routedToAnotherProject(slackTeam.id)));
+    const until = Date.now() + MOVE_OFFER_TTL_MS;
+    // the context's alarm revives this facet when the offer runs out, which drops the token
+    if (hold) {
+      using itx = this.getItx();
+      await itx.processors.claim(this.ctx.props.name, until);
+    }
+    if ((await this.ctx.storage.get<number>("revision")) !== started)
+      throw new Error(
+        "the secret was changed while the provider was answering — the tokens were discarded; begin again",
+      );
+    if (slackTeam && hold) {
+      const held: HeldExchange = {
+        ...(await this.#sealed(record, started ?? 0)),
+        nonce: input.nonce,
+        scopes,
+        until,
+        team: slackTeam,
+      };
+      await this.ctx.storage.put<HeldExchange>("held", held);
+      await this.ctx.storage.delete("pending");
+      return {
+        urls: record.urls,
+        refresh: record.refresh?.kind,
+        exchanged: true,
+        scopes,
+        held: { externalId: slackTeam.id, account: slackTeam.name, until },
+      };
+    }
+    await this.write(record);
+    const revision = await this.ctx.storage.get<number>("revision");
+    await this.ctx.storage.put("completed", { nonce: input.nonce, revision, scopes });
+    return { urls: record.urls, refresh: record.refresh?.kind, exchanged: true, scopes };
+  }
+
+  /** What the attempt `nonce` completed, while the record is still the one it wrote (a replay's
+   *  answer), or null; one it completed that was written or cleared since is refused. */
+  async #completed(
+    nonce: string,
+  ): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"]; scopes: string[] } | null> {
+    const completed = await this.ctx.storage.get<{
+      nonce: string;
+      revision: number;
+      scopes: string[];
+    }>("completed");
+    if (completed?.nonce !== nonce) return null;
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (stored?.revision !== completed.revision)
+      throw new Error(
+        "this attempt completed, but the secret was written or cleared since — begin again",
+      );
+    return {
+      urls: stored.record.urls,
+      refresh: stored.record.refresh?.kind,
+      scopes: completed.scopes,
+    };
+  }
+
+  /** THE GATE ON ITERATE'S SLACK APP'S TOKENS: one for a workspace another project's connection
+   *  holds is never stored here, where egress would substitute it, but held aside until that
+   *  workspace moves here; and one stored here is refused on use once another project holds the
+   *  workspace (`#assertWorkspaceNotMoved`) — as iterate's GitHub App's tokens are used only while
+   *  their installation is routed here (`#assertInstallationRouted`). A project's own app routes
+   *  nothing. */
+  async #routedToAnotherProject(teamId: string): Promise<boolean> {
+    const route = await new ControlPlane(this.env).integrationRouteOf("slack", teamId);
+    const { projectId } = DurableObjectNameCodec.parse(this.#address().context);
+    return Boolean(route && route.projectId !== projectId);
+  }
+
+  /** THE HELD TOKEN ADMITTED (the platform's move of its workspace here, integrations/verbs.ts
+   *  `confirmIntegrationMove`, once the route is this project's): the record written like any other,
+   *  while nothing was written since it was held and before it expires, then marked `completed` — so
+   *  the same call again, after the built-in's fact failed, answers the same without a second write.
+   *  Answers the pin and the strategy kind, what the fact carries. */
+  async admitHeldToken(input: {
+    nonce: string;
+  }): Promise<{ urls: string[]; refresh?: SecretRefresh["kind"] }> {
+    const replayed = await this.#completed(input.nonce);
+    if (replayed) return replayed;
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held?.nonce !== input.nonce)
+      throw new Error("no token is held for this consent any more — connect again");
+    await this.ctx.storage.delete("held");
+    const revision = (await this.ctx.storage.get<number>("revision")) ?? 0;
+    if (held.until <= Date.now() || revision !== held.revision)
+      throw new Error(
+        "the token held for this consent expired, or the secret was written since — connect again",
+      );
+    const { material } = await decryptSecretMaterial(
+      held.record.material,
+      { context: this.#address().context, urls: held.record.urls, revision: held.revision },
+      this.#keys(),
+    );
+    await this.write({ ...held.record, material });
+    await this.ctx.storage.put("completed", {
+      nonce: input.nonce,
+      revision: await this.ctx.storage.get<number>("revision"),
+      scopes: held.scopes,
+    });
+    return { urls: held.record.urls, refresh: held.record.refresh?.kind };
+  }
+
+  /** THE REVIVE the context's alarm owes this facet — also for a held token's offer running out
+   *  (`completeOAuth` claims it for `until`): a token past it is dropped. A revive before then (a new
+   *  incarnation's: a first-party facet's claim falls due at its context's birth) spent that claim,
+   *  so the offer's end is claimed again. */
+  override async revive(): Promise<void> {
+    await super.revive();
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (!held) return;
+    if (held.until <= Date.now()) await this.ctx.storage.delete("held");
+    else {
+      using itx = this.getItx();
+      await itx.processors.claim(this.ctx.props.name, held.until);
+    }
+  }
+
+  /** WHAT A FAILED MOVE LEFT OF ITS CONSENT, gone: the held token (`held`); or the record, cleared,
+   *  while it is still the one that consent's admit stored — checked and cleared with storage alone
+   *  between, so a write since (someone else's) stays — answering what the clear ended for the
+   *  built-in's facts; or nothing (`gone`). */
+  async dropHeldToken(input: {
+    nonce: string;
+  }): Promise<"held" | "gone" | { lends: EndedLends; borrowed: Borrowed | null }> {
+    const held = await this.ctx.storage.get<HeldExchange>("held");
+    if (held?.nonce === input.nonce) {
+      await this.ctx.storage.delete("held");
+      return "held";
+    }
+    const completed = await this.ctx.storage.get<{ nonce: string; revision: number }>("completed");
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    if (completed?.nonce !== input.nonce || stored?.revision !== completed.revision) return "gone";
+    return this.clear();
+  }
+
+  /** Substitute, pin, dispatch — refresh and retry once on a mintable miss or a 401. A refusal is
+   *  a 502 to the caller with the reason (never the destination, never the value). Every dispatch
+   *  is a `secret/used` fact on this path — the request AS RECEIVED (its placeholders, never a
+   *  value) and the upstream's status — appended off the response path. A WebSocket upgrade is a
+   *  dispatch like any other: the 101 and its socket go straight back. */
+  override async fetch(request: Request): Promise<Response> {
+    const headers = new Headers(request.headers);
+    // A borrower's use, admitted by this context (iterate-context-durable-object.ts `#lentFetch`,
+    // the one sender: every egress strips `x-itx-lend*`): its placeholders spell the borrower's path
+    // `as`, which this facet answers for as its own, and `secret/used` names the borrower.
+    const lentAs = headers.get(LENT_AS_HEADER);
+    headers.delete(LENT_AS_HEADER);
+    if (lentAs)
+      return this.#serve(
+        new Request(request, { headers }),
+        JSON.parse(lentAs) as { as: string; borrower: string },
+      );
+    const borrowed = await this.ctx.storage.get<Borrowed>("borrowed");
+    if (!borrowed) return this.#serve(request, null);
+    // The lender's context over FETCH, never a Workers-RPC method call: a 101's socket crosses a
+    // fetch channel only. The lend rides signed (secrets.ts `LEND_USE_HEADER`).
+    headers.set(
+      LEND_USE_HEADER,
+      await signLendUse(
+        {
+          lender: borrowed.lender,
+          lendId: borrowed.lendId,
+          borrower: DurableObjectNameCodec.parse(this.#address().context).projectId,
+        },
+        await sessionSigningSecretOf(appConfigOf(this.env)),
+      ),
+    );
+    return this.env.ITERATE_CONTEXT.getByName(borrowed.lender).fetch(
+      new Request(request, { headers }),
+    );
+  }
+
+  /** The dispatch itself, for this secret's own path — or, for a lend, the borrower's path `as` too. */
+  async #serve(request: Request, lent: { as: string; borrower: string } | null): Promise<Response> {
+    const { path } = this.#address();
+    // The record AS OF NOW, its pin checked against THIS request every time it is read — after a
+    // refresh (or a write that won the revision fence) the pin may have moved, and the retried
+    // request must honour the pin the new material was set with.
+    const read = async () => {
+      const stored = await this.ctx.storage.get<Stored>("stored");
+      if (!stored) return null;
+      if (!originPinned(request.url, stored.record.urls))
+        throw pinRefusal(path, request.url, stored.record.urls);
+      return { revision: stored.revision, record: await this.#opened(stored) };
+    };
+    const used = (response: Response): Response => {
+      this.ctx.waitUntil(
+        this.#fact({
+          type: "events.iterate.com/secret/used",
+          payload: {
+            method: request.method,
+            url: request.url,
+            status: response.status,
+            ...(lent && { borrower: lent.borrower }),
+          },
+        }),
+      );
+      return response;
+    };
+    // The Discord shape (secrets.ts `SECRET_FRAMES_HEADER`): the upgrade names this secret for its
+    // frames, and this facet proxies the socket to substitute them.
+    const framesFor = request.headers.get(SECRET_FRAMES_HEADER);
+    if (framesFor) {
+      const headers = new Headers(request.headers);
+      headers.delete(SECRET_FRAMES_HEADER);
+      request = new Request(request, { headers });
+    }
+    try {
+      if (
+        framesFor &&
+        (request.headers.get("upgrade")?.toLowerCase() !== "websocket" ||
+          !secretPathsIn(framesFor).some((named) => named === path || named === lent?.as))
+      )
+        throw new SecretRefused(
+          `itx.fetch: ${SECRET_FRAMES_HEADER} names this secret on a WebSocket upgrade only`,
+        );
+      let stored = await read();
+      if (stored) await this.#assertInstallationRouted(stored.record.refresh);
+      if (stored) await this.#assertWorkspaceNotMoved(stored.record.routedAccount);
+      // This facet answers for ONE secret: a placeholder naming another is refused here, not only
+      // at the egress that routed the request (the facet is the boundary that holds the bytes).
+      const resolve = (named: string) => {
+        if (named !== path && named !== lent?.as)
+          throw new SecretRefused(
+            `itx.fetch: getSecret(${JSON.stringify(named)}) does not belong to the secret ${path}`,
+          );
+        return stored?.record.material || null;
+      };
+      // A refresh-and-retry needs the request twice; clone while it is undisturbed. (The cast is
+      // workers-types' Request<Cf> vs the bare Request the pure half takes.)
+      let retry = stored?.record.refresh ? (request.clone() as unknown as Request) : null;
+      let substituted: Request;
+      try {
+        substituted = await substituteProjectSecrets(request, resolve);
+      } catch (error) {
+        // No accessToken yet with a strategy configured: mint first (the first-use case), then go.
+        if (!(error instanceof SecretRefused) || !retry || !error.mintable || !stored) throw error;
+        try {
+          await this.#refresh(stored.revision);
+        } catch (cause) {
+          throw new SecretRefused(
+            `${error.message}; the refresh failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          );
+        }
+        stored = await read();
+        substituted = await substituteProjectSecrets(retry, resolve);
+        retry = null; // one refresh per request: a just-minted token gets no second go
+      }
+      // A socket whose frames name this secret is proxied, with the material as of its dial.
+      const answer = (response: Response) =>
+        used(
+          framesFor && response.webSocket && stored
+            ? proxyFrames(response, [path, ...(lent ? [lent.as] : [])], stored.record.material)
+            : response,
+        );
+      const response = await dispatch(substituted);
+      if (response.status !== 401 || !retry || !stored) return answer(response);
+      try {
+        await this.#refresh(stored.revision);
+      } catch {
+        // The provider (or the material) refused the refresh: the 401 is the caller's answer.
+        return used(response);
+      }
+      await response.body?.cancel();
+      stored = await read();
+      return answer(await dispatch(await substituteProjectSecrets(retry, resolve)));
+    } catch (error) {
+      // A refusal is a 502 to the caller with the reason — never the destination, never the value.
+      if (error instanceof SecretRefused)
+        return new Response(`${error.message}\n`, { status: 502 });
+      throw error;
+    }
+  }
+
+  /** AN INSTALLATION'S TOKEN IS USED ONLY WHILE ITS ROUTE IS THIS PROJECT'S: iterate's GitHub App
+   *  mints only for an installation the control plane routes here (`#githubInstallationToken`),
+   *  and a token already minted is refused once the route went elsewhere (a move, a disconnect) —
+   *  re-read at most every INSTALLATION_ROUTE_RECHECK_MS, so a project that lost an installation
+   *  keeps using it that long at most, from any secret path it minted it at. */
+  async #assertInstallationRouted(refresh: SecretRecord["refresh"]): Promise<void> {
+    if (refresh?.kind !== "github-app-installation" || !("platform" in refresh.client)) return;
+    const { installationId } = refresh;
+    const readAt = this.#installationRouteReadAt.get(installationId);
+    if (readAt !== undefined && Date.now() - readAt < INSTALLATION_ROUTE_RECHECK_MS) return;
+    const { projectId } = DurableObjectNameCodec.parse(this.#address().context);
+    const route = await new ControlPlane(this.env).integrationRouteOf("github", installationId);
+    if (route?.projectId !== projectId) {
+      this.#installationRouteReadAt.delete(installationId);
+      throw new SecretRefused(
+        `itx.fetch: GitHub installation ${installationId} is not connected to this project`,
+      );
+    }
+    this.#installationRouteReadAt.set(installationId, Date.now());
+  }
+
+  /** A WORKSPACE'S TOKEN IS REFUSED ONCE IT MOVED: iterate's Slack app's token for a workspace
+   *  another project's connection now holds (a move took it while this project's cleanup had not
+   *  run) — re-read at most every INSTALLATION_ROUTE_RECHECK_MS, like an installation's. A workspace
+   *  no project holds is not refused: its connect routes it after the token's first use. */
+  async #assertWorkspaceNotMoved(routed: SecretRecord["routedAccount"]): Promise<void> {
+    if (!routed) return;
+    const readAt = this.#workspaceRouteReadAt.get(routed.externalId);
+    if (readAt !== undefined && Date.now() - readAt < INSTALLATION_ROUTE_RECHECK_MS) return;
+    if (await this.#routedToAnotherProject(routed.externalId)) {
+      this.#workspaceRouteReadAt.delete(routed.externalId);
+      throw new SecretRefused(
+        `itx.fetch: Slack workspace ${routed.externalId} is connected to another project`,
+      );
+    }
+    this.#workspaceRouteReadAt.set(routed.externalId, Date.now());
+  }
+
+  #refresh(revision: number): Promise<void> {
+    const inFlight = this.#refreshing;
+    if (inFlight?.revision === revision) return inFlight.promise;
+    // A different revision is running (or none): run this one after it settles, never alongside.
+    const previous = inFlight?.promise.catch(() => {}) ?? Promise.resolve();
+    const promise = previous
+      .then(() => this.#doRefresh(revision))
+      .finally(() => {
+        if (this.#refreshing?.promise === promise) this.#refreshing = undefined;
+      });
+    this.#refreshing = { revision, promise };
+    return promise;
+  }
+
+  /** Run the strategy against the record AS READ NOW; commit only if nothing was written meanwhile
+   *  (the revision fence) — a stale mint must never resurrect material a write replaced. The
+   *  outcome, either way, is a fact on this path: `secret/refreshed { kind, ok, error? }`. */
+  async #doRefresh(revision: number): Promise<void> {
+    const stored = await this.ctx.storage.get<Stored>("stored");
+    // A write landed first: whatever it stored (new material, or no strategy any more) is the
+    // answer, and the caller re-reads it — so the fence comes before any look at the strategy.
+    if (stored?.revision !== revision) return;
+    const record = await this.#opened(stored);
+    const { refresh, urls } = record;
+    if (!refresh) throw new Error("no refresh strategy"); // unreachable: this revision was read with one
+    // Refresh moves bytes only toward pinned hosts, like any use.
+    const pinnedDispatch = (exchange: Request) => {
+      if (!originPinned(exchange.url, urls))
+        throw new Error(`the exchange endpoint ${new URL(exchange.url).origin} is outside the pin`);
+      return dispatch(exchange);
+    };
+    let next: Record<string, unknown>;
+    try {
+      if (refresh.kind === "github-app-installation")
+        next = {
+          ...(isRecord(record.material) && record.material),
+          accessToken: await this.#githubInstallationToken(refresh, record, pinnedDispatch),
+        };
+      else if (refresh.kind === "oauth-refresh-token" && refresh.client)
+        next = await this.#platformRefresh(refresh, refresh.client, record, pinnedDispatch);
+      else if (refresh.kind === "worker")
+        // Exchange code runs in its jail (exchange-jail.ts), its egress the pin alone. The cast:
+        // `ctx.exports` is typed from the generated worker types, which do not see the entrypoint
+        // worker.ts exports; the SDK mints `ItxEntrypoint` from it the same way.
+        next = await runExchangeCode({
+          loader: this.env.LOADER,
+          pinnedOutbound: (
+            this.ctx.exports as unknown as {
+              PinnedOutbound: (options: { props: { urls: string[] } }) => Fetcher;
+            }
+          ).PinnedOutbound({ props: { urls } }),
+          deployId: appConfigOf(this.env).deployId,
+          context: this.#address().context,
+          urls,
+          source: refresh.source,
+          material: record.material,
+        });
+      else
+        next = await refreshSecretMaterial(
+          refresh,
+          record.material,
+          pinnedDispatch,
+          this.#clientSecretOf,
+        );
+    } catch (error) {
+      await this.#fact({
+        type: "events.iterate.com/secret/refreshed",
+        payload: {
+          kind: refresh.kind,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+      throw error;
+    }
+    const current = await this.ctx.storage.get<Stored>("stored");
+    if (current?.revision !== revision) return;
+    await this.ctx.storage.put<Stored>("stored", {
+      ...current,
+      ...(await this.#sealed({ ...record, material: next }, revision)),
+    });
+    await this.#fact({
+      type: "events.iterate.com/secret/refreshed",
+      payload: { kind: refresh.kind, ok: true },
+    });
+  }
+
+  /** The refresh grant with the deployment's client (`oauth-refresh-token` + `client`): its
+   *  credentials attached here, toward its own provider only (`#oauthClientOf`). */
+  async #platformRefresh(
+    refresh: Extract<SecretRefresh, { kind: "oauth-refresh-token" }>,
+    client: { platform: OAuthPlatform },
+    record: SecretRecord,
+    pinnedDispatch: (request: Request) => Promise<Response>,
+  ): Promise<Record<string, unknown>> {
+    const material = isRecord(record.material) ? record.material : {};
+    if (typeof material.refreshToken !== "string" || !material.refreshToken)
+      throw new Error(`${refresh.kind}: the secret's material has no "refreshToken"`);
+    const credentials = await this.#oauthClientOf({
+      client,
+      clientId: "",
+      clientSecret: "",
+      tokenEndpoint: refresh.tokenEndpoint,
+    });
+    const response = await pinnedDispatch(
+      oauthTokenRequest({
+        clientId: credentials.clientId,
+        clientSecret: credentials.clientSecret,
+        tokenEndpoint: refresh.tokenEndpoint,
+        clientAuth: refresh.clientAuth || "client_secret_basic",
+        params: { grant_type: "refresh_token", refresh_token: material.refreshToken },
+      }),
+    );
+    // A provider may rotate the refresh token on use; keep the newest.
+    return { ...material, ...(await oauthTokensOf(response, refresh.kind)) };
+  }
+
+  /** A GitHub App installation's token: an App JWT (@octokit/auth-app) traded at the
+   *  installation's `access_tokens`. The project's own App signs with the `appId` and `privateKey`
+   *  this secret's material holds. The deployment's App signs with APP_CONFIG's key, at its own
+   *  GitHub only, and only for an installation the control plane routes to THIS project — so no
+   *  project mints for an installation another project connected. */
+  async #githubInstallationToken(
+    refresh: Extract<SecretRefresh, { kind: "github-app-installation" }>,
+    record: SecretRecord,
+    pinnedDispatch: (request: Request) => Promise<Response>,
+  ): Promise<string> {
+    let app: { appId: string; privateKey: string };
+    if ("project" in refresh.client) {
+      const material = isRecord(record.material) ? record.material : {};
+      if (typeof material.appId !== "string" || typeof material.privateKey !== "string")
+        throw new Error(`${refresh.kind}: the secret's material holds no "appId" and "privateKey"`);
+      app = { appId: material.appId, privateKey: material.privateKey };
+    } else {
+      const github = appConfigOf(this.env).integrations.github;
+      if (!github)
+        throw new Error(
+          "this deployment has no GitHub App (APP_CONFIG integrations.github is unset)",
+        );
+      if (refresh.apiOrigin !== githubApiOriginOf(github.githubOrigin))
+        throw new Error(
+          `the platform's GitHub App answers at ${githubApiOriginOf(github.githubOrigin)}`,
+        );
+      const { projectId } = DurableObjectNameCodec.parse(this.#address().context);
+      const route = await new ControlPlane(this.env).integrationRouteOf(
+        "github",
+        refresh.installationId,
+      );
+      if (route?.projectId !== projectId)
+        throw new Error(
+          `GitHub installation ${refresh.installationId} is not connected to this project`,
+        );
+      app = { appId: github.appId, privateKey: github.privateKey.exposeSecret() };
+    }
+    // GitHub hands out PKCS#1 keys; @octokit/auth-app signs with WebCrypto here, which takes PKCS#8
+    const privateKey = createPrivateKey(app.privateKey).export({ type: "pkcs8", format: "pem" });
+    const { token: jwt } = await createAppAuth({
+      appId: app.appId,
+      privateKey: String(privateKey),
+    })({
+      type: "app",
+    });
+    const response = await pinnedDispatch(
+      new Request(
+        `${refresh.apiOrigin}/app/installations/${encodeURIComponent(refresh.installationId)}/access_tokens`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${jwt}`,
+            "user-agent": "iterate",
+          },
+        },
+      ),
+    );
+    const data: unknown = await response.json().catch(() => null);
+    if (!response.ok || !isRecord(data) || typeof data.token !== "string" || !data.token)
+      throw new Error(`${refresh.kind}: GitHub answered ${response.status} with no token`);
+    return data.token;
+  }
+
+  /** A fact about this secret onto its own log — a use, a refresh's outcome — the platform's own
+   *  append through this facet's loopback (no principal). Best-effort: what it records already
+   *  happened, and a lost fact must not fail the request that caused it. */
+  async #fact(event: EventInput<typeof SecretContract>): Promise<void> {
+    try {
+      using itx = this.getItx();
+      await itx.append(event);
+    } catch (error) {
+      reportIssue("secret.fact-append-failed", error, { type: event.type });
+    }
+  }
+}
+
+/** THE FRAME PROXY: the upstream's 101 held HERE, and a new socket handed to the caller — every
+ *  client→server text frame with this secret's placeholders substituted (secrets.ts
+ *  `substituteSecretInFrame`), everything else relayed as is, and each side's close the other's. A
+ *  frame naming another secret closes both, 1008. The socket pins this facet (and so its context)
+ *  for as long as it is open — as a passed-through 101 already does — plus the frame pump's CPU. */
+function proxyFrames(upstream: Response, paths: string[], material: SecretMaterial): Response {
+  const outbound = upstream.webSocket!;
+  const [caller, inbound] = Object.values(new WebSocketPair()) as [WebSocket, WebSocket];
+  outbound.accept();
+  inbound.accept();
+  const closeBoth = (code: number, reason: string) => {
+    for (const socket of [inbound, outbound])
+      try {
+        socket.close(code, reason);
+      } catch {
+        // already closed
+      }
+  };
+  inbound.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") return outbound.send(event.data);
+    try {
+      outbound.send(substituteSecretInFrame(event.data, paths, material));
+    } catch (error) {
+      closeBoth(1008, error instanceof SecretRefused ? error.message.slice(0, 120) : "refused");
+    }
+  });
+  outbound.addEventListener("message", (event) => inbound.send(event.data));
+  const relayClose = (to: WebSocket) => (event: CloseEvent) => {
+    try {
+      to.close(relayedCloseCode(event.code), event.reason);
+    } catch {
+      // already closed
+    }
+  };
+  inbound.addEventListener("close", relayClose(outbound));
+  outbound.addEventListener("close", relayClose(inbound));
+  inbound.addEventListener("error", () => closeBoth(DROPPED_CLOSE_CODE, "caller socket error"));
+  outbound.addEventListener("error", () => closeBoth(DROPPED_CLOSE_CODE, "upstream socket error"));
+  const protocol = upstream.headers.get("sec-websocket-protocol");
+  return new Response(null, {
+    status: 101,
+    webSocket: caller,
+    headers: protocol ? { "sec-websocket-protocol": protocol } : {},
+  });
+}
+
+/** The terminal fetch. A substituted secret follows NO redirect: a 3xx to another origin would carry
+ *  the credential there (the Fetch standard strips `Authorization` on a cross-origin redirect, not
+ *  other headers) — the caller sees the 3xx. A network failure is answered generically: the runtime's
+ *  own error quotes the request URL, which may by now carry the substituted secret. */
+const dispatch = async (request: Request): Promise<Response> => {
+  try {
+    return await fetch(request, { redirect: "manual" });
+  } catch {
+    throw new SecretRefused(
+      `itx.fetch: the pinned host ${new URL(request.url).origin} could not be reached`,
+    );
+  }
+};

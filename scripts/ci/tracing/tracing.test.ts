@@ -1,8 +1,9 @@
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 import { promisify } from "node:util";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { assembleTrace, jobKeyInWorkflow, renderTrace, stepCommands } from "./tracing.ts";
 
@@ -306,7 +307,7 @@ test("the shell hook preserves failures and does not double-count nested bash", 
 test.for([0, 7])(
   "the shell hook makes exit %s available to the next step without Depot logs",
   async (exitCode) => {
-    using directory = temporaryDirectory();
+    using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const output = resolve(directory.path, "step-output");
     const result = await promisify(execFile)("bash", ["-c", `exit ${exitCode}`], {
       env: {

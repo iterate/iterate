@@ -1,4 +1,4 @@
-// scripts/os/preview-readiness.ts — IS A DEPLOYMENT READY FOR TRAFFIC? The deploy's smoke of apps/os,
+// scripts/os/preview-readiness.ts — IS A DEPLOYMENT READY FOR TRAFFIC? The deploy's smoke of core/os,
 // asked as soon as its worker is uploaded. Every e2e row needs a WebSocket upgrade on
 // `/api`, and a Durable Object — a fresh context and a facet it hosts — answering over it on the
 // deploy's version. On a brand-new preview they do not, for seconds after its edge serves the new
@@ -20,7 +20,7 @@
 // https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates). For a while
 // an edge can still serve it and a brand-new Durable Object can still start on it, and an object on
 // it later resets with "Durable Object reset because its code was updated.", failing every call in
-// flight. So each probe also asks the operator's `session.versions` (apps/os/src/session.ts) which version
+// flight. So each probe also asks the operator's `session.versions` (core/os/src/session.ts) which version
 // its edge (the id `/version` answers with), its own context and another brand-new one run, and
 // misses (`stage: "version"`) when any is not the deploy's: the gate passes once `consecutive`
 // rounds in a row run the deploy's version everywhere they look.
@@ -28,12 +28,12 @@
 // A BRAND-NEW HOSTNAME reaches Cloudflare's servers one by one, and a probe that lands on one it has
 // not reached yet gets Cloudflare's own not-found, which its miss names (`isNotRoutedYet`). The
 // rounds only sample connections, so the suites' transport sends such a request again too
-// (apps/os/e2e/support/not-routed.ts).
+// (test/helpers/not-routed.ts).
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { request } from "node:https";
 import { newWebSocketRpcSession } from "capnweb";
-import { isNotRoutedYet } from "@iterate-com/shared/platform-retry";
+import { isNotRoutedYet } from "iterate/platform-retry";
 import type { IterateApi } from "iterate/api";
 import { WebSocket } from "undici";
 

@@ -1,5 +1,5 @@
 # ONE DEPLOYMENT PER TESTED COMMIT of a pull request: a fresh set of plain Workers on the dev/preview
-# account, apps/os and each app on top, `pr<n>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed
+# account, core/os and each app on top, `pr<n>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed
 # by the same build and `wrangler deploy` as prd. The script is scripts/os/preview.ts. Its
 # jobs are each a check named for what it proves:
 #   Deploy preview      every push: first whether the PR changes a preview path
@@ -55,7 +55,7 @@
 # slow-rows = run | skip overrides what the PR's paths and label say about the rows tagged `slow`:
 # `--input action=e2e --input slow-rows=run` runs them against the PR's newest deployment.
 # apps = all | none (the apps on top: dash, agents, notes, docs, voice, kit, admin). Pull-request runs use
-# all so every client is usable against the deployment's apps/os.
+# all so every client is usable against the deployment's core/os.
 #
 # Concurrency per PR. The PR's next push cancels the run in progress, in whatever job, since its
 # verdict would be out of date; Depot starts none of the cancelled run's `always()` jobs, and the
@@ -63,7 +63,7 @@
 # progress. preview-delete.yml takes the same group and cancels nothing, so a PR's delete waits for
 # its deploy and tests to settle.
 # The only Depot secret is DOPPLER_TOKEN; Doppler os/preview supplies the Cloudflare
-# credentials and the two secrets each apps/os deploy ships (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
+# credentials and the two secrets each core/os deploy ships (APP_CONFIG, APP_CONFIG_SECRETS__KEY).
 
 name: Preview OS
 
@@ -188,7 +188,7 @@ jobs:
   # SPECS_SHARDS jobs of the same steps, and Browser specs gives their verdict (below).
   # E2E tests is the full mutating proof (docs/testing.md): the vitest e2e suite, whose project-
   # creating rows this isolated preview owns (production runs only its deploy-script readiness
-  # probes). Browser specs is the browser proof: the root Playwright specs (specs/AGENTS.md) against
+  # probes). Browser specs is the browser proof: the root Playwright specs (test/playwright/AGENTS.md) against
   # the preview and its apps on top, and the Playwright report.
   #
   # STARTED WITH THE RUN, NOT AFTER THE DEPLOY: no `needs:`. Each sets its suite up while Deploy
@@ -204,7 +204,7 @@ jobs:
   # job that never had a preview keeps none.
   #
   # RUNNERS: E2E tests waits on a remote preview, which a 2x8 does about as fast as a 4x16. Each
-  # Browser specs shard runs six browsers (playwright.config.ts `workers`), whose specs run faster
+  # Browser specs shard runs six browsers (test/playwright.config.ts `workers`), whose specs run faster
   # with a 4x16's CPU. The measurements: docs/depot-ci.md#reliability-defaults. The timeout is the
   # wait's bound, the deploy's own 40 minutes, and then the suite's 30.
   e2e:
@@ -321,7 +321,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           DEPLOYMENT_PREFIX: ${{ inputs.preview-name }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          # the PR head the deploy stamped the default template's agents with (apps/os
+          # the PR head the deploy stamped the default template's agents with (core/os
           # scripts/published-package-commit.ts), which the agents rows wait for
           PREVIEW_HEAD_SHA: ${{ steps.tested.outputs.head-sha }}
           # `--slow-rows`: the e2e suite's rows tagged `slow`; the specs have none
@@ -381,7 +381,7 @@ jobs:
         run: bash scripts/ci/test-evidence-unreported.sh "${{ steps.evidence-write.outcome }}" "${{ steps.evidence-upload.outcome }}"
 
   # SHARDS: the specs run as SPECS_SHARDS jobs of the suite steps, the legs of `specs-shard`, each
-  # running its share (SPECS_SHARD, playwright.config.ts `shard`) and keeping its own evidence, with
+  # running its share (SPECS_SHARD, test/playwright.config.ts `shard`) and keeping its own evidence, with
   # a Playwright blob report in place of the HTML one. Enough of them that every spec has a worker
   # from the start, so the suite takes about as long as its longest spec
   # (scripts/ci/specs-shards.test.ts has the maths).

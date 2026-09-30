@@ -1,7 +1,7 @@
 // scripts/os/seed-instance-secrets.ts — THE DEPLOYMENT'S OWN KEYS: set Exa, Parallel and OpenAI at
 // `global:/secrets/{exa,parallel,openai}` on a deployment, as its operator (the admin bearer's
 // `session.global`), and with `--lend-to-every-project` lend each to every project as the same path
-// (apps/os/docs/integrations.md "Instance lends"). The keys come from the target's Doppler `os`
+// (core/os/docs/integrations.md "Instance lends"). The keys come from the target's Doppler `os`
 // config: EXA_API_KEY, PARALLEL_API_KEY and OPENAI_API_KEY. No value is ever printed.
 //
 //   pnpm os:seed-instance-secrets --env preview [--deployment pr3063-a1b2c3d] [--lend-to-every-project]
@@ -9,11 +9,10 @@
 // `--env` names the target in envs.ts and is required: there is no default, and prd also needs
 // `--confirm-prd`.
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
 import { previewDeploymentUrls } from "./preview-config.ts";
 
 /** Each key: its path on the instance, the variable of Doppler `os` it comes from, and the origins
@@ -88,5 +87,4 @@ export default async function seedInstanceSecrets(options: {
   }
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "seed-instance-secrets" }).run();
+void createCli({ ...import.meta, name: "seed-instance-secrets" }).run();

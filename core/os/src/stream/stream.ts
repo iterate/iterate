@@ -1,0 +1,1040 @@
+// stream/stream.ts — THE STREAM, a dependency-injected class the context DO holds and drives. The
+// one thing it needs from its host is `onCommit` (the post-commit fan-out); nothing here reaches
+// back into the DO. `ReachableContext`, the interface one context reaches another through, is at
+// the bottom.
+//
+// EPHEMERALS COST ZERO WRITES. An ephemeral event takes an offset from the shared sequence but is
+// never stored — and an ephemeral-only batch touches storage NOT AT ALL: no row, no transaction, not
+// even the high-water mark. Its offsets live in this incarnation's memory. The consequence is the
+// one contract every offset-keyed consumer already honours: an ephemeral's offset is unique WITHIN
+// an incarnation, and a later incarnation — which resumes from the last DURABLE mark — may hand the
+// same number to a durable. Every persisted checkpoint in this package advances only on a batch
+// that carried a durable (the processor engine, the core reduce, the subscription cursors), and
+// such a batch's high-water mark is committed with it, so no durable is ever skipped; the
+// `itx/woken` record, the first event of each incarnation, marks the boundary for anyone
+// chaining ranges across it. And `read()` never PROVES a scan beyond the durable mark: a short
+// page's `scannedThroughOffset` is the mark, not the in-memory head — so nothing a reader persists
+// (a facet's checkpoint, a subscription cursor) can name an offset a later incarnation could hand
+// to a durable. Pushes still carry the full head in their ranges; only the log's own proof is capped.
+// THE RECENT-EPHEMERALS RING is the one place an ephemeral outlives its append: an incarnation keeps
+// its last RECENT_EPHEMERALS_BUDGET_CHARS of them, and `read(…, { includeEphemeral: true })` merges
+// them into a page — under the same proof, which never names one.
+
+import { codedError, errorCode, reportIssue } from "iterate/lib";
+import type { ItxExpressionInput } from "iterate/expression";
+import type { StreamPage, WaitForEventFilter } from "iterate/api";
+import {
+  idempotencyConflictMessage,
+  sameIdempotentEvent,
+  type StreamEvent,
+  type StreamEventInput,
+  ReduceCheckpointTable,
+  type SqlStorageHandle,
+} from "iterate/stream/processor";
+import { newChain, recordRefusal, refuseActPastLimit, storedCause, type Cause } from "../cause.ts";
+import type { Caller } from "../caller.ts";
+import type { InboundCallKind } from "../context/residency.ts";
+import { reduceScheduledAppends } from "./scheduled-appends.ts";
+import {
+  CoreContract,
+  STREAM_RECORD_TYPES,
+  reduceCoreEventBatch,
+  type CoreState,
+} from "./core-processor.ts";
+
+/** THE APPEND CEILING on one serialized body, in JS chars (`JSON.stringify(body).length` — the one
+ *  O(1) size JS has; V8 serializes a string at 1–2 bytes per char). Workers RPC caps ONE message at
+ *  32 MiB serialized (every hop, no knob), and a 128 MiB isolate holds ~4 transient copies of a body
+ *  while reading it back — 8 MiB keeps both comfortable, and is the one number to tune. An event is
+ *  a fact, not a blob: a large payload lives elsewhere and the event names it. */
+const EVENT_BODY_MAX_CHARS = 8 * 1024 * 1024;
+/** THE READ BUDGET, in UTF-8 bytes as SQLite counts them (≥ JS chars): a page stops BEFORE the row
+ *  that would cross it and always carries ≥ 1 row, so the largest legal event still rides alone.
+ *  Every replay loop in the package pages through this budget. */
+const READ_PAGE_BUDGET_BYTES = 8 * 1024 * 1024;
+/** The most rows one page returns whatever `limit` asks — the object overhead of tiny events, which
+ *  the byte budget cannot see. */
+const READ_PAGE_MAX_EVENTS = 1000;
+/** THE RECENT-EPHEMERALS RING's size, in serialized JS chars: what an incarnation keeps of its
+ *  ephemerals after the moment they were appended — the one way to see one after the fact, since no
+ *  ephemeral ever reaches a row. Oldest out first, never the newest: an event over the whole budget
+ *  is kept alone until the next arrives (the append ceiling bounds it). Per incarnation, like every
+ *  ephemeral offset. The delivery loop reserves at least this much cursor-read room before a read
+ *  that can return nothing else (subscription-delivery.ts). */
+export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
+
+/** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
+ *  its wake, its delivery ladder still ends, its alarm passes stay observable, a script it started
+ *  still closes) and the pause/resume
+ *  pair itself (it must always accept its own resume). */
+const PAUSE_EXEMPT_EVENT_TYPES = new Set([
+  ...STREAM_RECORD_TYPES,
+  "events.iterate.com/itx/paused",
+  "events.iterate.com/itx/resumed",
+  // a reset's record (`itx.abort`, `itx.facets.abort`) — a paused context must still be resettable
+  "events.iterate.com/itx/aborted",
+  "events.iterate.com/itx/facet-aborted",
+  "events.iterate.com/itx/schedule-cancelled",
+  // a child's announcement — a paused ancestor must still learn which contexts exist below it
+  "events.iterate.com/itx/child-created",
+]);
+
+/** One waiting waitForEvent caller. In-memory only: the caller's own open RPC call keeps the DO
+ *  awake for the wait's duration, and a reset (`ctx.abort`, a storage reset) fails the call. An
+ *  instance the PLATFORM replaces under the call is the exception: the call stays on the old
+ *  instance, whose waiters never see the new one's appends and time out — a caller that must not
+ *  miss a fact waits in slices, each a fresh call (project/collection.ts TERMINAL_WAIT_SLICE_MS,
+ *  library.ts SCRIPT_RUN_WAIT_SLICE_MS). */
+type WaitForEventWaiter = {
+  /** Whether an event resolves it: its type and payload (`matchesWaitFilter`). */
+  matches: (event: StreamEvent) => boolean;
+  afterOffset: number;
+  resolve: (event: StreamEvent) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+/** WHY AN INCARNATION WOKE, as its wake record (`itx/woken`) says — a context wakes for two reasons
+ *  only. A caller reached it: `caller` is the kind of that first call, as the DO's census counts it
+ *  (context/residency.ts `InboundCallKind`), and `call` what it called — an expression's step names
+ *  (`itx.repos.get.modules`, never its arguments) or the entry point (`fetch`, `append`, …). Or its
+ *  alarm fired: `due` names the durable obligations it came back for — a schedule, a subscription's
+ *  retry or claim, a hosted processor's claim, a run. A fan-out row is told of every wake, at most
+ *  once (subscription-delivery.ts, THE WAKE RULE). */
+export type Wake =
+  | { cause: "call"; caller?: InboundCallKind; call?: string }
+  | { cause: "alarm"; due: ("schedule" | "retry" | "claim" | "run")[] };
+
+/** Everything the stream needs from its host. */
+interface StreamDeps {
+  /** The DO's whole `ctx.storage` — sync SQLite and the sync transaction. */
+  storage: DurableObjectStorageSlice;
+  /** The event-identity stamp on every StreamEvent. */
+  path: string;
+  /** The birth certificate's payload. */
+  projectId: string;
+  /** What the birth appends after the certificate and the wake record, in the same batch, unread:
+   *  the deployment's birth events for a project context (app-config.ts `contextBirthEvents`), none
+   *  for a global one. Absent: none. */
+  birthEvents?: readonly StreamEventInput[];
+  /** The post-commit fan-out, once per offset-advancing commit with the newly committed events in
+   *  offset order, ephemerals included (the waitForEvent waiters settle before it). */
+  onCommit: (freshEvents: StreamEvent[], afterOffset: number, throughOffset: number) => void;
+  /** What the host adds to each incarnation's wake record (`appendWakeRecord`) — the DO: the loaded
+   *  facets its birth reset (FacetHost `startFacetsTheLastIncarnationRan`), when there were any. */
+  wakeRecordDetail?: () => Record<string, unknown>;
+  /** The DO counts the incarnation itself (`storage.countIncarnation()`), once its birth started
+   *  the facets the last incarnation ran: until then the birth writes nothing (FacetHost
+   *  `startFacetsTheLastIncarnationRan`). Absent: counted as the stream is constructed. */
+  incarnationCountedByHost?: boolean;
+  /** The cause the running append runs under (the DO: its caller's), stamped on every event that
+   *  names none (cause.ts). Absent or none: a chain of this context's own. */
+  cause?: () => Cause | undefined;
+  /** The deploy this code runs as: a fan-out delivery's lease names it, so a lease a restart onto
+   *  other code finds is no death of its call (`FanOutDeliveryRecord.leased`). */
+  deployId?: string;
+}
+
+/** THE STREAM — the commit point: SQLite rows + ONE durable mark, idempotency on append, one
+ *  shared offset sequence (the header's ephemeral contract), and THE CORE REDUCE (core-processor.ts)
+ *  reduced inside every commit and checkpointed with the rows it was reduced from. A body over
+ *  EVENT_CHUNK_SIZE is chunked (`StreamStorage` below) — still ONE row at ONE offset. */
+export class Stream {
+  /** THE TABLES (`StreamStorage` below) — the delivery loop keeps its cursors through here too. */
+  readonly storage: StreamStorage;
+  readonly #path: string;
+  readonly #projectId: string;
+  readonly #birthEvents: readonly StreamEventInput[];
+  readonly #onCommit: StreamDeps["onCommit"];
+  readonly #wakeRecordDetail: StreamDeps["wakeRecordDetail"];
+  readonly #ambientCause: StreamDeps["cause"];
+  /** The highest offset assigned THIS INCARNATION, ephemerals included; an ephemeral-only batch
+   *  advances this alone. */
+  #highestAssignedOffset: number;
+  /** THE DURABLE MARK: the through-offset of the last COMMITTED durable batch — the core
+   *  checkpoint's offset, written every durable commit, so there is no separate mark. What `read()`
+   *  proves a scan through and what a resume's seek is clamped to — never the in-memory head above. */
+  #highestDurableOffset: number;
+  /** FIFO; resolved from `freshEvents` in append's step 5. */
+  readonly #waitForEventWaiters: WaitForEventWaiter[] = [];
+  /** This incarnation's newest ephemerals, oldest first, within the budget. */
+  readonly #recentEphemerals: { event: StreamEvent; chars: number }[] = [];
+  #recentEphemeralsChars = 0;
+  /** Per ephemeral type, the highest offset the ring has let go of this incarnation. */
+  readonly #evictedEphemeralThroughOffsetByType = new Map<string, number>();
+  // ── THE CORE REDUCE's state: rehydrated by the constructor from the versioned checkpoint and caught
+  // up to the durable mark, reduced inside every durable commit and checkpointed with it (the cursor
+  // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
+  #coreReducedState: CoreState;
+  #coreReducedThroughOffset: number;
+
+  constructor(deps: StreamDeps) {
+    this.storage = new StreamStorage(deps.storage, deps.deployId || "this deploy");
+    if (!deps.incarnationCountedByHost) this.storage.countIncarnation();
+    this.#path = deps.path;
+    this.#projectId = deps.projectId;
+    this.#birthEvents = deps.birthEvents || [];
+    this.#onCommit = deps.onCommit;
+    this.#wakeRecordDetail = deps.wakeRecordDetail;
+    this.#ambientCause = deps.cause;
+    // THE DURABLE HEAD is the core checkpoint's offset — written every durable commit anyway (the
+    // reduce inside the transaction below), so there is no separate mark to write. Read WHATEVER
+    // version wrote it: a core-version bump still recovers the head and re-reduces the log up to it.
+    const checkpoint = this.storage.reduceCheckpoints.read<CoreState>(CoreContract.slug);
+    // A log with rows but NO checkpoint (a lost row) is
+    // recoverable: the log is the truth and the checkpoint its cache — the mark is the highest row,
+    // and the state is re-reduced below exactly as after a version bump. Reported, never fatal: the
+    // alternative was re-appending the birth certificate over offset 1 and dying of a UNIQUE
+    // constraint on every wake.
+    const highestDurableOffset = checkpoint
+      ? checkpoint.reducedThroughOffset
+      : this.storage.highestEventOffset();
+    if (!checkpoint && highestDurableOffset > 0)
+      reportIssue(
+        "stream.core-checkpoint-missing",
+        new Error(
+          `stream ${this.#path}: the log holds rows through offset ${highestDurableOffset} but no core checkpoint — re-deriving the mark and the state from the log`,
+        ),
+        { highestDurableOffset },
+      );
+    this.#highestDurableOffset = highestDurableOffset;
+    this.#highestAssignedOffset = highestDurableOffset;
+    // The checkpoint is written in the SAME transaction as the rows it was reduced from, so the two
+    // cannot disagree; one written under ANOTHER contract version re-reduces the durable log from
+    // offset 0 — the one-time cost of a version bump.
+    if (checkpoint?.reducerVersion === CoreContract.version) {
+      this.#coreReducedState = checkpoint.state || CoreContract.initialState();
+      this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
+    } else {
+      this.#coreReducedState = CoreContract.initialState();
+      this.#coreReducedThroughOffset = 0;
+      // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
+      // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
+      while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
+        let page: StreamPage;
+        try {
+          page = this.read(this.#coreReducedThroughOffset, 500);
+        } catch (error) {
+          // An unreadable row must not brick the context on every wake: report it, skip it, go on.
+          if (errorCode(error) !== "EVENT_UNREADABLE") throw error;
+          // EVENT_UNREADABLE's one producer is `read` below, which codes it with `{ offset }`.
+          const { offset } = (error as { data: { offset: number } }).data;
+          reportIssue("stream.core-rereduce", error, { offset });
+          this.#coreReducedThroughOffset = offset;
+          continue;
+        }
+        this.#coreReducedState = this.#reduceEventsIntoCoreReducedState(
+          page.events,
+          this.#coreReducedState,
+        );
+        if (page.scannedThroughOffset <= this.#coreReducedThroughOffset) break; // nothing left
+        this.#coreReducedThroughOffset = page.scannedThroughOffset;
+      }
+    }
+  }
+
+  #wakeRecorded = false;
+
+  /** THE BIRTH RECORD — the first handler that reaches a never-seen context records it
+   *  (`appendWakeRecord`, what is worth reaching is worth recording): a FRESH store gets
+   *  `itx/created { projectId, path }` at offset 1, the first incarnation's wake record and the birth
+   *  events (`birthEvents`) in the same batch, all caused by the call that bore it (a birth is always
+   *  a call's — nothing has an alarm before it exists). A store with rows gets nothing here. Both
+   *  events are exempt from pause: a paused stream still records its wake. */
+  appendBirthRecord(cause?: Cause, wake: Wake = { cause: "call" }): void {
+    if (this.#highestDurableOffset !== 0) return;
+    const source = cause && { cause };
+    this.append(
+      {
+        type: "events.iterate.com/itx/created",
+        payload: { projectId: this.#projectId, path: this.#path },
+        source,
+      },
+      {
+        type: "events.iterate.com/itx/woken",
+        payload: { incarnation: this.storage.incarnation, ...wake },
+        source,
+      },
+      ...this.#birthEvents.map((event) => ({ ...event, source })),
+    );
+    this.#wakeRecorded = true;
+  }
+
+  /** THE WAKE RECORD, once per incarnation: `itx/woken { incarnation, ...wake }` — WHY it woke
+   *  (`Wake`: a caller reached it, and which kind, or its alarm fired, and for what), caused by what
+   *  woke it: the call, or the deepest obligation the alarm came back for. The first arrival appends
+   *  it, before its own work — on a never-seen store, the birth record (`appendBirthRecord`); the
+   *  ones after find it done. A call past the loop limit (cause.ts) wakes nothing and bears nothing:
+   *  refused LOOP_LIMIT, it may read an awake context and no other.
+   *  In the SAME batch: the `interrupted` settlement of every run the last incarnation left open
+   *  (core state `scriptRuns`). A run is never re-run — the executor that started it died with that
+   *  incarnation, or runs on in an instance Cloudflare replaced, which can no longer write (for a
+   *  processor's request still owed to the alarm, the pass that would have started it), and
+   *  whoever asked reads the settlement, not a second attempt. */
+  appendWakeRecord(wake: Wake, cause?: Cause): void {
+    if (this.#wakeRecorded) return;
+    if (wake.cause === "call")
+      refuseActPastLimit(
+        cause,
+        this.#highestDurableOffset === 0 ? `a birth of ${this.#path}` : `waking ${this.#path}`,
+      );
+    // one log line per wake. Workers Logs stamps a Durable Object's RPC call with no ray, so the
+    // chain's `(ray …)` is what joins it to the edge request that began the work
+    console.log({
+      event: "context.woken",
+      path: this.#path,
+      incarnation: this.storage.incarnation,
+      ...wake,
+      ...(cause && storedCause(cause)),
+    });
+    if (this.#highestDurableOffset === 0) return this.appendBirthRecord(cause, wake);
+    const interrupted = Object.entries(this.#coreReducedState.scriptRuns).map(
+      ([requestOffset, run]): StreamEventInput => ({
+        type: "events.iterate.com/itx/run-settled",
+        idempotencyKey: `itx/run-settled:${requestOffset}`,
+        source: run.cause && { cause: run.cause },
+        payload: {
+          requestOffset: Number(requestOffset),
+          settlement: {
+            status: "failed",
+            error:
+              "the context restarted before the script's result was recorded; it may have partly or fully run, and it is not run again",
+            failureKind: "interrupted",
+          },
+        },
+      }),
+    );
+    this.append(
+      {
+        type: "events.iterate.com/itx/woken",
+        payload: { incarnation: this.storage.incarnation, ...wake, ...this.#wakeRecordDetail?.() },
+        source: cause && { cause },
+      },
+      ...interrupted,
+    );
+    this.#wakeRecorded = true;
+  }
+
+  /** Refuse an act past the loop limit (cause.ts), recording the chain's one fact here first. */
+  #refusePastLoopLimit(cause: Cause, act: string): void {
+    try {
+      refuseActPastLimit(cause, act);
+    } catch (error) {
+      recordRefusal(error, (refused, message) => this.recordLoopLimit(refused, message));
+      throw error;
+    }
+  }
+
+  /** THE ONE VISIBLE FACT of a chain refused past the loop limit in this context:
+   *  `itx/loop-limit { chain, depth, error }`, once per chain — whatever refused it, an append here
+   *  or an act the context's delivery made (subscription-delivery.ts). A receipt at the refused
+   *  depth: delivered, but nothing can act on it. */
+  recordLoopLimit(cause: Cause, error: string): void {
+    const idempotencyKey = `itx/loop-limit:${cause.chain}`;
+    if (this.storage.readEventByIdempotencyKey(idempotencyKey)) return;
+    this.append({
+      type: "events.iterate.com/itx/loop-limit",
+      idempotencyKey,
+      payload: { chain: cause.chain, depth: cause.depth, error: error.slice(0, 1024) },
+      source: { cause: storedCause(cause) },
+    });
+  }
+
+  /** Whether this incarnation's wake record is on the log yet. Until it is, every open run is one
+   *  a dead incarnation left: every handler records the wake before it commits anything. */
+  wakeRecorded(): boolean {
+    return this.#wakeRecorded;
+  }
+
+  #rememberEphemeral(event: StreamEvent, chars: number) {
+    this.#recentEphemerals.push({ event, chars });
+    this.#recentEphemeralsChars += chars;
+    while (
+      this.#recentEphemeralsChars > RECENT_EPHEMERALS_BUDGET_CHARS &&
+      this.#recentEphemerals.length > 1
+    ) {
+      const oldest = this.#recentEphemerals.shift()!;
+      this.#recentEphemeralsChars -= oldest.chars;
+      this.#evictedEphemeralThroughOffsetByType.set(oldest.event.type, oldest.event.offset);
+    }
+  }
+
+  /** The ring's size now: what a read that can return only the ring holds. */
+  recentEphemeralsChars() {
+    return this.#recentEphemeralsChars;
+  }
+
+  /** The highest offset of `type` the ring has let go of this incarnation, if any. */
+  evictedEphemeralThroughOffset(type: string) {
+    return this.#evictedEphemeralThroughOffsetByType.get(type);
+  }
+
+  highestAssignedOffset(): number {
+    return this.#highestAssignedOffset;
+  }
+
+  /** 0 on a store that never held a durable row. Ephemeral offsets above it exist only in this
+   *  incarnation's memory. */
+  highestDurableOffset(): number {
+    return this.#highestDurableOffset;
+  }
+
+  /** The core reduced state as of the last commit — what `append`, the dispatcher and the
+   *  delivery loop read, synchronously. */
+  get coreReducedState(): CoreState {
+    return this.#coreReducedState;
+  }
+
+  /** `{ offset, state }` — what `itx.facets.get('core').snapshot()` answers. */
+  coreReducedStateSnapshot(): { offset: number; state: CoreState } {
+    return { offset: this.#coreReducedThroughOffset, state: this.#coreReducedState };
+  }
+
+  // ── APPEND: the commit pipeline, top to bottom ──
+
+  /** Commit a batch. Synchronous end to end (sync SQLite), so the steps never interleave:
+   *
+   *    1. MAY THIS LAND?  well-formed
+   *    2. OFFSETS         idempotency (dedupe or refuse) · the pause (a dedupe hit is admitted, a
+   *                       fresh event refused) · expected offsets · one shared sequence, ephemerals
+   *                       included · the body serialized once and measured against the ceiling —
+   *                       decided in memory, nothing written yet
+   *    3 + 4. REDUCE + COMMIT   rows + the high-water mark + the core reduce with its checkpoint, ONE
+   *                             transaction (an ephemeral-only batch skips this entirely: zero SQL)
+   *    5. AFTER           waiters, then the host's fan-out (every subscriber)
+   *
+   *  Every refusal happens before a single write. The two marks are advanced only AFTER the
+   *  transaction returns, so a throw leaves them true. */
+  append(...events: StreamEventInput[]): StreamEvent[] {
+    if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
+    // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
+    for (const event of events) {
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- append is the SOLE enforcement point (no boundary validator); event.type arrives from callers/the wire, so the static string type is not a runtime guarantee
+      if (typeof event.type !== "string" || event.type.trim() === "")
+        throw new Error("append: every event needs a non-empty type");
+    }
+    // 2. offsets — decided in memory, nothing written yet. THE PAUSE is checked per event AFTER the
+    //    idempotency lookup: replaying an already committed event is safe even while paused; a FRESH
+    //    event on a paused stream is refused unless PAUSE_EXEMPT_EVENT_TYPES names its type.
+    const paused = this.#coreReducedState.paused;
+    const afterOffset = this.#highestAssignedOffset;
+    const createdAt = new Date().toISOString();
+    const committedEvents: StreamEvent[] = []; // one per appended event, in order (a dedupe hit echoes the existing event)
+    const freshEvents: StreamEvent[] = []; // the events NEW to the log, in offset order — what commits, reduces, fans out
+    const eventsByIdempotencyKey = new Map<string, StreamEvent>(); // keys landing earlier in THIS batch
+    const freshDurables: { event: StreamEvent; serializedBody: string }[] = []; // the rows to insert, in offset order
+    const freshEphemerals: { event: StreamEvent; chars: number }[] = []; // for the ring, once the batch lands
+    let throughOffset = afterOffset;
+    let ambientCause: Cause | undefined;
+    for (const event of events) {
+      const { offset: expectedOffset, ...input } = event;
+      // WHERE IT CAME FROM AND WHY, on every event: a writer's origin is the platform's stamp
+      // (caller.ts `stampCaller`), and one without — the platform's own records — came from this
+      // context; its cause is the one it names (the platform's own records name theirs) or the one
+      // the append runs under (`StreamDeps.cause`), else a chain of this context's own.
+      const cause =
+        input.source?.cause ||
+        (ambientCause ||= this.#ambientCause?.() || newChain("a context's own work"));
+      const eventInput = {
+        ...input,
+        source: {
+          ...input.source,
+          origin: input.source?.origin || this.#path,
+          cause: storedCause(cause),
+        },
+      };
+      // IDEMPOTENCY: a key already in the log (or earlier in this batch) answers with THAT event and
+      // consumes no offset; a different body under the same key refuses the whole batch.
+      let existingEvent = eventInput.idempotencyKey
+        ? eventsByIdempotencyKey.get(eventInput.idempotencyKey)
+        : undefined;
+      if (eventInput.idempotencyKey && !existingEvent) {
+        const row = this.storage.readEventByIdempotencyKey(eventInput.idempotencyKey);
+        // row.body is the stored input plus createdAt, written only by the insert below; the row
+        // supplies the offset and the stream the path, which completes a StreamEvent.
+        if (row)
+          existingEvent = {
+            ...(JSON.parse(row.body) as object),
+            offset: row.offset,
+            path: this.#path,
+          } as StreamEvent;
+      }
+      if (existingEvent) {
+        if (!sameIdempotentEvent(existingEvent, eventInput))
+          throw codedError(
+            "IDEMPOTENCY_CONFLICT",
+            idempotencyConflictMessage(eventInput.idempotencyKey!, existingEvent.offset),
+            { existingOffset: existingEvent.offset },
+          );
+        committedEvents.push(existingEvent); // a retry answers with the event it already has, whatever `offset` it hoped for
+        continue;
+      }
+      if (paused && !PAUSE_EXEMPT_EVENT_TYPES.has(eventInput.type))
+        throw codedError("STREAM_PAUSED", `stream paused: ${paused.reason}`);
+      // THE LOOP GUARD (cause.ts): past the limit, code's own events are refused — the platform's
+      // records (a receipt, this very fact) still land.
+      if (!STREAM_RECORD_TYPES.has(eventInput.type))
+        this.#refusePastLoopLimit(cause, `an append of ${eventInput.type} to ${this.#path}`);
+      // EXPECTED OFFSET: an event carrying `offset` lands exactly there or the batch is refused —
+      // "nothing has happened since I last looked".
+      const offset = throughOffset + 1;
+      if (expectedOffset !== undefined && expectedOffset !== offset)
+        throw codedError(
+          "OFFSET_CONFLICT",
+          `expected offset ${expectedOffset}, but the next offset is ${offset}`,
+          { expected: expectedOffset, actual: offset },
+        );
+      throughOffset = offset;
+      // THE BODY, serialized once: the row carries the offset and the stream is the path, so the
+      // stored body is the input plus `createdAt` — adding offset, createdAt and path to the input
+      // is what makes the StreamEvent cast below whole. THE APPEND CEILING (EVENT_BODY_MAX_CHARS) is
+      // measured on it for every event alike — an ephemeral is never stored, but it rides every push
+      // over the same 32 MiB RPC and sits in the same delivery memory.
+      const serializedBody = JSON.stringify({ ...eventInput, createdAt });
+      if (serializedBody.length > EVENT_BODY_MAX_CHARS)
+        throw codedError(
+          "EVENT_TOO_LARGE",
+          `append: the ${JSON.stringify(eventInput.type)} event that would land at offset ${offset} serializes to ${serializedBody.length} chars, over the ${EVENT_BODY_MAX_CHARS / (1024 * 1024)} MiB ceiling — Workers RPC caps a message at 32 MiB and a read holds several copies; store the payload elsewhere and let the event name it. Nothing was appended`,
+          {
+            type: eventInput.type,
+            offset,
+            chars: serializedBody.length,
+            maxChars: EVENT_BODY_MAX_CHARS,
+          },
+        );
+      const committedEvent = { ...eventInput, offset, createdAt, path: this.#path } as StreamEvent;
+      if (eventInput.idempotencyKey)
+        eventsByIdempotencyKey.set(eventInput.idempotencyKey, committedEvent);
+      committedEvents.push(committedEvent);
+      freshEvents.push(committedEvent);
+      if (committedEvent.ephemeral)
+        freshEphemerals.push({ event: committedEvent, chars: serializedBody.length });
+      else freshDurables.push({ event: committedEvent, serializedBody });
+    }
+    if (freshEvents.length === 0) return committedEvents; // every event deduped to an existing one
+    // Only definitions can grow the projection. Completion/cancellation shrink it or advance a
+    // fixed-width nextAt; bounded failure diagnostics are excluded from the definition budget.
+    // Folded here, ahead of the core reduce's own fold, because this refusal depends on the state
+    // and must land before any write: `reduceCoreEventBatch` skips a throwing event, never refuses.
+    if (freshEvents.some((event) => event.type === "events.iterate.com/itx/schedule-set")) {
+      const scheduledAppends = freshEvents.reduce(
+        reduceScheduledAppends,
+        this.#coreReducedState.schedules,
+      );
+      if (
+        Object.keys(scheduledAppends).length > 100 ||
+        JSON.stringify(
+          Object.fromEntries(
+            Object.entries(scheduledAppends).map(([key, { failure: _failure, ...definition }]) => [
+              key,
+              definition,
+            ]),
+          ),
+        ).length >
+          1024 * 1024
+      )
+        throw codedError(
+          "SCHEDULE_LIMIT",
+          "a context may retain at most 100 schedules and 1,048,576 serialized characters; cancel failed definitions before adding more",
+        );
+    }
+    // 3 + 4. reduce and commit
+    if (freshDurables.length === 0) {
+      // THE EPHEMERAL FAST PATH: nothing to store, so no transaction and no high-water write —
+      // what lets a flood of ephemerals leave SQLite untouched (the flood proofs measure it).
+      this.#highestAssignedOffset = throughOffset; // the durable mark is untouched
+    } else {
+      let reducedState = this.#coreReducedState;
+      this.storage.transactionSync(() => {
+        for (const { event, serializedBody } of freshDurables)
+          this.storage.insertEvent(event.offset, serializedBody, event.idempotencyKey || null);
+        // The core reduce checkpoints with this batch: the cursor every batch IS the durable head
+        // (one write, not two), the state on change. Reduced into a LOCAL: the fields move only
+        // after the transaction commits, so a failed write never leaves phantom core state in memory.
+        reducedState = this.#reduceEventsIntoCoreReducedState(freshEvents, reducedState);
+        this.storage.reduceCheckpoints.write(
+          CoreContract.slug,
+          { reducerVersion: CoreContract.version, reducedThroughOffset: throughOffset },
+          reducedState,
+          reducedState !== this.#coreReducedState,
+        );
+      });
+      this.#coreReducedState = reducedState;
+      this.#coreReducedThroughOffset = throughOffset;
+      this.#highestAssignedOffset = throughOffset;
+      this.#highestDurableOffset = throughOffset;
+    }
+    // 5. after the commit — the ring first: an ephemeral is remembered only once its batch has
+    //    landed (a refusal above would leave a phantom at an offset a later batch reuses).
+    for (const { event, chars } of freshEphemerals) this.#rememberEphemeral(event, chars);
+    this.#resolveWaitForEventWaiters(freshEvents); // waiters first: onCommit may append again (a nested commit)
+    this.#onCommit(freshEvents, afterOffset, throughOffset);
+    return committedEvents;
+  }
+
+  /** THE ONE CALL SITE of the core reduce — the commit's fresh events and each page of the constructor's
+   *  re-reduce. A malformed control event must not wedge the stream: record the skip, move on. */
+  #reduceEventsIntoCoreReducedState(events: StreamEvent[], state: CoreState): CoreState {
+    return reduceCoreEventBatch(events, state, (error, event) =>
+      reportIssue("stream.core-reduce", error, { offset: event.offset, type: event.type }),
+    );
+  }
+
+  /** One page after `afterOffset`: at most `limit` DURABLE rows AND at most READ_PAGE_BUDGET_BYTES
+   *  of bodies — the SERVER decides the page, `limit` only shrinks it. With `includeEphemeral`, the
+   *  ephemerals this incarnation still holds (the ring) ride the page too, in offset order: the ones
+   *  inside the page's proven span, and — on the page that reaches the head — the head's tail beyond
+   *  the durable mark. They count against no limit (the ring bounds them), and THE PROOF IS THE
+   *  LOG'S: `scannedThroughOffset` never names an ephemeral, so a head ephemeral comes back on every
+   *  at-head read until a durable takes the head or the ring evicts it — persist
+   *  `scannedThroughOffset`, never an event's offset. SYNCHRONOUS: the stream's own single-turn
+   *  scans call it inline, and cross-hop callers get a promise from Workers RPC regardless. The
+   *  budget bounds ONE read; many large reads at once are an accepted client-behaviour limit
+   *  (test/vitest/os/isolate-ceilings-deployed.e2e.test.ts, CONCURRENT READERS, says why). */
+  read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
+    limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
+    const { rows, nextRowDidNotFit } = this.storage.readEventPage(
+      afterOffset,
+      limit,
+      READ_PAGE_BUDGET_BYTES,
+    );
+    const events: StreamEvent[] = rows.map((row) => {
+      // Written only by `append`: the input as it committed, its origin stamped, plus `createdAt`.
+      let body: Omit<StreamEvent, "offset" | "path">;
+      try {
+        body = JSON.parse(row.body) as Omit<StreamEvent, "offset" | "path">;
+      } catch (error) {
+        // A stored body that is not JSON is storage corruption; name the offset so a reader can
+        // skip past it (`read(offset)`), instead of the platform's parse error naming nothing.
+        throw codedError(
+          "EVENT_UNREADABLE",
+          `read: the stored body at offset ${row.offset} is not JSON (${error instanceof Error ? error.message : String(error)}) — read on from that offset to skip it`,
+          { offset: row.offset },
+        );
+      }
+      return { ...body, offset: row.offset, path: this.#path };
+    });
+    // The proof: a CUT page is contiguously known through its last row; a complete page proves the
+    // scan reached the durable mark — never the in-memory head (the header's zero-write contract).
+    // At head: the scan ran out of rows, or the page's last row IS the durable mark (an
+    // exact-`limit` page at the head must say so — rule 5's caught-up pass rides it).
+    const highestDurableOffset = this.highestDurableOffset();
+    const lastOffset = events.length ? events[events.length - 1].offset : afterOffset;
+    const atHead =
+      !nextRowDidNotFit && (events.length < limit || lastOffset >= highestDurableOffset);
+    const scannedThroughOffset = atHead ? highestDurableOffset : lastOffset;
+    if (options.includeEphemeral) {
+      const ceiling = atHead ? Infinity : scannedThroughOffset;
+      for (const { event } of this.#recentEphemerals)
+        if (event.offset > afterOffset && event.offset <= ceiling) events.push(event);
+      events.sort((a, b) => a.offset - b.offset);
+    }
+    return { events, scannedThroughOffset, atHead };
+  }
+
+  /** Resolve with the next event matching `filter` (`type`: one exact type or one of a list; absent =
+   *  any; `payload`: fields it carries with exactly these values) — or the first COMMITTED durable
+   *  match already in the log after an explicit `filter.afterOffset`. `timeoutMs` defaults to 30s, capped at 120s; expiry rejects with
+   *  codedError("WAIT_TIMEOUT", …). CHECK-AND-WAIT IS ONE SYNCHRONOUS SLICE: zero
+   *  awaits between the log scan and waiter registration (an await there would lose a racing commit
+   *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
+   *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
+  waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
+    const types = filter.type ? [filter.type].flat() : [];
+    const payload = Object.entries(filter.payload || {});
+    const matches = (event: StreamEvent) =>
+      (types.length === 0 || types.includes(event.type)) &&
+      payload.every(
+        ([field, value]) => (event.payload as Record<string, unknown>)?.[field] === value,
+      );
+    const afterOffset = filter.afterOffset ?? this.highestAssignedOffset();
+    const timeoutMs = Math.min(filter.timeoutMs ?? 30_000, 120_000);
+    let cursor = afterOffset;
+    for (;;) {
+      const page = this.read(cursor, 500);
+      for (const event of page.events) if (matches(event)) return Promise.resolve(event);
+      if (page.atHead) break;
+      cursor = page.scannedThroughOffset; // cut by `limit` or the byte budget: read on
+    }
+    return new Promise<StreamEvent>((resolve, reject) => {
+      const waiter: WaitForEventWaiter = {
+        matches,
+        afterOffset,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const at = this.#waitForEventWaiters.indexOf(waiter);
+          if (at !== -1) this.#waitForEventWaiters.splice(at, 1);
+          reject(
+            codedError(
+              "WAIT_TIMEOUT",
+              `waitForEvent: no ${types.length === 0 ? "" : `${types.map((type) => `"${type}"`).join(" | ")} `}event after offset ${afterOffset} within ${timeoutMs}ms`,
+            ),
+          );
+        }, timeoutMs),
+      };
+      this.#waitForEventWaiters.push(waiter);
+    });
+  }
+
+  /** A waiter matches on its filter AND `offset > afterOffset`. The default afterOffset is the head at
+   *  call time, so a default wait settles on the next event; but an explicit afterOffset ahead of
+   *  head (a caller waiting for the stream to REACH an offset), or one left behind by an ephemeral
+   *  offset rewind after eviction, must not be satisfied by an earlier fresh event — the filter's
+   *  documented contract (WaitForEventFilter). */
+  #resolveWaitForEventWaiters(freshEvents: StreamEvent[]): void {
+    for (const event of freshEvents) {
+      if (this.#waitForEventWaiters.length === 0) return;
+      for (const w of [...this.#waitForEventWaiters]) {
+        if (!w.matches(event) || event.offset <= w.afterOffset) continue;
+        this.#waitForEventWaiters.splice(this.#waitForEventWaiters.indexOf(w), 1);
+        clearTimeout(w.timer);
+        w.resolve(event);
+      }
+    }
+  }
+
+  /** The schedules' deadline for the DO's alarm (alarm-coordinator.ts): the earliest pending
+   *  batch's `nextAt`, epoch ms — none while paused (pause holds every scheduled append) or when
+   *  every definition is parked by a failure. */
+  nextScheduledAppendAt(): number | null {
+    if (this.#coreReducedState.paused) return null;
+    let earliest: number | null = null;
+    for (const row of Object.values(this.#coreReducedState.schedules)) {
+      if (row.failure) continue;
+      const at = Date.parse(row.nextAt);
+      earliest = earliest === null ? at : Math.min(earliest, at);
+    }
+    return earliest;
+  }
+}
+
+// ── stream storage ── THE STREAM'S TABLES, typed: every SQL statement the stream runs lives here,
+// over the ONE platform handle — `ctx.storage.sql` and `transactionSync`. Workerd's kv
+// is itself a SQLite table, so the stream keeps none of its own: the whole interface is SQL, and a
+// node:sqlite stand-in satisfies it in a screen (iterate/stream/test-support `nodeSqliteDurableObjectStorage`).
+//
+//   events                offset · body · idempotency_key   one row per durable event
+//   event_chunks          offset · chunk_index · chunk      a body over EVENT_CHUNK_SIZE, sliced —
+//                         the events row keeps an EMPTY body as the chunked marker (a real body is
+//                         never empty JSON); reads and the idempotency lookup reassemble it
+//   stream_meta           key · value                       the incarnation counter
+//   subscription_cursors  name · cursor (JSON)              the delivery loop's at-least-once cursors
+//   subscription_deliveries name · offset · attempt ·       a fan-out row's admitted events, each
+//                         next_attempt_at_ms · leased · error until it is acked or dead-lettered
+//   reduce_checkpoints    ReduceCheckpointTable (processor.ts) the core reduce's checkpoint (a facet host
+//                                                           keeps its own, in its own storage)
+
+/** The slice of `DurableObjectStorage` the stream drives, spelled structurally so a node:sqlite
+ *  stand-in satisfies it; the DO passes its whole `ctx.storage`. */
+export type DurableObjectStorageSlice = {
+  sql: SqlStorageHandle;
+  transactionSync<T>(closure: () => T): T;
+};
+
+/** A serialized body longer than this (chars) is split across `event_chunks` rows instead of one
+ *  SQLite TEXT cell (which caps around 2MB — SQLITE_TOOBIG). A body at or
+ *  under it stays single-cell (the fast path — no chunk join on read). */
+export const EVENT_CHUNK_SIZE = 512 * 1024;
+
+/** THE cursor of a subscription the stream delivers at-least-once (subscription-delivery.ts): the
+ *  offset an acked call confirmed, the ladder attempt, when the next attempt is due, and the
+ *  offset of the delivery-resumed fact already applied (so a resume applies exactly once). A
+ *  FAN-OUT row's `confirmedOffset` is its admission cursor, `nextAttemptAtMs` its next probe while
+ *  it is parked, `parkedProbes` how many it has had since its last success, and `failingOffsets`
+ *  the last distinct events that failed with no success since (its pause). */
+export type SubscriptionCursor = {
+  confirmedOffset: number;
+  attempt: number;
+  nextAttemptAtMs?: number;
+  resumeAppliedAtOffset?: number;
+  failingOffsets?: number[];
+  parkedProbes?: number;
+  /** A fan-out row's: a digest of where its target last resolved (subscription-delivery.ts
+   *  `#evaluateTargetHeadForRow`), kept across incarnations so a re-point while the context slept
+   *  is seen by the next one. */
+  route?: string;
+};
+
+/** One event a fan-out row admitted and still owes (subscription-delivery.ts): the attempts made,
+ *  when it is due — its lease's end while `leased` (a call under this attempt began under this
+ *  deploy and has not reported: stored as the deploy, so a lease another deploy left is none), its
+ *  next rung after a failure, null while the row's target resolves to nothing — and the last
+ *  error. */
+export type FanOutDeliveryRecord = {
+  offset: number;
+  attempt: number;
+  nextAttemptAtMs: number | null;
+  leased: boolean;
+  error: string | null;
+};
+
+/** One durable row as stored: its offset and its serialized body, reassembled. */
+type StoredEventRow = { offset: number; body: string };
+
+class StreamStorage {
+  readonly #storage: DurableObjectStorageSlice;
+  readonly #sql: SqlStorageHandle;
+  /** The core reduce's checkpoint (processor.ts `ReduceCheckpointTable`), in this store. */
+  readonly reduceCheckpoints: ReduceCheckpointTable;
+  /** This incarnation's number — the counter in `stream_meta`, read here and bumped by
+   *  `countIncarnation`: an incarnation starting. Growth across idle ⇒ the actor hibernated. */
+  readonly incarnation: number;
+
+  readonly #deployId: string;
+  constructor(storage: DurableObjectStorageSlice, deployId: string) {
+    this.#deployId = deployId;
+    this.#storage = storage;
+    this.#sql = storage.sql;
+    // The tables ONLY on a virgin store: a store with an incarnation was opened by a prior one and
+    // already has them (they are never dropped) — skipping four CREATEs on every re-wake saves
+    // their prepare+parse. `stream_meta` is the one CREATE that always runs: it holds the answer.
+    this.#sql.exec(
+      "CREATE TABLE IF NOT EXISTS stream_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    );
+    const prior = this.#sql
+      .exec<{ value: string }>("SELECT value FROM stream_meta WHERE key = 'incarnation'")
+      .toArray()[0];
+    if (!prior) {
+      this.#sql.exec(
+        `CREATE TABLE IF NOT EXISTS events (
+           offset INTEGER PRIMARY KEY,
+           body TEXT NOT NULL,
+           idempotency_key TEXT UNIQUE
+         )`,
+      );
+      this.#sql.exec(
+        `CREATE TABLE IF NOT EXISTS event_chunks (
+           offset INTEGER NOT NULL,
+           chunk_index INTEGER NOT NULL,
+           chunk TEXT NOT NULL,
+           PRIMARY KEY (offset, chunk_index)
+         )`,
+      );
+      this.#sql.exec(
+        "CREATE TABLE IF NOT EXISTS subscription_cursors (name TEXT PRIMARY KEY, cursor TEXT NOT NULL)",
+      );
+      this.#sql.exec(
+        `CREATE TABLE IF NOT EXISTS subscription_deliveries (
+           name TEXT NOT NULL,
+           offset INTEGER NOT NULL,
+           attempt INTEGER NOT NULL,
+           next_attempt_at_ms INTEGER,
+           leased TEXT NOT NULL,
+           error TEXT,
+           PRIMARY KEY (name, offset)
+         )`,
+      );
+      ReduceCheckpointTable.createTable(this.#sql);
+    }
+    this.reduceCheckpoints = new ReduceCheckpointTable(this.#sql, { createTable: false });
+    this.incarnation = (prior ? Number(prior.value) : 0) + 1;
+  }
+
+  /** This incarnation's number, written: the store's first write of an incarnation. */
+  countIncarnation(): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO stream_meta (key, value) VALUES ('incarnation', ?)",
+      String(this.incarnation),
+    );
+  }
+
+  transactionSync<T>(closure: () => T): T {
+    return this.#storage.transactionSync(closure);
+  }
+
+  /** The highest offset in the log — 0 on an empty one. The stream's constructor reads it once: a
+   *  log with rows but no core checkpoint is not a store this code wrote. */
+  highestEventOffset(): number {
+    const row = this.#sql
+      .exec<{ offset: number | null }>("SELECT MAX(offset) AS offset FROM events")
+      .toArray()[0];
+    return row?.offset === null || row?.offset === undefined ? 0 : Number(row.offset);
+  }
+
+  /** Insert one durable row (inside the caller's transaction). A body over EVENT_CHUNK_SIZE rides
+   *  `event_chunks` behind an empty marker cell, and a cut NEVER splits a UTF-16 surrogate PAIR
+   *  across two cells: a lone surrogate becomes U+FFFD on the SQLite TEXT bind, silently corrupting
+   *  the body — if the cut lands right after a high surrogate, it keeps the low half with it. */
+  insertEvent(offset: number, serializedBody: string, idempotencyKey: string | null): void {
+    if (serializedBody.length <= EVENT_CHUNK_SIZE) {
+      this.#sql.exec(
+        "INSERT INTO events (offset, body, idempotency_key) VALUES (?, ?, ?)",
+        offset,
+        serializedBody,
+        idempotencyKey,
+      );
+      return;
+    }
+    this.#sql.exec(
+      "INSERT INTO events (offset, body, idempotency_key) VALUES (?, '', ?)",
+      offset,
+      idempotencyKey,
+    );
+    for (let start = 0, idx = 0; start < serializedBody.length; idx++) {
+      let end = Math.min(start + EVENT_CHUNK_SIZE, serializedBody.length);
+      if (end < serializedBody.length) {
+        const c = serializedBody.charCodeAt(end - 1);
+        if (c >= 0xd800 && c <= 0xdbff) end -= 1;
+      }
+      this.#sql.exec(
+        "INSERT INTO event_chunks (offset, chunk_index, chunk) VALUES (?, ?, ?)",
+        offset,
+        idx,
+        serializedBody.slice(start, end),
+      );
+      start = end;
+    }
+  }
+
+  /** The row under an idempotency key, body reassembled — the dedupe lookup. */
+  readEventByIdempotencyKey(idempotencyKey: string): StoredEventRow | undefined {
+    const row = this.#sql
+      .exec<{ offset: number; body: string }>(
+        "SELECT offset, body FROM events WHERE idempotency_key = ?",
+        idempotencyKey,
+      )
+      .toArray()[0];
+    if (!row) return undefined;
+    const offset = Number(row.offset);
+    return { offset, body: this.#reassembleBody(offset, String(row.body)) };
+  }
+
+  /** The rows after `afterOffset`: at most `limit`, and at most `budgetBytes` of bodies as SQLite
+   *  counts them (UTF-8). The cursor is ITERATED and each row's size comes back with it, so no body
+   *  is built and then dropped; a page always carries ≥ 1 row. `nextRowDidNotFit` says the budget,
+   *  not the log, ended the page. */
+  readEventPage(
+    afterOffset: number,
+    limit: number,
+    budgetBytes: number,
+  ): { rows: StoredEventRow[]; nextRowDidNotFit: boolean } {
+    const rows: StoredEventRow[] = [];
+    let pageBytes = 0;
+    for (const row of this.#sql.exec<{ offset: number; body: string; body_bytes: number }>(
+      `SELECT offset, body,
+              length(CAST(body AS BLOB)) + COALESCE((SELECT SUM(length(CAST(chunk AS BLOB)))
+                FROM event_chunks WHERE event_chunks.offset = events.offset), 0) AS body_bytes
+         FROM events WHERE offset > ? ORDER BY offset LIMIT ?`,
+      afterOffset,
+      limit,
+    )) {
+      if (rows.length > 0 && pageBytes + Number(row.body_bytes) > budgetBytes)
+        return { rows, nextRowDidNotFit: true }; // the cursor is left undrained (workerd frees the statement with it)
+      pageBytes += Number(row.body_bytes);
+      const offset = Number(row.offset);
+      rows.push({ offset, body: this.#reassembleBody(offset, String(row.body)) });
+    }
+    return { rows, nextRowDidNotFit: false };
+  }
+
+  listSubscriptionCursors(): [name: string, cursor: SubscriptionCursor][] {
+    return (
+      this.#sql
+        .exec<{ name: string; cursor: string }>("SELECT name, cursor FROM subscription_cursors")
+        .toArray()
+        // `cursor` is written only by writeSubscriptionCursor, as JSON.stringify(SubscriptionCursor).
+        .map((row) => [String(row.name), JSON.parse(String(row.cursor)) as SubscriptionCursor])
+    );
+  }
+
+  writeSubscriptionCursor(name: string, cursor: SubscriptionCursor): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO subscription_cursors (name, cursor) VALUES (?, ?)",
+      name,
+      JSON.stringify(cursor),
+    );
+  }
+
+  deleteSubscriptionCursor(name: string): void {
+    this.#sql.exec("DELETE FROM subscription_cursors WHERE name = ?", name);
+  }
+
+  /** Every fan-out delivery record, every row: the delivery loop reads them once, as it starts. */
+  listSubscriptionDeliveries(): [name: string, record: FanOutDeliveryRecord][] {
+    return this.#sql
+      .exec<{
+        name: string;
+        offset: number;
+        attempt: number;
+        next_attempt_at_ms: number | null;
+        leased: string;
+        error: string | null;
+      }>(
+        "SELECT name, offset, attempt, next_attempt_at_ms, leased, error FROM subscription_deliveries",
+      )
+      .toArray()
+      .map((row) => [
+        String(row.name),
+        {
+          offset: Number(row.offset),
+          attempt: Number(row.attempt),
+          nextAttemptAtMs: row.next_attempt_at_ms === null ? null : Number(row.next_attempt_at_ms),
+          leased: String(row.leased) === this.#deployId,
+          error: row.error || null,
+        },
+      ]);
+  }
+
+  writeSubscriptionDelivery(name: string, record: FanOutDeliveryRecord): void {
+    this.#sql.exec(
+      "INSERT OR REPLACE INTO subscription_deliveries (name, offset, attempt, next_attempt_at_ms, leased, error) VALUES (?, ?, ?, ?, ?, ?)",
+      name,
+      record.offset,
+      record.attempt,
+      record.nextAttemptAtMs,
+      record.leased ? this.#deployId : "",
+      record.error,
+    );
+  }
+
+  /** One delivery settled: acked or dead-lettered. */
+  deleteSubscriptionDelivery(name: string, offset: number): void {
+    this.#sql.exec(
+      "DELETE FROM subscription_deliveries WHERE name = ? AND offset = ?",
+      name,
+      offset,
+    );
+  }
+
+  /** Every delivery record of a row that was removed or replaced. */
+  deleteSubscriptionDeliveries(name: string): void {
+    this.#sql.exec("DELETE FROM subscription_deliveries WHERE name = ?", name);
+  }
+
+  /** An EMPTY cell is the chunked marker (a real body is never empty JSON); otherwise the cell IS the body. */
+  #reassembleBody(offset: number, cell: string): string {
+    if (cell !== "") return cell;
+    return this.#sql
+      .exec<{ chunk: string }>(
+        "SELECT chunk FROM event_chunks WHERE offset = ? ORDER BY chunk_index",
+        offset,
+      )
+      .toArray()
+      .map((r) => String(r.chunk))
+      .join("");
+  }
+}
+
+/** A CONTEXT reachable over the wire — what `itx.cd('/x')` routes through. Named with the REAL
+ *  event types and Promise-returning throughout, so every backing satisfies it structurally with
+ *  ZERO casts: the IterateContextDurableObject itself (its own path hands `this`), a sibling
+ *  `DurableObjectStub<IterateContextDurableObject>`, an off-platform `RpcTarget` over capnweb. */
+export interface ReachableContext {
+  fetch(request: Request): Promise<Response>;
+  append(...events: StreamEventInput[]): Promise<StreamEvent[]>;
+  read(
+    afterOffset?: number,
+    limit?: number,
+    options?: { includeEphemeral?: boolean },
+  ): Promise<StreamPage>;
+  /** A delivery's write reserved at most once (integrations/email.ts): the event already recorded
+   *  under `key`, or whether this attempt reserved it now. */
+  reserveSend(key: string): Promise<{ recorded?: StreamEvent; reserved: boolean }>;
+  /** A reservation's release: what it was for did not happen. */
+  releaseSend(key: string): Promise<void>;
+  /** THE dispatch entry point. `caller` (WHO is calling) is what a `cd(path)` hop carries across to a
+   *  sibling — the same identity, so a sibling append is attributed too; `args` are the expression's
+   *  positional args. Both optional, so a bare `invoke(call)` is an anonymous probe. */
+  invoke(call: ItxExpressionInput, args?: unknown[], caller?: Caller): Promise<unknown>;
+}

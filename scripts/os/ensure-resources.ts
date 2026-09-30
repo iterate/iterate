@@ -2,8 +2,8 @@ import { createCli } from "trpc-cli";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
 import { ensureProxiedDnsRecord } from "../lib/deploy-helpers.ts";
-import { osResourceNames } from "../../apps/os/scripts/os-env.ts";
-import { routedHostnames } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { osResourceNames } from "../../core/os/scripts/os-env.ts";
+import { routedHostnames } from "../../core/os/scripts/generate-wrangler-config.ts";
 import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
@@ -48,7 +48,7 @@ export default async function ensureResources(options: { env: string }) {
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );
   // every routed hostname; a project's own custom hostnames are the worker's, at runtime
-  // (apps/os/src/project/custom-hostnames.ts)
+  // (core/os/src/project/custom-hostnames.ts)
   for (const { hostname } of routedHostnames(ctx.env))
     await ensureProxiedDnsRecord(ctx, zones, hostname, "Clean-room OAuth deployment");
   // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print
@@ -65,5 +65,4 @@ export default async function ensureResources(options: { env: string }) {
   }
   console.log(`✅ ${ctx.env.name} resources all present and match envs.ts`);
 }
-if (process.argv[1]?.endsWith("ensure-resources.ts"))
-  void createCli({ ...import.meta, name: "ensure-resources" }).run();
+void createCli({ ...import.meta, name: "ensure-resources" }).run();

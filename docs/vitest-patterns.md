@@ -13,8 +13,8 @@ Every new or edited test follows these nine rules.
    `test.each`, tuple rows or printf titles. A body with four or more
    `expect(f(…))` on one `f` is a table.
 2. **One fixture home per suite.** Unit files use their domain harness
-   (`iterate/stream/test-support`), Workers files `__workers-tests__/support.ts`,
-   e2e files `e2e/support/`, specs `specs/test-support/`. A helper two suites
+   (`iterate/stream/test-support`), Workers files `test/vitest/os-workers/support.ts`,
+   e2e files `test/helpers/`, specs `test/helpers/`. A helper two suites
    need moves down a layer, never into a copy
    ([where test helpers live](testing.md#where-test-helpers-live)).
 3. **No casts in test bodies.** One typed builder at the bottom of the file,
@@ -63,21 +63,22 @@ rule 1 included, is review.
 
 Each kind of test has one shape:
 
-| Kind                     | Lives in                                             | Shape                                                                                                                                                 |
-| ------------------------ | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pure function            | `x.test.ts` beside `x.ts`                            | One `test.for`, one assertion body, the expected value a literal in the row; wide inputs from one typed builder                                       |
-| Processor or reducer     | `processor.test.ts`, `core-processor.test.ts`        | Rows of `{ name, events, expected }`, events from short builders below the tests, and a re-reduce row ([ship-with rules](testing.md#ship-with-rules)) |
-| Stateful unit            | `rpc-stub-relay.test.ts`, `library.test.ts`          | One typed builder per collaborator, with defaults; a test passes only what differs                                                                    |
-| Workers                  | `apps/os/__workers-tests__/<topic>.test.ts`          | Only cases that need `cloudflare:test` controls; `readLog` and `snapshot`; files named by topic, not by incident                                      |
-| OS e2e                   | `apps/os/e2e/<topic>.e2e.test.ts`                    | One story per test on its own project (`freshCtx`); whole responses with `toMatchObject`; gates from `project-host.ts`                                |
-| Agents e2e               | `apps/agents/e2e/`                                   | As OS e2e; scenarios that differ only in the fake `itx.ai` are rows                                                                                   |
-| Browser spec             | `specs/<app>/*.spec.ts`                              | [specs/AGENTS.md](../specs/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table                                |
-| Perf                     | `apps/os/perf/<topic>.perf.test.ts`                  | Rows of `{ metric, load }`; budgets in `perf/latency.ts`                                                                                              |
-| CI script                | `scripts/**`, `apps/*/scripts/`                      | A table over the pure decision function, IO injected; no tests of argument parsing, log wording or another file's text                                |
-| Config conformance       | `depot-workflows.test.ts`, `lint/oxlintrc-*.test.ts` | Only invariants that guard cost or security, each a rule over every workflow or config                                                                |
-| Lint rule                | `lint/oxlint-plugin-*.test.ts`                       | Rows of `{ name, source, reports }`, each source a template literal, one body through `lintOne`                                                       |
-| Test support's own tests | `packages/shared/src/test-support/`                  | A fake run from one typed builder per reporter                                                                                                        |
-| Firmware host            | `apps/kit/firmware/tests/*_test.c`                   | `<assert.h>` (CMake passes `-UNDEBUG`), shared fixtures in a header (`capnweb_capture.h`), no per-file assert macros                                  |
+| Kind                     | Lives in                                             | Shape                                                                                                                                                                |
+| ------------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pure function            | `x.test.ts` beside `x.ts`                            | One `test.for`, one assertion body, the expected value a literal in the row; wide inputs from one typed builder                                                      |
+| Processor or reducer     | `processor.test.ts`, `core-processor.test.ts`        | Rows of `{ name, events, expected }`, events from short builders below the tests, and a re-reduce row ([ship-with rules](testing.md#ship-with-rules))                |
+| Stateful unit            | `rpc-stub-relay.test.ts`, `library.test.ts`          | One typed builder per collaborator, with defaults; a test passes only what differs                                                                                   |
+| Workers                  | `test/vitest/os-workers/<topic>.test.ts`             | Only cases that need `cloudflare:test` controls; `readLog` and `snapshot`; files named by topic, not by incident                                                     |
+| In-process platform      | `test/vitest/os/<topic>.test.ts`                     | The platform staged in this process or its children (a bare workerd, a memory-capped Node child, a Vite dev server); never in core/os, which keeps simple unit tests |
+| OS e2e                   | `test/vitest/os/<topic>.e2e.test.ts`                 | One story per test on its own project (`freshCtx`); whole responses with `toMatchObject`; gates from `project-host.ts`                                               |
+| Agents e2e               | `test/vitest/agents/`                                | As OS e2e; scenarios that differ only in the fake `itx.ai` are rows                                                                                                  |
+| Browser spec             | `test/playwright/<app>/*.spec.ts`                    | [test/playwright/AGENTS.md](../test/playwright/AGENTS.md); Playwright has no `test.for`, so `for (const row of rows) test(…)` is the table                           |
+| Perf                     | `test/vitest/os/perf/<topic>.perf.test.ts`           | Rows of `{ metric, load }`; budgets in `perf/latency.ts`                                                                                                             |
+| CI script                | `scripts/**`, `apps/*/scripts/`                      | A table over the pure decision function, IO injected; no tests of argument parsing, log wording or another file's text                                               |
+| Config conformance       | `depot-workflows.test.ts`, `lint/oxlintrc-*.test.ts` | Only invariants that guard cost or security, each a rule over every workflow or config                                                                               |
+| Lint rule                | `lint/oxlint-plugin-*.test.ts`                       | Rows of `{ name, source, reports }`, each source a template literal, one body through `lintOne`                                                                      |
+| Test support's own tests | `packages/shared/src/test-support/`                  | A fake run from one typed builder per reporter                                                                                                                       |
+| Firmware host            | `apps/kit/firmware/tests/*_test.c`                   | `<assert.h>` (CMake passes `-UNDEBUG`), shared fixtures in a header (`capnweb_capture.h`), no per-file assert macros                                                 |
 
 ## Test-style lint rules
 
@@ -106,16 +107,16 @@ test.for([
 });
 ```
 
-The Cloudflare refusal table in `apps/os/__workers-tests__/identity.test.ts`
+The Cloudflare refusal table in `test/vitest/os-workers/identity.test.ts`
 is a model: each refusal case as a row of data with a literal expected status,
 `$name` as the title, and one assertion body.
 
 A `$field` title prints the row's value quoted and whole: every vitest config
-(each `apps/os` project too) sets `chaiConfig: { truncateThreshold: 0 }`, where
+(each `core/os` project too) sets `chaiConfig: { truncateThreshold: 0 }`, where
 Vitest's default cuts it at 40 characters with `…`. The same setting prints a
 failed assertion's values whole. `test.for`'s options apply to every row, so a
 per-row bound such as a timeout goes to the code it bounds
-(`memory-budget.test.ts` passes each row's timeout to its child process).
+(`test/vitest/os/memory-budget.test.ts` passes each row's timeout to its child process).
 
 Expectations are literals a reviewer can read against the row's inputs — not
 snapshots. `.toMatchInlineSnapshot()` regenerates on demand, which turns
@@ -129,7 +130,7 @@ instead of snapshotting the whole thing.
 The Workers suite and the e2e suite each poll with their own
 `until(label, fn, timeoutMs?)`, suite-local by design
 ([test helper layers](testing.md#where-test-helpers-live)):
-`apps/os/__workers-tests__/support.ts` and `apps/os/e2e/support/client.ts`.
+`test/vitest/os-workers/support.ts` and `test/helpers/client.ts`.
 `until` returns the first value that is neither `undefined` nor `false`, and
 throws `until(<label>): timed out …` once `timeoutMs` passes (10s in the
 Workers suite, 20s in e2e, whose copy also polls through a throwing `fn`):

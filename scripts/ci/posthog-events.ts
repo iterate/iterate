@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { fetchRetryingPlatformFailures } from "iterate/platform-retry";
 
 export type PostHogEvent = {
   event: string;

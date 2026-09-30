@@ -33,9 +33,16 @@
     "./expression": "./src/expression.ts",
     "./principal": "./src/principal.ts",
     "./stream/processor": "./src/stream/processor.ts",
+    "./stream/contract": "./src/stream/contract.ts",
     "./stream/test-support": "./src/stream/test-support.ts",
     "./oauth-scopes": "./src/oauth-scopes.ts",
     "./project-ingress": "./src/project-ingress.ts",
+    "./app-config": "./src/app-config.ts",
+    "./compatibility-date": "./src/compatibility-date.ts",
+    "./pkg-pr-new": "./src/pkg-pr-new.ts",
+    "./platform-retry": "./src/platform-retry.ts",
+    "./config-repo-template": "./src/config-repo-template.ts",
+    "./integration-scopes": "./src/integration-scopes.ts",
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
@@ -88,6 +95,10 @@
         "types": "./dist/stream/processor.d.mts",
         "import": "./dist/stream/processor.mjs"
       },
+      "./stream/contract": {
+        "types": "./dist/stream/contract.d.mts",
+        "import": "./dist/stream/contract.mjs"
+      },
       "./stream/test-support": {
         "types": "./dist/stream/test-support.d.mts",
         "import": "./dist/stream/test-support.mjs"
@@ -99,6 +110,30 @@
       "./project-ingress": {
         "types": "./dist/project-ingress.d.mts",
         "import": "./dist/project-ingress.mjs"
+      },
+      "./app-config": {
+        "types": "./dist/app-config.d.mts",
+        "import": "./dist/app-config.mjs"
+      },
+      "./compatibility-date": {
+        "types": "./dist/compatibility-date.d.mts",
+        "import": "./dist/compatibility-date.mjs"
+      },
+      "./pkg-pr-new": {
+        "types": "./dist/pkg-pr-new.d.mts",
+        "import": "./dist/pkg-pr-new.mjs"
+      },
+      "./platform-retry": {
+        "types": "./dist/platform-retry.d.mts",
+        "import": "./dist/platform-retry.mjs"
+      },
+      "./config-repo-template": {
+        "types": "./dist/config-repo-template.d.mts",
+        "import": "./dist/config-repo-template.mjs"
+      },
+      "./integration-scopes": {
+        "types": "./dist/integration-scopes.d.mts",
+        "import": "./dist/integration-scopes.mjs"
       },
       "./oauth": {
         "types": "./dist/oauth.d.mts",

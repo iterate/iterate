@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const script = resolve(import.meta.dirname, "esp-idf.sh");
@@ -58,7 +58,7 @@ test.for([
 });
 
 function fixture() {
-  const root = temporaryDirectory();
+  const root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const idfPath = join(root.path, "esp-idf");
   const toolsPath = join(root.path, "espressif");
   const githubEnv = join(root.path, "github-env");

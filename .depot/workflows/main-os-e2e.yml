@@ -1,6 +1,6 @@
 # MAIN'S E2E RUN on the dev/preview account, in parallel with Deploy OS, which waits for none of
 # it: a push to main (the paths a PR preview runs for) deploys a fresh set of plain Workers for the
-# pushed commit, `main-<sha7>-<app>` (envs.ts `previewDeployment`), apps/os and the clients on top,
+# pushed commit, `main-<sha7>-<app>` (envs.ts `previewDeployment`), core/os and the clients on top,
 # and runs the e2e suite and the browser specs against it, each in its own job, the jobs a PR's
 # Preview OS has, by the same names: Deploy preview, and beside it from the start E2E tests (every
 # row, the ones tagged `slow` that most PRs skip too) and Browser specs in shards, each set up
@@ -46,7 +46,7 @@ on:
       - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
       - .depot/workflows/main-os-e2e.yml
-      - apps/os/**
+      - core/os/**
       - configs/**
       - apps/dash/**
       - apps/agents/**
@@ -57,8 +57,7 @@ on:
       - apps/kit/**
       # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
       - "!apps/kit/firmware/**"
-      - specs/**
-      - playwright.config.ts
+      - test/**
       - packages/cli/**
       - packages/iterate/**
       - packages/agents/**
@@ -188,7 +187,7 @@ jobs:
         id: suite
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # the agents rows' GitHub calls (apps/agents/e2e/support.ts `publishedPackage`)
+          # the agents rows' GitHub calls (test/vitest/agents/support.ts `publishedPackage`)
           GITHUB_TOKEN: ${{ github.token }}
           E2E_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           # the job whose end starts the suite (scripts/ci/await-deploy.ts)

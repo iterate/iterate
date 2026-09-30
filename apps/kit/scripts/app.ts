@@ -1,4 +1,3 @@
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { kitEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -9,4 +8,4 @@ export const kit = {
   root: new URL("..", import.meta.url),
   envs: kitEnvs,
 };
-if (isMainModule(import.meta.url)) void startAppCli(kit).run();
+if (import.meta.main) void startAppCli(kit).run();

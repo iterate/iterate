@@ -1,5 +1,5 @@
 // sdk/loaded-worker.test.ts — what every loaded worker evaluates first, on the `cloudflare:workers`
-// shim's base class. In a loaded isolate: apps/os __workers-tests__/loop-guard.test.ts.
+// shim's base class. In a loaded isolate: core/os test/vitest/os-workers/loop-guard.test.ts.
 import "./loaded-worker.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { expect, test } from "vitest";
