@@ -1,6 +1,7 @@
 // Comments on a doc: events on the doc's own context, never text in the file. A comment on a typo
 // reaches another member live, their reply reaches its author, an agent's commit fixing the typo
-// leaves the comment on the corrected word, and any member may resolve it.
+// leaves the comment on the corrected word, an agent replies as packages/docs/AGENTS.md says and
+// the page names it, and any member may resolve it.
 import { projectUrlOf } from "iterate/project-ingress";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { test } from "../test-support/test.ts";
@@ -55,6 +56,22 @@ test("two people comment on a typo, an agent fixes it and the comment stays on t
   // timeout: a commit made elsewhere, so the spinner-waiter has nothing to extend by
   await onFix.filter({ hasText: "The one by the station." }).waitFor({ timeout: 10_000 });
   await jonas.page.getByRole("article", { name: "Comment on “Hotel”" }).waitFor();
+
+  // An agent working for Misha replies, reading the thread and appending the reply as the agent
+  // guide says; the page shows who it was
+  const doc = fixture.itx.cd("/docs/config/plan.md");
+  const { state }: any = await doc.invoke("itx.facets.get('doc').liveSnapshot()");
+  await doc.append({
+    type: "docs/comment-replied",
+    payload: {
+      thread: state.threads[0].id,
+      comment: crypto.randomUUID(),
+      body: "Booked at the one by the station.",
+      via: "Claude Code",
+    },
+  });
+  // timeout: an agent's reply, so the spinner-waiter has nothing to extend by
+  await onFix.filter({ hasText: "· Claude Code" }).waitFor({ timeout: 10_000 });
 
   // Jonas resolves it: anyone can, and it folds away for Misha too
   await jonas.page

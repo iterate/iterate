@@ -25,6 +25,19 @@ export const docsModule = {
 
 const RootManifest = z.object({ dependencies: z.record(z.string(), z.string()).optional() });
 
+/** The guide an agent follows to work on docs (this package's AGENTS.md), on main. */
+export const docsAgentGuide =
+  "https://raw.githubusercontent.com/iterate/iterate/main/packages/docs/AGENTS.md";
+
+/** What `installDocs` adds to the config's AGENTS.md, which an agent on the platform's MCP server
+ *  is told to read first: where the guide is. */
+export const docsAgentsSection = `## Docs
+
+Docs (\`docs.ts\`, @iterate-com/docs) co-edits this project's files in the browser. An agent edits a
+doc by committing it, and comments on one with events on its context, \`/docs/<repo name>/<path>\`,
+as ${docsAgentGuide} says.
+`;
+
 /** Install Docs in a project's config at `version` (a pkg.pr.new build at its commit, or an npm
  *  version): `docs.ts` and the root package.json's pin, one commit, then the config's publication
  *  of it. Resolves once the project runs it; throws with the platform's reason when it refused the
@@ -43,12 +56,22 @@ export async function installDocs(
   // the pin set in place: every other field and dependency keeps its value and its order
   const { dependencies } = RootManifest.parse(manifest);
   manifest.dependencies = { ...dependencies, "@iterate-com/docs": version };
+  // the guide's pointer, once: a section already there (a reinstall, the owner's own words) stays
+  const agents = (await repo.readFile("AGENTS.md")) || "";
   const { commitOid } = await repo.commitFiles({
     message: `Install @iterate-com/docs at ${version}`,
     parent: tip,
     changes: [
       docsModule,
       { path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
+      ...(agents.includes(docsAgentGuide)
+        ? []
+        : [
+            {
+              path: "AGENTS.md",
+              content: agents ? `${agents.trimEnd()}\n\n${docsAgentsSection}` : docsAgentsSection,
+            },
+          ]),
     ],
   });
   // one deadline for the whole wait: a give-up for now does not restart it

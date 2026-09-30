@@ -17,7 +17,8 @@
     "./anchor": "./src/anchor.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "AGENTS.md"
   ],
   "publishConfig": {
     "access": "public",
