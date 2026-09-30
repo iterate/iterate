@@ -5,8 +5,10 @@ size: medium
 
 # What a `run` script writes says who asked for it
 
-Status: [poc] specified. Carries the requester of a `run` onto what its script writes, as a signed
-`onBehalfOf` riding the run's cause. Attribution only; the script's authority is unchanged.
+Status: [poc] built, waiting on its preview. Events a `run` script appends carry `source.onBehalfOf`
+(the requester, their grant, the run), from a signed token on the run's cause; Docs reads it. Not
+done: a commit's git author (the repo facet can't verify the token; its `repo/commit-completed` event
+does say who asked).
 
 ## What we saw
 
@@ -107,13 +109,13 @@ panel's "/ · Claude Code" becomes "misha · Claude Code".
 
 ## The plan (poc)
 
-- [ ] `Cause.onBehalfOf` (the signed token) through `parseCause`, never in `storedCause`
-- [ ] the runner signs it from the request's stamped principal and grant (`#executeRun`)
-- [ ] `ItxEntrypoint.#caller` verifies it into `Caller.onBehalfOf`; hops keep it
-- [ ] `stampCaller` stamps `source.onBehalfOf`; the SDK's `StreamEvent` source type has it
-- [ ] a commit with no `author` under `onBehalfOf` is authored by the requester
-- [ ] Docs' `authorOf` reads it; the MCP instructions say it
-- [ ] tests: unit (token round trip, stampCaller, forged token ignored) and e2e (an MCP run's append)
+- [x] `Cause.onBehalfOf` (the signed token) through `parseCause`, never in `storedCause` _(cause.ts; never a mark's, never a delivery's)_
+- [x] the runner signs it from the request's stamped principal and grant (`#executeRun`) _(`requesterOf`, `mintOnBehalfOf`; a redirect's request passes it on)_
+- [x] ~~`ItxEntrypoint.#caller` verifies it~~ the append verifies it into `Caller.onBehalfOf` _(context/built-ins.ts: `#caller` is synchronous and HMAC verification isn't; hops keep the token in the cause)_
+- [x] `stampCaller` stamps `source.onBehalfOf`; the SDK's `StreamEvent` source type has it
+- [ ] a commit with no `author` under `onBehalfOf` is authored by the requester _(not in the poc: the repo facet's env has no signing secret; first-party facets would need the host to hand them the verified identity)_
+- [x] Docs' `authorOf` reads it; the MCP instructions say it
+- [x] tests: unit (token round trip, stampCaller, forged token ignored) and e2e (an MCP run's append) _(on-behalf-of.test.ts, cause.test.ts, caller.test.ts, docs processor.test.ts, e2e/mcp-project-root.e2e.test.ts)_
 
 ## Rollout
 
@@ -121,3 +123,9 @@ Core, so with Jonas. The change is additive (a new optional field), readers opt 
 that reads `source.principal` changes meaning. Old events stay as they were.
 
 ## Implementation log
+
+- 2026-09-30: who-asked rides the CAUSE, not the loaded worker's props: loaded isolates are reused
+  by content hash and share one loopback `ITX` stub per context, so props would put one requester's
+  name on the next run's writes. The cause is per call. It is unsigned by design, hence the token.
+- Verified at the append (async), not in `ItxEntrypoint.#caller` (sync). The workerd tests for runs,
+  the loop guard, alarm-started runs and wake causes pass unchanged.

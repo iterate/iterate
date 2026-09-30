@@ -103,7 +103,21 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
       'async (itx) => { await itx.cd("/notes/mcp").append({ type: "note", payload: { ok: true } }); await itx.kv.put("mcp", "root"); return itx.kv.get("mcp"); }',
     ),
   ).toBe("root");
-  expect((await readAll(root.cd("/notes/mcp"))).some((e) => e.type === "note")).toBe(true);
+  // what the script wrote is for the person who asked for the run, through their grant; the
+  // script itself called as the project's code
+  expect((await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")).toMatchObject({
+    source: {
+      origin: "/",
+      onBehalfOf: {
+        principal: { actor: principal.actor },
+        grant: grantId,
+        run: expect.stringMatching(/^\/@\d+$/),
+      },
+    },
+  });
+  expect(
+    (await readAll(root.cd("/notes/mcp"))).find((e) => e.type === "note")?.source,
+  ).not.toHaveProperty("principal");
 
   const changes = [
     { path: "app/page.js", content: 'export const html = "<h1>MCP config repo publication</h1>";' },

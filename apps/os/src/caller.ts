@@ -9,6 +9,7 @@ import { codedError } from "iterate/lib";
 import type { Principal } from "iterate/principal";
 import type { StreamEventInput } from "iterate/stream/processor";
 import { storedCause, type Cause } from "./cause.ts";
+import type { OnBehalfOf } from "./on-behalf-of.ts";
 
 /** WHO is making a call: the acting principal (null = anonymous). The one thing carried through every
  *  dispatch and every sibling hop (`invoke(call, args, caller)`). Set ONLY by trusted code — the edge
@@ -51,6 +52,9 @@ export type Caller = {
   /** WHY the call is made (cause.ts), stamped on every event it appends. Absent where a call begins
    *  a chain: the context it reaches begins one. */
   cause?: Cause;
+  /** WHO A SCRIPT RUNS FOR (on-behalf-of.ts): its cause's token, verified by the append that
+   *  stamps it (context/built-ins.ts). Attribution only: authority is still the principal's. */
+  onBehalfOf?: OnBehalfOf;
   /** THE PERSON THEMSELVES, managing their own account: the principal's own OAuth grant holds the
    *  `account` scope and nobody acts as them (session.ts `#caller`). Absent for a grant bound to
    *  projects or without `account`, an admin's sign-in as someone, the admin secret (with or without
@@ -84,6 +88,7 @@ export function stampCaller<E extends { source?: StreamEventInput["source"] }>(
   if (event.source?.processor) source.processor = event.source.processor;
   if (caller.principal) source.principal = caller.principal;
   if (caller.principal && caller.grant) source.grant = caller.grant;
+  if (caller.onBehalfOf) source.onBehalfOf = caller.onBehalfOf;
   if (caller.platform) source.platform = true;
   return { ...event, source };
 }

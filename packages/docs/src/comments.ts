@@ -85,9 +85,11 @@ export const CommentThread = z.object({
 });
 export type CommentThread = z.infer<typeof CommentThread>;
 
-/** Who wrote an event: the person, else the context it was written from (an agent's). */
+/** Who wrote an event: the person, or the person a script ran for (an agent over MCP, as them),
+ *  else the context it was written from (an agent's own). */
 export function authorOf(event: Pick<StreamEvent, "source">) {
-  return event.source.principal?.email || event.source.principal?.actor || event.source.origin;
+  const person = event.source.principal || event.source.onBehalfOf?.principal;
+  return person?.email || person?.actor || event.source.origin;
 }
 
 /** The threads after `event`; the same array when it changes nothing (not a comment event, a

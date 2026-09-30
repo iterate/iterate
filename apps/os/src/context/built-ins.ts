@@ -40,6 +40,7 @@ import { missingScopes } from "@iterate-com/shared/integration-scopes";
 import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
+import { verifyOnBehalfOf } from "../on-behalf-of.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
 import { Kept } from "../kept.ts";
 import { facetStateOf } from "../context-stub.ts";
@@ -570,8 +571,9 @@ export interface BuildBuiltInsDeps {
    *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
    *  delivery loop, an alarm. */
   platformOrigin: () => string | null;
-  /** The key `itx.r2.presign` signs a file URL with (app-config.ts `sessionSigningSecretOf`). */
-  fileUrlSecret: () => Promise<string>;
+  /** The key the platform signs its own tokens with (app-config.ts `sessionSigningSecretOf`): a
+   *  file URL (`itx.r2.presign`), and who a script runs for (on-behalf-of.ts). */
+  signingSecret: () => Promise<string>;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
    *  `getCode`, so only on a cold isolate). */
   invoke: (call: ItxExpression) => Promise<unknown>;
@@ -660,7 +662,16 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           : event,
       ),
     );
-    return ownContext().append(...keyed.map((event) => stampCaller(event, caller, path)));
+    // who a script runs for, from its cause's signed token (on-behalf-of.ts): nobody's when forged
+    const onBehalfOf = await verifyOnBehalfOf(
+      caller.cause?.onBehalfOf,
+      projectId,
+      await deps.signingSecret(),
+      Date.now(),
+    );
+    return ownContext().append(
+      ...keyed.map((event) => stampCaller(event, { ...caller, onBehalfOf }, path)),
+    );
   };
   /** THE PLATFORM'S OWN HOP: the caller rides — principal and grant (the facts stay attributed),
    *  path and origin — but never its `app`: the app wall (itx-expression-rewriting.ts `#admit`) is
@@ -2169,7 +2180,7 @@ export function projectConfigDeps(
     },
     ingressRouting: appConfig.urls.ingressRouting,
     projectWildcard: appConfig.urls.projectWildcard,
-    fileUrlSecret: () => sessionSigningSecretOf(appConfig),
+    signingSecret: () => sessionSigningSecretOf(appConfig),
   } satisfies Partial<BuildBuiltInsDeps>;
 }
 
@@ -2185,7 +2196,7 @@ type PortableBuiltInsDeps = Pick<
   | "env"
   | "ingressRouting"
   | "projectWildcard"
-  | "fileUrlSecret"
+  | "signingSecret"
   | "context"
   | "egress"
   | "caller"
@@ -2285,7 +2296,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
           method: input.method || "GET",
           expiresInSeconds: input.expiresInSeconds,
           host: slug,
-          secret: await deps.fileUrlSecret(),
+          secret: await deps.signingSecret(),
           routing: deps.ingressRouting,
           platformOrigin,
         });

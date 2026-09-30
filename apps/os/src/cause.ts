@@ -42,6 +42,10 @@ export type Cause = {
   /** The delivery the code runs for (`<row>:<path>@<offset>`), the same on every attempt: what
    *  keys the writes it makes (guarantee 3). Never a mark's: only a call carries it. */
   writeKey?: string;
+  /** The signed token of who a script runs for (on-behalf-of.ts), from the run's runner: what an
+   *  append verifies into `source.onBehalfOf`. Never a mark's, never stored: only a call carries
+   *  it, and a delivery's cause starts without it. */
+  onBehalfOf?: string;
 };
 
 /** The deepest a chain acts at: past it, code may read but not act. */
@@ -169,6 +173,7 @@ const WrittenCause = z.object({
   parent: z.string().max(512).optional().catch(undefined),
   hops: CauseCount.nullish(),
   writeKey: z.string().max(512).optional().catch(undefined),
+  onBehalfOf: z.string().max(4096).optional().catch(undefined),
 });
 
 /** `value` as a cause — loaded code's word for its own over RPC, or a mark's text, the JSON
@@ -185,8 +190,15 @@ export function parseCause(value: unknown): Cause | undefined {
     }
   const written = WrittenCause.safeParse(fields);
   if (!written.success) return undefined;
-  const { chain, depth, parent, hops, writeKey } = written.data;
-  return { chain, depth, parent, hops: hops || 0, ...(!mark && writeKey && { writeKey }) };
+  const { chain, depth, parent, hops, writeKey, onBehalfOf } = written.data;
+  return {
+    chain,
+    depth,
+    parent,
+    hops: hops || 0,
+    ...(!mark && writeKey && { writeKey }),
+    ...(!mark && onBehalfOf && { onBehalfOf }),
+  };
 }
 
 /** The SDK's carrier of the running cause in this isolate (iterate src/cause.ts), by the name it
