@@ -42,7 +42,8 @@ export function inspectedPlace(
  *  negative; none when either time does not parse. */
 export function elapsedBetween(from: string, to: string): string | undefined {
   const ms = Date.parse(to) - Date.parse(from);
-  return Number.isNaN(ms) ? undefined : formatDelta(Math.max(0, ms));
+  if (Number.isNaN(ms)) return undefined;
+  return formatDelta(Math.max(0, ms));
 }
 
 /** The raw event's keys, signal first: what happened and its payload before the envelope. */
