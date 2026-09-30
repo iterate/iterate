@@ -58,7 +58,8 @@ rest are my calls:
 - [x] every mention rewritten: workspace, knip, oxlint, workflows (pkg.pr.new's filters and publish
       list, path filters), docs, the commit hook, `test/`'s CLI e2e
 - [x] lint: the boundary without the exception, the platform line over `core/lib`, and their tests
-- [ ] the catalog's `trpc-cli` is `0.17.0`, not main's pkg.pr.new build (`@01f575e`), before merge
+- [x] the catalog's `trpc-cli` is `0.17.0`, not main's pkg.pr.new build (`@01f575e`), before merge
+      _(0.17.0 published; same checks pass)_
 - [ ] typecheck, lint, knip, format, `iterate`'s tests (the CLI's included), a build and
       `node core/lib/bin/iterate.js --help`; CI green
 
