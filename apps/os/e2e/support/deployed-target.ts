@@ -21,6 +21,7 @@ export function deployedTarget(workerBaseUrl: string): {
       "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer (and the sign-in password, where it sets one) the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",
     );
   const appConfig = parseAppConfig({
+    APP_CONFIG_URLS__OS: workerBaseUrl,
     APP_CONFIG: process.env.APP_CONFIG,
     APP_CONFIG_SECRETS__KEY: process.env.APP_CONFIG_SECRETS__KEY,
   });
