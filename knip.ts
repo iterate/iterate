@@ -135,9 +135,9 @@ export default {
       ignoreDependencies: ["@iterate-com/capnweb", "wrangler"],
     },
     "apps/browser-extension": {
-      // public/index.html loads panel.js; its ./capnweb.js and ./oauth.js are the ones the build
-      // copies into dist/.
-      entry: ["public/panel.js"],
+      // public/index.html loads panel.js and the manifest names background.js; panel.js's
+      // ./capnweb.js and ./oauth.js are the ones the build copies into dist/.
+      entry: ["public/panel.js", "public/background.js"],
       ignoreUnresolved: ["./capnweb.js", "./oauth.js"],
     },
     "packages/ui": {
