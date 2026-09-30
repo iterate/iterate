@@ -363,20 +363,20 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
       // writes authors), and names the run that made it, and them when it names another author
       const onBehalfOf = await this.#onBehalfOfIn(cause);
       const email = onBehalfOf?.principal.email;
+      const message = input.message.trimEnd();
       const trailers: string[] = [];
       if (onBehalfOf) {
+        // a blank line first, unless the message already ends in trailers (an agent's `Via:`, a
+        // `Co-authored-by:`): git and GitHub read only the last paragraph as trailers
+        if (!/\n\n(?:[\w-]+: .+\n?)+$/.test(message)) trailers.push("");
         trailers.push(`Iterate-Run: ${onBehalfOf.run}`);
         if (input.author && input.author.email !== email)
           trailers.push(`Requested-by: ${email || onBehalfOf.principal.actor}`);
       }
-      // into a last paragraph that is already trailers (an agent's `Via:`, a `Co-authored-by:`),
-      // since git and GitHub read only the last paragraph as trailers
-      const message = input.message.trimEnd();
-      const joiner = /\n\n(?:[\w-]+: .+\n?)+$/.test(message) ? "\n" : "\n\n";
       return this.#commitFiles({
         ...input,
         author: input.author || (email ? { name: email, email } : undefined),
-        message: trailers.length ? message + joiner + trailers.join("\n") : input.message,
+        message: [message, ...trailers].join("\n").trim(),
       });
     });
   }
