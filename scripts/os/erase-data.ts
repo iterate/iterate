@@ -9,7 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
-import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "iterate/platform-retry";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
 import { getWorkerDoNamespaces, resetWorkerDurableObjects } from "../lib/do-reset.ts";
 import { CloudflareApiError, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";

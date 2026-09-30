@@ -9,7 +9,7 @@ import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
 import { releaseRpcSessions } from "iterate/lib";
 import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec, type DurableObjectAddress } from "./context/paths.ts";
 import type { IterateContextNamespace } from "./iterate-context.ts";

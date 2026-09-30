@@ -44,7 +44,7 @@ import {
   failureKind,
   isPlatformFailureKind,
   logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";

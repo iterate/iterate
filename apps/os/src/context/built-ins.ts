@@ -36,8 +36,8 @@ import {
   projectPublicUrlOf,
   type IngressRouting,
 } from "iterate/project-ingress";
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { missingScopes } from "iterate/integration-scopes";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Cause } from "../cause.ts";
 import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
 import { verifyOnBehalfOf } from "../on-behalf-of.ts";

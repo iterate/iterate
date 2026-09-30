@@ -1,6 +1,6 @@
 import { existsSync, globSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test, vi } from "vitest";
 import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
 import { templates } from "../generated/config-templates.js";

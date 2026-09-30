@@ -15,7 +15,7 @@
 import { createHash } from "node:crypto";
 import { AwsClient } from "aws4fetch";
 import { z } from "zod";
-import { fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { fetchRetryingPlatformFailures } from "iterate/platform-retry";
 
 /** The bucket's client, once the API token's id is known. */
 export async function ciBucket(input: {

@@ -4,7 +4,7 @@
 // (built-ins.ts), over a fake loader; the real one is the Workers suite's.
 import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
 import { codedError, errorCode } from "iterate/lib";
-import { failureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind } from "iterate/platform-retry";
 import { expect, test, vi } from "vitest";
 import { workersRoot } from "./built-ins.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";

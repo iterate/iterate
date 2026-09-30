@@ -47,7 +47,7 @@ import {
   isPlatformFailureKind,
   retryPlatformFailures,
   type FailureKind,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import { OS_DOPPLER_PROJECT, backupBucketEnvs, getEnv, osEnvs } from "../../envs.ts";
 import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";

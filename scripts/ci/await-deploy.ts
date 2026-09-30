@@ -18,11 +18,7 @@
 // fails the suite. An answer about the request (a 401 or 403, a missing token, an answer the wait
 // cannot read) fails it at once.
 import { z } from "zod";
-import {
-  httpFailureFields,
-  httpFailureKind,
-  isPlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+import { httpFailureFields, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { depotApi, type DepotApi } from "./depot.ts";
 
 /** How often the wait asks Depot; how long it waits at most, the deploy jobs' own `timeout-minutes`;

@@ -21,11 +21,11 @@
 // catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { errorCode, resolveContextPath } from "iterate/lib";
-import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -34,7 +34,7 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
-import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
+import { pinPkgPrNewDependencies } from "iterate/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
 import { defaultFiles, templateFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
@@ -568,7 +568,7 @@ export class ProjectProcessor extends StreamProcessor<
     const reference = state.creation?.configRepoTemplate;
     try {
       // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
-      // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
+      // build, and the loader refuses a ref that moves (iterate/pkg-pr-new). A ref
       // that cannot be pinned fails the creation, like a download that fails. The default and the
       // presets come from the build, their agents already at this deployment's own build.
       const changes = await pinPkgPrNewDependencies(

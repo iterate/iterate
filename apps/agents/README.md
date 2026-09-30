@@ -24,7 +24,7 @@ Mask the sandbox's specific `itx.agents` grant too when denying access to the co
 A platform deployment upgrades no project: a project upgrades by committing a newer pin, which
 restarts its agents on their next call with their grants and history kept. The sidebar's **Agents
 build** does it: it shows the build the project runs and, when main has published a newer
-one (`buildStanding` from `@iterate-com/shared/pkg-pr-new`, asked in this app's Worker), **Upgrade
+one (`buildStanding` from `iterate/pkg-pr-new`, asked in this app's Worker), **Upgrade
 to the newest** commits that pin and waits for the commit's publication (`upgradeAgents` from
 `@iterate-com/agents/install`).
 

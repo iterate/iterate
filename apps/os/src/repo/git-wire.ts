@@ -17,7 +17,7 @@ import {
   httpFailureKind,
   retryPlatformFailures,
   UPSTREAM_ONCE,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 
 /** The "no such object" oid a first push names as the old value of an unborn ref. */
 export const ZERO_OID = "0".repeat(40);

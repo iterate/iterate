@@ -7,11 +7,7 @@
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import {
-  failureKind,
-  isPlatformFailureKind,
-  logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {

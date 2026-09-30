@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
 import { z } from "zod";
-import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { CLOUDFLARE_API, fetchRetryingPlatformFailures } from "iterate/platform-retry";
 
 /**
  * An app's envs.ts entry and the name it was found by (envs.ts `getEnv`,
