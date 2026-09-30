@@ -33,12 +33,13 @@ Supabase, tRPC, Hono and Wrangler draw the same line:
 Code the platform loads for a project (the config entrypoint, a facet, a worker behind a rewrite rule)
 imports each symbol from one path, and the loader links this deployment's own build of it:
 
-| Path                       | What it holds                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors |
-| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too         |
-| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                              |
-| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                            |
+| Path                       | What it holds                                                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `iterate/sdk`              | The workerd hosts: `IterateConfigEntrypoint`, `FacetDurableObject`, `StreamProcessorDurableObject`, their types, and capnweb's constructors                               |
+| `iterate/stream/processor` | A processor's surface: `StreamProcessor`, `defineProcessorContract`, `LiveState`, the event and contract types. It runs in Node too                                       |
+| `iterate/stream/contract`  | `defineProcessorContract` and the contract types alone, which `iterate/stream/processor` re-exports. Code a browser loads imports it: the engine needs `node:async_hooks` |
+| `iterate/email`            | The `email` facet's contract, `email/received` and `email/sent` and the threads they fold into                                                                            |
+| `zod`                      | zod, one copy per isolate, so a schema user code makes is the one the SDK checks                                                                                          |
 
 ```js
 import { StreamProcessorDurableObject } from "iterate/sdk";

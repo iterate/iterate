@@ -20,6 +20,7 @@ const root = path.resolve(import.meta.dirname, "..");
 const PLATFORM_ENTRIES = [
   "iterate/sdk",
   "iterate/stream/processor",
+  "iterate/stream/contract",
   "iterate/stream/run",
   "iterate/email",
   "iterate/api",

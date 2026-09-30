@@ -26,6 +26,7 @@ export default defineConfig([
       expression: "src/expression.ts",
       principal: "src/principal.ts",
       "stream/processor": "src/stream/processor.ts",
+      "stream/contract": "src/stream/contract.ts",
       "stream/run": "src/stream/run.ts",
       email: "src/email.ts",
       "oauth-scopes": "src/oauth-scopes.ts",
