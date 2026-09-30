@@ -121,8 +121,14 @@ export async function build() {
       .map((file) => {
         const content = readFileSync(path.join(templatesRoot, name, file), "utf8");
         const manifest = file === "package.json" ? JSON.parse(content) : undefined;
-        const ours = ["@iterate-com/agents", "@iterate-com/voice"].filter((dependency) =>
-          manifest?.dependencies?.[dependency]?.endsWith("@main"),
+        // every package of ours the template takes from pkg.pr.new's moving `@main`; `iterate` itself
+        // is not one: the loader links it to this deployment's own build (PLATFORM_ENTRIES)
+        const ours = Object.entries<string>(manifest?.dependencies || {}).flatMap(
+          ([dependency, version]) =>
+            dependency.startsWith("@iterate-com/") &&
+            /^https:\/\/pkg\.pr\.new\/.*@main$/.test(version)
+              ? [dependency]
+              : [],
         );
         if (!ours.length) return { path: file, content };
         packagesCommit ||= checkoutPublishedPackageCommit(
