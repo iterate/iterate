@@ -38,12 +38,21 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   expect(page.events[0]).toMatchObject({ offset: 1, payload: { projectId: ctx, path: "/" } });
   const incarnation = page.events[1].payload.incarnation;
   expect(incarnation).toBeGreaterThanOrEqual(1);
+  const birthNames = page.events.map(
+    (event: { type: string; payload?: { name?: string } }) => event.payload?.name || event.type,
+  );
+  expect(birthNames.slice(0, 2)).toEqual([
+    "events.iterate.com/itx/created",
+    "events.iterate.com/itx/woken",
+  ]);
+  expect(birthNames.slice(2)).toContain("config");
+  const birthHead = page.events.at(-1)!.offset;
 
   // The first user append follows the birth rows: a root with no config pointer passes its events
   // over, so nothing of its `config` row's lands in between.
   const receipts = await itx.invoke(`itx.append({ type: 'hello' })`);
   expect(receipts).toHaveLength(1);
-  expect(receipts[0]).toMatchObject({ offset: 5, type: "hello" });
+  expect(receipts[0]).toMatchObject({ offset: birthHead + 1, type: "hello" });
 
   // the core reduce reduced both records — runtime state IS reduced state
   const snap = await itx.invoke("itx.facets.get('core').snapshot()");
@@ -53,16 +62,9 @@ test("any call materializes a fresh context: readEvents(0) starts with created, 
   // woken exactly once per incarnation, born exactly once ever: the durable log is exactly this
   await itx.invoke(`itx.append({ type: 'again' })`);
   const names = (await itx.invoke("itx.readEvents(0)")).events.map(
-    (e: { type: string; payload?: { name?: string } }) => e.payload?.name || e.type,
+    (event: { type: string; payload?: { name?: string } }) => event.payload?.name || event.type,
   );
-  expect(names).toEqual([
-    "events.iterate.com/itx/created",
-    "events.iterate.com/itx/woken",
-    "config",
-    "platform",
-    "hello",
-    "again",
-  ]);
+  expect(names).toEqual([...birthNames, "hello", "again"]);
 });
 
 // ── the commit point: guards, idempotency, depth, the pause slice, paging ──

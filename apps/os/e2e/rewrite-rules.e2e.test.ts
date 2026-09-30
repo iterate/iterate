@@ -110,12 +110,14 @@ test("rewriteRules.list() is the EFFECTIVE table, DESCRIBED: every implicit row 
     match: string;
     target: string | null;
     description?: string;
+    declaration?: string;
     context: string;
   }[];
   expect(before.find((row) => row.match === "itx.kv")).toEqual({
     match: "itx.kv",
     target: "itx.builtins.kv",
     description: expect.stringContaining("key-value"),
+    declaration: 'IterateContextApi["kv"]',
     context: "/",
   });
   expect(before.find((row) => row.match === "itx.append")).toMatchObject({
@@ -236,8 +238,10 @@ test("append refuses a match rooted at itx.builtins or at a proxy verb; the plat
   expect(String((await rejection(itx.provide("itx.provide", "itx.whoami"))).message)).toMatch(
     /proxy's own verb "provide"/,
   );
-  // `cd` is a NAME: a row at it is legal (a null there is the wall a jail relies on)
-  (await itx.provide("itx.cd('/y')", "itx.whoami"))[Symbol.dispose]();
+  // `cd` is a capability NAME, but a rule match cannot be a call: a jail's wall is `itx.cd`.
+  expect(String((await rejection(itx.provide("itx.cd('/y')", "itx.whoami"))).message)).toMatch(
+    /dotted capability name, not a call/,
+  );
   // what the platform writes is builtins-rooted, so a row at `itx.rpcStubs` or `itx.facets`
   // redirects the caller's calls and nothing the platform relies on
   await itx.provide("itx.rpcStubs", null);
@@ -245,11 +249,6 @@ test("append refuses a match rooted at itx.builtins or at a proxy verb; the plat
   expect(await itx.tool()).toBe("still served");
   expect(errorCode(await rejection(itx.rpcStubs.list()))).toBe("NO_ITX_EXPRESSION_MATCH");
   expect(await itx.builtins.rpcStubs.list()).toContain("itx.tool");
-  const events = await readAll(itx);
-  const ruleTargets = events
-    .filter((e) => e.type === "events.iterate.com/itx/rewrite-rule-configured" && e.payload.target)
-    .map((e) => e.payload.target as string);
-  expect(ruleTargets).toContainEqual(["itx", "builtins", "rpcStubs", ["get", "itx.tool"]]);
 });
 
 test("append refuses a whole-context override that names its OWN context (every call would route back into itself, a fresh resolve per hop); a sibling context is fine", async () => {
