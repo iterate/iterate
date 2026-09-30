@@ -377,9 +377,7 @@ test("fan-out persists bounded offsets then calls each event independently", asy
     Array.from({ length: 16 }, (_, index) => index + 1),
   );
   expect(high).toBe(8);
-  expect(store.values.get("durable-delivery/fan")).toMatchObject({
-    fanOut: { admittedThrough: 16, pending: [] },
-  });
+  expect(store.values.get("durable-delivery/fan")).not.toHaveProperty("fanOut");
 });
 
 test("a 128-call fan-out takes two one-page alarm passes", async () => {
@@ -408,9 +406,7 @@ test("a 128-call fan-out takes two one-page alarm passes", async () => {
   expect(wakes.at(-1)).not.toBeNull();
   await engine.processEventBatch([], { after: 100, through: 100 });
   await settle(100);
-  expect(store.values.get("durable-delivery/fan-catch-up")).toMatchObject({
-    fanOut: { admittedThrough: 128, pending: [] },
-  });
+  expect(store.values.get("durable-delivery/fan-catch-up")).not.toHaveProperty("fanOut");
   expect(delivered).toHaveLength(128);
   expect(wakes.at(-1)).toBeNull();
 });
@@ -620,7 +616,7 @@ test("a context resume fence does not dead-letter stale fan-out work", async () 
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/fanout-stale-resume")).toMatchObject({
-    fanOut: { pending: [{ offset: 1, attempt: 0 }] },
+    fanOut: [{ offset: 1, attempt: 0 }],
   });
   expect(terminal).not.toHaveBeenCalled();
 });
@@ -653,7 +649,7 @@ test("deliveryBusy reschedules fan-out work without spending an attempt", async 
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
   expect(store.values.get("durable-delivery/fanout-busy")).toMatchObject({
-    fanOut: { pending: [{ offset: 1, attempt: 0 }] },
+    fanOut: [{ offset: 1, attempt: 0 }],
   });
   expect(wakes).toHaveLength(1);
   expect(terminal).not.toHaveBeenCalled();

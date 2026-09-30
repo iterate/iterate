@@ -119,11 +119,8 @@ test("a halted fan-out cursor never re-arms from its retained pending retry", ()
     [
       "durable-delivery/fanout@1",
       {
-        confirmedOffset: 1,
-        fanOut: {
-          admittedThrough: 2,
-          pending: [{ offset: 2, attempt: 1, nextAttemptAtMs: 99_999 }],
-        },
+        confirmedOffset: 2,
+        fanOut: [{ offset: 2, attempt: 1, nextAttemptAtMs: 99_999 }],
       },
     ],
   ]);

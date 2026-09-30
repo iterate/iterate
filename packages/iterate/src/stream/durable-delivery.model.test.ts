@@ -48,7 +48,7 @@ test.each([false, true])(
     shared.put("durable-delivery/interrupted", {
       confirmedOffset: 0,
       ...(fanOut
-        ? { fanOut: { admittedThrough: 1, pending: [{ offset: 1, attempt: 2 }] } }
+        ? { confirmedOffset: 1, fanOut: [{ offset: 1, attempt: 2 }] }
         : { pending: { after: 0, through: 1, offsets: [1], attempt: 2 } }),
     });
     const invoke = vi.fn();
@@ -99,14 +99,12 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   await drive(fanOut(blocked), 1);
   await settle();
   expect(shared.values.get("durable-delivery/fan")).toMatchObject({
-    fanOut: {
-      admittedThrough: 3,
-      pending: [
-        { offset: 1, attempt: 1 },
-        { offset: 2, attempt: 1 },
-        { offset: 3, attempt: 1 },
-      ],
-    },
+    confirmedOffset: 3,
+    fanOut: [
+      { offset: 1, attempt: 1 },
+      { offset: 2, attempt: 1 },
+      { offset: 3, attempt: 1 },
+    ],
   });
 
   const replayed: number[] = [];
@@ -123,9 +121,7 @@ test("fan-out recovery replays only pending source offsets after interruption", 
     vi.useRealTimers();
   }
   expect(replayed.sort()).toEqual([1, 2, 3]);
-  expect(shared.values.get("durable-delivery/fan")).toMatchObject({
-    fanOut: { admittedThrough: 3, pending: [] },
-  });
+  expect(shared.values.get("durable-delivery/fan")).not.toHaveProperty("fanOut");
 });
 
 test("a fan-out wave persists its claim and combined outcomes once each", async () => {
@@ -150,7 +146,7 @@ test("a fan-out wave persists its claim and combined outcomes once each", async 
   await vi.waitFor(() => expect(started).toHaveLength(8));
   expect(writes).toHaveLength(2); // admission, then the whole wave's pre-call claim
   for (const release of releases) release();
-  await vi.waitFor(() => expect(processor.snapshot()).toMatchObject({ fanOut: { pending: [] } }));
+  await vi.waitFor(() => expect(processor.snapshot()).not.toHaveProperty("fanOut"));
   expect(writes).toHaveLength(3);
 });
 
@@ -173,7 +169,6 @@ test("a resume fence discards a fan-out wave's late combined outcome", async () 
   await settle();
   expect(processor.snapshot()).toEqual({
     confirmedOffset: 0,
-    fanOut: { admittedThrough: 0, pending: [] },
     resumeAtOffset: 99,
   });
 });
@@ -196,13 +191,11 @@ test("a fan-out wave combines success, busy, retry and terminal results", async 
   await drive(processor, 1);
   await vi.waitFor(() =>
     expect(processor.snapshot()).toMatchObject({
-      fanOut: {
-        pending: [
-          { offset: 2, attempt: 0 },
-          { offset: 3, attempt: 1, error: "retry" },
-          { offset: 4, attempt: 1, terminal: true, error: "terminal" },
-        ],
-      },
+      fanOut: [
+        { offset: 2, attempt: 0 },
+        { offset: 3, attempt: 1 },
+        { offset: 4, attempt: 1, terminal: true, error: "terminal" },
+      ],
     }),
   );
   expect(host).toMatchObject({ terminals: [] });
@@ -272,7 +265,7 @@ test("a fan-out backoff still admits the following source page", async () => {
   await settle(100);
   expect(delivered).toHaveLength(100);
   expect(processor.snapshot()).toMatchObject({
-    fanOut: { admittedThrough: 101, pending: [{ offset: 1, attempt: 1 }] },
+    fanOut: [{ offset: 1, attempt: 1 }],
   });
 });
 
@@ -321,7 +314,7 @@ test("a fan-out target 410 halts the row and a resume retries its admitted offse
   expect(failed.terminals[0]?.fanOut).toBeUndefined();
   expect(processor.snapshot()).toMatchObject({
     halted: { after: 1, attempts: 1 },
-    fanOut: { admittedThrough: 1, pending: [{ offset: 1, attempt: 1 }] },
+    fanOut: [{ offset: 1, attempt: 1 }],
   });
 
   const replayed: number[] = [];
@@ -330,9 +323,7 @@ test("a fan-out target 410 halts the row and a resume retries its admitted offse
   await drive(processor, 2);
   await settle();
   expect(replayed).toEqual([1]);
-  expect(processor.snapshot()).toMatchObject({
-    fanOut: { admittedThrough: 1, pending: [] },
-  });
+  expect(processor.snapshot()).not.toHaveProperty("fanOut");
   expect(processor.snapshot().halted).toBeUndefined();
 });
 
@@ -368,9 +359,8 @@ test("a long failed delivery message stays bounded through retry and halt", asyn
   const processor = ordered(failed, { maxAttempts: 2, retryDelayMs: () => 0 });
   await drive(processor, 1);
   await settle();
-  expect(processor.snapshot()).toMatchObject({
-    pending: { attempt: 1, error: "x".repeat(1024) },
-  });
+  expect(processor.snapshot()).toMatchObject({ pending: { attempt: 1 } });
+  expect(processor.snapshot().pending).not.toHaveProperty("error");
 
   await drive(processor, 2);
   await settle();
@@ -388,23 +378,20 @@ test("fan-out cursor errors are UTF-8 bounded below one 2 MiB KV value", async (
   const failed = runtime(kv(), source.stream.read, () => {
     throw new Error("😀".repeat(1_000));
   });
-  const processor = fanOut(failed);
+  const processor = fanOut(failed, { maxAttempts: 1 });
   await drive(processor, 1);
   await settle();
-  const error = processor.snapshot().fanOut?.pending[0]?.error;
+  const error = processor.snapshot().fanOut?.[0]?.error;
   expect(error).toBeDefined();
   expect(new TextEncoder().encode(error).byteLength).toBeLessThanOrEqual(1024);
   const cursor = {
     confirmedOffset: 0,
-    fanOut: {
-      admittedThrough: 1_000,
-      pending: Array.from({ length: 1_000 }, (_, index) => ({
-        offset: index + 1,
-        attempt: 15,
-        terminal: true,
-        error,
-      })),
-    },
+    fanOut: Array.from({ length: 1_000 }, (_, index) => ({
+      offset: index + 1,
+      attempt: 15,
+      terminal: true,
+      error,
+    })),
   };
   expect(new TextEncoder().encode(JSON.stringify(cursor)).byteLength).toBeLessThan(2 * 1024 * 1024);
 });
@@ -448,14 +435,14 @@ test("a fan-out resume leaves a future offset for normal admission", async () =>
   const storage = kv();
   storage.put("durable-delivery/fan", {
     confirmedOffset: 3,
-    fanOut: { admittedThrough: 3, pending: [] },
+    fanOut: [],
   });
   const calls: number[] = [];
   const processor = fanOut(
     runtime(storage, source.stream.read, ({ offsets }) => void calls.push(offsets[0]!)),
   );
   expect(processor.resume(undefined, 4, 99)).toBe(true);
-  expect(processor.snapshot()).toMatchObject({ fanOut: { admittedThrough: 3, pending: [] } });
+  expect(processor.snapshot()).not.toHaveProperty("fanOut");
   await drive(processor, 5);
   await settle();
   expect(calls).toEqual([4]);
@@ -467,13 +454,10 @@ test("a selective fan-out resume stamps retained terminal work before reporting 
   const storage = kv();
   storage.put("durable-delivery/fan", {
     confirmedOffset: 7,
-    fanOut: {
-      admittedThrough: 7,
-      pending: [
-        { offset: 5, attempt: 1, terminal: true, error: "five" },
-        { offset: 7, attempt: 1, terminal: true, error: "seven" },
-      ],
-    },
+    fanOut: [
+      { offset: 5, attempt: 1, terminal: true, error: "five" },
+      { offset: 7, attempt: 1, terminal: true, error: "seven" },
+    ],
   });
   const calls: number[] = [];
   const host = runtime(storage, source.stream.read, ({ offsets }) => void calls.push(offsets[0]!));
@@ -495,10 +479,7 @@ test("a cold fan-out terminal takes its resume fence from the cursor root", asyn
   storage.put("durable-delivery/fan", {
     confirmedOffset: 1,
     resumeAtOffset: 100,
-    fanOut: {
-      admittedThrough: 1,
-      pending: [{ offset: 1, attempt: 1, terminal: true, error: "one" }],
-    },
+    fanOut: [{ offset: 1, attempt: 1, terminal: true, error: "one" }],
   });
   const host = runtime(storage, source.stream.read, () => {});
   const processor = fanOut(host, { resumeAtOffset: 100 });

@@ -16,7 +16,6 @@ export type DurableDeliveryCursor = {
     offsets: number[];
     attempt: number;
     nextAttemptAtMs?: number;
-    error?: string;
   };
   halted?: {
     after: number;
@@ -24,7 +23,8 @@ export type DurableDeliveryCursor = {
     error: string;
     terminalReported?: true;
   };
-  fanOut?: { admittedThrough: number; pending: FanOutPending[] };
+  /** Independently retried events admitted through `confirmedOffset`. */
+  fanOut?: FanOutPending[];
 };
 
 type FanOutPending = {
@@ -223,18 +223,17 @@ export class DurableDeliveryProcessor {
   resume(afterOffset?: number, offset?: number, resumeAtOffset?: number): boolean {
     if (this.#disposed) return false;
     const cursor = this.#cursor();
-    const fanOut =
-      (this.#options.fanOut && afterOffset !== undefined
-        ? { admittedThrough: afterOffset, pending: [] }
-        : cursor.fanOut) ||
-      (this.#options.fanOut && offset !== undefined
-        ? { admittedThrough: afterOffset ?? cursor.confirmedOffset, pending: [] }
-        : undefined);
+    const fanOut = this.#options.fanOut
+      ? afterOffset === undefined
+        ? cursor.fanOut || []
+        : []
+      : undefined;
+    this.#discardEphemerals();
     if (fanOut) {
       this.#resumeAtOffset = resumeAtOffset;
       this.#generation++;
       const rowWasHalted = !!cursor.halted;
-      const pending = fanOut.pending.map((item) =>
+      const pending = fanOut.map((item) =>
         rowWasHalted || (item.terminal && (offset === undefined || item.offset === offset))
           ? {
               ...item,
@@ -249,12 +248,16 @@ export class DurableDeliveryProcessor {
       // passed it. A future offset remains for normal admission and must not be delivered twice.
       if (
         offset !== undefined &&
-        offset <= fanOut.admittedThrough &&
+        offset <= cursor.confirmedOffset &&
         !pending.some((item) => item.offset === offset)
       )
         pending.push({ offset, attempt: 0 });
-      const { halted: _halted, ...running } = cursor;
-      this.#putCursor({ ...running, fanOut: { ...fanOut, pending } });
+      const { halted: _halted, fanOut: _previousFanOut, ...running } = cursor;
+      this.#putCursor({
+        ...running,
+        ...(pending.length > 0 && { fanOut: pending }),
+        ...(afterOffset !== undefined && { confirmedOffset: afterOffset }),
+      });
       return true;
     }
     this.#resumeAtOffset = resumeAtOffset;
@@ -285,7 +288,7 @@ export class DurableDeliveryProcessor {
     this.#discardEphemerals();
     this.#putCursor({
       confirmedOffset: afterOffset,
-      fanOut: cursor.fanOut,
+      ...(cursor.fanOut && { fanOut: cursor.fanOut }),
       halted: {
         after: afterOffset,
         attempts,
@@ -312,9 +315,10 @@ export class DurableDeliveryProcessor {
     );
   }
   #putCursor(cursor: DurableDeliveryCursor): void {
-    const { resumeAtOffset: _previousResumeAtOffset, ...withoutPreviousResume } = cursor;
+    const { resumeAtOffset: _previousResumeAtOffset, fanOut, ...withoutPreviousResume } = cursor;
     this.#options.runtime.storage.put(this.#key(), {
       ...withoutPreviousResume,
+      ...(fanOut && fanOut.length > 0 && { fanOut }),
       ...(this.#resumeAtOffset !== undefined && { resumeAtOffset: this.#resumeAtOffset }),
     });
   }
@@ -377,11 +381,6 @@ export class DurableDeliveryProcessor {
         }
         {
           if (!this.#isCurrent(stamp)) return;
-          cursor = this.#cursor();
-          if (cursor.pending || cursor.halted) {
-            await this.#options.runtime.scheduleWake(Date.now());
-            return;
-          }
           const queuedOffset = this.#ephemeralQueue[0]?.offset;
           // An ephemeral between two durable offsets stays between their deliveries. The durable
           // read does not carry ephemeral bodies, so admit only the durable prefix before it.
@@ -437,10 +436,10 @@ export class DurableDeliveryProcessor {
       const pending = cursor.pending!;
       const stamp = this.#stamp();
       {
-        if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, pending.attempt)) return;
+        if (!this.#isCurrent(stamp)) return;
         const attempt = Math.min(pending.attempt + 1, this.#options.maxAttempts);
         this.#putCursor({
-          ...this.#cursor(),
+          ...cursor,
           pending: {
             ...pending,
             attempt,
@@ -449,7 +448,7 @@ export class DurableDeliveryProcessor {
         });
         try {
           if (pending.attempt >= this.#options.maxAttempts)
-            throw new Error(pending.error || "delivery did not settle before its host restarted");
+            throw new Error("delivery did not settle before its host restarted");
           await this.#withinDeadline(() =>
             this.#options.runtime.deliver({
               range: { after: pending.after, through: pending.through },
@@ -457,19 +456,19 @@ export class DurableDeliveryProcessor {
               resumeAtOffset: stamp.resumeAtOffset,
             }),
           );
-          if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
+          if (!this.#isCurrent(stamp)) return;
           this.#putCursor({ confirmedOffset: pending.through });
           await this.#options.runtime.scheduleWake(atHead ? null : Date.now());
           return;
         } catch (error) {
-          if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
+          if (!this.#isCurrent(stamp)) return;
           // The host has an equivalent target call in flight. It has not accepted
           // this attempt, so retain the prior attempt count and try after the
           // short native admission delay.
           if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
             const nextAttemptAtMs = Date.now() + busyRetryDelayMs;
             this.#putCursor({
-              ...this.#cursor(),
+              ...cursor,
               pending: {
                 ...pending,
                 nextAttemptAtMs,
@@ -495,12 +494,11 @@ export class DurableDeliveryProcessor {
               attempt,
             );
           this.#putCursor({
-            ...this.#cursor(),
+            ...cursor,
             pending: {
               ...pending,
               attempt,
               nextAttemptAtMs,
-              error: message,
             },
           });
           await this.#options.runtime.scheduleWake(nextAttemptAtMs);
@@ -533,9 +531,9 @@ export class DurableDeliveryProcessor {
       await this.#reportHalted(cursor.halted);
       return;
     }
-    const fanOut = cursor.fanOut || { admittedThrough: cursor.confirmedOffset, pending: [] };
+    const fanOut = cursor.fanOut || [];
     let admittedAtHead: boolean | undefined;
-    const terminal = fanOut.pending.find((item) => item.terminal);
+    const terminal = fanOut.find((item) => item.terminal);
     if (terminal) {
       const stamp = this.#stamp();
       try {
@@ -546,13 +544,9 @@ export class DurableDeliveryProcessor {
           fanOut: true,
           resumeAtOffset: stamp.resumeAtOffset,
         });
-        const current = this.#cursor().fanOut;
-        const reported = current?.pending.find(
-          (candidate) => candidate.offset === terminal.offset && candidate.terminal,
-        );
-        if (!this.#isCurrent(stamp) || !current || !reported) return;
-        current.pending.splice(current.pending.indexOf(reported), 1);
-        this.#putCursor({ ...this.#cursor(), fanOut: current });
+        if (!this.#isCurrent(stamp)) return;
+        fanOut.splice(fanOut.indexOf(terminal), 1);
+        this.#putCursor({ ...cursor, ...(fanOut.length > 0 && { fanOut }) });
         await this.#options.runtime.scheduleWake(Date.now());
         return;
       } catch {
@@ -560,13 +554,13 @@ export class DurableDeliveryProcessor {
         return;
       }
     }
-    const room = fanOutMaxPending - fanOut.pending.length;
+    const room = fanOutMaxPending - fanOut.length;
     if (room > 0) {
       const stamp = this.#stamp();
       let page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
       try {
         page = await this.#options.runtime.read(
-          fanOut.admittedThrough,
+          cursor.confirmedOffset,
           Math.min(pageLimit, room),
           stamp.resumeAtOffset,
         );
@@ -577,29 +571,21 @@ export class DurableDeliveryProcessor {
       }
       {
         if (!this.#isCurrent(stamp)) return;
-        cursor = this.#cursor();
-        const currentFanOut = cursor.fanOut || {
-          admittedThrough: cursor.confirmedOffset,
-          pending: [],
-        };
-        if (currentFanOut.admittedThrough !== fanOut.admittedThrough) {
-          await this.#options.runtime.scheduleWake(Date.now());
-          return;
-        }
         const additions = page.offsets.map((offset) => ({
           offset,
           attempt: 0,
         }));
-        currentFanOut.pending.push(...additions);
-        currentFanOut.admittedThrough = page.scannedThroughOffset;
-        cursor = { ...cursor, fanOut: currentFanOut };
-        this.#putCursor(cursor);
+        if (additions.length > 0 || page.scannedThroughOffset !== cursor.confirmedOffset) {
+          fanOut.push(...additions);
+          cursor.confirmedOffset = page.scannedThroughOffset;
+          cursor.fanOut = fanOut;
+          this.#putCursor(cursor);
+        }
         admittedAtHead = page.atHead;
       }
     }
-    const currentFanOut = this.#cursor().fanOut || fanOut;
     const drainStamp = this.#stamp();
-    const due = currentFanOut.pending
+    const due = fanOut
       .filter(
         (item) =>
           !item.terminal &&
@@ -607,11 +593,11 @@ export class DurableDeliveryProcessor {
       )
       .slice(0, pageLimit);
     for (let start = 0; start < due.length; start += fanOutConcurrency) {
-      await this.#deliverFanOutWave(due.slice(start, start + fanOutConcurrency));
+      await this.#deliverFanOutWave(cursor, due.slice(start, start + fanOutConcurrency));
       if (!this.#isCurrent(drainStamp)) return;
     }
-    const settled = this.#cursor().fanOut || currentFanOut;
-    const next = settled.pending
+    const settled = fanOut;
+    const next = settled
       .filter((item) => !item.terminal && item.nextAttemptAtMs)
       .reduce<number | undefined>(
         (earliest, item) =>
@@ -620,29 +606,28 @@ export class DurableDeliveryProcessor {
             : earliest,
         undefined,
       );
-    if (settled.pending.some((item) => item.terminal))
+    if (settled.some((item) => item.terminal))
       return await this.#options.runtime.scheduleWake(Date.now());
-    if (settled.pending.some((item) => !item.terminal && !item.nextAttemptAtMs))
+    if (settled.some((item) => !item.terminal && !item.nextAttemptAtMs))
       return await this.#options.runtime.scheduleWake(Date.now());
     // A backoff is per event. Keep admitting later pages while there is room so one slow webhook
     // cannot turn a catch-up into one page per retry delay.
-    if (!admittedAtHead && settled.pending.length < fanOutMaxPending)
+    if (!admittedAtHead && settled.length < fanOutMaxPending)
       return await this.#options.runtime.scheduleWake(Date.now());
     if (next !== undefined) await this.#options.runtime.scheduleWake(next);
-    else if (settled.pending.length === 0) {
+    else if (settled.length === 0) {
       if (admittedAtHead) await this.#options.runtime.scheduleWake(null);
       else await this.#options.runtime.scheduleWake(Date.now());
     }
   }
 
   /** One pre-call cursor write bounds a whole eight-item wave; one write records its outcomes. */
-  async #deliverFanOutWave(items: FanOutPending[]): Promise<void> {
+  async #deliverFanOutWave(cursor: DurableDeliveryCursor, items: FanOutPending[]): Promise<void> {
     const stamp = this.#stamp();
     if (!this.#isCurrent(stamp)) return;
-    const cursor = this.#cursor();
     const fanOut = cursor.fanOut;
     if (!fanOut) return;
-    const wave = fanOut.pending.filter(
+    const wave = fanOut.filter(
       (item) => !item.terminal && items.some(({ offset }) => offset === item.offset),
     );
     const interrupted = wave.map((item) => item.attempt >= this.#options.maxAttempts);
@@ -653,9 +638,9 @@ export class DurableDeliveryProcessor {
     if (wave.length === 0) return;
     this.#putCursor({ ...cursor, fanOut });
     const outcomes = await Promise.allSettled(
-      wave.map(({ offset, error }, index) =>
+      wave.map(({ offset }, index) =>
         interrupted[index]
-          ? Promise.reject(new Error(error || "delivery did not settle before its host restarted"))
+          ? Promise.reject(new Error("delivery did not settle before its host restarted"))
           : this.#withinDeadline(() =>
               this.#options.runtime.deliver({
                 range: { after: offset - 1, through: offset },
@@ -679,7 +664,7 @@ export class DurableDeliveryProcessor {
       if (refused.status !== "rejected") return;
       const current = wave[refusedIndex]!;
       const halted = {
-        after: fanOut.admittedThrough,
+        after: cursor.confirmedOffset,
         attempts: current.attempt,
         error: deliveryErrorMessage(refused.reason),
       };
@@ -692,33 +677,33 @@ export class DurableDeliveryProcessor {
     for (const [index, outcome] of outcomes.entries()) {
       const current = wave[index]!;
       if (outcome.status === "fulfilled") {
-        fanOut.pending.splice(fanOut.pending.indexOf(current), 1);
+        fanOut.splice(fanOut.indexOf(current), 1);
         continue;
       }
       const error = outcome.reason;
       if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
         current.attempt -= 1;
         current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
-        current.error = undefined;
         continue;
       }
-      current.error = deliveryErrorMessage(error);
-      if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts)
+      if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts) {
+        current.error = deliveryErrorMessage(error);
         current.terminal = true;
-      else
+      } else
         current.nextAttemptAtMs =
           Date.now() +
           (this.#options.retryDelayMs || ((n) => Math.min(1_000 * 2 ** (n - 1), 30 * 60_000)))(
             current.attempt,
           );
     }
-    this.#putCursor({ ...cursor, fanOut });
+    this.#putCursor({ ...cursor, ...(fanOut.length > 0 && { fanOut }) });
   }
 
   /** Reports one row-level terminal receipt and leaves the row frozen if that append must retry. */
   async #reportHalted(halted: NonNullable<DurableDeliveryCursor["halted"]>): Promise<void> {
     if (halted.terminalReported || this.#disposed) return;
     const stamp = this.#stamp();
+    const cursor = this.#cursor();
     try {
       await this.#options.runtime.terminal({
         afterOffset: halted.after,
@@ -726,16 +711,8 @@ export class DurableDeliveryProcessor {
         error: halted.error,
         resumeAtOffset: stamp.resumeAtOffset,
       });
-      const current = this.#cursor().halted;
-      if (
-        this.#isCurrent(stamp) &&
-        current?.after === halted.after &&
-        current.attempts === halted.attempts
-      )
-        this.#putCursor({
-          ...this.#cursor(),
-          halted: { ...current, terminalReported: true },
-        });
+      if (!this.#isCurrent(stamp)) return;
+      this.#putCursor({ ...cursor, halted: { ...halted, terminalReported: true } });
     } catch {
       if (this.#isCurrent(stamp)) await this.#options.runtime.scheduleWake(Date.now() + 1_000);
     }
@@ -750,18 +727,6 @@ export class DurableDeliveryProcessor {
       !this.#disposed &&
       this.#generation === stamp.generation &&
       this.#resumeAtOffset === stamp.resumeAtOffset
-    );
-  }
-
-  #isCurrentPending(
-    pending: NonNullable<DurableDeliveryCursor["pending"]>,
-    attempt: number,
-  ): boolean {
-    const current = this.#cursor().pending;
-    return (
-      current?.after === pending.after &&
-      current.through === pending.through &&
-      current.attempt === attempt
     );
   }
 

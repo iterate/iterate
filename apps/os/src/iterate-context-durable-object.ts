@@ -1886,7 +1886,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         confirmedOffset: number;
         pending?: { attempt: number; nextAttemptAtMs?: number };
         halted?: { after: number; attempts: number; error: string };
-        fanOut?: { admittedThrough: number; pending: unknown[] };
+        fanOut?: unknown[];
       }
     > = durable.length === 0 ? {} : this.#durableSubscriptionDelivery.snapshots();
     return Object.entries(subscriptions).map(([name, s]) => {
@@ -1894,7 +1894,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const cursor = snapshot
         ? s.delivery === "durable"
           ? {
-              confirmedOffset: snapshot.fanOut?.admittedThrough ?? snapshot.confirmedOffset,
+              confirmedOffset: snapshot.confirmedOffset,
               attempt: snapshot.pending?.attempt ?? 0,
               nextAttemptAtMs: snapshot.pending?.nextAttemptAtMs,
             }
@@ -1911,7 +1911,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ...(s.afterOffset !== undefined && { afterOffset: s.afterOffset }),
         ...(s.ordered === false && { ordered: false as const }),
         ...(s.ordered === false && {
-          pending: snapshot?.fanOut?.pending.length ?? 0,
+          pending: snapshot?.fanOut?.length ?? 0,
           paused: false,
         }),
         // an absent facet stays ABSENT on the wire, like the fields around it
