@@ -39,6 +39,39 @@ test("an ordered runner replays its persisted pending range after interruption a
   releaseFirst();
 });
 
+test.each([false, true])(
+  "interrupted delivery stops at its persisted attempt limit (fan-out=%s)",
+  async (fanOut) => {
+    const source = memoryStream();
+    await source.stream.append({ type: "work" });
+    const shared = kv();
+    shared.put("durable-delivery/interrupted", {
+      confirmedOffset: 0,
+      ...(fanOut
+        ? { fanOut: { admittedThrough: 1, pending: [{ offset: 1, attempt: 2 }] } }
+        : { pending: { after: 0, through: 1, offsets: [1], attempt: 2 } }),
+    });
+    const invoke = vi.fn();
+    const host = runtime(shared, source.stream.read, invoke);
+    const processor = new DurableDeliveryProcessor({
+      slug: "interrupted",
+      consumes: ["work"],
+      fanOut,
+      maxAttempts: 2,
+      runtime: host,
+    });
+    await drive(processor, 1);
+    await settle(50);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(host.terminals).toEqual([
+      expect.objectContaining({
+        attempts: 2,
+        error: "delivery did not settle before its host restarted",
+      }),
+    ]);
+  },
+);
+
 test("omitting consumes delivers every durable event", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "alpha" }, { type: "beta" });

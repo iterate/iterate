@@ -407,7 +407,7 @@ export class DurableDeliveryProcessor {
       const stamp = this.#stamp();
       {
         if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, pending.attempt)) return;
-        const attempt = pending.attempt + 1;
+        const attempt = Math.min(pending.attempt + 1, this.#options.maxAttempts);
         this.#putCursor({
           ...this.#cursor(),
           pending: {
@@ -418,6 +418,8 @@ export class DurableDeliveryProcessor {
           },
         });
         try {
+          if (pending.attempt >= this.#options.maxAttempts)
+            throw new Error(pending.error ?? "delivery did not settle before its host restarted");
           await this.#deliverWithinDeadline({
             range: { after: pending.after, through: pending.through },
             offsets: pending.offsets,
@@ -632,12 +634,15 @@ export class DurableDeliveryProcessor {
     let fanOut = cursor.fanOut;
     let current = fanOut?.pending.find((candidate) => candidate.offset === item.offset);
     if (!fanOut || !current || current.terminal) return;
-    current.attempt += 1;
+    const interruptedAtLimit = current.attempt >= this.#options.maxAttempts;
+    if (!interruptedAtLimit) current.attempt += 1;
     current.nextAttemptAtMs = Date.now() + this.#options.callDeadlineMs;
     current.resumeAtOffset = stamp.resumeAtOffset;
     const attempt = current.attempt;
     this.#putCursor({ ...cursor, fanOut });
     try {
+      if (interruptedAtLimit)
+        throw new Error(current.error ?? "delivery did not settle before its host restarted");
       await this.#deliverWithinDeadline({
         range: { after: current.offset - 1, through: current.offset },
         offsets: [current.offset],
