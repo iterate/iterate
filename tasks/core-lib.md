@@ -33,9 +33,10 @@ core/
 Misha chose the merge ("merged into iterate; we'll drop the clack and orpc deps soon anyway"). The
 rest are my calls:
 
-- **`iterate` gains the `iterate` bin** and the CLI's dependencies (`@clack/prompts`,
-  `@orpc/server`, `trpc-cli`; `capnweb`, `oauth4webapi`, `ws`, `zod` it already has). Its engines
-  floor rises to the CLI's, Node 22.18.
+- **`iterate` gains the `iterate` bin** and the CLI's one new dependency, `trpc-cli` (`capnweb`,
+  `oauth4webapi`, `ws`, `zod` it already has). trpc-cli 0.17 has `os` and prompts built in, so the
+  CLI drops `@orpc/server` and `@clack/prompts` (Misha). Its engines floor rises to the CLI's,
+  Node 22.18.
 - **The CLI imports the SDK by relative path**, not `iterate/*`: it is the same package now, and a
   package importing its own name is resolved differently by Node, TypeScript and Vite. The CLI's
   build entry bundles the SDK modules it uses, as the other Node entries do.
@@ -57,12 +58,12 @@ rest are my calls:
 - [x] every mention rewritten: workspace, knip, oxlint, workflows (pkg.pr.new's filters and publish
       list, path filters), docs, the commit hook, `test/`'s CLI e2e
 - [x] lint: the boundary without the exception, the platform line over `core/lib`, and their tests
+- [ ] the catalog's `trpc-cli` is `0.17.0`, not main's pkg.pr.new build (`@01f575e`), before merge
 - [ ] typecheck, lint, knip, format, `iterate`'s tests (the CLI's included), a build and
       `node core/lib/bin/iterate.js --help`; CI green
 
 ## Out of scope
 
-- Dropping `@clack/prompts` and `@orpc/server`.
 - A deprecation release of `@iterate-com/cli`.
 - Core baking only a minimal template (PR 2's open item).
 
@@ -77,3 +78,8 @@ rest are my calls:
 - `tasks/core-os.md` was still in `tasks/` when #3487 merged: moved to `complete/` here, and its
   open item became `tasks/core-minimal-template.md`, which the lint message and core/AGENTS.md link.
 - knip's root `ignoreDependencies` no longer needs the bin's package: the root imports `iterate`.
+- trpc-cli 0.17.0 was still validating on npm, so the catalog pins main's pkg.pr.new build by commit
+  (pnpm caches a mutable `@main` URL). Every workspace on the catalog's trpc-cli typechecks and
+  passes on it. The CLI's prompts stay off for a coding agent and a non-terminal, as before
+  (`prompts: !isAgent && stdin.isTTY && stdout.isTTY`); the computer-name question uses the built-in
+  `input` prompt directly.

@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
-import * as prompts from "@clack/prompts";
 import { RpcTarget } from "capnweb";
+import { builtInPrompts } from "trpc-cli";
 import type { connectIterate } from "../node.ts";
 import { run } from "./run-command.ts";
 
@@ -84,19 +84,21 @@ async function askComputerName(): Promise<string> {
   // Non-interactive (piped output, an agent): just take the proposal.
   if (!process.stdin.isTTY) return proposed;
 
-  const answer = await prompts.text({
-    message: "What should agents call this computer? (camelCase — it becomes the itx.<name> path)",
-    placeholder: proposed,
-    defaultValue: proposed,
-    validate: (value) =>
-      /^[a-zA-Z][a-zA-Z0-9]*$/.test((value || "").trim())
-        ? undefined
-        : "Use a camelCase name: letters and digits, starting with a letter (e.g. jonasComputer).",
-  });
-  if (prompts.isCancel(answer)) {
-    prompts.cancel("Cancelled.");
-    process.exit(0);
-  }
+  const answer = await builtInPrompts().input(
+    {
+      message:
+        "What should agents call this computer? (camelCase — it becomes the itx.<name> path)",
+      default: proposed,
+      validate: (value) =>
+        /^[a-zA-Z][a-zA-Z0-9]*$/.test(value.trim()) ||
+        "Use a camelCase name: letters and digits, starting with a letter (e.g. jonasComputer).",
+    },
+    // the prompt reads only the streams; the command and inputs are for prompts inside trpc-cli
+    {
+      command: { name: () => "use-my-computer" },
+      inputs: { argv: [], arguments: [], options: [] },
+    },
+  );
   return answer.trim();
 }
 

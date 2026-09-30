@@ -169,8 +169,6 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.0",
-    "@orpc/server": "catalog:",
     "capnweb": "catalog:",
     "json5": "catalog:",
     "oauth4webapi": "catalog:",
