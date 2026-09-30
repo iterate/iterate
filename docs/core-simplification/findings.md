@@ -56,7 +56,12 @@ root samples and identifies possible contention from background config delivery.
 That is a hypothesis pending the main comparison, not a demonstrated regression;
 see [the investigation](performance-investigation.md).
 
-The complete 100-run soak `5xq58s3spm` is still running on immutable ref
+The complete 100-run soak `5xq58s3spm` is still running and **already has
+nonpasses**: iteration 1 had zero E2E failures and one cross-append perf failure;
+iteration 2 had two E2E failures and no perf failures. The failed E2E rows are
+Agents' reply/feed during a running script and `STREAM_PAUSED` propagation
+across `/api`. These need their report-level causes and repairs; neither a retry
+nor a partial pass hides them. The soak runs on immutable ref
 `soak/core-simplification-0739e06`, distinct preview `soak-cs-3461-0739`,
 with residency timing enabled and no test filter. Partial runs do not count
 as a completed soak. The matched Logs snapshot is **not green**. All eight
