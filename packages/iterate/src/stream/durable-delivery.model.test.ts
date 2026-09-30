@@ -506,9 +506,9 @@ test("a cold fan-out terminal takes its resume fence from the cursor root", asyn
   await drive(processor, 2);
   await settle();
 
-  expect(host.terminals).toEqual([
-    expect.objectContaining({ afterOffset: 0, fanOut: true, resumeAtOffset: 100 }),
-  ]);
+  expect(host).toMatchObject({
+    terminals: [expect.objectContaining({ afterOffset: 0, fanOut: true, resumeAtOffset: 100 })],
+  });
 });
 
 test("a cold ordered retry takes its resume fence from the cursor root", async () => {

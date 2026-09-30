@@ -1,9 +1,8 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { deployedTarget } from "./deployed-target.ts";
 
-afterEach(() => vi.unstubAllEnvs());
-
 test("a deployed target supplies its known origin beside its Doppler secrets", () => {
+  using _env = { [Symbol.dispose]: () => vi.unstubAllEnvs() };
   vi.stubEnv(
     "APP_CONFIG",
     JSON.stringify({ login: { password: "p" }, secrets: { adminBearer: "bearer" } }),

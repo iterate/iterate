@@ -38,8 +38,8 @@ can be reflected into complete types.
 Configured subscriptions choose delivery explicitly. Live callbacks use the
 pager; ordinary processors use their checkpoints; durable target subscriptions
 keep their cursor, retry, halt/resume and fan-out state in the context's own KV.
-There is no `subscriptions` facet and no bridge RPC between two platform
-objects. Existing processor authoring and React hooks retain their shape. The
+There is no `subscriptions` facet or bridge RPC. Main already kept delivery
+in the context; the separate facet was an intermediate candidate rejected here. Existing processor authoring and React hooks retain their shape. The
 API client remains an ordinary Iterate Cap'n Web client.
 
 The context owns the log, selected bodies, caller provenance, effective rules,
@@ -108,7 +108,10 @@ acknowledgement is part of the cursor itself, so it cannot disagree with a
 separate KV marker. Starting a retry consumes its previous wake, so a long
 running call cannot repeatedly re-arm an already past deadline. Fan-out persists each eight-call wave before invoking any
 target and writes its combined outcomes once, rather than rewriting the whole
-cursor for each item.
+cursor for each item. The cursor root owns the resume acknowledgement; pending
+ranges, fan-out items and halt records no longer duplicate that identity. Each
+call captures the current identity in memory, with generation checks on both
+sides of every await.
 
 Failure and halt receipts reach a durable target only when its consumes list
 names the exact event type. This relaxes implicit wildcard delivery of the
@@ -118,28 +121,28 @@ another failed receipt forever. Explicit receipt subscriptions remain possible.
 The larger possible relaxation is to stop giving every arbitrary target an
 automatic platform-owned durable broker. A consumer could own its forwarding,
 checkpoint, retry and terminal policy as ordinary processor code. That would
-remove the private durable delivery runner and its bridge, rather than merely
-move them. This candidate preserves that service; deleting it would change a
+remove the automatic durable runner and the recovery policy that the context
+currently supplies for arbitrary targets. This candidate preserves that service; deleting it would change a
 guarantee and needs a real consumer replacement. Likewise, transparent proxied
 WebSocket upgrades remain supported here. Neither future cut is counted as a
 current deletion.
 
 ## Validation boundary
 
-The runner and model suite has 48 passing tests, and the unchanged ordinary
+The runner and model suite has 50 passing tests, and the unchanged ordinary
 processor engine has 64 passing tests. Three new Workers fault probes pass:
 implicit failure-receipt reentry, a large retry range ending at an ephemeral
 position, and terminal acknowledgement of an invalid selective resume. Existing
 cold recovery, admission, halt/resume, replacement and ephemeral offset-reuse
 probes remain in the full Workers suite.
 
-The published b11 checkpoint passes the full root test command, including socket
-suites: OS has 153 passing files, 2,308 passing tests and 14 existing expected
-failures. The additional consumed-wake regression passes; the assembled head
-is being rerun with a frozen commit after a deployment-script commit invalidated
-two generated-template pin assertions during the previous run. Lint, typecheck, formatting and Knip have passed. Local success does not replace
-the deployed slow residency rows, browser specs, latency/throughput budgets,
-100-run soak and same-window Workers Logs comparison.
+The assembled source passes the full root test command, including socket
+suites: OS has 154 passing files, 2,310 passing tests and 14 existing expected
+failures. Lint, typecheck, formatting and Knip pass. The new deployed-target
+fixture supplies its already known OS URL alongside Doppler secrets; the
+Worker, preview readiness gate and test harness share that configured origin.
+Local success does not replace the deployed slow residency rows, browser specs,
+latency/throughput budgets, 100-run soak and same-window Workers Logs comparison.
 
 The published 9c preview had 19 E2E failures. Its browser and performance results
 and its cancelled soak are historical evidence, not proof of this native head.
@@ -151,9 +154,9 @@ review used immutable source 179629660f and identified the resume, receipt,
 wake, range and fan-out persistence faults now addressed in this checkpoint.
 It did not execute tests or review later source changes.
 
-The tracked working count is **18,066 core lines plus 7,546 SDK lines = 25,612**,
-versus main's **18,806 plus 6,814 = 25,620**. This is only **eight lines smaller**:
-core fell by 740 lines while the SDK grew by 732. Restoring the existing
+The tracked working count is **18,066 core lines plus 7,527 SDK lines = 25,593**,
+versus main's **18,806 plus 6,814 = 25,620**. This is only **27 lines smaller**:
+core fell by 740 lines while the SDK grew by 713. Restoring the existing
 processor claim code removes the now single-caller `BackgroundClaims` class;
 moved responsibility and deleted tests do not count as runtime deletion. This
 is a real but inadequate combined reduction, and further simplification remains

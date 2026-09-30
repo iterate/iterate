@@ -219,7 +219,7 @@ export class DurableDeliveryProcessor {
     this.#requestDrain(runInBackground);
   }
 
-  /** The subscriptions facet applies the existing resume control fact before calling drive. */
+  /** The context applies the existing resume control fact before calling drive. */
   resume(afterOffset?: number, offset?: number, resumeAtOffset?: number): boolean {
     if (this.#disposed) return false;
     const cursor = this.#cursor();

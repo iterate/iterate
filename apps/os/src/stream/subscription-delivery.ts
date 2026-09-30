@@ -235,7 +235,7 @@ export class SubscriptionDelivery {
                 this.#reportFacetRowFailure("configured", name, row, error);
               },
             );
-          // Live rows own their recovery. Durable rows are owned by the subscriptions facet.
+          // Live rows own their recovery. Context-owned runners handle durable rows.
           break;
         }
       }
