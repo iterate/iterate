@@ -141,7 +141,13 @@ copied from (every main commit is published).
       sha, a fresh `git init` with no origin: frozen install, `CLOUDFLARE_ENV=self-host pnpm --filter
 os build`, `wrangler deploy --dry-run` all pass, and the baked template pins agents and voice
       at that sha. In iterate/iterate the build still pins every `@main`
-- [ ] The branch's Copybara job syncs os0929 with the real transform and runs the self-host check
+- [x] The branch's Copybara job syncs os0929 with the real transform and runs the self-host check
+      _(os0929 [5d35f36](https://github.com/iterate/os0929/commit/5d35f36bbd0910efbca2492975068964b06463c2):
+      configs/default pins agents, voice and iterate at 435de9929, all three 200 on pkg.pr.new, and
+      no envs.ts. The first run's check failed after that correct migration: a --to-folder run lists
+      no changes, so the check now fetches the copy's head first and passes its GitOrigin-RevId as
+      `--labels copied_commit:<sha>` (FLAG_COPIED_COMMIT). At 3b4633767 both copies are in sync and
+      a fresh clone installs, builds, dry-run deploys and stays clean)_
 
 ### What `iterate/os` contains, as input for `core/`
 
