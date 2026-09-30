@@ -428,7 +428,7 @@ export async function identityResponse(request: Request, env: Env) {
       headers.set("Location", flow.next);
       return new Response(null, { status: 303, headers });
     }
-    const session = await startIssuerSession(env, request, user, flow.next, {
+    const session = await startIssuerSession(env, user, flow.next, {
       picture: identity.picture,
       name: identity.name,
     });

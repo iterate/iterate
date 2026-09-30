@@ -17,7 +17,7 @@ test("first consent creates organization and project through the ordinary sessio
     subject: "1357924680",
     email: "bootstrap@example.com",
   });
-  const helpers = oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
+  const helpers = oauthHelpers(env, platformAddressesOf(env));
   const client = await helpers.createClient({
     clientName: "Claude fixture",
     clientUri: "https://studio.example/about",
@@ -436,10 +436,7 @@ test("consent omits missing, insecure and credential-bearing branding URLs", asy
     "javascript:alert(1)",
     "https://user:password@app.example/logo.svg",
   ]) {
-    const client = await oauthHelpers(
-      env,
-      platformAddressesOf(env, new Request(ORIGIN)),
-    ).createClient({
+    const client = await oauthHelpers(env, platformAddressesOf(env)).createClient({
       clientName: "Example App",
       clientUri: url,
       logoUri: url,
@@ -570,9 +567,9 @@ test("the consent page renders on the server, and Authorize posts the choice to 
 async function issuerSignIn(
   user: UserRecord,
   next: string,
-  extras?: Parameters<typeof startIssuerSession>[4],
+  extras?: Parameters<typeof startIssuerSession>[3],
 ) {
-  const login = await startIssuerSession(env, new Request(ORIGIN), user, next, extras);
+  const login = await startIssuerSession(env, user, next, extras);
   if ("error" in login) throw new Error(login.error);
   return login;
 }

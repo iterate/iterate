@@ -144,7 +144,7 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
     "ensure-user",
     new ControlPlane(env).ensureUser(checked.email),
   );
-  const session = await startIssuerSession(env, request, user, checked.next);
+  const session = await startIssuerSession(env, user, checked.next);
   if ("error" in session) return refused(session.error, checked.next);
   console.info({ event: "admin-sign-in.signed-in", email: checked.email });
   const headers = new Headers({

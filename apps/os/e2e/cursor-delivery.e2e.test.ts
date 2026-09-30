@@ -341,11 +341,9 @@ test("consumes ['*'] delivers every durable event; the row carries a cursor at `
   }
 });
 
-test("ephemerals DO reach a caught-up cursor target (read back from the stream's recent-ephemerals ring) — including a FRESH row's first batch after unrelated commits", async () => {
-  // The one loop reads a cursor row's batch from the log with the stream's recent-ephemerals ring
-  // merged in, so a cursor target sees the ephemerals it named while the ring holds them (1 MiB,
-  // per incarnation). A filtered commit between the configuration and the first consumed batch
-  // must not lose that first ephemeral: the row is caught up, and reads it from the ring.
+test("ephemerals reach a caught-up cursor target, including a fresh row after unrelated commits", async () => {
+  // A filtered durable commit between configuration and the first consumed batch must not lose the
+  // first named ephemeral while its body is still live.
   const itx = openItx(freshCtx("ephcur"));
   const c = collector();
   await cursorSubscribe(itx, "ephcur", c.fn, ["blip"]);
@@ -356,9 +354,11 @@ test("ephemerals DO reach a caught-up cursor target (read back from the stream's
   await until("the durable blip delivers", () => c.offsets().includes(durable.offset), 8_000);
   await sleep(400);
   expect(c.offsets()).toEqual([eph.offset, durable.offset]); // both, once each, in order
-  // ranges chain across the two deliveries exactly like a push subscriber's
-  expect(c.invocations[1].range).toMatchObject({ after: c.invocations[0].range.through });
-  // the cursor stands at the durable head (an ephemeral-only batch advances it in memory only)
+  // Ephemeral delivery does not advance the durable cursor. The following range re-scans from the
+  // last durable mark and selects the durable event without re-delivering the ephemeral body.
+  expect(c.invocations[1].range).toMatchObject({ through: durable.offset });
+  expect(c.invocations[1].range.after).toBeLessThan(durable.offset);
+  // The cursor stands at the durable head.
   expect((await itx.subscriptions.get("ephcur")).cursor).toMatchObject({
     confirmedOffset: durable.offset,
   });
@@ -451,9 +451,8 @@ test("cursor subscriptions enable no processor and mint no facet; a row appears 
 test("subscribe resolves without probing the receiver; an unusable target fails at its FIRST delivery, never at configure", async () => {
   // A deliberate non-guarantee, kept on purpose: configure appends
   // the row and returns — "the receiver learns about the subscription when its first copy arrives".
-  // A fat-fingered target therefore fails LATE: the loop fails to evaluate `itx.does-not-exist` on
-  // the first consumed commit (NO_ITX_EXPRESSION_MATCH) and the row DANGLES — its cursor stays at
-  // rest (no rung, no claim on the alarm) and it never halts: it waits for its rule.
+  // A fat-fingered target therefore fails late. The delivery loop records its first retry rather
+  // than treating a failed first target evaluation as successful progress.
   const itx = openItx(freshCtx("noverify"));
   const sub = await itx.subscribe({
     name: "unusable",
@@ -462,11 +461,18 @@ test("subscribe resolves without probing the receiver; an unusable target fails 
   });
   expect(await sub.name).toBe("unusable"); // configure resolved — the receiver was not probed
   await itx.append({ type: "mark" }); // the first delivery fails inside the loop, never here
-  await sleep(800);
-  const r = await itx.subscriptions.get("unusable");
+  const r = await until(
+    "the failed first delivery records its retry",
+    async () => {
+      const row = await itx.subscriptions.get("unusable");
+      return row?.cursor?.attempt === 1 ? row : undefined;
+    },
+    8_000,
+  );
   expect(r).not.toBeNull(); // the row stands…
-  expect(r.cursor).toMatchObject({ attempt: 0 }); // …its cursor at rest (no rung: a wait, not a failure)…
-  expect(r.halted).toBeUndefined(); // …and no halt fact for an operator to find
+  expect(r.cursor).toMatchObject({ attempt: 1 }); // …and its first delivery failure is observable…
+  expect(r.cursor.nextAttemptAtMs).toBeTypeOf("number");
+  expect(r.halted).toBeUndefined(); // …without treating the first bounded retry as terminal
 });
 
 test("agreement: a push subscriber and a cursor subscriber see the SAME offsets in order", async () => {

@@ -7,7 +7,7 @@
 //     routing the platform strips the base, so the local server sees the same path either way),
 //     the body uncompressed (a local server that gzips whatever the request accepts is not asked to)
 //   • a WebSocket asking for `vite-hmr` opens with it and echoes
-//   • SIGINT deletes the route: the host is the template's own 404 again
+//   • SIGINT disposes the lend and its live route: the host is the template's own 404 again
 
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { WebSocketServer } from "ws";
 import { expect, test } from "vitest";
-import { adminCredentials, session, workerUrl } from "./support/client.ts";
+import { adminCredentials, session, untilValue, workerUrl } from "./support/client.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,
@@ -28,7 +28,7 @@ import {
 const example = fileURLToPath(new URL("../examples/serve-localhost.mjs", import.meta.url).href);
 
 test(
-  "examples/serve-localhost.mjs: the printed URL reaches the local server (HTTP and a vite-hmr WebSocket), SIGINT deletes the route",
+  "examples/serve-localhost.mjs: the printed URL reaches the local server (HTTP and a vite-hmr WebSocket), SIGINT detaches its live route",
   // one capnweb session that lends and sets a route: a few seconds against a preview
   { timeout: 60_000 },
   async () => {
@@ -72,11 +72,24 @@ test(
         protocol: "vite-hmr",
         echo: "local-echo:ping",
       });
+      expect(await itx.fetchRoutes.list()).toMatchObject([
+        {
+          fetchRouteName: "tunnel-web",
+          target: ["itx", "tunnels", "web"],
+          authRequirement: null,
+        },
+      ]);
 
       child.kill("SIGINT");
       expect(await exited).toBe(0);
       expect(await itx.fetchRoutes.list()).toEqual([]);
-      expect(await fetchProjectUrl(hello)).toMatchObject({ status: 404, text: "Not found\n" });
+      expect(
+        await untilValue(
+          "the example's detached route reaches the config worker",
+          () => fetchProjectUrl(hello),
+          (answer) => answer.status === 404 && answer.text === "Not found\n",
+        ),
+      ).toMatchObject({ status: 404, text: "Not found\n" });
     } finally {
       child.kill("SIGKILL");
     }

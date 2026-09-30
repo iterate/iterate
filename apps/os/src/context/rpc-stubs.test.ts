@@ -144,6 +144,64 @@ test("a borrowed stub after a rejected call: a late transport failure of a stub 
   expect(rpcStubDirectory.hasBorrowedRpcStubs()).toBe(true);
 });
 
+test("the last pager's close detaches even while Workers still reports that closing socket as open", () => {
+  const pager = {
+    readyState: WebSocket.OPEN,
+    deserializeAttachment: () => ({ rpcStubKey: "k" }),
+  } as unknown as WebSocket;
+  const onPresence = vi.fn();
+  const rpcStubDirectory = new RpcStubDirectory({
+    ctx: { acceptWebSocket: () => {}, getWebSockets: () => [pager] },
+    onPresence,
+    rpcStubFetch: { serve: async () => undefined } as unknown as RpcStubFetchServer,
+  });
+  const stub = fakeBorrowedRpcStub(async () => "ok");
+  rpcStubDirectory.lendRpcStub({ rpcStubKey: "k", stub });
+
+  rpcStubDirectory.rpcStubPagerClosed(pager);
+
+  expect(stub).toMatchObject({ disposed: true });
+  expect(onPresence).toHaveBeenCalledWith("detached", "k");
+});
+
+test("superseding a live attachment closes only the matching pager", () => {
+  const provider = {
+    readyState: WebSocket.OPEN,
+    close: vi.fn(),
+    deserializeAttachment: () => ({
+      rpcStubKey: "itx.provider",
+      attachmentId: "old",
+      liveProvide: { match: "itx.provider" },
+    }),
+  } as unknown as WebSocket;
+  const replacement = {
+    readyState: WebSocket.OPEN,
+    close: vi.fn(),
+    deserializeAttachment: () => ({
+      rpcStubKey: "itx.provider",
+      attachmentId: "replacement",
+      liveProvide: { match: "itx.provider" },
+    }),
+  } as unknown as WebSocket;
+  const subscriber = {
+    readyState: WebSocket.OPEN,
+    close: vi.fn(),
+    deserializeAttachment: () => ({
+      rpcStubKey: "subscription:keep",
+      attachmentId: "subscriber",
+      liveSubscription: { name: "keep" },
+    }),
+  } as unknown as WebSocket;
+  const rpcStubDirectory = directory([provider, replacement, subscriber]);
+
+  expect(rpcStubDirectory.removeLiveProvide("itx.provider", new Set(["old"]))).toBe(true);
+  expect(provider.close).toHaveBeenCalledWith(1000, "superseded by durable configuration");
+  expect(replacement.close).not.toHaveBeenCalled();
+  expect(subscriber.close).not.toHaveBeenCalled();
+  expect(rpcStubDirectory.removeLiveSubscription("keep")).toBe(true);
+  expect(subscriber.close).toHaveBeenCalledWith(1000, "superseded by durable configuration");
+});
+
 // A PAGE THAT TIMES OUT loses what waited on it — a live client's push among them, which delivery
 // treats as heal-by-read and never logs — so the timeout is logged where it happens, once per page
 // however many calls share it. 2026-09-24: 33 of 200 pushes lost this way left no trace.

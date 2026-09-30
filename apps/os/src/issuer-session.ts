@@ -40,8 +40,6 @@ const PLATFORM_FAILURE_MESSAGE = "Sign-in failed on our side. Try again.";
  * The person's account starts here too, and the sign-in never waits for it (`startAccount`). */
 export async function startIssuerSession(
   env: Env,
-  /** the sign-in request — its origin is the issuer on a deployment that named no `urls.os` */
-  request: Request,
   user: UserRecord,
   next: string,
   /** what the identity provider said about the person (Google's profile; an email sign-in has

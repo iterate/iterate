@@ -16,7 +16,6 @@ test("a sign-in reads the person's account in the background, and answers withou
 
   const session = await startIssuerSession(
     { ...env, ITERATE_CONTEXT: contexts.namespace },
-    new Request(`${ORIGIN}/login`, { method: "POST" }),
     user,
     "/login",
   );

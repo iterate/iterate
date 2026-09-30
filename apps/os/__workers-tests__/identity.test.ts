@@ -38,7 +38,7 @@ test("Google proves issuer identity; upstream credentials never become app token
   const auth = await authorizationForToken(
     env,
     (await session.bearer())!,
-    platformAddressesOf(env, new Request(`${ORIGIN}/`)),
+    platformAddressesOf(env),
     "browser-session",
   );
   // the person's id is minted by the control plane; Google's subject names them from now on
@@ -150,7 +150,7 @@ test("Cloudflare's verified ID token creates the same revocable issuer session, 
   const auth = await authorizationForToken(
     env,
     (await session.bearer())!,
-    platformAddressesOf(env, new Request(ORIGIN)),
+    platformAddressesOf(env),
     "browser-session",
   );
   expect(auth?.principal).toEqual({
@@ -943,7 +943,7 @@ async function principalOf(response: Response) {
   const auth = await authorizationForToken(
     env,
     (await session.bearer())!,
-    platformAddressesOf(env, new Request(ORIGIN)),
+    platformAddressesOf(env),
     "browser-session",
   );
   return auth?.principal;

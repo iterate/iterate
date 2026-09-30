@@ -19,7 +19,6 @@ function inputOf<T>(schema: z.ZodType<T>) {
 }
 
 export const getLandingState = createServerFn({ method: "GET" }).handler(async () => {
-  const request = getRequest();
   const { env } = issuerRequestContext();
   setResponseHeader("cache-control", "no-store");
   return {

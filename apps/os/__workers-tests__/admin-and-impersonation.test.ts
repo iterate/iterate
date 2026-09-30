@@ -13,10 +13,10 @@ import {
   issuerApprover,
   rpc,
 } from "./oauth-support.ts";
-import { controlPlane, fetchReachesThisWorker, loginPassword, ORIGIN, readLog } from "./support.ts";
+import { controlPlane, fetchReachesThisWorker, loginPassword, readLog } from "./support.ts";
 
 const ADMIN = "oauth-admin@example.com";
-const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+const addresses = platformAddressesOf(env);
 
 test("the admin scope: offered and granted to a listed address alone, every project as that person for 12 hours, only at /api, ended when the list drops them", async () => {
   fetchReachesThisWorker();

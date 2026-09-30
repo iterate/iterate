@@ -148,7 +148,7 @@ test("the token endpoint rides out a deploy's reset of the person's Durable Obje
     });
     return authorizationServerFetch(
       { ...env, ITERATE_CONTEXT: contexts },
-      platformAddressesOf(env, request),
+      platformAddressesOf(env),
       request,
       createExecutionContext(),
     );
@@ -190,7 +190,7 @@ test("a sign-in lands while the person's account Durable Object has not started:
     Promise.race([
       authorizationServerFetch(
         { ...env, ITERATE_CONTEXT: notStarted },
-        platformAddressesOf(env, request),
+        platformAddressesOf(env),
         request,
         createExecutionContext(),
       ),

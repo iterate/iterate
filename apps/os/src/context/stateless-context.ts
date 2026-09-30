@@ -147,9 +147,7 @@ export function itxEntrypointFor(
   if (known) return known;
   const { exports } = ctx as unknown as {
     exports: {
-      ItxEntrypoint(opts: {
-        props: { iterateContextName: string };
-      }): Fetcher;
+      ItxEntrypoint(opts: { props: { iterateContextName: string } }): Fetcher;
     };
   };
   const stub = exports.ItxEntrypoint({ props: { iterateContextName } });
@@ -170,7 +168,6 @@ export function statelessResolverFor(args: {
   const { env, address, caller } = args;
   const { projectId, path } = address;
   const appConfig = appConfigOf(env);
-  const platformOrigin = appConfig.urls.os;
   const reach = contextReach({
     env,
     namespace: args.namespace,

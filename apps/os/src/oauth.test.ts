@@ -123,6 +123,7 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
   };
   const appended: unknown[] = [];
   const env = {
+    APP_CONFIG_URLS__OS: "https://os.test",
     APP_CONFIG_SECRETS__KEY: "secrets-key",
     APP_CONFIG_LOGIN__PASSWORD: "password",
     OAUTH_KV: {

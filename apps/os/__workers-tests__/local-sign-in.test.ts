@@ -138,7 +138,7 @@ async function signedInAs(response: Response) {
   const grant = await authorizationForToken(
     laptopEnv,
     (await session.bearer())!,
-    platformAddressesOf(laptopEnv, new Request(`${LAPTOP}/`)),
+    platformAddressesOf(laptopEnv),
     "browser-session",
   );
   return grant?.principal.email;

@@ -1,25 +1,16 @@
 // rpc-stubs-reconnect-and-attach.e2e.test.ts — RECONNECT AT THE SAME SPELLING, and THE ATTACH that
-// carries the rule. An rpc-stub PROVIDER is ephemeral (its capnweb WebSocket terminates at a STATELESS
-// `/api` worker), so a provider dropping is EXPECTED and the platform's answer is re-provide at the
-// same match, not server durability (the dead-provider half — presence shrinks, the rule is un-set,
-// the match is default-deny, a same-key re-provide replaces the transport — is
-// rpc-stubs-lend-recall-and-offline.e2e). The DO owns BOTH ends of a lent stub's rule (and of a live
-// subscriber's row): the edge's `provide(match, stub)` / `subscribe({ target: fn })` build the event
-// that names the key and hand it to the DO INSIDE the pager upgrade, which appends it in the turn it
-// accepts the pager (src/context/rpc-stubs.ts) and un-sets it when the key's last pager
-// closes — one edge→DO round trip, the set and the un-set decided on one side. Pins:
-//   • a live SUBSCRIBER re-subscribing under its name replaces the transport (ONE row, ONE more
-//     configured event, the first callback physically unreachable); `subscribe({ name, target: null })`
-//     drops the row and recalls the stub — no callback under that name receives anything afterwards
+// carries the effective rule. An rpc-stub PROVIDER is ephemeral (its capnweb WebSocket terminates at
+// a STATELESS `/api` worker), so a provider dropping is expected and the platform's answer is
+// re-provide at the same match. The pager attachment projects the live rule or subscription while it
+// is open. Pins:
+//   • a live SUBSCRIBER re-subscribing under its name replaces the transport; the first callback is
+//     physically unreachable; `subscribe({ name, target: null })` drops the attachment
 //   • THE LEASE IS THE HANDLE: disposing a STALE provide handle leaves its replacement serving; an
 //     EXPRESSION handle disposed after a live provider took its match over un-sets nothing
 //   • RED (`createFailing`): two sessions providing the IDENTICAL rule share one identity — disposing the
 //     first removes the second's row
-//   • the rule / the row is appended INSIDE the pager attach: its offset is BELOW the key's ephemeral
-//     `itx/rpc-stub-attached` (the presence fact)
-//   • a paused stream's refusal of a provide or a subscribe crosses /api CODED (STREAM_PAUSED); after
-//     resume the same calls land (the attach's atomicity at the DO — 409 + code, no socket, no
-//     presence, no rule — is __workers-tests__/rpc-stub-pager-attach.test.ts)
+//   • a paused stream accepts a write-less live attachment, while durable configuration remains
+//     refused until resume
 
 import { expect, test } from "vitest";
 import { E2E_CI_RETRIES } from "@iterate-com/shared/test-support/e2e-policy";
@@ -42,14 +33,10 @@ import { Tools } from "./support/targets.ts";
 
 // ── reconnect at the same spelling ──
 
-// The reconnect one layer up: a LIVE SUBSCRIBER is a stub lent under
-// `subscription:<name>` plus one subscription row naming it. Re-subscribing the same name
-// re-lends under the same key — the session disposes the first relay (its transport is REPLACED, the
-// first callback physically unreachable) — and appends ONE more subscription-configured (same name
-// REPLACES the row; there is no shadow stack and no dedupe). `subscribe({ name, target: null })`
-// drops the one row and recalls this session's stub: no callback under that name receives anything
-// afterwards.
-test("a live subscriber re-subscribes under the same name — the transport is replaced (one row, one more event); a null target stops delivery for good", async () => {
+// The reconnect one layer up: a LIVE SUBSCRIBER is a stub lent under `subscription:<name>` plus a
+// projected subscription row. Re-subscribing replaces its transport. `target: null` drops the
+// attachment, so no callback under that name receives anything afterwards.
+test("a live subscriber re-subscribes under the same name; a null target stops delivery for good", async () => {
   const itx = openItx(freshCtx("resub"));
   await itx.append({ type: "seed" });
   const rowsNamed = async (name: string): Promise<unknown[]> =>
@@ -82,7 +69,6 @@ test("a live subscriber re-subscribes under the same name — the transport is r
       cb1 += events.length;
     },
   });
-  const logBefore = await itx.readEvents(0, 500);
   await itx.subscribe({
     name: "s", // the client's model: this REPLACES cb1
     consumes: ["mark"],
@@ -90,9 +76,7 @@ test("a live subscriber re-subscribes under the same name — the transport is r
       cb2 += events.length;
     },
   });
-  // the replacing row appended ONE event, the table holds ONE row named s, and the key is present
-  const logAfter = await itx.readEvents(0, 500);
-  expect(logAfter.events.length).toBe(logBefore.events.length + 1);
+  // The projected table holds one row named s and the key is present.
   expect(await rowsNamed("s")).toHaveLength(1);
   expect(await presence(itx)).toContain("subscription:s");
 
@@ -182,79 +166,54 @@ createFailing(
   },
 );
 
-// ── the attach carries the rule: the ORDER of two events on the shared offset sequence.
-// `itx/rpc-stub-attached` (the ephemeral presence fact) is appended AFTER the events the attach carried,
-// so the rule / the row has a LOWER offset than the key's `attached` ──
-
-test("provide(match, stub): the rule is appended INSIDE the pager attach — its offset is below the key's itx/rpc-stub-attached", async () => {
+test("provide(match, stub) projects its effective rule and presence", async () => {
   const ctx = freshCtx("attach-rule");
-  const { observer, attachedOffsetOf } = await watchAttached(ctx);
+  const observer = openItx(ctx);
 
   await openItx(ctx).provide("itx.pinned", new Tools("pinned"));
-  const attachedOffset = await until("itx.pinned attached seen by the watcher", () =>
-    attachedOffsetOf("itx.pinned"),
+  await until("itx.pinned is present", async () =>
+    (await presence(observer)).includes("itx.pinned"),
   );
-  const ruleEvent = (await readAll(observer)).find(
-    (e) =>
-      e.type === "events.iterate.com/itx/rewrite-rule-configured" &&
-      ruleMatchAtRest(e) === "itx.pinned",
-  );
-  expect(ruleEvent?.payload.target).toEqual(["itx", "builtins", "rpcStubs", ["get", "itx.pinned"]]);
-  // THE PIN: the DO appended the rule while accepting the pager, before it announced presence.
-  expect(ruleEvent.offset).toBeLessThan(attachedOffset);
-  // And it all works: presence, the rule, a call through the match.
-  expect(await presence(observer)).toContain("itx.pinned");
   expect(await rpcStubRewriteRuleMatches(observer)).toContain("itx.pinned");
   expect(await observer.invoke("itx.pinned.hello()")).toBe("hello-from-pinned");
 });
 
-test("subscribe({ target: fn }): the row is appended INSIDE the pager attach — its offset is below the key's itx/rpc-stub-attached", async () => {
+test("subscribe({ target: fn }) projects its row and delivers through the pager", async () => {
   const ctx = freshCtx("attach-row");
-  const { observer, attachedOffsetOf } = await watchAttached(ctx);
+  const observer = openItx(ctx);
 
   const deliveries = collector();
   await openItx(ctx).subscribe({ name: "live", target: deliveries.fn, consumes: ["mark"] });
-  const attachedOffset = await until("subscription:live attached seen by the watcher", () =>
-    attachedOffsetOf("subscription:live"),
+  await until("subscription:live is present", async () =>
+    (await presence(observer)).includes("subscription:live"),
   );
-  const rowEvent = (await readAll(observer)).find(
-    (e) =>
-      e.type === "events.iterate.com/itx/subscription-configured" && e.payload?.name === "live",
-  );
-  expect(rowEvent?.payload.target).toEqual([
-    "itx",
-    "builtins",
-    "rpcStubs",
-    ["get", "subscription:live"],
-  ]);
-  expect(rowEvent.offset).toBeLessThan(attachedOffset);
-  // The row delivers: a mark lands on the live callback through the pager the attach opened.
+  expect((await subscriptions(observer)).map((row) => row.name)).toContain("live");
   await observer.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered", () => deliveries.types().includes("mark"));
 });
 
-test("a paused stream's refusal of a provide or a subscribe crosses /api CODED — STREAM_PAUSED on the error — and after resume the same calls land", async () => {
-  // The edge turns the refused pager upgrade's answer (a 409 whose JSON body carries the code) into
-  // the coded capnweb error a client classifies by; the attach itself is pinned at the DO.
+test("a paused stream accepts live attachments but refuses durable configuration; delivery begins after resume", async () => {
   const ctx = freshCtx("attach-refused");
   const itx = openItx(ctx);
   await itx.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
 
-  const provideError = await rejection(
-    itx.provide("itx.refused", new Tools("refused")),
-    "provide on a paused stream",
+  const marks = collector();
+  await itx.provide("itx.refused", new Tools("resumed"));
+  await itx.subscribe({ name: "refused", target: marks.fn, consumes: ["mark"] });
+  await until("the live provider and callback are present", async () => {
+    const attached = await presence(itx);
+    return attached.includes("itx.refused") && attached.includes("subscription:refused");
+  });
+  expect(await rpcStubRewriteRuleMatches(itx)).toContain("itx.refused");
+  expect((await subscriptions(itx)).map((row) => row.name)).toContain("refused");
+
+  const configError = await rejection(
+    itx.provide("itx.durable", "itx.kv"),
+    "durable configuration on a paused stream",
   );
-  expect(errorCode(provideError)).toBe("STREAM_PAUSED");
-  const subscribeError = await rejection(
-    itx.subscribe({ name: "refused", target: () => undefined }),
-    "subscribe on a paused stream",
-  );
-  expect(errorCode(subscribeError)).toBe("STREAM_PAUSED");
+  expect(errorCode(configError)).toBe("STREAM_PAUSED");
 
   await itx.append({ type: "events.iterate.com/itx/resumed" });
-  await itx.provide("itx.refused", new Tools("resumed"));
-  const marks = collector();
-  await itx.subscribe({ name: "refused", target: marks.fn, consumes: ["mark"] });
   expect(await itx.invoke("itx.refused.hello()")).toBe("hello-from-resumed");
   await itx.append({ type: "mark", payload: { n: 1 } });
   await until("the mark delivered after resume", () => marks.types().includes("mark"));
@@ -272,24 +231,4 @@ async function removalCommitted(itx: any, match: string): Promise<void> {
         e.payload.target === null,
     ),
   );
-}
-
-/** A live watcher of presence: the ephemeral `itx/rpc-stub-attached` events, WITH their offsets. */
-async function watchAttached(ctx: string) {
-  const observer = openItx(ctx);
-  const seen = collector();
-  await observer.subscribe({
-    name: "presence-watch",
-    target: seen.fn,
-    consumes: ["events.iterate.com/itx/rpc-stub-attached"],
-  });
-  const attachedOffsetOf = (rpcStubKey: string): number | undefined =>
-    seen.invocations
-      .flatMap((i) => i.events)
-      .find(
-        (e) =>
-          e.type === "events.iterate.com/itx/rpc-stub-attached" &&
-          e.payload?.rpcStubKey === rpcStubKey,
-      )?.offset;
-  return { observer, attachedOffsetOf };
 }

@@ -24,13 +24,13 @@
 //
 // 2. THE KEY, in the context DO (`RpcStubDirectory`), in memory:
 //
-//      ABSENT ──pager attach (appends what names the key)──▶ OFFERED ──call──▶ PAGING
+//      ABSENT ──pager attach──▶ OFFERED ──call──▶ PAGING
 //      PAGING ──the relay lends──▶ BORROWED        PAGING ──10 s──▶ OFFERED (its calls fail)
 //      PAGING ──the pager replaced──▶ PAGING (the page sent again down the new pager)
 //      BORROWED ──a call the transport broke; the pins' release; the pager replaced──▶ OFFERED
 //      OFFERED ──the DO hibernates and wakes──▶ OFFERED (a pager's attachment rides the eviction)
-//      any ──the key's last pager closes──▶ ABSENT (`detached`: what named the key is un-set)
-//      any ──the DO resets (no close handler runs)──▶ ABSENT, what named the key still set [D]
+//      any ──the key's last pager closes──▶ ABSENT (`detached`)
+//      any ──the DO resets (no close handler runs)──▶ ABSENT
 //
 // 3. A LENT CALL, in the relay (`whileClientAnswers`): unanswered for 10 s ──▶ a liveness probe
 //    [C]; the probe unanswered 10 s more ──▶ RPC_STUB_OFFLINE, and the lend stays.
@@ -42,14 +42,9 @@
 //                   `answerPage`).
 //   [B] re-dial     The pager dropped (a DO reset, every deploy; a fault on the hop) or went
 //                   silent with its close held back (the keepalive). Re-dialed for 60 s
-//                   (redial.ts); the attach re-appends what names the key, so the lend outlives
-//                   the drop.
+//                   (redial.ts); the attachment is restored when the pager reopens.
 //   [C] probe       The client's network vanished without a close: its calls fail in ~20 s, not
 //                   when the edge's TCP gives up.
-//   [D] census      A DO reset took the key's last pager with no close handler run, or a pause
-//                   refused the un-set: the `woken` or `resumed` commit un-sets what names a key no
-//                   pager or borrowed stub holds (iterate-context-durable-object.ts); a live
-//                   lender's re-dial [B] sets it again.
 //   [E] lend again  The lend ended under a live session (the re-dial gave up; the DO closed the
 //                   pager): `lendEnded()` says why, and `iterate tunnel` provides again
 //                   (packages/cli/src/tunnel.ts).
@@ -87,8 +82,8 @@ import {
 //   pager (below) is one-shot: after the return the key is offline until someone lends again.
 //
 //   LAYER 2 — THE RPC-STUB PAGERS. A hibernatable WebSocket per key, opened by the stateless edge
-//   relay (rpc-stub-relay.ts), carrying `{ rpcStubKey }` in its attachment and nothing
-//   else. It is a standing offer: "I can lend this key back on demand". When a call finds
+//   relay (rpc-stub-relay.ts), carrying `{ rpcStubKey }` plus optional live configuration. It is a
+//   standing offer: "I can lend this key back on demand". When a call finds
 //   the key not borrowed, the DO sends `{type:"page"}` down the pager, the edge answers with
 //   `lendRpcStub`, and layer 1 takes over. Between pages the DO holds only hibernatable sockets.
 //
@@ -96,12 +91,11 @@ import {
 // PAGER IS ITS SOCKET: a NEW pager under an existing key attaches beside the old one, then wins (the
 // reconnect swap).
 //
-// ONE-SHOT pager attach: the pager upgrade's `x-itx-rpc-stub-pager` header carries the KEY and the
-// EVENTS THAT NAME IT (a rewrite rule, a subscription row); this side accepts the socket and appends
-// those events in the SAME synchronous turn — the SET half of "the DO owns both ends of a lent
-// stub's rule" (the un-set half is the key's last pager close, `onPresence`). A refused append (a
-// paused stream) un-accepts: the socket closes silently, nothing was named, and the refusal — its
-// CODE — is the upgrade's answer. So a `provide(stub)` costs the edge ONE round trip to this DO.
+// ONE-SHOT pager attach: the pager upgrade's `x-itx-rpc-stub-pager` header carries the key and an
+// optional live provider or subscription. The socket attachment projects that configuration while
+// the pager is open; it never appends a durable event, so a paused stream accepts it. A durable
+// configuration at the same public name later closes the captured attachment after old snapshot
+// leases expire. A `provide(stub)` costs the edge one round trip to this DO.
 
 // ── the wire: what the relay (rpc-stub-relay.ts) speaks to this side ──
 
@@ -394,7 +388,7 @@ export class RpcStubDirectory {
     this.#closedRpcStubPagerSockets.add(ws);
     const { rpcStubKey } = this.#rpcStubPagerRecord(ws);
     // another pager for this key is open (a reconnect): the swap already returned the old stub
-    if (this.#rpcStubPagerFor(rpcStubKey)) return;
+    if (this.#rpcStubPagerFor(rpcStubKey, ws)) return;
     this.#returnRpcStubAndFailItsPage(rpcStubKey);
     this.#onPresence("detached", rpcStubKey);
   }
@@ -424,9 +418,17 @@ export class RpcStubDirectory {
   }
 
   /** Live rows reconstructed from socket attachments after every hibernation. */
-  liveProvides(): Array<RpcStubPagerLiveProvide & { rpcStubKey: string }> {
+  liveProvides(): Array<RpcStubPagerLiveProvide & { rpcStubKey: string; attachmentId: string }> {
     return this.#rpcStubPagerRecords().flatMap((record) =>
-      record.liveProvide ? [{ ...record.liveProvide, rpcStubKey: record.rpcStubKey }] : [],
+      record.liveProvide
+        ? [
+            {
+              ...record.liveProvide,
+              rpcStubKey: record.rpcStubKey,
+              attachmentId: record.attachmentId,
+            },
+          ]
+        : [],
     );
   }
   liveSubscriptions(): Array<
@@ -442,6 +444,24 @@ export class RpcStubDirectory {
             },
           ]
         : [],
+    );
+  }
+
+  /** A durable configuration at the same public name supersedes this live attachment. */
+  removeLiveProvide(match: string, attachmentIds?: ReadonlySet<string>): boolean {
+    return this.#removeLiveAttachments(
+      (record) =>
+        record.liveProvide?.match === match &&
+        (!attachmentIds || attachmentIds.has(record.attachmentId)),
+    );
+  }
+
+  /** A durable configuration at the same subscription name supersedes this live attachment. */
+  removeLiveSubscription(name: string, attachmentIds?: ReadonlySet<string>): boolean {
+    return this.#removeLiveAttachments(
+      (record) =>
+        record.liveSubscription?.name === name &&
+        (!attachmentIds || attachmentIds.has(record.attachmentId)),
     );
   }
   /** Included in snapshots. A replacement with the same name is still a different attachment. */
@@ -481,10 +501,23 @@ export class RpcStubDirectory {
   #rpcStubPagerRecords(): RpcStubPagerRecord[] {
     return this.#rpcStubPagerSockets().map((ws) => this.#rpcStubPagerRecord(ws));
   }
-  #rpcStubPagerFor(rpcStubKey: string): WebSocket | undefined {
+  #rpcStubPagerFor(rpcStubKey: string, except?: WebSocket): WebSocket | undefined {
     return this.#rpcStubPagerSockets().find(
-      (ws) => this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey,
+      (ws) => ws !== except && this.#rpcStubPagerRecord(ws).rpcStubKey === rpcStubKey,
     );
+  }
+  #removeLiveAttachments(matches: (record: RpcStubPagerRecord) => boolean): boolean {
+    const sockets = this.#rpcStubPagerSockets().filter((ws) =>
+      matches(this.#rpcStubPagerRecord(ws)),
+    );
+    for (const ws of sockets) {
+      try {
+        ws.close(1000, "superseded by durable configuration");
+      } catch {
+        /* The close callback still removes an attachment that was already closing. */
+      }
+    }
+    return sockets.length > 0;
   }
   #rpcStubPagerRecord(ws: WebSocket): RpcStubPagerRecord {
     return ws.deserializeAttachment() as RpcStubPagerRecord;

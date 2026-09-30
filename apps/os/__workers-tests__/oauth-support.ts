@@ -64,7 +64,7 @@ export async function issuerApprover(cookie: string) {
 }
 
 export function helpers() {
-  return oauthHelpers(env, platformAddressesOf(env, new Request(`${ORIGIN}/`)));
+  return oauthHelpers(env, platformAddressesOf(env));
 }
 
 export function call(path: string, init?: RequestInit) {

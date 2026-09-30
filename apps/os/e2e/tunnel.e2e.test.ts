@@ -7,10 +7,10 @@
 //     under paths (a per-PR preview) as under subdomains
 //   • public: HTTP reaches the local server; a WebSocket asking for `vite-hmr` opens with it, echoes
 //   • a context reset (what every deploy does) leaves the WebSocket open, nothing lost
-//   • Ctrl-C deletes the route: the host is the template's own 404 again
+//   • Ctrl-C detaches the live route: the host is the template's own 404 again
 //   • a tunnel killed outright closes a visitor's WebSocket at once, 1011 "tunnel disconnected",
 //     and its route goes with its lend: the host is the template's own 404 again
-//   • a restart sets its route again, and Ctrl-C deletes it
+//   • a restart attaches its route again, and Ctrl-C detaches it
 //   • a visitor whose connection vanishes without a close frame (a tab closed, a laptop gone):
 //     the local server's socket closes within seconds, so nothing keeps streaming through the
 //     platform
@@ -45,7 +45,7 @@ import {
 const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
 
 test(
-  "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel's host is 404",
+  "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C detaches its route, a killed tunnel's host is 404",
   // Each CLI process connects and sets a route (a few seconds each against a preview): three of them.
   { timeout: 90_000 },
   async () => {
@@ -99,7 +99,13 @@ test(
     }
     expect(await privateTunnel.stop("SIGINT")).toBe(0);
     expect(await itx.fetchRoutes.list()).toEqual([]);
-    expect(await fetchProjectUrl(privateUrl)).toMatchObject({
+    expect(
+      await untilValue(
+        "the stopped private tunnel reaches the config worker",
+        () => fetchProjectUrl(privateUrl),
+        (answer) => answer.status === 404 && answer.text === "Not found\n",
+      ),
+    ).toMatchObject({
       status: 404,
       text: "Not found\n",
     });
@@ -116,6 +122,13 @@ test(
     // relative: under paths routing the tunnel's base is `/projects/<project>/web/`, which the
     // local server sees too (it serves under that base)
     const url = await publicTunnel.url;
+    expect(await itx.fetchRoutes.list()).toMatchObject([
+      {
+        fetchRouteName: "tunnel-web",
+        target: ["itx", "tunnels", "web"],
+        authRequirement: null,
+      },
+    ]);
     const publicUrl = new URL("hello", url.endsWith("/") ? url : `${url}/`);
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({
       status: 200,
@@ -156,9 +169,15 @@ test(
         { timeoutMs: 10_000 },
       ),
     ).toEqual([]);
-    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
+    expect(
+      await untilValue(
+        "the killed tunnel's host is the config worker's",
+        () => fetchProjectUrl(publicUrl),
+        (answer) => answer.status === 404 && answer.text === "Not found\n",
+      ),
+    ).toMatchObject({ status: 404, text: "Not found\n" });
 
-    // a restart sets its route again; then Ctrl-C deletes it and the host is the template's own
+    // a restart attaches its route again; then Ctrl-C detaches it and the host is the template's own
     // 404 again
     const again = cli.tunnel([
       String(local.port),
@@ -172,7 +191,13 @@ test(
     expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 200 });
     expect(await again.stop("SIGINT")).toBe(0);
     expect(await itx.fetchRoutes.list()).toEqual([]);
-    expect(await fetchProjectUrl(publicUrl)).toMatchObject({ status: 404, text: "Not found\n" });
+    expect(
+      await untilValue(
+        "the stopped public tunnel reaches the config worker",
+        () => fetchProjectUrl(publicUrl),
+        (answer) => answer.status === 404 && answer.text === "Not found\n",
+      ),
+    ).toMatchObject({ status: 404, text: "Not found\n" });
   },
 );
 

@@ -246,7 +246,7 @@ test("resource narrowing, refresh and the revocation marker use the provider lif
 test("login.allowedEmails: a live grant whose email the list stops naming is refused at its next admission", async () => {
   fetchReachesThisWorker();
   const flow = await grant([`${ORIGIN}/api`]);
-  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  const addresses = platformAddressesOf(env);
   const token = flow.token!.access_token;
   const listing = (patterns: string) =>
     ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
@@ -266,7 +266,7 @@ test("a use the account recorded within the hour is not recorded again by anothe
   const token = flow.token!.access_token;
   const [userId, grantId] = token.split(":") as [string, string];
   const bearer = { Authorization: `Bearer ${token}` };
-  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  const addresses = platformAddressesOf(env);
   // the worker admits the token and records its use, off the response path
   expect(await call("/api", { method: "POST", body: "", headers: bearer })).toMatchObject({
     status: 200,

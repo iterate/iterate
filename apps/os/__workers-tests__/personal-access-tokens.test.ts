@@ -260,7 +260,7 @@ test("the operator bearer is /api's alone: refused at /mcp and on a project host
   const operator = env.APP_CONFIG_SECRETS__ADMIN_BEARER!;
   expect(await mcp(operator, "tools/list", {})).toMatchObject({ status: 401 });
   expect(await host(project.slug, operator)).toMatchObject({ status: 401 });
-  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  const addresses = platformAddressesOf(env);
   expect(await authorizationForToken(env, operator, addresses, "api")).toMatchObject({
     principal: { actor: "admin" },
   });
@@ -304,7 +304,7 @@ test("a device's key is listed as the device; an expiring key is refused past it
   const { root: deviceApi } = await rpc(device.token);
   expect((await deviceApi.projects.list()).map((row) => row.id)).toEqual([project.id]);
   // login.allowedEmails: a key whose person's email the list stops naming is refused, like a grant
-  const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/api`));
+  const addresses = platformAddressesOf(env);
   const listing = (patterns: string) =>
     ({ ...env, APP_CONFIG_LOGIN__ALLOWED_EMAILS: patterns }) as typeof env;
   expect(

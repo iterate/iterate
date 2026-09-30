@@ -42,7 +42,7 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
     );
 
   const user = await watchSignInStep("ensure-user", new ControlPlane(env).ensureUser(email));
-  const session = await startIssuerSession(env, request, user, "/login");
+  const session = await startIssuerSession(env, user, "/login");
   const headers = new Headers({ "cache-control": "no-store", "referrer-policy": "no-referrer" });
   if ("error" in session) {
     headers.set("location", `/login?${new URLSearchParams({ error: session.error })}`);

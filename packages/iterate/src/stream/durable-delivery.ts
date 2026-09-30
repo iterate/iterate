@@ -132,6 +132,10 @@ const permanentFailure = (error: unknown): boolean =>
 const configuredTargetFailure = (error: unknown): boolean =>
   ["NOT_A_METHOD", "FORBIDDEN", "GONE"].includes(errorCode(error) ?? "");
 
+/** Cursor state shares a KV cell with up to one thousand fan-out failures. */
+const deliveryErrorMessage = (error: unknown): string =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 1024);
+
 /** The SDK replacement for one durable `subscribe` row. It stores only a cursor plus at most one
  * pending scanned range; source bodies stay in the event log and are read again for every attempt. */
 export class DurableDeliveryProcessor {
@@ -276,10 +280,11 @@ export class DurableDeliveryProcessor {
     if (this.#disposed) return false;
     const cursor = this.#cursor();
     const halted = cursor.halted;
+    const message = deliveryErrorMessage(error);
     if (
       halted?.after === afterOffset &&
       halted.attempts === attempts &&
-      halted.error === error &&
+      halted.error === message &&
       halted.resumeAtOffset === resumeAtOffset &&
       halted.terminalReported
     )
@@ -293,7 +298,7 @@ export class DurableDeliveryProcessor {
       halted: {
         after: afterOffset,
         attempts,
-        error,
+        error: message,
         terminalReported: true,
         resumeAtOffset,
       },
@@ -438,7 +443,7 @@ export class DurableDeliveryProcessor {
             await this.#options.runtime.scheduleWake(nextAttemptAtMs);
             return;
           }
-          const message = error instanceof Error ? error.message : String(error);
+          const message = deliveryErrorMessage(error);
           if (permanentFailure(error) || attempt >= this.#options.maxAttempts) {
             const halted = {
               after: pending.after,
@@ -667,7 +672,7 @@ export class DurableDeliveryProcessor {
         current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
         current.error = undefined;
       } else {
-        current.error = error instanceof Error ? error.message : String(error);
+        current.error = deliveryErrorMessage(error);
         if (configuredTargetFailure(error)) {
           await this.#haltFanOutTarget(cursor, fanOut, current, error, stamp.resumeAtOffset);
           return;
@@ -700,7 +705,7 @@ export class DurableDeliveryProcessor {
     const halted = {
       after: fanOut.admittedThrough,
       attempts,
-      error: current.error || (error instanceof Error ? error.message : String(error)),
+      error: current.error || deliveryErrorMessage(error),
       resumeAtOffset,
     };
     this.#generation++;

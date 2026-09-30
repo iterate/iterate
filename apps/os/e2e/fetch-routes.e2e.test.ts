@@ -7,8 +7,8 @@
 //   • a WebSocket asking for a subprotocol (Vite's HMR asks for `vite-hmr`) opens: the provider's
 //     choice rides back to the eyeball's 101, or a spec-following client refuses the handshake
 //   • a private route: an anonymous page load is sent to sign in, an anonymous fetch gets the 401
-//   • the lend recalled: its rule and route go with it, and the host is the config worker's once the
-//     edge's snapshot of the route expires; a route deleted by hand at once
+//   • a durable route survives the lend it names: the missing target then fails normally until the
+//     durable route is deleted by hand, when the host is the config worker's again
 //   • `set` refuses a malformed route and appends nothing for a route that stands
 // The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
 
@@ -25,7 +25,7 @@ import {
   wsRoundTripOnProjectUrl,
 } from "./support/project-host.ts";
 
-test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the private route's sign-in, and the host back to the config worker once the lend is recalled or the route deleted", async () => {
+test("a durable route to a lent stub: HTTP, a WebSocket keeping its subprotocol, private sign-in, and explicit deletion after the lend ends", async () => {
   const slug = freshDnsSafeProjectSlug("fetch-routes");
   const projectId = await registerProject(slug);
   const itx = session().authenticate(adminCredentials()).projects.get(projectId);
@@ -61,29 +61,26 @@ test("a route to a lent stub: HTTP, a WebSocket keeping its subprotocol, the pri
 
   await itx.fetchRoutes.set("tunnel-blog", route);
   provision[Symbol.dispose]();
+  // `fetchRoutes.set` is durable. Recalling a live target removes only its pager attachment, so the
+  // route remains observable and attempts its now-unresolved target.
+  expect(await itx.fetchRoutes.list()).toMatchObject([
+    { fetchRouteName: "tunnel-blog", target: ["itx", "tunnels", "blog"] },
+  ]);
+
+  // Re-lending makes the same durable route useful again. Removing the route, rather than disposing
+  // the lend, is the action that returns this host to the config worker.
+  using _again = await itx.provide("itx.tunnels.blog", new LocalSite());
+  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 200, text: "local site" });
+  await itx.fetchRoutes.set("tunnel-blog", null);
+  expect(await itx.fetchRoutes.list()).toEqual([]);
+  // The edge may briefly serve its prior routing snapshot after the core row is gone.
   expect(
     await untilValue(
-      "the recalled tunnel's route is gone",
-      () => itx.fetchRoutes.list() as Promise<unknown[]>,
-      (routes) => routes.length === 0,
-    ),
-  ).toEqual([]);
-  // polled: no writer holds the recall, so the edge serves its snapshot of the old route until it expires
-  expect(
-    await untilValue(
-      "the recalled tunnel's host is the config worker's",
+      "the deleted tunnel's host is the config worker's",
       () => fetchProjectUrl(blog),
       (answer) => answer.text === "no route\n",
     ),
   ).toMatchObject({ status: 404, text: "no route\n" });
-
-  // a route deleted by hand, with the lend still up
-  using _again = await itx.provide("itx.tunnels.blog", new LocalSite());
-  await itx.fetchRoutes.set("tunnel-blog", route);
-  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 200, text: "local site" });
-  await itx.fetchRoutes.set("tunnel-blog", null);
-  expect(await itx.fetchRoutes.list()).toEqual([]);
-  expect(await fetchProjectUrl(blog)).toMatchObject({ status: 404, text: "no route\n" });
 });
 
 test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it appends and appends nothing for a route that already stands", async () => {

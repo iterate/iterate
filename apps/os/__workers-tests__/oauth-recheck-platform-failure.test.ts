@@ -26,7 +26,7 @@ test("a live session rides out control-plane reads that failed on the platform's
   const authorization = await authorizationForToken(
     env,
     flow.token!.access_token,
-    platformAddressesOf(env, request),
+    platformAddressesOf(env),
     "api",
   );
   const response = await rpcResponse(request, env, executionContext, authorization);

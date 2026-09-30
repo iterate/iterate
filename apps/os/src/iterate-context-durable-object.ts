@@ -575,12 +575,80 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** An append whose writer is answered by the fence rule of context/rule-snapshots.ts. */
   async #appendWaitingOutOlderSnapshots(events: StreamEventInput[]): Promise<StreamEvent[]> {
     const before = this.#stream.coreReducedState;
+    const liveAttachmentLeaseUntil = Math.max(
+      this.#snapshotLeaseUntil,
+      this.#pendingFence()?.until ?? 0,
+    );
+    const headBeforeCommit = this.#stream.highestAssignedOffset();
     const committed = this.#appendAndRunCommittedEffects(events);
+    const supersededLiveAttachments = this.#liveAttachmentsSupersededBy(
+      committed.filter((event) => event.offset > headBeforeCommit),
+    );
+    const { matches, names } = supersededLiveAttachments;
+    const providers = this.#liveAttachmentIds(this.#rpcStubs.liveProvides(), matches, "match");
+    const subscriptions = this.#liveAttachmentIds(
+      this.#rpcStubs.liveSubscriptions(),
+      names,
+      "name",
+    );
     await this.#waitOutOlderSnapshots(
       before,
       events.some((event) => SNAPSHOT_ROW_TYPES.has(event.type)),
     );
+    if (providers.size || subscriptions.size) {
+      await this.#waitOutLiveAttachmentSnapshots(liveAttachmentLeaseUntil);
+      for (const [match, attachmentIds] of providers)
+        this.#rpcStubs.removeLiveProvide(match, attachmentIds);
+      for (const [name, attachmentIds] of subscriptions)
+        this.#rpcStubs.removeLiveSubscription(name, attachmentIds);
+    }
     return committed;
+  }
+
+  /** Durable rows supersede an attached live provider or callback at the same public name. */
+  #liveAttachmentsSupersededBy(events: StreamEvent[]): { matches: string[]; names: string[] } {
+    const matches: string[] = [];
+    const names: string[] = [];
+    for (const event of events) {
+      // `normalizeControlEvent()` accepted this payload before `Stream.append()` made the event.
+      const payload = event.payload as {
+        match?: string;
+        name?: string;
+        target?: unknown;
+        ifTarget?: unknown;
+        ifConfiguredAtOffset?: unknown;
+      };
+      if (event.type === "events.iterate.com/itx/rewrite-rule-configured") {
+        if (!payload.match) continue;
+        // A stale handle's compare-and-set may remove an older durable row beneath a live provider.
+        if (payload.target === null && payload.ifTarget !== undefined) continue;
+        matches.push(payload.match);
+      }
+      if (event.type === "events.iterate.com/itx/subscription-configured") {
+        if (!payload.name) continue;
+        // A stale subscription handle must not remove a callback that replaced its row.
+        if (payload.target === null && payload.ifConfiguredAtOffset !== undefined) continue;
+        names.push(payload.name);
+      }
+    }
+    return { matches, names };
+  }
+
+  #liveAttachmentIds(
+    attachments: Array<{ attachmentId: string; match?: string; name?: string }>,
+    names: readonly string[],
+    field: "match" | "name",
+  ): Map<string, Set<string>> {
+    const wanted = new Set(names);
+    const byName = new Map<string, Set<string>>();
+    for (const attachment of attachments) {
+      const name = attachment[field];
+      if (!name || !wanted.has(name)) continue;
+      const attachmentIds = byName.get(name) ?? new Set<string>();
+      attachmentIds.add(attachment.attachmentId);
+      byName.set(name, attachmentIds);
+    }
+    return byName;
   }
 
   /** A write of what a snapshot carries answers its writer once the fence it must wait out has
@@ -701,9 +769,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (this.#stream.reconstructionRefusal) throw this.#stream.reconstructionRefusal;
   }
 
-  /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
-   *  callers: `append`, and the pager attach (rpc-stubs.ts), which needs the refusal in the same
-   *  turn it accepted the socket. */
+  /** SYNCHRONOUS end to end (Stream.append is): the commit and its effects. */
   #appendAndRunCommittedEffects(events: StreamEventInput[]): StreamEvent[] {
     const stateBeforeCommit = this.#stream.coreReducedState;
     const { subscriptions: subscriptionsBeforeCommit } = stateBeforeCommit;
@@ -1072,9 +1138,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           ? last
           : undefined;
       const targetPrefix = method ? target.slice(0, -1) : target;
-      ({ value } = await this.#callerStorage.run(
-        ({ principal: null, cause }),
-        () => this.#itxExpressionResolver.evaluate(targetPrefix),
+      ({ value } = await this.#callerStorage.run({ principal: null, cause }, () =>
+        this.#itxExpressionResolver.evaluate(targetPrefix),
       ));
       this.#configuredSubscriptionRow(request);
       const args = fanOut ? [events[0]] : [events, request.range];
@@ -1375,9 +1440,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(
-        this.#callerStorage.run({ principal: null, cause }, () =>
-          this.#scriptExecution(code),
-        ),
+        this.#callerStorage.run({ principal: null, cause }, () => this.#scriptExecution(code)),
       );
       try {
         settle(settlement);
@@ -1457,9 +1520,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     reserveSend: async (key) => this.reserveSend(key),
     releaseSend: async (key) => this.releaseSend(key),
     invoke: (call, args = [], caller = this.#caller) =>
-      this.#callerStorage.run(caller, () =>
-        this.#itxExpressionResolver.invoke(call, ...args),
-      ),
+      this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args)),
   };
 
   /** The control plane as this context reads it: its own project's slug, once (`#projectSlug`). */
@@ -2093,7 +2154,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  (cause.ts). */
   async #namedWorker(source: ItxExpressionInput): Promise<NamedWorker> {
     const { at, spec, vouched } = await this.#callerStorage.run(
-      ({ principal: null, cause: this.#caller.cause }),
+      { principal: null, cause: this.#caller.cause },
       () => this.#itxExpressionResolver.namedWorker(source),
     );
     const { cause } = this.#caller;
@@ -2108,9 +2169,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #invokeInProcess(call: ItxExpressionInput, args: unknown[], caller: Caller): Promise<unknown> {
-    return this.#callerStorage.run(caller, () =>
-      this.#itxExpressionResolver.invoke(call, ...args),
-    );
+    return this.#callerStorage.run(caller, () => this.#itxExpressionResolver.invoke(call, ...args));
   }
   readonly #callerStorage = new AsyncLocalStorage<Caller>();
   /** WHO is calling right now: the caller of the call this DO is running, or nobody (an alarm, a

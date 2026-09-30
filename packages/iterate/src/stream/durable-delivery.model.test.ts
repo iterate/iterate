@@ -187,6 +187,30 @@ test("terminal ordered work stays halted until an explicit resume, then replays 
   expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
 });
 
+test("a long failed delivery message stays bounded through retry and halt", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const message = "x".repeat(10_240);
+  const failed = runtime(kv(), source.stream.read, () => {
+    throw new Error(message);
+  });
+  const processor = ordered(failed, { maxAttempts: 2, retryDelayMs: () => 0 });
+  await drive(processor, 1);
+  await settle();
+  expect(processor.snapshot()).toMatchObject({
+    pending: { attempt: 1, error: "x".repeat(1024) },
+  });
+
+  await drive(processor, 2);
+  await settle();
+  expect(processor.snapshot()).toMatchObject({
+    halted: { attempts: 2, error: "x".repeat(1024) },
+  });
+  expect(failed).toMatchObject({
+    terminals: [expect.objectContaining({ error: "x".repeat(1024) })],
+  });
+});
+
 test("a resume seek replaces an in-flight ordered range", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" }, { type: "work" });

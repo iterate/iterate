@@ -2,20 +2,16 @@
 // (src/context/rpc-stubs.ts + iterate-context.ts). TWO different
 // things, two lifetimes: an RPC STUB is physical — `itx.provide(match, stub)` LENDS a client's rpc
 // stub to the `itx.rpcStubs` built-in under the key = the canonical match (it lives until the handle
-// is disposed or its session ends); an ITX-EXPRESSION REWRITE RULE is pure data —
-// `match ⇒ itx.rpcStubs.get('<match>')`, ONE `itx/rewrite-rule-configured` event in a MAP keyed by
-// match (a set replaces; the un-set appends the REMOVAL spelling, target `itx.builtins.<match…>`,
-// which restores the row to the platform default beneath — none, for a user's name). Provided
-// together they are session-scoped as a pair: disposing the handle (or the session dying) recalls
-// the stub AND un-sets its rule, so a call on the match answers NO_ITX_EXPRESSION_MATCH afterwards —
-// default-deny, nothing lingers.
-// RPC_STUB_OFFLINE is narrower: the rule EXISTS but the key has no stub — an in-flight call whose
+// is disposed or its session ends). Its pager attachment projects the effective rewrite rule while
+// open. An ITX-EXPRESSION REWRITE RULE is separately durable pure data. Disposing a live handle (or
+// ending its session) removes both the stub and its effective rule, so a call answers
+// NO_ITX_EXPRESSION_MATCH afterwards. RPC_STUB_OFFLINE is narrower: a durable rule exists but the
+// key has no stub — an in-flight call whose
 // provider dies mid-call, or a hand-configured rule (`itx.provide("itx.x", "itx.rpcStubs.get('itx.k')")`)
 // whose key nobody lent. PRESENCE is physical: `itx.rpcStubs.list()` — the keys with an open
-// transport RIGHT NOW. Re-providing the same key replaces the transport (the old pager closes
-// "replaced") and appends ONE more rule event (no dedupe; the map still holds one rule). A live
-// SUBSCRIBER is the same shape one layer up — a stub under `subscription:<name>` plus a row of
-// the SUBSCRIPTIONS table, never a rewrite rule.
+// transport RIGHT NOW. Re-providing the same key replaces the transport. A live SUBSCRIBER is the
+// same shape one layer up — a stub under `subscription:<name>` plus a projected subscriptions row,
+// never a rewrite rule.
 
 import { expect, test } from "vitest";
 import { errorCode } from "iterate/lib";
@@ -25,10 +21,8 @@ import {
   openItx,
   presence,
   rawSession,
-  readAll,
   rejection,
   rpcStubRewriteRuleMatches,
-  ruleMatchAtRest,
   session,
   sleep,
   subscriptions,
@@ -42,7 +36,7 @@ import { HangTools, Tools } from "./support/targets.ts";
 // key": the hand-configured-rule and mid-invoke tests below. That a visitor's `x-itx-*` headers never
 // reach the DO's attach is __workers-tests__/control-plane.test.ts + ingress-project-host.e2e.)
 
-test("same-key re-provide replaces the transport while online and appends ONE more rule event — the map still holds one rule, the match follows the survivor", async () => {
+test("same-key re-provide replaces the transport while online; the effective rule follows the survivor", async () => {
   const ctx = freshCtx("replace");
   const observer = openItx(ctx);
   // First live provider under rpcStubKey itx.dupTool, rule itx.dupTool ⇒ itx.rpcStubs.get('itx.dupTool').
@@ -51,14 +45,10 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
     (await presence(observer)).includes("itx.dupTool"),
   );
   expect(await observer.invoke(["itx", "dupTool", ["hello"]])).toBe("hello-from-one");
-  expect(await ruleEventsAt(observer, "itx.dupTool")).toEqual([
-    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
-  ]);
 
   // Second LIVE session, same key → the newest transport wins (when its pager opens,
   // `RpcStubDirectory` drops every OTHER same-key pager with reason "replaced"), and the provide
-  // appends its rule event like any other — NO dedupe: the log grows by exactly one
-  // rewrite-rule-configured, and the MAP still holds exactly one rule at the match.
+  // replaces the effective attachment at the same match.
   await openItx(ctx).provide("itx.dupTool", new Tools("two"));
   await until("itx.dupTool serves 'two' over exactly one transport", async () => {
     if ((await presence(observer)).filter((k) => k === "itx.dupTool").length !== 1)
@@ -67,10 +57,6 @@ test("same-key re-provide replaces the transport while online and appends ONE mo
       ? "ok"
       : undefined;
   });
-  expect(await ruleEventsAt(observer, "itx.dupTool")).toEqual([
-    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
-    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.dupTool"]] },
-  ]);
   expect((await rpcStubRewriteRuleMatches(observer)).filter((m) => m === "itx.dupTool")).toEqual([
     "itx.dupTool",
   ]);
@@ -93,7 +79,7 @@ test("replacing a LIVE target with an EXPRESSION target at the same match / name
   await until("the subscriber's lend recalled", async () => (await presence(itx)).length === 0);
 });
 
-test("disposing a client session recalls its stubs (presence) AND un-sets their rules — the match is default-deny afterwards", async () => {
+test("disposing a client session recalls its stub and removes its effective rule — the match is default-deny afterwards", async () => {
   const ctx = freshCtx("dispose");
   const observer = openItx(ctx);
   const sA = session();
@@ -116,10 +102,8 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     "the stub gone from presence",
     async () => !(await presence(observer)).includes("itx.ghosttool"),
   );
-  // THE RULE IS SESSION-SCOPED: capnweb disposed the `RewriteRuleHandleRpcTarget` with the session, and
-  // its recall appended `rewrite-rule-configured { match, target: itx.builtins.<match…> }` — the
-  // removal spelling, restoring the row to the platform default beneath (none here). Calls on the
-  // match are default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
+  // The effective rule is the pager attachment, so it leaves with the session. Calls on the match
+  // are default-deny again — NO_ITX_EXPRESSION_MATCH, never a lingering offline row.
   await until(
     "the rule un-set",
     async () => !(await rpcStubRewriteRuleMatches(observer)).includes("itx.ghosttool"),
@@ -131,10 +115,6 @@ test("disposing a client session recalls its stubs (presence) AND un-sets their 
     );
     expect(errorCode(err)).toBe("NO_ITX_EXPRESSION_MATCH");
   }
-  expect(await ruleEventsAt(observer, "itx.ghosttool")).toEqual([
-    { target: ["itx", "builtins", "rpcStubs", ["get", "itx.ghosttool"]] },
-    { target: null }, // the un-set: `null` with `ifTarget`, a compare-and-set delete (stream/core-processor.ts)
-  ]);
 });
 
 test("a hand-configured rule naming a key nobody lent answers RPC_STUB_OFFLINE — rule present, stub absent", async () => {
@@ -178,8 +158,8 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   // RPC_STUB_OFFLINE in flight: the rule matched when the call went out; the transport died under it.
   const err = await rejection(inFlight, "in-flight invoke on a dying provider", 20_000);
   expect(errorCode(err)).toBe("RPC_STUB_OFFLINE");
-  // ...then the session's death is detected at the edge (onRpcBroken): the transport leaves
-  // presence and the disposed handle un-sets the rule, so a fresh call is default-deny.
+  // ...then the session's death is detected at the edge: the attachment leaves presence and its
+  // effective rule disappears, so a fresh call is default-deny.
   await until(
     "the dead transport left presence",
     async () => !(await presence(observer)).includes("itx.hanger"),
@@ -191,16 +171,10 @@ test("killing the provider session mid-invoke rejects the in-flight call promptl
   expect(await rpcStubRewriteRuleMatches(observer)).not.toContain("itx.hanger");
 });
 
-// The DO owns a lent stub's rule and un-sets it one append AFTER the key's last pager closes, while
-// the lender's recall disposes the session's dup at once. A call landing in that window — the rule
-// still there, the dup gone — is refused CODED: the relay re-codes every ended lend (recalled,
-// returned, broken) to RPC_STUB_OFFLINE, and once the un-set lands default-deny answers
-// NO_ITX_EXPRESSION_MATCH. capnweb's raw "Attempted to use RPC stub after it has been disposed" never
-// reaches a caller.
-test("a call in the window between a lender's recall and the DO's un-set is refused CODED — RPC_STUB_OFFLINE, then NO_ITX_EXPRESSION_MATCH — never capnweb's raw disposed error", async () => {
-  // The window is a few ms wide, tens of ms after the dispose: six rounds of eight calls 1 ms apart
-  // straddle it wherever it falls. The first calls of a burst may still answer (the recall not yet
-  // at the edge), the last see the un-set.
+// A call that races a live attachment's recall can reach its already-disposed transport. The relay
+// re-codes that error to RPC_STUB_OFFLINE; once the attachment disappears, default-deny answers
+// NO_ITX_EXPRESSION_MATCH. capnweb's raw disposed error never reaches a caller.
+test("a call racing a lender's recall is refused CODED — RPC_STUB_OFFLINE or NO_ITX_EXPRESSION_MATCH — never capnweb's raw disposed error", async () => {
   const answers: string[] = [];
   for (let round = 0; round < 6; round++) {
     const ctx = freshCtx(`recall-window-${round}`);
@@ -219,7 +193,7 @@ test("a call in the window between a lender's recall and the DO's un-set is refu
           ? String(s.value)
           : (errorCode(s.reason) ?? `UNCODED: ${(s.reason as Error).message}`),
       );
-    const denied = await until("the un-set landed", async () => {
+    const denied = await until("the attachment left", async () => {
       const e = await rejection(itx.invoke("itx.tool.hello()"));
       return errorCode(e) === "RPC_STUB_OFFLINE" ? undefined : e; // the window — keep waiting
     });
@@ -299,11 +273,9 @@ test("fan-out via the rpc-stub rewrite rules + map: a dead member leaves the set
   expect(dropped).toEqual({ "itx.ghost": "RPC_STUB_OFFLINE" });
 });
 
-// Concurrent provides at one key collapse to ONE live transport. The reconciliation happens when
-// each pager opens (`RpcStubDirectory` drops every OTHER same-key pager then, reason "replaced"),
-// so at any settled moment exactly one transport carries the key. The rule table is a MAP: four
-// provides append four identical rule events, and the map holds exactly ONE rule at the match.
-test("concurrent provides at one key collapse to ONE live transport; the map holds ONE rule at the match and the survivor serves", async () => {
+// Concurrent provides at one key collapse to one live transport. The reconciliation happens when
+// each pager opens, so at any settled moment exactly one transport carries the key.
+test("concurrent provides at one key collapse to one live transport and the survivor serves", async () => {
   const ctx = freshCtx("race");
   const observer = openItx(ctx);
   await Promise.all([1, 2, 3, 4].map((i) => openItx(ctx).provide("itx.solo", new Tools(`r${i}`))));
@@ -317,21 +289,13 @@ test("concurrent provides at one key collapse to ONE live transport; the map hol
   );
   // ONE transport: the registry lists the key exactly once.
   expect((await presence(observer)).filter((k) => k === "itx.solo")).toHaveLength(1);
-  // FOUR rule events, ONE rule: the map keyed by match.
-  expect(await ruleEventsAt(observer, "itx.solo")).toHaveLength(4);
-  const snap: any = await observer.invoke("itx.facets.get('core').snapshot()");
-  expect(snap.state.itxExpressionRewriteRules["itx.solo"]).toEqual({
-    match: ["itx", "solo"],
-    target: ["itx", "builtins", "rpcStubs", ["get", "itx.solo"]],
-  });
   expect((await rpcStubRewriteRuleMatches(observer)).filter((m) => m === "itx.solo")).toEqual([
     "itx.solo",
   ]);
 });
 
-// (The pager attach itself — one upgrade carrying the key and the rule, atomic with the append — is
-// pinned DO-level, where the socket census is readable: __workers-tests__/rpc-stub-pager-attach.test.ts;
-// its ORDER relative to presence, at the surface: rpc-stubs-reconnect-and-attach.e2e.test.ts.)
+// The pager attachment is pinned DO-level, where the socket census is readable:
+// __workers-tests__/rpc-stub-pager-attach.test.ts.
 
 // ── the same shape one layer up: a live SUBSCRIBER's stub + row ──
 
@@ -414,8 +378,7 @@ test("storm of provide/dispose/subscribe/null-target/disconnect: presence AND th
     // (a) subscribe then subscribe({ name, target: null }) — the recall path (row + stub both go).
     const subscription = await observer.subscribe({ target: () => undefined });
     await observer.subscribe({ name: await subscription.name, target: null });
-    // (b) provide a live stub with a rule, then dispose the handle — ONE call in, one call out
-    //     (dispose recalls this session's stub AND un-sets the rule).
+    // (b) provide a live stub, then dispose the handle — the attachment and transport both leave.
     const provided = await observer.provide(`itx.tool${i}`, new Tools(`s${i}`));
     provided[Symbol.dispose]();
     // (c) a live provide from a fresh session then a clean disconnect (dispose the client
@@ -536,13 +499,3 @@ test("churn 20×: no ghost deliveries; presence AND the tables return to baselin
   expect((await rpcStubRewriteRuleMatches(observer)).length).toBe(baselineRules); // the dispose touched no rule
   expect((await subscriptions(observer)).map((r) => r.name)).toEqual([]);
 });
-
-/** The `itx/rewrite-rule-configured` events the durable log holds at `match` — the "a re-provide
- *  appends ONE rule event" instrument. */
-const ruleEventsAt = async (itx: any, match: string): Promise<{ target: string | null }[]> =>
-  (await readAll(itx))
-    .filter(
-      (e) =>
-        e.type === "events.iterate.com/itx/rewrite-rule-configured" && ruleMatchAtRest(e) === match,
-    )
-    .map((e) => ({ target: e.payload.target as string | null }));

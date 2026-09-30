@@ -1,6 +1,6 @@
 // examples/serve-localhost.mjs — `iterate tunnel` without the CLI: serve a local port on a project
 // host, WebSockets included, in one capnweb session. Lend the project a fetch-shaped RpcTarget with a
-// fetch route to it, print the URL; Ctrl-C deletes the route (the lend's end would too).
+// fetch route to it, print the URL; Ctrl-C ends the lend and its live route.
 //
 //   npm install capnweb@npm:@iterate-com/capnweb
 //   ITERATE_BEARER_TOKEN=… node serve-localhost.mjs https://os.iterate.com my-project blog 5173
@@ -64,13 +64,14 @@ class LocalSite extends RpcTarget {
 }
 
 const fetchRouteName = `tunnel-${routingSlug}`;
-// the route rides the lend: set again when the platform re-attaches it, gone when it ends
-await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
+// The route rides the lend: it is set again when the pager re-attaches it and disappears when this
+// handle is disposed. A durable route belongs to `fetchRoutes.set`, not this example.
+const lend = await project.provide(`itx.tunnels.${routingSlug}`, new LocalSite(), {
   fetchRoute: { fetchRouteName, requestMatcher: { routingSlug }, authRequirement: null },
 });
 console.log(await project.url({ routingSlug }));
 process.once("SIGINT", async () => {
-  await project.fetchRoutes.set(fetchRouteName, null);
+  lend[Symbol.dispose]();
   api[Symbol.dispose]();
   process.exit(0);
 });

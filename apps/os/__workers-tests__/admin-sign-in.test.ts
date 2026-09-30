@@ -25,7 +25,7 @@ const previewEnv = {
   APP_CONFIG_LOGIN__ADMIN_ISSUER: ORIGIN,
   APP_CONFIG_ADMINS: JSON.stringify(["boss@admins.test"]),
 } as typeof env;
-const addresses = platformAddressesOf(env, new Request(`${ORIGIN}/`));
+const addresses = platformAddressesOf(env);
 const FLOW_COOKIE = "__Host-itx-admin-sign-in";
 
 /** A site that answers with the cookies it was handed, and tries to set the flow's cookie beside
@@ -78,7 +78,7 @@ test("an admin: the issuer asks only who they are, and the preview signs them in
   const signedIn = await authorizationForToken(
     previewEnv,
     (await session.bearer())!,
-    platformAddressesOf(previewEnv, new Request(`${PREVIEW}/`)),
+    platformAddressesOf(previewEnv),
     "browser-session",
   );
   expect(signedIn?.principal.email).toBe("boss@admins.test");

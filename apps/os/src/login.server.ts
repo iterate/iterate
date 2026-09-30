@@ -89,7 +89,7 @@ export async function loginFormResponse(request: Request, env: Env): Promise<Res
   /** The person is signed in: the issuer session's cookie, any pending code dropped, onward. Or the
    *  platform failed the sign-in's last step: back to the page to start again. */
   const signedIn = async (user: UserRecord) => {
-    const session = await startIssuerSession(env, request, user, next);
+    const session = await startIssuerSession(env, user, next);
     if ("error" in session) return back(session.error, clearLoginCookie);
     const headers = new Headers({ location: session.location });
     headers.append("set-cookie", session.setCookie);

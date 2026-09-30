@@ -172,8 +172,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, ...Array(9).fil
 
 /** `iterate tunnel <port>`: lend a `LocalPortRpcTarget` to the project as `itx.tunnels.<name>` with
  *  the fetch route `tunnel-<name>` taking the `<name>` routing slug's host to it (or, given a
- *  `hostname`, that hostname's requests alone), print the URL on stdout, and on Ctrl-C delete the
- *  route, then end the lend. The route rides the lend (`provide`'s `fetchRoute`):
+ *  `hostname`, that hostname's requests alone), print the URL on stdout, and on Ctrl-C end the
+ *  lend. The route rides the lend (`provide`'s `fetchRoute`):
  *  the platform sets it again whenever it re-attaches the lend and removes it when the lend ends —
  *  a tunnel killed outright, or asleep, leaves no route behind. A connection that closes (its
  *  heartbeat found it dead, iterate/node) is replaced: `reconnect` opens a fresh one and the tunnel
@@ -207,7 +207,7 @@ export async function runTunnel(input: {
   const stopped = new Promise<"stopped">((resolve) => (stop = () => resolve("stopped")));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
-  /** Serve over one connection until Ctrl-C (the route deleted), or until the connection closes or
+  /** Serve over one connection until Ctrl-C (the live route detached), or until the connection closes or
    *  the lend ends — why, as a line. */
   const serve = async (
     connection: IterateConnection,
@@ -261,11 +261,6 @@ export async function runTunnel(input: {
       ({ code, reason }) => `${code}: ${reason || "connection closed"}`,
     );
     const outcome = await Promise.race([stopped, connectionClosed, lendEnded]);
-    // the route first: the host stops answering the moment it is gone
-    if (outcome === "stopped")
-      await project.fetchRoutes.set(fetchRouteName, null).catch((error: unknown) => {
-        console.error(`Could not delete the fetch route ${fetchRouteName}: ${messageOf(error)}`);
-      });
     return outcome;
   };
   const delaysMs = input.reconnectDelaysMs || RECONNECT_DELAYS_MS;
