@@ -1,6 +1,6 @@
 import { connectIterate } from "iterate/node";
 
-/** One connection to WORKER_BASE_URL, authenticated as the CLI authenticates (packages/cli): with
+/** One connection to WORKER_BASE_URL, authenticated as the CLI authenticates (core/lib/src/cli): with
  *  APP_CONFIG_SECRETS__ADMIN_BEARER, the deployment's operator bearer, for a project no token at
  *  hand covers, else with ITERATE_BEARER_TOKEN, the person's personal access token for the project
  *  (core/os/docs/credentials.md). Dispose it to close its socket. */

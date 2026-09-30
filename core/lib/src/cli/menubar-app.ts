@@ -2,7 +2,7 @@
 // `iterate menubar` — build (on first use) and launch the menu-bar
 // app.
 //
-// The published package ships only the Swift SOURCE (packages/cli/menubar);
+// The published package ships only the Swift SOURCE (core/lib/menubar);
 // this compiles it with swiftc on the user's Mac, cached by source hash next to
 // the config, and launches the .app. It also writes ~/.config/iterate/menubar.json
 // so the app knows which CLI to spawn (this exact one) for which project.
@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { CONFIG_DIR } from "./config.ts";
 import { run } from "./run-command.ts";
@@ -30,8 +30,9 @@ export async function launchMenubarApp(input: {
     throw new Error("The menu-bar app is macOS-only.");
   }
   const log = input.log || (() => {});
-  const menubarDir = join(import.meta.dirname, "..", "menubar");
-  const binPath = join(import.meta.dirname, "..", "bin", "iterate.js");
+  const root = packageRoot();
+  const menubarDir = join(root, "menubar");
+  const binPath = join(root, "bin", "iterate.js");
 
   // Cache by source hash: rebuild only when the Swift (or build script) changed.
   const contents = await Promise.all(
@@ -77,4 +78,12 @@ export async function launchMenubarApp(input: {
     "It lives in your menu bar — click the 𝑖 to sign in and " +
       "share your computer with the project's agents.",
   );
+}
+
+/** The `iterate` package's root, the folder holding `bin/iterate.js`: this module runs from
+ *  `src/cli/` in the repo and from a `dist/` chunk once built. */
+function packageRoot() {
+  for (let dir = import.meta.dirname; dir !== dirname(dir); dir = dirname(dir))
+    if (existsSync(join(dir, "bin", "iterate.js"))) return dir;
+  throw new Error(`no bin/iterate.js above ${import.meta.dirname}`);
 }

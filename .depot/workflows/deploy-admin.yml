@@ -15,7 +15,7 @@ on:
       - apps/admin/**
       - envs.ts
       - scripts/lib/**
-      - packages/iterate/**
+      - core/lib/**
       # admin renders packages/ui (the context view, the app shell); a change there is an admin change
       - packages/ui/**
       - packages/shared/**

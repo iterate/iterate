@@ -19,7 +19,7 @@ on:
       # the UI reads the agents' contract and parser and installs the package; its scripts drive voice
       - packages/agents/**
       - packages/voice/**
-      - packages/iterate/**
+      - core/lib/**
       - packages/ui/**
       - packages/shared/**
       - package.json

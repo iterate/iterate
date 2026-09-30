@@ -13,7 +13,7 @@ export type ContextViewAppendEvent = {
 };
 
 /** A prefilled draft: a type opaque to the platform (no `events.iterate.com/` prefix — see
- *  packages/iterate/README.md#event-types), so a stray append never reads as one of its facts. */
+ *  core/lib/README.md#event-types), so a stray append never reads as one of its facts. */
 export const DEFAULT_APPEND_YAML = "type: manual/note-added\npayload:\n  text: Hello\n";
 
 const FIELDS = new Set(["type", "payload", "metadata", "idempotencyKey"]);

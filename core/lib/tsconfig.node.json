@@ -10,5 +10,5 @@
     "tsdown.config.ts",
     "vitest.config.ts"
   ],
-  "exclude": []
+  "exclude": ["src/cli"]
 }

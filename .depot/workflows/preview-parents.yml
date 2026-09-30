@@ -46,8 +46,7 @@ on:
       - apps/kit/**
       - "!apps/kit/firmware/**"
       - test/**
-      - packages/cli/**
-      - packages/iterate/**
+      - core/lib/**
       - packages/agents/**
       - packages/voice/**
       - packages/docs/**

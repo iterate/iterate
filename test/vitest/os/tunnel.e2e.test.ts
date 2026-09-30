@@ -14,7 +14,7 @@
 //   • a visitor whose connection vanishes without a close frame (a tab closed, a laptop gone):
 //     the local server's socket closes within seconds, so nothing keeps streaming through the
 //     platform
-// The proxy's own behaviour (headers, bodies, frames) is packages/cli src/tunnel.test.ts; the route
+// The proxy's own behaviour (headers, bodies, frames) is core/lib/src/cli/tunnel.test.ts; the route
 // and the subprotocol through the platform, vitest/os/fetch-routes.e2e.test.ts.
 
 import { tmpdir } from "node:os";
@@ -43,7 +43,7 @@ import {
   wsRoundTripOnProjectUrl,
 } from "../../helpers/project-host.ts";
 
-const bin = fileURLToPath(new URL("../../../packages/cli/bin/iterate.js", import.meta.url).href);
+const bin = fileURLToPath(new URL("../../../core/lib/bin/iterate.js", import.meta.url).href);
 
 test(
   "iterate tunnel: private by default (under paths a member reaches its page, assets and WebSocket), public on --public (HTTP and a vite-hmr WebSocket), Ctrl-C deletes the route, a killed tunnel's host is 404",

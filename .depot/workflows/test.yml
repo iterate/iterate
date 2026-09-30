@@ -59,7 +59,7 @@ jobs:
         parallel:
           # No secrets: no unit test reads one. The telemetry's kind and suite are the reporters'
           # own `unit`, and its branch GitHub's head_ref or ref_name (ci-telemetry.ts). Core's
-          # workspaces (core/os, packages/iterate) import no reporter: they add the ones
+          # workspaces (core/os, core/lib) import no reporter: they add the ones
           # VITEST_EXTRA_REPORTERS names, so they write the same telemetry.
           - name: Run Tests
             id: tests

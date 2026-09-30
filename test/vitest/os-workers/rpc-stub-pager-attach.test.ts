@@ -501,7 +501,7 @@ function liveSubscription(name: string, consumes?: string[]): StreamEventInput {
   };
 }
 
-/** The route `iterate tunnel` sets beside its lend (packages/cli/src/tunnel.ts). */
+/** The route `iterate tunnel` sets beside its lend (core/lib/src/cli/tunnel.ts). */
 function routeTo(fetchRouteName: string, target: string): StreamEventInput {
   return {
     type: "events.iterate.com/itx/fetch-route-configured",

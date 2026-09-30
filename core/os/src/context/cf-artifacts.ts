@@ -54,7 +54,7 @@ interface ArtifactListResult {
  *  Artifacts — and the actor — open until the next deploy (2026-09-23). Each verb takes a handle and
  *  releases it (`withArtifactRepoHandle`), so each verb is one `namespace.get` and one call on it.
  *  Building it touches no binding: an itx chain `get(path).createToken(…)` walks `get(path)` once per
- *  dispatch, and a mid-chain handle is two dispatches (packages/iterate/src/expression.ts). */
+ *  dispatch, and a mid-chain handle is two dispatches (core/lib/src/expression.ts). */
 export class ScopedArtifactRepoRpcTarget extends RpcTarget implements CfArtifactRepoApi {
   readonly #namespace: ArtifactsNamespace;
   readonly #name: string;

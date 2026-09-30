@@ -1,4 +1,4 @@
-// /collect-secret/<slug> — the collection-link page; see `collectFromUser` in packages/iterate/src/api.ts.
+// /collect-secret/<slug> — the collection-link page; see `collectFromUser` in core/lib/src/api.ts.
 // One card outside the Dash's shell, framed like the issuer's sign-in and consent pages.
 // A visitor without a session signs in and returns here; one whose sign-in lacks the project
 // is offered another. The requester's description is markdown the page renders without HTML or

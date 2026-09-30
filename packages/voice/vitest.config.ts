@@ -7,7 +7,7 @@ export default defineConfig({
     alias: {
       // voice-agent.ts's only platform import is the SDK's Durable Object base class.
       "cloudflare:workers": fileURLToPath(
-        new URL("../iterate/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
+        new URL("../../core/lib/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
     },
   },

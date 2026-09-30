@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import WebSocket from "ws";
-import type { IterateConnection } from "iterate/node";
+import type { IterateConnection } from "../node.ts";
 
 /** Headers the local dial makes itself: undici throws on the hop-by-hop ones, and `host` must be
  *  localhost's (Vite's `allowedHosts` refuses any other). */

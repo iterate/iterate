@@ -114,10 +114,10 @@ function scratchRepo(marker: Record<string, string | undefined>) {
     join(projectDir, ".husky/prepare-commit-msg"),
     join(dir, "hooks/prepare-commit-msg"),
   );
-  mkdirSync(join(dir, "packages/cli/src"), { recursive: true });
+  mkdirSync(join(dir, "core/lib/src/cli"), { recursive: true });
   copyFileSync(
-    join(projectDir, "packages/cli/src/coding-agent.ts"),
-    join(dir, "packages/cli/src/coding-agent.ts"),
+    join(projectDir, "core/lib/src/cli/coding-agent.ts"),
+    join(dir, "core/lib/src/cli/coding-agent.ts"),
   );
   writeFileSync(join(dir, ".gitignore"), "hooks/\npackages/\n");
   const env = { ...cleanEnv(), ...marker };

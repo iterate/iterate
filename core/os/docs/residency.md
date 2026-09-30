@@ -9,14 +9,14 @@ Six mechanisms keep that from happening. Three release Workers-RPC sessions so a
 nothing behind that holds an actor. Three are the context's own timers and resets for what it holds
 on purpose or cannot stop others from holding.
 
-| #   | Mechanism                             | Ends                                                       | Where                                                                  | Since                                |
-| --- | ------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------ |
-| 1   | `getItx` records every pipelined step | loaded and first-party code's hold on its context's values | `packages/iterate/src/sdk/itx-scope.ts`, lint `iterate/no-raw-itx-get` | #2846, removed #2855, restored #2863 |
-| 2   | `itxAnswerDetachedFromSession`        | a caller's hold on what the context answered               | `src/context/dispatch.ts`, called by the DO's `invoke`                 | #2855                                |
-| 3   | `awaitAnswerReleasedIfRejected`       | a rejected call's session                                  | `src/context/dispatch.ts`, called by the step walk                     | #2874                                |
-| 4   | The pins' release, 30 s               | borrowed rpc stubs, the library's open sockets             | [`src/context/residency.ts`](../src/context/residency.ts)              | named in #2756                       |
-| 5   | The birth reset                       | unclaimed loaded facets the last incarnation left running  | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`           | #2905                                |
-| 6   | The quiet-period sweep, 60 s          | the same facets, while the context is still resident       | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`                 | #2905, clock fixed in #2922          |
+| #   | Mechanism                             | Ends                                                       | Where                                                          | Since                                |
+| --- | ------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| 1   | `getItx` records every pipelined step | loaded and first-party code's hold on its context's values | `core/lib/src/sdk/itx-scope.ts`, lint `iterate/no-raw-itx-get` | #2846, removed #2855, restored #2863 |
+| 2   | `itxAnswerDetachedFromSession`        | a caller's hold on what the context answered               | `src/context/dispatch.ts`, called by the DO's `invoke`         | #2855                                |
+| 3   | `awaitAnswerReleasedIfRejected`       | a rejected call's session                                  | `src/context/dispatch.ts`, called by the step walk             | #2874                                |
+| 4   | The pins' release, 30 s               | borrowed rpc stubs, the library's open sockets             | [`src/context/residency.ts`](../src/context/residency.ts)      | named in #2756                       |
+| 5   | The birth reset                       | unclaimed loaded facets the last incarnation left running  | `residency.ts`, FacetHost `startFacetsTheLastIncarnationRan`   | #2905                                |
+| 6   | The quiet-period sweep, 60 s          | the same facets, while the context is still resident       | `residency.ts`, FacetHost `resetUnclaimedLoadedFacets`         | #2905, clock fixed in #2922          |
 
 Mechanisms 4–6 live in one class, `Residency` in [`src/context/residency.ts`](../src/context/residency.ts).
 The context DO forwards its entry points to it and reads the sweep's deadline back for its one alarm
@@ -121,7 +121,7 @@ preview, 2026-09-23). So:
 
 - Unit: `src/context/residency.test.ts` (the sweep's rule and clock, the pins' timer, the birth
   reset's record);
-  [`itx-scope.test.ts`](../../../packages/iterate/src/sdk/itx-scope.test.ts) (1);
+  [`itx-scope.test.ts`](../../lib/src/sdk/itx-scope.test.ts) (1);
   `src/context/dispatch.test.ts` (2).
 - Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
   decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.

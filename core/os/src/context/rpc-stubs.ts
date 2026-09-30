@@ -52,7 +52,7 @@
 //                   lender's re-dial [B] sets it again.
 //   [E] lend again  The lend ended under a live session (the re-dial gave up; the DO closed the
 //                   pager): `lendEnded()` says why, and `iterate tunnel` provides again
-//                   (packages/cli/src/tunnel.ts).
+//                   (core/lib/src/cli/tunnel.ts).
 //   [F] splice      A WebSocket upgrade through a lent stub's fetch outlives the DO's sockets
 //                   (fetch-upgrade-splice.ts).
 
