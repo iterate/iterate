@@ -63,7 +63,7 @@ test("a future retry survives eviction, alarms a cold context, and delivers once
       ? row
       : undefined;
   });
-  expect(delivered.cursor.nextAttemptAtMs).toBeUndefined();
+  expect(delivered.cursor?.nextAttemptAtMs).toBeUndefined();
   expect(await s.invoke(["itx", "kv", ["get", "durable-count"]])).toBe("1");
   await releasePins(context);
   await evictDurableObject(s);
@@ -94,7 +94,11 @@ test("a permanent refusal remains halted across eviction and a resume admits lat
   const [later] = (await s.append({ type: "work" })) as { offset: number }[];
   await until("resume confirms later work", async () => {
     const row = await rowOf(context, "halt");
-    return row?.cursor?.confirmedOffset >= later.offset && !row.halted ? row : undefined;
+    return row?.cursor?.confirmedOffset !== undefined &&
+      row.cursor.confirmedOffset >= later.offset &&
+      !row.halted
+      ? row
+      : undefined;
   });
   await releasePins(context);
 });
@@ -115,14 +119,14 @@ test("a removed held row cannot recreate a cursor or halt when its old target re
   await s.invoke(["itx", "facets", ["get", "held", HOLD], ["release"]]);
   await until("old target settles without restoring removed state", async () => {
     const state = await runInDurableObject(s, async (instance, doState) => ({
-      status: instance.subscriptionDeliveryStatus(),
+      status: await instance.subscriptionDeliveryStatus(),
       cursorKeys: [...doState.storage.kv.list({ prefix: "durable-delivery/" })].map(([key]) => key),
-      alarm: await doState.storage.getAlarm(),
+      deliveryWake: doState.storage.kv.get("durable-delivery-wake-at"),
     }));
     return state.status.activeTargetDeliveries === 0 &&
       !Object.keys(state.status.snapshots).some((key) => key.startsWith("removed@")) &&
       !state.cursorKeys.some((key) => key.startsWith("durable-delivery/removed@")) &&
-      state.alarm === null &&
+      state.deliveryWake === undefined &&
       (await rowOf(context, "removed")) === null
       ? state
       : undefined;

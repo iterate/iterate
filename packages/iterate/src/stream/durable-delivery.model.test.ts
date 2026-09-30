@@ -63,6 +63,10 @@ test.each([false, true])(
     await drive(processor, 1);
     await settle(50);
     expect(invoke).not.toHaveBeenCalled();
+    if (fanOut) {
+      await drive(processor, 2);
+      await settle();
+    }
     expect(host.terminals).toEqual([
       expect.objectContaining({
         attempts: 2,
@@ -140,6 +144,10 @@ test("the D10, E11, D12, E13, D14 model preserves the ephemeral position without
   });
   processor.push({ ...committedEvent(11, "poke"), ephemeral: true });
   processor.push({ ...committedEvent(13, "poke"), ephemeral: true });
+  processor.drive((work) => void work());
+  await vi.waitFor(() => expect(delivered).toEqual(["D10"]));
+  processor.drive((work) => void work());
+  await vi.waitFor(() => expect(delivered).toEqual(["D10", "E11", "D12"]));
   processor.drive((work) => void work());
   await vi.waitFor(() => expect(delivered).toEqual(["D10", "E11", "D12", "E13", "D14"]));
   expect(JSON.stringify(processor.snapshot())).not.toContain("poke");

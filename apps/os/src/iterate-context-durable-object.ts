@@ -409,8 +409,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       // used has been started. This direct owner rebuilds its retry deadlines before the overdue
       // watch derives the one context alarm.
       this.#durableSubscriptionDelivery.sync();
-      if (this.ctx.storage.kv.get(IterateContextDurableObject.#durableDeliveryWakeKey))
-        this.#durableDeliveryRecoveryAt = Date.now();
+      this.#durableDeliveryRecoveryAt =
+        this.ctx.storage.kv.get<number>(IterateContextDurableObject.#durableDeliveryWakeKey) ??
+        null;
       this.#stream.storage.countIncarnation();
       if (this.#stream.highestDurableOffset() > 0)
         this.#snapshotLeaseUntil = Date.now() + SNAPSHOT_TTL_MS + SNAPSHOT_CLOCK_SLACK_MS;
@@ -533,29 +534,32 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         ...input,
       }),
     run: (work) => this.#runDurableDelivery(work),
-    wakesChanged: () => this.#alarmCoordinator.reconcile(),
+    wakesChanged: () => {
+      if (this.#durableDeliveryInFlight === 0)
+        this.#setDurableDeliveryRecovery(this.#durableSubscriptionDelivery.deadline);
+      this.#alarmCoordinator.reconcile();
+    },
   });
 
-  #armDurableDeliveryRecovery(): void {
-    const at = Date.now() + 20_000;
+  #setDurableDeliveryRecovery(at: number | null): void {
+    if (at === this.#durableDeliveryRecoveryAt) return;
     this.#durableDeliveryRecoveryAt = at;
-    this.ctx.storage.kv.put(IterateContextDurableObject.#durableDeliveryWakeKey, at);
-  }
-
-  #clearDurableDeliveryRecovery(): void {
-    this.#durableDeliveryRecoveryAt = null;
-    this.ctx.storage.kv.delete(IterateContextDurableObject.#durableDeliveryWakeKey);
+    if (at === null)
+      this.ctx.storage.kv.delete(IterateContextDurableObject.#durableDeliveryWakeKey);
+    else this.ctx.storage.kv.put(IterateContextDurableObject.#durableDeliveryWakeKey, at);
   }
 
   #runDurableDelivery(work: () => Promise<unknown>): void {
-    if (this.#durableDeliveryInFlight++ === 0) this.#armDurableDeliveryRecovery();
+    if (this.#durableDeliveryInFlight++ === 0)
+      this.#setDurableDeliveryRecovery(Date.now() + 20_000);
     this.ctx.waitUntil(
       Promise.resolve()
         .then(work)
         .catch((error) => reportIssue("subscription-delivery.context-background", error))
         .finally(() => {
           this.#durableDeliveryInFlight--;
-          if (this.#durableDeliveryInFlight === 0) this.#clearDurableDeliveryRecovery();
+          if (this.#durableDeliveryInFlight === 0)
+            this.#setDurableDeliveryRecovery(this.#durableSubscriptionDelivery.deadline);
           this.#alarmCoordinator.reconcile();
         }),
     );
@@ -960,20 +964,22 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     const rows = this.#durableSubscriptionRows();
     if (rows.length === 0) {
       this.#durableSubscriptionDelivery.sync();
-      this.#clearDurableDeliveryRecovery();
+      this.#setDurableDeliveryRecovery(null);
       return;
     }
     const configurationChanged = events.some(
       (event) =>
         event.type === "events.iterate.com/itx/subscription-configured" ||
-        event.type === "events.iterate.com/itx/subscription-delivery-resumed",
+        event.type === "events.iterate.com/itx/subscription-delivery-resumed" ||
+        event.type === "events.iterate.com/itx/subscription-delivery-halted",
     );
     const durableDeliveryDue = rows.some(
       (row) =>
         !row.halted &&
         events.some((event) => !event.ephemeral && consumesEvent(row.consumes, event)),
     );
-    if (configurationChanged || durableDeliveryDue) this.#armDurableDeliveryRecovery();
+    if (configurationChanged || durableDeliveryDue)
+      this.#setDurableDeliveryRecovery(Date.now() + 20_000);
     if (
       !configurationChanged &&
       !durableDeliveryDue &&
@@ -2100,7 +2106,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         }
         // THE DUE CLAIMS of hosted processors (context/facet-host.ts) — AWAITED, so the claim a
         // revive may make is the one derived below.
-        if (!this.#durableSubscriptionDelivery.revive()) this.#clearDurableDeliveryRecovery();
+        if (this.#durableDeliveryInFlight > 0)
+          this.#setDurableDeliveryRecovery(Date.now() + 20_000);
+        if (!this.#durableSubscriptionDelivery.revive()) this.#setDurableDeliveryRecovery(null);
         await this.#facetHost.reviveDueClaims();
       });
     } catch (error) {

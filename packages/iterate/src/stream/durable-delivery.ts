@@ -346,6 +346,7 @@ export class DurableDeliveryProcessor {
   async #drain(): Promise<void> {
     if (this.#disposed) return;
     if (this.#options.fanOut) return await this.#drainFanOut();
+    let ephemerals = 0;
     for (;;) {
       let atHead = false;
       let cursor = this.#cursor();
@@ -392,6 +393,10 @@ export class DurableDeliveryProcessor {
             }
             await this.#drainEphemerals();
             if (!this.#isCurrent(stamp)) return;
+            if (++ephemerals >= pageLimit) {
+              await this.#options.runtime.scheduleWake(Date.now());
+              return;
+            }
             continue;
           }
           atHead =
@@ -595,9 +600,15 @@ export class DurableDeliveryProcessor {
           !item.terminal &&
           (item.nextAttemptAtMs === undefined || item.nextAttemptAtMs <= Date.now()),
       )
-      .slice(0, this.#options.concurrency);
-    await Promise.all(due.map((item) => this.#deliverFanOutItem(item)));
-    if (!this.#isCurrent(drainStamp)) return;
+      .slice(0, pageLimit);
+    for (let start = 0; start < due.length; start += this.#options.concurrency) {
+      await Promise.all(
+        due
+          .slice(start, start + this.#options.concurrency)
+          .map((item) => this.#deliverFanOutItem(item)),
+      );
+      if (!this.#isCurrent(drainStamp)) return;
+    }
     const settled = this.#cursor().fanOut || currentFanOut;
     const next = settled.pending
       .filter((item) => !item.terminal && item.nextAttemptAtMs)
