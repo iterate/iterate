@@ -25,6 +25,8 @@ import type { StreamSchema } from "../src/stream-schema.ts";
 import deploy from "./deploy.ts";
 
 const SCHEMAS = { events, logs, spans, metrics };
+/** The two OTLP destinations, by the dataset each exports; apps/os's wrangler config names them. */
+const DESTINATIONS = { traces: "telemetry-traces", logs: "telemetry-logs" };
 
 export default async function ensureResources(options: { env: string }) {
   const env = getEnv(options.env, telemetryEnvs);
@@ -94,10 +96,10 @@ export default async function ensureResources(options: { env: string }) {
   const streams = await cf<Stream[]>("/pipelines/v1/streams?per_page=100");
   const sinks = await cf<{ name: string }[]>("/pipelines/v1/sinks?per_page=100");
   const pipelines = await cf<{ name: string }[]>("/pipelines/v1/pipelines?per_page=100");
-  const found: Record<string, { id: string; endpoint: string }> = {};
+  const found: Record<string, string> = {};
   for (const [table, schema] of Object.entries(SCHEMAS)) {
     const [streamName, sinkName, pipelineName] = ["stream", "sink", "pipeline"].map(
-      (kind) => `${env.namespace}_${table}_${kind}`,
+      (kind) => `telemetry_${table}_${kind}`,
     );
     const stream =
       streams.find((candidate) => candidate.name === streamName) ??
@@ -114,7 +116,7 @@ export default async function ensureResources(options: { env: string }) {
     // A stream's schema never changes: a column change is a new table (docs/telemetry.md).
     if (columnsOf(stream.schema) !== columnsOf(schema))
       throw new Error(`${streamName}'s columns differ from schemas/${table}.json: add ${table}_v2`);
-    found[table] = { id: stream.id, endpoint: stream.endpoint };
+    found[table] = stream.id;
     if (!sinks.some((candidate) => candidate.name === sinkName))
       await cf("/pipelines/v1/sinks", {
         method: "POST",
@@ -125,7 +127,7 @@ export default async function ensureResources(options: { env: string }) {
           config: {
             account_id: account,
             bucket: env.bucket,
-            namespace: env.namespace,
+            namespace: "telemetry",
             table_name: table,
             token: catalogToken,
             rolling_policy: { interval_seconds: 60 },
@@ -140,7 +142,7 @@ export default async function ensureResources(options: { env: string }) {
           sql: `INSERT INTO ${sinkName} SELECT * FROM ${streamName}`,
         }),
       });
-    console.log(`${env.namespace}.${table}: stream ${stream.id}, sink and pipeline present`);
+    console.log(`telemetry.${table}: stream ${stream.id}, sink and pipeline present`);
   }
   // The Worker binds the streams by the ids in envs.ts, so bring-up ends in a reviewed commit.
   if (JSON.stringify(found) !== JSON.stringify(env.streams)) {
@@ -155,7 +157,7 @@ export default async function ensureResources(options: { env: string }) {
   doppler("TELEMETRY_OTLP_SECRET", secret);
   await deploy({ env: env.name });
   const destinations = await cf<{ slug: string }[]>("/workers/observability/destinations");
-  for (const [dataset, name] of Object.entries(env.destinations)) {
+  for (const [dataset, name] of Object.entries(DESTINATIONS)) {
     const configuration = {
       type: "logpush",
       url: `${env.baseUrl}/v1/${dataset}`,

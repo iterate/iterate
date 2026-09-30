@@ -139,13 +139,13 @@ function deploymentWranglerConfig(env: OsEnv) {
     observability: telemetry
       ? {
           ...OBSERVABILITY,
-          traces: { ...OBSERVABILITY.traces, destinations: [telemetry.destinations.traces] },
-          logs: { ...OBSERVABILITY.logs, destinations: [telemetry.destinations.logs] },
+          traces: { ...OBSERVABILITY.traces, destinations: ["telemetry-traces"] },
+          logs: { ...OBSERVABILITY.logs, destinations: ["telemetry-logs"] },
         }
       : OBSERVABILITY,
     ...(telemetry && {
-      pipelines: [{ binding: "EVENTS", stream: telemetry.streams.events.id }],
-      analytics_engine_datasets: [{ binding: "METRICS", dataset: telemetry.metricsDataset }],
+      pipelines: [{ binding: "EVENTS", stream: telemetry.streams.events }],
+      analytics_engine_datasets: [{ binding: "METRICS", dataset: "iterate_metrics" }],
     }),
     routes: [
       ...routedHostnames(env).map(({ hostname, zone }) => ({

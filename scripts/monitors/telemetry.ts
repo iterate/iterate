@@ -181,7 +181,7 @@ async function findingsOf(env: TelemetryEnv, now: Date) {
   const account = `/accounts/${env.cloudflareAccountId}`;
   const ruleFindings = await Promise.all(
     ALERT_RULES.map(async (rule) =>
-      evaluateRule(rule, await analyticsEngineSql(env, apiToken, rule.sql(env.metricsDataset))),
+      evaluateRule(rule, await analyticsEngineSql(env, apiToken, rule.sql("iterate_metrics"))),
     ),
   );
   const pipelines = await cf<{ id: string; name: string }[]>(

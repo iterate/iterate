@@ -113,7 +113,7 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
     const census = await analyticsEngineSql(
       env,
       apiToken,
-      `SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '1' HOUR)) AS hour, count() AS points FROM ${env.metricsDataset} WHERE timestamp >= toDateTime(${since}) AND timestamp < toDateTime(${until}) GROUP BY hour`,
+      `SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '1' HOUR)) AS hour, count() AS points FROM iterate_metrics WHERE timestamp >= toDateTime(${since}) AND timestamp < toDateTime(${until}) GROUP BY hour`,
     );
     const points = new Map(census.map((row) => [Number(row.hour), Number(row.points)]));
     if (points.size === 0) {
@@ -124,7 +124,7 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
       `https://api.sql.cloudflarestorage.com/api/v1/accounts/${env.cloudflareAccountId}/r2-sql/query/${env.bucket}`,
       apiToken,
       JSON.stringify({
-        query: `SELECT date_trunc('hour', time) AS hour FROM ${env.namespace}.metrics WHERE time >= '${new Date(since * 1_000).toISOString()}' AND time < '${new Date(until * 1_000).toISOString()}' GROUP BY date_trunc('hour', time)`,
+        query: `SELECT date_trunc('hour', time) AS hour FROM telemetry.metrics WHERE time >= '${new Date(since * 1_000).toISOString()}' AND time < '${new Date(until * 1_000).toISOString()}' GROUP BY date_trunc('hour', time)`,
       }),
       { idempotent: true },
     );
@@ -144,7 +144,7 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
         await analyticsEngineSql(
           env,
           apiToken,
-          `SELECT toUnixTimestamp(timestamp) AS unix, blob1 AS name, blob2 AS kind, blob3 AS worker, blob4 AS project_id, blob5 AS path, blob6 AS labels, double1 AS value, _sample_interval AS weight FROM ${env.metricsDataset} WHERE timestamp >= toDateTime(${hour}) AND timestamp < toDateTime(${hour + HOUR_S})`,
+          `SELECT toUnixTimestamp(timestamp) AS unix, blob1 AS name, blob2 AS kind, blob3 AS worker, blob4 AS project_id, blob5 AS path, blob6 AS labels, double1 AS value, _sample_interval AS weight FROM iterate_metrics WHERE timestamp >= toDateTime(${hour}) AND timestamp < toDateTime(${hour + HOUR_S})`,
         ),
       );
       const at = new Date(hour * 1_000).toISOString();
@@ -157,7 +157,14 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
         continue;
       }
       for (const body of bodies)
-        await cloudflarePost(env.streams.metrics.endpoint, apiToken, body, { idempotent: true });
+        await cloudflarePost(
+          `https://${env.streams.metrics}.ingest.cloudflare.com`,
+          apiToken,
+          body,
+          {
+            idempotent: true,
+          },
+        );
       console.log(`[metrics copy] sent ${summary}`);
     }
   }

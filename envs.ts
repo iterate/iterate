@@ -68,13 +68,11 @@ export const kitEnvs = {
 } satisfies Record<string, KitEnv>;
 
 /** apps/telemetry — one Cloudflare account's telemetry lake (docs/telemetry.md), by env name: the R2
- *  bucket whose Data Catalog holds the four tables under `namespace`, each table's Pipelines stream
- *  (the id a binding names, and its authenticated HTTP ingest endpoint), the two OTLP destinations
- *  an exporting Worker names in its observability config, and the Analytics Engine dataset
- *  `iterate/metrics` writes. The Worker receives the OTLP export and fills `logs` and `spans`.
- *  `pnpm --dir apps/telemetry ensure-resources --env <env>` creates all of it and prints the streams
- *  to put here. Doppler project `telemetry` holds the catalog token (TELEMETRY_CATALOG_TOKEN, which
- *  R2 SQL reads with) and the OTLP secret. */
+ *  bucket whose Data Catalog holds the four tables under the namespace `telemetry`, and each table's
+ *  Pipelines stream id (its HTTP endpoint is `https://<id>.ingest.cloudflare.com`). The Worker
+ *  receives the OTLP export and fills `logs` and `spans`. `pnpm --dir apps/telemetry
+ *  ensure-resources --env <env>` creates all of it and prints the streams to put here. Doppler
+ *  project `telemetry` holds the catalog token (TELEMETRY_CATALOG_TOKEN) and the OTLP secret. */
 export const telemetryEnvs = {
   preview: {
     ...cloudflareAccounts["dev/preview"],
@@ -82,40 +80,14 @@ export const telemetryEnvs = {
     workerName: "telemetry",
     baseUrl: "https://telemetry.iterate-dev-preview.workers.dev",
     bucket: "iterate-telemetry",
-    namespace: "telemetry",
     streams: {
-      events: {
-        id: "3dad6126791a4641928ad2dca104a1d2",
-        endpoint: "https://3dad6126791a4641928ad2dca104a1d2.ingest.cloudflare.com",
-      },
-      logs: {
-        id: "2cef1503b98b4d618bb317381e957930",
-        endpoint: "https://2cef1503b98b4d618bb317381e957930.ingest.cloudflare.com",
-      },
-      spans: {
-        id: "8e107d095c7e4a3ebfc1150891c59030",
-        endpoint: "https://8e107d095c7e4a3ebfc1150891c59030.ingest.cloudflare.com",
-      },
-      metrics: {
-        id: "65559d6006ef4cd8aeaaa896063b72a2",
-        endpoint: "https://65559d6006ef4cd8aeaaa896063b72a2.ingest.cloudflare.com",
-      },
+      events: "3dad6126791a4641928ad2dca104a1d2",
+      logs: "2cef1503b98b4d618bb317381e957930",
+      spans: "8e107d095c7e4a3ebfc1150891c59030",
+      metrics: "65559d6006ef4cd8aeaaa896063b72a2",
     },
-    destinations: { traces: "telemetry-traces", logs: "telemetry-logs" },
-    metricsDataset: "iterate_metrics",
   },
-  // TODO: prd, once the preview's lake is proven. `ensure-resources --env prd` prints its streams.
-  // prd: {
-  //   ...cloudflareAccounts.prd,
-  //   dopplerProject: "telemetry",
-  //   workerName: "telemetry",
-  //   baseUrl: "https://telemetry.iterate.workers.dev",
-  //   bucket: "iterate-telemetry",
-  //   namespace: "telemetry",
-  //   streams: { events: …, logs: …, spans: …, metrics: … },
-  //   destinations: { traces: "telemetry-traces", logs: "telemetry-logs" },
-  //   metricsDataset: "iterate_metrics",
-  // },
+  // TODO: prd, once the preview's lake is proven: `ensure-resources --env prd` prints its streams.
 };
 
 export const osEnvs: Record<string, OsEnv> = {

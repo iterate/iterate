@@ -22,8 +22,8 @@ export default defineConfig({
           traces: { ...OBSERVABILITY.traces, destinations: [] },
         },
         pipelines: [
-          { binding: "LOGS", stream: streams.logs.id },
-          { binding: "SPANS", stream: streams.spans.id },
+          { binding: "LOGS", stream: streams.logs },
+          { binding: "SPANS", stream: streams.spans },
         ],
         // scripts/ensure-resources.ts rotates it in Doppler; scripts/deploy.ts ships it from there.
         secrets: { required: ["TELEMETRY_OTLP_SECRET"] },

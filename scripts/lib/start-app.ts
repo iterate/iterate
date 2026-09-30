@@ -144,7 +144,7 @@ export function startAppWorkerConfig(
     pkgPrNewRef,
     ...(app.readsMetrics &&
       telemetry && {
-        metrics: { accountId: telemetry.cloudflareAccountId, dataset: telemetry.metricsDataset },
+        metrics: { accountId: telemetry.cloudflareAccountId, dataset: "iterate_metrics" },
       }),
   } satisfies z.input<typeof StartAppConfig>;
   return {

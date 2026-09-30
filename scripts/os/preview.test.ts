@@ -471,13 +471,11 @@ test.for([
   "$name binds the dev/preview account's telemetry lake and exports its traces and logs there",
   ({ env, worker }) => {
     expect(viteWranglerConfig(getOsEnv(env), { localDev: false, port: "0" })).toMatchObject({
-      pipelines: [{ binding: "EVENTS", stream: telemetryEnvs.preview.streams.events.id }],
-      analytics_engine_datasets: [
-        { binding: "METRICS", dataset: telemetryEnvs.preview.metricsDataset },
-      ],
+      pipelines: [{ binding: "EVENTS", stream: telemetryEnvs.preview.streams.events }],
+      analytics_engine_datasets: [{ binding: "METRICS", dataset: "iterate_metrics" }],
       observability: {
-        traces: { destinations: [telemetryEnvs.preview.destinations.traces] },
-        logs: { destinations: [telemetryEnvs.preview.destinations.logs] },
+        traces: { destinations: ["telemetry-traces"] },
+        logs: { destinations: ["telemetry-logs"] },
       },
       vars: { WORKER_NAME: worker },
     });
