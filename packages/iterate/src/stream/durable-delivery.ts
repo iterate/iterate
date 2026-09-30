@@ -248,7 +248,7 @@ export class DurableDeliveryProcessor {
       // passed it. A future offset remains for normal admission and must not be delivered twice.
       if (
         offset !== undefined &&
-        offset <= cursor.confirmedOffset &&
+        offset <= (afterOffset ?? cursor.confirmedOffset) &&
         !pending.some((item) => item.offset === offset)
       )
         pending.push({ offset, attempt: 0 });

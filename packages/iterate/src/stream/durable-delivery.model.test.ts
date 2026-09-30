@@ -424,6 +424,28 @@ test("a resume seek replaces an in-flight ordered range", async () => {
   expect(delivered).toEqual([[2]]);
 });
 
+test("a fan-out seek admits a selected offset behind the new cursor", () => {
+  const storage = kv();
+  storage.put("durable-delivery/fan", {
+    confirmedOffset: 2,
+    fanOut: [],
+  });
+  const processor = fanOut(
+    runtime(
+      storage,
+      async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
+      () => {},
+    ),
+  );
+
+  expect(processor.resume(10, 5, 99)).toBe(true);
+  expect(processor.snapshot()).toEqual({
+    confirmedOffset: 10,
+    fanOut: [{ offset: 5, attempt: 0 }],
+    resumeAtOffset: 99,
+  });
+});
+
 test("a fan-out resume leaves a future offset for normal admission", async () => {
   const source = memoryStream();
   await source.stream.append(
