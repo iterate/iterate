@@ -10,7 +10,7 @@ test("pins a branch without downloading its tree and leaves exact commits alone"
     owner: "iterate",
     repo: "iterate",
     ref: "main",
-    path: "core/configs/minimal",
+    path: "configs/minimal",
   };
   const githubFetch = vi
     .fn()
@@ -39,7 +39,7 @@ test("copies an exact commit's public folder in two anonymous Git requests", asy
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/with-voice",
+        path: "configs/with-voice",
         ref: fixture.commitOid,
         repo: "iterate",
       },
@@ -74,7 +74,7 @@ test("resolves a GitHub pull ref before fetching its objects", async () => {
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/with-voice",
+        path: "configs/with-voice",
         ref: "pull/2503/head",
         repo: "iterate",
       },
@@ -95,7 +95,7 @@ test("rejects folders which are absent from the pinned commit", async () => {
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/missing",
+        path: "configs/missing",
         ref: fixture.commitOid,
         repo: "iterate",
       },
@@ -114,7 +114,7 @@ test("rejects symbolic links before downloading file contents", async () => {
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/with-voice",
+        path: "configs/with-voice",
         ref: fixture.commitOid,
         repo: "iterate",
       },
@@ -137,7 +137,7 @@ test("rejects non-text files because the bootstrap file structure stores strings
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/with-voice",
+        path: "configs/with-voice",
         ref: fixture.commitOid,
         repo: "iterate",
       },
@@ -159,7 +159,7 @@ test("rejects a file whose inflated body exceeds the hard byte limit", async () 
     downloadPublicGithubTemplate(
       {
         owner: "iterate",
-        path: "core/configs/with-voice",
+        path: "configs/with-voice",
         ref: fixture.commitOid,
         repo: "iterate",
       },
@@ -212,7 +212,7 @@ async function createFixture(
   const { rootOid, trees } = await treeObjectsOf(
     new Map(
       blobs.map(({ file, oid }) => [
-        `core/configs/with-voice/${file.name}`,
+        `configs/with-voice/${file.name}`,
         { mode: file.mode || "100644", oid },
       ]),
     ),

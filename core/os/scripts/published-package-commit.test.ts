@@ -26,7 +26,7 @@ test.for([
   },
   {
     name: "no change to a published package pins the merge base, which main published",
-    changedPaths: ["core/os/src/worker.ts", "core/configs/default/worker.ts"],
+    changedPaths: ["core/os/src/worker.ts", "configs/default/worker.ts"],
     expected: base,
   },
 ])("$name", ({ changedPaths, expected }) => {

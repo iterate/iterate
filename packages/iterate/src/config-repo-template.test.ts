@@ -8,20 +8,20 @@ import {
 test.for([
   ["github:iterate/iterate", { owner: "iterate", repo: "iterate" }],
   [
-    "github:iterate/iterate#path:core/configs/default",
-    { owner: "iterate", path: "core/configs/default", repo: "iterate" },
+    "github:iterate/iterate#path:configs/default",
+    { owner: "iterate", path: "configs/default", repo: "iterate" },
   ],
   [
-    "github:iterate/iterate#main&path:core/configs/with-voice",
-    { owner: "iterate", path: "core/configs/with-voice", ref: "main", repo: "iterate" },
+    "github:iterate/iterate#main&path:configs/with-voice",
+    { owner: "iterate", path: "configs/with-voice", ref: "main", repo: "iterate" },
   ],
   [
     "github:iterate/iterate#feature/voice",
     { owner: "iterate", ref: "feature/voice", repo: "iterate" },
   ],
   [
-    "git+https://github.com/iterate/iterate.git#abc123&path:core/configs/default",
-    { owner: "iterate", path: "core/configs/default", ref: "abc123", repo: "iterate" },
+    "git+https://github.com/iterate/iterate.git#abc123&path:configs/default",
+    { owner: "iterate", path: "configs/default", ref: "abc123", repo: "iterate" },
   ],
 ] as const)("parses %s", ([input, expected]) => {
   expect(parseConfigRepoTemplateReference(input)).toEqual(expected);
@@ -30,9 +30,9 @@ test.for([
 test("serializes every accepted prefix to canonical GitHub shorthand", () => {
   expect(
     normalizeConfigRepoTemplateReference(
-      " git+https://github.com/iterate/iterate.git#main&path:core/configs/with-voice ",
+      " git+https://github.com/iterate/iterate.git#main&path:configs/with-voice ",
     ),
-  ).toBe("github:iterate/iterate#main&path:core/configs/with-voice");
+  ).toBe("github:iterate/iterate#main&path:configs/with-voice");
 });
 
 test("formats path-only, ref-only, and repository-root references", () => {
@@ -57,8 +57,8 @@ test.for([
   "github:iterate/iterate#main&unknown:value",
   "github:iterate/iterate#main&path:",
   "github:iterate/iterate#main&path:/configs/default",
-  "github:iterate/iterate#main&path:core/configs/../default",
-  "github:iterate/iterate#main&path:core/configs/.git/objects",
+  "github:iterate/iterate#main&path:configs/../default",
+  "github:iterate/iterate#main&path:configs/.git/objects",
   "github:iterate/iterate#main&path:configs\\default",
   "github:iterate/iterate#main..other",
   "git+http://github.com/iterate/iterate.git",

@@ -308,8 +308,8 @@
               {
                 "target": "./core",
                 "from": "./",
-                "except": ["./core", "./node_modules", "./packages/iterate"],
-                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. packages/iterate is the one exception until it moves to core/lib."
+                "except": ["./configs", "./core", "./node_modules", "./packages/iterate"],
+                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The exceptions until they are resolved: packages/iterate, which moves to core/lib, and configs/, the project templates the build bakes in (tasks/core-os.md)."
               }
             ]
           }

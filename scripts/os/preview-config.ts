@@ -198,7 +198,7 @@ export function signInLinkOf(input: {
  *  (scripts/os/preview.ts `seedSignIn`), so its `Sign in ↗` lands on the app: the routing slug of the
  *  app's name, members only, to a loaded worker that fetches through to `appUrl`, the deployment's
  *  own app Worker, as the app's `config-worker.ts` does for prd's. The project's config worker
- *  (core/configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
+ *  (configs/default/worker.ts) forwards a member's request to it, and answers anyone else the
  *  sign-in challenge. */
 export function proxiedAppRoute(app: string, appUrl: string) {
   const { protocol, host } = new URL(appUrl);
@@ -226,9 +226,9 @@ export function proxiedAppRoute(app: string, appUrl: string) {
 
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
-/** The config templates a project can be born from: the directories of core/configs/. */
+/** The config templates a project can be born from: the directories of configs/. */
 export function configTemplateNames(repoRoot: string) {
-  return readdirSync(path.join(repoRoot, "core/configs"), { withFileTypes: true })
+  return readdirSync(path.join(repoRoot, "configs"), { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .sort();
@@ -236,7 +236,7 @@ export function configTemplateNames(repoRoot: string) {
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
  *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
- *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:core/configs/<name>`,
+ *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:configs/<name>`,
  *  the custom field prefilled), so the project is born from the unmerged template. `default` never
  *  is: the preview embeds this PR's copy, its agents pinned to this PR's build (core/os/scripts/build.ts). */
 export function templateQuickLaunches(input: {
@@ -247,10 +247,9 @@ export function templateQuickLaunches(input: {
 }) {
   return input.templates.map((name) => {
     const changed =
-      name !== "default" &&
-      input.changedPaths.some((file) => file.startsWith(`core/configs/${name}/`));
+      name !== "default" && input.changedPaths.some((file) => file.startsWith(`configs/${name}/`));
     const template = changed
-      ? `github:iterate/iterate#${input.headSha}&path:core/configs/${name}`
+      ? `github:iterate/iterate#${input.headSha}&path:configs/${name}`
       : name;
     return {
       name,

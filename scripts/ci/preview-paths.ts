@@ -39,7 +39,7 @@ export const previewPaths = [
   ".depot/workflows/deploy-kit.yml",
   ".depot/workflows/preview-os.yml",
   "core/os/**",
-  "core/configs/**",
+  "configs/**",
   "apps/dash/**",
   "apps/agents/**",
   "apps/notes/**",

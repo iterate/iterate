@@ -1,6 +1,6 @@
 // fetch-routes.e2e.test.ts — `itx.fetchRoutes` through `/api`, exactly as a production client
 // (the `iterate tunnel` CLI) spells it: a route set on the project's root, a config worker shaped
-// like the template's (core/configs/default/worker.ts) asking `match` and forwarding to the route's
+// like the template's (configs/default/worker.ts) asking `match` and forwarding to the route's
 // target through its own `env.ITX.fetch`, and a fetch-shaped stub lent by a plain Node capnweb client — the tunnel's shape
 // minus the local port (the CLI itself is vitest/os/tunnel.e2e.test.ts). Pins:
 //   • HTTP reaches the lent stub on the route's host; a host no route takes is the config worker's
@@ -117,7 +117,7 @@ test("itx.fetchRoutes.set refuses a malformed route (INVALID_INPUT) before it ap
   ]);
 });
 
-/** The template's router (core/configs/default/worker.ts) with a 404 of its own. */
+/** The template's router (configs/default/worker.ts) with a 404 of its own. */
 const SRC_FETCH_ROUTER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { IterateConfigEntrypoint } from "iterate/sdk";

@@ -12,7 +12,7 @@ a project installs this package; the platform ships none of it.
 
 A project's config repo depends on the package, re-exports its service and relay class from
 `voice.ts`, and installs voice from its init case beside the agents app, which every call runs on
-(core/configs/default does all of it):
+(configs/default does all of it):
 
 ```text
 package.json   "dependencies": { "@iterate-com/voice": "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@<sha>" }

@@ -5,7 +5,6 @@ The Iterate context platform runs at **https://os.iterate.com**. `core/os` owns 
 | Path                     | Purpose                                                         |
 | ------------------------ | --------------------------------------------------------------- |
 | `core/os`                | Platform Worker and its issuer pages (sign-in, consent)         |
-| `core/configs`           | Project templates the platform bakes in                         |
 | `apps/dash`              | Projects, organizations, sessions, and personal access tokens   |
 | `apps/agents`            | Agent conversations and inspection                              |
 | `apps/notes`             | Notes client                                                    |

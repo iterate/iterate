@@ -1,6 +1,6 @@
 // The core boundary (core/AGENTS.md): core/ builds from a clone of itself, so nothing in it imports
-// outside it; packages/iterate is the one exception until it moves to core/lib. Outside code may
-// import core. The rows run .oxlintrc.json's own overrides for `import-js/no-restricted-paths`,
+// outside it. Two exceptions remain: packages/iterate until it moves to core/lib, and the project
+// templates in configs/, which the build bakes in. Outside code may import core. The rows run .oxlintrc.json's own overrides for `import-js/no-restricted-paths`,
 // copied verbatim, over one temp project linted once by the real oxlint binary; `reported` says
 // whether the rule flags that file.
 
@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
 
-test("nothing in core/ imports outside core/ but packages/iterate and npm packages", () => {
+test("nothing in core/ imports outside core/ but packages/iterate, configs/ and npm packages", () => {
   const rows = [
     { path: "core/os/scripts/build.ts", source: 'import { x } from "../../../scripts/lib/x.ts";' },
     { path: "core/os/src/envs.ts", source: 'import { x } from "../../../envs.ts";' },
@@ -21,12 +21,8 @@ test("nothing in core/ imports outside core/ but packages/iterate and npm packag
     { path: "core/os/src/dash.ts", source: 'export { x } from "../../../apps/dash/src/x.ts";' },
     { path: "core/os/src/dynamic.ts", source: 'await import("../../../test/helpers/x.ts");' },
     {
-      path: "core/configs/default/worker.ts",
-      source: 'import { x } from "../../../scripts/lib/x.ts";',
-    },
-    {
       path: "core/os/src/template.test.ts",
-      source: 'import { x } from "../../configs/default/agents.ts";',
+      source: 'import { x } from "../../../configs/default/agents.ts";',
       allowed: true,
     },
     {
@@ -63,7 +59,7 @@ test("nothing in core/ imports outside core/ but packages/iterate and npm packag
     "packages/shared/src/x.ts",
     "apps/dash/src/x.ts",
     "test/helpers/x.ts",
-    "core/configs/default/agents.ts",
+    "configs/default/agents.ts",
     "packages/iterate/src/lib.ts",
     "core/os/src/thing.ts",
   ])

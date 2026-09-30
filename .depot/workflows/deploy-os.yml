@@ -23,7 +23,7 @@ on:
       - "!core/os/docs/**"
       - "!core/os/**/*.test.ts"
       - "!core/os/scripts/preview*.ts"
-      - core/configs/**
+      - configs/**
       # the default template the Worker embeds pins @iterate-com/agents at the deployed commit
       - packages/agents/**
       - packages/iterate/**

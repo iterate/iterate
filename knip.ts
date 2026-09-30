@@ -29,8 +29,8 @@ export default {
       // The config-repo templates: the platform loads worker.ts as a project's config entrypoint,
       // agents.ts as the module the agents app's facets load their classes from, and voice.ts as
       // voice's service and relay.
-      entry: ["core/configs/*/worker.ts", "core/configs/*/agents.ts", "core/configs/*/voice.ts"],
-      project: ["*.ts", "core/configs/**/*.{ts,js}"],
+      entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
+      project: ["*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",

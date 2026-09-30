@@ -15,7 +15,7 @@ on:
       - apps/agents/**
       - envs.ts
       - scripts/lib/**
-      - core/configs/**
+      - configs/**
       # the UI reads the agents' contract and parser and installs the package; its scripts drive voice
       - packages/agents/**
       - packages/voice/**

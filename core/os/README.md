@@ -172,7 +172,7 @@ working until then. D1 Time Travel restores a database to any minute of the last
 repository; a commit to `/repos/config` publishes its `main` (`src/project/publication.ts`). A repo can remember
 a git remote as its origin and `pull()` or `push()` it, fast-forward only unless `force`, keeping one
 history with the same commits on both ([a config repo on GitHub](docs/project-creation.md#a-config-repo-on-github)). The default
-template (`core/configs/default`) installs the userspace agents and voice apps from npm; `core/configs/minimal`
+template (`configs/default`) installs the userspace agents and voice apps from npm; `configs/minimal`
 is a homepage alone. See [project creation](docs/project-creation.md).
 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or

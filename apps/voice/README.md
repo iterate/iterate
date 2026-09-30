@@ -21,7 +21,7 @@ Node), with the browser's microphone and speaker on either end and the relay's l
   50 ms PCM16 frames, the playback worklet drains a queue of answer chunks (cleared when the relay
   says so). Modeled on the recorder and stream player of OpenAI's realtime console.
 
-The project's config repo installs voice, as core/configs/default does. A project whose voice cannot
+The project's config repo installs voice, as configs/default does. A project whose voice cannot
 take a call yet gets **Set up voice** in place of Call: an OpenAI key field if the project has no
 `/secrets/openai`, then `ensureVoiceAgent` (`@iterate-com/voice/install`, what Kit's Prepare runs
 too), which stores the key, waits for `itx.voice` and refuses a project whose config installs no

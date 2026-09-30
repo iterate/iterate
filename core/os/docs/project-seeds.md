@@ -77,7 +77,7 @@ not restore exactly.
 
 `apply` restores a config tree byte for byte, so a tree written for an older platform must be
 migrated in a checkout before capture, with `--config-repo` naming it. For a platform whose SDK has
-`IterateConfigEntrypoint` (core/configs/default is the reference):
+`IterateConfigEntrypoint` (configs/default is the reference):
 
 - `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, not `ConfigWorker`, and types
   `processEvent`'s argument as `IterateConfigProcessEventArgs`;

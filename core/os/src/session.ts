@@ -1020,7 +1020,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
   }
 
   /** The built-in config repo templates a creation may name (generated/config-templates.js); naming
-   *  none creates the default config (core/configs/default). */
+   *  none creates the default config (configs/default). */
   async templates() {
     return templates;
   }

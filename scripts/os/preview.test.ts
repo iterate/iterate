@@ -288,7 +288,7 @@ test("the seed's route for a proxied app: the routing slug of its name, members 
   `);
 });
 
-test("every core/configs/ directory is a config template", () => {
+test("every configs/ directory is a config template", () => {
   expect(configTemplateNames(path.resolve(import.meta.dirname, "../.."))).toEqual(
     expect.arrayContaining(["default", "minimal"]),
   );
@@ -298,22 +298,22 @@ test.for([
   {
     name: "a template this PR changes is the PR head's copy, an unchanged one its name, and default the preview's own",
     changedPaths: [
-      "core/configs/default/AGENTS.md",
-      "core/configs/minimal/worker.ts",
-      "core/configs/other-v2/x.md",
+      "configs/default/AGENTS.md",
+      "configs/minimal/worker.ts",
+      "configs/other-v2/x.md",
     ],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       {
         name: "minimal",
         fromHead: "bbbbbbbbb0123456",
-        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Acore%2Fconfigs%2Fminimal`,
+        next: `${DASH}/projects?new=1&template=github%3Aiterate%2Fiterate%23bbbbbbbbb0123456%26path%3Aconfigs%2Fminimal`,
       },
     ],
   },
   {
     name: "a PR that changes no template links each by name",
-    changedPaths: ["core/os/src/worker.ts", "core/configs/README.md"],
+    changedPaths: ["core/os/src/worker.ts", "configs/README.md"],
     expected: [
       { name: "default", next: `${DASH}/projects?new=1&template=default` },
       { name: "minimal", next: `${DASH}/projects?new=1&template=minimal` },
@@ -334,12 +334,12 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   const [link] = templateQuickLaunches({
     dashUrl: DASH,
     templates: ["minimal"],
-    changedPaths: ["core/configs/minimal/AGENTS.md"],
+    changedPaths: ["configs/minimal/AGENTS.md"],
     headSha: "bbbbbbbbb0123456",
   });
   expect(Object.fromEntries(new URL(link!.next).searchParams)).toEqual({
     new: "1",
-    template: "github:iterate/iterate#bbbbbbbbb0123456&path:core/configs/minimal",
+    template: "github:iterate/iterate#bbbbbbbbb0123456&path:configs/minimal",
   });
 });
 

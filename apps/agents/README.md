@@ -11,7 +11,7 @@ facet, not a platform built-in. This folder is the web app and the tests that dr
 - Its e2e and Workers tests live outside the app: `test/vitest/agents/` and `test/vitest/agents-workers/`.
 
 A project's config repo installs the app ([packages/agents/README.md](../../packages/agents/README.md#install);
-core/configs/default does). This app installs nothing: on a project without `itx.agents` it says so and
+configs/default does). This app installs nothing: on a project without `itx.agents` it says so and
 links to the config repo. `itx.agents.create(path)` installs an agent at that context;
 `get(path).message(text)` sends a message. The project owns the pin and its data.
 

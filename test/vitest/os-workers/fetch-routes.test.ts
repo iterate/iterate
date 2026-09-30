@@ -1,7 +1,7 @@
 // vitest/os-workers/fetch-routes.test.ts — THE FETCH ROUTES, end to end inside workerd: a config
 // worker that asks `itx.fetchRoutes.match` for every request and forwards a match through its own
 // `env.ITX.fetch` naming the route's target in `x-itx-expression` — the shape `iterate tunnel`
-// routes with (core/configs/default/worker.ts) — reaching a lent stub over a real capnweb session:
+// routes with (configs/default/worker.ts) — reaching a lent stub over a real capnweb session:
 //
 //   eyeball `blog--<project>.projects.test` → the edge → the context DO → the config worker (loaded)
 //   → `fetchRoutes.match` (the root's core state) → `env.ITX.fetch` → the DO's expression fetch of
@@ -182,7 +182,7 @@ test("a route whose target is a lent stub that is offline answers 502, logged at
   expect(error).not.toHaveBeenCalled();
 });
 
-/** THE TEMPLATE ROUTER (core/configs/default/worker.ts), plus a fallback: a matched request goes to
+/** THE TEMPLATE ROUTER (configs/default/worker.ts), plus a fallback: a matched request goes to
  *  its route through `env.ITX.fetch`, a private route's anonymous visitor gets the sign-in
  *  challenge, anything else is this worker's 404. */
 const SRC_FETCH_ROUTER = {

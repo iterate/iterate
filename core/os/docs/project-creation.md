@@ -8,7 +8,7 @@ The project processor creates `/repos/config`, then seeds it only when `main` is
 may be a public GitHub repository or subdirectory. Its ref is resolved to a commit before the
 request is recorded, so recovery always uses the same source. A template's `package.json` names
 its main module in `"main"`; the built-in default template is used when none is supplied. Built-in choices come from
-[configs](../../configs/README.md).
+[configs](../../../configs/README.md).
 
 Once the seed's publication has landed, admitted or refused (below), the processor points the
 project's ingress at its published config, `itx.config`, once, and emits `project/created`. Interrupted attempts reuse the repository and seed commit; existing repositories

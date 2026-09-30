@@ -47,8 +47,8 @@ test("a preset is seeded from the build, its agents and voice pinned as the defa
   });
 });
 
-test("every package.json under core/configs/ names its folder's main module", () => {
-  const configs = path.resolve(import.meta.dirname, "../../../configs");
+test("every package.json under configs/ names its folder's main module", () => {
+  const configs = path.resolve(import.meta.dirname, "../../../../configs");
   const manifests = globSync("*/**/package.json", {
     cwd: configs,
     exclude: (file) => file.includes("node_modules"),

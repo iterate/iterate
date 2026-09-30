@@ -100,7 +100,7 @@ async function platformModules() {
 /** Everything above, written. */
 export async function build() {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
-  const templatesRoot = path.resolve(root, "../configs");
+  const templatesRoot = path.resolve(root, "../../configs");
   const sourceRef = execFileSync("git", ["rev-parse", "HEAD"], {
     cwd: root,
     encoding: "utf8",
@@ -146,7 +146,7 @@ export async function build() {
     .map((entry) => entry.name);
   const templates = named.map((name) => ({
     label: name.charAt(0).toUpperCase() + name.slice(1).replaceAll("-", " "),
-    reference: `github:iterate/iterate#${sourceRef}&path:core/configs/${name}`,
+    reference: `github:iterate/iterate#${sourceRef}&path:configs/${name}`,
   }));
   const templateFiles = Object.fromEntries(
     named.map((name, index) => [templates[index]!.reference, filesOf(name)]),

@@ -3,8 +3,8 @@ import { codedError } from "iterate/lib";
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
 import type { StreamEvent } from "iterate/stream/processor";
-import DefaultTemplate from "../../../configs/default/worker.ts";
-import HeartbeatTemplate from "../../../configs/heartbeat/worker.ts";
+import DefaultTemplate from "../../../../configs/default/worker.ts";
+import HeartbeatTemplate from "../../../../configs/heartbeat/worker.ts";
 import { EmailProcessor } from "../email/processor.ts";
 
 test.for([
