@@ -303,7 +303,7 @@ test("a project's fetch routes round-trip through a seed: capture records each b
   const session = await openSession();
   const admin = session.authenticate(adminCredentials());
   const project = await admin.projects.create({ project: "seed-fetch-routes" });
-  // the members-only Docs routes prd's `iterate` project has (scripts/preview-config.ts
+  // the members-only Docs routes prd's `iterate` project has (scripts/os/preview-config.ts
   // `proxiedAppRoute`'s shape), on its routing slug and on a hostname of its own
   const docs = {
     requestMatcher: { routingSlug: "docs" },
