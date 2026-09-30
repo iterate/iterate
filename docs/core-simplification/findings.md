@@ -57,8 +57,13 @@ see [the investigation](performance-investigation.md).
 The complete 100-run soak `5xq58s3spm` is still running on immutable ref
 `soak/core-simplification-0739e06`, distinct preview `soak-cs-3461-0739`,
 with residency timing enabled and no test filter. Partial runs do not count
-as a completed soak. Matched eight-main/eight-preview Workers Logs analysis
-is pending. The candidate does not yet satisfy all operational gates.
+as a completed soak. The matched Logs snapshot is **not green**. All eight
+actual PR-preview worker names were verified; only OS recorded entries
+(131 errors / 444 warnings), compared with main's 0 errors / 10 known pager
+warnings. The separate soak OS had 139 errors / 770 warnings. Deliberate
+fault probes explain many entries; wrappers, cancellations and disconnects
+still need attribution. See [the sanitized analysis](log-analysis-0739.md).
+The candidate does not yet satisfy all operational gates.
 
 External evidence for `5eff` is incomplete and does not pass release gates. The
 `lpdbw2tv6d` 100-run soak was cancelled and is invalid, not a passing soak. Its
