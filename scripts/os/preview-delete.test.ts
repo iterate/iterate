@@ -112,6 +112,41 @@ test("a deployment deleted over a listing another run has since emptied: every m
   );
 });
 
+test("a namespace stuck on Cloudflare's phantom count costs 5 refused rounds, is reported once, and every later deletion still goes", async () => {
+  const account = fakeAccount({ phantom: ["pr1-aaaaaaa-os-repos"] });
+  account.add("pr1-aaaaaaa", "2026-09-28T11:00:00Z");
+  account.add("pr2-bbbbbbb", "2026-09-28T12:00:00Z");
+  account.add("pr3-ccccccc", "2026-09-28T13:00:00Z");
+
+  const { outcomes, logs, warns } = await capturingLogs(() =>
+    deletePreviewDeployments(account.cf, account.listing(), async () => {}),
+  );
+
+  expect(outcomes).toEqual({
+    failures: [],
+    stuckNamespaces: [{ namespace: "pr1-aaaaaaa-os-repos", repoCount: 1, createdAt: undefined }],
+  });
+  expect(warns).toEqual([
+    {
+      event: "preview.platform-failure-stuck-namespace",
+      namespace: "pr1-aaaaaaa-os-repos",
+      repoCount: 1,
+      createdAt: undefined,
+      listedRepos: 0,
+      refusedRounds: 5,
+    },
+  ]);
+  expect(
+    account.answers.filter(
+      (answer) => answer === "DELETE /artifacts/namespaces/pr1-aaaaaaa-os-repos: 409/10202",
+    ),
+  ).toHaveLength(5);
+  expect(account.holds("pr1-aaaaaaa")).toEqual(["pr1-aaaaaaa-os-repos"]);
+  expect(account.holds("pr2-bbbbbbb")).toEqual([]);
+  expect(account.holds("pr3-ccccccc")).toEqual([]);
+  expect(logs).toContain("deleted deployment pr3-ccccccc (13 members)");
+});
+
 test.for([
   {
     refusal: "an R2 object's 403/10003",
@@ -187,7 +222,9 @@ test.for([
  *  what is already gone answered with its kind's not-found (preview-delete.ts `GONE`). A racing R2
  *  bucket delete gets the 404/10006 the API client's retry ends with (preview-delete.ts
  *  `deleteR2Bucket`). Each answer is a turn of the event loop later, so deletes run side by side
- *  interleave. `fault` answers a request with a failure instead, when it returns one. */
+ *  interleave. `fault` answers a request with a failure instead, when it returns one. A `phantom`
+ *  Artifacts namespace is one Cloudflare will not delete (preview-artifacts.ts
+ *  `StuckArtifactsNamespace`), its row's repo_count 1. */
 function fakeAccount(
   options: {
     fault?: (
@@ -195,8 +232,10 @@ function fakeAccount(
       path: string,
       state: { buckets: Map<string, Set<string>> },
     ) => CloudflareApiError | undefined;
+    phantom?: string[];
   } = {},
 ) {
+  const phantom = new Set(options.phantom);
   const workers = new Set<string>();
   const kv = new Map<string, string>();
   const buckets = new Map<string, Set<string>>();
@@ -211,7 +250,11 @@ function fakeAccount(
       kv.set(`kv-${deployment}-${suffix}`, `${deployment}-${suffix}`);
     buckets.set(`${deployment}-os-files`, new Set(OBJECTS));
     d1.set(`uuid-${deployment}`, `${deployment}-os-db`);
-    artifacts.set(`${deployment}-os-repos`, new Set(["prj_a.repos--config", "prj_a.repos--main"]));
+    const namespace = `${deployment}-os-repos`;
+    artifacts.set(
+      namespace,
+      new Set(phantom.has(namespace) ? [] : ["prj_a.repos--config", "prj_a.repos--main"]),
+    );
     createdAt.set(deployment, stamp);
   };
 
@@ -296,12 +339,16 @@ function fakeAccount(
       if (!repos) throw refuse(404, 10200);
       if (method === "GET") {
         answer(200);
-        return { namespace: id, repo_count: repos.size, created_at: createdAt.get(id!) };
+        return {
+          namespace: id,
+          repo_count: phantom.has(id!) ? 1 : repos.size,
+          created_at: createdAt.get(id!),
+        };
       }
       if (method === "DELETE" && sub === "repos") {
         if (!repos.delete(rest[0]!)) throw refuse(404, 10200);
       } else if (method === "DELETE" && !sub) {
-        if (repos.size > 0) throw refuse(409, 10202);
+        if (repos.size > 0 || phantom.has(id!)) throw refuse(409, 10202);
         artifacts.delete(id!);
       } else throw new Error(`unexpected ${method} ${path}`);
     } else throw new Error(`unexpected ${method} ${path}`);
