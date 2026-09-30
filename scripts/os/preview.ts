@@ -475,10 +475,8 @@ async function deployPreviewSteps(
   });
   // Nothing is handed on — the PR body's links, the sign-in seed, the suites — until the gate
   // passes, three rounds of eight in a row answering in full on this version (preview-readiness.ts
-  // says why), and pkg.pr.new serves this deployment's packages at `packagesCommit`, which every
-  // project it seeds installs through esm.sh. The same push's pkg-pr-new.yml run publishes them
-  // beside this deploy, and esm.sh must not be asked for them first (preview-packages.ts). A
-  // commit pkg.pr.new already serves costs one HEAD per package.
+  // says why), and pkg.pr.new serves the packages its projects install at `packagesCommit`
+  // (preview-packages.ts says why).
   await Promise.all([
     traceOperation("Readiness gate", () =>
       awaitPreviewReady(url, {
