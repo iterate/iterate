@@ -4,7 +4,7 @@
 // preview mid-release is what the gate itself measures.
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { appConfigOf } from "../../../apps/os/src/app-config.ts";
+import { appConfigOf } from "../../../core/os/src/app-config.ts";
 import { adminCredentials, openSession, refused, signedInSession } from "./support.ts";
 
 test("session.versions names the version the edge and each named project's root context run — the operator's alone", async () => {

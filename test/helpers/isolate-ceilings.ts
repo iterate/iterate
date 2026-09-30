@@ -9,7 +9,7 @@ export const blob = (chars: number): string => "q".repeat(chars);
 
 /** The signal of an UNCONTROLLED reset: `.durableObjectReset` where a hop kept workerd's stamp, or
  *  the reset's own message, which the edge keeps when it answers the failure UNAVAILABLE
- *  (apps/os/src/unavailable.ts): "…isolate exceeded its memory limit and was reset.", "…caused
+ *  (core/os/src/unavailable.ts): "…isolate exceeded its memory limit and was reset.", "…caused
  *  object to be reset…". NOT a loaded-isolate OOM ("Worker exceeded memory limit.") and NOT a facet
  *  wedge (SQLITE_TOOBIG). */
 export const isDurableObjectReset = (e: any): boolean =>

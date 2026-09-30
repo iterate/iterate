@@ -5,7 +5,7 @@ import { z } from "zod";
  *   - `account`             — manage the person's sessions and personal access tokens
  *   - `organizations:write` — the person's organizations: list every one they belong to, create new ones
  *   - `admin`               — operate the platform: every project and person. Granted only to an
- *                             email the deployment's `admins` lists (apps/os consent.ts), and only
+ *                             email the deployment's `admins` lists (core/os consent.ts), and only
  *                             while it lists it (oauth.ts). Signing a client in as someone else is
  *                             no scope: the issuer offers it to a listed admin at consent
  *  Consent is task-based (the shape Cloudflare's own OAuth consent took in August 2026: a client

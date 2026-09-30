@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import type { IngressRouting } from "iterate/project-ingress";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../apps/os/src/project/context-birth-events.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../core/os/src/project/context-birth-events.ts";
 
-/** apps/os, whose Vite-built worker the suite boots. */
-export const PACKAGE_DIR = fileURLToPath(new URL("../../apps/os", import.meta.url).href);
+/** core/os, whose Vite-built worker the suite boots. */
+export const PACKAGE_DIR = fileURLToPath(new URL("../../core/os", import.meta.url).href);
 
 /** The e2e worker's admin bearer — what the suite's default session authenticates with
  *  (helpers/client.ts `adminCredentials`; global-setup hands it to every file). */

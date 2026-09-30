@@ -14,7 +14,7 @@ import { createSign } from "node:crypto";
 import type { Octokit } from "@octokit/rest";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { parseAppConfig } from "../../../apps/os/src/app-config.ts";
+import { parseAppConfig } from "../../../core/os/src/app-config.ts";
 import { ciBucketEnvs, getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
 import { dopplerSecret, resolveEnvContext } from "../../lib/env-context.ts";
 import { createOctokit } from "../github.ts";

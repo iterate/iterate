@@ -28,12 +28,12 @@ export type RunSettled = z.infer<typeof RunSettled>;
 export type RunSettlement = RunSettled["settlement"];
 
 /** THE RUN DEADLINE: ten minutes from the moment the context's runner starts a script. A run still
- *  going then is settled `failed` / `deadline` (apps/os/src/library.ts), so a reader of the log
+ *  going then is settled `failed` / `deadline` (core/os/src/library.ts), so a reader of the log
  *  counts a running script down to its request's time plus this. Ten minutes is what an agent's
  *  turn already allows: its model request expires after ten. */
 export const RUN_DEADLINE_MS = 10 * 60_000;
 
-/** The run events' catalog. The core owns them (apps/os core-processor.ts); a processor that
+/** The run events' catalog. The core owns them (core/os core-processor.ts); a processor that
  *  consumes them names this catalog in its `processorDeps`. */
 export const RunEventCatalog = {
   events: {

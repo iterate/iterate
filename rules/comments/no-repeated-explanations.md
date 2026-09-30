@@ -9,7 +9,7 @@ files:
     "!**/pnpm-lock.yaml",
     "!packages/ui/src/components/{alert-dialog,avatar,badge,breadcrumb,button,card,checkbox,command,dialog,dropdown-menu,empty,field,input,input-group,label,native-select,select,separator,sheet,sidebar,skeleton,sonner,spinner,table,tabs,textarea,tooltip}.tsx",
     "!packages/ui/src/hooks/use-mobile.ts",
-    "!apps/os/src/components/ui/{avatar,button,checkbox,field,input,label,native-select,separator,spinner}.tsx",
+    "!core/os/src/components/ui/{avatar,button,checkbox,field,input,label,native-select,separator,spinner}.tsx",
     "!**/*.gen.ts",
   ]
 engine: llm

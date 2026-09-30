@@ -11,8 +11,8 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createTestHarness } from "wrangler";
 import type { TestProject } from "vitest/node";
-import { build } from "../../apps/os/scripts/build.ts";
-import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
+import { build } from "../../core/os/scripts/build.ts";
+import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
 import { deployedTarget } from "./deployed-target.ts";
 import {
   E2E_ADMIN_BEARER,
@@ -52,7 +52,7 @@ declare module "vitest" {
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  // apps/os's generated modules (its scripts/build.ts), which the apps/os source the suites import
+  // core/os's generated modules (its scripts/build.ts), which the core/os source the suites import
   // reads. `pnpm e2e` builds the whole worker before vitest starts; `e2e:run` against a deployment
   // builds nothing else.
   await build();

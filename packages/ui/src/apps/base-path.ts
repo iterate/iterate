@@ -6,7 +6,7 @@
 // every path the page names carries it — its links, its assets (the app's server.ts `transformAssets`), its
 // server functions (the app's start.ts) — and the router drops it on the way in (`basePathRewrite`). The
 // browser adapter's `/.auth/*` and `/api` stay root paths: the host's, which the platform answers
-// (apps/os/src/worker.ts); under paths they are its own, on the origin the page shares with it.
+// (core/os/src/worker.ts); under paths they are its own, on the origin the page shares with it.
 //
 // A dev server behind `iterate tunnel` under paths starts under the tunnel's base path (README):
 // Vite's `base`, which its module URLs and its HMR socket carry. The page's base path takes the

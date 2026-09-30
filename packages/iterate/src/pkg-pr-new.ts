@@ -1,10 +1,10 @@
 // pkg-pr-new.ts — pkg.pr.new builds as a config repo's package.json lists them
 // (`https://pkg.pr.new/<owner>/<repo>/<package>@<ref>`), and how everything that writes one pins it.
 // The platform's loader loads such a dependency only at a full commit and refuses a branch or a PR
-// number (apps/os/src/context/module-resolution.ts says why), so a writer resolves a moving ref
+// number (core/os/src/context/module-resolution.ts says why), so a writer resolves a moving ref
 // once, as it writes, the way npm's lockfile holds a git dependency at its commit
 // (https://docs.npmjs.com/cli/v11/configuring-npm/package-lock-json#packages). The writers: the
-// platform's seed of a config repo from a template (apps/os/src/project/processor.ts), the apps
+// platform's seed of a config repo from a template (core/os/src/project/processor.ts), the apps
 // that upgrade agents and voice to main's newest build (`buildStanding`), and the e2e rows.
 import { z } from "zod";
 import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";

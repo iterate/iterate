@@ -7,7 +7,7 @@ import { touchesPreview } from "./preview-paths.ts";
 
 // GitHub's `paths` semantics: any file whose last matching pattern is a positive one triggers.
 test.for([
-  { files: ["apps/os/src/worker.ts"], preview: true },
+  { files: ["core/os/src/worker.ts"], preview: true },
   { files: ["configs/default/AGENTS.md"], preview: true },
   { files: ["package.json"], preview: true },
   { files: [".depot/workflows/preview-os.yml"], preview: true },
@@ -24,13 +24,13 @@ test.for([
 });
 
 // The command the Deploy preview job runs, in a scratch repository whose HEAD is the pull request
-// merged into main. A rename counts on both sides: moving a file out of apps/os changes apps/os.
+// merged into main. A rename counts on both sides: moving a file out of core/os changes core/os.
 // A HEAD that is no merge (the head alone, when the pull request conflicts) cannot tell, so it
 // deploys.
 test.for([
   { change: "adds", path: "docs/notes.md", preview: "false" },
-  { change: "adds", path: "apps/os/src/worker.ts", preview: "true" },
-  { change: "moves apps/os/src/moved.ts to", path: "docs/moved.ts", preview: "true" },
+  { change: "adds", path: "core/os/src/worker.ts", preview: "true" },
+  { change: "moves core/os/src/moved.ts to", path: "docs/moved.ts", preview: "true" },
   { change: "is not merged but adds", path: "docs/notes.md", preview: "true" },
 ])(
   "changes writes preview=$preview when the pull request $change $path",
@@ -47,13 +47,13 @@ test.for([
       expect(result).toMatchObject({ status: 0 });
     };
     git("init", "--quiet", "--initial-branch=main");
-    mkdirSync(join(repo, "apps/os/src"), { recursive: true });
-    writeFileSync(join(repo, "apps/os/src/moved.ts"), "export const moved = 1;\n");
+    mkdirSync(join(repo, "core/os/src"), { recursive: true });
+    writeFileSync(join(repo, "core/os/src/moved.ts"), "export const moved = 1;\n");
     git("add", ".");
     git("commit", "--quiet", "-m", "base");
     git("checkout", "--quiet", "-b", "pr-head");
     mkdirSync(dirname(join(repo, path)), { recursive: true });
-    if (change.startsWith("moves")) git("mv", "apps/os/src/moved.ts", path);
+    if (change.startsWith("moves")) git("mv", "core/os/src/moved.ts", path);
     else writeFileSync(join(repo, path), "change\n");
     git("add", ".");
     git("commit", "--quiet", "-m", "head");

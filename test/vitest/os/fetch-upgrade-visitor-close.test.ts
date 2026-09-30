@@ -82,7 +82,7 @@ import {
   FetchUpgradeSpliceEnd,
   reportFetchUpgradeSpliceEvent,
   visitorEndOfSplice,
-} from "../../../apps/os/src/context/fetch-upgrade-splice.ts";
+} from "../../../core/os/src/context/fetch-upgrade-splice.ts";
 
 function clockSocket() {
   const pair = new WebSocketPair();

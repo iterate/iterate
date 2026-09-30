@@ -1,7 +1,7 @@
 // The Dash's Integrations page: a project connects Slack, Google and GitHub through iterate's apps —
 // Connect opens a sheet, whose "another account" goes through iterate's app — sees each connection
 // listed, and disconnects it. A preview's iterate apps are the pet shop's fakes
-// (apps/os/scripts/preview-{slack,google,github}-app.ts): their pages send the browser straight back
+// (core/os/scripts/preview-{slack,google,github}-app.ts): their pages send the browser straight back
 // through the platform's callback, which finishes the connection; GitHub's install page is where a
 // person picks the account, which the spec does by naming an installation it registered (and Slack's
 // consent page the workspace, by naming a team). An installation or a workspace another project
@@ -11,7 +11,7 @@ import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug
 import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
-} from "../../../apps/os/scripts/preview-github-app.ts";
+} from "../../../core/os/scripts/preview-github-app.ts";
 import { petshopBaseUrl, petshopRegisterGithubInstallation } from "../../helpers/petshop.ts";
 import { openOperatorSession } from "../../helpers/operator.ts";
 import { test } from "../../helpers/test.ts";

@@ -6,7 +6,7 @@ import { expect, test, vi } from "vitest";
 import { ITERATE_CAUSE_HEADER } from "iterate/lib";
 import type { StreamEvent } from "iterate/stream/processor";
 import { newWebSocketRpcSession } from "capnweb";
-import { runningCause, type Cause } from "../../../apps/os/src/cause.ts";
+import { runningCause, type Cause } from "../../../core/os/src/cause.ts";
 import {
   adminCredentials,
   at,

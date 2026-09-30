@@ -40,26 +40,26 @@ type ErrorCode =
   | "REDUCE_CHECKPOINT_TOO_LARGE" // a reduce's state would not fit one storage cell (stream/processor.ts)
   | "EVENT_UNREADABLE" // a stored row's body is not JSON — `data.offset` names it (stream.ts read)
   | "STREAM_PAUSED"
-  | "INVALID_CONTEXT" // a context name / project id the codec refuses (apps/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
+  | "INVALID_CONTEXT" // a context name / project id the codec refuses (core/os context/paths.ts `DurableObjectNameCodec`) — coded, so it survives the hop
   | "EXPRESSION_TOO_LONG" // a STRING itx expression over ITX_EXPRESSION_STRING_MAX_CHARS — pass the parsed form
   | "FACET_SOURCE_TOO_LARGE" // a facet's literal source, or a rule's target, over 1 MiB (worker-loader.ts FACET_SOURCE_MAX_CHARS) — refused on entry
   | "INVALID_CREDENTIALS" // authenticate(): the admin secret did not match, or the credentials named no known kind
   | "UNAUTHENTICATED" // authenticate({ type: "from-server-cookie" }): no session cookie on the request, or a cross-origin browser's request
-  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (apps/os first-party-facet-placement.ts)
+  | "FORBIDDEN" // projects.get(project): outside the session's reach (a grant narrowed to other projects, or the user is no member of its org); create on a narrowed grant; grants/consent on a session that carries none; organizations.get outside the session's memberships; `cd` in the global namespace (a global context is reached by identity, never by path); a first-party facet off the context the platform hosts it on, or loaded code in the global namespace (core/os first-party-facet-placement.ts)
   | "PROJECT_NAME_TAKEN" // projects.create({ project }): a project of that slug exists in another org
   | "RPC_STUB_OFFLINE" // the rpc stub a row names is neither borrowed nor pager-backed right now — or its lend ended mid-call (recalled, returned, broken; the relay re-codes)
   | "NOT_A_METHOD" // the dotted path's terminal segment is not callable on the target
   | "NO_FACET" // no facet of that name has been loaded into this context
-  | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (apps/os context/facet-host.ts) — its next call starts it fresh
-  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (apps/os context/facet-host.ts) — its next call runs on the new instance
-  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (apps/os context/facet-host.ts)
+  | "FACET_ABORTED" // the facet instance this call ran on was reset by `itx.facets.abort` (core/os context/facet-host.ts) — its next call starts it fresh
+  | "FACET_RESTARTED" // the facet instance this call ran on was restarted by the platform under it — its source or loader identity changed, or another call on it timed out (core/os context/facet-host.ts) — its next call runs on the new instance
+  | "FACET_NO_UPGRADE" // a WebSocket upgrade aimed at a facet: a facet answers RPC and plain HTTP, never a socket — sockets terminate at the edge (core/os context/facet-host.ts)
   | "WAIT_TIMEOUT" // waitForEvent expired with no matching event committed
-  | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (apps/os repo/durable-object.ts) — `data` is { ours, theirs }
+  | "NOT_FAST_FORWARD" // a repo's pull or push without `force` where neither main contains the other (core/os repo/durable-object.ts) — `data` is { ours, theirs }
   | "TIMEOUT" // lib.ts withTimeout: the call did not answer within its deadline
   | "GONE" // a target that says it is gone for good (an HTTP webhook's 410): the delivery halts its row, which an operator's resume reopens
-  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (apps/os cause.ts): the act is refused for good, never retried
+  | "LOOP_LIMIT" // code reacting to code too many hand-offs deep (core/os cause.ts): the act is refused for good, never retried
   | "UNAVAILABLE" // the platform failed the call, not the caller: `data` is { kind, retryAfterMs } — a deploy's reset ("deploy-reset"), a lost connection ("disconnected") or an overload ("overloaded"); an idempotent call may be asked again after retryAfterMs, and an HTTP edge answers it 503 with that Retry-After
-  | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (apps/os stream/subscription-delivery.ts); a processor's work in flight that died with its host five times, whose revive is refused and recorded as `itx/work-failed` (stream/processor.ts)
+  | "PERMANENT_FAILURE"; // a failure no repeat can change (a subscriber's poison event): a delivery halts on it at once instead of climbing its retry ladder (core/os stream/subscription-delivery.ts); a processor's work in flight that died with its host five times, whose revive is refused and recorded as `itx/work-failed` (stream/processor.ts)
 // (There is no separate boundary-validation library: the append method's own runtime guards
 // throw plain Errors; a client is JUST capnweb, so malformed args surface as ordinary errors.)
 
@@ -75,10 +75,10 @@ export function errorCode(error: unknown): ErrorCode | undefined {
     : undefined;
 }
 
-/** OUR MARK (apps/os cause.ts): what the platform sends — a request, a mail — carries the cause of
+/** OUR MARK (core/os cause.ts): what the platform sends — a request, a mail — carries the cause of
  *  the code that sent it here, as JSON; a request that comes back with it resumes its chain. */
 export const ITERATE_CAUSE_HEADER = "X-Iterate-Cause";
-/** What marks a 508 as an act refused past the loop limit (apps/os unavailable.ts). */
+/** What marks a 508 as an act refused past the loop limit (core/os unavailable.ts). */
 export const LOOP_LIMIT_HEADER = "iterate-loop-limit";
 
 /** An answer refused past the loop limit — a 508 marked so — as the LOOP_LIMIT refusal it is,
@@ -90,7 +90,7 @@ export async function loopLimitOf(answer: Response): Promise<Error | undefined> 
 
 // reportIssue — the ONE exit for unexpected failures (cloudflare-os error-reporting.ts, minus
 // its private Reporter Worker): one bounded console.error line; query event="issue" in Workers
-// Logs. A host forwards issues elsewhere too by `forwardIssues(forward)` (apps/os posthog.ts:
+// Logs. A host forwards issues elsewhere too by `forwardIssues(forward)` (core/os posthog.ts:
 // PostHog Error Tracking) — capture sites never change. Deliberately NO cloudflare:workers
 // import: this file rides the platform-neutral SDK bundle. Reporting must never disturb the
 // caller — armored end to end; worst case it prints nothing.
@@ -335,7 +335,7 @@ export function bytesToBase64(bytes: Uint8Array) {
 }
 
 // ── origin ── the one check that makes an ambient cookie safe to honour (session.ts
-// `from-server-cookie`, the issuer's form posts in apps/os issuer-pages.ts).
+// `from-server-cookie`, the issuer's form posts in core/os issuer-pages.ts).
 
 /** Whether `request` may spend the cookies it carries: its `Origin` header is this origin, or absent
  *  (a non-browser client — curl, a script). A browser stamps the page's origin on every WebSocket
@@ -365,7 +365,7 @@ export function cookieValueOf(cookieHeader: string | null, name: string): string
 
 /** `next` as a path on `origin`, else "/" — a redirect never leaves the host: `//evil.example`,
  *  `/\evil.example` and an absolute URL all resolve to a foreign origin and fall back to "/". The
- *  issuer's login redirect uses it too (apps/os issuer-pages.ts). */
+ *  issuer's login redirect uses it too (core/os issuer-pages.ts). */
 export function sameOriginPath(next: string, origin: string): string {
   try {
     const url = new URL(next, origin);
@@ -412,8 +412,8 @@ export function resolveContextPath(basePath: string, contextPath: string): strin
  * - `localhost`, `*.localhost`, `127.0.0.1`: `pnpm dev`
  * - anything else: production (os.iterate.com, dash.iterate.com, agents.iterate.com, …)
  *
- * Rendered by environment-head-content.tsx in every client's root (packages/ui's, and apps/os's own
- * copy), and by the OS's `/favicon.svg` (apps/os/src/issuer-pages.ts), which the SDK's gate pages
+ * Rendered by environment-head-content.tsx in every client's root (packages/ui's, and core/os's own
+ * copy), and by the OS's `/favicon.svg` (core/os/src/issuer-pages.ts), which the SDK's gate pages
  * link.
  */
 export function deploymentEnvironment(hostname: string) {
@@ -444,7 +444,7 @@ export function environmentFaviconHref(environment: DeploymentEnvironment, produ
 /**
  * Preview: purple, the PR number in white as large as the square allows (PR numbers run to four
  * digits and more, too many for the corner badge #2197 drew for single-digit preview slots).
- * Dev: teal, the white iterate mark (apps/os/public/iterate-logo.svg's paths).
+ * Dev: teal, the white iterate mark (core/os/public/iterate-logo.svg's paths).
  */
 export function environmentFaviconSvg(
   environment: Exclude<DeploymentEnvironment, { kind: "production" }>,

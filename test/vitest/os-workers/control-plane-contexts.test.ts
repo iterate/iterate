@@ -19,8 +19,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import type { RpcStub } from "capnweb";
 import { expect, test } from "vitest";
-import { AccountProcessor } from "../../../apps/os/src/account/processor.ts";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import { AccountProcessor } from "../../../core/os/src/account/processor.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import { endGrantOnAccount } from "./oauth-support.ts";
 import {
   adminCredentials,

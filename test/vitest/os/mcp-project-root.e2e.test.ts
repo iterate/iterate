@@ -2,7 +2,7 @@
 // No capability fakes.
 import { newHttpBatchRpcSession } from "capnweb";
 import { expect, test } from "vitest";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import { mcpCall, openItx, readAll, until, workerUrl } from "../../helpers/client.ts";
 import { oauthSession } from "../../helpers/principal.ts";
 import {

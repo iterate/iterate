@@ -67,7 +67,7 @@ export const Route = createFileRoute("/_auth/sessions")({
     cursor: z.string().optional().catch(undefined),
     /** The New token sheet. */
     token: z.literal(1).optional().catch(undefined),
-    /** Why the issuer refused to add a sign-in (apps/os identity.ts, "ADD A SIGN-IN"). */
+    /** Why the issuer refused to add a sign-in (core/os identity.ts, "ADD A SIGN-IN"). */
     error: z.string().optional().catch(undefined),
   }),
   loaderDeps: ({ search }) => ({ cursor: search.cursor }),

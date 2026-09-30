@@ -1,5 +1,5 @@
 // dist/ is the unpacked extension (what Load unpacked takes, and what apps/spa's build zips):
-// public/, capnweb's browser bundle from node_modules (the catalog's version, the one apps/os
+// public/, capnweb's browser bundle from node_modules (the catalog's version, the one core/os
 // speaks) and the SPA's oauth.js, the one OAuth client both run. README.md says why the extension
 // carries its code itself.
 import { cpSync, rmSync } from "node:fs";

@@ -258,7 +258,7 @@ function project({
   const values: Record<string, string> = {};
   let tip = "seed";
   let publishedCommit = published;
-  // every verb of a repo whose certificate has not landed refuses (apps/os entity-lifecycle.ts)
+  // every verb of a repo whose certificate has not landed refuses (core/os entity-lifecycle.ts)
   const notCreated = () =>
     new Error('repo /repos/config: not created — itx.repos.create("/repos/config") first');
   const repo = {

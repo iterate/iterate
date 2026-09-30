@@ -1,4 +1,4 @@
-# THE LATENCY MEASUREMENT for apps/os: every 3 hours, deploy main's commit as `latency-<sha7>` (a
+# THE LATENCY MEASUREMENT for core/os: every 3 hours, deploy main's commit as `latency-<sha7>` (a
 # deployment of its own, which nothing else touches: Main OS e2e has its own, and a latency measured
 # beside another suite measures that suite; the same deployment again, in place, when main has not
 # moved since the last run), run the perf suite against it (test/vitest/os/perf: concurrent project
@@ -82,7 +82,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
-          export WORKER_BASE_URL="$(node -p 'require("../apps/os/output/preview.json").url')"
+          export WORKER_BASE_URL="$(node -p 'require("../core/os/output/preview.json").url')"
           doppler run --project os --config preview -- pnpm perf:run --reporter=default --reporter=json --outputFile.json=output/perf-report.json \
             || echo "the perf suite exited $?: the health job judges its report"
       - name: Keep the perf report

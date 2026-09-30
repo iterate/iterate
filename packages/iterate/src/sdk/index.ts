@@ -9,7 +9,7 @@
 // Everything else has one path of its own: a processor's surface (`StreamProcessor`,
 // `defineProcessorContract`, `LiveState`, the event and contract types) is `iterate/stream/processor`,
 // which runs in Node too; zod is `zod`. A loaded worker imports each
-// by name and the loader links this deployment's own build of it (apps/os/scripts/build.ts):
+// by name and the loader links this deployment's own build of it (core/os/scripts/build.ts):
 //
 //   import { StreamProcessorDurableObject } from "iterate/sdk";
 //   import { StreamProcessor, defineProcessorContract } from "iterate/stream/processor";
@@ -61,7 +61,7 @@ export { newHttpBatchRpcSession, newWebSocketRpcSession, newWorkersRpcResponse }
 //
 // IDENTITY is `ctx.props` — `{ iterateContextName, name }`, minted by the parent, the only party
 // that knows it (pinned in test/vitest/os-workers/facets.test.ts), plus `fedByPushes` when a row
-// pushes it (FacetProps). THE STREAM is the itx scope `this.getItx()` hands out (apps/os
+// pushes it (FacetProps). THE STREAM is the itx scope `this.getItx()` hands out (core/os
 // iterate-context.ts `ItxEntrypoint`); the engine's `append`/`read` ride it like any other dotted call.
 //
 // NEVER define alarm(): facets have none (workerd#6810 — the runtime answers "Facets currently
@@ -95,7 +95,7 @@ export type FacetProps = {
  *  className })`, a rule naming it, or a processor's row. A caller reaches a facet by itx expression
  *  (`itx.facets.get(name).<method>(…)`) only through what its class lists in `publicMethods`: the
  *  context refuses any other first step FORBIDDEN before the call reaches the facet
- *  (apps/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
+ *  (core/os context/facet-public-methods.ts). The platform's own calls — the delivery loop's push
  *  and catch-up, the alarm's revive — never go through the list. A loaded class that does not
  *  extend this shell lists nothing, so no caller reaches it by expression. */
 export abstract class FacetDurableObject<
@@ -117,7 +117,7 @@ export abstract class FacetDurableObject<
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`): a caller's `itx.facets.get(name).<steps>`, the
-   *  alarm's revive. On no list: only the platform calls it (apps/os context/facet-host.ts). */
+   *  alarm's revive. On no list: only the platform calls it (core/os context/facet-host.ts). */
   callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
     return walkUnderCause(this, cause, steps);
   }
@@ -160,7 +160,7 @@ export abstract class FacetDurableObject<
 
 /** What hands the itx scope over — a loaded worker's `env.ITX`, or the loopback a class of the
  *  platform's own worker mints from `ctx.exports`: `get()` its scope (a context's declared API,
- *  api.ts, which a capnweb stub of apps/os's `IterateContextRpcTarget` satisfies), or `fetch` a
+ *  api.ts, which a capnweb stub of core/os's `IterateContextRpcTarget` satisfies), or `fetch` a
  *  request through the context's dispatch (a fetch route's target, the `x-itx-expression` header). */
 export type ItxEntrypointService = {
   get(): IterateContextApi;
@@ -313,7 +313,7 @@ export abstract class IterateConfigEntrypoint<
   }
 
   /** THE CALL UNDER A CAUSE (`walkUnderCause`) every method but `fetch` is called through. On no
-   *  list: only the platform calls it (apps/os context/built-ins.ts `workers`). */
+   *  list: only the platform calls it (core/os context/built-ins.ts `workers`). */
   callWithCause(cause: unknown, steps: RpcSteps): Promise<unknown> {
     return walkUnderCause(this, cause, steps);
   }

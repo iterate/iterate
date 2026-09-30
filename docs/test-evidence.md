@@ -203,8 +203,8 @@ The upload step's log and the job's summary give the run's prefix. With the same
 repository root:
 
 ```sh
-doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>manifest.json" --remote --pipe
-doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 object get "iterate-ci/<prefix>playwright-html/index.html" --remote --file index.html
+doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 object get "iterate-ci/<prefix>manifest.json" --remote --pipe
+doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 object get "iterate-ci/<prefix>playwright-html/index.html" --remote --file index.html
 ```
 
 Every file the manifest lists is at `<prefix><path>`, its bytes hashing to the listed sha256. Each
@@ -271,13 +271,13 @@ Doppler `_shared/preview`'s `CLOUDFLARE_API_TOKEN` and
 1. **The bucket and its retention.** Done on 2026-09-24:
 
    ```sh
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket create iterate-ci
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-ci backups-context-sweep-after-365-days backups/context-sweep/ --expire-days 365 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket create iterate-ci
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-main-after-365-days evidence/ci/trust=main/ --expire-days 365 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-pr-after-90-days evidence/ci/trust=pr/ --expire-days 90 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci evidence-local-after-30-days evidence/local/ --expire-days 30 --force
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-ci backups-context-sweep-after-365-days backups/context-sweep/ --expire-days 365 --force
    # nothing expires state/
-   doppler run --project _shared --config preview -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle list iterate-ci
+   doppler run --project _shared --config preview -- pnpm --dir core/os exec wrangler r2 bucket lifecycle list iterate-ci
    ```
 
    No bucket lock is set ([#3110](https://github.com/iterate/iterate/issues/3110) has the commands).

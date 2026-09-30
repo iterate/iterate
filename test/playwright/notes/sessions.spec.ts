@@ -33,7 +33,7 @@ test("the Notes app works through a project config worker, keeps a note, and end
       routingSlug: "notes",
       path,
     })!;
-  // WHOSE SIGN-IN the app runs on: its host's `/.auth/*` (apps/os/src/worker.ts). Under subdomains
+  // WHOSE SIGN-IN the app runs on: its host's `/.auth/*` (core/os/src/worker.ts). Under subdomains
   // that host is an origin of its own, a client of its own whose document names no app, so consent
   // names it by its host. Under paths it is the platform's origin, whose sign-in the fixture already
   // holds: no consent, and the Dash lists that session as "iterate".
@@ -111,7 +111,7 @@ function client(origin: string, name: string): Client {
 
 /** The issuer's consent page for `client`: its name in the heading, always, and beneath it the
  *  domain its metadata came from, which the issuer shows only for an https client id
- *  (apps/os/src/client-display.ts) — not a local app's http origin. */
+ *  (core/os/src/client-display.ts) — not a local app's http origin. */
 async function consentPage(page: Page, client: Client) {
   await page
     .getByRole("heading", { name: `${client.name} wants to access your account`, exact: true })

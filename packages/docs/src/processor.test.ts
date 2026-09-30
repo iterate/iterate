@@ -329,7 +329,7 @@ function openDoc(
     get engine() {
       return current.engine;
     },
-    /** What a `run` script appends for `email` (apps/os on-behalf-of.ts): no principal, the person
+    /** What a `run` script appends for `email` (core/os on-behalf-of.ts): no principal, the person
      *  it runs for in `onBehalfOf`. */
     appendAsScriptFor: (email: string, type: string, payload: Record<string, unknown>) =>
       log.stream.append({

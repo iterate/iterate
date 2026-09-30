@@ -24,7 +24,7 @@
 //     the DO and returns the committed event (the Workers-RPC path no other suite drives)
 
 import { expect, test } from "vitest";
-import { EVENT_CHUNK_SIZE } from "../../../apps/os/src/stream/stream.ts";
+import { EVENT_CHUNK_SIZE } from "../../../core/os/src/stream/stream.ts";
 import {
   freshCtx,
   openItx,
