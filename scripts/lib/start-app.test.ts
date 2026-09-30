@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
-import { dashEnvs, kitEnvs, notesEnvs } from "../../envs.ts";
+import { dashEnvs, docsEnvs, kitEnvs, notesEnvs } from "../../envs.ts";
 import { ownZones, startAppWorkerConfig } from "./start-app.ts";
 
 test("a per-commit deployment's app is a worker of its own, signs in against that deployment's apps/os and links to its apps", () => {
@@ -12,6 +12,7 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
       envs: notesEnvs,
     },
     "pr3144-a1b2c3d",
+    "0123456789abcdef0123456789abcdef01234567",
   );
   expect(config).toMatchObject({
     name: "pr3144-a1b2c3d-notes",
@@ -26,9 +27,24 @@ test("a per-commit deployment's app is a worker of its own, signs in against tha
       dash: "https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev",
       notes: "https://pr3144-a1b2c3d-notes.iterate-dev-preview.workers.dev",
     },
-    // what it installs in a project is the PR's build
-    pkgPrNewRef: "3144",
+    // what it installs in a project: the commit its packages are published at, which preview.ts hands it
+    pkgPrNewRef: "0123456789abcdef0123456789abcdef01234567",
   });
+});
+
+test("a per-commit deployment's app refuses to build without the commit its packages are at", () => {
+  expect(() =>
+    startAppWorkerConfig(
+      {
+        name: "docs",
+        root: new URL("file:///apps/docs/"),
+        dopplerProject: "_shared",
+        envs: docsEnvs,
+      },
+      "pr3144-a1b2c3d",
+      undefined,
+    ),
+  ).toThrow("PUBLISHED_PACKAGE_COMMIT");
 });
 
 test("on workers.dev our own zones are our apps' hosts, not the accounts they share with anyone's worker", () => {
@@ -53,6 +69,7 @@ test("a deployed app links to the other apps at their prd origins from envs.ts, 
   const { vars } = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
     "prd",
+    undefined,
   );
   expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
     urls: {
@@ -72,6 +89,7 @@ test("main on dev (the app's `preview` build) signs in against main on dev's app
   const { vars } = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
     "preview",
+    undefined,
   );
   expect(JSON.parse(vars.APP_CONFIG)).toMatchObject({
     urls: {
@@ -90,6 +108,7 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   const { vars } = startAppWorkerConfig(
     { name: "kit", root: new URL("file:///apps/kit/"), dopplerProject: "kit", envs: kitEnvs },
     "prd",
+    undefined,
   );
   expect(startAppConfigOf({ ...vars })).toMatchObject({
     urls: { os: "https://os.iterate.com", dash: "https://dash.iterate.com" },
@@ -99,6 +118,7 @@ test("the app reads the config it is deployed with as written, and a laptop's .d
   // local dev starts from prd's config (no env) and overrides one key, keeping the rest
   const local = startAppWorkerConfig(
     { name: "dash", root: new URL("file:///apps/dash/"), dopplerProject: "dash", envs: dashEnvs },
+    undefined,
     undefined,
   ).vars;
   expect(
@@ -127,6 +147,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
       envs: dashEnvs,
     },
     "prd",
+    undefined,
   );
   expect(dash.assets).toMatchObject({
     run_worker_first: ["/*", "!/assets/*", "!/client-logo.svg", "!/logos/*"],
@@ -140,6 +161,7 @@ test("every request starts the app's Worker but its static files: vite's /assets
       envs: kitEnvs,
     },
     "prd",
+    undefined,
   );
   expect(kit.assets).toMatchObject({
     run_worker_first: expect.arrayContaining(["/*", "!/assets/*", "!/favicon.svg", "!/vendors/*"]),

@@ -23,7 +23,7 @@ test("a project without Docs installs it from a doc's page, and the doc opens", 
   await routeDocs(fixture.itx, new URL(helpers.appOrigin("docs")));
   const config = fixture.itx.repos.get("/repos/config");
   await config.writeFile("plan.md", "# Plan\n");
-  // the page installs this deployment's build, the PR's: wait until pkg.pr.new has this commit's
+  // the page installs this deployment's build: wait until pkg.pr.new has published this checkout's
   await docsBuild();
 
   await page.goto(docUrl.href);

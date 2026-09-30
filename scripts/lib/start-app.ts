@@ -112,8 +112,19 @@ export function ownZones(): string[] {
  *  vite.config.ts hands the Cloudflare Vite plugin (`cloudflare({ config })`); there is no wrangler
  *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
-export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
-  const { env, platform, appOrigins, pkgPrNewRef } = linkedEnvironment(app, envName);
+export function startAppWorkerConfig(
+  app: StartApp,
+  envName: string | undefined,
+  /** The commit a per-commit deployment's packages are published at (apps/os
+   *  scripts/published-package-commit.ts), which preview.ts works out once for all its builds;
+   *  unused by any other env. */
+  packagesCommit: string | undefined,
+) {
+  const { env, platform, appOrigins, pkgPrNewRef } = linkedEnvironment(
+    app,
+    envName,
+    packagesCommit,
+  );
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -166,6 +177,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,
+  packagesCommit: string | undefined,
 ): {
   env: StartAppEnv | undefined;
   platform: { baseUrl: string };
@@ -173,14 +185,20 @@ function linkedEnvironment(
   pkgPrNewRef: string;
 } {
   const preview = envName ? previewDeployment(envName) : undefined;
-  if (preview)
+  if (preview) {
+    // the build the rest of the deployment runs: a PR's head when it changes a package, else its
+    // merge base with main (pkg.pr.new publishes a PR only when it changes one)
+    if (!packagesCommit)
+      throw new Error(
+        `apps/${app.name}: ${envName}'s build needs its packages' commit (PUBLISHED_PACKAGE_COMMIT, which preview.ts sets)`,
+      );
     return {
       env: preview.apps[app.name],
       platform: preview.os,
       appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
-      // a PR's preview (`pr<N>-<sha7>`) goes with the PR's build, any other run's with main's
-      pkgPrNewRef: /^pr(\d+)$/.exec(preview.prefix)?.[1] || "main",
+      pkgPrNewRef: packagesCommit,
     };
+  }
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
     throw new Error(
@@ -321,8 +339,12 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
  *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. */
-export function buildStartApp(app: StartApp, env: string) {
-  return viteBuild(fileURLToPath(app.root), { CLOUDFLARE_ENV: env });
+export function buildStartApp(app: StartApp, env: string, packagesCommit: string | undefined) {
+  return viteBuild(fileURLToPath(app.root), {
+    CLOUDFLARE_ENV: env,
+    // blank for an env of envs.ts, which takes no packages' commit
+    PUBLISHED_PACKAGE_COMMIT: packagesCommit || "",
+  });
 }
 
 /**
