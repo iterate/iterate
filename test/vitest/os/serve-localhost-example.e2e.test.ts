@@ -26,7 +26,7 @@ import {
 } from "../../helpers/project-host.ts";
 
 const example = fileURLToPath(
-  new URL("../../../apps/os/examples/serve-localhost.mjs", import.meta.url).href,
+  new URL("../../../core/os/examples/serve-localhost.mjs", import.meta.url).href,
 );
 
 test(

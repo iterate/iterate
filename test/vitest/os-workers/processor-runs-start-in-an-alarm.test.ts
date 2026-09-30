@@ -11,7 +11,7 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import type { AlarmTrace } from "../../../apps/os/src/iterate-context-durable-object.ts";
+import type { AlarmTrace } from "../../../core/os/src/iterate-context-durable-object.ts";
 import { adminCredentials, openSession, readLog, stub, until } from "./support.ts";
 
 const TURNS = 30;

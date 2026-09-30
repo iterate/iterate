@@ -8,9 +8,9 @@
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, test, vi } from "vitest";
-import { platformAddressesOf } from "../../../apps/os/src/app-config.ts";
-import { authorizationServerFetch } from "../../../apps/os/src/oauth.ts";
-import { clearLoginCookie } from "../../../apps/os/src/password-and-code-sign-in.ts";
+import { platformAddressesOf } from "../../../core/os/src/app-config.ts";
+import { authorizationServerFetch } from "../../../core/os/src/oauth.ts";
+import { clearLoginCookie } from "../../../core/os/src/password-and-code-sign-in.ts";
 import { authorizationRequest, helpers } from "./oauth-support.ts";
 import { controlPlane, loginPassword, ORIGIN } from "./support.ts";
 

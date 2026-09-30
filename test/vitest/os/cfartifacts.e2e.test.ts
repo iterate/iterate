@@ -25,7 +25,7 @@
 
 import { expect, test } from "vitest";
 import type { RepoLogEntry } from "iterate/api";
-import { repoArtifactName } from "../../../apps/os/src/context/cf-artifacts.ts";
+import { repoArtifactName } from "../../../core/os/src/context/cf-artifacts.ts";
 import { freshCtx, freshRepoPath, openItx } from "../../helpers/client.ts";
 
 test("cfArtifacts create/get/list/delete against the real binding, by path, project-scoped", async () => {

@@ -3,7 +3,7 @@
 // loaded by Node itself, their bare imports resolved from their own folder, their functions lent at
 // itx.<name> and called back through the lent stub, the itx they were handed reaching the project;
 // a missing dependency named before any sign-in; and `runProvide` lending again over each new
-// connection. The platform half (the lend through a deployment) is apps/os e2e/provide.e2e.test.ts.
+// connection. The platform half (the lend through a deployment) is core/os e2e/provide.e2e.test.ts.
 import { tmpdir } from "node:os";
 import { execFile, type ChildProcess } from "node:child_process";
 import { mkdirSync, realpathSync, writeFileSync, mkdtempDisposableSync } from "node:fs";

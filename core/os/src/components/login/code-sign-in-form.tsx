@@ -1,0 +1,46 @@
+import { useId } from "react";
+import { Button } from "../ui/button.tsx";
+import { Field, FieldLabel } from "../ui/field.tsx";
+import { Input } from "../ui/input.tsx";
+import { focusOnMount } from "../focus-on-mount.ts";
+
+/** The mailed code, and the way back to another email. */
+export function CodeSignInForm({ next, codeSentTo }: { next: string; codeSentTo: string }) {
+  const codeId = useId();
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-sm">
+        We sent a code to <strong className="wrap-anywhere">{codeSentTo}</strong>.
+      </p>
+      <form method="post" action="/login" className="flex flex-col gap-3">
+        <input type="hidden" name="next" value={next} />
+        <Field>
+          <FieldLabel htmlFor={codeId}>Code</FieldLabel>
+          <Input
+            id={codeId}
+            type="text"
+            name="code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            spellCheck={false}
+            pattern="[0-9]{6}"
+            maxLength={6}
+            required
+            ref={focusOnMount}
+            className="h-11 text-center text-2xl tracking-[0.45em] tabular-nums md:text-2xl"
+          />
+        </Field>
+        <Button type="submit" size="lg" className="h-11">
+          Continue
+        </Button>
+      </form>
+      <form method="post" action="/login" className="flex flex-col">
+        <input type="hidden" name="next" value={next} />
+        <input type="hidden" name="restart" value="1" />
+        <Button type="submit" variant="ghost" className="h-9 text-[0.8rem]">
+          Use a different email
+        </Button>
+      </form>
+    </div>
+  );
+}

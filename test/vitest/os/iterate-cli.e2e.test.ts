@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectIterate } from "iterate/node";
 import { test } from "vitest";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import { MyComputer } from "../../../packages/cli/src/use-my-computer.ts";
 import { adminCredentials, freshCtx, openItx, readAll, workerUrl } from "../../helpers/client.ts";
 import { issuerCookie } from "../../helpers/principal.ts";

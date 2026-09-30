@@ -1,6 +1,6 @@
 // app-config.test.ts — the mechanism every Worker's config goes through: the object and its vars
 // composed, a key the schema does not name warned about in both spellings and dropped, and a
-// malformed field refused. Each schema's own fields are its app's table (apps/os/src/worker.test.ts,
+// malformed field refused. Each schema's own fields are its app's table (core/os/src/worker.test.ts,
 // scripts/lib/start-app.test.ts).
 import { expect, test, vi } from "vitest";
 import { z } from "zod";

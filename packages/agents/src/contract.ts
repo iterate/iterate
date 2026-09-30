@@ -12,7 +12,7 @@
 //   EventInput<typeof AgentContract>                                           what `itx.cd(path).append(…)` takes
 //
 // Its birth is the saga `itx.agents.create(path)` opens: `create-requested`, then `created` — the
-// certificate, cross-posted to `/` for the project catalog (apps/os/src/project/) — with the
+// certificate, cross-posted to `/` for the project catalog (core/os/src/project/) — with the
 // default system prompt beside it; an operator's instructions are their own `context-added` after.
 // From then on everything is THE LOOP: a `context-added` from outside (a person) or from a script's
 // result raises the ONE pending trigger; the loop records the request (`llm-request-requested`),

@@ -29,7 +29,7 @@ const viewOutput = `- Resolving items.
 `;
 
 test("reads each file of the dry run's view by its repository path, with its exact content", () => {
-  expect(parseView(viewOutput)).toEqual([
+  expect(parseView(viewOutput, "packages/ui")).toEqual([
     {
       path: "packages/ui/src/components/skeleton.tsx",
       action: "overwrite",
@@ -41,9 +41,9 @@ test("reads each file of the dry run's view by its repository path, with its exa
       content: "export const MOBILE_BREAKPOINT = 768\n",
     },
   ]);
-  expect(() => parseView(viewOutput.replace("(skip) 2 lines", "(skip) 3 lines"))).toThrow(
-    /printed 2 of src\/hooks\/use-mobile.ts's 3 lines/,
-  );
+  expect(() =>
+    parseView(viewOutput.replace("(skip) 2 lines", "(skip) 3 lines"), "packages/ui"),
+  ).toThrow(/printed 2 of src\/hooks\/use-mobile.ts's 3 lines/);
 });
 
 test("no drift when every vendored file holds upstream's bytes and globals.css needs nothing", () => {
@@ -59,7 +59,7 @@ test("no drift when every vendored file holds upstream's bytes and globals.css n
 
 test("drift names an overwritten file, whitespace the CLI ignores, a file off the list, a file upstream stopped writing, and CSS", () => {
   const { files, repository, current } = inSync();
-  const button = files.find((file) => file.path.endsWith("/button.tsx"))!;
+  const button = files.find((file) => file.path === "packages/ui/src/components/button.tsx")!;
   Object.assign(button, { action: "overwrite", content: "upstream's button\n" });
   repository.set(
     "packages/ui/src/components/skeleton.tsx",

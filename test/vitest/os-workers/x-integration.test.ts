@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { DEFAULT_X_SCOPES } from "../../../apps/os/src/app-config.ts";
+import { DEFAULT_X_SCOPES } from "../../../core/os/src/app-config.ts";
 import {
   catalog,
   followConsent,

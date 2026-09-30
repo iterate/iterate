@@ -2,7 +2,7 @@ import { evictDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { expect, test } from "vitest";
-import type { IterateRpcTarget } from "../../../apps/os/src/session.ts";
+import type { IterateRpcTarget } from "../../../core/os/src/session.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   catalog,

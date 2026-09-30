@@ -2,7 +2,7 @@
 // cost the root at most a snapshot read per TTL, never a call each. Snapshots: rule-snapshots.test.ts.
 import { exports } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { SNAPSHOT_TTL_MS } from "../../../apps/os/src/context/rule-snapshots.ts";
+import { SNAPSHOT_TTL_MS } from "../../../core/os/src/context/rule-snapshots.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   adminCredentials,

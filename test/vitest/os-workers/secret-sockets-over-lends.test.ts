@@ -11,7 +11,7 @@
 // `fetch` is the isolate's global fetch, answered for `SHOP` by `serveGateways` below.
 
 import { expect, onTestFinished, test, vi } from "vitest";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
 import { adminSession, projectWithMember, stub } from "./support.ts";
 
 const SHOP = "https://gateway.test";

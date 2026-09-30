@@ -1,11 +1,11 @@
 ---
 name: debug-os-worker
-description: Diagnose an apps/os failure on production or a PR preview from Workers Logs and the context's own durable log. Use when prd pages #error-pulse, a preview misbehaves, a request 5xxs, or someone asks "what happened on os at <time>".
+description: Diagnose an core/os failure on production or a PR preview from Workers Logs and the context's own durable log. Use when prd pages #error-pulse, a preview misbehaves, a request 5xxs, or someone asks "what happened on os at <time>".
 ---
 
 # Debug the OS worker
 
-The platform (`apps/os`) is one Worker. Its evidence comes from two places:
+The platform (`core/os`) is one Worker. Its evidence comes from two places:
 
 - **Workers Logs**: every invocation and every structured `console.*` line.
 - **The context's durable log**: what actually happened to a project's state.
@@ -87,7 +87,7 @@ Useful variations:
   `$workers.eventType` (`fetch`, `alarm`, `jsrpc`), `$workers.durableObjectId`,
   `$workers.scriptVersion.id`, and a structured line's own top-level fields (`event`, `name`).
 - **One project or context**: a context's Durable Object name is `<projectId>.iterate<path>`
-  (`DurableObjectNameCodec`, `apps/os/src/context/paths.ts`), and context-level lines log it as
+  (`DurableObjectNameCodec`, `core/os/src/context/paths.ts`), and context-level lines log it as
   `name`. Filter `{ "key": "name", "operation": "includes", "value": "prj_….iterate/agents/" }`.
 - **Operators**: `eq`, `includes`, `not_includes`, `gte`, `regex`, `exists`. Start with a narrow
   time window and widen it before you add filters.
@@ -99,7 +99,7 @@ lines are incomplete evidence.
 
 - **Credentials**: a personal access token for the project as `ITERATE_BEARER_TOKEN`, or, for a
   project you don't belong to, the operator bearer as `APP_CONFIG_SECRETS__ADMIN_BEARER`
-  ([credentials](../../../apps/os/docs/credentials.md#personal-access-tokens)).
+  ([credentials](../../../core/os/docs/credentials.md#personal-access-tokens)).
 - **A context's log and processor rows**: the CLI, at the project root:
   `pnpm exec iterate --config <cfg> itx run --project <slug> --eval 'return (await itx.cd("<path>").readEvents(0, 500)).events'`,
   and `itx.cd("<path>").subscriptions.list()` for the rows. The fix-stream skill shows the

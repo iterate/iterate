@@ -46,8 +46,8 @@ is the entire runtime-specific binding around the shared client.
 
 The backend surface is the platform's one API — declared in
 [`packages/iterate/src/api.ts`](../packages/iterate/src/api.ts) (never
-generated; `apps/os` asserts its classes satisfy it), and served by
-[`apps/os`](../apps/os/README.md).
+generated; `core/os` asserts its classes satisfy it), and served by
+[`core/os`](../core/os/README.md).
 
 ## The four nouns
 

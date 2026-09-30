@@ -1,5 +1,5 @@
 /**
- * Shared primitives for the deploy and ensure-resources scripts under apps/ and apps/os.
+ * Shared primitives for the deploy and ensure-resources scripts under apps/ and core/os.
  *
  * Each script stays an imperative top-to-bottom program; these are the
  * handful of moves they all make (spawn-and-fail-fast, smoke
@@ -11,8 +11,8 @@ import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CLOUDFLARE_API, retryPlatformFailures } from "iterate/platform-retry";
+import { runStreamingCaptured } from "../../core/os/scripts/vite-build.ts";
 import { type DeployableEnv, type EnvContext } from "./env-context.ts";
-import { runStreamingCaptured } from "./vite-build.ts";
 
 /**
  * Spawn a command with inherited stdio and reject on a nonzero exit — the
@@ -171,7 +171,7 @@ export function findBuiltWranglerConfig(appRoot: string): string {
 /**
  * The app config a deployment reads from its Doppler config: `APP_CONFIG` and every
  * `APP_CONFIG_<PATH>__<KEY>` beside it. The Worker's parser merges each var on top of the object
- * (apps/os/src/app-config.ts), so a deploy ships all of them: a new key needs Doppler, not a deploy
+ * (core/os/src/app-config.ts), so a deploy ships all of them: a new key needs Doppler, not a deploy
  * script.
  */
 export function appConfigSecretsOf(secrets: Record<string, string>): Record<string, string> {

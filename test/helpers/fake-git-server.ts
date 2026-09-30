@@ -32,7 +32,7 @@ import {
   treeObjectsOf,
   type RawGitObject,
   type RepoManifest,
-} from "../../apps/os/src/repo/git-wire.ts";
+} from "../../core/os/src/repo/git-wire.ts";
 
 /** The repo facet's one branch, and the author of a commit landed from outside it. */
 const REF = "refs/heads/main";

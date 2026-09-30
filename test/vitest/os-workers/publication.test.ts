@@ -2,8 +2,8 @@
 // follower that publishes with them is src/project/processor.test.ts's.
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { moduleIdentityOf } from "../../../apps/os/src/context/worker-loader.ts";
-import { manifestOf } from "../../../apps/os/src/project/publication.ts";
+import { moduleIdentityOf } from "../../../core/os/src/context/worker-loader.ts";
+import { manifestOf } from "../../../core/os/src/project/publication.ts";
 import { stub } from "./support.ts";
 
 test("a commit's manifest names each top-level module by what the loader loads for it, which a change elsewhere leaves as it was, and the Durable Object classes a facet names", async () => {

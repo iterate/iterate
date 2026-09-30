@@ -3,9 +3,9 @@
 import { createExecutionContext } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import { expect, onTestFinished, test } from "vitest";
-import { describeConsent } from "../../../apps/os/src/consent-page.server.ts";
-import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../apps/os/src/context/paths.ts";
-import { startIssuerSession } from "../../../apps/os/src/issuer-session.ts";
+import { describeConsent } from "../../../core/os/src/consent-page.server.ts";
+import { DurableObjectNameCodec, GLOBAL_PROJECT_ID } from "../../../core/os/src/context/paths.ts";
+import { startIssuerSession } from "../../../core/os/src/issuer-session.ts";
 import { authorizationRequest, helpers } from "./oauth-support.ts";
 import { controlPlane, fetchReachesThisWorker, loginPassword, ORIGIN } from "./support.ts";
 

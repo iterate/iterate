@@ -989,7 +989,7 @@ function artifact(
       {
         fullName: "stream › appends round-trip",
         leafName: "appends round-trip",
-        moduleId: "/home/runner/work/iterate/iterate/apps/os/src/stream.test.ts",
+        moduleId: "/home/runner/work/iterate/iterate/core/os/src/stream.test.ts",
         tags: [],
         retryCount: 0,
         passedAfterRetry: false,

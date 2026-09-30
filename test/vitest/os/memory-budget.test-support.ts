@@ -31,10 +31,10 @@ import {
   ReduceCheckpointTable,
 } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
-import { FacetHandle } from "../../../apps/os/src/context/dispatch.ts";
-import { CoreContract, normalizeControlEvent } from "../../../apps/os/src/stream/core-processor.ts";
-import { Stream, type DurableObjectStorageSlice } from "../../../apps/os/src/stream/stream.ts";
-import { SubscriptionDelivery } from "../../../apps/os/src/stream/subscription-delivery.ts";
+import { FacetHandle } from "../../../core/os/src/context/dispatch.ts";
+import { CoreContract, normalizeControlEvent } from "../../../core/os/src/stream/core-processor.ts";
+import { Stream, type DurableObjectStorageSlice } from "../../../core/os/src/stream/stream.ts";
+import { SubscriptionDelivery } from "../../../core/os/src/stream/subscription-delivery.ts";
 
 /** The facet host's platform entries (context/facet-host.ts), stood in for by each fake
  *  FacetHandle's own walk. */

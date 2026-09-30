@@ -1,26 +1,26 @@
 # iterate
 
-The SDK for Iterate (`apps/os`): context APIs, stream processors, reactive clients, React
+The SDK for Iterate (`core/os`): context APIs, stream processors, reactive clients, React
 bindings, and OAuth app sessions, under `iterate/*`. The package exports source in this
 workspace and compiled JavaScript with declarations when packed. The `iterate` command is
 [`@iterate-com/cli`](../cli/README.md).
 
 ## The SDK/platform line
 
-The SDK holds what user code runs or speaks, and the platform is its first user: apps/os builds
+The SDK holds what user code runs or speaks, and the platform is its first user: core/os builds
 its own entities on `iterate/sdk`, and the first-party apps' code uses only `iterate/*`. Each
 subpath in `package.json`'s `exports` is one public module; nothing else is importable.
 
 - A module belongs here when user code runs it or speaks it: a loaded worker, a facet, a
   processor, a browser or Node client, or the wire contract between them and the platform. It
-  belongs in apps/os when only the platform's Worker runs it, and in packages/shared when more
+  belongs in core/os when only the platform's Worker runs it, and in packages/shared when more
   than one app needs it and user code never does.
-- Outside apps/os, no package and no app imports apps/os. `import-js/no-restricted-paths` in
+- Outside core/os, no package and no app imports core/os. `import-js/no-restricted-paths` in
   `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
   imports, re-exports, dynamic `import()` and an app added later are covered, and
   `lint/oxlintrc-platform-line.test.ts` pins it. The platform's tests live in `test/`, which
-  the rule does not cover: they may import apps/os, and apps/os keeps only simple unit tests.
-- No private core package behind a thin `iterate`: apps/os would then import modules user code
+  the rule does not cover: they may import core/os, and core/os keeps only simple unit tests.
+- No private core package behind a thin `iterate`: core/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 
 The decision's reasons, and how workerd, the Agents SDK, Convex,
@@ -109,7 +109,7 @@ await itx.cd("/agents/b").append({
 ```
 
 Words from `/` (a member's session, the dash) read as a person's, with no sender. `origin` is the
-context whose code ran, not who asked it to run (apps/os `caller.ts` `stampCaller` says why that
+context whose code ran, not who asked it to run (core/os `caller.ts` `stampCaller` says why that
 makes it advisory). Batch writes: `append(...events)` is one commit, however many events it carries.
 
 Runaway reactions stop on their own: code that reacts to other code's output round after round —
@@ -165,7 +165,7 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 ### Namespaces
 
 - **`itx`** holds the context engine's own events: everything the core contract
-  (`apps/os/src/stream/core-processor.ts`) reduces, validates or refuses, plus the records the
+  (`core/os/src/stream/core-processor.ts`) reduces, validates or refuses, plus the records the
   Stream, the context Durable Object and the SDK processor host write themselves. Where the schema
   and the reduce live decides it, not which contexts hold the event: fetch routes and the apex
   ingress target are core state, so they are `itx` even though only a project root's copy is read.
@@ -232,8 +232,8 @@ that prefix belongs to whoever appends it and is opaque to the platform: tests u
 
 | Namespace                                                           | Defined in                                                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `itx`                                                               | `apps/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `apps/os/src/context/built-ins.ts`, `apps/os/src/fetch-routes.ts`, `apps/os/src/iterate-context-durable-object.ts`, `packages/iterate/src/stream/{run,processor}.ts` |
-| `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `apps/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
+| `itx`                                                               | `core/os/src/stream/core-processor.ts` (and its leaf event catalog), `stream.ts`, `scheduled-appends.ts`, `subscription-delivery.ts`, `core/os/src/context/built-ins.ts`, `core/os/src/fetch-routes.ts`, `core/os/src/iterate-context-durable-object.ts`, `packages/iterate/src/stream/{run,processor}.ts` |
+| `account`, `organization`, `project`, `repo`, `workspace`, `secret` | `core/os/src/<name>/contract.ts` (repo and workspace also use `project/entity-lifecycle.ts`)                                                                                                                                                                                                               |
 | `agent`                                                             | `packages/agents/src/contract.ts`                                                                                                                                                                                                                                                                          |
 | `voice-agent`                                                       | `packages/voice/src/voice-agent.ts`, `packages/voice/src/events.ts`                                                                                                                                                                                                                                        |
 | `chrome`                                                            | `apps/browser-extension/public/panel.js`                                                                                                                                                                                                                                                                   |

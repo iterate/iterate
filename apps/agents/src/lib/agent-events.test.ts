@@ -1,4 +1,4 @@
-// agent-events.test.ts — the apps/os log through the shared reducer: the CONTEXT's runs
+// agent-events.test.ts — the core/os log through the shared reducer: the CONTEXT's runs
 // (`itx/run-requested` / `run-settled`, the request's offset as identity) are the code steps, linked
 // to the assistant's message by the processor's `whileProcessing` stamp, so a turn renders as one
 // activity with its code step.

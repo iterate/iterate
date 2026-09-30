@@ -48,7 +48,7 @@ import {
 const ROOT = path.resolve(import.meta.dirname, "../../test");
 const OUT = path.join(ROOT, "output/soak");
 
-/** apps/os's URL in the deployment scripts/os/preview.ts makes of this checkout for `--name <name>`
+/** core/os's URL in the deployment scripts/os/preview.ts makes of this checkout for `--name <name>`
  *  (preview-config.ts `previewDeploymentName`: `<prefix>-<sha7>`). */
 function deploymentUrl(name: string) {
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });

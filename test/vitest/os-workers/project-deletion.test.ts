@@ -8,7 +8,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import { env } from "cloudflare:workers";
 import { errorCode } from "iterate/lib";
-import { CONTEXT_DESTROYED } from "../../../apps/os/src/context/paths.ts";
+import { CONTEXT_DESTROYED } from "../../../core/os/src/context/paths.ts";
 import {
   adminCredentials,
   controlPlane,

@@ -135,7 +135,7 @@ export function encodeDeviceConfiguration(
         value: configuration.iterate.projectId,
         maxBytes: projectIdMaxBytes,
         /* The project's minted id (`prj_<hex>`), held to the charset every projectId is
-         * (apps/os/src/context/paths.ts `PROJECT_ID`), as `configuration.c` holds it. */
+         * (core/os/src/context/paths.ts `PROJECT_ID`), as `configuration.c` holds it. */
         validate: (value) => /^[A-Za-z0-9_-]+$/.test(value),
       },
       {

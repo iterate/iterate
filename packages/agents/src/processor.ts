@@ -444,7 +444,7 @@ export class AgentProcessor extends StreamProcessor<AgentState, AgentEvent> {
 
       case "events.iterate.com/agent/context-added": {
         const { role, content, actor, llmRequestPolicy, llmRequestOffset } = event.payload;
-        // WHO SENT IT: another context's stamp (apps/os caller.ts `stampCaller`), else the sender
+        // WHO SENT IT: another context's stamp (core/os caller.ts `stampCaller`), else the sender
         // the collection relayed through this agent's own facet (`message`; its base is the
         // caller's to choose through the public `at(base)`, collection.ts). `/` is the people's
         // (the dash, a member's session, the root's collection): a person's words carry no sender.

@@ -765,10 +765,10 @@ export const runCli = async () => {
 
 /**
  * The deployment's MCP endpoint, proven to accept `token` by a `tools/list`, which the platform's
- * stateless handler (apps/os/src/mcp.ts) answers without an `initialize` first.
+ * stateless handler (core/os/src/mcp.ts) answers without an `initialize` first.
  *
  * Starts at `<osBaseUrl>/mcp`. A deployment with its own MCP origin answers there with a 308 to it
- * (apps/os/src/worker.ts: os.iterate.com/mcp → https://mcp.iterate.com/). The redirect is followed
+ * (core/os/src/worker.ts: os.iterate.com/mcp → https://mcp.iterate.com/). The redirect is followed
  * here, bearer kept, because fetch drops `Authorization` on a cross-origin redirect
  * (https://fetch.spec.whatwg.org/#http-redirect-fetch), which would read as a rejected bearer; the
  * returned URL is the final one, so Claude Code never meets the redirect.

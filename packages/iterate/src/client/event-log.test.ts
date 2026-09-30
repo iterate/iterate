@@ -1,5 +1,5 @@
 // client/event-log.test.ts — the log half of useIterateContext over a fake context whose
-// `readEvents` answers as apps/os stream.ts `read` does: at most `limit` rows (capped at 1000) and a
+// `readEvents` answers as core/os stream.ts `read` does: at most `limit` rows (capped at 1000) and a
 // byte budget (here: at most 300 rows a page), `atHead` once the scan ran out, `scannedThroughOffset`
 // the last row read or, at the head, the durable mark. Offsets have gaps, as a log whose ephemerals
 // took offsets has.

@@ -1,6 +1,6 @@
 // scripts/os/preview-packages.ts — A PREVIEW'S PACKAGES, SERVED BEFORE ANYTHING INSTALLS THEM. Every
 // project a preview seeds installs this repository's packages at the deployment's packages commit
-// (apps/os/scripts/published-package-commit.ts says which) through esm.sh. The push that starts
+// (core/os/scripts/published-package-commit.ts says which) through esm.sh. The push that starts
 // the preview deploy starts .github/workflows/pkg-pr-new.yml too, and pkg.pr.new serves the build
 // only once that run has published it, so the deploy (scripts/os/preview.ts) waits for it here
 // before it hands the deployment on.
@@ -41,7 +41,7 @@ export const AWAIT_PUBLISHED = { pollMs: 5_000, boundMs: 10 * 60_000 };
  * `https://pkg.pr.new/iterate/iterate/<package>@<commit>` every AWAIT_PUBLISHED.pollMs, asking
  * only for those not yet served, until each answers 200. A 404 is pkg.pr.new not serving it yet.
  * It asks pkg.pr.new and never esm.sh, through which the platform installs a project's pkg.pr.new
- * dependencies (apps/os/src/context/module-resolution.ts): esm.sh answers "tarball … not found"
+ * dependencies (core/os/src/context/module-resolution.ts): esm.sh answers "tarball … not found"
  * for a build asked for before pkg.pr.new serves it, and goes on answering that for a while after.
  *
  * Bounded and observable: one line per change of what pkg.pr.new answers, and one when it serves

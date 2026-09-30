@@ -40,20 +40,20 @@ const getCalleeName = (callee: any) => {
 function isAllowedRawDurableObjectBindingAccessFile(filename: string) {
   const path = filename.replaceAll("\\", "/");
 
-  if (!path.includes("/apps/os/src/")) return true;
-  if (path.includes("/apps/os/docs/")) return true;
+  if (!path.includes("/core/os/src/")) return true;
+  if (path.includes("/core/os/docs/")) return true;
   // iterate-context.ts is THE capability layer: the edge's context handle and
   // the ItxEntrypoint loaded code reaches its context through.
-  if (path.endsWith("/apps/os/src/iterate-context.ts")) return true;
+  if (path.endsWith("/core/os/src/iterate-context.ts")) return true;
   // The worker's edge entry points dial a context only after authorizing the caller:
   // project-host ingress (worker.ts), the MCP tool call (mcp.ts) and the OAuth
   // callback that lands a secret's tokens (secret-oauth-callback.ts).
-  if (path.endsWith("/apps/os/src/worker.ts")) return true;
-  if (path.endsWith("/apps/os/src/mcp.ts")) return true;
-  if (path.endsWith("/apps/os/src/secret-oauth-callback.ts")) return true;
+  if (path.endsWith("/core/os/src/worker.ts")) return true;
+  if (path.endsWith("/core/os/src/mcp.ts")) return true;
+  if (path.endsWith("/core/os/src/secret-oauth-callback.ts")) return true;
   // The integrations' callbacks and webhooks (src/integrations/): a project the catalog admits or a
   // signed state names, touched only after the signature or the member's session.
-  if (path.includes("/apps/os/src/integrations/")) return true;
+  if (path.includes("/core/os/src/integrations/")) return true;
 
   return (
     path.includes("/durable-objects/") ||

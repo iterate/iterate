@@ -6,7 +6,7 @@
 import { evictDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { expect, test } from "vitest";
-import { DurableObjectNameCodec } from "../../../apps/os/src/context/paths.ts";
+import { DurableObjectNameCodec } from "../../../core/os/src/context/paths.ts";
 import { adminCredentials, catalog, openSession, readLog, refused, stub } from "./support.ts";
 
 test("the sweep identifies a context by id and reads its log without waking it, refuses an id nothing was born at, and destroys only an orphan", async () => {

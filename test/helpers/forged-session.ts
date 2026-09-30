@@ -102,7 +102,7 @@ export async function mintIterateSession(input: { email: string; page: Page }) {
       timeout: 15_000,
     });
     // A sign-in the platform failed answers 303 back to the sign-in page, its error in the query
-    // (apps/os src/issuer-session.ts): the location is the failure's own words.
+    // (core/os src/issuer-session.ts): the location is the failure's own words.
     if (login.status() !== 302)
       throw new Error(
         `sign-in answered ${login.status()} to ${login.headers().location ?? "no location"}: ${await login.text()}`,
