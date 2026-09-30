@@ -19,9 +19,8 @@ export type DurableSubscriptionRow = {
 
 type Page = { offsets: number[]; scannedThroughOffset: number; atHead: boolean };
 
-// Targets resolve through live rules. One ladder for every durable row keeps a rule edit from
-// changing a persisted cursor's attempt bound: non-webhooks receive ten extra attempts and the
-// webhook four-hour retry cap.
+// Every durable target uses the same bounded ladder, so live rule edits cannot change the retry
+// policy for an admitted cursor.
 const durableDeliveryMaxAttempts = 25;
 
 type Deps = {
@@ -78,7 +77,7 @@ export class DurableSubscriptionDelivery {
   }
 
   push(rows: DurableSubscriptionRow[], events: StreamEvent[], configurationChanged: boolean): void {
-    if (configurationChanged) this.#reconcile(rows);
+    this.#reconcile(rows);
     for (const row of rows) {
       if (row.halted) continue;
       const relevant =
