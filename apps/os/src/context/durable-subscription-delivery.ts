@@ -53,8 +53,6 @@ export class DurableSubscriptionDelivery {
   readonly #deps: Deps;
   readonly #runners = new Map<string, DurableDeliveryProcessor>();
   readonly #wakeByRunner = new Map<string, number>();
-  /** A persisted pending attempt has no in-memory promise after a cold start. */
-  readonly #coldRecovery = new Set<string>();
   #swept = false;
 
   constructor(deps: Deps) {
@@ -97,12 +95,10 @@ export class DurableSubscriptionDelivery {
     let drove = false;
     for (const row of rows) {
       const key = keyOf(row);
-      this.#coldRecovery.delete(key);
       if (row.halted) continue;
       this.#runners.get(key)?.drive((work) => this.#deps.run(work));
       drove = true;
     }
-    this.#restoreWakes();
     return drove;
   }
 
@@ -113,7 +109,6 @@ export class DurableSubscriptionDelivery {
         runner[Symbol.dispose]();
         this.#runners.delete(key);
         this.#wakeByRunner.delete(key);
-        this.#coldRecovery.delete(key);
         this.#deps.storage.delete(`durable-delivery/${key}`);
         this.#deps.storage.delete(`durable-delivery-resumed/${key}`);
       }
@@ -129,13 +124,6 @@ export class DurableSubscriptionDelivery {
       const key = keyOf(row);
       let runner = this.#runners.get(key);
       if (!runner) {
-        const persisted = this.#deps.storage.get<DurableDeliveryCursor>(`durable-delivery/${key}`);
-        if (
-          persisted?.pending?.nextAttemptAtMs === undefined &&
-          (persisted?.pending ||
-            persisted?.fanOut?.pending.some((item) => item.nextAttemptAtMs === undefined))
-        )
-          this.#coldRecovery.add(key);
         runner = new DurableDeliveryProcessor({
           slug: key,
           consumes: row.consumes,
@@ -151,7 +139,7 @@ export class DurableSubscriptionDelivery {
         this.#runners.set(key, runner);
       }
       if (row.halted) {
-        this.#coldRecovery.delete(key);
+        this.#wakeByRunner.delete(key);
         runner.halt(
           row.halted.afterOffset,
           row.halted.attempts,
@@ -172,26 +160,8 @@ export class DurableSubscriptionDelivery {
         this.#deps.storage.put(`durable-delivery-resumed/${key}`, row.resumedAtOffset);
       }
     }
-    this.#restoreWakes();
   }
 
-  #restoreWakes() {
-    this.#wakeByRunner.clear();
-    for (const [key, runner] of this.#runners) {
-      const cursor = runner.snapshot();
-      if (cursor.halted) continue;
-      const fanout = cursor.fanOut?.pending.reduce<number | undefined>(
-        (at, item) =>
-          item.nextAttemptAtMs === undefined || (at !== undefined && at <= item.nextAttemptAtMs)
-            ? at
-            : item.nextAttemptAtMs,
-        undefined,
-      );
-      const at = cursor.pending?.nextAttemptAtMs ?? fanout;
-      if (this.#coldRecovery.has(key)) this.#wakeByRunner.set(key, Date.now());
-      else if (at !== undefined) this.#wakeByRunner.set(key, at);
-    }
-  }
 
   #runtime(row: DurableSubscriptionRow): DurableDeliveryRuntime {
     const key = keyOf(row);

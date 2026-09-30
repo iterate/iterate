@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { DurableSubscriptionDelivery } from "./durable-subscription-delivery.ts";
 
-test("a cold context derives an immediate retry from a persisted in-flight cursor", async () => {
+test("a cold context drives a persisted in-flight cursor from the context recovery alarm", async () => {
   const values = new Map<string, unknown>([
     [
       "durable-delivery/cold@1",
@@ -32,7 +32,6 @@ test("a cold context derives an immediate retry from a persisted in-flight curso
   });
 
   delivery.sync();
-  expect(delivery.deadline).toBeLessThanOrEqual(Date.now());
   expect(values.has("durable-delivery/orphan@1")).toBe(false);
 
   delivery.revive();
