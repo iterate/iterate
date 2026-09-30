@@ -226,6 +226,39 @@ test("a metadata read failure schedules a bounded wake without an attempt or ter
   expect(terminal).not.toHaveBeenCalled();
 });
 
+test("an unexpected fan-out cursor write retains a bounded recovery wake", async () => {
+  const values = new Map<string, unknown>();
+  let puts = 0;
+  const storage: EngineKv = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key, value) => {
+      if (++puts === 3) throw new Error("outcome write failed");
+      values.set(key, structuredClone(value));
+    },
+    delete: (key) => values.delete(key),
+  };
+  const wakes: number[] = [];
+  const processor = new DurableDeliveryProcessor({
+    slug: "fanout-cursor-write-failure",
+    consumes: ["work"],
+    fanOut: true,
+    runtime: {
+      storage,
+      read: async () => ({ offsets: [1], scannedThroughOffset: 1, atHead: true }),
+      deliver: async () => {},
+      deliverEphemeral: async () => {},
+      scheduleWake: async (at) => {
+        if (at !== null) wakes.push(at);
+      },
+      terminal: async () => {},
+    },
+  });
+  processor.drive((work) => void work().catch(() => {}));
+  await vi.waitFor(() => expect(wakes).toHaveLength(1));
+  expect(wakes[0]).toBeGreaterThan(Date.now());
+  expect(puts).toBe(3);
+});
+
 test("a persisted delivery error is capped at 1 KiB", async () => {
   const store = kv();
   const source = memoryStream();

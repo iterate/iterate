@@ -99,7 +99,14 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   await drive(fanOut(blocked), 1);
   await settle();
   expect(shared.values.get("durable-delivery/fan")).toMatchObject({
-    fanOut: { admittedThrough: 3, pending: [{ offset: 1 }, { offset: 2 }, { offset: 3 }] },
+    fanOut: {
+      admittedThrough: 3,
+      pending: [
+        { offset: 1, attempt: 1 },
+        { offset: 2, attempt: 1 },
+        { offset: 3, attempt: 1 },
+      ],
+    },
   });
 
   const replayed: number[] = [];
@@ -119,6 +126,87 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   expect(shared.values.get("durable-delivery/fan")).toMatchObject({
     fanOut: { admittedThrough: 3, pending: [] },
   });
+});
+
+test("a fan-out wave persists its claim and combined outcomes once each", async () => {
+  const source = memoryStream();
+  await source.stream.append(...Array.from({ length: 8 }, () => ({ type: "work" })));
+  const storage = kv();
+  const writes: unknown[] = [];
+  const put = storage.put.bind(storage);
+  storage.put = (key, value) => {
+    writes.push(structuredClone(value));
+    put(key, value);
+  };
+  const started: number[] = [];
+  const releases: (() => void)[] = [];
+  const processor = fanOut(
+    runtime(storage, source.stream.read, ({ offsets }) => {
+      started.push(offsets[0]!);
+      return new Promise<void>((resolve) => releases.push(resolve));
+    }),
+  );
+  await drive(processor, 1);
+  await vi.waitFor(() => expect(started).toHaveLength(8));
+  expect(writes).toHaveLength(2); // admission, then the whole wave's pre-call claim
+  for (const release of releases) release();
+  await vi.waitFor(() => expect(processor.snapshot()).toMatchObject({ fanOut: { pending: [] } }));
+  expect(writes).toHaveLength(3);
+});
+
+test("a resume fence discards a fan-out wave's late combined outcome", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" }, { type: "work" });
+  const storage = kv();
+  const releases: (() => void)[] = [];
+  const processor = fanOut(
+    runtime(storage, source.stream.read, () => new Promise<void>((resolve) => releases.push(resolve))),
+  );
+  await drive(processor, 1);
+  await vi.waitFor(() => expect(releases).toHaveLength(2));
+  expect(processor.resume(0, undefined, 99)).toBe(true);
+  for (const release of releases) release();
+  await settle();
+  expect(processor.snapshot()).toEqual({
+    confirmedOffset: 0,
+    fanOut: { admittedThrough: 0, pending: [] },
+  });
+});
+
+test("a fan-out wave combines success, busy, retry and terminal results", async () => {
+  const source = memoryStream();
+  await source.stream.append(...Array.from({ length: 4 }, () => ({ type: "work" })));
+  const host = runtime(kv(), source.stream.read, ({ offsets }) => {
+    if (offsets[0] === 2) throw codedError("UNAVAILABLE", "busy", { deliveryBusy: true });
+    if (offsets[0] === 3) throw new Error("retry");
+    if (offsets[0] === 4) throw codedError("PERMANENT_FAILURE", "terminal");
+  });
+  const processor = new DurableDeliveryProcessor({
+    slug: "fan",
+    consumes: ["work"],
+    fanOut: true,
+    retryDelayMs: () => 60_000,
+    runtime: host,
+  });
+  await drive(processor, 1);
+  await vi.waitFor(() =>
+    expect(processor.snapshot()).toMatchObject({
+      fanOut: {
+        pending: [
+          { offset: 2, attempt: 0 },
+          { offset: 3, attempt: 1, error: "retry" },
+          { offset: 4, attempt: 1, terminal: true, error: "terminal" },
+        ],
+      },
+    }),
+  );
+  expect(host.terminals).toEqual([]);
+  await drive(processor, 2);
+  await vi.waitFor(() =>
+    expect(host.terminals).toEqual([
+      expect.objectContaining({ afterOffset: 3, attempts: 1, error: "terminal", fanOut: true }),
+    ]),
+  );
 });
 
 test("the D10, E11, D12, E13, D14 model preserves the ephemeral position without persisting its body", async () => {
@@ -285,6 +373,33 @@ test("a long failed delivery message stays bounded through retry and halt", asyn
   expect(failed).toMatchObject({
     terminals: [expect.objectContaining({ error: "x".repeat(1024) })],
   });
+});
+
+test("fan-out cursor errors are UTF-8 bounded below one 2 MiB KV value", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const failed = runtime(kv(), source.stream.read, () => {
+    throw new Error("😀".repeat(1_000));
+  });
+  const processor = fanOut(failed);
+  await drive(processor, 1);
+  await settle();
+  const error = processor.snapshot().fanOut?.pending[0]?.error;
+  expect(error).toBeDefined();
+  expect(new TextEncoder().encode(error).byteLength).toBeLessThanOrEqual(1024);
+  const cursor = {
+    confirmedOffset: 0,
+    fanOut: {
+      admittedThrough: 1_000,
+      pending: Array.from({ length: 1_000 }, (_, index) => ({
+        offset: index + 1,
+        attempt: 15,
+        terminal: true,
+        error,
+      })),
+    },
+  };
+  expect(new TextEncoder().encode(JSON.stringify(cursor)).byteLength).toBeLessThan(2 * 1024 * 1024);
 });
 
 test("a resume seek replaces an in-flight ordered range", async () => {
