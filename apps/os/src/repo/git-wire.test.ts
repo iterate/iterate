@@ -133,9 +133,8 @@ test.for([
   );
 });
 
-// ── no answer ── a git request that gets no whole answer in 20 s counts as a lost connection: a read
-// is aborted, freeing its connection, and sent once more; a push fails. On prd on 2026-09-30 every
-// read of iterate's config repo went unanswered until the facet's 60 s watchdog restarted it.
+// ── no answer ── a request that gets no whole answer in time (`GIT_REQUEST_TIMEOUT_MS` in
+// ./git-wire.ts says why).
 
 test("a read that gets no answer in 20 s is aborted and sent once more", async () => {
   vi.useFakeTimers();

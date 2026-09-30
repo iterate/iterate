@@ -823,9 +823,8 @@ export function commitReaches(
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 /** How long one git request may go without its whole answer before it counts as a lost connection:
  *  a read is then sent once more, and a push fails. Artifacts answers a config repo's reads in well
- *  under a second. On prd on 2026-09-30, after the 08:03 UTC deploy, every read the iterate
- *  project's config repo facet sent got no answer at all, so each one held the facet until its
- *  60 s watchdog (context/facet-host.ts) restarted it, and iterate.com answered 500 for as long. */
+ *  under a second. A request that never answers would otherwise hold the repo facet until its 60 s
+ *  watchdog (context/facet-host.ts) restarts it, failing every call queued behind it. */
 const GIT_REQUEST_TIMEOUT_MS = 20_000;
 
 /** A git request that got no whole answer within `GIT_REQUEST_TIMEOUT_MS`: a lost connection. */
