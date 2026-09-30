@@ -7,8 +7,8 @@ size: small
 
 Status: built, awaiting CI and review. Every commit the platform makes is committed by `iterate`;
 a script's commit for someone is authored by them and ends with `Iterate-Run:` (and `Requested-by:`
-when it names another author); agents are told to write their own `Via:`. Left: the MCP e2e
-asserting the committer, once #3479 has moved the e2e suites.
+when it names another author); agents are told to write their own `Via:`. The MCP e2e (moved
+to test/ by #3479) asserts the committer and `Iterate-Run:` too.
 
 ## Why
 
@@ -49,7 +49,7 @@ committer and no trailers.
 - **Only `apps/os/src/repo/` changes in core**, plus the MCP instructions' text. A platform-verified
   client name needs it carried from the OAuth admission through the caller, the run request and
   the token (#3480): a core decision for another day.
-- **No e2e changes**: #3479 is moving the e2e suites to `test/`. The repo facet's own Node test
+- **No e2e changes at first**: #3479 was moving the e2e suites to `test/`. The repo facet's own Node test
   (src/repo/durable-object.test.ts, over the fake git remote) drives a commit under a real token.
   Once #3479 lands, the MCP e2e can assert the committer too.
 - **`Iterate-Run:` is `<path>@<offset>`, not a dash link**: the repo facet knows neither the
@@ -66,7 +66,7 @@ committer and no trailers.
 - [x] tests: the trailers helper; git-wire's committer round trip; the repo facet committing under
       a token (committer, author, trailers after an agent's `Via:`), naming another author
       (`Requested-by:`), and under none (committer only) _(repo/commit-attribution.test.ts, repo/durable-object.test.ts)_
-- [ ] once #3479 lands: the MCP e2e asserts an MCP script's commit is committed by `iterate` and names its run
+- [x] once #3479 lands: the MCP e2e asserts an MCP script's commit is committed by `iterate` and names its run _(test/vitest/os/mcp-project-root.e2e.test.ts, after merging main with #3479)_
 
 ## Implementation log
 
