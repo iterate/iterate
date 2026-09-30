@@ -13,6 +13,7 @@
 // disposable the caller registers with its `SessionTeardown`).
 
 import { RpcTarget as WorkersRpcTarget } from "cloudflare:workers";
+import { RpcStub as CapnwebRpcStub } from "capnweb";
 import {
   failureKind,
   RELAY_BURST,
@@ -480,16 +481,22 @@ export async function lendRpcStubOverPager(
   attachPager(pagerWebSocket);
   // capnweb's own death signal, registered ONCE: set the shared reason AND close the pager NOW so the
   // DO returns the stub immediately — without this the presence list lies until a page times out.
-  // `ClientRpcStub` types only `dup`; a capnweb stub also has `onRpcBroken`, and a stub without it
-  // (a test's fake) skips the registration.
-  (sessionRpcStub as { onRpcBroken?: (cb: () => void) => void }).onRpcBroken?.(() => {
-    lendEnded.reason = "went offline (its client session broke)";
-    try {
-      pagerWebSocket.close(1000, "client session broke");
-    } catch {
-      /* already closing */
-    }
-  });
+  // `ClientRpcStub` types only `dup`. A Cap'n Web stub owns `onRpcBroken`; a Workers-RPC callback
+  // proxy treats any unknown member as a remote method, so optional property access would create a
+  // rejected `onRpcBroken` call. Plain local fakes may own the hook for relay tests.
+  const onRpcBroken =
+    sessionRpcStub instanceof CapnwebRpcStub
+      ? sessionRpcStub.onRpcBroken.bind(sessionRpcStub)
+      : Object.getOwnPropertyDescriptor(sessionRpcStub, "onRpcBroken")?.value;
+  if (typeof onRpcBroken === "function")
+    onRpcBroken(() => {
+      lendEnded.reason = "went offline (its client session broke)";
+      try {
+        pagerWebSocket.close(1000, "client session broke");
+      } catch {
+        /* already closing */
+      }
+    });
   return {
     dispose: () => {
       disposeSessionRpcStub("was recalled by its lender");

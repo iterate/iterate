@@ -19,8 +19,8 @@
 //     name, so a row at `itx.rpcStubs` or `itx.facets` redirects nothing the platform relies on
 //   • an EXPRESSION handle's dispose removes the row it wrote (compare-and-set on the printed target);
 //     RED (`createFailing`): while the stream is paused the removal is refused and forgotten
-//   • a match may PIN literal args on a call step: `itx.llm.run('special')` beats `itx.llm.run`, the
-//     pinned args are consumed, a client's stub can sit behind a pinned match, un-set by that spelling
+//   • argument adaptation runs in confined worker code; the jailed adapter proof is
+//     __workers-tests__/rule-snapshots.test.ts
 //   • the table under concurrency: 5 re-sets of ONE match leave one row, the last committed; a
 //     NON-CANONICAL match is stored CANONICAL; the newest of 300 rules still rewrites (how fast is
 //     perf/rewrite-rules.perf.test.ts); malformed rule events are refused at the append boundary
@@ -96,7 +96,7 @@ test("a DENY: provide(match, null) at a built-in's name masks it; the built-in s
   );
   expect(await itx.kv.get("k")).toBe("v");
   expect(errorCode(await rejection(itx.kv.put("k", "w")))).toBe("NO_ITX_EXPRESSION_MATCH"); // the partial mask stands
-  // a pinned physical target under the root is a GRANT of exactly that call (the rewrite-rule reduce, stream/core-processor.ts): the row is
+  // a physical target under the root grants exactly that call (the rewrite-rule reduce, stream/core-processor.ts): the row is
   // stored — and re-opens the prefix the partial mask closed
   await itx.provide("itx.kv.put", "itx.builtins.kv.put");
   expect(await itx.rewriteRules.get("itx.kv.put")).toMatchObject({ target: "itx.builtins.kv.put" });
@@ -154,8 +154,7 @@ test("rewriteRules.list() under a bare row WITH a target still shows every impli
 
 // An EXPRESSION handle's undo is compare-and-set on the row's target: `#removeRuleInBackground`
 // (src/iterate-context.ts) removes the row only while its target is still the one this handle wrote —
-// spelled the way `rewriteRules.get` spells it (PRINTED, with holes), since the appended event carries
-// the PARSED form.
+// spelled the way `rewriteRules.get` prints it, since the appended event carries the parsed form.
 test("disposing an EXPRESSION provide handle removes the rule it wrote — the platform row beneath shows through again", async () => {
   const itx = openItx(freshCtx("expression-dispose"));
   const handle = await itx.provide("itx.kv", "itx.builtins.whoami");
@@ -170,18 +169,6 @@ test("disposing an EXPRESSION provide handle removes the rule it wrote — the p
       (await itx.rewriteRules.get("itx.kv"))?.target === "itx.builtins.kv" ? true : undefined,
     5_000,
   );
-});
-
-test("rewriteRules.get(match) canonicalizes the caller's spelling — whitespace, quotes, key order — before the lookup", async () => {
-  const itx = openItx(freshCtx("get-canonical"));
-  await itx.provide("itx.ai.run('x', {b:1, a:2})", "itx.builtins.whoami");
-  for (const spelling of [
-    "itx.ai.run('x',{a:2,b:1})",
-    'itx.ai.run("x", { b: 1, a: 2 })',
-    "itx.ai.run( 'x' , {b:1, a:2} )",
-  ])
-    expect((await itx.rewriteRules.get(spelling))?.target).toBe("itx.builtins.whoami");
-  expect(await itx.rewriteRules.get("not an expression at all")).toBeNull();
 });
 
 test("resolve(call) is the pure chain, and THE LAW holds: invoke(call) ≡ invoke(resolve(call).at(-1)); invoke(call, ...args) applies live args", async () => {
@@ -300,39 +287,6 @@ createFailing(test, /until\(the rule disposed while paused is gone after resume\
     );
   },
 );
-
-// ── a match with PINNED arguments (rules 1–3; `llm` is no built-in root, so nothing lies beneath these
-// rows — `itx.ai` would fall to its platform row): `itx.llm.run('special')` is a more specific rule
-// than `itx.llm.run`, matched by structural equality of the leading args and CONSUMED by the match
-// (partial application) — the target sees only the unpinned args ──
-
-test("itx.llm.run('special') rewrites past the plain itx.llm.run rule; pinned args are consumed; a client's rpc stub can sit behind a pinned match", async () => {
-  const ctx = freshCtx("pinned");
-  const itx = openItx(ctx);
-  await itx.provide("itx.llm.run", "itx.kv.get"); // the plain rule: itx.llm.run(k) → itx.kv.get(k)
-  await itx.provide("itx.llm.run('special')", "itx.whoami"); // pinned: itx.llm.run('special') → itx.whoami()
-  await itx.invoke("itx.kv.put('other', 'from-kv')");
-  expect(await itx.invoke("itx.llm.run('special')")).toMatchObject({ projectId: ctx });
-  expect(await itx.invoke("itx.llm.run('other')")).toBe("from-kv");
-  // a live capnweb value behind a pinned match — the pinned arg never reaches it
-  await itx.provide(
-    "itx.llm.run('live')",
-    (...unpinned: unknown[]) => `live:${JSON.stringify(unpinned)}`,
-  );
-  expect(await itx.invoke("itx.llm.run('live', 7)")).toBe("live:[7]");
-  // the table is a MAP keyed by the CANONICAL pinned spelling; each row carries the parsed match
-  const snap: any = await itx.invoke("itx.facets.get('core').snapshot()");
-  expect(Object.keys(snap.state.itxExpressionRewriteRules)).toEqual(
-    expect.arrayContaining(["itx.llm.run('special')", "itx.llm.run('live')"]),
-  );
-  expect(snap.state.itxExpressionRewriteRules["itx.llm.run('special')"]).toMatchObject({
-    match: ["itx", "llm", ["run", "special"]],
-  });
-  // un-setting by the canonical pinned spelling deletes exactly that rule; the plain rule (less specific,
-  // `pickItxExpressionRewriteRule`) matches the call from now on
-  await itx.provide("itx.llm.run('special')", null);
-  expect(await itx.invoke("itx.llm.run('special')")).toBeNull(); // the plain rule → kv.get('special') → null
-});
 
 // ── the table under stress ──
 

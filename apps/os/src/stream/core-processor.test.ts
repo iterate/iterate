@@ -967,16 +967,8 @@ test("builtins root: `null` at a built-in's name is KEPT as a mask row; `null` a
     }),
     at(3, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx.other", target: null }),
     at(4, "events.iterate.com/itx/rewrite-rule-configured", { match: "itx", target: null }),
-    at(5, "events.iterate.com/itx/rewrite-rule-configured", {
-      match: "itx.kv.get('a')",
-      target: null,
-    }),
   ]);
-  expect(Object.keys(masked.itxExpressionRewriteRules).sort()).toEqual([
-    "itx",
-    "itx.kv",
-    "itx.kv.get('a')",
-  ]);
+  expect(Object.keys(masked.itxExpressionRewriteRules).sort()).toEqual(["itx", "itx.kv"]);
   expect(masked.itxExpressionRewriteRules["itx.kv"]).toEqual({
     match: ["itx", "kv"],
     target: null,
@@ -1027,19 +1019,6 @@ test("builtins root: the platform-equivalent target `itx.builtins.<match…>` DE
       state: s,
     }),
   ).toBeUndefined();
-  // a PINNED match's physical target is NOT the implicit row it sits under (`itx.ai`): it is a
-  // grant of exactly that call and is STORED — what re-opens a prefix beneath a mask
-  const pinned = reduceAll([
-    at(1, "events.iterate.com/itx/rewrite-rule-configured", {
-      match: "itx.ai.run('gpt-5')",
-      target: "itx.fake",
-    }),
-    at(2, "events.iterate.com/itx/rewrite-rule-configured", {
-      match: "itx.ai.run('gpt-5')",
-      target: "itx.builtins.ai.run('gpt-5')",
-    }),
-  ]);
-  expect(Object.keys(pinned.itxExpressionRewriteRules)).toEqual(["itx.ai.run('gpt-5')"]);
 });
 
 test("builtins root: hosting is decided on the RESOLVED target (any spelling, a worker's name); the source is elided", () => {
@@ -1287,7 +1266,7 @@ test("a platform-equivalent target beneath a broader mask re-opens exactly that 
 
 // ── subscriptions ── the subscriptions table's one COMMAND (a literal `subscription-configured` event, normalized at the append boundary by `normalizeControlEvent`)
 // BUILDS the event the caller appends — a configure, a replace, or (target null) a removal; a refusal
-// (a dotted name, the reserved `core`, a target not rooted at itx) THROWS on append, nothing
+// (a dotted name, the reserved `core` or `subscriptions`, a target not rooted at itx) THROWS on append, nothing
 // appended. A subscription is PURE DATA — a name, a target expression stored in its parsed form,
 // an optional `consumes` filter; nothing here knows HOW a target is served (subscription-delivery.ts
 // decides that by evaluating it). The rows THEMSELVES are `core` state, read here from the real
@@ -1465,7 +1444,7 @@ test("configure: the target must be rooted at `itx` (a bare built-in root is uns
   expect(events).toHaveLength(0);
 });
 
-test("configure: a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.prototype and never `core` — a dotted, spaced, `__proto__`, `constructor` or `core` name is refused on append, nothing appended", () => {
+test("configure: a name is ONE segment, never a prototype key, `core`, or `subscriptions` — a dotted, spaced, `__proto__`, `constructor`, `core`, or `subscriptions` name is refused on append, nothing appended", () => {
   const { configure, events } = setup();
   expect(() => configure({ name: "a.b", target: "itx.whoami", delivery: "durable" })).toThrow(
     /one segment/,
@@ -1487,10 +1466,21 @@ test("configure: a name is ONE segment, [A-Za-z0-9_-]+, never a key of Object.pr
     /reserved/,
   );
   expect(() => configure({ name: "core", target: null })).toThrow(/reserved/);
+  expect(() =>
+    configure({ name: "subscriptions", target: "itx.whoami", delivery: "durable" }),
+  ).toThrow(/reserved/);
+  expect(() => configure({ name: "subscriptions", target: null })).toThrow(/reserved/);
+  expect(() =>
+    configure({
+      name: "attacker",
+      target: "itx.builtins.facets.get('subscriptions').processEventBatch",
+      delivery: "processor",
+    }),
+  ).toThrow(/private to durable delivery/);
   expect(events).toHaveLength(0);
 });
 
-test("configure: the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed) and the row reduces to it — so the reserved literal `{ '@': true }` is DATA here (the markers belong to a rule's target only)", () => {
+test("configure: the stored target IS the parsed form: an array target is stored as given (shape-checked, never printed); `{ '@': true }` is ordinary call data", () => {
   const { configure, rows } = setup();
   const targets: ItxExpression[] = [
     ["itx", "facets", ["get", { "a b": 1e21 }], "processEventBatch"],
@@ -1528,12 +1518,10 @@ test("rule 8 at a child: `null` at a name a stored SHORTER row with a target wou
     atChild(1, { match: "itx", target: "itx.builtins.cd('/')" }),
     atChild(2, { match: "itx.tool", target: null }),
     atChild(3, { match: "itx.repos", target: "itx.builtins.cd('/').repos" }),
-    atChild(4, { match: "itx.repos.get('secret')", target: null }),
   ]);
   expect(Object.keys(linked.itxExpressionRewriteRules).sort()).toEqual([
     "itx",
     "itx.repos",
-    "itx.repos.get('secret')",
     "itx.tool",
   ]);
   expect(linked.itxExpressionRewriteRules["itx.tool"]).toMatchObject({ target: null });

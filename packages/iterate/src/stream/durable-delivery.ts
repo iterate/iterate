@@ -59,7 +59,6 @@ export type DurableDeliveryRuntime = {
   }>;
   /** Resolve and invoke the stored subscribe target afresh under Caller.delivery. */
   deliver(input: {
-    target: unknown;
     events: StreamEvent[];
     range: ScannedRange;
     /** Resume control identity captured before this call began. */
@@ -82,7 +81,6 @@ export type DurableDeliveryRuntime = {
 
 export type DurableDeliveryOptions = {
   slug: string;
-  target: unknown;
   /** Omitted has the normal subscription meaning: every durable event. */
   consumes?: readonly string[];
   runtime: DurableDeliveryRuntime;
@@ -102,6 +100,31 @@ export type DurableDeliveryOptions = {
 const pageLimit = 100;
 const defaultCallDeadlineMs = 20_000;
 const ephemeralQueueBudgetChars = 8 * 1024 * 1024;
+
+// A native target already has this row's body. Do not spend a delivery attempt, but avoid turning
+// a wedged target into a hot alarm loop while its native completion wake is unavailable.
+const busyRetryDelayMs = 1_000;
+const deliveryBusy = (error: unknown): boolean =>
+  errorCode(error) === "UNAVAILABLE" &&
+  typeof error === "object" &&
+  !!error &&
+  "data" in error &&
+  typeof (error as { data?: unknown }).data === "object" &&
+  (error as { data?: { deliveryBusy?: unknown } }).data?.deliveryBusy === true;
+
+/** A resume fact can reach the context while the old facet invocation is in flight. The context
+ * fences that invocation with this private marker; it is neither a target failure nor an attempt. */
+const staleResume = (error: unknown, resumeAtOffset: number | undefined): boolean => {
+  if (errorCode(error) !== "GONE" || typeof error !== "object" || !error || !("data" in error))
+    return false;
+  const data = (error as { data?: unknown }).data;
+  return (
+    typeof data === "object" &&
+    !!data &&
+    "resumeAtOffset" in data &&
+    (data as { resumeAtOffset?: unknown }).resumeAtOffset !== resumeAtOffset
+  );
+};
 
 const permanentFailure = (error: unknown): boolean =>
   [
@@ -133,7 +156,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     resumeAtOffset: number | undefined;
   }[] = [];
   #ephemeralQueueChars = 0;
-  #ephemeralDrainRequested = false;
 
   constructor(options: DurableDeliveryOptions) {
     super();
@@ -168,14 +190,11 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
       args.event?.ephemeral &&
       consumesEvent(this.#options.consumes, args.event)
     )
-      this.#queueEphemeral(args.event, args.runInBackground);
+      this.#queueEphemeral(args.event);
     this.#requestDrain(args.runInBackground);
   }
 
-  #queueEphemeral(
-    event: StreamEvent,
-    runInBackground: (work: () => Promise<unknown>) => void,
-  ): void {
+  #queueEphemeral(event: StreamEvent): void {
     const chars = JSON.stringify(event).length;
     // Ephemerals are best effort, but queued bodies must share one facet-wide budget. Drop oldest
     // local bodies first so a busy row keeps the newest push and returns its reservation promptly.
@@ -200,29 +219,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     }
     this.#ephemeralQueue.push({ event, chars, lease, resumeAtOffset: this.#resumeAtOffset });
     this.#ephemeralQueueChars += chars;
-    if (this.#ephemeralDrainRequested) return;
-    this.#ephemeralDrainRequested = true;
-    runInBackground(async () => {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      try {
-        while (this.#ephemeralQueue.length > 0) {
-          const pending = this.#ephemeralQueue.shift()!;
-          this.#ephemeralQueueChars -= pending.chars;
-          try {
-            await this.#deliverWithinDeadline({
-              target: this.#options.target,
-              events: [pending.event],
-              range: { after: pending.event.offset - 1, through: pending.event.offset },
-              resumeAtOffset: pending.resumeAtOffset,
-            });
-          } finally {
-            pending.lease[Symbol.dispose]();
-          }
-        }
-      } finally {
-        this.#ephemeralDrainRequested = false;
-      }
-    });
   }
 
   #discardOldestEphemeral(): void {
@@ -314,8 +310,16 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
 
   async #drain(): Promise<void> {
     if (this.#options.fanOut) return await this.#drainFanOut();
+    await this.#drainEphemerals();
     for (;;) {
       let cursor = this.#cursor();
+      let admitted:
+        | {
+            pending: NonNullable<DurableDeliveryCursor["pending"]>;
+            page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
+            events: StreamEvent[];
+          }
+        | undefined;
       if (cursor.halted) {
         if (cursor.halted.terminalReported) return;
         const stamp = this.#stamp();
@@ -350,6 +354,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
       if (!cursor.pending) {
         const stamp = this.#stamp();
         const page = await this.#options.runtime.read(cursor.confirmedOffset, pageLimit);
+        let retainPage = false;
         try {
           if (!this.#isCurrent(stamp)) return;
           cursor = this.#cursor();
@@ -365,28 +370,37 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
             this.#putCursor({ confirmedOffset: page.scannedThroughOffset });
             continue;
           }
+          const pending = {
+            after: cursor.confirmedOffset,
+            through: page.scannedThroughOffset,
+            attempt: 0,
+            resumeAtOffset: stamp.resumeAtOffset,
+          };
           cursor = {
             ...cursor,
-            pending: {
-              after: cursor.confirmedOffset,
-              through: page.scannedThroughOffset,
-              attempt: 0,
-              resumeAtOffset: stamp.resumeAtOffset,
-            },
+            pending,
           };
           this.#putCursor(cursor);
+          // The admission read is already the source proof for the first call. Keep its lease
+          // through that call; retries re-read the durable source as before.
+          admitted = { pending, page, events };
+          retainPage = true;
         } finally {
-          page[Symbol.dispose]?.();
+          if (!retainPage) page[Symbol.dispose]?.();
         }
       }
       const pending = cursor.pending!;
       const stamp = this.#stamp();
-      const page = await this.#options.runtime.read(pending.after, pageLimit);
+      const page = admitted
+        ? admitted.page
+        : await this.#options.runtime.read(pending.after, pageLimit);
       try {
         if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, pending.attempt)) return;
-        const events = page.events
-          .filter((event) => event.offset <= pending.through)
-          .filter((event) => !event.ephemeral && consumesEvent(this.#options.consumes, event));
+        const events = admitted
+          ? admitted.events
+          : page.events
+              .filter((event) => event.offset <= pending.through)
+              .filter((event) => !event.ephemeral && consumesEvent(this.#options.consumes, event));
         // Only selected bodies cross the target call; release skipped page bodies before it awaits.
         page.events.length = 0;
         const attempt = pending.attempt + 1;
@@ -401,7 +415,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
         });
         try {
           await this.#deliverWithinDeadline({
-            target: this.#options.target,
             events,
             range: { after: pending.after, through: pending.through },
             resumeAtOffset: stamp.resumeAtOffset,
@@ -411,6 +424,22 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
           this.#putCursor({ confirmedOffset: pending.through });
         } catch (error) {
           if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
+          // The host has an equivalent target call in flight. It has not accepted
+          // this attempt, so retain the prior attempt count and try after the
+          // short native admission delay.
+          if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
+            const nextAttemptAtMs = Date.now() + busyRetryDelayMs;
+            this.#putCursor({
+              ...this.#cursor(),
+              pending: {
+                ...pending,
+                nextAttemptAtMs,
+                resumeAtOffset: stamp.resumeAtOffset,
+              },
+            });
+            await this.#options.runtime.scheduleWake(nextAttemptAtMs);
+            return;
+          }
           const message = error instanceof Error ? error.message : String(error);
           if (permanentFailure(error) || attempt >= this.#options.maxAttempts) {
             const halted = {
@@ -464,6 +493,30 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
         }
       } finally {
         page[Symbol.dispose]?.();
+      }
+    }
+  }
+
+  async #drainEphemerals(): Promise<void> {
+    while (this.#ephemeralQueue.length > 0) {
+      const pending = this.#ephemeralQueue.shift()!;
+      this.#ephemeralQueueChars -= pending.chars;
+      try {
+        await this.#deliverWithinDeadline({
+          events: [pending.event],
+          range: { after: pending.event.offset - 1, through: pending.event.offset },
+          resumeAtOffset: pending.resumeAtOffset,
+        });
+      } catch (error) {
+        // An ephemeral has no recoverable source body. Its loss is best effort, but remains
+        // observable instead of retaining an unbounded retry record in this facet.
+        console.warn({
+          event: "durable-delivery.ephemeral-failed",
+          slug: this.#options.slug,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        pending.lease[Symbol.dispose]();
       }
     }
   }
@@ -579,7 +632,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
       this.#putCursor({ ...cursor, fanOut });
       try {
         await this.#deliverWithinDeadline({
-          target: this.#options.target,
           events: [event],
           range: { after: current.offset - 1, through: current.offset },
           resumeAtOffset: stamp.resumeAtOffset,
@@ -607,15 +659,21 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
             candidate.resumeAtOffset === stamp.resumeAtOffset,
         );
         if (!fanOut || !current) return;
-        current.error = error instanceof Error ? error.message : String(error);
-        if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts)
-          current.terminal = true;
-        else
-          current.nextAttemptAtMs =
-            Date.now() +
-            (this.#options.retryDelayMs || ((n) => Math.min(1_000 * 2 ** (n - 1), 30 * 60_000)))(
-              current.attempt,
-            );
+        if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
+          current.attempt = attempt - 1;
+          current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
+          current.error = undefined;
+        } else {
+          current.error = error instanceof Error ? error.message : String(error);
+          if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts)
+            current.terminal = true;
+          else
+            current.nextAttemptAtMs =
+              Date.now() +
+              (this.#options.retryDelayMs || ((n) => Math.min(1_000 * 2 ** (n - 1), 30 * 60_000)))(
+                current.attempt,
+              );
+        }
       }
       if (this.#isCurrent(stamp) && fanOut && current)
         this.#putCursor({ ...this.#cursor(), fanOut });
@@ -629,8 +687,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   }
 
   #isCurrent(stamp: { generation: number; resumeAtOffset: number | undefined }): boolean {
-    // `undefined` is the pre-resume generation; it must not compare equal to a later numeric fence.
-    // oxlint-disable-next-line iterate/simple-truthiness-check
     return this.#generation === stamp.generation && this.#resumeAtOffset === stamp.resumeAtOffset;
   }
 
@@ -668,7 +724,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     try {
       await Promise.race([deliver, deadline]);
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   }
 }

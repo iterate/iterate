@@ -108,9 +108,9 @@ test("a pre-v18 core row refuses normal access yet remains sweepable and destroy
   });
   await evictDurableObject(s);
   await runInDurableObject(s, async (instance) => {
-    // Observe the latched refusal inside the native actor call rather than leaving a rejected
-    // loopback RPC promise for workerd's test harness to report after this assertion settles.
-    expect(() => instance.read(0)).toThrow(/cannot be reconstructed.*recreate the context/);
+    // Workerd exposes even in-actor DO entry points as native RPC promises; await the refusal so
+    // its expected INVALID_INPUT is not reported later as an unhandled test rejection.
+    await expect(instance.read(0)).rejects.toThrow(/cannot be reconstructed.*recreate the context/);
     expect(instance.readForSweep(0).events).toContainEqual(
       expect.objectContaining({
         offset: seed.offset,
@@ -156,7 +156,7 @@ test("the private durable-subscription bridge accepts no target, event, caller o
   const context = "prj_do_delivery_bridge";
   await stub(context).append({
     type: "events.iterate.com/itx/subscription-configured",
-    payload: { name: "sink", target: "itx.builtins.platformHook", delivery: "durable" },
+    payload: { name: "sink", target: "itx.whoami", delivery: "durable", consumes: ["never"] },
   });
   await runInDurableObject(stub(context), async (instance) => {
     await expect(
@@ -190,21 +190,20 @@ test("a durable alias ending in a hosted processor method preserves the constrai
       target: ["itx", "facets", ["get", "project"], "processEventBatch"],
     },
   });
-  const [configured] = (await s.append({
+  await s.append({
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "aliased", target: "itx.alias", delivery: "durable", consumes: ["mark"] },
-  })) as unknown as [{ offset: number }];
+  });
   const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
-  const event = (await s.read(mark.offset - 1, 1)).events.find(
-    ({ offset }) => offset === mark.offset,
-  )!;
-  await runInDurableObject(s, (instance) =>
-    instance.deliverConfiguredSubscription({
-      name: "aliased",
-      configuredAtOffset: configured.offset,
-      range: { after: mark.offset - 1, through: mark.offset },
-      events: [event],
-    }),
+  await until(
+    "the aliased hosted processor receives its durable batch through the platform route",
+    async () => {
+      const rows = (await s.invoke("itx.subscriptions.list()")) as Array<{
+        name: string;
+        cursor?: { confirmedOffset: number };
+      }>;
+      return rows.find((row) => row.name === "aliased")?.cursor?.confirmedOffset === mark.offset;
+    },
   );
   await releasePins(context);
 });
@@ -216,7 +215,7 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "fanout",
-      target: "itx.builtins.platformHook.deliverEvent",
+      target: "itx.platformHook.deliverEvent",
       delivery: "durable",
       ordered: false,
       consumes: ["mark"],
@@ -241,7 +240,9 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
       fanOut: true,
     });
   });
-  const receipts = (await s.read(0)).events.filter(
+  // Raw `read()` and `invoke()` carry event payloads as `unknown`, so Workers-RPC correctly
+  // types their unbounded result as `never`. `readLog` is the suite's explicit wire boundary.
+  const receipts = (await readLog(context)).filter(
     (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
   );
   expect(receipts).toHaveLength(1);
@@ -249,7 +250,7 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
     payload: { name: "fanout", offset: mark.offset, attempts: 15, error: "receiver refused" },
   });
   expect(
-    (await s.invoke("itx.subscriptions.list()")).find(
+    ((await s.invoke("itx.subscriptions.list()")) as Array<{ name: string }>).find(
       (row: { name: string }) => row.name === "fanout",
     ),
   ).not.toHaveProperty("halted");
@@ -271,9 +272,12 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
     ),
   ).rejects.toMatchObject({ code: "GONE" });
   expect(
-    (await s.invoke("itx.subscriptions.list()")).find(
-      (row: { name: string }) => row.name === "fanout",
-    ),
+    (
+      (await s.invoke("itx.subscriptions.list()")) as Array<{
+        name: string;
+        configuredAtOffset: number;
+      }>
+    ).find((row: { name: string }) => row.name === "fanout"),
   ).toMatchObject({ configuredAtOffset: replacement.offset });
 
   await s.append({
@@ -320,58 +324,64 @@ test("an ordered terminal receipt lands outside the control boundary and a resum
   })) as unknown as [{ offset: number }];
   await terminal(resumed.offset);
   expect(
-    (await s.read(0)).events.filter(
+    (await readLog(context)).filter(
       (event) => event.type === "events.iterate.com/itx/subscription-delivery-halted",
     ),
   ).toHaveLength(2);
   expect(
-    (await s.invoke("itx.subscriptions.list()")).find(
-      (row: { name: string }) => row.name === "ordered",
-    ),
+    (
+      (await s.invoke("itx.subscriptions.list()")) as Array<{
+        name: string;
+        halted?: { afterOffset: number; attempts: number };
+      }>
+    ).find((row: { name: string }) => row.name === "ordered"),
   ).toMatchObject({
     halted: { afterOffset: mark.offset - 1, attempts: 15 },
   });
   await releasePins(context);
 });
 
-test("a resumed durable row accepts its new resume generation through the private bridge", async () => {
+test("a halted durable row resumes through the runner under its new resume generation", async () => {
   const context = "prj_do_subscription_resume_bridge";
   const s = stub(context);
   const [configured] = (await s.append({
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "ordered",
-      target: "itx.builtins.platformHook.deliverEvent",
+      target: "itx.whoami",
       delivery: "durable",
       consumes: ["mark"],
     },
   })) as unknown as [{ offset: number }];
-  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  const [first] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await until("the first durable delivery is confirmed", async () => {
+    const rows = (await s.invoke("itx.subscriptions.list()")) as Array<{
+      name: string;
+      cursor?: { confirmedOffset: number };
+    }>;
+    return rows.find((row) => row.name === "ordered")?.cursor?.confirmedOffset === first.offset;
+  });
   await runInDurableObject(s, (instance) =>
     instance.recordConfiguredSubscriptionTerminal({
       name: "ordered",
       configuredAtOffset: configured.offset,
-      afterOffset: mark.offset - 1,
+      afterOffset: first.offset - 1,
       attempts: 25,
       error: "test halt",
     }),
   );
-  const [resumed] = (await s.append({
+  await s.append({
     type: "events.iterate.com/itx/subscription-delivery-resumed",
-    payload: { name: "ordered", afterOffset: mark.offset - 1 },
-  })) as unknown as [{ offset: number }];
-  const event = (await s.read(mark.offset - 1, 1)).events.find(
-    ({ offset }) => offset === mark.offset,
-  )!;
-  await runInDurableObject(s, (instance) =>
-    instance.deliverConfiguredSubscription({
-      name: "ordered",
-      configuredAtOffset: configured.offset,
-      resumeAtOffset: resumed.offset,
-      range: { after: mark.offset - 1, through: mark.offset },
-      events: [event],
-    }),
-  );
+    payload: { name: "ordered", afterOffset: first.offset },
+  });
+  const [second] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await until("the resumed generation confirms a later durable delivery", async () => {
+    const rows = (await s.invoke("itx.subscriptions.list()")) as Array<{
+      name: string;
+      cursor?: { confirmedOffset: number };
+    }>;
+    return rows.find((row) => row.name === "ordered")?.cursor?.confirmedOffset === second.offset;
+  });
   await releasePins(context);
 });
 
@@ -386,7 +396,7 @@ test("the private subscriptions facet owns ordered and fan-out durable progress"
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
       name: "fanout",
-      target: "itx.builtins.platformHook.deliverEvent",
+      target: "itx.platformHook.deliverEvent",
       delivery: "durable",
       ordered: false,
       consumes: ["mark"],

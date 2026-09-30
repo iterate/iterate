@@ -53,7 +53,7 @@ test("a malformed pager header is a 400; a well-formed one attaches the pager AN
 
   const ok = await openPager(ctx, "itx.k1", [ruleFor("itx.k1")]);
   expect(ok).toMatchObject({ status: 101 });
-  ok.webSocket!.accept();
+  await ok.webSocket!.accept();
   // The pager is attached, the key is present, and its rule exists — nothing else was called.
   expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k1"]);
@@ -132,7 +132,9 @@ test("loaded code cannot lend over reserved itx.config or through a jailed itx.a
       const { exports } = state as unknown as {
         exports: {
           ItxEntrypoint(opts: { props: { iterateContextName: string; platformOrigin: null } }): {
-            get(): { provide(name: string, target: RpcTarget): Promise<unknown> };
+            get(): {
+              provide(name: string, target: () => Promise<void>): Promise<unknown>;
+            };
           };
         };
       };
@@ -145,8 +147,8 @@ test("loaded code cannot lend over reserved itx.config or through a jailed itx.a
             },
           })
           .get()
-          // The admission check must refuse before the live target is duplicated or lent.
-          .provide(match, null as unknown as RpcTarget)
+          // The admission check must refuse before this callback is duplicated or lent.
+          .provide(match, async () => undefined)
       );
     });
 
@@ -164,6 +166,51 @@ test("loaded code cannot lend over reserved itx.config or through a jailed itx.a
   expect(await readLog(ctx)).toEqual(before);
 });
 
+test("loaded code projects both its live provide and callback subscription through pager attachments", async () => {
+  const ctx = "prj_pager_loaded_live_attachments";
+  const delivered: unknown[] = [];
+  const handles = await runInDurableObject(stub(ctx), (_instance, state) => {
+    const { exports } = state as unknown as {
+      exports: {
+        ItxEntrypoint(opts: { props: { iterateContextName: string; platformOrigin: null } }): {
+          get(): {
+            provide(name: string, target: RpcTarget): Promise<Disposable>;
+            subscribe(input: {
+              name: string;
+              target: (events: unknown[], range: unknown) => Promise<void>;
+              consumes: string[];
+            }): Promise<Disposable>;
+          };
+        };
+      };
+    };
+    const itx = exports
+      .ItxEntrypoint({
+        props: { iterateContextName: DurableObjectNameCodec.parse(ctx).name, platformOrigin: null },
+      })
+      .get();
+    return Promise.all([
+      itx.provide("itx.loaded", new Echo(11)),
+      itx.subscribe({
+        name: "loaded-callback",
+        target: async (events, range) => {
+          delivered.push([events, range]);
+        },
+        consumes: ["test/loaded"],
+      }),
+    ]);
+  });
+  try {
+    expect(await stub(ctx).invoke("itx.loaded.echo('hello')")).toBe("echo-11:hello");
+    expect(await subscriptionNames(ctx)).toContain("loaded-callback");
+    await stub(ctx).append({ type: "test/loaded" });
+    await until("the loaded callback receives its event", () => delivered.length > 0);
+    expect(JSON.stringify(delivered)).toContain("test/loaded");
+  } finally {
+    for (const handle of handles) handle[Symbol.dispose]();
+  }
+});
+
 test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, and leaves no socket, no presence, no rule; after resume the same attach lands", async () => {
   const ctx = "prj_pager_attach_refused";
   const s = stub(ctx);
@@ -171,7 +218,7 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
 
   const refused = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
   expect(refused).toMatchObject({ status: 101 });
-  refused.webSocket!.accept();
+  await refused.webSocket!.accept();
   // Pager attachment is physical state, independent of whether the event log is paused.
   expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k2"]);
@@ -179,7 +226,7 @@ test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, 
   await s.append({ type: "events.iterate.com/itx/resumed" });
   const ok = await openPager(ctx, "itx.k2", [ruleFor("itx.k2")]);
   expect(ok).toMatchObject({ status: 101 });
-  ok.webSocket!.accept();
+  await ok.webSocket!.accept();
   expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1 });
   expect(await presence(ctx)).toEqual(["itx.k2"]);
   expect((await ruleAt(ctx, "itx.k2"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k2')");
@@ -202,7 +249,7 @@ test("a stub whose last pager closes DURING a pause keeps its rule (the un-set a
   const s = stub(ctx);
   const pager = await openPager(ctx, "itx.k5", [ruleFor("itx.k5")]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
   expect((await ruleAt(ctx, "itx.k5"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k5')");
 
   await s.append({ type: "events.iterate.com/itx/paused", payload: { reason: "test" } });
@@ -216,7 +263,7 @@ test("a DO reset takes a live callback's pager with no close run: the woken inca
   const ctx = "prj_pager_reset_unset";
   const pager = await openPager(ctx, "subscription:live", [liveSubscription("live")]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
   expect(await subscriptionNames(ctx)).toContain("live");
 
   // abort() kills the request running the callback and every hibernatable socket with it, and no
@@ -238,7 +285,7 @@ test("a HIBERNATED DO whose pager rode the eviction keeps the row on wake, and t
   const delivered: unknown[] = [];
   const pager = await openPager(ctx, rpcStubKey, [liveSubscription("kept", ["test/kept"])]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
   pager.webSocket!.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data === "string" && event.data.includes('"page"'))
       void s.lendRpcStub({ rpcStubKey, stub: new LentRecorder(delivered) as never });
@@ -276,7 +323,7 @@ test("append REFUSES a rule match rooted at itx.builtins (the reserved fixed poi
   // and a real rule's own un-set sweep is untouched: the pager's last close un-sets itx.k7's row.
   const pager = await openPager(ctx, "itx.k7", [ruleFor("itx.k7")]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
   expect((await ruleAt(ctx, "itx.k7"))?.target).toBe("itx.builtins.rpcStubs.get('itx.k7')");
   pager.webSocket!.close(1000, "last pager");
   await until("itx.k7's own rule is un-set", async () => (await ruleAt(ctx, "itx.k7")) === null);
@@ -290,7 +337,7 @@ test("a lender's session that dies with no route delete (kill -9, a lid closed):
     headers: { Upgrade: "websocket" },
   });
   const lenderSocket = upgrade.webSocket!;
-  lenderSocket.accept();
+  await lenderSocket.accept();
   const lender = newWebSocketRpcSession(lenderSocket as unknown as WebSocket) as any;
   const lenderItx = await lender.authenticate(adminCredentials()).projects.get(ctx);
   await lenderItx.provide("itx.tunnels.gone", new Echo(1), {
@@ -318,7 +365,7 @@ test("a DO reset takes a tunnel's pager with no close run: the woken incarnation
     routeTo("tunnel-reset", "itx.tunnels.reset"),
   ]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
   expect(await fetchRouteNames(ctx)).toEqual(["tunnel-reset"]);
 
   await runInDurableObject(stub(ctx), (_instance, state) => {
@@ -403,7 +450,7 @@ test("a HIBERNATED DO whose tunnel pager rode the eviction keeps the fetch route
     routeTo("tunnel-kept", "itx.tunnels.kept"),
   ]);
   expect(pager).toMatchObject({ status: 101 });
-  pager.webSocket!.accept();
+  await pager.webSocket!.accept();
 
   await releasePins(ctx);
   await evictDurableObject(s);
@@ -432,7 +479,7 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
   // out, the one a client reconnects to replace.
   let pagesSeenByFirstPager = 0;
   const first = await openPager(ctx, rpcStubKey);
-  first.webSocket!.accept();
+  await first.webSocket!.accept();
   first.webSocket!.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data === "string" && event.data.includes('"page"')) pagesSeenByFirstPager++;
   });
@@ -451,7 +498,7 @@ test("a pager RECONNECT while a page is in flight is a reconnect, not a close: t
   // THE RECONNECT: the client re-provides at the same key from a fresh relay. Its pager attaches
   // (the DO drops pager #1 as "replaced") and it answers pages with a lend, like any relay.
   const second = await openPager(ctx, rpcStubKey);
-  second.webSocket!.accept();
+  await second.webSocket!.accept();
   second.webSocket!.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data === "string" && event.data.includes('"page"'))
       void s.lendRpcStub({ rpcStubKey, stub: new LentAnswer("reconnected") as never });
@@ -477,7 +524,7 @@ test("a pager replaced while its stub is borrowed gives the stub back: the next 
     s.invoke(["itx", "rpcStubs", ["get", rpcStubKey], ["echo", arg]]) as Promise<string>;
 
   const first = await openPager(ctx, rpcStubKey);
-  first.webSocket!.accept();
+  await first.webSocket!.accept();
   first.webSocket!.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data === "string" && event.data.includes('"page"'))
       void s.lendRpcStub({ rpcStubKey, stub: new LentAnswer("first") as never });
@@ -486,7 +533,7 @@ test("a pager replaced while its stub is borrowed gives the stub back: the next 
   expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 1, borrowedRpcStubs: 1 });
 
   const second = await openPager(ctx, rpcStubKey);
-  second.webSocket!.accept();
+  await second.webSocket!.accept();
   second.webSocket!.addEventListener("message", (event: MessageEvent) => {
     if (typeof event.data === "string" && event.data.includes('"page"'))
       void s.lendRpcStub({ rpcStubKey, stub: new LentAnswer("second") as never });

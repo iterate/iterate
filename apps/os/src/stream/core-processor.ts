@@ -92,7 +92,7 @@ export function facetSpecFromHostingTarget(
   resolvedTarget: ItxExpression,
 ): HostingFacetSpec | undefined {
   const getStep = builtInsGetStep(resolvedTarget, "facets");
-  if (!getStep) return undefined;
+  if (!getStep || getStep[1] === "subscriptions") return undefined;
   // A FIRST-PARTY facet hosts this worker's own class: the target names it and carries no spec.
   const firstPartyClassName = firstPartyFacetClassOf(getStep[1]);
   if (getStep.length === 2 && firstPartyClassName)
@@ -356,6 +356,10 @@ function parseSubscriptionName(name: string): string {
   if (name === CoreContract.slug)
     throw new Error(
       `"${CoreContract.slug}" is reserved as a subscription name: it is the core reduce, never a configurable subscription`,
+    );
+  if (name === "subscriptions")
+    throw new Error(
+      '"subscriptions" is reserved as a subscription name: durable delivery owns its private facet',
     );
   return name;
 }
@@ -704,6 +708,8 @@ function normalizeSubscriptionConfigured(input: {
     throw new Error(
       `a subscription target must be rooted at "itx" (got ${JSON.stringify(print(target))})`,
     );
+  if (target && builtInsGetStep(target, "facets")?.[1] === "subscriptions")
+    throw new Error("the subscriptions facet is private to durable delivery");
   return {
     name,
     target,

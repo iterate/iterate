@@ -31,6 +31,7 @@ import {
 } from "iterate/lib";
 import { DurableObject } from "cloudflare:workers";
 import { consumesEvent, type StreamEvent, type StreamEventInput } from "iterate/stream/processor";
+import type { DurableDeliveryCursor } from "iterate/stream/durable-delivery";
 import {
   canonicalItxExpressionPrefix,
   itxExpressionStepName,
@@ -450,10 +451,18 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   /** Context-local only: a facet restart cannot duplicate an unanswered target call. */
-  readonly #configuredSubscriptionDeliveries = new Set<string>();
+  readonly #configuredSubscriptionDeliveries = new Map<string, { startedAt: number }>();
+  /** A retry after its deadline observes a late success instead of invoking the target again. */
+  readonly #settledConfiguredSubscriptionDeliveries = new Map<
+    string,
+    { settledAt: number; error?: { code?: ReturnType<typeof errorCode>; message: string } }
+  >();
   /** Bodies handed to a target may outlive the runner deadline. This reservation stays here, beside
    * the raw native call, until that target settles; a timed-out facet cannot release it early. */
   static readonly #configuredSubscriptionDeliveryBodyBudgetChars = 8 * 1024 * 1024;
+  /** Workers RPC limits one serialized message to 32 MiB. A legal append can exceed the ordinary
+   * page ledger by its committed offset/path envelope, so one such event runs alone. */
+  static readonly #configuredSubscriptionDeliveryMaximumBodyChars = 32 * 1024 * 1024;
   #configuredSubscriptionDeliveryBodyChars = 0;
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
@@ -758,17 +767,28 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     readWaiters: number;
     pendingEphemeralChars: number;
     targetBodyChars: number;
-    snapshots: Record<string, unknown>;
+    activeTargetDeliveries: number;
+    oldestTargetDeliveryAgeMs: number | null;
+    /** Persisted cursor/retry state from the private facet, with no event bodies or RPC values. */
+    snapshots: Record<string, DurableDeliveryCursor>;
   }> {
     const hasDurable = Object.values(this.#stream.coreReducedState.subscriptions).some(
       (row) => row.delivery === "durable",
     );
+    const startedAt = [...this.#configuredSubscriptionDeliveries.values()].map(
+      (delivery) => delivery.startedAt,
+    );
+    const activeTargetDeliveries = startedAt.length;
+    const oldestTargetDeliveryAgeMs =
+      activeTargetDeliveries === 0 ? null : Date.now() - Math.min(...startedAt);
     if (!hasDurable)
       return {
         readReservedBytes: 0,
         readWaiters: 0,
         pendingEphemeralChars: 0,
         targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
+        activeTargetDeliveries,
+        oldestTargetDeliveryAgeMs,
         snapshots: {},
       };
     const [resources, snapshots] = await Promise.all([
@@ -782,7 +802,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         pendingEphemeralChars: number;
       }),
       targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
-      snapshots: snapshots as Record<string, unknown>,
+      activeTargetDeliveries,
+      oldestTargetDeliveryAgeMs,
+      snapshots: snapshots as Record<string, DurableDeliveryCursor>,
     };
   }
 
@@ -847,16 +869,64 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     if (fanOut && events.length !== 1)
       throw codedError("INVALID_INPUT", "fan-out delivery contains exactly one event");
 
-    const deliveryKey = `${request.name}:${request.configuredAtOffset}:${request.resumeAtOffset ?? 0}:${request.range.after}:${request.range.through}`;
-    if (this.#configuredSubscriptionDeliveries.has(deliveryKey))
-      throw codedError("UNAVAILABLE", "configured subscription delivery is already in flight");
+    const rowKey = `${request.name}@${request.configuredAtOffset}${fanOut ? `#${events[0].offset}` : ""}`;
+    const requestKey = `${rowKey}:${request.resumeAtOffset ?? 0}:${request.range.after}:${request.range.through}`;
+    const now = Date.now();
+    for (const [key, outcome] of this.#settledConfiguredSubscriptionDeliveries)
+      if (outcome.settledAt + 40_000 <= now)
+        this.#settledConfiguredSubscriptionDeliveries.delete(key);
+    const settled = this.#settledConfiguredSubscriptionDeliveries.get(requestKey);
+    if (settled) {
+      if (!settled.error) return;
+      if (settled.error.code) throw codedError(settled.error.code, settled.error.message);
+      throw new Error(settled.error.message);
+    }
+    const active = this.#configuredSubscriptionDeliveries.get(rowKey);
+    if (active)
+      throw codedError("UNAVAILABLE", "configured subscription delivery is busy", {
+        deliveryBusy: true,
+      });
+    const promise = this.#invokeConfiguredSubscriptionDelivery(request, row, events, fanOut);
+    this.#configuredSubscriptionDeliveries.set(rowKey, { startedAt: now });
+    try {
+      await promise;
+      this.#rememberConfiguredSubscriptionDelivery(requestKey, { settledAt: Date.now() });
+    } catch (error) {
+      const busy =
+        errorCode(error) === "UNAVAILABLE" &&
+        (error as { data?: { deliveryBusy?: unknown } }).data?.deliveryBusy === true;
+      if (!busy)
+        this.#rememberConfiguredSubscriptionDelivery(requestKey, {
+          settledAt: Date.now(),
+          error: {
+            code: errorCode(error),
+            message: error instanceof Error ? error.message : String(error),
+          },
+        });
+      throw error;
+    } finally {
+      this.#configuredSubscriptionDeliveries.delete(rowKey);
+    }
+  }
+
+  async #invokeConfiguredSubscriptionDelivery(
+    request: SubscriptionDeliveryBridgeRequest,
+    row: Subscription,
+    events: StreamEvent[],
+    fanOut: boolean,
+  ): Promise<void> {
     // The source page can be at the stream's 8 MiB limit. Reserve its body here, not in the facet:
     // Promise.race may finish the facet attempt while this native target call still owns the body.
     const bodyChars = JSON.stringify(events).length;
+    const admittedAlone =
+      events.length === 1 &&
+      this.#configuredSubscriptionDeliveryBodyChars === 0 &&
+      bodyChars <= IterateContextDurableObject.#configuredSubscriptionDeliveryMaximumBodyChars;
     if (
-      bodyChars > IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars ||
-      this.#configuredSubscriptionDeliveryBodyChars + bodyChars >
-        IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars
+      !admittedAlone &&
+      (bodyChars > IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars ||
+        this.#configuredSubscriptionDeliveryBodyChars + bodyChars >
+          IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars)
     ) {
       console.warn({
         event: "subscription-delivery.body-budget-exhausted",
@@ -864,9 +934,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         requestedChars: bodyChars,
         retainedChars: this.#configuredSubscriptionDeliveryBodyChars,
       });
-      throw codedError("UNAVAILABLE", "configured subscription delivery body budget is exhausted");
+      throw codedError("UNAVAILABLE", "configured subscription delivery body budget is exhausted", {
+        deliveryBusy: true,
+      });
     }
-    this.#configuredSubscriptionDeliveries.add(deliveryKey);
     this.#configuredSubscriptionDeliveryBodyChars += bodyChars;
     let value: unknown;
     let result: unknown;
@@ -881,19 +952,20 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       };
       // Hashing crosses an async boundary too; stale generations never even resolve a target.
       this.#configuredSubscriptionRow(request);
-      // Resolve normally before granting delivery identity. Aliases may end at a hosted processor;
-      // retain the terminal method until after fixed-point resolution so its constrained platform
-      // route is selected rather than exposing a general facet authority.
       const target = this.#itxExpressionResolver.resolve(row.target).at(-1) ?? row.target;
       const last = target.at(-1);
-      const method = typeof last === "string" && target.length > 2 ? last : undefined;
+      // `itx.builtins.<root>` is a callable root, not a method to peel: evaluating its
+      // two-step prefix would name the reserved physical namespace alone. A terminal property is
+      // a method only after that root (or after a normal/alias expression's own root).
+      const method =
+        typeof last === "string" && target.length > (target[1] === "builtins" ? 3 : 2)
+          ? last
+          : undefined;
       const targetPrefix = method ? target.slice(0, -1) : target;
       ({ value } = await this.#callerStorage.run(
         this.#withPlatformOrigin({ principal: null, cause }),
         () => this.#itxExpressionResolver.evaluate(targetPrefix),
       ));
-      // Every await above is outside the row generation. Recheck the exact generation, resume
-      // fence, durable mode, and halt state immediately before the only capability call.
       this.#configuredSubscriptionRow(request);
       const args = fanOut ? [events[0]] : [events, request.range];
       result = await this.#callerStorage.run(this.#withPlatformOrigin(caller), async () => {
@@ -904,9 +976,25 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : await callOn(value, undefined, args);
       });
     } finally {
-      this.#configuredSubscriptionDeliveries.delete(deliveryKey);
       this.#configuredSubscriptionDeliveryBodyChars -= bodyChars;
       releaseRpcSessions([value, result]);
+    }
+  }
+
+  #rememberConfiguredSubscriptionDelivery(
+    key: string,
+    outcome: {
+      settledAt: number;
+      error?: { code?: ReturnType<typeof errorCode>; message: string };
+    },
+  ): void {
+    this.#settledConfiguredSubscriptionDeliveries.set(key, outcome);
+    while (this.#settledConfiguredSubscriptionDeliveries.size > 128) {
+      const oldest = this.#settledConfiguredSubscriptionDeliveries.keys().next().value;
+      // Map#keys may be empty only if another mutation occurs before this synchronous turn.
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- iterator exhaustion is undefined, distinct from a string key
+      if (oldest === undefined) return;
+      this.#settledConfiguredSubscriptionDeliveries.delete(oldest);
     }
   }
 
@@ -920,10 +1008,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       !row ||
       row.configuredAtOffset !== request.configuredAtOffset ||
       row.delivery !== "durable" ||
-      row.halted ||
-      row.resumed?.atOffset !== request.resumeAtOffset
+      row.halted
     )
       throw codedError("GONE", "configured subscription no longer accepts delivery");
+    if (row.resumed?.atOffset !== request.resumeAtOffset)
+      throw codedError("GONE", "configured subscription delivery belongs to an older resume", {
+        resumeAtOffset: row.resumed?.atOffset,
+      });
     return row;
   }
 

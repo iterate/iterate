@@ -312,14 +312,14 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   // ── PROVIDE, THE ONE WAY IN: make `match` mean `target` — (a) a lent rpc stub or (b) a pure rewrite ──
 
-  /** PROVIDE: from now on a call starting with `match` runs as the same call with `match` replaced by
-   *  `target` (context/itx-expression-rewriting.ts — `match` may pin literal args: `itx.ai.run('gpt-5')`).
+  /** PROVIDE: from now on a call starting with property-only `match` runs as the same call with
+   *  `match` replaced by `target` (context/itx-expression-rewriting.ts).
    *  `target` is EITHER
    *    • a client's rpc stub (a function, an RpcTarget) — THE ONE PHYSICAL ACT: it is lent to the DO's
    *      `itx.rpcStubs` registry through a pager owned HERE (DON'T-PIN) under the key = the canonical
-   *      `match`, and the pure-data rule `match ⇒ itx.builtins.rpcStubs.get('<match>')` is appended. The DO
-   *      un-sets that rule when the stub's LAST pager closes. Re-providing the same match re-lends
-   *      (reconnect — the pager is replaced);
+   *      `match`. Its pager attachment projects `match ⇒ itx.builtins.rpcStubs.get('<match>')` while
+   *      attached and reveals any durable row when it closes. Re-providing the same match re-lends
+   *      (the pager is replaced);
    *    • an itx EXPRESSION — a pure rewrite: literally `append({ type: "…/rewrite-rule-configured", payload: { match, target } })`;
    *    • `null` — deny `match`: kept as a MASK where an implicit row lies beneath it (a bare `itx`
    *      denies all), a deletion otherwise (and a stub THIS session lent under it is recalled).
@@ -418,7 +418,7 @@ export class IterateContextRpcTarget extends RpcTarget {
     );
     // Registered with the session so a dying session recalls it even when the handle was never
     // disposed (`SessionTeardown`: a re-provide replaces the entry). The rule is NOT un-set by this
-    // session — the DO un-sets what names the key when its LAST pager closes.
+    // session — the DO removes the live attachment when its last pager closes.
     const lease = this.#sessionTeardown.add(sessionTeardownKey, pager);
     return new RewriteRuleHandleRpcTarget(() => lease.dispose(), pager.lendEnded); // the lease IS the handle: a stale one is inert
   }
@@ -574,7 +574,7 @@ export class IterateContextRpcTarget extends RpcTarget {
 
   /** The SessionTeardown key for a lent stub. The teardown is SESSION-lived and shared by every
    *  IterateContextRpcTarget the session hands out, while a stub key is only unique PER CONTEXT — so the key is
-   *  the JSON pair, unambiguous whatever either half holds (a match may pin a string arg). */
+   *  the JSON pair, unambiguous for every context-scoped property name. */
   #sessionTeardownKey(rpcStubKey: string): string {
     return JSON.stringify([this.#durableObjectAddress.name, rpcStubKey]);
   }

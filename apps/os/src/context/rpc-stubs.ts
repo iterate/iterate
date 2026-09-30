@@ -149,7 +149,6 @@ export function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAtt
       typeof provide.match !== "string" ||
       (typeof provide.description !== "undefined" && typeof provide.description !== "string") ||
       (typeof provide.declaration !== "undefined" && typeof provide.declaration !== "string") ||
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- missing route differs from a malformed present route in the serialized pager header.
       (typeof provide.fetchRoute !== "undefined" && !isJsonRecord(provide.fetchRoute))
     )
       throw new Error("invalid liveProvide");
@@ -165,7 +164,7 @@ export function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAtt
       if (record.rpcStubKey !== canonicalItxExpressionPrefix(normalized.match))
         throw new Error("liveProvide rpcStubKey must equal its canonical match");
       if (
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- only a present route is schema-checked; absence is the ordinary no-route attachment.
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- an omitted route is valid; a present route must be schema-checked before the socket is accepted.
         typeof provide.fetchRoute !== "undefined" &&
         !FetchRouteConfiguredPayload.safeParse({
           ...(provide.fetchRoute as Record<string, unknown>),
@@ -188,7 +187,6 @@ export function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAtt
     if (
       Object.keys(subscription).some((key) => !["name", "consumes"].includes(key)) ||
       typeof subscription.name !== "string" ||
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- an omitted consumes list differs from a malformed present list at this wire boundary.
       (typeof subscription.consumes !== "undefined" &&
         (!Array.isArray(subscription.consumes) ||
           subscription.consumes.some((type) => typeof type !== "string")))

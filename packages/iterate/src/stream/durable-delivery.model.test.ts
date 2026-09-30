@@ -48,7 +48,6 @@ test("omitting consumes keeps the normal subscription default: every durable eve
   const received: string[] = [];
   const processor = new DurableDeliveryProcessor({
     slug: "all",
-    target: "itx.target",
     runtime: runtime(
       kv(),
       source.stream.read,
@@ -100,7 +99,6 @@ test("a fan-out terminal is selectively resumed without replaying already acknow
   });
   const processor = new DurableDeliveryProcessor({
     slug: "selective",
-    target: "itx.target",
     consumes: ["work"],
     fanOut: true,
     maxAttempts: 1,
@@ -193,7 +191,6 @@ test("a replacement generation has isolated progress while its predecessor still
   );
   const old = new DurableDeliveryProcessor({
     slug: "subscription@1",
-    target: "itx.old",
     consumes: ["work"],
     runtime: oldRuntime,
   });
@@ -208,7 +205,6 @@ test("a replacement generation has isolated progress while its predecessor still
   );
   const replacement = new DurableDeliveryProcessor({
     slug: "subscription@2",
-    target: "itx.replacement",
     consumes: ["work"],
     runtime: replacementRuntime,
   });
@@ -249,7 +245,6 @@ test("seeded recovery worlds preserve each ordered source prefix across retries 
 function ordered(runtime: Runtime, overrides: Record<string, unknown> = {}) {
   return new DurableDeliveryProcessor({
     slug: "orders",
-    target: "itx.target",
     consumes: ["work"],
     runtime,
     ...overrides,
@@ -258,7 +253,6 @@ function ordered(runtime: Runtime, overrides: Record<string, unknown> = {}) {
 function fanOut(runtime: Runtime) {
   return new DurableDeliveryProcessor({
     slug: "fan",
-    target: "itx.target",
     consumes: ["work"],
     fanOut: true,
     concurrency: 3,
@@ -276,6 +270,15 @@ async function drive(processor: DurableDeliveryProcessor, offset: number) {
     through: offset,
   });
 }
+type RuntimeRead = (
+  after: number,
+  limit: number,
+) => Promise<{
+  events: import("./processor.ts").StreamEvent[];
+  scannedThroughOffset: number;
+  atHead: boolean;
+}>;
+
 function runtime(
   storage: ReturnType<typeof kv>,
   read: RuntimeRead,
@@ -291,6 +294,7 @@ function runtime(
     abort: (reason: string): never => {
       throw new Error(reason);
     },
+    tryReservePendingEphemeral: () => ({ [Symbol.dispose]: () => {} }),
     terminal: async (input: Terminal) => {
       terminals.push(input);
       await terminal(input);
@@ -298,14 +302,6 @@ function runtime(
     terminals,
   };
 }
-type RuntimeRead = (
-  after: number,
-  limit: number,
-) => Promise<{
-  events: import("./processor.ts").StreamEvent[];
-  scannedThroughOffset: number;
-  atHead: boolean;
-}>;
 type RuntimeDeliver = (input: {
   events: import("./processor.ts").StreamEvent[];
 }) => void | Promise<void>;

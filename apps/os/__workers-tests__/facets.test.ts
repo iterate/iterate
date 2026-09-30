@@ -15,7 +15,7 @@ import { env, exports } from "cloudflare:workers";
 import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
-import type { FacetSpec } from "iterate/api";
+import type { FacetSpec, WorkerSource } from "iterate/api";
 import type { ItxExpression, ItxExpressionInput } from "iterate/expression";
 import { errorCode } from "iterate/lib";
 import { UNCLAIMED_FACET_SWEEP_AFTER_QUIET_MS } from "../src/context/facet-host.ts";
@@ -1561,22 +1561,92 @@ test("the private subscriptions facet has no public handle, processor controls, 
       target: "itx.facets.get('subscriptions').processEventBatch",
     },
   });
+  expect(await outcomeOf(() => s.invoke("itx.privateSubscriptionTarget"))).toBe("FORBIDDEN");
+});
+
+test("a raw subscription row cannot host or remove the private subscriptions facet", async () => {
+  const ctx = freshProject("prj_subscriptions_raw");
+  const s = stub(ctx);
+  const receiver: WorkerSource = {
+    "package.json": '{"main":"worker.js"}',
+    "worker.js": /* js */ `
+import { WorkerEntrypoint } from "cloudflare:workers";
+export default class extends WorkerEntrypoint {
+  processEventBatch() {}
+}
+`,
+  };
   await s.append({
     type: "events.iterate.com/itx/subscription-configured",
     payload: {
-      name: "private-target",
-      target: "itx.privateSubscriptionTarget",
-      delivery: "processor",
+      name: "kept",
+      target: ["itx", "workers", ["get", { source: receiver }], "processEventBatch"],
+      delivery: "durable",
       consumes: ["mark"],
     },
   });
-  await s.append({ type: "mark" });
-  expect(
-    await until(
-      "the reserved target is refused",
-      async () => (await rowOf(ctx, "private-target"))?.halted,
-    ),
-  ).toMatchObject({ attempts: 1 });
+  const [first] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await until(
+    "the existing durable row is confirmed",
+    async () => (await rowOf(ctx, "kept"))?.cursor?.confirmedOffset === first.offset,
+  );
+
+  await expect(
+    s.append({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "attack",
+        target: "itx.builtins.facets.get('subscriptions').processEventBatch",
+        delivery: "processor",
+      },
+    }),
+  ).rejects.toThrow(/private to durable delivery/);
+  await expect(
+    s.append({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "subscriptions",
+        target: "itx.builtins.facets.get('subscriptions').processEventBatch",
+        delivery: "processor",
+      },
+    }),
+  ).rejects.toThrow(/reserved as a subscription name/);
+  await expect(
+    s.append({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: { name: "subscriptions", target: null },
+    }),
+  ).rejects.toThrow(/reserved as a subscription name/);
+
+  // An alias can still resolve to this physical target after append normalization. It must never
+  // acquire a hosted-facet marker: removing this caller-owned row must not delete durable delivery's
+  // private cursor owner.
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.privateSubscriptionAlias",
+      target: "itx.builtins.facets.get('subscriptions').processEventBatch",
+    },
+  });
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "alias-attack",
+      target: "itx.privateSubscriptionAlias",
+      delivery: "processor",
+      consumes: ["never"],
+    },
+  });
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "alias-attack", target: null },
+  });
+
+  const [second] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await until(
+    "the existing durable row still advances",
+    async () => (await rowOf(ctx, "kept"))?.cursor?.confirmedOffset === second.offset,
+  );
 });
 
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {

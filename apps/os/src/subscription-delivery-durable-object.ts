@@ -9,7 +9,12 @@ import {
   DurableDeliveryProcessor,
   type DurableDeliveryRuntime,
 } from "iterate/stream/durable-delivery";
-import type { ProcessEventArgs, ScannedRange, StreamEvent } from "iterate/stream/processor";
+import {
+  BackgroundClaims,
+  type ProcessEventArgs,
+  type ScannedRange,
+  type StreamEvent,
+} from "iterate/stream/processor";
 
 export type DurableSubscriptionConfig = {
   name: string;
@@ -71,7 +76,15 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   /** One 8MiB source page at a time across all runners, before any page body is materialized. */
   #readReserved = false;
   readonly #readWaiters: Array<() => void> = [];
-  #background = 0;
+  readonly #backgroundClaims = new BackgroundClaims({
+    claim: async (at) => await this.#context().claimSubscriptionDelivery(at),
+    report: (error) =>
+      reportIssue("subscription-delivery.facet-claim", error, {
+        context: this.ctx.props.iterateContextName,
+      }),
+    afterMs: 20_000,
+    maxAfterMs: 20_000,
+  });
 
   /** One context commit and its current durable-row identities. The rows are configuration only:
    * target expressions and event bodies never enter this facet or its storage. */
@@ -160,7 +173,6 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
       if (!runner) {
         runner = new DurableDeliveryProcessor({
           slug: key,
-          target: null,
           consumes: row.consumes,
           afterOffset: row.afterOffset ?? row.configuredAtOffset,
           resumeAtOffset: row.resumedAtOffset,
@@ -202,7 +214,7 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
         const key = `${row.name}@${row.configuredAtOffset}`;
         if (atMs === null) this.#wakeByRunner.delete(key);
         else this.#wakeByRunner.set(key, atMs);
-        await this.#syncClaim();
+        this.#syncClaim();
       },
       // The context-side single-flight guard owns an unanswered target call across a facet
       // restart. Resetting this shared facet would discard unrelated rows, so the deadline simply
@@ -301,28 +313,27 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   }
 
   #runInBackground(work: () => Promise<unknown>): void {
-    this.#background++;
+    this.#backgroundClaims.started();
     this.ctx.waitUntil(
-      this.#syncClaim()
+      Promise.resolve()
         .then(work)
         .catch((error) =>
           reportIssue("subscription-delivery.facet-background", error, {
             context: this.ctx.props.iterateContextName,
           }),
         )
-        .finally(async () => {
-          this.#background--;
-          await this.#syncClaim();
+        .finally(() => {
+          this.#backgroundClaims.settled();
+          this.#syncClaim();
         }),
     );
   }
 
-  async #syncClaim(): Promise<void> {
+  #syncClaim(): void {
     const wakeAt = [...this.#wakeByRunner.values()].reduce<number | null>(
       (earliest, at) => (earliest === null || at < earliest ? at : earliest),
       null,
     );
-    const at = this.#background > 0 ? Date.now() + 20_000 : wakeAt;
-    await this.#context().claimSubscriptionDelivery(at);
+    this.#backgroundClaims.at(this.#backgroundClaims.inFlight > 0 ? Date.now() + 20_000 : wakeAt);
   }
 }
