@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 // Each row branches `main` and `pull-request` from one base commit, edits the lockfile's lines on
@@ -50,7 +50,7 @@ test.for<{
 });
 
 function gitRepository() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const cwd = directory.path;
   const env = {
     ...process.env,

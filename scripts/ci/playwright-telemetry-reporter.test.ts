@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import type {
   FullConfig,
@@ -9,14 +10,13 @@ import type {
 } from "@playwright/test/reporter";
 import { expect, test, vi } from "vitest";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import PlaywrightTelemetryReporter from "./playwright-telemetry-reporter.ts";
 
 test("records each test after its attempts, and a flake record for a retried pass, without uploading", async () => {
   isolateTelemetryEnvironment();
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
-  using flakeRecordDirectory = temporaryDirectory();
+  using flakeRecordDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory.path);
   const firstResult = {
     retry: 0,
@@ -99,7 +99,7 @@ test("records each test after its attempts, and a flake record for a retried pas
 
 test("keeps Playwright's raw result status separate from its expected outcome", async () => {
   isolateTelemetryEnvironment();
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const failedAsExpected = {
     retry: 0,
@@ -134,9 +134,9 @@ test("keeps Playwright's raw result status separate from its expected outcome", 
 
 test("a plain spec that failed every attempt leaves an unexpected-error flake record", async () => {
   isolateTelemetryEnvironment();
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
-  using flakeRecordDirectory = temporaryDirectory();
+  using flakeRecordDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("FLAKE_RECORD_DIR", flakeRecordDirectory.path);
   const attempt = (retry: number) =>
     ({
@@ -187,7 +187,7 @@ test("a plain spec that failed every attempt leaves an unexpected-error flake re
 
 test("preserves timed-out runs and run-level Playwright errors", async () => {
   isolateTelemetryEnvironment();
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const reporter = new PlaywrightTelemetryReporter();
   reporter.onBegin(
@@ -213,7 +213,7 @@ test("preserves timed-out runs and run-level Playwright errors", async () => {
 
 test("an interrupted attempt's negative duration is recorded as zero", async () => {
   isolateTelemetryEnvironment();
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.stubEnv("TEST_TELEMETRY_ARTIFACT_DIR", artifactDirectory.path);
   const interruptedResult = {
     retry: 0,

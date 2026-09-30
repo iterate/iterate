@@ -32,6 +32,7 @@ import {
 import {
   plainLeftClick,
   readSidebarNav,
+  type AppPaletteEntry,
   type SidebarNavItem,
 } from "./app-shell-palette-entries.ts";
 import { Avatar, AvatarFallback } from "./avatar.tsx";
@@ -81,6 +82,7 @@ export function AppShell({
   onNavigate,
   switcherActions,
   nav,
+  paletteEntries,
   header,
   account,
   accountActions,
@@ -103,6 +105,9 @@ export function AppShell({
   switcherActions?: ReactNode;
   /** the app's own navigation, its `SidebarGroup`s */
   nav?: ReactNode;
+  /** rows for ⌘K beside what it reads off `nav`: what the sidebar shows in a way it can't read
+   *  (a file tree in its own shadow DOM) */
+  paletteEntries?: AppPaletteEntry[];
   /** what sits beside the phone's sidebar trigger in the header row */
   header?: ReactNode;
   /** who the app is signed in as (`info.principal`); "Sign out" posts to the SDK's `/.auth/logout`,
@@ -168,6 +173,7 @@ export function AppShell({
       </SidebarInset>
       <AppShellPalette
         nav={palette}
+        entries={paletteEntries || []}
         onClose={() => setPalette(null)}
         projects={projects}
         activeProjectId={activeProjectId}

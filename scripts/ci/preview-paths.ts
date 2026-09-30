@@ -33,6 +33,7 @@ export const previewPaths = [
   ".depot/workflows/deploy-dash.yml",
   ".depot/workflows/deploy-agents.yml",
   ".depot/workflows/deploy-notes.yml",
+  ".depot/workflows/deploy-docs.yml",
   ".depot/workflows/deploy-admin.yml",
   ".depot/workflows/deploy-voice.yml",
   ".depot/workflows/deploy-kit.yml",
@@ -42,6 +43,7 @@ export const previewPaths = [
   "apps/dash/**",
   "apps/agents/**",
   "apps/notes/**",
+  "apps/docs/**",
   "apps/admin/**",
   "apps/voice/**",
   "apps/kit/**",
@@ -52,9 +54,10 @@ export const previewPaths = [
   // apps/os/e2e/iterate-cli.e2e.test.ts drives the built CLI.
   "packages/cli/**",
   "packages/iterate/**",
-  // the agents and voice rows install these (apps/agents/e2e)
+  // the agents and voice rows install these (apps/agents/e2e), and the docs spec this one
   "packages/agents/**",
   "packages/voice/**",
+  "packages/docs/**",
   "packages/shared/**",
   "packages/ui/**",
   "package.json",
@@ -62,6 +65,8 @@ export const previewPaths = [
   "pnpm-workspace.yaml",
   "envs.ts",
   "scripts/lib/**",
+  // iterate's apps/os tooling: the preview deploy itself, prd's deploy, provisioning and erase
+  "scripts/os/**",
   // the setup every preview job runs (docs/depot-ci.md#setup-on-depots-stock-image)
   ".depot/actions/**",
   "scripts/ci/toolchain.sh",

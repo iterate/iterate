@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Principal } from "iterate/principal";
+import type { AppPaletteEntry } from "./app-shell-palette-entries.ts";
 import { AppShell, type AppShellProject } from "./app-shell.tsx";
 import {
   Breadcrumb,
@@ -19,16 +20,23 @@ export function ProjectAppShell({
   basePath = "",
   account,
   locationKey,
+  nav,
+  paletteEntries,
   children,
 }: {
   app: string;
   projects: AppShellProject[];
   project: AppShellProject;
-  /** the path the page is served under when a project proxies the app (apps/notes base-path.ts) */
+  /** the path the page is served under when a project proxies the app (packages/ui/src/apps/base-path.ts) */
   basePath?: string;
   account: Principal;
   /** the router's current href — a change closes the phone's sidebar sheet */
   locationKey: string;
+  /** the app's own navigation in the sidebar, its `SidebarGroup`s (`AppShell`'s `nav`, which ⌘K
+   *  lists too) */
+  nav?: ReactNode;
+  /** rows for ⌘K the app hands over (`AppShell`'s `paletteEntries`) */
+  paletteEntries?: AppPaletteEntry[];
   children: ReactNode;
 }) {
   return (
@@ -48,6 +56,8 @@ export function ProjectAppShell({
           </BreadcrumbList>
         </Breadcrumb>
       }
+      nav={nav}
+      paletteEntries={paletteEntries}
       account={account}
       locationKey={locationKey}
     >

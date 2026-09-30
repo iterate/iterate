@@ -16,7 +16,6 @@
 // models say numbers as digits or as words, so ask for either: --expect "132|thirty-two".
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { connect } from "./client.ts";
@@ -176,4 +175,4 @@ export default async function voiceBoard(
   process.exit(verdict === "PASS" ? 0 : 1);
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "voice-board" }).run();
+void createCli({ ...import.meta, name: "voice-board" }).run();

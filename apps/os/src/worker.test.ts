@@ -8,7 +8,7 @@
 import { inspect } from "node:util";
 import { expect, test, vi } from "vitest";
 import { parse } from "iterate/expression";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../envs.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "./project/context-birth-events.ts";
 // Routing is under test here: the unit project aliases Start's generated server entry to a stand-in
 // page (src/test/start-server-entry-shim.ts); the real entry is exercised by the built-Worker and
 // browser suites, where its Vite virtual modules exist.

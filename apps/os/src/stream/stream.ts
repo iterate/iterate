@@ -96,12 +96,13 @@ type WaitForEventWaiter = {
 
 /** WHY AN INCARNATION WOKE, as its wake record (`itx/woken`) says — a context wakes for two reasons
  *  only. A caller reached it: `caller` is the kind of that first call, as the DO's census counts it
- *  (context/residency.ts `InboundCallKind`; absent at a birth, whose caller the constructor cannot
- *  see). Or its alarm fired: `due` names the durable obligations it came back for — a schedule, a
- *  subscription's retry or claim, a hosted processor's claim, a run. A fan-out row is told of every
- *  wake, at most once (subscription-delivery.ts, THE WAKE RULE). */
+ *  (context/residency.ts `InboundCallKind`), and `call` what it called — an expression's step names
+ *  (`itx.repos.get.modules`, never its arguments) or the entry point (`fetch`, `append`, …). Or its
+ *  alarm fired: `due` names the durable obligations it came back for — a schedule, a subscription's
+ *  retry or claim, a hosted processor's claim, a run. A fan-out row is told of every wake, at most
+ *  once (subscription-delivery.ts, THE WAKE RULE). */
 export type Wake =
-  | { cause: "call"; caller?: InboundCallKind }
+  | { cause: "call"; caller?: InboundCallKind; call?: string }
   | { cause: "alarm"; due: ("schedule" | "retry" | "claim" | "run")[] };
 
 /** Everything the stream needs from its host. */
@@ -240,7 +241,7 @@ export class Stream {
    *  events (`birthEvents`) in the same batch, all caused by the call that bore it (a birth is always
    *  a call's — nothing has an alarm before it exists). A store with rows gets nothing here. Both
    *  events are exempt from pause: a paused stream still records its wake. */
-  appendBirthRecord(cause?: Cause): void {
+  appendBirthRecord(cause?: Cause, wake: Wake = { cause: "call" }): void {
     if (this.#highestDurableOffset !== 0) return;
     const source = cause && { cause };
     this.append(
@@ -251,7 +252,7 @@ export class Stream {
       },
       {
         type: "events.iterate.com/itx/woken",
-        payload: { incarnation: this.storage.incarnation, cause: "call" },
+        payload: { incarnation: this.storage.incarnation, ...wake },
         source,
       },
       ...this.#birthEvents.map((event) => ({ ...event, source })),
@@ -277,7 +278,16 @@ export class Stream {
         cause,
         this.#highestDurableOffset === 0 ? `a birth of ${this.#path}` : `waking ${this.#path}`,
       );
-    if (this.#highestDurableOffset === 0) return this.appendBirthRecord(cause);
+    // one log line per wake. Workers Logs stamps a Durable Object's RPC call with no ray, so the
+    // chain's `(ray …)` is what joins it to the edge request that began the work
+    console.log({
+      event: "context.woken",
+      path: this.#path,
+      incarnation: this.storage.incarnation,
+      ...wake,
+      ...(cause && storedCause(cause)),
+    });
+    if (this.#highestDurableOffset === 0) return this.appendBirthRecord(cause, wake);
     const interrupted = Object.entries(this.#coreReducedState.scriptRuns).map(
       ([requestOffset, run]): StreamEventInput => ({
         type: "events.iterate.com/itx/run-settled",

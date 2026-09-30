@@ -19,6 +19,10 @@
 //    of its own, a mail — is keyed by that delivery (`Cause.writeKey`), where it lands and what it
 //    is: the same on every attempt, so a retry never repeats what an attempt before it did, and the
 //    same write twice in one delivery lands once.
+//
+// The same stamp says WHY anything happened: the chain names where it began (a request's with its
+// Cloudflare ray, which joins Cloudflare's own request log), and `parent` the event whose handling
+// wrote it, so any event walks back to its origin one step at a time.
 
 import { codedError, errorCode, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import { z } from "zod";
@@ -30,6 +34,9 @@ export type Cause = {
   chain: string;
   /** Hand-offs since the chain began: 0 for a person's call, one more per delivery or script. */
   depth: number;
+  /** The event whose handling this work runs for, `<path>@<offset>`: the step before, on every
+   *  event the work writes. None where a person's call or an outside request began the work. */
+  parent?: string;
   /** The contexts the call has crossed so far (guarantee 2). */
   hops?: number;
   /** The delivery the code runs for (`<row>:<path>@<offset>`), the same on every attempt: what
@@ -42,7 +49,8 @@ export const LOOP_DEPTH_LIMIT = 8;
 /** The most contexts one call crosses. */
 const MAX_CONTEXT_HOPS = 16;
 /** A new chain, at depth 0, beginning now `with` its origin: the kind of thing that began it ("a
- *  call", "inbound mail", "a request to <host>"), never who — no path, no address. Printable ASCII
+ *  call", "inbound mail", "a request to <host> (ray <cf-ray>)"), never who — no path, no address;
+ *  a ray is Cloudflare's opaque id for the request, which its logs are searched by. Printable ASCII
  *  only, so our mark (iterate/lib `ITERATE_CAUSE_HEADER`, unsigned: forging it can only make the
  *  forger's own request deeper) is plain JSON on any header. */
 export function newChain(origin: string): Cause {
@@ -61,18 +69,27 @@ export function deepestCause(causes: readonly (Cause | undefined)[]): Cause | un
   return deepest;
 }
 
-/** THE ONE +1: code run because of `events` runs one hand-off deeper than the deepest of them, in
- *  its chain, with no hops. An event with no cause counts as a chain's first. */
-export function causeOfDelivery(events: readonly { source?: { cause?: Cause } }[]): Cause {
-  const deepest =
-    deepestCause(events.map((event) => event.source?.cause)) ??
-    newChain("an event that names no cause");
-  return { chain: deepest.chain, depth: deepest.depth + 1 };
+/** THE ONE +1: code run because of `events` runs one hand-off deeper than the deepest of them (the
+ *  first of equals), in its chain, with no hops, and with that event as its parent — or, when what
+ *  it runs for is a call and no event (a script's run), that call's own parent. An event with no
+ *  cause counts as a chain's first. */
+export function causeOfDelivery(
+  events: readonly { path?: string; offset?: number; source?: { cause?: Cause } }[],
+): Cause {
+  let deepest = events[0];
+  for (const event of events)
+    if ((event.source?.cause?.depth ?? -1) > (deepest?.source?.cause?.depth ?? -1)) deepest = event;
+  const cause = deepest?.source?.cause || newChain("an event that names no cause");
+  // a committed event's offset is 1 or more
+  const parent =
+    deepest?.path && deepest.offset ? `${deepest.path}@${deepest.offset}` : cause.parent;
+  return { chain: cause.chain, depth: cause.depth + 1, parent };
 }
 
-/** A cause as an event stores it: the chain and the depth, never what only a call needs. */
-export function storedCause({ chain, depth }: Cause): Cause {
-  return { chain, depth };
+/** A cause as an event stores it: the chain, the depth and the parent, never what only a call
+ *  needs — and no `parent` key at all without one, so an event reads the same live as stored. */
+export function storedCause({ chain, depth, parent }: Cause): Cause {
+  return parent ? { chain, depth, parent } : { chain, depth };
 }
 
 /** THE REFUSAL of an act past the limit — an append, a send, egress, a commit, waking a sleeping
@@ -123,9 +140,15 @@ export function crossingOneMore(cause: Cause, into: string, contexts = 1): Cause
   return { ...cause, hops };
 }
 
-/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII (a header is bytes; `newChain`). */
-export function causeHeader(cause: Cause): string {
-  return JSON.stringify({ chain: cause.chain, depth: cause.depth, hops: cause.hops ?? 0 });
+/** A cause as ITERATE_CAUSE_HEADER carries it: JSON, ASCII (a header is bytes; `newChain`), so a
+ *  parent in any other characters stays behind. */
+export function causeHeader({ chain, depth, hops, parent }: Cause): string {
+  return JSON.stringify({
+    chain,
+    depth,
+    hops: hops ?? 0,
+    ...(parent && PRINTABLE_ASCII.test(parent) && { parent }),
+  });
 }
 
 /** `request` carrying `cause` as our mark: how a Request hands it to the SDK host serving it. */
@@ -135,16 +158,15 @@ export function requestCausedBy(request: Request, cause: Cause): Request {
   return new Request(request, { headers });
 }
 
+const PRINTABLE_ASCII = /^[\x20-\x7e]*$/;
 /** A count a cause carries: a safe whole number, never below 0. */
 const CauseCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 /** A cause as anyone may write it (`parseCause`). A chain the platform mints is printable ASCII
- *  (`newChain`), so any other is forged; a malformed write key is dropped alone. */
+ *  (`newChain`), so any other is forged; a malformed parent or write key is dropped alone. */
 const WrittenCause = z.object({
-  chain: z
-    .string()
-    .max(512)
-    .regex(/^[\x20-\x7e]*$/),
+  chain: z.string().max(512).regex(PRINTABLE_ASCII),
   depth: CauseCount,
+  parent: z.string().max(512).optional().catch(undefined),
   hops: CauseCount.nullish(),
   writeKey: z.string().max(512).optional().catch(undefined),
 });
@@ -163,8 +185,8 @@ export function parseCause(value: unknown): Cause | undefined {
     }
   const written = WrittenCause.safeParse(fields);
   if (!written.success) return undefined;
-  const { chain, depth, hops, writeKey } = written.data;
-  return { chain, depth, hops: hops || 0, ...(!mark && writeKey && { writeKey }) };
+  const { chain, depth, parent, hops, writeKey } = written.data;
+  return { chain, depth, parent, hops: hops || 0, ...(!mark && writeKey && { writeKey }) };
 }
 
 /** The SDK's carrier of the running cause in this isolate (iterate src/cause.ts), by the name it

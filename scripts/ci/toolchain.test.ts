@@ -1,8 +1,15 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+  mkdtempDisposableSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 
 const script = resolve(import.meta.dirname, "toolchain.sh");
@@ -69,7 +76,7 @@ test("start puts Node and a pnpm pinned to packageManager on the PATH; wait fail
 });
 
 function fixture() {
-  const root = temporaryDirectory();
+  const root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const cache = join(root.path, "hostedtoolcache", "node");
   const dist = join(root.path, "dist");
   const runnerTemp = join(root.path, "runner-temp");

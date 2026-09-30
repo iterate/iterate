@@ -1,0 +1,71 @@
+{
+  "name": "@iterate-com/docs",
+  "version": "0.1.0",
+  "description": "Live co-editing for a project's docs: one processor per open doc holds its text as Yjs, autosaves it to its repo, and keeps its comments",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iterate/iterate",
+    "directory": "packages/docs"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./install": "./src/install.ts",
+    "./frames": "./src/frames.ts",
+    "./comments": "./src/comments.ts",
+    "./anchor": "./src/anchor.ts"
+  },
+  "files": [
+    "dist",
+    "AGENTS.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./install": {
+        "types": "./dist/install.d.mts",
+        "import": "./dist/install.mjs"
+      },
+      "./frames": {
+        "types": "./dist/frames.d.mts",
+        "import": "./dist/frames.mjs"
+      },
+      "./comments": {
+        "types": "./dist/comments.d.mts",
+        "import": "./dist/comments.mjs"
+      },
+      "./anchor": {
+        "types": "./dist/anchor.d.mts",
+        "import": "./dist/anchor.mjs"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "diff": "^8.0.4",
+    "yjs": "^13.6.31"
+  },
+  "peerDependencies": {
+    "iterate": "*",
+    "zod": "^4"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "iterate": "workspace:*",
+    "node-diff3": "3.2.1",
+    "tsdown": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

@@ -236,7 +236,7 @@ test("Preview OS's suites decide as Deploy preview does whether there is a previ
 });
 
 // The wait is bounded by the deploy's own timeout, and the suite by its 30 minutes after it
-// (apps/os/scripts/preview.ts `runBounded`), so the job's timeout is never what stops a suite. The
+// (scripts/os/preview.ts `runBounded`), so the job's timeout is never what stops a suite. The
 // first specs shard then collects the others, for as long as its step's timeout, which outlasts the
 // collection's own bound (scripts/ci/specs-shards.ts).
 test("Preview OS's suite jobs outlast the deploy they wait for and then their suite's 30 minutes, and Browser specs outlasts them", () => {
@@ -390,7 +390,7 @@ test.each<[string, Run, { e2e: string; specs: string; trace: boolean }]>([
 });
 
 // The cleanup deletes only once this run's deployment is ready, and only this run's prefix's older
-// ones (apps/os/scripts/preview-sweep.ts planSupersededCleanup).
+// ones (scripts/os/preview-sweep.ts planSupersededCleanup).
 test.for([
   { name: "a deploy that deployed", deploy: "success", deployment: "pr123-a1b2c3d", runs: true },
   { name: "a PR that changes no preview path", deploy: "success", deployment: "", runs: false },
@@ -408,7 +408,7 @@ test.for([
   });
 });
 
-// A PR's preview is `pr<n>` whatever its branch (apps/os/scripts/preview-config.ts
+// A PR's preview is `pr<n>` whatever its branch (scripts/os/preview-config.ts
 // resolvePreviewPrefix), and `pnpm preview` takes flags only: its suite step passes `--pr` the PR's
 // number and `--name` the dispatch's preview-name, each when set.
 test("a test job names its preview by the PR's number, or by preview-name without one", () => {

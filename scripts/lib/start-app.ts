@@ -1,5 +1,5 @@
 /**
- * The scripts of a TanStack Start app on Workers — dash, agents, notes, voice and kit. An app
+ * The scripts of a TanStack Start app on Workers — dash, agents, notes, docs, voice and kit. An app
  * describes itself in apps/<app>/scripts/app.ts (a StartApp below), its vite.config.ts hands the
  * Cloudflare Vite plugin `startAppWorkerConfig`, and its package scripts run `startAppCli`:
  *
@@ -15,11 +15,13 @@ import { fileURLToPath } from "node:url";
 import { Generator, getConfig } from "@tanstack/router-generator";
 import { createCli, t } from "trpc-cli";
 import { z } from "zod";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { StartAppConfig } from "@iterate-com/shared/start-app-config";
 import {
   adminEnvs,
   agentsEnvs,
   dashEnvs,
+  docsEnvs,
   getEnv,
   kitEnvs,
   notesEnvs,
@@ -28,9 +30,10 @@ import {
   voiceEnvs,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
-import { ensureProxiedDnsRecord, viteBuild } from "./deploy-helpers.ts";
+import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext } from "./env-context.ts";
-import { COMPATIBILITY_DATE, OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
+import { viteBuild } from "./vite-build.ts";
+import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
 
 /** One deployed environment of a start app: its Cloudflare account, its Doppler config (in the
  *  project named for the app), the worker and its origin. */
@@ -46,8 +49,11 @@ export interface StartAppEnv {
 
 /** What apps/<app>/scripts/app.ts declares; everything in this module is the same program over it. */
 export interface StartApp {
-  /** "dash": the directory under apps/, the Doppler project and the local-dev worker all carry this name. */
+  /** "dash": the directory under apps/ and the local-dev worker carry this name. */
   name: string;
+  /** The Doppler project whose `preview`/`prd` configs deploy it: the app's own ("dash"), or
+   *  "_shared" for an app with no secrets of its own. */
+  dopplerProject: string;
   /** The app's directory — `new URL("..", import.meta.url)` from scripts/app.ts. */
   root: URL;
   /** The app's map in envs.ts. */
@@ -63,6 +69,7 @@ const FIRST_PARTY_APPS: Record<
   dash: dashEnvs,
   agents: agentsEnvs,
   notes: notesEnvs,
+  docs: docsEnvs,
   admin: adminEnvs,
   voice: voiceEnvs,
   kit: kitEnvs,
@@ -105,8 +112,19 @@ export function ownZones(): string[] {
  *  vite.config.ts hands the Cloudflare Vite plugin (`cloudflare({ config })`); there is no wrangler
  *  file. `vite build` snapshots it into dist/server/wrangler.json, what a deploy ships. The
  *  environment is CLOUDFLARE_ENV, as deployApp and buildStartApp set it. */
-export function startAppWorkerConfig(app: StartApp, envName: string | undefined) {
-  const { env, platform, appOrigins } = linkedEnvironment(app, envName);
+export function startAppWorkerConfig(
+  app: StartApp,
+  envName: string | undefined,
+  /** The commit a per-commit deployment's packages are published at (apps/os
+   *  scripts/published-package-commit.ts), which preview.ts works out once for all its builds;
+   *  unused by any other env. */
+  packagesCommit: string | undefined,
+) {
+  const { env, platform, appOrigins, pkgPrNewRef } = linkedEnvironment(
+    app,
+    envName,
+    packagesCommit,
+  );
   // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
   // (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -117,6 +135,7 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
     },
     denyZones: ownZones(),
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
+    pkgPrNewRef,
   } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName || app.name,
@@ -158,14 +177,28 @@ export function startAppWorkerConfig(app: StartApp, envName: string | undefined)
 function linkedEnvironment(
   app: StartApp,
   envName: string | undefined,
-): { env: StartAppEnv | undefined; platform: { baseUrl: string }; appOrigins: string[][] } {
+  packagesCommit: string | undefined,
+): {
+  env: StartAppEnv | undefined;
+  platform: { baseUrl: string };
+  appOrigins: string[][];
+  pkgPrNewRef: string;
+} {
   const preview = envName ? previewDeployment(envName) : undefined;
-  if (preview)
+  if (preview) {
+    // the build the rest of the deployment runs: a PR's head when it changes a package, else its
+    // merge base with main (pkg.pr.new publishes a PR only when it changes one)
+    if (!packagesCommit)
+      throw new Error(
+        `apps/${app.name}: ${envName}'s build needs its packages' commit (PUBLISHED_PACKAGE_COMMIT, which preview.ts sets)`,
+      );
     return {
       env: preview.apps[app.name],
       platform: preview.os,
       appOrigins: Object.entries(preview.apps).map(([name, env]) => [name, env.baseUrl]),
+      pkgPrNewRef: packagesCommit,
     };
+  }
   const env = envName ? app.envs[envName] : undefined;
   if (envName && !env)
     throw new Error(
@@ -181,7 +214,7 @@ function linkedEnvironment(
       throw new Error(`apps/${app.name}: envs.ts has no ${linked} environment of apps/${name}`);
     return [name, other.baseUrl];
   });
-  return { env, platform, appOrigins };
+  return { env, platform, appOrigins, pkgPrNewRef: "main" };
 }
 
 /** THE REQUESTS THAT START THE APP'S WORKER (`assets.run_worker_first`): every one — /healthz, the
@@ -204,7 +237,7 @@ function workerFirstRoutes(app: StartApp) {
 
 async function deploy(app: StartApp, options: { env: string }) {
   await deployApp(getEnv(options.env, app.envs), {
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
     smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
@@ -213,7 +246,7 @@ async function deploy(app: StartApp, options: { env: string }) {
 
 async function ensureResources(app: StartApp, options: { env: string }) {
   const ctx = await resolveEnvContext(getEnv(options.env, app.envs), {
-    dopplerProject: app.name,
+    dopplerProject: app.dopplerProject,
   });
   const zones = await ctx.cfV4<{ id: string; name: string }[]>(
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
@@ -306,8 +339,12 @@ async function generateRouteTree(app: StartApp, options: { check?: boolean }) {
 
 /** `vite build` for one env: the cloudflare plugin snapshots that env's Worker config
  *  (startAppWorkerConfig) into dist/server/wrangler.json, which the deploy then ships. */
-export function buildStartApp(app: StartApp, env: string) {
-  return viteBuild(fileURLToPath(app.root), env);
+export function buildStartApp(app: StartApp, env: string, packagesCommit: string | undefined) {
+  return viteBuild(fileURLToPath(app.root), {
+    CLOUDFLARE_ENV: env,
+    // blank for an env of envs.ts, which takes no packages' commit
+    PUBLISHED_PACKAGE_COMMIT: packagesCommit || "",
+  });
 }
 
 /**

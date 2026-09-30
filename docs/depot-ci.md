@@ -75,10 +75,10 @@ Anything else that needs GitHub-only triggers, such as `pull_request_target`, `i
 | `pr-dashboard.yml`    | PR opened, reopened, ready, drafted or closed    | The event's line in #ci and the daily PR dashboard                                                               |
 | `preview-os.yml`      | Every PR, dispatch                               | **Preview OS**: Deploy preview, beside it **E2E tests** and **Browser specs** in shards, then CI trace           |
 | `preview-delete.yml`  | Such a PR closing, dispatch                      | Deletes the PR's deployments                                                                                     |
-| `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments, the legacy Worker Previews and the former parents           |
+| `preview-sweep.yml`   | Nightly, dispatch                                | Deletes superseded, stale and half-made deployments                                                              |
 | `main-os-e2e.yml`     | Main push touching the preview paths, dispatch   | **Main OS e2e**: the pushed commit deployed as `main-<sha7>`, E2E tests, Browser specs, cleanup, its page, trace |
 | `deploy-os.yml`       | Main push touching what OS ships, dispatch       | **Deploy OS**: production, then the project-host check                                                           |
-| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Voice, Kit, SPA, dummy-petshop or ci-reports                                      |
+| `deploy-<app>.yml`    | Main push touching what the app ships, dispatch  | Deploy of Dash, Agents, Notes, Docs, Voice, Kit, SPA, dummy-petshop or ci-reports                                |
 | `kit-firmware.yml`    | Firmware PR and main push, daily, dispatch       | Builds the changed boards; main publishes their releases                                                         |
 | `prd-fault-alarm.yml` | Every 15 minutes, dispatch                       | Reads production's Workers Logs and pages #error-pulse on faults                                                 |
 | `health.yml`          | Hourly, dispatch                                 | **Health**: judges the runs below and PR time to green; one #error-pulse page per red signal                     |
@@ -150,7 +150,7 @@ secret (the Depot organization token, `scripts/ci/depot.ts` `depotApi`; the Slac
 reads a secret into its shell. The one other form is for commands that act on an OS deployment
 with its configuration in their environment, as a developer's terminal runs them: the preview
 tooling (`pnpm preview …`) and the suites against a deployment (`pnpm e2e`, `pnpm e2e:run`,
-`pnpm e2e:soak`, `pnpm perf:run`) run under
+`pnpm os:e2e-soak`, `pnpm perf:run`) run under
 `doppler run --project os --config <the deployment's config> --`. `depot-workflows.test.ts` fails a
 step that calls Doppler any other way. The test evidence upload's token
 is fetched beside the tests into a Doppler fallback file and read offline after them
@@ -194,7 +194,7 @@ depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml --job test --
 ```
 
 When done: `git push origin --delete ci-soak/<name>`, remove the worktree, and delete any preview
-the soak named (`pnpm --dir apps/os preview delete --name soak-<name>`).
+the soak named (`pnpm preview delete --name soak-<name>`).
 
 ### The commit a run reports on
 
@@ -329,8 +329,8 @@ one-line `node scripts/ci/<script>.ts …`), and validate with `depot ci run` fr
 branch ([Run CI without a PR](#run-ci-without-a-pr)).
 
 - A step runs TypeScript one way: `node <file>.ts`, with Node's own type stripping (the root
-  `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with its
-  `isMainModule` footer ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
+  `tsconfig.base.json` allows only erasable syntax). A trpc-cli script ends with
+  `createCli({ ...import.meta })` ([scripts are trpc-cli programs](typescript-conventions.md#scripts-are-trpc-cli-programs)),
   so `node` runs its commands. Steps that run before `pnpm install` use the same form.
   `depot-workflows.test.ts` fails a step that calls `tsx` or the trpc-cli bin, which the root does
   not install.
@@ -647,7 +647,7 @@ same names.
 With Playwright's full parallelism a spec starts as soon as a worker is free, so when
 `shards × workers ≥ specs` every spec starts at once and the suite takes about as long as its
 longest spec. Each shard is a `4x16` with six workers (the density #3258 measured), so there are
-`ceil(specs / 6)` shards: 11 for 61 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
+`ceil(specs / 6)` shards: 10 for 58 specs. `scripts/ci/specs-shards.test.ts` lists the specs and
 fails when the count no longer matches, naming what to change: `SPECS_SHARDS` and the
 `specs-shard` matrix, in both workflows. Playwright 1.63 deals the specs out by count, so the
 fullest shard holds `ceil(specs / shards)`.
@@ -673,7 +673,7 @@ fullest shard holds `ceil(specs / shards)`.
 A suite job with `needs: deploy` would start only once the deploy ended, so
 Depot's hand-off (about 3 s), the sandbox's boot (about 2 s), the checkout and
 setup (about 7 s), Node loading
-`apps/os/scripts/preview.ts` and the test runner's start would all come between
+`scripts/os/preview.ts` and the test runner's start would all come between
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
 
@@ -720,12 +720,12 @@ the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
 Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (apps/os and every
 app on top, envs.ts `previewDeployment`), tests it, and deletes the `main-…` deployments before it
 (Clean up superseded). The latency guard does the same under `latency`, and the real-model suite
-under `real-model` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`); when main has not
+under `real-model` (`CI_WORKFLOW_PREVIEWS` in `scripts/os/preview-sweep.ts`); when main has not
 moved since their last run, they deploy the same deployment again, in place.
 
 A brand-new worker's Durable Objects can answer Cloudflare's `internal error; reference = …` for
 seconds after it is created (10–40 s on brand-new Worker Previews, 2026-09), and the deploy's
-readiness gate (`apps/os/scripts/preview-readiness.ts`) waits that out. A worker redeployed in place
+readiness gate (`scripts/os/preview-readiness.ts`) waits that out. A worker redeployed in place
 has another window: Cloudflare releases the new version eventually consistently, so for a while an
 edge can still serve the previous version and a brand-new Durable Object can still start on it, and
 an object on it later resets with "Durable Object reset because its code was updated.", failing
@@ -773,7 +773,7 @@ and OTLP JSON export.
 #error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
 (`onCallMention` in `scripts/ci/slack.ts`), thread replies included: the [health](#health) pages,
 the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the preview
-sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
+sweep's pages (`scripts/os/preview.ts sweep`), a failed context sweep
 (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
 (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each pull request event as one
 top-level line (its title cut to 80 characters, its base named only when it is not `main`), each

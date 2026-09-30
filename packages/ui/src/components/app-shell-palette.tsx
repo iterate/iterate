@@ -17,6 +17,7 @@ import {
   filterPaletteEntries,
   plainLeftClick,
   withoutProjectLinks,
+  type AppPaletteEntry,
   type PaletteEntry,
   type SidebarNavItem,
 } from "./app-shell-palette-entries.ts";
@@ -35,7 +36,8 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./sidebar.tsx";
 
 type PaletteRow =
   | (PaletteEntry & { kind: "project"; href: string })
-  | (PaletteEntry & { kind: "nav"; element: HTMLElement });
+  | (PaletteEntry & { kind: "nav"; element: HTMLElement })
+  | (PaletteEntry & { kind: "app"; onSelect: () => void });
 
 /** Nothing to subscribe to: the platform does not change under a page. */
 const subscribeToNothing = () => () => {};
@@ -100,9 +102,11 @@ export function PaletteHeaderButton({ onOpen }: { onOpen: () => void }) {
 /** The dialog. `nav` is the sidebar's navigation as it read when the palette opened, null while
  *  closed. A project row is a real link to `projectHref(project)` — a plain click (or Enter) goes
  *  through `onNavigate` when the app has a client router, a modified or middle click opens a tab —
- *  and a nav row clicks the sidebar's own element. */
+ *  a nav row clicks the sidebar's own element, and an entry the app handed over runs its
+ *  `onSelect`. */
 export function AppShellPalette({
   nav,
+  entries,
   onClose,
   projects,
   activeProjectId,
@@ -110,6 +114,7 @@ export function AppShellPalette({
   onNavigate,
 }: {
   nav: SidebarNavItem[] | null;
+  entries: AppPaletteEntry[];
   onClose: () => void;
   projects: AppShellProject[];
   activeProjectId: string | null;
@@ -135,6 +140,7 @@ export function AppShellPalette({
         {nav ? (
           <PaletteBody
             nav={nav}
+            entries={entries}
             onClose={onClose}
             projects={projects}
             activeProjectId={activeProjectId}
@@ -150,6 +156,7 @@ export function AppShellPalette({
 /** Mounted per opening, so the query starts empty each time. */
 function PaletteBody({
   nav,
+  entries,
   onClose,
   projects,
   activeProjectId,
@@ -157,6 +164,7 @@ function PaletteBody({
   onNavigate,
 }: {
   nav: SidebarNavItem[];
+  entries: AppPaletteEntry[];
   onClose: () => void;
   projects: AppShellProject[];
   activeProjectId: string | null;
@@ -189,7 +197,12 @@ function PaletteBody({
     active,
     element,
   }));
-  const groups = filterPaletteEntries([...navRows, ...projectRows], query);
+  const appRows = entries.map((entry, index): PaletteRow => ({
+    kind: "app",
+    id: `app:${index}`,
+    ...entry,
+  }));
+  const groups = filterPaletteEntries([...navRows, ...appRows, ...projectRows], query);
   return (
     <Command shouldFilter={false} loop className="p-0">
       <div className="flex items-center gap-2 px-3 py-2">
@@ -219,6 +232,11 @@ function PaletteBody({
                 onSelect={() => {
                   if (row.kind === "project") {
                     links.current.get(row.id)?.click();
+                    return;
+                  }
+                  if (row.kind === "app") {
+                    onClose();
+                    row.onSelect();
                     return;
                   }
                   onClose();

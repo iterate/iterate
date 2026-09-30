@@ -8,11 +8,12 @@
 // published config (`itx/ingress-configured` to `itx.config`, the core's, once), then the
 // certificate, once the seed's publication has landed. THE PUBLICATION OF THE CONFIG REPO: every
 // `repo/commit-completed` from `/repos/config` gets ONE outcome on `/`, as the generation of its
-// fact's offset — its commit published (publication.ts) while it is still `main`'s head: the pointer
-// `itx.config` moved to it, then `project/worker-updated`; or `project/worker-update-failed`, a
-// commit refused or one main moved on from first — so a commit changes the project's code
-// everywhere, and whoever made it can wait for its outcome by its oid. Subscribed to `/` (the row `session.projects.create` enables), it runs again
-// after every eviction: an attempt lost with an incarnation is simply run again by the next — the
+// fact's offset — its commit published (publication.ts) if it is `main`'s head as its attempt
+// begins: the pointer `itx.config` moved to it and `project/worker-updated`, in one batch; or
+// `project/worker-update-failed`, a commit refused or one main moved on from first — so a commit
+// changes the project's code everywhere, and whoever made it can wait for its outcome by its oid.
+// Subscribed to `/` (the row `session.projects.create` enables), it runs again after every
+// eviction: an attempt lost with an incarnation is simply run again by the next — the
 // repo tolerates existing, a born `main` refuses the seed, a publication is keyed by its generation,
 // the ingress and the certificate are keyed. Its reach is its constructor's arguments; a
 // unit test constructs it with `new` and reduces rows (processor.test.ts, in node) or hands it a fake
@@ -20,11 +21,11 @@
 // catalog, the apex answering the seed; e2e/website-publication.e2e.test.ts: a commit publishes).
 
 import { errorCode, resolveContextPath } from "iterate/lib";
-import { failureKind, isPlatformFailureKind } from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import {
   parseConfigRepoTemplateReference,
   type ConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import {
   type ConsumedEvent,
   type EmittedEventInput,
@@ -33,8 +34,7 @@ import {
   type StreamEventInput,
   StreamProcessor,
 } from "iterate/stream/processor";
-import type { WithItx } from "iterate/sdk";
-import { pinPkgPrNewDependencies } from "@iterate-com/shared/pkg-pr-new";
+import { pinPkgPrNewDependencies } from "iterate/pkg-pr-new";
 import { runningUnder } from "../cause.ts";
 import { defaultFiles, templateFiles } from "../generated/config-templates.js";
 import { readPackage } from "../context/module-resolution.ts";
@@ -43,7 +43,7 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { unavailableError } from "../unavailable.ts";
-import { ProjectContract, type ProjectState } from "./contract.ts";
+import { ProjectContract, type CustomHostnameObservation, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
 import { configPointer, manifestOf, type ProjectPublisher } from "./publication.ts";
@@ -77,6 +77,14 @@ export type ProjectHostnames = {
   reservedZones: readonly string[];
   claim(hostname: string): Promise<void>;
   release(hostname: string): Promise<void>;
+  /** Whether another project holds `hostname`'s claim: then its Cloudflare custom hostname is
+   *  that project's too, and a remove here leaves it. */
+  heldElsewhere(hostname: string): Promise<boolean>;
+  /** The ownership record for `hostname` and whether DNS has it (custom-hostnames.ts
+   *  `ownershipRecordOf`); a lookup that fails is not proof. */
+  proof(
+    hostname: string,
+  ): Promise<{ record: CustomHostnameObservation["records"][number]; proven: boolean }>;
   setPrimaryHostname(hostname: string | null): Promise<void>;
   provider: CustomHostnameProvider | null;
   /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
@@ -87,10 +95,12 @@ export type ProjectHostnames = {
   dnsZone(hostname: string): Promise<{ zone: string; provider: string | null } | null>;
 };
 
-/** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
- *  what a primary hostname must be. */
+/** Whether a hostname serves: the project holds its claim, and Cloudflare says its hostname and its
+ *  certificate are both active — what a primary hostname must be. */
 const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
-  entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
+  Boolean(entry?.claimed) &&
+  entry?.cloudflare?.status === "active" &&
+  entry.cloudflare.sslStatus === "active";
 
 /** What the deletion saga reaches, for THIS project (durable-object.ts builds it): a context's
  *  destruction, the Artifacts repo a context's path backs, and the project's own kv and files. The
@@ -114,21 +124,21 @@ export class ProjectProcessor extends StreamProcessor<
 > {
   readonly contract = ProjectContract;
 
-  private readonly withItx: WithItx<ItxEntrypointScope>;
+  private readonly getItx: () => ItxEntrypointScope & Disposable;
   private readonly downloadTemplate: TemplateDownload;
   private readonly hostnames: () => ProjectHostnames | null;
   private readonly deletion: () => ProjectDeletion | null;
   private readonly publisher: () => ProjectPublisher | null;
 
   constructor(
-    withItx: WithItx<ItxEntrypointScope>,
+    getItx: () => ItxEntrypointScope & Disposable,
     downloadTemplate: TemplateDownload,
     hostnames: () => ProjectHostnames | null = () => null,
     deletion: () => ProjectDeletion | null = () => null,
     publisher: () => ProjectPublisher | null = () => null,
   ) {
     super();
-    this.withItx = withItx;
+    this.getItx = getItx;
     this.downloadTemplate = downloadTemplate;
     this.hostnames = hostnames;
     this.deletion = deletion;
@@ -205,6 +215,7 @@ export class ProjectProcessor extends StreamProcessor<
               cloudflare: known?.cloudflare || null,
               error: null,
               connectedAt: event.payload.connected ? event.createdAt : known?.connectedAt || null,
+              claimed: known?.claimed || false,
             },
           },
         };
@@ -216,7 +227,13 @@ export class ProjectProcessor extends StreamProcessor<
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
         const requested = known.requested?.offset === requestOffset ? null : known.requested;
-        const settled = { ...known, requested, cloudflare: cloudflare || known.cloudflare, error };
+        const settled = {
+          ...known,
+          requested,
+          cloudflare: cloudflare || known.cloudflare,
+          error,
+          claimed: event.payload.claimed ?? Boolean(cloudflare || known.cloudflare),
+        };
         return {
           ...state,
           hostnames: { ...state.hostnames, [hostname]: settled },
@@ -251,7 +268,10 @@ export class ProjectProcessor extends StreamProcessor<
         if (known.requested && known.requested.offset !== requestOffset)
           return {
             ...state,
-            hostnames: { ...state.hostnames, [hostname]: { ...known, cloudflare: null } },
+            hostnames: {
+              ...state.hostnames,
+              [hostname]: { ...known, cloudflare: null, claimed: false },
+            },
           };
         const { [hostname]: _gone, ...hostnames } = state.hostnames;
         return { ...state, hostnames };
@@ -326,7 +346,9 @@ export class ProjectProcessor extends StreamProcessor<
             {
               commitOid: event.payload.commitOid,
               offset: event.offset,
-              ...(event.source?.cause && { cause: event.source.cause }),
+              ...(event.source?.cause && {
+                cause: { ...event.source.cause, parent: `${event.path}@${event.offset}` },
+              }),
             },
           ],
         };
@@ -435,10 +457,10 @@ export class ProjectProcessor extends StreamProcessor<
       runInBackground(async () => {
         try {
           // Drain: the newest request as of each pass, never the one just answered again. Whether
-          // the hostname is serving is the worker's own to carry: the state it drains from may not
-          // have reduced its last answer yet.
+          // the project holds the claim is the worker's own to carry: the state it drains from may
+          // not have reduced its last answer yet.
           let answered = 0;
-          let serving = Boolean(entry.cloudflare);
+          let claimed = entry.claimed;
           for (
             let owed = entry;
             owed?.requested && owed.requested.offset !== answered;
@@ -447,11 +469,10 @@ export class ProjectProcessor extends StreamProcessor<
             const { verb, offset } = owed.requested;
             const answer =
               verb === "add"
-                ? await this.#addHostname(hostname, offset, serving)
+                ? await this.#addHostname(hostname, offset, claimed)
                 : await this.#removeHostname(hostname, offset);
             await append(answer);
-            serving =
-              "cloudflare" in answer.payload ? serving || !!answer.payload.cloudflare : false;
+            claimed = "claimed" in answer.payload && answer.payload.claimed;
             answered = offset;
           }
         } finally {
@@ -529,7 +550,11 @@ export class ProjectProcessor extends StreamProcessor<
   /** THE SEED: the config repo, and the template committed onto its unborn `main` — or `main` as it
    *  is, born by an earlier attempt or another commit. */
   async #seed(state: ProjectState): Promise<void> {
-    await this.withItx((itx) => itx.repos.create("/repos/config"));
+    // its own block: the template's download below outlasts it
+    {
+      using itx = this.getItx();
+      await itx.repos.create("/repos/config");
+    }
     const config = (itx: ItxEntrypointScope) => itx.repos.get("/repos/config");
     // THE SEED LANDS ONLY ON AN UNBORN `main` (`parent: null`), so it is committed without a read
     // of the tip first — one Artifacts round trip less on every creation, and the one that hung
@@ -543,7 +568,7 @@ export class ProjectProcessor extends StreamProcessor<
     const reference = state.creation?.configRepoTemplate;
     try {
       // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
-      // build, and the loader refuses a ref that moves (@iterate-com/shared/pkg-pr-new). A ref
+      // build, and the loader refuses a ref that moves (iterate/pkg-pr-new). A ref
       // that cannot be pinned fails the creation, like a download that fails. The default and the
       // presets come from the build, their agents already at this deployment's own build.
       const changes = await pinPkgPrNewDependencies(
@@ -557,17 +582,18 @@ export class ProjectProcessor extends StreamProcessor<
         Object.fromEntries(changes.map((file) => [file.path, file.content])),
         "The config template",
       );
-      const seeded = (await this.withItx((itx) =>
-        config(itx).commitFiles({
-          message: reference ? `seed: ${reference}` : "seed: minimal project config",
-          changes,
-          parent: null,
-        }),
-      )) as unknown as { commitOid: string | null };
+      using itx = this.getItx();
+      // Over the loopback stub the commit's answer types as an RPC result; the wire copied it.
+      const seeded = (await config(itx).commitFiles({
+        message: reference ? `seed: ${reference}` : "seed: minimal project config",
+        changes,
+        parent: null,
+      })) as unknown as { commitOid: string | null };
       commitOid = seeded.commitOid;
     } catch (error) {
+      using itx = this.getItx();
       // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      commitOid = (await this.withItx((itx) => config(itx).tip())) as unknown as string | null;
+      commitOid = (await config(itx).tip()) as unknown as string | null;
       if (!commitOid) throw error;
       console.info({
         event: "project.seed-on-born-main",
@@ -587,8 +613,10 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   /** ONE OUTCOME for the commit fact `commit`, as generation `commit.offset` (publication.ts). A
-   *  commit that is still `main`'s head is admitted: the pointer, as the platform — its write
-   *  answers once every context resolves through it — then `project/worker-updated`. A commit the
+   *  commit that is `main`'s head as an attempt begins and that the probe admits is published: the
+   *  pointer and `project/worker-updated` in ONE batch as the platform, so no state of `/` holds
+   *  either without the other. Every context resolves through the pointer within SNAPSHOT_TTL_MS
+   *  of that batch (context/rule-snapshots.ts), and the append answers once it does. A commit the
    *  probe refuses, or one main moved on from (anyone may append a fact), is
    *  `project/worker-update-failed`. Both keyed by the generation, so an attempt run again lands
    *  nothing more. A platform failure is met again after 5 s and 30 s, within
@@ -638,13 +666,11 @@ export class ProjectProcessor extends StreamProcessor<
           payload: { commitOid, generation, error: attempt.error },
         });
       const { manifest } = attempt;
-      await landOnce(publisher, ...configPointer(commitOid, manifest));
-      await landOnce(publisher, {
+      return landOnce(publisher, ...configPointer(commitOid, manifest), {
         type: "events.iterate.com/project/worker-updated",
         idempotencyKey: `project/publication:${generation}`,
         payload: { commitOid, generation, modules: manifest.modules },
       });
-      return;
     }
     await publisher.appendAsPlatform({
       type: "events.iterate.com/project/worker-update-failed",
@@ -678,23 +704,28 @@ export class ProjectProcessor extends StreamProcessor<
     }
   }
 
-  /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
-   *  after the claim releases it unless the hostname was already serving (a failed re-check keeps it). */
-  async #addHostname(hostname: string, offset: number, provisioned: boolean) {
+  /** Claim the hostname once it is proven the project's (or again, when the project holds it), then
+   *  find-or-create its custom hostname: the answer to an add. A refusal after a claim this answer
+   *  took releases it; a claim held before stays (a failed re-check keeps it). */
+  async #addHostname(hostname: string, offset: number, held: boolean) {
     const hostnames = this.hostnames();
     let cloudflare = null;
     let error = null;
-    let claimed = false;
+    let claimed = held;
     try {
       if (!hostnames?.provider) throw new Error("This deployment cannot add custom hostnames.");
       const problem = customHostnameProblem(hostname, hostnames.reservedZones);
       if (problem) throw new Error(problem);
-      await hostnames.claim(hostname);
-      claimed = true;
+      const proof = await hostnames.proof(hostname);
+      if (held || proof.proven) {
+        await hostnames.claim(hostname);
+        claimed = true;
+      }
       const observed = await hostnames.provider.provision(hostname);
-      // while there is something to add: one click at the owner's DNS provider, and who that
-      // provider is, for the instructions by hand — both best effort, a failure logged and left out
-      const live = observed.status === "active" && observed.sslStatus === "active";
+      // while there is something to add — the ownership record too, once Cloudflare is done: one
+      // click at the owner's DNS provider, and who that provider is, for the instructions by hand —
+      // both best effort, a failure logged and left out
+      const live = claimed && observed.status === "active" && observed.sslStatus === "active";
       const bestEffort = <T>(what: string, ask: () => Promise<T | null>) =>
         live
           ? null
@@ -706,15 +737,18 @@ export class ProjectProcessor extends StreamProcessor<
         bestEffort("domain connect", () => hostnames.connect(hostname)),
         bestEffort("dns zone", () => hostnames.dnsZone(hostname)),
       ]);
-      cloudflare = { ...observed, connect, dns };
+      cloudflare = { ...observed, records: [...observed.records, proof.record], connect, dns };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
-      if (claimed && !provisioned) await hostnames!.release(hostname);
+      if (claimed && !held) {
+        await hostnames!.release(hostname);
+        claimed = false;
+      }
     }
     return {
       type: "events.iterate.com/project/hostname-add-settled" as const,
       idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
-      payload: { hostname, requestOffset: offset, cloudflare, error },
+      payload: { hostname, requestOffset: offset, cloudflare, error, claimed },
     };
   }
 
@@ -750,7 +784,7 @@ export class ProjectProcessor extends StreamProcessor<
     }
     for (const hostname of Object.keys(this.#newestState?.hostnames ?? {})) {
       const hostnames = this.hostnames();
-      await hostnames?.provider?.remove(hostname);
+      if (!(await hostnames?.heldElsewhere(hostname))) await hostnames?.provider?.remove(hostname);
       await hostnames?.release(hostname);
     }
     await deletion.deleteProjectStorage();
@@ -762,10 +796,11 @@ export class ProjectProcessor extends StreamProcessor<
     await deletion.destroyContext("/");
   }
 
-  /** Delete the custom hostname, then release the claim: the answer to a remove. */
+  /** Delete the custom hostname — unless another project holds the claim, whose it is then — and
+   *  release the claim: the answer to a remove. */
   async #removeHostname(hostname: string, offset: number) {
     const hostnames = this.hostnames();
-    await hostnames?.provider?.remove(hostname);
+    if (!(await hostnames?.heldElsewhere(hostname))) await hostnames?.provider?.remove(hostname);
     await hostnames?.release(hostname);
     return {
       idempotencyKey: `project/hostname-remove:${hostname}:${offset}`,
@@ -775,8 +810,8 @@ export class ProjectProcessor extends StreamProcessor<
   }
 }
 
-/** A keyed platform fact landed once: an IDEMPOTENCY_CONFLICT is the same key an earlier attempt of
- *  this generation already landed. */
+/** A keyed platform batch landed once: an IDEMPOTENCY_CONFLICT is a key an earlier attempt of this
+ *  generation already landed, and a batch lands whole or not at all, so its outcome is there. */
 async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput[]): Promise<void> {
   try {
     await publisher.appendAsPlatform(...events);

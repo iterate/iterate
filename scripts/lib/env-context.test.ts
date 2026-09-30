@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { cloudflareApi, dopplerSecret } from "./env-context.ts";
 import { fakeDoppler } from "./fake-doppler.ts";
@@ -79,7 +79,7 @@ test.for<{
 // The test evidence upload's: fetched beside the tests into the job's file, read after them from it.
 test("dopplerSecret with a fallback fetches the config into the file, then reads it offline", () => {
   using doppler = fakeDoppler({ secrets: { CLOUDFLARE_API_TOKEN: "token" } });
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const fallback = join(directory.path, "doppler-shared-preview");
   const read = () => dopplerSecret("_shared", "preview", "CLOUDFLARE_API_TOKEN", { fallback });
 
@@ -119,14 +119,14 @@ test.for([
     outcome: { error: 'Cloudflare API DELETE /d1/query failed (404): [{"code":10200}]' },
   },
   {
-    // R2's NoSuchKey for an object delete (apps/os/scripts/preview-delete.ts `GONE`)
+    // R2's NoSuchKey for an object delete (scripts/os/preview-delete.ts `GONE`)
     name: "a 200 whose envelope says `success: false` is the caller's CloudflareApiError, sent once",
     method: "DELETE",
     answers: [Response.json({ success: false, errors: [{ code: 10007 }] }, { status: 200 })],
     outcome: { error: 'Cloudflare API DELETE /d1/query failed (200): [{"code":10007}]' },
   },
   {
-    // the loser of two racing R2 bucket deletes (apps/os/scripts/preview-delete.ts `deleteR2Bucket`)
+    // the loser of two racing R2 bucket deletes (scripts/os/preview-delete.ts `deleteR2Bucket`)
     name: "a DELETE answered 500/10001 is sent again, and the retry's not-found is the caller's",
     method: "DELETE",
     answers: [

@@ -10,7 +10,6 @@
 // platform's own, with an installation token that can only write issues in this repository
 // (../iterate-app-token.ts). The Depot app's job token has no Issues permission.
 import type { Octokit } from "@octokit/rest";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { ciBucketEnvs } from "../../../envs.ts";
 import { dopplerSecret } from "../../lib/env-context.ts";
@@ -90,5 +89,4 @@ async function findDashboardIssue(github: Octokit, repository: { owner: string; 
   return issues.find((issue) => !issue.pull_request && issue.body?.startsWith(DASHBOARD_MARKER));
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "flake-dashboard-update" }).run();
+void createCli({ ...import.meta, name: "flake-dashboard-update" }).run();

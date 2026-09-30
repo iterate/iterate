@@ -1,7 +1,7 @@
 /** Deployment configuration for OS and its first-party apps. Secrets live in Doppler. */
 
 import { TEST_EMAIL_DOMAIN } from "./apps/os/src/test-email-domain.ts";
-import type { IngressRouting } from "./packages/iterate/src/project-ingress.ts";
+import type { OsDeployableEnv, OsEnv } from "./apps/os/scripts/os-env.ts";
 
 /** The two Cloudflare accounts, and the Doppler config whose CLOUDFLARE_API_TOKEN and
  * CLOUDFLARE_ACCOUNT_ID reach each one for account-wide tooling (scripts/monitors/do-cost.ts).
@@ -24,12 +24,6 @@ export const PRD_ACCOUNT_ID = cloudflareAccounts.prd.cloudflareAccountId;
 /** The shared dev/preview Cloudflare account (iterate-preview-N and dev zones). */
 export const PREVIEW_AND_DEV_ACCOUNT_ID = cloudflareAccounts["dev/preview"].cloudflareAccountId;
 
-/**
- * Placeholder for a Cloudflare resource that hasn't been created yet.
- * Deploy scripts refuse to ship it; `ensure-resources` replaces it.
- */
-export const UNPROVISIONED = "UNPROVISIONED";
-
 /** The Doppler project holding apps/os's secrets (and apps/spa's deploy credentials): one config per
  *  `osEnvs` deployment, each inheriting `_shared/<config>`. Every script that deploys, provisions,
  *  previews, erases or seeds an OS deployment reads its secrets from here. */
@@ -38,31 +32,6 @@ export const OS_DOPPLER_PROJECT = "os";
 /** The PostHog project every app reports to — "iterate (prd)" in PostHog EU. A project key is public:
  *  it ships in every page that loads posthog-js. Only prd entries carry it, so previews send nothing. */
 const ITERATE_POSTHOG_PROJECT_KEY = "phc_2MGb9SEJABGj4sCx4grFIbzMR7NjbcUgP5YmhSXfcr7";
-
-/** THE EVENTS EVERY PROJECT CONTEXT IS BORN WITH, in every deployment (a change reaches the contexts
- *  born after it): two fan-out rows from the context's birth on. `config` delivers every durable
- *  event to the project's published config entrypoint, `itx.config` on `/` (apps/os
- *  src/project/publication.ts); `platform` to the platform's own hook (apps/os src/platform-hook.ts). */
-export const PROJECT_CONTEXT_BIRTH_EVENTS = [
-  {
-    type: "events.iterate.com/itx/subscription-configured",
-    payload: {
-      name: "config",
-      target: "itx.cd('/').config.deliverEvent",
-      afterOffset: 0,
-      ordered: false,
-    },
-  },
-  {
-    type: "events.iterate.com/itx/subscription-configured",
-    payload: {
-      name: "platform",
-      target: "itx.builtins.platformHook.deliverEvent",
-      afterOffset: 0,
-      ordered: false,
-    },
-  },
-] as const;
 
 /** apps/kit — the browser device installer (README there): a TanStack Start app like notes, an
  *  ordinary OAuth client of the platform, on the k.iterate.com custom domain. It owns no stateful
@@ -97,78 +66,6 @@ export const kitEnvs = {
     posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
   },
 } satisfies Record<string, KitEnv>;
-
-export interface OsEnv {
-  cloudflareAccountId: string;
-  dopplerConfig: string;
-  workerName: string;
-  baseUrl: string;
-  mcpBaseUrl: string;
-  /** PostHog's project key (`ITERATE_POSTHOG_PROJECT_KEY`): the worker's `APP_CONFIG
-   *  posthogProjectKey`, which the issuer's own pages start posthog-js with. Unset ⇒ no PostHog. */
-  posthogProjectKey?: string;
-  /** The dash's origin for this deployment (apps/dash) — where the platform's landing page `/` sends
-   *  a person, the platform being headless. Unset ⇒ the page names no dash (a preview has none). */
-  dashBaseUrl?: string;
-  /** The platform admins (apps/os src/app-config.ts `admins`): exact email addresses, not secrets,
-   *  so here rather than in Doppler; the generator hands them to the worker as `APP_CONFIG_ADMINS`. */
-  admins?: string[];
-  /** How projects are reached over HTTP (`APP_CONFIG urls.ingressRouting`): `subdomains` hangs
-   *  `<routingSlug>--<project>.<hostname>` and the apex `<project>.<hostname>` under a wildcard route the
-   *  generator adds on `hostname`'s zone (ensure-resources creates the wildcard DNS record); `paths`
-   *  serves `<baseUrl>/projects/<project>/<routingSlug>/…` from the one origin. Unset ⇒ no ingress. */
-  ingressRouting?: NonNullable<IngressRouting>;
-  /** The prefix of the deployment's named Cloudflare resources (KV `<prefix>-oauth|-itx`, R2
-   *  `<prefix>-files`, the control plane's D1 `<prefix>-db`, the Artifacts namespace
-   *  `<prefix>-repos`; `osResourceNames`). It is its own field, not the worker name, so a worker can
-   *  be renamed without renaming the data it binds. `ensure-resources`, erase-data and the wrangler
-   *  generator derive the names from this, never from the worker name. No other Worker may bind
-   *  them: erase-data refuses a shared store, and another Worker would read every project's repos. */
-  resourceNamePrefix: string;
-  /** An owned zone served as the named project's config-worker apex: the zone's apex and every
-   *  first-level name under it, each with a route and a proxied DNS record (ensure-resources). More
-   *  specific Worker routes on that zone continue to take precedence. */
-  projectWildcard?: {
-    hostname: string;
-    project: string;
-    excludedHostnames?: string[];
-    /** A verified Email Routing destination (the account's Destination addresses) that every
-     *  message to an address on `hostname` is also forwarded to, as it arrived, once the project
-     *  has it (apps/os src/integrations/email.ts). */
-    forwardEmailTo?: string;
-  };
-  /** The zone this deployment serves projects' own hostnames on as a Cloudflare for SaaS provider
-   *  (apps/os src/project/custom-hostnames.ts): its fallback origin `cname.<zone>` is the
-   *  deployment's, reached through the one `*\/*` route the generator adds. The worker creates each
-   *  custom hostname at runtime with `APP_CONFIG.cloudflareApiToken` (Doppler). `dcvDelegationUuid`
-   *  is the zone's Delegated DCV id (`GET /zones/:id/dcv_delegation/uuid`), which the owner's
-   *  `_acme-challenge` CNAME names. */
-  cloudflareForSaas?: { zone: string; zoneId: string; dcvDelegationUuid: string };
-  /** Another iterate deployment whose word on who a browser is this one takes, for its `admins`
-   *  alone (apps/os src/app-config.ts `login.adminIssuer`, src/admin-sign-in.ts): prd, for a
-   *  per-commit deployment, whose admins sign in through it and sign an app in as the PR's test
-   *  person from the consent page. app-config.ts refuses it off an https workers.dev origin. */
-  adminIssuer?: string;
-  /** The reserved domain of the deployment's test people (apps/os src/app-config.ts
-   *  `login.testEmailDomain`): the pet shop's fake sign-ins admit addresses under it alone, and a
-   *  PR body's sign-in link pre-fills one of them for an admin. A per-commit deployment's only. */
-  testEmailDomain?: string;
-  /** iterate's own Slack app, Google and Cloudflare OAuth clients and GitHub App are the dummy pet
-   *  shop's fakes (apps/os/scripts/preview-*-app.ts), and people sign in with Google, Cloudflare and
-   *  GitHub through them. A per-commit deployment's only: prd's and main on dev's integrations are
-   *  their Doppler `APP_CONFIG`'s. */
-  petshopIntegrations?: boolean;
-  /** The ids of the resources `resourceNamePrefix` names, which ensure-resources creates and this
-   *  file records. Unset for a per-commit deployment (`previewDeployment`), whose own deploy creates
-   *  them by name (scripts/deploy.ts). */
-  resources?: { oauthKvId: string; itxKvId: string; dbId: string };
-}
-
-/** The named resources an apps/os deployment binds, from its `resourceNamePrefix`: the Artifacts
- *  namespace, the R2 bucket and the control plane's D1. The self-host config's prefix is `iterate`. */
-export function osResourceNames(prefix: string) {
-  return { repos: `${prefix}-repos`, files: `${prefix}-files`, db: `${prefix}-db` };
-}
 
 export const osEnvs: Record<string, OsEnv> = {
   // MAIN ON THE DEV/PREVIEW ACCOUNT: preview-parents.yml redeploys it in place from every push to
@@ -301,6 +198,28 @@ export const notesEnvs = {
   },
 };
 
+/** apps/docs — served only under a project's hosts: a members-only fetch route on the project
+ *  fetches through to this Worker, whose own URL no one signs in on (apps/os/scripts/preview-config.ts
+ *  `proxiedAppRoute` is the route a preview seeds). The prd iterate project routes its `docs` slug
+ *  and docs.iterate.com here, so the Worker keeps a workers.dev origin. */
+export const docsEnvs = {
+  // DOCS AT MAIN on the dev/preview account, redeployed in place with the platform
+  // (preview-parents.yml). A PR's docs is its own worker (`previewDeployment`).
+  preview: {
+    cloudflareAccountId: PREVIEW_AND_DEV_ACCOUNT_ID,
+    dopplerConfig: "preview",
+    workerName: "docs",
+    baseUrl: "https://docs.iterate-dev-preview.workers.dev",
+  },
+  prd: {
+    cloudflareAccountId: PRD_ACCOUNT_ID,
+    dopplerConfig: "prd",
+    workerName: "docs",
+    posthogProjectKey: ITERATE_POSTHOG_PROJECT_KEY,
+    baseUrl: "https://docs.iterate.workers.dev",
+  },
+};
+
 /** apps/admin — the platform's admin app (README there); the notes app's shape, on a custom domain. */
 export const adminEnvs = {
   // ADMIN AT MAIN on the dev/preview account, signed in against osEnvs.preview and
@@ -349,6 +268,7 @@ export const PREVIEW_DEPLOYMENT_APPS = [
   "dash",
   "agents",
   "notes",
+  "docs",
   "admin",
   "voice",
   "kit",
@@ -359,14 +279,14 @@ export const PREVIEW_DEPLOYMENT_APPS = [
  *  set stays under 63 characters (`<name>-agents`, `<name>-os-oauth-kv`). */
 const PREVIEW_DEPLOYMENT_NAME = /^(?<prefix>[a-z0-9]+(?:-[a-z0-9]+)*)-(?<sha>[0-9a-f]{7})$/;
 
-/** THE PER-COMMIT DEPLOYMENTS (apps/os/scripts/preview.ts): every PR run and every CI workflow that
+/** THE PER-COMMIT DEPLOYMENTS (scripts/os/preview.ts): every PR run and every CI workflow that
  *  tests a deployment gets a fresh set of plain Workers on the dev/preview account for the commit
  *  it tests, apps/os and each app on top, named `<name>-<app>` for a `name` of `<prefix>-<sha7>`:
  *  `pr3144-a1b2c3d-os` at `https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev`,
  *  `pr3144-a1b2c3d-dash`, …. The name decides everything, so the build, the deploy, the suites and
  *  the delete each derive the same set from it. apps/os's resources are named after its worker and
  *  provisioned by its first deploy: KV by wrangler (`<worker>-oauth-kv`, `<worker>-itx-kv`), the
- *  D1, R2 bucket and Artifacts namespace by scripts/deploy.ts. Nothing is redeployed in place: the
+ *  D1, R2 bucket and Artifacts namespace by scripts/os/deploy.ts. Nothing is redeployed in place: the
  *  next commit gets a set of its own, and the older one is deleted (preview.ts `cleanup-superseded`,
  *  preview-sweep.ts). Undefined for a name of any other shape. */
 export function previewDeployment(name: string) {
@@ -387,7 +307,7 @@ export function previewDeployment(name: string) {
     admins: [...osEnvs.prd!.admins!, `admin@${TEST_EMAIL_DOMAIN}`],
     adminIssuer: osEnvs.prd!.baseUrl,
     testEmailDomain: TEST_EMAIL_DOMAIN,
-    petshopIntegrations: true,
+    petshopOrigin: dummyPetshopEnvs.prd!.baseUrl,
     resourceNamePrefix: osWorker,
   };
   const apps = Object.fromEntries(
@@ -416,15 +336,11 @@ export function getEnv<E>(name: string, envs: Record<string, E>): E & { name: st
   return { ...env, name };
 }
 
-/** An apps/os deployment and the name it was found by (`getOsEnv`): what the deploy,
- *  preview and sweep scripts hold once they have looked their `--env` up. */
-export type OsDeployableEnv = OsEnv & { name: string };
-
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
  *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
- *  it; throws for any other name. What building and deploying apps/os by name look up
- *  (vite.config.ts through generate-wrangler-config.ts, scripts/deploy.ts), so neither needs to
- *  tell the two apart. */
+ *  it; throws for any other name. What deploying and previewing apps/os by name look up
+ *  (scripts/os/deploy.ts, preview.ts), so neither needs to tell the two apart; each hands the
+ *  result to the build (apps/os/scripts/build.ts `viteBuildOs`), which looks nothing up. */
 export function getOsEnv(name: string): OsDeployableEnv {
   const env = osEnvs[name] || previewDeployment(name)?.os;
   if (!env)

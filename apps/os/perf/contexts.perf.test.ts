@@ -42,21 +42,19 @@ test("a context's first append, then durable appends on a warm context", async (
 const APPENDER = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class extends WorkerEntrypoint {
-  timed(path, writers, each) {
-    return withItx(this.env.ITX, async (itx) => {
-      const ms = [];
-      const started = Date.now();
-      await Promise.all(Array.from({ length: writers }, async (_, w) => {
-        for (let i = 0; i < each; i++) {
-          const t = Date.now();
-          await (path ? itx.cd(path) : itx).append({ type: "perf/loaded", payload: { w, i } });
-          ms.push(Date.now() - t);
-        }
-      }));
-      return { ms, wallMs: Date.now() - started };
-    });
+  async timed(path, writers, each) {
+    using itx = this.getItx();
+    const ms = [];
+    const started = Date.now();
+    await Promise.all(Array.from({ length: writers }, async (_, w) => {
+      for (let i = 0; i < each; i++) {
+        const t = Date.now();
+        await (path ? itx.cd(path) : itx).append({ type: "perf/loaded", payload: { w, i } });
+        ms.push(Date.now() - t);
+      }
+    }));
+    return { ms, wallMs: Date.now() - started };
   }
 }`,
 };

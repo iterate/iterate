@@ -2,6 +2,8 @@
 // the rows that read workerd's own log: the runtime's uncaught errors, which neither the Workers
 // suite nor wrangler's harness shows.
 
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo } from "node:net";
@@ -9,7 +11,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { build } from "esbuild";
 import { expect, vi } from "vitest";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 
 /** `fixture` (a module whose imports resolve from `resolveDir`) served by a bare workerd on a free
  *  port as the service `main`, `--verbose` so its log names every invocation that failed. `worker`
@@ -22,7 +24,7 @@ export async function bareWorkerd(options: {
   worker?: string;
 }) {
   const port = await freePort();
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const dir = directory.path;
   const bundle = await build({
     stdin: { contents: options.fixture, resolveDir: options.resolveDir },
@@ -38,7 +40,7 @@ export async function bareWorkerd(options: {
 const config :Workerd.Config = (
   services = [ (name = "main", worker = (
     modules = [ (name = "worker.js", esModule = embed "worker.js") ],
-    compatibilityDate = "2026-09-01",
+    compatibilityDate = "${COMPATIBILITY_DATE}",
     ${options.worker || ""}
   )) ],
   sockets = [ (name = "http", address = "127.0.0.1:${port}", http = (), service = "main") ],

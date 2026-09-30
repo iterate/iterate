@@ -1,6 +1,5 @@
 import type { RestEndpointMethodTypes } from "@octokit/rest";
 
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { getOctokit, getRepo } from "./github.ts";
 import { getSlackClient, slackChannelIds, slackEscape, slackUsers } from "./slack.ts";
 
@@ -223,6 +222,6 @@ function ordinal(n: number) {
   return `${n}${suffixes[(mod100 - 20) % 10] || suffixes[mod100] || suffixes[0]}`;
 }
 
-if (isMainModule(import.meta.url)) {
+if (import.meta.main) {
   await updatePrDashboard();
 }

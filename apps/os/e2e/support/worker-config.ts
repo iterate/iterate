@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { experimental_readRawConfig, type Unstable_RawConfig } from "wrangler";
 import type { IngressRouting } from "iterate/project-ingress";
-import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../../../envs.ts";
+import { PROJECT_CONTEXT_BIRTH_EVENTS } from "../../src/project/context-birth-events.ts";
 
 /** The package root (this file lives at e2e/support/). */
 export const PACKAGE_DIR = dirname(dirname(dirname(fileURLToPath(import.meta.url))));

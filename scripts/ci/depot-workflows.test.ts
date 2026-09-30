@@ -1,11 +1,17 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  mkdtempDisposableSync,
+} from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { testEvidencePaths } from "@iterate-com/shared/test-support/test-evidence";
-import { CI_WORKFLOW_PREVIEWS } from "../../apps/os/scripts/preview-sweep.ts";
+import { CI_WORKFLOW_PREVIEWS } from "../os/preview-sweep.ts";
 import { mainE2eRecords, realModelTelemetry } from "../monitors/e2e.ts";
 import { AWAIT_OLDER_RUNS, stateArtifacts as healthStates } from "../monitors/health.ts";
 import { latencyReport } from "../monitors/latency.ts";
@@ -21,7 +27,7 @@ const repoRoot = resolve(import.meta.dirname, "../..");
 const attemptSuffix = "-attempt-${{ steps.attempt.outputs.id }}";
 /** When the preview and main suite jobs run their finalizer: whenever their suite step ran, whatever
  *  its outcome. It keeps evidence once the suite read the deployed target
- *  (apps/os/scripts/preview.ts `writeDeployedTarget`; test-evidence.ts `finalize --only-with-target`). */
+ *  (scripts/os/preview.ts `writeDeployedTarget`; test-evidence.ts `finalize --only-with-target`). */
 const afterTheSuite = "${{ always() && steps.suite.outcome != 'skipped' }}";
 /** The suite jobs' Depot artifact uploads after the finalizer's step: once it kept the folder (its
  *  `evidence` output) or failed, perhaps before it could say so, never a `hashFiles()` of their own. */
@@ -102,7 +108,7 @@ const workspaceDirectories = (
 // ── Depot deployment safety ──
 test("finds the production deploy workflows", () => {
   expect(deploymentWorkflows.map(({ app }) => app)).toEqual(
-    expect.arrayContaining(["os", "dash", "agents", "notes", "voice", "kit", "spa"]),
+    expect.arrayContaining(["os", "dash", "agents", "notes", "docs", "voice", "kit", "spa"]),
   );
 });
 
@@ -229,7 +235,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
   for (const file of [
     "apps/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
     "apps/os/scripts/build.ts",
-    "apps/os/scripts/deploy.ts",
+    "scripts/os/deploy.ts",
     "apps/os/scripts/generate-wrangler-config.ts",
     "apps/os/vite.config.ts",
     "apps/os/wrangler.base.jsonc",
@@ -249,9 +255,10 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
     "apps/os/bench/api.bench.ts",
     "apps/os/perf/push-delivery.perf.test.ts",
     "apps/os/perf/latency.ts",
-    "apps/os/scripts/preview.ts",
-    "apps/os/scripts/preview-config.ts",
-    "apps/os/scripts/e2e-soak.ts",
+    "scripts/os/preview.ts",
+    "scripts/os/preview-config.ts",
+    "scripts/os/e2e-soak.ts",
+    "scripts/os/preview.test.ts",
     ".depot/actions/setup/action.yml",
     "scripts/ci/toolchain.sh",
   ]) {
@@ -261,7 +268,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
 
 test.each(
   deploymentWorkflows.filter(({ app }) =>
-    ["os", "dash", "agents", "notes", "admin", "voice", "kit"].includes(app),
+    ["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"].includes(app),
   ),
 )("$file posts the deploy's own result as the deploy job's last two steps", ({ file, app }) => {
   const workflow = loadWorkflow(file);
@@ -408,7 +415,7 @@ test("uses DOPPLER_TOKEN as the only stored Depot secret", () => {
 // `doppler run`, as a developer's terminal runs them. No step calls Doppler any other way.
 test("no step reads Doppler but to wrap the preview tooling or a suite against a deployment", () => {
   const wrapper =
-    /^doppler run --project os --config [a-z0-9_-]+ -- pnpm (?:preview|e2e|e2e:run|e2e:soak|perf:run)(?=\s|$)/u;
+    /^doppler run --project os --config [a-z0-9_-]+ -- pnpm (?:preview|e2e|e2e:run|os:e2e-soak|perf:run)(?=\s|$)/u;
   const others = everyStepRun().flatMap(({ where, run }) =>
     [...run.matchAll(/\bdoppler\b.*/gu)]
       .filter(([command]) => !wrapper.test(command))
@@ -498,7 +505,7 @@ test.each([
     file: ".depot/workflows/preview-parents.yml",
     permissions: { contents: "read" },
   },
-  ...["os", "admin", "agents", "dash", "notes", "voice", "kit"].map((app) => ({
+  ...["os", "admin", "agents", "dash", "notes", "docs", "voice", "kit"].map((app) => ({
     file: `.depot/workflows/deploy-${app}.yml`,
     permissions: { contents: "read" },
   })),
@@ -1007,7 +1014,6 @@ test("the os parent's data is reset nightly, in the parents' deploy group", () =
     concurrency: { ...parents.concurrency, "cancel-in-progress": false },
   });
   expect(workflow.jobs["reset-parent"]?.steps?.at(-1)).toMatchObject({
-    "working-directory": "apps/os",
     run: "doppler run --project os --config preview -- pnpm preview reset-parent",
   });
 });
@@ -1027,7 +1033,6 @@ test("the preview parents deploy from main, for the paths a PR gets a preview fo
     concurrency: { group: "preview-parents", "cancel-in-progress": false },
   });
   expect(workflow.jobs.deploy?.steps?.at(-1)).toMatchObject({
-    "working-directory": "apps/os",
     run: "doppler run --project os --config preview -- pnpm preview deploy-parents",
   });
   // and nothing else deploys a parent: Main OS e2e's preview does not wait for one
@@ -1058,7 +1063,7 @@ test("a closed PR's preview is deleted by its own workflow, in that PR's preview
 });
 
 // Each CI workflow of main that deploys a preview has a prefix of its own
-// (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS, with the workflow's `name:`, which the
+// (scripts/os/preview-sweep.ts CI_WORKFLOW_PREVIEWS, with the workflow's `name:`, which the
 // cleanup asks Depot for its runs in progress by), its DEPLOYMENT_PREFIX, which its `pnpm preview`
 // steps pass as `--name`: it deploys the commit it tests as `<prefix>-<sha7>` and then deletes only
 // the deployments before it (`cleanup-superseded`), never a whole prefix's (`delete`), and no run
@@ -1516,7 +1521,7 @@ test("the CI telemetry sync's test evidence jobs are the jobs that upload a fold
 });
 
 test("the Test job's summary says which pnpm store its install started from and what main saved, warns on a failed restore or save, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (restore: string, primary: string, matched: string, save: string) => {
     writeFileSync(summary, "");
@@ -1580,9 +1585,9 @@ test("the Test job's summary says which pnpm store its install started from and 
 });
 
 test("the fallback report names a failed evidence step that did not report itself, once, and never fails", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // the job's workspace, where the manifest is test-results/manifest.json
-  using workspace = temporaryDirectory();
+  using workspace = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const report = (write: string, upload: string) => {
     writeFileSync(summary, "");
@@ -1649,7 +1654,7 @@ test("the test jobs' flake records go into the test evidence folder", () => {
   const runTests = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.find(
     (step) => step.name === "Run Tests",
   );
-  // under its suite's name, as the e2e jobs' records are (apps/os/scripts/preview.ts)
+  // under its suite's name, as the e2e jobs' records are (scripts/os/preview.ts)
   expect(runTests?.env?.FLAKE_RECORD_DIR).toBe(`${testEvidencePaths.flakeRecords}/unit`);
   for (const path of Object.values(testEvidencePaths).filter((path) => path !== "test-results")) {
     expect(path.startsWith(`${testEvidencePaths.root}/`), path).toBe(true);
@@ -1658,7 +1663,7 @@ test("the test jobs' flake records go into the test evidence folder", () => {
 
 test("the attempt step reads the job attempt's id from DEPOT_JOB_URL, and fails without one", () => {
   const run = loadWorkflow(".depot/workflows/test.yml").jobs.test?.steps?.[0]?.run ?? "";
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const attempt = (jobUrl: string) => {
     const output = join(directory.path, "output");
     writeFileSync(output, "");

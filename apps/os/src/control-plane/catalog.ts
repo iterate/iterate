@@ -747,6 +747,10 @@ export class ControlPlaneDatabase {
         : `'${hostname}' is under '${foreign.hostname}', which belongs to another project.`,
     );
   }
+  /** The id of the project holding `hostname`'s claim, or null when none does. */
+  async hostnameHolder(hostname: string): Promise<string | null> {
+    return (await projectsByHostnames(this.#client, { hostnames: [hostname] }))[0]?.id || null;
+  }
   /** Release a project's claim on `hostname`; another project's claim, or none, is left alone. */
   async releaseHostname(projectId: string, hostname: string): Promise<void> {
     await releaseHostname(this.#client, { hostname, projectId });

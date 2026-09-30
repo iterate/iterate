@@ -17,12 +17,11 @@ const CONFLICT_PROBE: FacetSpec = {
   source: {
     "worker.js": /* js */ `
 import { FacetDurableObject } from "iterate/sdk";
-import { withItx } from "iterate/with-itx";
 export class ConflictProbe extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "appendTwice"];
   async appendTwice(idempotencyKey) {
-    const append = (v) =>
-      withItx(this.env.ITX, (itx) => itx.append({ type: "probe", idempotencyKey, payload: { v } }));
+    using itx = this.getItx();
+    const append = (v) => itx.append({ type: "probe", idempotencyKey, payload: { v } });
     const [first] = await append(1);
     try {
       await append(2);

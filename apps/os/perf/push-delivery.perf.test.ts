@@ -1,7 +1,7 @@
 // perf/push-delivery.perf.test.ts — THE PUSH-DELIVERY BUDGETS: how fast the loads push-delivery.e2e
 // proves correct (e2e/support/push-load.ts) run, measured with nothing else on the wire. The perf
 // project runs its files one at a time and their rows in order (vitest.config.ts), and the soak runs
-// it after each e2e run, never beside one (scripts/e2e-soak.ts). These budgets used to sit in the
+// it after each e2e run, never beside one (scripts/os/e2e-soak.ts). These budgets used to sit in the
 // e2e rows, where 16 files ran at once against one worker and a latency measured the suite's
 // contention as much as the platform: a 1.6 s whoami against 1.5 s (main f5fdb3cf) and a 582 ms p50
 // against 500 (#2962), each green on its retry, in 2 of 124 e2e jobs.

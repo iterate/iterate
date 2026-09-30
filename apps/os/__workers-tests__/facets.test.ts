@@ -12,6 +12,7 @@
 
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { newWebSocketRpcSession, newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { expect, type MockInstance, onTestFinished, test, vi } from "vitest";
 import type { FacetSpec } from "iterate/api";
@@ -59,7 +60,7 @@ test("a facet from getDurableObjectClass(name, { props }) sees ctx.props: how a 
     async (_instance, state) => {
       // A fixed key: low-cardinality by construction (the loader cacheKey rule), tests only.
       const worker = env.LOADER.get("probe:facet-props:v1", () => ({
-        compatibilityDate: "2026-09-01",
+        compatibilityDate: COMPATIBILITY_DATE,
         mainModule: "probe.js",
         modules: { "probe.js": IDENTITY_PROBE },
       }));
@@ -92,7 +93,7 @@ test("a facet from ctx.exports.<Class>({ props }) sees ctx.props and answers thr
       return {
         entryKind: Object.getPrototypeOf(entry)?.constructor?.name,
         classKind: Object.getPrototypeOf(klass)?.constructor?.name,
-        // `snapshot()` catches up from the context's log through `withItx` — the loopback the class
+        // `snapshot()` catches up from the context's log through `getItx` — the loopback the class
         // minted from its props — so a fresh context answers the processor's empty view.
         snapshot: await facet.snapshot(),
       };
@@ -597,7 +598,13 @@ test("the sweep's alarm an evicted incarnation left wakes a fresh one that appen
   expect(appended.map((event) => [event.type, event.payload])).toEqual([
     [
       "events.iterate.com/itx/woken",
-      { incarnation: incarnation + 1, cause: "call", caller: "other", facetsReset: ["plain"] },
+      {
+        incarnation: incarnation + 1,
+        cause: "call",
+        caller: "other",
+        call: "itx.readEvents",
+        facetsReset: ["plain"],
+      },
     ],
   ]);
 });
@@ -793,9 +800,11 @@ test.for([
     // every durable event counted once — no double, no loss
     expect(await snapshot<{ n: number }>(ctx, "flaky")).toMatchObject({ state: { n: durable } });
     // The loaded identity was retired once: a fresh isolate. `loaderIdBefore` may already be the
-    // retry's (`…#1`) when the configure batch was pushed, rejected and retried before `until`'s
-    // first read landed.
-    expect(await kv(ctx, "facet:flaky:loader-id")).toBe(`${loaderIdBefore.replace(/#1$/, "")}#1`);
+    // retry's (`…#1.<salt>`) when the configure batch was pushed, rejected and retried before
+    // `until`'s first read landed.
+    expect(await kv(ctx, "facet:flaky:loader-id")).toEqual(
+      expect.stringContaining(`${loaderIdBefore.replace(/#1\.\w+$/, "")}#1.`),
+    );
     const rows = (await s.invoke("itx.processors.list()")) as {
       hostedFacet: { restarts: number };
     }[];
@@ -888,7 +897,7 @@ export class StartsFlaky extends FacetDurableObject {
   expect({
     loaderId: await kv(ctx, "facet:flaky:loader-id"),
     restarts: await kv(ctx, "facet:flaky:restarts"),
-  }).toEqual({ loaderId: `${loaderIdBefore}#1`, restarts: 1 });
+  }).toEqual({ loaderId: expect.stringContaining(`${loaderIdBefore}#1.`), restarts: 1 });
 });
 
 test("concurrent stale start failures do not retire the replacement generation twice", async () => {
@@ -1054,13 +1063,17 @@ test.for([
   {
     name: "a GET is replayed once on a fresh isolate and answers",
     first: { method: "GET" },
-    firstAnswer: { status: 200, text: "GET from a healthy isolate" },
+    firstAnswer: { status: 200, retryAfter: null, text: "GET from a healthy isolate" },
     event: "workers.platform-failure-retry",
   },
   {
-    name: "a POST with a body is not replayed: it fails, and the next request answers from a fresh isolate",
+    name: "a POST with a body is not replayed: a 503 to ask again, and the next request answers from a fresh isolate",
     first: { method: "POST", body: "form=1" },
-    firstAnswer: { status: 500, text: `expression fetch error: ${CLONE_VERSION_TEXT}\n` },
+    firstAnswer: {
+      status: 503,
+      retryAfter: "1",
+      text: `expression fetch error: workers.get(spec).fetch: ${CLONE_VERSION_TEXT}\n`,
+    },
     event: "workers.platform-failure-retire",
   },
 ])(
@@ -1081,12 +1094,17 @@ test.for([
           },
         }),
       );
-      return { status: response.status, text: await response.text() };
+      return {
+        status: response.status,
+        retryAfter: response.headers.get("retry-after"),
+        text: await response.text(),
+      };
     };
 
     expect(await page(first)).toEqual(firstAnswer);
     expect(await page({ method: "GET" })).toEqual({
       status: 200,
+      retryAfter: null,
       text: "GET from a healthy isolate",
     });
     expect(
@@ -1415,7 +1433,7 @@ const FACET_PUBLIC_METHOD_ROWS: {
   { facet: "loaded processor", method: "revive", byExpression: "FORBIDDEN" },
   // Nor is what a class has but never listed: the SDK's own plumbing.
   { facet: "account", method: "listPublicMethods", byExpression: "FORBIDDEN" },
-  { facet: "account", method: "withItx", byExpression: "FORBIDDEN" },
+  { facet: "account", method: "getItx", byExpression: "FORBIDDEN" },
   { facet: "loaded processor", method: "publishLiveState", byExpression: "FORBIDDEN" },
   // The `secret` facet lists its reads alone.
   { facet: "secret", method: "write", byExpression: "FORBIDDEN" },

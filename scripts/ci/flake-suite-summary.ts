@@ -78,7 +78,7 @@ export async function writeFlakeSuiteSummary(input: {
   ];
   const tests = artifacts.flatMap((artifact) => artifact.tests);
   if (tests.length === 0) diagnostics.push("No tests reported");
-  // Whether the rows tagged `slow` ran (apps/os/scripts/slow-rows.ts); a tree with none says nothing.
+  // Whether the rows tagged `slow` ran (scripts/os/slow-rows.ts); a tree with none says nothing.
   const slowRows = tests.filter((test) => test.tags.includes("slow"));
   const startedAt =
     artifacts.map((artifact) => artifact.run.startedAt).sort()[0] || new Date().toISOString();

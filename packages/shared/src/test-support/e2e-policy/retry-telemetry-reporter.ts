@@ -58,7 +58,7 @@ export class RetryTelemetryReporter {
   private readonly workspace: string;
 
   /** A unit run's kind and suite unless TEST_TELEMETRY_KIND and TEST_TELEMETRY_SUITE say otherwise
-   *  (a preview's e2e run: apps/os/scripts/preview.ts). */
+   *  (a preview's e2e run: scripts/os/preview.ts). */
   constructor() {
     this.workspace =
       process.env.TEST_TELEMETRY_WORKSPACE || process.env.npm_package_name || process.cwd();

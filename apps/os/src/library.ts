@@ -53,7 +53,7 @@ export interface LibraryRoots {
   /** A script — the text of `async (itx) => { … }` — run ONCE against this context, ON THE LOG:
    *  `run` appends `itx/run-requested { code }` (attributed to the caller), the context's
    *  runner starts it at that commit in a confined isolate (`executeScript`: a WorkerEntrypoint
-   *  whose `run` hands the script the scope of one `withItx` round trip), and the caller gets
+   *  whose `run` hands the script one `getItx()` scope), and the caller gets
    *  the `run-settled` event's result — or its error. So every script that ever ran is a pair of
    *  events on the context it ran against, and a run the context's restart interrupted — or that
    *  was still running at its ten-minute deadline (RUN_DEADLINE_MS) — is settled as such, never
@@ -214,10 +214,11 @@ export function buildLibrary(
 // caller's own code in its own confined isolate: the trusted-client doctrine), so a text that is not
 // one function expression fails at load, in the loader's words. It takes no arguments: a script is
 // an agent's whole output (an alternative to a tool call), its values baked in. The template is the
-// smallest WorkerEntrypoint that hosts it: `run(cause)` hands it the scope of ONE `withItx` round
-// trip, as the SDK's IterateConfigEntrypoint does, so the scope and every call the script made
-// through it are released when it settles — its unawaited ones and its deadline's included — all
-// of it under the cause its run was handed (cause.ts).
+// smallest WorkerEntrypoint that hosts it: `run()` hands it ONE `using itx = this.getItx()` scope,
+// as the SDK's IterateConfigEntrypoint does, so the scope and every call the script made through
+// it are released when it settles — its unawaited ones and its deadline's included — all of it
+// under the cause its run was handed (cause.ts), through the `callWithCause` every loaded
+// WorkerEntrypoint has (iterate src/sdk/loaded-worker.ts).
 // The call rides `itx.workers.get(...).run()` on the handle the library holds, so a rule on
 // `itx.workers` applies to it like any other call.
 
@@ -228,39 +229,31 @@ export function buildLibrary(
 // billed), the runner stops waiting (`runSettlementOf`) and a caller's `itx.run` returns.
 
 /** The source `run` loads, one module that package.json names as its `main`: `script` spliced in
- *  as `const script = …;`, run inside ONE `withItx` round trip (`iterate/with-itx`, the platform's
- *  ~1.5 KB module: a script's isolate never loads the whole SDK) and raced against the deadline. Its value becomes JSON inside the round trip: the log carries
- *  JSON, and a live value (a handle, a function) is released with the round trip. Exported for the
- *  unit pin. */
+ *  as `const script = …;`, run under ONE `using itx = this.getItx()` scope (the prototype's, so a
+ *  script's isolate never loads the SDK's hosts) and raced against the deadline. Its value becomes
+ *  JSON inside the scope's block: the log carries JSON, and a live value (a handle, a function) is
+ *  released with the scope. Exported for the unit pin. */
 export function runScriptModule(script: string) {
   return {
     "package.json": '{"main":"worker.js"}',
     "worker.js": [
       'import { WorkerEntrypoint } from "cloudflare:workers";',
-      'import { withItx } from "iterate/with-itx";',
       // the script on lines of its own, ended by a `;` of ours: its own trailing `;` or line comment
       // is then harmless, however an agent or a formatter wrote it
       `const script =\n${script}\n;`,
-      // the SDK's carrier, which `iterate/with-itx` shares by name (cause.ts runningCause)
-      'const carrier = globalThis[Symbol.for("iterate.cause")];',
       "export default class extends WorkerEntrypoint {",
-      "  // the platform runs the script under the cause of its request (cause.ts)",
-      "  callWithCause(cause) {",
-      "    return carrier.run(cause, () => this.run());",
-      "  }",
       "  async run() {",
       "    let deadline;",
       "    try {",
-      "      return await withItx(this.env.ITX, async (itx) => {",
-      "        const value = await Promise.race([",
-      "          script(itx),",
-      "          new Promise((_, reject) => {",
-      `            deadline = setTimeout(() => reject(new Error("itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes")), ${RUN_DEADLINE_MS});`,
-      "          }),",
-      "        ]);",
-      "        const json = JSON.stringify(value);",
-      "        return json === undefined ? undefined : JSON.parse(json);",
-      "      });",
+      "      using itx = this.getItx();",
+      "      const value = await Promise.race([",
+      "        script(itx),",
+      "        new Promise((_, reject) => {",
+      `          deadline = setTimeout(() => reject(new Error("itx.run: the script did not finish within ${RUN_DEADLINE_MS / 60_000} minutes")), ${RUN_DEADLINE_MS});`,
+      "        }),",
+      "      ]);",
+      "      const json = JSON.stringify(value);",
+      "      return json === undefined ? undefined : JSON.parse(json);",
       "    } finally {",
       "      clearTimeout(deadline);",
       "    }",

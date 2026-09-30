@@ -120,7 +120,7 @@ class SubscriptionHandleRpcTarget extends RpcTarget {
 /** WHAT RIDES THE HOP, TYPED: every built-in root (`append`, `readEvents`, `waitForEvent`, `kv`, `rpcStubs`,
  *  `facets`, `workers`, …) is a member of this class's TYPE by declaration merging — zero runtime; the
  *  prototype fallback at the bottom of this file is the runtime. So a reader of this file sees the
- *  whole surface, and `withItx(env.ITX, (itx) => itx.append(…))` typechecks in loaded code. `cd` is
+ *  whole surface, and `itx.append(…)` on a `getItx()` scope typechecks in loaded code. `cd` is
  *  the edge's own (below) — it returns an EDGE context, not the built-in's handle — and `facets` is
  *  the published one, whose `get<Facet>` lets a caller type the facet it names (the record's own
  *  `get` answers the physical host's brand, which a caller never sees). */
@@ -267,10 +267,16 @@ export class IterateContextRpcTarget extends RpcTarget {
    *  fetch. */
   async invoke(call: ItxExpressionInput, ...args: unknown[]): Promise<unknown> {
     const answer = await this.#dispatch(call, args);
+    if (!(answer instanceof Response)) return answer;
     // a fetch refused past the loop limit answers 508, marked (cause.ts): `itx.fetch` throws it
-    const refused = answer instanceof Response ? await loopLimitOf(answer) : undefined;
+    const refused = await loopLimitOf(answer);
     if (refused) throw refused;
-    return answer;
+    if (!answer.body) return answer;
+    // A PLATFORM WORKAROUND: a Durable Object's body that workerd pumps natively into a Workers-RPC
+    // answer can reach the caller with its chunks out of order, while a body this isolate fetched
+    // itself arrives whole (prd, measured 2026-09-29). Through a JS stream, workerd reads it chunk
+    // by chunk, in order. Pinned by iterate-context.test.ts; drop it once workerd keeps the order.
+    return new Response(answer.body.pipeThrough(new TransformStream()), answer);
   }
 
   async #dispatch(call: ItxExpressionInput, args: unknown[]): Promise<unknown> {

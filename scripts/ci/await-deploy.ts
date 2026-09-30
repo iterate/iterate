@@ -1,6 +1,6 @@
 // scripts/ci/await-deploy.ts — A SUITE JOB'S WAIT FOR ITS RUN'S DEPLOY. Preview OS's and Main OS
 // e2e's E2E tests and Browser specs jobs start when the run does, beside Deploy preview, with no
-// `needs:`. Each sets itself up while the deploy runs (apps/os/scripts/preview.ts `runSuite`), then
+// `needs:`. Each sets itself up while the deploy runs (scripts/os/preview.ts `runSuite`), then
 // waits here: Depot's GetWorkflow for its own workflow run, once a second, until the deploy job has
 // finished, which starts the suite, or failed, been cancelled or skipped, which fails it red, since
 // there is no preview of this commit to test (docs/depot-ci.md#preview-job-shape).
@@ -18,18 +18,14 @@
 // fails the suite. An answer about the request (a 401 or 403, a missing token, an answer the wait
 // cannot read) fails it at once.
 import { z } from "zod";
-import {
-  httpFailureFields,
-  httpFailureKind,
-  isPlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+import { httpFailureFields, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { depotApi, type DepotApi } from "./depot.ts";
 
 /** How often the wait asks Depot; how long it waits at most, the deploy jobs' own `timeout-minutes`;
  *  and how long Depot may fail every call before the wait gives up on it. */
 export const AWAIT_DEPLOY = { pollMs: 1_000, boundMs: 40 * 60_000, outageMs: 5 * 60_000 };
 
-/** How long a suite runs at most once the wait is over (apps/os/scripts/preview.ts `runSuite`). The
+/** How long a suite runs at most once the wait is over (scripts/os/preview.ts `runSuite`). The
  *  suite jobs' `timeout-minutes` is the wait's bound and then this (preview-os-workflow.test.ts). */
 export const SUITE_BOUND_MS = 30 * 60_000;
 

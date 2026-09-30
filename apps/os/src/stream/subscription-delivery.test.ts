@@ -362,6 +362,39 @@ test("a row re-configured onto a NEW target while a delivery is in flight delive
   expect({ sinkA, sinkB }).toEqual({ sinkA: [[1]], sinkB: [[2]] });
 });
 
+test("a cursor row re-configured `ordered: false` while its call is out leaves the fan-out row alone: the old batch moves no cursor, and `deliverEvent` only ever gets one event", async () => {
+  const pushes: number[][] = [];
+  const delivered: unknown[] = [];
+  let releasePush!: () => void;
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? {
+          push: (events: { payload?: { n?: number } }[]) => {
+            pushes.push(ns(events));
+            return new Promise<void>((resolve) => (releasePush = resolve));
+          },
+          // every call keeps its slot: the row admits 8 and stays behind the mark
+          deliverEvent: (event: StreamEvent | StreamEvent[]) => {
+            delivered.push(Array.isArray(event) ? "a batch" : ns([event])[0]);
+            return new Promise<never>(() => {});
+          },
+        }
+      : undefined,
+  );
+  configure(rig, { name: "s", target: "itx.sink.push", consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(pushes).toEqual([[1]]); // parked
+  configure(rig, { ...SINK_ROW, name: "s", consumes: ["demo/ping"] });
+  rig.stream.append(...range(2, 10).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  const fanOutCursor = rig.stream.storage.listSubscriptionCursors();
+  releasePush();
+  await drainDeliveries();
+  expect(delivered).toEqual(range(2, 9));
+  expect(rig.stream.storage.listSubscriptionCursors()).toEqual(fanOutCursor);
+});
+
 test("a two-step target (`itx.<alias>` — the spelling every provide mints) IS the callee: delivered to whole, never split into a bare root and a method", async () => {
   const delivered: number[][] = [];
   const { stream, evaluated } = incarnation((printed) =>
@@ -1038,6 +1071,7 @@ test("alarm claim: a cursor row re-pointed at a facet drops its cursor and its c
   expect(rig.delivery.deadlines()).toEqual([]);
   expect(rig).toMatchObject({ deletes: [1] });
   await rig.release();
+  expect(rig.delivery.cursor("s")).toBeUndefined(); // the call that was out acks nothing
 });
 
 test("alarm claim: the ladder's next attempt IS the row's deadline, and survives an eviction before any pass", async () => {
@@ -1498,11 +1532,41 @@ test("fan-out: an evaluation is reused until it expires; a pending retry keeps i
   expect(next.records()).toEqual([]);
 });
 
+test("fan-out: a row replaced while its predecessor's call was evaluating the target keeps its own bound: the old evaluation's answer touches nothing of the new row's", async () => {
+  const evaluations: (() => void)[] = [];
+  const calls: number[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.sink"
+      ? new Promise<void>((resolve) => evaluations.push(resolve)).then(() => ({
+          // every call keeps its slot
+          deliverEvent: (event: StreamEvent) => {
+            calls.push(...ns([event]));
+            return new Promise<never>(() => {});
+          },
+        }))
+      : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] }); // over ping 1's evaluation
+  rig.stream.append(...range(2, 9).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  evaluations.shift()!(); // the old row's answers first
+  await drainDeliveries();
+  for (const answer of evaluations.splice(0)) answer();
+  await drainDeliveries();
+  rig.stream.append(...range(10, 20).map((n) => ({ type: "demo/ping", payload: { n } })));
+  await drainDeliveries();
+  expect(calls).toEqual(range(2, 9));
+});
+
 test.for([
-  { name: "a refusal", refusedForMs: undefined },
+  { name: "its own table's refusal", refusedForMs: undefined },
   { name: "a refusal no snapshot bounds, `validUntil` Infinity", refusedForMs: Infinity },
+  { name: "another context's snapshot's refusal", refusedForMs: 5_000 },
 ])(
-  "fan-out: a row whose target resolves to nothing ($name) waits unspent, probes 15 times, then waits for a commit",
+  "fan-out: a row whose target resolves to nothing ($name) waits unspent, probes 15 times, never before the refusal expires, then waits for a commit",
   async ({ refusedForMs }) => {
     let provided = false;
     const rig = fanOutRig({ provided: () => provided, options: { refusedForMs } });
@@ -1516,7 +1580,11 @@ test.for([
     );
     fakeClock();
     const probes: number[] = [];
-    for (let probe = rig.delivery.deadlines()[0]; probe; probe = rig.delivery.deadlines()[0]) {
+    for (
+      let probe = rig.delivery.deadlines()[0];
+      probe && probes.length < 40;
+      probe = rig.delivery.deadlines()[0]
+    ) {
       probes.push(probe.at);
       vi.setSystemTime(probe.at + 1);
       await rig.pass();
@@ -1524,6 +1592,10 @@ test.for([
     }
     expect(probes).toHaveLength(15);
     expect(probes.at(-1)! - probes.at(-2)!).toBeGreaterThan(probes[1]! - probes[0]!); // backing off
+    const gaps = probes.slice(1).map((at, i) => at - probes[i]!);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(
+      Number.isFinite(refusedForMs) ? refusedForMs! : 0,
+    );
     expect(rig).toMatchObject({ calls: [] });
     provided = true;
     rig.stream.append({ type: "demo/other" }); // any commit of its own tries it again
@@ -1533,33 +1605,143 @@ test.for([
   },
 );
 
-test("fan-out: a dangling row another context's snapshot refused waits rather than fails: it probes on its ladder, never before that snapshot expires, and past DELIVERY_MAX_ATTEMPTS on its top rung — the pointer landing on the root reaches it at its next probe, with no commit of its own", async () => {
-  let provided = false;
-  const rig = fanOutRig({
-    behave: () => "ack",
-    provided: () => provided,
-    options: { refusedForMs: 5_000 },
+test.for([
+  { name: "the root's own table", refusedForMs: undefined },
+  { name: "the root's snapshot, from another context", refusedForMs: 5_000 },
+])(
+  "fan-out: while the project's config is unpublished ($name refuses `itx.config`), the config row passes every event over — no record, no claim, no probe — and delivers from the commit that publishes it",
+  async ({ refusedForMs }) => {
+    let published = false;
+    const told: string[] = [];
+    const config = sink(told);
+    const rig = incarnation(
+      (printed) => (published && printed === CONFIG_HEAD ? config("itx.sink") : undefined),
+      undefined,
+      { refusedForMs, refusal: { unpublishedConfig: true } },
+    );
+    configure(rig, { name: "config", target: `${CONFIG_HEAD}.deliverEvent`, ordered: false });
+    rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+    rig.stream.append({ type: "demo/ping", payload: { n: 2 } });
+    await drainDeliveries();
+    expect({
+      records: rig.stream.storage.listSubscriptionDeliveries(),
+      deadlines: rig.delivery.deadlines(),
+      armedAt: rig.coordinator.snapshot().armedAt,
+    }).toEqual({ records: [], deadlines: [], armedAt: null });
+    expect(rig.delivery.fanOutView("config")).toEqual({ pending: 0, paused: false });
+    published = true;
+    rig.stream.append({ type: "demo/published" });
+    rig.stream.append({ type: "demo/ping", payload: { n: 3 } });
+    await drainDeliveries();
+    expect(told).toEqual(["demo/published", "demo/ping#3"]);
+    expect(rig.delivery.deadlines()).toEqual([]);
+  },
+);
+
+test("fan-out: the root's snapshot that refuses `itx.config` passes over only what was committed before its read: an event newer than the snapshot waits it out, and the publication since delivers it", async () => {
+  fakeClock();
+  let published = false;
+  const told: string[] = [];
+  const config = sink(told);
+  // the snapshot lasts 1 s more: it was read 4 s ago (SNAPSHOT_TTL_MS 5 s), before the ping
+  const rig = incarnation(
+    (printed) => (published && printed === CONFIG_HEAD ? config("itx.sink") : undefined),
+    undefined,
+    { refusedForMs: 1_000, refusal: { unpublishedConfig: true } },
+  );
+  configure(rig, { name: "config", target: `${CONFIG_HEAD}.deliverEvent`, ordered: false });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  const [probe] = rig.delivery.deadlines();
+  expect(probe!.at).toBeGreaterThanOrEqual(Date.now() + 1_000);
+  published = true; // the root published after that read, before the ping
+  vi.setSystemTime(probe!.at + 1);
+  await rig.pass();
+  await drainDeliveries();
+  expect({ told, deadlines: rig.delivery.deadlines() }).toEqual({
+    told: ["demo/ping#1"],
+    deadlines: [],
   });
+});
+
+test("fan-out: a call rejected with no reason at all (`undefined`) climbs the ladder like any failure", async () => {
+  const rig = incarnation((printed) =>
+    printed === "itx.sink" ? { deliverEvent: () => Promise.reject(undefined) } : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  rig.stream.append({ type: "demo/ping", payload: { n: 1 } });
+  await drainDeliveries();
+  expect(rig.stream.storage.listSubscriptionDeliveries()).toMatchObject([
+    ["f", { attempt: 1, leased: false }],
+  ]);
+});
+
+test("fan-out: a call out claims the alarm while its time is ahead — a death mid-call is retried — and nothing once that time passes with the call still out, so it never spins the alarm; its settle tries it again", async () => {
+  fakeClock(Date.now(), ["setTimeout", "clearTimeout"]);
+  let answered = 0;
+  const rig = fanOutRig({ behave: () => (answered++ === 0 ? "park" : "ack") });
   rig.pings(1);
   await drainDeliveries();
-  const probes: number[] = [];
-  fakeClock();
-  // twenty probes in, five past the budget a failing row has, the rule lands on the root
-  for (let n = 1; n <= 20; n++) {
-    const [probe] = rig.delivery.deadlines();
-    probes.push(probe!.at);
-    if (n === 20) provided = true;
-    vi.setSystemTime(probe!.at + 1);
+  const [lease] = rig.records();
+  expect(rig.delivery.deadlines()).toMatchObject([{ at: lease!.nextAttemptAtMs }]);
+  vi.advanceTimersByTime(20_000); // the watchdog gives up on the call; it is still out
+  await drainDeliveries();
+  const [rung] = rig.records();
+  expect(rung).toMatchObject({ attempt: 1, leased: false });
+  expect(rig.delivery.deadlines()).toMatchObject([{ at: rung!.nextAttemptAtMs }]);
+  vi.setSystemTime(rung!.nextAttemptAtMs! + 1);
+  const armed = rig.alarms.length;
+  for (let pass = 0; pass < 3; pass++) {
     await rig.pass();
     await drainDeliveries();
   }
-  const gaps = probes.slice(1).map((at, i) => at - probes[i]!);
-  // never before the snapshot that refused it expires, and at most the ladder's top rung (30
-  // minutes, +20% jitter)
-  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(5_000);
-  expect(Math.max(...gaps)).toBeLessThanOrEqual(36 * 60_000 + 1);
-  expect(rig).toMatchObject({ acked: [1] });
-  expect(rig.delivery.deadlines()).toEqual([]);
+  expect({ deadlines: rig.delivery.deadlines(), armed: rig.alarms.length - armed }).toEqual({
+    deadlines: [],
+    armed: 0,
+  });
+  rig.settle(1);
+  await drainDeliveries();
+  expect({ acked: rig.acked, records: rig.records() }).toEqual({ acked: [1, 1], records: [] });
+});
+
+test("fan-out: a dangling row's records keep no time while the in-flight budget is full: they claim nothing, and the release tries them", async () => {
+  let provided = false;
+  const held: (() => void)[] = [];
+  const rig = incarnation((printed) =>
+    printed === "itx.big"
+      ? { deliverEvent: () => new Promise<void>((resolve) => held.push(resolve)) }
+      : printed === "itx.sink" && provided
+        ? { deliverEvent: () => undefined }
+        : undefined,
+  );
+  configure(rig, { ...SINK_ROW, consumes: ["demo/ping"] });
+  configure(rig, {
+    name: "big",
+    target: "itx.big.deliverEvent",
+    consumes: ["demo/big"],
+    ordered: false,
+  });
+  const pad = "x".repeat(4096);
+  for (const n of [1, 2]) rig.stream.append({ type: "demo/ping", payload: { n, pad } });
+  await drainDeliveries();
+  expect(rig.delivery.fanOutView("f")).toEqual({ pending: 2, paused: false });
+  // one call out holds the whole budget
+  rig.stream.append({ type: "demo/big", payload: { blob: "z".repeat(8 * MiB - 2_000) } });
+  await drainDeliveries();
+  expect(held).toHaveLength(1);
+  rig.stream.append({ type: "demo/other" }); // a durable commit tries the dangling row again
+  await drainDeliveries();
+  expect(
+    rig.stream.storage
+      .listSubscriptionDeliveries()
+      .filter(([name]) => name === "f")
+      .map(([, record]) => record.nextAttemptAtMs),
+  ).toEqual([null, null]);
+  expect(rig.delivery.deadlines().filter(({ name }) => name === "f")).toEqual([]);
+  provided = true;
+  held.shift()!();
+  await drainDeliveries();
+  expect(rig.delivery.fanOutView("f")).toEqual({ pending: 0, paused: false });
 });
 
 test("fan-out, the loop rule: no fan-out row takes a dead letter or an ephemeral, through `*`, by name or by resume", async () => {
@@ -1808,6 +1990,7 @@ function incarnation(
     validForMs = Infinity,
     routeOf = (printed) => printed,
     refusedForMs,
+    refusal = {},
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
     deployId,
@@ -1818,6 +2001,8 @@ function incarnation(
     routeOf?: (printedExpression: string) => string;
     /** A refusal came from another context's snapshot, which lasts this long (its `validUntil`). */
     refusedForMs?: number;
+    /** What else a refusal says, as the resolver marks it (`unpublishedConfig`). */
+    refusal?: Record<string, unknown>;
     /** Why this incarnation woke, as the DO's first handler records it. */
     wake?: Wake;
     /** What the context is born with (app-config.ts `contextBirthEvents`). */
@@ -1864,6 +2049,7 @@ function incarnation(
             `no rewrite rule matches ${JSON.stringify(printed)} (default-deny)`,
           ),
           refusedForMs === undefined ? {} : { validUntil: Date.now() + refusedForMs },
+          refusal,
         );
       return { value, validUntil: Date.now() + validForMs, routedTo: routeOf(printed) };
     },
@@ -2111,6 +2297,9 @@ const WOKEN = "events.iterate.com/itx/woken";
 
 /** A fan-out row on every durable event, one call each, to `itx.sink.deliverEvent`. */
 const SINK_ROW = { name: "f", target: "itx.sink.deliverEvent", ordered: false };
+
+/** The config birth row's target head (../project/context-birth-events.ts), as printed. */
+const CONFIG_HEAD = "itx.builtins.cd('/').config";
 
 /** A subscription row as the context's append normalizes it. */
 function configured(payload: Record<string, unknown>, path = "/") {

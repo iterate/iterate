@@ -135,8 +135,9 @@ export type DeploymentStructure = z.infer<typeof DeploymentStructure>;
 /** How a live deployment differs from a captured structure, by what survives a recreation: users
  * by email, organizations by name, memberships by (email, role), projects by ID and slug and their
  * organization's name. `problems` fail `verify-structure`; `notes` are what a restore does not
- * promise — a captured user or an empty organization nobody has recreated yet (sign-in recreates a
- * user; an empty organization has nothing to restore), and anything live that was not captured. */
+ * promise — a captured user or an organization with no projects nobody has recreated yet (sign-in
+ * recreates a user; no seed carries an organization with no projects), and anything live that was
+ * not captured. */
 export function compareStructure(captured: DeploymentStructure, live: DeploymentStructure) {
   const problems: string[] = [];
   const notes: string[] = [];
@@ -149,9 +150,10 @@ export function compareStructure(captured: DeploymentStructure, live: Deployment
     const want = members(captured, org.id);
     if (matches.length > 1)
       problems.push(`organization "${org.name}" exists ${matches.length} times`);
-    else if (!matches.length && (want.length || org.projects))
+    else if (!matches.length && org.projects)
       problems.push(`organization "${org.name}" is missing`);
-    else if (!matches.length) notes.push(`empty organization "${org.name}" was not recreated`);
+    else if (!matches.length)
+      notes.push(`organization "${org.name}" has no projects and was not recreated`);
     else {
       const have = members(live, matches[0]!.id);
       for (const member of want)
@@ -203,6 +205,7 @@ const ProjectHostnames = z.object({
         requested: z.object({ verb: z.enum(["add", "remove"]) }).nullable(),
         cloudflare: z.object({ status: z.string(), sslStatus: z.string() }).nullable(),
         error: z.string().nullable(),
+        claimed: z.boolean(),
       }),
     ),
   }),
@@ -216,9 +219,10 @@ async function projectHostnameState(root: SeedRoot) {
 async function projectHostnames(root: SeedRoot): Promise<ProjectHostnames> {
   return (await projectHostnameState(root)).hostnames;
 }
-/** Served: Cloudflare has provisioned it for the project, and no removal is pending. */
+/** Served: the project holds it (its ownership record named the project), Cloudflare has
+ *  provisioned it, and no removal is pending. */
 const serves = (entry: ProjectHostnames[string] | undefined) =>
-  !!entry?.cloudflare && entry.requested?.verb !== "remove";
+  !!entry?.claimed && !!entry.cloudflare && entry.requested?.verb !== "remove";
 
 /** What `capture` records: every hostname the project serves. A first add still in flight, or one
  *  refused, was never the project's; a hostname being removed is on its way out. */
@@ -272,10 +276,12 @@ export async function restoreHostnames(
     );
   return hostnames.map((hostname) => {
     const { status, sslStatus } = now[hostname]!.cloudflare!;
+    // provisioned, but not the project's until the owner's `_iterate` TXT record names it
+    const proof = now[hostname]!.claimed ? "" : ", ownership record missing";
     return {
       hostname,
       asked: ask.includes(hostname),
-      status: `${status}, certificate ${sslStatus}`,
+      status: `${status}, certificate ${sslStatus}${proof}`,
     };
   });
 }
@@ -290,7 +296,7 @@ export async function capturePrimaryHostname(root: SeedRoot): Promise<string | n
  *  processor to reduce it. The reduce takes only a hostname the project holds whose certificate is
  *  active; after an erase the zone still holds the custom hostname, so it usually is. One still
  *  pending is not made primary: `primary` answers false, and the owner makes it primary on the
- *  dash's Hostnames page once it serves. */
+ *  dash's Domains page once it serves. */
 export async function restorePrimaryHostname(
   root: SeedRoot,
   hostname: string,

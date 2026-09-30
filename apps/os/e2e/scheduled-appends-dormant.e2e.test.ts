@@ -33,7 +33,10 @@ const platformHeldTheAlarm = createFlake(
 platformHeldTheAlarm(
   "a disconnected userspace facet's deadline fires after the pins' release without another request",
   async () => {
-    const { ctx, itx } = await freshPublishedCtx("schedule_dormant");
+    // On a child: other contexts read the root's rules, and each read keeps the context it lands
+    // on resident, so the dormancy this row proves is a context no one reads.
+    const { ctx, itx: root } = await freshPublishedCtx("schedule_dormant");
+    const itx = root.cd("/dormant");
     await itx.processors.enable("deadlines", {
       source: scheduledAppendFacetSource,
       className: "DeadlinesDurableObject",
@@ -43,7 +46,7 @@ platformHeldTheAlarm(
     disposeSessions();
     await sleep(22_000);
     const reconnectedAt = Date.now();
-    const reconnected = openItx(ctx);
+    const reconnected = openItx(ctx).cd("/dormant");
     // Committed already — or, when the platform held the alarm, by the reconnected actor.
     const first = await reconnected.waitForEvent({
       type: "job/timed-out",

@@ -17,8 +17,9 @@ instead.
 
 Copy `scripts/app.ts` and `src/routes/` from `apps/voice`:
 
-- `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`) plus the CLI line. `name` is
-  the directory, the Doppler project and the local Worker name.
+- `scripts/app.ts`: the app's `StartApp` (`name`, `root`, `envs`, `dopplerProject`) plus the CLI
+  line. `name` is the directory and the local Worker name; `dopplerProject` is `"_shared"` unless
+  the app has secrets of its own ([Doppler setup](references/doppler.md)).
 - `src/routes/`: `__root.tsx` (`AppDocument`), the landing page `index.tsx`, and `_auth.tsx`, which
   is `ssr: false` with `createIterateClient({ scopes })` in `beforeLoad`. An app a project proxies
   under paths ingress needs Notes' `basePath` too (`apps/notes/src/base-path.ts`).
@@ -41,7 +42,7 @@ Then run `pnpm install` and `pnpm --dir apps/<app> routes:generate`.
 | `envs.ts`                                                                                     | `<app>Envs` with `preview` (main on dev: dev/preview account, `<app>` on `iterate-dev-preview.workers.dev`) and `prd` (with `posthogProjectKey`); `PREVIEW_DEPLOYMENT_APPS`, so each PR deploys it |
 | `scripts/lib/start-app.ts`                                                                    | `FIRST_PARTY_APPS`, which drives the deny zones and the apps' `APP_CONFIG` `urls`                                                                                                                  |
 | `packages/shared/src/start-app-config.ts`                                                     | the app's name under `urls`, which `FIRST_PARTY_APPS` is typed against                                                                                                                             |
-| `apps/os/scripts/preview-config.ts`                                                           | `APPS`, so each PR deploys it next to the platform and it gets its own `Sign in ↗` link                                                                                                            |
+| `scripts/os/preview-config.ts`                                                                | `APPS`, so each PR deploys it next to the platform and it gets its own `Sign in ↗` link                                                                                                            |
 | `pnpm-workspace.yaml`, `knip.ts`, `doppler.yaml`                                              | the workspace entry, the `apps/{dash,kit,notes,voice}` knip block, `project: <app>` with `path: apps/<app>/`                                                                                       |
 | `scripts/ci/preview-paths.ts`, `preview-delete.yml`, `main-os-e2e.yml`, `preview-parents.yml` | `apps/<app>/**` and `deploy-<app>.yml` in `previewPaths` and the three workflows' `paths`, and the app list in `preview-os.yml`'s `apps` description                                               |
 | `apps/dash/src/apps.ts`                                                                       | only if the app opens a project: the dash's directory, keyed by the same name                                                                                                                      |
@@ -55,7 +56,7 @@ parents workflow once the app is on `main`.
 
 Read [Doppler setup](references/doppler.md). Then copy `.depot/workflows/deploy-dash.yml` to
 `deploy-<app>.yml`, and change the name, the concurrency group, the `paths` (the app's
-directory and the workflow itself), the Doppler project, the `working-directory`, and
+directory and the workflow itself), the `working-directory`, and
 `APP_DISPLAY_NAME`. Depot registers triggers from the default branch, so the
 workflow first runs after it lands on `main` ([Depot CI](../../../docs/depot-ci.md)).
 
@@ -72,4 +73,4 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
   with its password, confirm **Sign in as someone else**, and check that the app lands inside
   project `pr<n>`.
 - Browser specs go under `specs/<app>/`, with a Playwright project in `playwright.config.ts`
-  and a base URL that `runSuite` (`apps/os/scripts/preview.ts`) passes. Voice is the example.
+  and a base URL that `runSuite` (`scripts/os/preview.ts`) passes. Voice is the example.

@@ -43,7 +43,7 @@ signal. "Unavoidable error spam" is not a category.
 
 Every failure is one of five kinds. The hop that first sees it decides the
 kind (`failureKind` in
-[platform-retry.ts](../packages/shared/src/platform-retry.ts)), and the kind
+[platform-retry.ts](../packages/iterate/src/platform-retry.ts)), and the kind
 rides on as own properties, which Workers RPC and capnweb keep.
 
 | Kind           | Recognized by                                                                                                                                                                                                                                                                                                                                     | Repeated                                                                                                                                          | Answered as            |

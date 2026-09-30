@@ -50,8 +50,7 @@ export function registerRpcSessionBrand(brand: abstract new (...args: never[]) =
 const holdsRpcSession = (v: unknown): boolean => RPC_SESSION_BRANDS.some((b) => v instanceof b);
 
 /** Whether `error` is workerd's refusal of an RPC to `method`, which its receiver does not
- *  implement: a loaded class that is no SDK host has neither `callWithCause` nor
- *  `listPublicMethods`. */
+ *  implement: a loaded facet class that is no SDK shell has no `listPublicMethods`. */
 export const isMissingRpcMethod = (error: unknown, method: string): boolean =>
   String(error).includes(`does not implement the method "${method}"`);
 

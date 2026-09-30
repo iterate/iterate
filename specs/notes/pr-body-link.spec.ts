@@ -1,9 +1,9 @@
-// A PR body's Notes `Sign in ↗` (where it goes and why: apps/os/scripts/preview-config.ts
+// A PR body's Notes `Sign in ↗` (where it goes and why: scripts/os/preview-config.ts
 // `signInLinkOf`). No spec can hold a prd session, so once the page leads with os.iterate.com this
 // one signs in another way: the preview's test admin, with the password.
 import { expect } from "@playwright/test";
 import { uniqueFixtureSlug } from "@iterate-com/shared/test-support/fixture-slug";
-import { proxiedAppRoute, signInLinkOf } from "../../apps/os/scripts/preview-config.ts";
+import { proxiedAppRoute, signInLinkOf } from "../../scripts/os/preview-config.ts";
 import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
 import { readOsPlaywrightAuthConfig } from "../test-support/auth-config.ts";
 import { signInWithPassword } from "../test-support/issuer.ts";

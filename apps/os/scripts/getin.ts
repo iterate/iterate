@@ -26,7 +26,6 @@ import process from "node:process";
 import { newHttpBatchRpcSession } from "capnweb";
 import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
 
 /** Open a browser signed in to local OS, on a project — starting the dev server and creating the project when missing */
@@ -148,4 +147,5 @@ async function localDash(origin: string, issuer: string) {
     : null;
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "getin" }).run();
+// trpc-cli runs it only when this file is the entry point (it checks `import.meta`)
+void createCli({ ...import.meta, name: "getin" }).run();

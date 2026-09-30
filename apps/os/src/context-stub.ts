@@ -9,7 +9,7 @@ import { itxExpressionStepName, type ItxExpression } from "iterate/expression";
 import { releaseRpcSessions } from "iterate/lib";
 import type { StreamProcessorDurableObject } from "iterate/sdk";
 import type { StreamEvent } from "iterate/stream/processor";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Caller } from "./caller.ts";
 import { DurableObjectNameCodec, type DurableObjectAddress } from "./context/paths.ts";
 import type { IterateContextNamespace } from "./iterate-context.ts";
@@ -93,6 +93,23 @@ export function contextStub(
       );
     },
   };
+}
+
+/** A first-party facet's folded state on `context`, the platform's own read at the fixed point: no
+ *  rewrite row of that context's redirects or masks it. `invoke` answers `unknown` across the DO
+ *  hop; a first-party facet's `snapshot()` is the engine's `{ offset, state }`, its state the
+ *  facet contract's. */
+export async function facetStateOf<State>(
+  context: { invoke(call: ItxExpression, args: unknown[], caller: Caller): Promise<unknown> },
+  facet: string,
+  caller: Caller,
+): Promise<State> {
+  const snapshot = await context.invoke(
+    ["itx", "builtins", "facets", ["get", facet], ["snapshot"]],
+    [],
+    caller,
+  );
+  return (snapshot as { state: State }).state;
 }
 
 /** `settlementOfScriptRun`'s reads: one `waitForEvent` on a fresh stub of the context at `path` in

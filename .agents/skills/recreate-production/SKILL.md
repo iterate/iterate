@@ -10,7 +10,7 @@ Use this skill only for a deliberate production recovery. Read
 seed holds, what `apply` converges and refuses, hostnames, and the merge pause. A seed is a semantic
 snapshot of one project, not a database dump.
 
-Use `pnpm --dir apps/os project-seed` and always pass `--env`. Keep archives outside the
+Use `pnpm os:project-seed` and always pass `--env`. Keep archives outside the
 repository. They contain encrypted secret cells and must never be committed or printed. Report only
 non-secret counts, hostnames and paths.
 
@@ -22,12 +22,12 @@ non-secret counts, hostnames and paths.
    platform"): clone it, migrate it, and capture from the checkout with `--config-repo`:
 
    ```sh
-   pnpm --dir apps/os project-seed capture \
+   pnpm os:project-seed capture \
      --env prd --project <slug> --file <absolute-path>.json \
      [--config-repo <absolute-path-to-migrated-checkout>]
-   pnpm --dir apps/os project-seed check \
+   pnpm os:project-seed check \
      --env prd --file <absolute-path>.json
-   pnpm --dir apps/os project-seed structure --env prd --file <absolute-path>-structure.json
+   pnpm os:project-seed structure --env prd --file <absolute-path>-structure.json
    ```
 
    A seed does not carry the connections, installed processors or repo origins a project set up
@@ -39,16 +39,21 @@ non-secret counts, hostnames and paths.
    announce the pause where the team merges (nothing enforces it), and check that no Deploy OS run
    is in flight (the command is in
    [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Pause merges").
-3. Inventory the erase with `pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run`.
+3. Inventory the erase with `pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run`.
    The erase and the deploy after it are separate operations, run only on the user's explicit
-   request; no seed command performs either.
+   request; no seed command performs either. Never roll `os-prd` back until `verify-structure`
+   passes, and never onto a version tagged `erase-parked`: the erase leaves one, and a rollback
+   onto it deletes every Durable Object. The deploy's post-deploy check posts to #ci that the
+   project hosts answer 421 until `apply`; that is expected. The recovery if a rollback lands on it
+   anyway is in [`apps/os/docs/project-seeds.md`](../../../apps/os/docs/project-seeds.md), "Never
+   roll `os-prd` back".
 4. Restore every seed, then compare the whole structure with the capture:
 
    ```sh
-   pnpm --dir apps/os project-seed apply \
+   pnpm os:project-seed apply \
      --env prd --yes-i-mean-prd --file <absolute-path>.json \
      --organization <organization> --owners <owner-email> [...]
-   pnpm --dir apps/os project-seed verify-structure --env prd --file <absolute-path>-structure.json
+   pnpm os:project-seed verify-structure --env prd --file <absolute-path>-structure.json
    ```
 
    If a deploy lands mid-restore anyway (`apply` fails with "Durable Object reset because its code

@@ -34,7 +34,7 @@ import {
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
 import { agentsVersion, upgradeAgents } from "@iterate-com/agents/install";
-import { buildStanding } from "@iterate-com/shared/pkg-pr-new";
+import { buildStanding } from "iterate/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
@@ -173,9 +173,7 @@ function AgentsPage() {
                   check={(installed) => agentsBuild({ data: installed })}
                   upgrade={async (version) => {
                     using itx = await api.projects.get(project);
-                    // The SDK models the public API as promises; capnweb's stub has the same
-                    // runtime methods with additional pipelining types.
-                    await upgradeAgents(itx as unknown as IterateContextApi, version);
+                    await upgradeAgents(itx, version);
                     await router.invalidate({ sync: true });
                   }}
                 />

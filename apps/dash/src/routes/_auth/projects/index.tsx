@@ -10,7 +10,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
-import { parseConfigRepoTemplateReference } from "@iterate-com/shared/config-repo-template/reference";
+import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";

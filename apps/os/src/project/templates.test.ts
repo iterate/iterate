@@ -1,6 +1,6 @@
 import { existsSync, globSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { pkgPrNewVersion } from "@iterate-com/shared/pkg-pr-new";
+import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test, vi } from "vitest";
 import { checkoutPublishedPackageCommit } from "../../scripts/published-package-commit.ts";
 import { templates } from "../generated/config-templates.js";
@@ -299,7 +299,10 @@ function project(
     files = { ...files, ...changed };
     tipOid = "c".repeat(40);
   };
-  const itx = { repos: { create: vi.fn(async () => {}), get: () => repo } };
+  const itx = {
+    repos: { create: vi.fn(async () => {}), get: () => repo },
+    [Symbol.dispose]: () => {},
+  };
   const append = vi.fn(async (...events: { type: string }[]) => {
     order.push(...events.map((event) => event.type));
   });
@@ -329,7 +332,7 @@ async function deliver(
     appendAsPlatform: async () => [],
   };
   const processor = new ProjectProcessor(
-    (call) => Promise.resolve(call(fixture.itx as never)),
+    () => fixture.itx as never,
     fixture.downloadTemplate,
     () => null,
     () => null,

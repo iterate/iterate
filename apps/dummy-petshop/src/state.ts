@@ -1,8 +1,11 @@
 /**
- * How long an access token lives. Deliberately short so integration e2e hits
- * real expiry (and therefore real refresh) without waiting an hour.
+ * How long every access token the shop mints lives, a GraphQL session's too.
+ * Deliberately short so integration e2e hits real expiry (and therefore real
+ * refresh) without waiting an hour; long enough to outlive the gap between a
+ * token's mint and its first use, which a loaded e2e run stretches. A test
+ * forces its 401 through expire-tokens instead.
  */
-export const DEFAULT_ACCESS_TTL_SECONDS = 120;
+export const ACCESS_TOKEN_TTL_SECONDS = 120;
 
 /**
  * The seeded OAuth client every environment starts with. Fixed, well-known
@@ -23,10 +26,9 @@ export const DEFAULT_CLIENT_SECRET = "petshop-default-secret";
 export const DEFAULT_APP_ID = "petshop-app";
 export const DEFAULT_INSTALLATION_ID = "petshop-installation";
 
-/** One registered OAuth client: its secret and how long its access tokens live. */
+/** One registered OAuth client. */
 export interface OauthClient {
   clientSecret: string;
-  accessTokenTtlSeconds: number;
   /** RFC 7591 dynamically-registered redirect URIs. Empty for the seeded client and those minted
    * by `POST /__test-controls/clients` (they accept any absolute redirect_uri); a DCR client is
    * pinned to exactly what it registered. */
@@ -235,10 +237,7 @@ export class PetshopStore {
     const initial: PetshopState = {
       accessTokenEpochs: {},
       clients: {
-        [DEFAULT_CLIENT_ID]: {
-          clientSecret: DEFAULT_CLIENT_SECRET,
-          accessTokenTtlSeconds: DEFAULT_ACCESS_TTL_SECONDS,
-        },
+        [DEFAULT_CLIENT_ID]: { clientSecret: DEFAULT_CLIENT_SECRET },
       },
       revokedRefreshTokenIds: [],
       usedAuthorizationCodeIds: [],
@@ -273,7 +272,6 @@ export class PetshopStore {
     const clientSecret = input.public ? "" : crypto.randomUUID();
     state.clients[clientId] = {
       clientSecret,
-      accessTokenTtlSeconds: DEFAULT_ACCESS_TTL_SECONDS,
       redirectUris: input.redirectUris,
       ...(input.public && { public: true }),
     };

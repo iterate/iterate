@@ -1,13 +1,13 @@
 # THE FLAKE HUNT for apps/os: run the e2e suite N times against one deployed worker (the dispatched
 # ref's deployment `<preview>-<sha7>`, `pnpm preview deploy --name <preview>`), each run followed by the
 # perf budgets (apps/os/perf, alone on the wire), and tally every row that did not pass every time
-# (apps/os/scripts/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
+# (scripts/os/e2e-soak.ts). Dispatch only — this is a measurement, not a gate:
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow os-e2e-soak.yml \
 #     --ref <branch> --input runs=100 --input preview=soak-<your slug>
 # A SOAK OF ITS OWN NEEDS A NAME OF ITS OWN: two soaks of one name and one commit deploy the same
 # deployment again before their suites, so each measures the other's deploys. Delete a name's
 # deployments when done:
-# `pnpm --dir apps/os preview delete --name <preview>`; the nightly sweep takes them after a day.
+# `pnpm preview delete --name <preview>`; the nightly sweep takes them after a day.
 # --input fresh-previews=true and --input redeploy=true are e2e-soak.ts's --fresh-previews and
 # --redeploy modes; dispatch several fresh-previews soaks at once for more deployments per hour.
 # DISPATCH ON A REF NOTHING WILL PUSH TO: a push to the dispatched branch cancels the running soak —
@@ -76,7 +76,6 @@ jobs:
       # runs, so the tests and the worker never skew. An explicit worker-base-url is soaked as given.
       - name: Deploy the soak preview from this ref
         if: inputs.worker-base-url == '' && inputs.fresh-previews != 'true' && inputs.redeploy != 'true'
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW: ${{ inputs.preview }}
@@ -86,7 +85,6 @@ jobs:
       # apps/os/e2e/support/global-setup.ts reads them out of it, and the routing out of envs.ts
       # `previewDeployment`.
       - name: Soak
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           CI: "1"
@@ -108,7 +106,7 @@ jobs:
           if [ -n "$FRESH_PREVIEWS" ]; then target=(--fresh-previews "$FRESH_PREVIEWS")
           elif [ "$REDEPLOY" = true ]; then target=(--redeploy "$PREVIEW" --gap "${GAP:-0}")
           else target=(--preview "$PREVIEW"); fi
-          doppler run --project os --config preview -- pnpm e2e:soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
+          doppler run --project os --config preview -- pnpm os:e2e-soak --runs "$RUNS" "${target[@]}" ${FILTER:+--filter "$FILTER"}
       - name: Upload the per-run reports and the summary
         if: always()
         uses: actions/upload-artifact@v4

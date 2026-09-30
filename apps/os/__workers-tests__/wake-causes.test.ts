@@ -9,13 +9,13 @@ test.for([
   {
     name: "a signed-in session's call",
     call: (ctx: string) => stub(ctx).invoke("itx.whoami()", [], { principal: PERSON }),
-    wake: { cause: "call", caller: "other" },
+    wake: { cause: "call", caller: "other", call: "itx.whoami" },
   },
   {
     name: "another context's hop",
     call: (ctx: string) =>
       stub(ctx).invoke("itx.whoami()", [], { principal: PERSON, path: "/elsewhere" }),
-    wake: { cause: "call", caller: "context" },
+    wake: { cause: "call", caller: "context", call: "itx.whoami" },
   },
   {
     name: "loaded code's call, after a read of the context's rules that records no wake",
@@ -23,7 +23,7 @@ test.for([
       await stub(ctx).rulesSnapshot();
       await stub(ctx).invoke("itx.whoami()", [], { principal: null, app: true });
     },
-    wake: { cause: "call", caller: "loaded" },
+    wake: { cause: "call", caller: "loaded", call: "itx.whoami" },
   },
   {
     name: "an expression fetch",
@@ -33,12 +33,12 @@ test.for([
           headers: { [ITX_EXPRESSION_FETCH_HEADER]: JSON.stringify(["itx", "nosuch"]) },
         }),
       ),
-    wake: { cause: "call", caller: "other" },
+    wake: { cause: "call", caller: "other", call: "fetch" },
   },
   {
     name: "another context's append",
     call: (ctx: string) => stub(ctx).append({ type: "test/announced" }),
-    wake: { cause: "call", caller: "other" },
+    wake: { cause: "call", caller: "other", call: "append" },
   },
 ])("each entry point records one wake, stamped with its cause: $name", async ({ call, wake }) => {
   const ctx = freshProject();
@@ -47,7 +47,7 @@ test.for([
   await call(ctx);
   const wokens = (await readLog(ctx)).filter(({ type }) => type === "events.iterate.com/itx/woken");
   expect(wokens.map(({ payload }) => payload)).toMatchObject([
-    { incarnation: 1 },
+    { incarnation: 1, cause: "call", caller: "other", call: "itx.whoami" }, // its birth's
     { incarnation: 2, ...wake },
   ]);
 });

@@ -1,7 +1,8 @@
 // cause.ts — the SDK's half of the loop guard, INTERNAL: no export names it and no signature takes
-// it (apps/os src/cause.ts explains the guard). A host's `callWithCause`, and its `fetch` under a
-// Request's mark, run their code under the cause the platform handed them, and this carries that
-// cause, unread, to every `withItx` round trip and, in a loaded isolate, every outbound `fetch`.
+// it (apps/os src/cause.ts explains the guard). A host's `callWithCause` (every loaded entrypoint
+// has one, sdk/loaded-worker.ts), and its `fetch` under a Request's mark, run their code under the
+// cause the platform handed them, and this carries that cause, unread, to every `getItx` scope
+// and, in a loaded isolate, every outbound `fetch`.
 // Any other code runs, in a loaded isolate, under the newest cause its isolate saw, and in the
 // platform's own, shared by every project, under none. Shared by name
 // (`Symbol.for("iterate.cause")`), so every copy of the SDK in an isolate reaches the same one.
@@ -37,9 +38,14 @@ function newCarrier(): Carrier {
   };
   return {
     run(cause, code) {
-      // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not kept
-      const { chain, depth } = (cause ?? {}) as { chain?: unknown; depth?: unknown };
-      if (loaded) newest = chain === undefined ? undefined : { chain, depth };
+      // what a call needs only for itself (its hops, the delivery its writes are keyed by) is not
+      // kept; the cause is carried unread (`unknown`), so only the fields kept are named
+      const { chain, depth, parent } = (cause ?? {}) as {
+        chain?: unknown;
+        depth?: unknown;
+        parent?: unknown;
+      };
+      if (loaded) newest = chain === undefined ? undefined : { chain, depth, parent };
       return running.run({ cause }, code);
     },
     current,
@@ -48,12 +54,20 @@ function newCarrier(): Carrier {
       loaded = true;
       const outbound = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
-        const cause = current() as { chain?: unknown; depth?: unknown; hops?: unknown } | undefined;
+        // the cause is carried unread, so `current()` is `unknown`: the mark reads its fields alone
+        const cause = current() as
+          | { chain?: unknown; depth?: unknown; hops?: unknown; parent?: unknown }
+          | undefined;
         const request = new Request(input, init);
-        // the mark alone, never what only a call needs (the delivery its writes are keyed by)
+        // the mark alone, never what only a call needs (the delivery its writes are keyed by); a
+        // header is bytes, so a parent in other characters than printable ASCII stays behind
         if (cause) {
-          const { chain, depth, hops } = cause;
-          request.headers.set(ITERATE_CAUSE_HEADER, JSON.stringify({ chain, depth, hops }));
+          const { chain, depth, hops, parent } = cause;
+          const ascii = typeof parent === "string" && /^[\x20-\x7e]*$/.test(parent);
+          request.headers.set(
+            ITERATE_CAUSE_HEADER,
+            JSON.stringify({ chain, depth, hops, ...(ascii && { parent }) }),
+          );
         }
         const answer = await outbound(request);
         // a request refused past the loop limit answers 508, marked: it throws as the refusal it is
@@ -73,9 +87,8 @@ export const runCausedBy = <T>(cause: unknown, code: () => T): T => carrier.run(
 export const currentCause = (): unknown => carrier.current();
 
 /** In a LOADED isolate: every outbound `fetch` carries the cause it runs under (the platform's
- *  egress turns it into our mark) — installed as the SDK's module is evaluated there, before any of
- *  the loaded code's own module runs (apps/os scripts/build.ts); the platform's isolate never is.
- *  @public — called only from the entries that build writes, which knip does not read. */
+ *  egress turns it into our mark) — installed before any of the loaded code's own module runs
+ *  (sdk/loaded-worker.ts); the platform's isolate never is. */
 export const carryCauseOnFetch = (): void => carrier.carryOnFetch();
 
 /** The cause a Request carries, or none. */

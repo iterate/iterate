@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useState } from "react";
-import type { BuildStanding } from "@iterate-com/shared/pkg-pr-new";
+import type { BuildStanding } from "iterate/pkg-pr-new";
 import { Button } from "./button.tsx";
 import { Spinner } from "./spinner.tsx";
 
@@ -11,7 +11,7 @@ type Outcome = { kind: "upgraded"; from: string; to: string } | { kind: "failed"
 
 /**
  * AN INSTALLED APP'S BUILD, and its upgrade to main's newest: the Agents app's sidebar and the Voice
- * page. `check` says where the installed build stands (@iterate-com/shared/pkg-pr-new
+ * page. `check` says where the installed build stands (iterate/pkg-pr-new
  * `buildStanding`, which the app's Worker runs), asked again whenever `installed` changes; while it
  * runs the section says so, and a check that fails says why, with Check again. A build main has a
  * newer one of offers "Upgrade to the newest", which runs `upgrade` (the app's commit of the new pin

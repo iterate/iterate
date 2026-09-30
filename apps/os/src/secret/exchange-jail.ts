@@ -17,9 +17,11 @@
 //   • isolation: one isolate per (deployment, secret, pin, source), so module state never carries
 //     one secret's material into another's login, and a new pin is a new `globalOutbound`.
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import type { SecretMaterial } from "iterate/api";
 import { z } from "zod";
-import { originPinned, sha256Hex } from "../secrets.ts";
+import { sha256Hex } from "../caller.ts";
+import { originPinned } from "../secrets.ts";
 
 /** The header `PinnedOutbound` answers a refused request with, naming the refused origin. */
 const REFUSED_HEADER = "x-itx-exchange-refused";
@@ -115,7 +117,7 @@ export async function runExchangeCode(input: {
   // one per deployment, secret, pin and source, never per refresh.
   const id = `secret-exchange:${await sha256Hex(JSON.stringify([input.deployId, input.context, urls, source]))}`;
   const worker = input.loader.get(id, () => ({
-    compatibilityDate: "2026-09-01",
+    compatibilityDate: COMPATIBILITY_DATE,
     compatibilityFlags: ["no_nodejs_compat", "no_nodejs_compat_v2"],
     mainModule: "jail.js",
     modules: { "jail.js": JAIL, "prelude.js": PRELUDE, "exchange.js": source },

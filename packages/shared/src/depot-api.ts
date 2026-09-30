@@ -1,6 +1,6 @@
 // depot-api.ts — THE ONE CLIENT OF DEPOT'S CI API, runtime-neutral (no `node:` imports), so the CI
 // scripts (scripts/ci/depot.ts) and the ci-reports Worker (apps/ci-reports) call it alike.
-import { CI_HTTP, fetchRetryingPlatformFailures, HttpAnswerError } from "./platform-retry.ts";
+import { CI_HTTP, fetchRetryingPlatformFailures, HttpAnswerError } from "iterate/platform-retry";
 
 /** Iterate's Depot organization, which runs every workflow in .depot/workflows (docs/depot-ci.md). */
 export const DEPOT_ORG = "0p91s0lz49";

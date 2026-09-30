@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { touchesPreview } from "./preview-paths.ts";
 
@@ -35,7 +35,7 @@ test.for([
 ])(
   "changes writes preview=$preview when the pull request $change $path",
   ({ change, path, preview }) => {
-    using directory = temporaryDirectory();
+    using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const repo = directory.path;
     const output = join(repo, "github-output");
     const git = (...args: string[]) => {

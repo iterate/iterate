@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { expect, test, vi } from "vitest";
 import { resetWorkerDurableObjects } from "./do-reset.ts";
 
@@ -20,18 +21,6 @@ test.for([
     },
   },
   {
-    name: "retires a preview parent's own classes, none of its Worker Previews' namespaces",
-    workerName: "os",
-    workers: ["os"],
-    namespaces: [
-      { id: "own", script: "os", class: "ProjectDurableObject" },
-      { id: "pr7", script: "os", class: "ProjectDurableObject", preview: { name: "pr7" } },
-      // a class only the pull request declares
-      { id: "pr7-repo", script: "os", class: "RepoDurableObject", preview: { name: "pr7" } },
-    ],
-    exports: { ProjectDurableObject: { type: "durable-object", state: "deleted" } },
-  },
-  {
     name: "never deploys, and so never creates, a worker that does not exist",
     workerName: "os-prd",
     workers: ["dash-prd"],
@@ -45,18 +34,20 @@ test.for([
     workerName,
     cwd: wrangler.dir,
     credentials: { CLOUDFLARE_API_TOKEN: "test-token", CLOUDFLARE_ACCOUNT_ID: "test-account" },
-    compatibilityDate: "2026-09-01",
+    compatibilityDate: COMPATIBILITY_DATE,
   });
   expect(wrangler.deployed()).toEqual(
     exports && {
       command: "exec wrangler deploy --config",
+      // Cloudflare's version list says what a rollback onto this version does
+      annotations:
+        "--tag erase-parked --message erase-data's parked worker: a rollback onto it deletes every Durable Object",
       credentials: "test-token test-account",
       config: {
         name: workerName,
         main: "worker.js",
-        compatibility_date: "2026-09-01",
+        compatibility_date: COMPATIBILITY_DATE,
         workers_dev: false,
-        preview_urls: true,
         exports,
       },
       worker: readFileSync(new URL("./parked-worker/worker.js", import.meta.url), "utf8"),
@@ -74,9 +65,10 @@ function resetCtx(workers: string[], namespaces: unknown[]) {
 }
 
 /** A `pnpm` on PATH that records the parked deploy instead of running wrangler: the command, the
- *  credentials it was handed, and the config and module it would upload. */
+ *  version's tag and message, the credentials it was handed, and the config and module it would
+ *  upload. */
 function fakeWrangler() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const dir = directory.path;
   writeFileSync(
     join(dir, "pnpm"),
@@ -87,6 +79,8 @@ function fakeWrangler() {
       'printf "%s" "$CLOUDFLARE_API_TOKEN $CLOUDFLARE_ACCOUNT_ID" > credentials',
       'cp "$5" wrangler.json',
       'cp "$(dirname "$5")/worker.js" worker.js',
+      "shift 5",
+      'printf "%s" "$*" > annotations',
     ].join("\n"),
     { mode: 0o755 },
   );
@@ -98,6 +92,7 @@ function fakeWrangler() {
       existsSync(join(dir, "command"))
         ? {
             command: read("command"),
+            annotations: read("annotations"),
             credentials: read("credentials"),
             config: JSON.parse(read("wrangler.json")),
             worker: read("worker.js"),

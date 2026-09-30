@@ -40,7 +40,7 @@ const Sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
 
 /**
  * `target.json`: what an e2e job's suites were about to test, recorded just before they start
- * (apps/os/scripts/preview.ts). A run against a preview deployed earlier (Preview OS's `action=e2e`
+ * (scripts/os/preview.ts). A run against a preview deployed earlier (Preview OS's `action=e2e`
  * dispatch) tests whatever that deploy left, not the commit the job checked out, so this names the
  * deployment. The shape is the deploy's own `preview.json` summary, narrowed.
  */

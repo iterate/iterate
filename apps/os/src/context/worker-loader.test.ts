@@ -1,9 +1,12 @@
 // context/worker-loader.test.ts — the Worker Loader id is an authority boundary (two callers who
-// compose one id share an isolate), a producer runs inside `getCode`, and the dead-id WORKAROUND
-// (worker-loader.ts `loaderIdGenerations`), over a fake loader; the real one is the Workers suite's.
-import type { ItxExpression } from "iterate/expression";
-import { codedError } from "iterate/lib";
+// compose one id share an isolate), a producer runs inside `getCode`, the dead-id WORKAROUND
+// (worker-loader.ts `loaderIdGenerations`), and `workers.get`'s recovery from the loader defect
+// (built-ins.ts), over a fake loader; the real one is the Workers suite's.
+import type { ItxExpression, ItxExpressionStep } from "iterate/expression";
+import { codedError, errorCode } from "iterate/lib";
+import { failureKind } from "iterate/platform-retry";
 import { expect, test, vi } from "vitest";
+import { workersRoot } from "./built-ins.ts";
 import { SOURCE_MAX_CHARS } from "./itx-expression-rewriting.ts";
 import { DurableObjectNameCodec } from "./paths.ts";
 import {
@@ -103,11 +106,11 @@ test("a producer's modules are read once per commit, not once per cold isolate: 
     return warm.get(loaderId);
   };
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(producer.produced()).toBe(1);
   await expect(coldIsolate()).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(producer.produced()).toBe(1);
 });
@@ -159,7 +162,7 @@ test("a KV that cannot be read or written costs the producer's run and a logged 
     ...producer,
   });
   await expect(warm.get(loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default 1" },
+    modules: { "worker.js": loaded("export default 1") },
   });
   expect(warn.mock.calls.map(([line]) => line)).toMatchObject([
     { event: "worker-loader.platform-failure-module-cache", action: "get" },
@@ -182,7 +185,7 @@ test("an answer that cannot load is never kept or believed: the dead-id recovery
   expect(shared).toMatchObject({ puts: [] });
   const recovered = await load();
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(produced).toBe(2);
   expect(shared.puts).toHaveLength(1);
@@ -209,7 +212,7 @@ test("an answer over KV's value limit is not kept, and costs no warning: the wor
     invoke,
   });
   await expect(warm.get(loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(shared).toMatchObject({ puts: [] });
   expect(warn).not.toHaveBeenCalled();
@@ -286,10 +289,12 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   artifactLanded = true;
   const recovered = await load();
   expect(recovered).toMatchObject({
-    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"])}#1`,
+    loaderId: expect.stringContaining(
+      `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"])}#1.`,
+    ),
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Built {}" },
+    modules: { "worker.js": loaded("export default class Built {}") },
   });
   expect(produced).toBe(4);
   // 4. …and from here the generation is warm: no producer run, no new id
@@ -348,9 +353,13 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
   expect(produced).toBe(3); // one recovery, however many callers
   release();
   const recovered = await Promise.all(herd);
-  expect(new Set(recovered.map((r) => r.loaderId))).toEqual(new Set([`${dead}#1`]));
+  const [recoveredId, ...others] = new Set(recovered.map((r) => r.loaderId));
+  expect({ recoveredId, others }).toEqual({
+    recoveredId: expect.stringContaining(`${dead}#1.`),
+    others: [],
+  });
   expect(produced).toBe(3);
-  expect(new Set(keys)).toEqual(new Set([dead, `${dead}#1`]));
+  expect(new Set(keys)).toEqual(new Set([dead, recoveredId]));
 });
 
 test("a producer that loses its connection once inside getCode is read once more, and the id stays live: no dead mark, no next generation", async () => {
@@ -370,7 +379,7 @@ test("a producer that loses its connection once inside getCode is read once more
     });
   const first = await load();
   await expect(warm.get(first.loaderId)).resolves.toMatchObject({
-    modules: { "worker.js": "export default class Site {}" },
+    modules: { "worker.js": loaded("export default class Site {}") },
   });
   expect(produced).toBe(2);
   // warm under the same id: the lost connection marked nothing dead
@@ -413,7 +422,9 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   outcome = "ok";
   const incarnation2 = {} as Fetcher;
   await expect(load(incarnation2)).resolves.toMatchObject({
-    loaderId: `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "key:site@1"])}#1`,
+    loaderId: expect.stringContaining(
+      `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "key:site@1"])}#1.`,
+    ),
   });
   expect(produced).toBe(4);
 });
@@ -429,11 +440,35 @@ test("retire(): a burst of calls that failed on one identity retires it once, an
   a.retire();
   b.retire();
   const recovered = await prepareConfinedWorker(opts);
-  expect(recovered).toMatchObject({ loaderId: `${a.loaderId}#1` });
+  expect(recovered).toMatchObject({ loaderId: expect.stringContaining(`${a.loaderId}#1.`) });
   // generation 1 fails too; a call still in flight on generation 0 fails late
   recovered.retire();
   a.retire();
-  expect(await prepareConfinedWorker(opts)).toMatchObject({ loaderId: `${a.loaderId}#2` });
+  expect(await prepareConfinedWorker(opts)).toMatchObject({
+    loaderId: expect.stringContaining(`${a.loaderId}#2.`),
+  });
+});
+
+test("two isolates that retire one identity load its next generation under two ids, never each other's entry", async () => {
+  // The Worker Loader shares an entry by id across a machine's isolates, and each isolate, its own
+  // evaluation of worker-loader.ts, counts generations from 0.
+  const opts = workerOptions(fakeLoaderEnv().env, {
+    owner: "prj_two_isolates.iterate/",
+    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" },
+  });
+  vi.resetModules();
+  const sibling = await import("./worker-loader.ts");
+  const nextGenerationIn = async (isolate: Pick<typeof sibling, "prepareConfinedWorker">) => {
+    (await isolate.prepareConfinedWorker(opts)).retire();
+    return (await isolate.prepareConfinedWorker(opts)).loaderId;
+  };
+  const base = (await prepareConfinedWorker(opts)).loaderId;
+  const ids = [await nextGenerationIn({ prepareConfinedWorker }), await nextGenerationIn(sibling)];
+  expect(new Set(ids)).toMatchObject({ size: 2 });
+  expect(ids).toEqual([
+    expect.stringContaining(`${base}#1.`),
+    expect.stringContaining(`${base}#1.`),
+  ]);
 });
 
 test("prepare resolves the identity without asking the loader; load() is the one call that does, and a repeat is the loader's cache to answer", async () => {
@@ -540,6 +575,82 @@ test.for([
   expect(isLoadedWorkerPlatformFailure(error)).toBe(retired);
 });
 
+// `workers.get` over a loader whose first `failingEntries` entries fail every call with `failure`,
+// then one more GET: what each call settled as, and the generation of every entry it was served.
+const defect = new Error("internal error; reference = defect");
+const unavailable = {
+  rejected: {
+    code: "UNAVAILABLE",
+    kind: "disconnected",
+    message: "workers.get(spec).fetch: internal error; reference = defect",
+  },
+};
+test.for([
+  {
+    name: "a GET the defect fails is replayed once, on the next generation, and answers",
+    step: ["fetch", new Request("https://site.test/")],
+    failingEntries: 1,
+    failure: defect,
+    expected: { first: { answered: "GET" }, next: { answered: "GET" }, generations: [0, 1, 1] },
+  },
+  {
+    name: "a GET whose replay the defect fails too is UNAVAILABLE, disconnected: a 503 with Retry-After",
+    step: ["fetch", new Request("https://site.test/")],
+    failingEntries: 2,
+    failure: defect,
+    expected: { first: unavailable, next: { answered: "GET" }, generations: [0, 1, 2] },
+  },
+  {
+    name: "a POST the defect fails is never replayed: UNAVAILABLE, and the next call loads fresh",
+    step: ["fetch", new Request("https://site.test/", { method: "POST", body: "form=1" })],
+    failingEntries: 1,
+    failure: defect,
+    expected: { first: unavailable, next: { answered: "GET" }, generations: [0, 1] },
+  },
+  {
+    name: "an RPC method the defect fails is never replayed: UNAVAILABLE, and the next call loads fresh",
+    step: ["hello"],
+    failingEntries: 1,
+    failure: defect,
+    expected: {
+      first: {
+        rejected: {
+          ...unavailable.rejected,
+          message: "workers.get(spec).hello: internal error; reference = defect",
+        },
+      },
+      next: { answered: "GET" },
+      generations: [0, 1],
+    },
+  },
+  {
+    name: "the loaded code's own failure is its own: no retire, no replay, not recoded",
+    step: ["fetch", new Request("https://site.test/")],
+    failingEntries: 1,
+    failure: Object.assign(new Error("internal error; reference = thrown-by-code"), {
+      remote: true,
+    }),
+    expected: {
+      first: {
+        rejected: { kind: "failed", message: "internal error; reference = thrown-by-code" },
+      },
+      next: {
+        rejected: { kind: "failed", message: "internal error; reference = thrown-by-code" },
+      },
+      generations: [0, 0],
+    },
+  },
+] satisfies { step: ItxExpressionStep; [key: string]: unknown }[])(
+  "workers.get and the loader defect: $name",
+  async ({ step, failingEntries, failure, expected }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { call, generations } = workersGetOverFailingLoader(failingEntries, failure);
+    const first = await settle(call(step));
+    const next = await settle(call(["fetch", new Request("https://site.test/")]));
+    expect({ first, next, generations }).toEqual(expected);
+  },
+);
+
 /** The site ingress's producer expression: the config repo's tree at one commit. */
 const site: ItxExpression = [
   "itx",
@@ -632,3 +743,68 @@ const loadConfined = async (...args: Parameters<typeof workerOptions>) => {
 /** Let every promise chain started so far settle (a producer's failure reaches the dead marker
  *  through the resolve step's awaits), whatever its depth in microtasks. */
 const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** `itx.workers.get(spec)` of a fresh context, one `call(step)` per call, over a Worker Loader whose
+ *  first `failingEntries` entries (by id, in the order it was asked for them) reject every call with
+ *  `failure`, and whose later ones answer: a fetch with its request's method, an RPC `hello` with
+ *  "hello". `generations` is the generation of each entry a call was served, in order. */
+const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => {
+  const entries: string[] = [];
+  const generations: number[] = [];
+  const env = {
+    LOADER: {
+      get: (id: string) => {
+        if (!entries.includes(id)) entries.push(id);
+        generations.push(Number(/#(\d+)\.[0-9a-f]{8}$/.exec(id)?.[1] ?? 0));
+        const answer = async (value: string) => {
+          if (entries.indexOf(id) < failingEntries) throw failure;
+          return value;
+        };
+        return {
+          getEntrypoint: () => ({
+            fetch: async (request: Request) => new Response(await answer(request.method)),
+            hello: () => answer("hello"),
+          }),
+        };
+      },
+    },
+    ITX_KV: fakeKv().kv,
+  } as unknown as ConfinedWorkerOptions["env"];
+  const itxEntrypoint = {} as Fetcher; // one stub per context incarnation, as the platform mints it
+  const workers = workersRoot({
+    env,
+    deployId: "deploy-1",
+    projectId: "prj_u",
+    path: "/",
+    iterateContextName: `prj_u.iterate/${crypto.randomUUID()}`,
+    platformOrigin: () => null,
+    itxEntrypoint: () => itxEntrypoint,
+    invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
+    caller: () => ({ principal: null, app: true }),
+    delivery: () => undefined,
+    cause: () => undefined,
+    namedWorker: () => Promise.reject(new Error("a literal source names no worker")),
+  });
+  const source = { "package.json": '{"main":"worker.js"}', "worker.js": "export default {}" };
+  return {
+    generations,
+    call: (step: ItxExpressionStep) => workers.get({ source }).invoke([step]),
+  };
+};
+
+/** What a call settled as: a Response's text or the value it answered, or the failure's code, kind
+ *  and message. */
+const settle = (call: unknown) =>
+  Promise.resolve(call).then(
+    async (answer) => ({ answered: answer instanceof Response ? await answer.text() : answer }),
+    (error: unknown) => ({
+      rejected: {
+        code: errorCode(error),
+        kind: failureKind(error),
+        message: error instanceof Error ? error.message : String(error),
+      },
+    }),
+  );
+
+/** An author's main module as the loader starts it: the platform's module imported first. */
+const loaded = (code: string) => `import "./node_modules/.platform/loaded-worker.js"; ${code}`;

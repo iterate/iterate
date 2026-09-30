@@ -1,4 +1,4 @@
-# A CLOSED PULL REQUEST'S DEPLOYMENTS, DELETED (`pnpm preview delete`, apps/os/scripts/preview.ts):
+# A CLOSED PULL REQUEST'S DEPLOYMENTS, DELETED (`pnpm preview delete`, scripts/os/preview.ts):
 # every `pr<n>-<sha7>` deployment Preview OS (preview-os.yml) made for the PR — its workers, KV
 # namespaces, R2 bucket, D1 and Artifacts namespace — usually just the newest, since each run's
 # cleanup deletes the ones before it. The PR body's section of links to them is folded first.
@@ -33,6 +33,7 @@ on:
       - .depot/workflows/deploy-dash.yml
       - .depot/workflows/deploy-agents.yml
       - .depot/workflows/deploy-notes.yml
+      - .depot/workflows/deploy-docs.yml
       - .depot/workflows/deploy-admin.yml
       - .depot/workflows/deploy-voice.yml
       - .depot/workflows/deploy-kit.yml
@@ -42,6 +43,7 @@ on:
       - apps/dash/**
       - apps/agents/**
       - apps/notes/**
+      - apps/docs/**
       - apps/admin/**
       - apps/voice/**
       - apps/kit/**
@@ -52,6 +54,7 @@ on:
       - packages/iterate/**
       - packages/agents/**
       - packages/voice/**
+      - packages/docs/**
       - packages/shared/**
       - packages/ui/**
       - package.json
@@ -59,6 +62,7 @@ on:
       - pnpm-workspace.yaml
       - envs.ts
       - scripts/lib/**
+      - scripts/os/**
       - .depot/actions/**
       - scripts/ci/toolchain.sh
   workflow_dispatch:
@@ -95,7 +99,6 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       - name: Delete the PR's deployments
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}

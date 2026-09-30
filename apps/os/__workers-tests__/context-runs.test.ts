@@ -191,8 +191,9 @@ test("REPLACED MID-RUN, REDIRECTED: a run its context sends to a sandbox (the ag
 // from its loaded isolate, and a LIVE value in it — a function, an object carrying one, a handle —
 // arrives as a stub. Serialized and dropped undisposed, that stub held the context: workerd refused
 // to evict it ("still has active references") until the next deploy. The number is the control.
-// The script runs inside one `withItx` round trip (`runScriptModule`), so the calls it made and never
-// returned — awaited or not, on the scope or on a handle it awaited — are released with its scope.
+// The script runs under one `using itx = this.getItx()` scope (`runScriptModule`), so the calls it
+// made and never returned — awaited or not, on the scope or on a handle it awaited — are released
+// with its scope.
 test.for([
   ["a number", "async () => 1", 1],
   ["a function", "async () => () => 1", undefined],

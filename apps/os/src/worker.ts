@@ -7,11 +7,7 @@
 // Cap’n Web terminates at `/api`; a project host's request is served where it arrived.
 
 import { proxyPosthogRequest } from "@iterate-com/shared/posthog";
-import {
-  failureKind,
-  isPlatformFailureKind,
-  logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+import { failureKind, isPlatformFailureKind, logPlatformFailure } from "iterate/platform-retry";
 import { ITX_PRINCIPAL_HEADER, type Principal } from "iterate/principal";
 import { forwardIssues, ITERATE_CAUSE_HEADER } from "iterate/lib";
 import {
@@ -254,11 +250,12 @@ async function routeRequest(
   const url = new URL(request.url);
   // OUR MARK (cause.ts): a request our own code sent resumes its chain, one context further.
   const mark = parseCause(request.headers.get(ITERATE_CAUSE_HEADER));
+  const ray = request.headers.get("cf-ray");
   let cause: Cause;
   try {
     cause = mark
       ? crossingOneMore(mark, `a request to ${url.host}`)
-      : newChain(`a request to ${url.host}`);
+      : newChain(`a request to ${url.host}${ray ? ` (ray ${ray})` : ""}`);
   } catch (error) {
     return new Response(`508: ${error instanceof Error ? error.message : String(error)}\n`, {
       status: 508,

@@ -1,6 +1,6 @@
 import { expect, onTestFinished, test, vi } from "vitest";
+import { HttpAnswerError } from "iterate/platform-retry";
 import { depotCiApi } from "./depot-api.ts";
-import { HttpAnswerError } from "./platform-retry.ts";
 
 // A single 500 on GetJobAttemptLogs must not fail a trace job.
 test("a read Depot answers with one 500 is asked again, with a warn, and succeeds", async () => {

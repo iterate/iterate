@@ -7,5 +7,5 @@ import { GithubSyncProcessor } from "./processor.ts";
 export class GithubSyncDurableObject extends StreamProcessorDurableObject<
   ProcessorState<typeof GithubSyncContract>
 > {
-  processor = new GithubSyncProcessor((call) => this.withItx(call));
+  processor = new GithubSyncProcessor(() => this.getItx());
 }

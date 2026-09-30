@@ -1,11 +1,18 @@
+import { tmpdir } from "node:os";
 import { execFile } from "node:child_process";
 import { createServer } from "node:http";
-import { chmodSync, copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+  mkdtempDisposableSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
@@ -238,7 +245,7 @@ test(
 );
 
 test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
-  using scratch = temporaryDirectory();
+  using scratch = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const directory = scratch.path;
   for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
     mkdirSync(join(directory, path), { recursive: true });
@@ -452,7 +459,7 @@ test("mcp claude: prints the command alone on stdout, or --exec runs claude with
 });
 
 function cliConfig(baseUrl: string) {
-  const config = temporaryDirectory();
+  const config = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   mkdirSync(join(config.path, "iterate"));
   writeFileSync(
     join(config.path, "iterate/config.json"),

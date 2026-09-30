@@ -33,7 +33,7 @@ Substantive PRs get a **risk map** section:
 
 A reviewer should know where to spend attention before opening the diff.
 
-CI writes managed sections into the PR body on each push: `<!-- loc-report -->…<!-- /loc-report -->` (the LOC table, `scripts/ci/loc-report.ts`), `<!-- os-preview -->…<!-- /os-preview -->` (the preview links, `apps/os/scripts/preview.ts`), and Bugbot's `<!-- CURSOR_SUMMARY -->…<!-- /CURSOR_SUMMARY -->`. Editing the description does not rewrite them.
+CI writes managed sections into the PR body on each push: `<!-- loc-report -->…<!-- /loc-report -->` (the LOC table, `scripts/ci/loc-report.ts`), `<!-- os-preview -->…<!-- /os-preview -->` (the preview links, `scripts/os/preview.ts`), and Bugbot's `<!-- CURSOR_SUMMARY -->…<!-- /CURSOR_SUMMARY -->`. Editing the description does not rewrite them.
 
 To edit a body, fetch the current one and change only your own text around those sections. Never PATCH a body written from scratch after the last push: that deletes the sections for good, and the squash commit ships without the LOC table.
 
@@ -94,7 +94,7 @@ gh api -X PATCH repos/iterate/iterate/pulls/<n> --input payload.json
 
 ## Previews
 
-Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys the tested commit as a fresh set of plain Workers, `apps/os` plus the Dash, Agents, Notes, Admin, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, deletes the PR's older deployments (**Clean up superseded**), and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both pass without testing. Commands for re-running the suites or deleting the deployments: [apps/os/README.md](../apps/os/README.md).
+Every open PR (draft or ready) whose change touches the platform or its clients gets a preview deployment: the Preview OS workflow deploys the tested commit as a fresh set of plain Workers, `apps/os` plus the Dash, Agents, Notes, Docs, Admin, Voice and Kit clients on top (**Deploy preview**), runs the integration suite (**E2E tests**) and the browser specs (**Browser specs**) against it, deletes the PR's older deployments (**Clean up superseded**), and writes the links and operations into the PR body. E2E tests and Browser specs are required checks. A PR that touches none of the preview paths deploys nothing, and both pass without testing. Commands for re-running the suites or deleting the deployments: [apps/os/README.md](../apps/os/README.md).
 
 For operational changes, inspect the preview's resulting state and telemetry in addition to test results. Production rollout remains gated on the [engineering invariant](engineering-invariants.md).
 

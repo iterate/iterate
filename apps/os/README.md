@@ -45,7 +45,7 @@ before deploying so the generated Wrangler configuration matches the selected en
 
 ```sh
 pnpm --dir apps/os build
-pnpm --dir apps/os run deploy --env <environment>
+pnpm os:deploy --env <environment>
 ```
 
 Production uses `https://os.iterate.com` as its OAuth issuer and
@@ -66,8 +66,8 @@ The proxied `*.iterate.com` DNS record and Worker route serve the `iterate` proj
 named Worker routes such as `os.iterate.com`, `mcp.iterate.com`, `dash.iterate.com`, and
 `k.iterate.com` take precedence. The zone has an active `*.iterate.com` edge certificate.
 
-The Preview OS workflow's Deploy preview job deploys the tested commit's platform and all six hosted
-clients (Dash, Agents, Notes, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
+The Preview OS workflow's Deploy preview job deploys the tested commit's platform and all seven hosted
+clients (Dash, Agents, Notes, Docs, Admin, Voice, Kit). Beside it, its E2E tests job sets up the integration
 suite and its Browser specs job the browser specs, and each runs its suite against them once the
 deploy has finished, each a required check; after the deploy, Clean up superseded deletes the PR's
 older deployments. A PR that changes no preview path deploys nothing and passes both without testing.
@@ -78,9 +78,9 @@ on the dev/preview account (envs.ts `previewDeployment`): for PR 3144 at `a1b2c3
 `https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev` for the platform,
 `https://pr3144-a1b2c3d-dash.iterate-dev-preview.workers.dev` and so on for the clients, which sign
 in against it. The platform has its own Durable Objects, D1, KV, R2 and Artifacts namespace, and
-deploys through `scripts/deploy.ts` like prd (`pnpm run deploy --env pr3144-a1b2c3d` works too).
+deploys through `scripts/os/deploy.ts` like prd (`pnpm os:deploy --env pr3144-a1b2c3d` works too).
 Nothing is redeployed in place and no data survives a push. Closing the PR deletes its deployments;
-the nightly sweep removes superseded, stale and half-made ones (`scripts/preview-sweep.ts` for the
+the nightly sweep removes superseded, stale and half-made ones (`scripts/os/preview-sweep.ts` for the
 rules). Deployments use workers.dev and have no project hosts. Main OS e2e, the latency guard and
 the real-model suite use the prefixes `main`, `latency` and `real-model`; leave those names to CI.
 
@@ -142,7 +142,7 @@ hostnames and the OAuth provider's grants — is one D1 per deployment, bound as
 `os-parent-db` (main on dev), `<deployment>-os-db` for each per-commit deployment, and `os-dev-db`
 locally (`src/control-plane/db/`). prd's and main on dev's primaries are in western Europe; a
 per-commit deployment's is created near the job that deploys it, which for CI is where its suites
-run (`scripts/d1.ts`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
+run (`scripts/os/d1.ts`). [sqlfu](https://github.com/mmkal/sqlfu) authors it: the schema is
 `definitions.sql`, the migrations `migrations/*.sql`, and every query a named statement in
 `queries/*.sql`, typed into `queries/.generated/` (committed); `db/index.ts` says why each write is
 one statement or one batch. It is the one truth of organizations, members, invitations and projects:
@@ -159,7 +159,7 @@ pnpm --dir apps/os db:migrate   # this worktree's local D1 (`pnpm dev` runs it t
 ```
 
 Wrangler migrates a deployment's D1 when it deploys, a per-commit deployment's too (created first),
-before the code that reads it uploads (`scripts/d1.ts`): a migration must keep the running version
+before the code that reads it uploads (`scripts/os/d1.ts`): a migration must keep the running version
 working until then. D1 Time Travel restores a database to any minute of the last 30 days.
 
 ## Projects and MCP

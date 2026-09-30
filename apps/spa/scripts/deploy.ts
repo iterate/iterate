@@ -1,11 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from "trpc-cli";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { z } from "zod";
 import { OS_DOPPLER_PROJECT, getEnv, spaEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { COMPATIBILITY_DATE } from "../../../scripts/lib/wrangler-config.ts";
-import { isMainModule } from "../../../packages/shared/src/dev/is-main-module.ts";
 
 const assets = new URL("../dist/assets/", import.meta.url);
 /** The packaged extension's version, which scripts/build.ts names the download after. */
@@ -50,9 +49,7 @@ export default async function deploy(options: { env: string }) {
   });
 }
 
-if (isMainModule(import.meta.url)) {
-  void createCli({ ...import.meta, name: "deploy" }).run({
-    logger: yamlTableConsoleLogger,
-    prompts: isAgent() ? undefined : createBuiltInPrompts(),
-  });
-}
+void createCli({ ...import.meta, name: "deploy" }).run({
+  logger: yamlTableConsoleLogger,
+  prompts: isAgent() ? undefined : createBuiltInPrompts(),
+});

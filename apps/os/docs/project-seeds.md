@@ -1,14 +1,14 @@
 # Project recovery seeds
 
-Use `pnpm --dir apps/os project-seed` to capture, check and restore selected
+Use `pnpm os:project-seed` to capture, check and restore selected
 projects across a deliberate environment erase. Always select `--env` explicitly.
 
 ```sh
-pnpm --dir apps/os project-seed capture \
+pnpm os:project-seed capture \
   --env prd --project garple --file ~/.iterate/backups/garple-2026-09-22.json
-pnpm --dir apps/os project-seed check \
+pnpm os:project-seed check \
   --env prd --file ~/.iterate/backups/garple-2026-09-22.json
-pnpm --dir apps/os project-seed apply \
+pnpm os:project-seed apply \
   --env prd --yes-i-mean-prd \
   --file ~/.iterate/backups/garple-2026-09-22.json \
   --organization garple --owners jonas@nustom.com misha@nustom.com
@@ -96,13 +96,17 @@ recorded.
 
 After the config is published, `apply` appends `project/hostname-add-requested` for
 each archived hostname the project does not serve. This is the same event the dash's
-Hostnames page appends. `apply` then waits for the answers, 60 s in total for all
+Domains page appends. `apply` then waits for the answers, 60 s in total for all
 of the seed's hostnames, and prints Cloudflare's status for each. A hostname already
 served is left alone, so a rerun requests nothing. A refused hostname fails `apply`
 with its name and the reason; so do answers still missing after 60 s, naming the
 hostnames. `erase-data` does not delete the Cloudflare custom
 hostname and the owner's CNAMEs are on their own DNS, so the add finds the existing
-custom hostname and the answer is usually `active` straight away.
+custom hostname and the answer is usually `active` straight away. The project claims
+a hostname only once its ownership record, the TXT record `_iterate.<hostname>` with
+`iterate-project=<project id>`, is in DNS. A seed restores the project's id, so a
+hostname whose owner added that record is claimed and served again; one without it
+comes back unclaimed, and the Domains page shows the record to add.
 
 `primaryHostname` records the project's primary hostname (one of `hostnames`), or
 null. After the hostnames, `apply` appends `project/primary-hostname-configured` for
@@ -110,7 +114,7 @@ it, the event the dash's Make primary appends, unless the project already has it
 waits for the project processor to reduce it. The reduce takes only a hostname whose
 certificate is active. After an erase Cloudflare still holds it, so it usually is;
 one still pending is not made primary, and `apply` says so rather than failing: make
-it primary on the dash's Hostnames page once it serves.
+it primary on the dash's Domains page once it serves.
 
 Hostnames are restored only when `apply` targets the deployment the archive was
 captured on (`source.platform`), because a custom hostname lives on that
@@ -124,9 +128,9 @@ organizations with no project, the deployment's own `admin` organization — is 
 separate file:
 
 ```sh
-pnpm --dir apps/os project-seed structure \
+pnpm os:project-seed structure \
   --env prd --file ~/.iterate/backups/structure-2026-09-22.json
-pnpm --dir apps/os project-seed verify-structure \
+pnpm os:project-seed verify-structure \
   --env prd --file ~/.iterate/backups/structure-2026-09-22.json
 ```
 
@@ -134,8 +138,9 @@ pnpm --dir apps/os project-seed verify-structure \
 overwrite one. `verify-structure` compares the deployment with it by what a
 recreation keeps: organizations by name, members by email and role, projects by
 ID, slug and organization name. It prints every difference and fails on a missing
-organization, membership or project. A captured user who has not signed in again,
-an empty organization and anything new are printed as notes.
+project, membership, or organization with projects. A captured user who has not
+signed in again, an organization with no projects (no seed carries one) and anything
+new are printed as notes.
 
 Only project IDs survive a recreation. `apply` recreates each member through
 sign-in's find-or-create by email and each organization under a fresh ID; a
@@ -195,7 +200,9 @@ After `apply` and `verify-structure`, restore them in this order:
    a member of the project. GitHub skips its prompt for someone who authorized the App before, and
    the callback answers "Done: GitHub is connected". Other providers connect again from the Dash's
    Integrations page. Check that `integration_routes` has the row and that a webhook lands on the
-   connection's log.
+   connection's log. To wait for a connect, read that row, or the project facet from
+   `iterate repl` at most once a minute. Never loop `itx run` on `/`: every run wakes the root
+   and writes three events to its log.
 2. **Origins**, with `repo.setOrigin(url)` and the archived URL. When the origin still has the
    pre-erase history (the erase does not reach GitHub), make it the base again:
    `repo.pull({ force: true })` (the Dash's "Keep GitHub's"), commit on top whatever the recreate
@@ -216,8 +223,8 @@ and the old one keeps its data until its owner deletes it. Deploy the new Worker
 beside the old one, restore onto it, then move the routes:
 
 ```sh
-pnpm --dir apps/os ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
-pnpm --dir apps/os run deploy --env prd --without-routes
+pnpm os:ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
+pnpm os:deploy --env prd --without-routes
 ```
 
 `--without-routes` deploys code, bindings and secrets with no routes: Cloudflare
@@ -229,7 +236,7 @@ rollback.
 For an erase, inventory first:
 
 ```sh
-pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run
+pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run
 ```
 
 **Pause merges to `main` from the erase until the last `apply` and `verify-structure`
@@ -252,8 +259,18 @@ If a deploy lands mid-restore anyway, wait for it to finish, then rerun `apply` 
 every seed with the same `--organization` and `--owners` as the first run, then
 `verify-structure`. Inside the restore window a rerun only finishes what was cut off.
 
+**Never roll `os-prd` back until `verify-structure` passes, and never onto a version
+tagged `erase-parked`.** The erase deploys a parked worker that deletes every Durable
+Object class. Its version stays in the Worker's version list with that tag, and a
+rollback onto it deletes every Durable Object again. After the deploy that follows
+the erase, every project host answers 421 until `apply` recreates its project. The
+post-deploy check posts that to #ci, says not to roll back, and passes. Any page it
+posts names the exact `wrangler rollback <version>`, or says there is no safe target.
+If a rollback lands on a parked version anyway, erase again, deploy, and rerun every
+`apply`.
+
 The erase refuses shared data resources while another worker still binds them,
-and refuses preview parents with multiple namespaces for a class. Retire any
+and refuses a worker with two Durable Object namespaces of one class. Retire any
 confirmed predecessor's writers before erasing shared stores. The worker identity
 and routes remain; Durable Objects, both KV stores, R2 objects and Artifacts repositories
 are emptied and verified, and the control plane's D1 loses its schema and migration

@@ -1,5 +1,8 @@
 // library.test.ts — the library's executable spec, one describe per concept (each over its own fake `itx`).
 
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { RpcTarget, newHttpBatchRpcResponse } from "capnweb";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { codedError } from "iterate/lib";
@@ -194,19 +197,18 @@ test("buildLibrary memoizes live connections per context: the memo is keyed by t
 // values in), the same text ⇒ the same module (the loader's content hash reuses the isolate), a
 // blank script refused.
 
-test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one withItx round trip from iterate/with-itx alone, with a callWithCause of its own", () => {
+test("run: the source: package.json naming worker.js its main, the script spliced in verbatim, a default WorkerEntrypoint whose run() hands it one `using itx = this.getItx()` scope, importing nothing else and with no callWithCause of its own", () => {
   const module = runScriptModule("async (itx) => (await itx.whoami()).path");
-  expect(module["worker.js"]).toContain('import { WorkerEntrypoint } from "cloudflare:workers"');
-  expect(module["worker.js"]).toContain('import { withItx } from "iterate/with-itx";');
+  expect(module["worker.js"].match(/^import .*$/gm)).toEqual([
+    'import { WorkerEntrypoint } from "cloudflare:workers";',
+  ]);
   expect(module["worker.js"]).toContain(
     "const script =\nasync (itx) => (await itx.whoami()).path\n;",
   );
   expect(module["worker.js"]).toContain("export default class extends WorkerEntrypoint");
-  expect(module["worker.js"]).toContain(
-    "callWithCause(cause) {\n    return carrier.run(cause, () => this.run());\n  }",
-  );
+  expect(module["worker.js"]).not.toContain("callWithCause");
   expect(module["worker.js"]).toContain("async run() {");
-  expect(module["worker.js"]).toContain("return await withItx(this.env.ITX, async (itx) => {");
+  expect(module["worker.js"]).toContain("using itx = this.getItx();");
   expect(module["worker.js"]).toContain("script(itx),");
   expect(module["worker.js"]).not.toContain("ITX.get()");
   expect(module["package.json"]).toBe('{"main":"worker.js"}');
@@ -299,7 +301,7 @@ test("run: the module's run() releases a handle the script awaited, and the call
   expect(released).toEqual(["whoami", "handle", "cd", "scope"]);
 });
 
-test("run: the module's callWithCause runs the script under the cause it is handed: its one withItx round trip names it", async () => {
+test("run: the callWithCause every loaded WorkerEntrypoint has runs the script under the cause it is handed: its one getItx() scope names it", async () => {
   const { callWithCause, causes } = await loadedRun("async () => 1");
   const cause = { chain: "a request's chain", depth: 3 };
   expect(await callWithCause(cause)).toBe(1);
@@ -1280,10 +1282,10 @@ function contextLog(settlements: (StreamEvent | "timeout")[]) {
   return { waitForEventAt, waits };
 }
 
-/** THE MODULE, RUN: the text the loader gets, imported here as a module with its imports stood in
- *  for (`WorkerEntrypoint`, which only hands `env` over; `iterate/with-itx`, the real module), so
- *  its `run()` executes exactly as written — under fake timers. `disposals()` counts the script's
- *  scope being released; `itx` stands in for the scope. */
+/** THE MODULE, RUN: the text the loader gets, imported here as a module whose `WorkerEntrypoint` is
+ *  the shim's, given `getItx` and `callWithCause` by the SDK's real loaded-worker.ts (found the way
+ *  apps/os/scripts/build.ts finds it), so its `run()` executes exactly as written — under fake
+ *  timers. `disposals()` counts the script's scope being released; `itx` stands in for the scope. */
 async function loadedRun(
   script: string,
   itx: object = {},
@@ -1295,17 +1297,14 @@ async function loadedRun(
 }> {
   let disposals = 0;
   const module = runScriptModule(script);
-  (globalThis as { withItxForLoadedRun?: unknown }).withItxForLoadedRun =
-    await import("iterate/with-itx");
-  const standIn = module["worker.js"]
-    .replace(
-      'import { WorkerEntrypoint } from "cloudflare:workers";',
-      "class WorkerEntrypoint { constructor(ctx, env) { this.env = env; } }",
-    )
-    .replace(
-      'import { withItx } from "iterate/with-itx";',
-      "const { withItx } = globalThis.withItxForLoadedRun;",
-    );
+  const sdkDir = dirname(createRequire(import.meta.url).resolve("iterate/sdk"));
+  await import(/* @vite-ignore */ join(sdkDir, "loaded-worker.ts"));
+  (globalThis as { workerEntrypointForLoadedRun?: unknown }).workerEntrypointForLoadedRun =
+    WorkerEntrypoint;
+  const standIn = module["worker.js"].replace(
+    'import { WorkerEntrypoint } from "cloudflare:workers";',
+    "const WorkerEntrypoint = globalThis.workerEntrypointForLoadedRun;",
+  );
   const { default: Entrypoint } = await import(
     /* @vite-ignore */ `data:text/javascript,${encodeURIComponent(standIn)}`
   );
@@ -1321,7 +1320,10 @@ async function loadedRun(
     causes.push(cause);
     return scope;
   };
-  const entrypoint = new Entrypoint({}, { ITX: { get } });
+  const env = { ITX: { get } };
+  const entrypoint = new Entrypoint({}, env);
+  // the shim's base class keeps no constructor arguments; the runtime's sets `env` from them
+  Object.assign(entrypoint, { env });
   return {
     run: () => entrypoint.run(),
     callWithCause: (cause) => entrypoint.callWithCause(cause, [["run"]]),

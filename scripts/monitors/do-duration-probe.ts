@@ -27,7 +27,6 @@
 
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { cloudflareAccounts } from "../../envs.ts";
 import { dopplerSecret } from "../lib/env-context.ts";
 
@@ -142,8 +141,7 @@ async function checkAccountActiveTime(input: {
 /**
  * The trailing 60 minutes' five biggest DO namespaces by active time, named
  * as the account's namespace listing names them: `<script>_<class>`
- * (`pr2828-a1b2c3d-os_IterateContextDurableObject` for a per-commit deployment;
- * a legacy Worker Preview's had its slug in between, `os_pr2828_…`).
+ * (`pr2828-a1b2c3d-os_IterateContextDurableObject` for a per-commit deployment).
  * DO-hours in the trailing hour are DO-hours per hour, so the alert can put
  * a $/h on each.
  */
@@ -362,5 +360,4 @@ export async function probeAccount(options: {
   };
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "do-duration-probe" }).run();
+void createCli({ ...import.meta, name: "do-duration-probe" }).run();

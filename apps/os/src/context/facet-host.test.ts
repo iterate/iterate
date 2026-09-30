@@ -4,6 +4,8 @@
 // `blockConcurrencyWhile` queues them. The Workers suite drives the real publication
 // (__workers-tests__/named-facets.test.ts).
 import { expect, test } from "vitest";
+import { codedError } from "iterate/lib";
+import type { StreamEvent } from "iterate/stream/processor";
 import { unavailableError } from "../unavailable.ts";
 import { FacetHost } from "./facet-host.ts";
 
@@ -35,14 +37,60 @@ test("a live facet outlasts a name it cannot read right now: the platform failed
   expect(facets).toMatchObject({ started: ["agents-v1"] });
 });
 
+test("a call cut off by `itx.facets.abort` rejects FACET_ABORTED with its own abort's reason, even once a second abort ended the next instance before the first cut-off arrived", async () => {
+  const facets = namedFacets();
+  facets.publish(1);
+  await facets.boot();
+  const cutOff = facets.work();
+  await settle();
+  await facets.abort("first");
+  await facets.abort("second");
+  facets.failHeldWork(new Error("the runtime's abort"));
+  await expect(cutOff).rejects.toMatchObject({
+    code: "FACET_ABORTED",
+    message: expect.stringContaining("aborted: first"),
+  });
+});
+
+test("a call cut off by `itx.facets.abort` rejects FACET_ABORTED even when what cut it off reads TIMEOUT", async () => {
+  const facets = namedFacets();
+  facets.publish(1);
+  await facets.boot();
+  const cutOff = facets.work();
+  await settle();
+  await facets.abort("asked");
+  facets.failHeldWork(codedError("TIMEOUT", "the watchdog's own timeout"));
+  await expect(cutOff).rejects.toMatchObject({ code: "FACET_ABORTED" });
+});
+
+test("a call in flight when its facet is deleted rejects NO_FACET only for the runtime's own words for the deletion, and keeps any other failure as its own", async () => {
+  const facets = namedFacets();
+  facets.publish(1);
+  await facets.boot();
+  const ownFailure = facets.work();
+  const cutOff = facets.work();
+  await settle();
+  facets.delete();
+  facets.failHeldWork(new Error("the facet's own failure"));
+  facets.failHeldWork(new Error("Facet was deleted."));
+  await expect(ownFailure).rejects.toThrow("the facet's own failure");
+  await expect(cutOff).rejects.toMatchObject({ code: "NO_FACET" });
+});
+
 /** A context's facet host with one facet, `tally`, named by the root's published worker: `publish`
  *  sets the generation the name resolves to (agents.ts's identity `agents-v<generation>`), `boot` is
  *  one call on it answering the identity its class was minted under, and `started` every class the
- *  host minted, in order. */
+ *  host minted, in order. `work` is a call the facet holds until `failHeldWork` rejects the oldest
+ *  one held: the fake's abort and `delete` (its hosting row removed) cut off nothing by themselves,
+ *  so a test says when the runtime's rejection arrives. */
 function namedFacets() {
   const kv = new Map<string, unknown>();
   const started: string[] = [];
-  const instances = new Map<string, { boot(): string; listPublicMethods(): string[] }>();
+  const instances = new Map<
+    string,
+    { boot(): string; listPublicMethods(): string[]; work(): Promise<never> }
+  >();
+  const heldWork: ((error: unknown) => void)[] = [];
   let generation = 0;
   let holdNext = false;
   let answerHeld = (_generation: number) => {};
@@ -85,7 +133,11 @@ function namedFacets() {
           if (!instance) {
             const { identity } = startup().class;
             started.push(identity);
-            instance = { boot: () => identity, listPublicMethods: () => ["boot"] };
+            instance = {
+              boot: () => identity,
+              listPublicMethods: () => ["boot"],
+              work: () => new Promise<never>((_, reject) => heldWork.push(reject)),
+            };
             instances.set(name, instance);
           }
           return instance;
@@ -132,6 +184,18 @@ function namedFacets() {
     started,
     publish: (next: number) => void (generation = next),
     boot: () => host.callFacetAsPlatform(tally, [["boot"]]),
+    work: () => host.callFacetAsPlatform(tally, [["work"]]),
+    abort: (reason: string) => host.abort("tally", reason),
+    failHeldWork: (error: unknown) => heldWork.shift()?.(error),
+    delete: () =>
+      host.deleteFacetsWhoseHostingSubscriptionWasRemoved(
+        [removedTallyRow],
+        // The deletion reads only the removed row's `hostedFacet`; the row's other fields are the
+        // reduce's, which this fake never runs.
+        {
+          "tally-row": { hostedFacet: { name: "tally", className: "Tally" } },
+        } as unknown as Parameters<FacetHost["deleteFacetsWhoseHostingSubscriptionWasRemoved"]>[1],
+      ),
     holdNextResolution: () => {
       holdNext = true;
       return { answer: (at: number) => answerHeld(at) };
@@ -143,6 +207,16 @@ function namedFacets() {
     releaseRestarts: () => releaseRestarts(),
   };
 }
+
+/** `tally`'s hosting row removed: a `subscription-configured` with no target is the disablement. */
+const removedTallyRow: StreamEvent = {
+  offset: 1,
+  type: "events.iterate.com/itx/subscription-configured",
+  createdAt: "2026-09-30T00:00:00.000Z",
+  path: "/x",
+  source: { origin: "prj_unit.iterate/x" },
+  payload: { name: "tally-row", target: null },
+};
 
 /** Let every promise chain started so far settle. */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 10));

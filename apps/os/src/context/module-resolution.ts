@@ -18,18 +18,15 @@
 //   pkg.pr.new ref that is not a full commit (a branch, a PR number, a short sha) is refused: a
 //   moving ref asks to follow it, which a lock cannot do without asking pkg.pr.new on every cold
 //   start, and a project's builds would then differ by when each host started. Whatever writes a
-//   dependency pins it as it writes (@iterate-com/shared/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
+//   dependency pins it as it writes (iterate/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
 //   keeps the platform packages external, so a library's zod is the SDK's.
 
-import { isPkgPrNewCommit, pkgPrNewVersionOf } from "@iterate-com/shared/pkg-pr-new";
-import {
-  failureKind,
-  httpFailureKind,
-  isPlatformFailureKind,
-} from "@iterate-com/shared/platform-retry";
+import { isPkgPrNewCommit, pkgPrNewVersionOf } from "iterate/pkg-pr-new";
+import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
 import { z } from "zod";
+import { sha256Hex } from "../caller.ts";
 import { unavailableError } from "../unavailable.ts";
 
 /** A module map: module name → code. */
@@ -312,23 +309,41 @@ export async function resolveModules(
   }
 
   // 3. the platform modules the worker reaches, and nothing else.
-  while (platformUsed.length) {
-    const name = platformUsed.pop()!;
+  addPlatformModules(out, platformUsed, platform);
+  return { mainModule: outputName(entry), modules: out };
+}
+
+/** The platform modules `names` added to `out`, with every platform module they import. */
+function addPlatformModules(out: ModuleMap, names: string[], platform: PlatformModules): void {
+  while (names.length) {
+    const name = names.pop()!;
     if (Object.hasOwn(out, name)) continue;
     out[name] = platform.modules[name]!;
-    platformUsed.push(...(platform.imports[name] ?? []));
+    names.push(...(platform.imports[name] ?? []));
   }
-  return { mainModule: outputName(entry), modules: out };
+}
+
+/** What every loaded worker evaluates first (iterate src/sdk/loaded-worker.ts), as build.ts names it. */
+const LOADED_WORKER_MODULE = "node_modules/.platform/loaded-worker.js";
+
+/** A resolved worker as the loader starts it: its main module imports the platform's
+ *  LOADED_WORKER_MODULE before anything of its own — on its first line, so its lines keep their
+ *  numbers — and exports what it always did. */
+export function enteredThroughPlatform(
+  resolved: { mainModule: string; modules: ModuleMap },
+  platform: PlatformModules,
+): { mainModule: string; modules: ModuleMap } {
+  const modules = { ...resolved.modules };
+  addPlatformModules(modules, [LOADED_WORKER_MODULE], platform);
+  const { mainModule } = resolved;
+  const platformFirst = JSON.stringify(relativeSpecifier(mainModule, LOADED_WORKER_MODULE));
+  modules[mainModule] = `import ${platformFirst}; ${modules[mainModule]}`;
+  return { mainModule, modules };
 }
 
 /** A locked npm graph: every module (each requested specifier's entry under
  *  `node_modules/<specifier>.js`), and the platform modules it imports (esm.sh leaves them external). */
 type DependencyGraph = { modules: ModuleMap; platformModules: string[] };
-
-async function sha256(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 /** The dependency graph for these specifiers under these versions — from the store when this exact
  *  set was resolved before (by any project), otherwise resolved from esm.sh and stored. A version
@@ -349,7 +364,7 @@ async function lockedDependencyGraph(
     externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
-  const key = `module-lock-2/${await sha256(JSON.stringify(lockInput))}`;
+  const key = `module-lock-2/${await sha256Hex(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
   const graph = await resolveFromEsm(lockInput, bases, opts);
@@ -385,7 +400,7 @@ function esmPackageBase(name: string, version: string, where: string): string {
 
 /** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. esm.sh out of
  *  reach, too slow (ESM_FETCH_TIMEOUT_MS) or answering 5xx, 429 or 408 is the platform's failure,
- *  code UNAVAILABLE of its kind (@iterate-com/shared/platform-retry `httpFailureKind`): a
+ *  code UNAVAILABLE of its kind (iterate/platform-retry `httpFailureKind`): a
  *  publication meets it again rather than refusing the commit. Any other answer is the source's. */
 async function fetchModuleText(url: string, fetchFn: typeof fetch): Promise<string> {
   let response: Response;

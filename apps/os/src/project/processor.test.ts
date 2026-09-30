@@ -9,6 +9,7 @@ import type { StreamEventInput } from "iterate/stream/processor";
 import { reduceProcessor } from "iterate/stream/test-support";
 import { runningCause, runningUnder } from "../cause.ts";
 import { normalizeControlEvent } from "../stream/core-processor.ts";
+import { ownershipRecordOf } from "./custom-hostnames.ts";
 import { ProjectProcessor } from "./processor.ts";
 import type { ProjectState } from "./contract.ts";
 
@@ -170,6 +171,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -180,7 +182,7 @@ const reduceRows: {
       hostname("add-requested"),
       addSettled(1, "active"),
       hostname("add-requested"),
-      addSettled(3, null, "boom"),
+      addSettled(3, null, "boom", true),
     ],
     state: {
       ...empty,
@@ -190,6 +192,7 @@ const reduceRows: {
           cloudflare: observation("active"),
           error: "boom",
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -221,6 +224,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: expect.any(String),
+          claimed: true,
         },
       },
     },
@@ -236,6 +240,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -257,6 +262,7 @@ const reduceRows: {
           cloudflare: null,
           error: null,
           connectedAt: null,
+          claimed: false,
         },
       },
     },
@@ -338,6 +344,7 @@ const reduceRows: {
           cloudflare: null,
           error: null,
           connectedAt: null,
+          claimed: false,
         },
       },
       primaryHostname: "www.acme.test",
@@ -354,6 +361,7 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
     },
@@ -386,8 +394,34 @@ const reduceRows: {
           cloudflare: observation("pending"),
           error: null,
           connectedAt: null,
+          claimed: true,
         },
       },
+    },
+  },
+  {
+    name: "a hostname nobody has proven is not the project's: live at Cloudflare, it holds no claim and is refused as primary",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active", null, false),
+      primary("www.acme.test"),
+    ],
+    state: {
+      ...empty,
+      hostnames: { "www.acme.test": { ...liveHostname(), claimed: false } },
+    },
+  },
+  {
+    name: "an answer from before the ownership proof held its claim once it reached Cloudflare",
+    events: [
+      hostname("add-requested"),
+      addSettled(1, "active", null, undefined),
+      primary("www.acme.test"),
+    ],
+    state: {
+      ...empty,
+      hostnames: { "www.acme.test": liveHostname() },
+      primaryHostname: "www.acme.test",
     },
   },
   {
@@ -433,7 +467,7 @@ for (const { name, events, state } of reduceRows)
     expect(reduceProcessor(processorWithoutHostnames(), events)).toEqual(state));
 
 // THE PUBLICATION OF THE CONFIG REPO: `processEvent` driven by hand over a fake publisher.
-test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer then project/worker-updated as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
+test("ProjectProcessor — the publication: a commit fact publishes its commit, main's head, as the generation of the fact's offset, its pointer and project/worker-updated in one batch as the platform; a commit that lands during an attempt is published when it settles; a pull back to an earlier commit is a publication of its own", async () => {
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -450,16 +484,14 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
   release();
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@5"],
-    ["project/worker-updated aaa@5"],
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+    ["itx.config ⇒ aaa@5", "project/worker-updated aaa@5"],
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
   // the pointer reads the commit's modules through `itx.config.modules`, which only the platform writes
   const repo = ["itx", "builtins", ["cd", "/repos/config"], "builtins", "facets", ["get", "repo"]];
   const source = ["itx", "config", ["modules", { commitOid: "bbb" }]];
   const manifest = { generation: 7, modules: modulesOf("bbb") };
-  expect(publisher.batches[2]).toMatchObject([
+  expect(publisher.batches[1]).toMatchObject([
     {
       idempotencyKey: "project/config-modules:7",
       payload: { match: "itx.config.modules", target: [...repo, "modules"] },
@@ -471,19 +503,18 @@ test("ProjectProcessor — the publication: a commit fact publishes its commit, 
         target: ["itx", "builtins", "workers", ["get", { source, cacheKey: "bbb", manifest }]],
       },
     },
+    { idempotencyKey: "project/publication:7" },
   ]);
-  expect(publisher.batches[3]![0]).toMatchObject({ idempotencyKey: "project/publication:7" });
   // delivered again over the same commits, before their outcomes reduced: nothing more
   deliver(processor, owing(tip("aaa", 5), tip("bbb", 7)), unusedAppend);
   await settle();
-  expect(publisher.batches).toHaveLength(4);
+  expect(publisher.batches).toHaveLength(2);
   // a forced pull back to the first commit is a new fact, and a publication of its own
   publisher.main = "aaa";
   deliver(processor, owing(tip("aaa", 9)), unusedAppend);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ aaa@9"],
-    ["project/worker-updated aaa@9"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ aaa@9", "project/worker-updated aaa@9"],
   ]);
 });
 
@@ -493,8 +524,7 @@ test.for([
     owed: [tip("aaa", 5), tip("bbb", 7)],
     outcomes: [
       ["project/worker-update-failed aaa@5"],
-      ["itx.config ⇒ bbb@7"],
-      ["project/worker-updated bbb@7"],
+      ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
     ],
   },
   {
@@ -530,10 +560,9 @@ test("ProjectProcessor — init-at-8: a publication runs under its commit's caus
   );
   await settle();
   expect(publisher.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@1"],
-    ["project/worker-updated aaa@1"],
+    ["itx.config ⇒ aaa@1", "project/worker-updated aaa@1"],
   ]);
-  expect(publisher.causes).toMatchObject([commit, commit]);
+  expect(publisher.causes).toMatchObject([commit]);
 });
 
 test("ProjectProcessor — a commit the probe refuses is project/worker-update-failed with why, keyed by its generation, and no pointer", async () => {
@@ -564,9 +593,8 @@ test.for<{ name: string; dropped: FakeCommit }>([
     publisher.main = "dropped";
     deliver(processor, owing(tip("good", 2), tip("dropped", 3)), unusedAppend);
     await settle();
-    expect(publisher.batches.map(summary).slice(-2)).toEqual([
-      ["itx.config ⇒ dropped@3"],
-      ["project/worker-updated dropped@3"],
+    expect(publisher.batches.map(summary).slice(-1)).toEqual([
+      ["itx.config ⇒ dropped@3", "project/worker-updated dropped@3"],
     ]);
   },
 );
@@ -583,11 +611,10 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   const tipped = owing(tip("aaa", 1));
   deliver(processorPublishingWith(publisher), tipped, unusedAppend, runInBackground);
   await settle();
-  const [pointer, [updated]] = publisher.batches as [StreamEventInput[], StreamEventInput[]];
+  const [publication] = publisher.batches as [StreamEventInput[]];
   const state = reduceProcessor(processorWithoutHostnames(), [
     committed("/repos/config", "aaa"),
-    ...pointer.map((rule) => normalizeControlEvent(rule, "/")),
-    updated!,
+    ...publication.map((event) => normalizeControlEvent(event, "/")),
   ]);
   expect(state).toEqual({
     ...tipped,
@@ -597,7 +624,7 @@ test("ProjectProcessor — a commit is owed until an outcome of its own generati
   });
   deliver(processorPublishingWith(publisher), state, unusedAppend, runInBackground);
   await settle();
-  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 2, background: 1 });
+  expect({ batches: publisher.batches.length, background }).toEqual({ batches: 1, background: 1 });
 });
 
 test.for([
@@ -631,9 +658,8 @@ test.for([
   const publisher = fakePublisher({ aaa: {}, bbb: {} });
   await run(publisher);
   await settle();
-  expect(publisher.batches.map(summary).slice(-2)).toEqual([
-    ["itx.config ⇒ bbb@7"],
-    ["project/worker-updated bbb@7"],
+  expect(publisher.batches.map(summary).slice(-1)).toEqual([
+    ["itx.config ⇒ bbb@7", "project/worker-updated bbb@7"],
   ]);
 });
 
@@ -653,8 +679,7 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
   expect(recovering).toMatchObject({ batches: [] });
   await vi.advanceTimersByTimeAsync(30_000);
   expect(recovering.batches.map(summary)).toEqual([
-    ["itx.config ⇒ aaa@4"],
-    ["project/worker-updated aaa@4"],
+    ["itx.config ⇒ aaa@4", "project/worker-updated aaa@4"],
   ]);
   expect(vi.getTimerCount()).toBe(0); // a pending timer would keep the context resident
 
@@ -678,12 +703,16 @@ test("ProjectProcessor — a platform failure is met again after 5 s and 30 s wi
 test("ProjectProcessor — an event that changes the primary hostname holds the cursor until the control plane has it; one that changes nothing writes nothing", async () => {
   const written: (string | null)[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
       claim: async () => {},
       release: async () => {},
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async (hostname) => void written.push(hostname),
       provider: null,
       connect: async () => null,
@@ -710,15 +739,19 @@ test("ProjectProcessor — an event that changes the primary hostname holds the 
 });
 
 // THE CUSTOM HOSTNAMES — the effect, driven by hand with a fake control plane and Cloudflare.
-test("ProjectProcessor — a hostname add claims, provisions and answers keyed by its request; a refusal releases a claim never provisioned; a remove deletes then releases; a deployment that cannot provision refuses", async () => {
+test("ProjectProcessor — a hostname add claims once proven, provisions and answers keyed by its request; an unproven one is provisioned unclaimed; a refusal releases a claim it just took; a remove deletes then releases, leaving another project's custom hostname; a deployment that cannot provision refuses", async () => {
   const calls: string[] = [];
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: ["iterate.app"],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async (name) => name.startsWith("taken."),
+      proof: async (name) => ({ ...(await proven(name)), proven: !/^(shop|done)\./.test(name) }),
       setPrimaryHostname: async () => {},
       connect: async (name) => ({ provider: "Cloudflare", url: `https://dc.test/apply/${name}` }),
       dnsZone: async () => ({ zone: "acme.test", provider: "cloudflare" }),
@@ -726,7 +759,7 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
         provision: async (name) => {
           calls.push(`provision ${name}`);
           if (name.startsWith("new.")) throw new Error("Cloudflare says no");
-          return observation("pending");
+          return observation(name.startsWith("done.") ? "active" : "pending");
         },
         remove: async (name) => void calls.push(`remove ${name}`),
       },
@@ -734,17 +767,27 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   );
   const appended: {
     idempotencyKey?: string;
-    payload: { error?: string | null; cloudflare?: { connect: unknown } | null };
+    payload: {
+      error?: string | null;
+      claimed?: boolean;
+      cloudflare?: { connect: unknown; records: unknown[] } | null;
+    };
   }[] = [];
   const owe = async (
     name: string,
     verb: "add" | "remove",
     offset: number,
-    { on = processor, serving = false } = {},
+    { on = processor, held = false } = {},
   ) => {
-    const cloudflare = serving ? observation("active") : null;
+    const cloudflare = held ? observation("active") : null;
     const hostnames = {
-      [name]: { requested: { verb, offset }, cloudflare, error: null, connectedAt: null },
+      [name]: {
+        requested: { verb, offset },
+        cloudflare,
+        error: null,
+        connectedAt: null,
+        claimed: held,
+      },
     };
     deliver(on, { ...empty, hostnames }, async (...events) => {
       appended.push(...(events as typeof appended));
@@ -753,10 +796,12 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
   };
   await owe("www.acme.test", "add", 4);
   await owe("new.acme.test", "add", 5);
-  await owe("new.acme.test", "add", 6, { serving: true }); // a failed re-check keeps a serving claim
+  await owe("new.acme.test", "add", 6, { held: true }); // a failed re-check keeps a held claim
   await owe("docs.iterate.app", "add", 7);
-  await owe("www.acme.test", "remove", 8);
-  await owe("www.acme.test", "add", 9, { on: processorWithoutHostnames() });
+  await owe("shop.acme.test", "add", 8); // no ownership record yet
+  await owe("www.acme.test", "remove", 9);
+  await owe("taken.acme.test", "remove", 10); // another project's custom hostname stays
+  await owe("www.acme.test", "add", 11, { on: processorWithoutHostnames() });
   expect(calls).toEqual([
     "claim www.acme.test",
     "provision www.acme.test",
@@ -765,20 +810,47 @@ test("ProjectProcessor — a hostname add claims, provisions and answers keyed b
     "release new.acme.test",
     "claim new.acme.test",
     "provision new.acme.test",
+    "provision shop.acme.test",
     "remove www.acme.test",
     "release www.acme.test",
+    "release taken.acme.test",
   ]);
-  expect(appended.map((event) => [event.idempotencyKey, event.payload.error || null])).toEqual([
-    ["project/hostname-add:www.acme.test:4", null],
-    ["project/hostname-add:new.acme.test:5", "Cloudflare says no"],
-    ["project/hostname-add:new.acme.test:6", "Cloudflare says no"],
+  expect(
+    appended.map((event) => [
+      event.idempotencyKey,
+      event.payload.error || null,
+      event.payload.claimed,
+    ]),
+  ).toEqual([
+    ["project/hostname-add:www.acme.test:4", null, true],
+    ["project/hostname-add:new.acme.test:5", "Cloudflare says no", false],
+    ["project/hostname-add:new.acme.test:6", "Cloudflare says no", true],
     [
       "project/hostname-add:docs.iterate.app:7",
       "'docs.iterate.app' is under iterate.app, which this deployment serves itself.",
+      false,
     ],
-    ["project/hostname-remove:www.acme.test:8", null],
-    ["project/hostname-add:www.acme.test:9", "This deployment cannot add custom hostnames."],
+    ["project/hostname-add:shop.acme.test:8", null, false],
+    ["project/hostname-remove:www.acme.test:9", null, undefined],
+    ["project/hostname-remove:taken.acme.test:10", null, undefined],
+    [
+      "project/hostname-add:www.acme.test:11",
+      "This deployment cannot add custom hostnames.",
+      false,
+    ],
   ]);
+  // a hostname Cloudflare is done with but nobody has proven still carries where to add the record
+  await owe("done.acme.test", "add", 12);
+  expect(appended.at(-1)!.payload).toMatchObject({
+    claimed: false,
+    cloudflare: { status: "active", dns: { zone: "acme.test" } },
+  });
+  // the records to add end with the ownership record, which Domain Connect writes too
+  expect(appended[4]!.payload.cloudflare!.records.at(-1)).toEqual({
+    type: "TXT",
+    name: "_iterate.shop.acme.test",
+    value: "iterate-project=prj_test",
+  });
   // a hostname not yet live carries the one-click link its DNS provider offers
   expect(appended[0]!.payload.cloudflare).toMatchObject({
     status: "pending",
@@ -792,12 +864,16 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
   let finish!: () => void;
   const held = new Promise<void>((resolve) => (finish = resolve));
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -821,6 +897,7 @@ test("ProjectProcessor — one request per hostname at a time: a remove asked wh
             cloudflare: null,
             error: null,
             connectedAt: null,
+            claimed: false,
           },
         },
       },
@@ -842,12 +919,16 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
   const held = new Promise<void>((resolve) => (finish = resolve));
   let provisions = 0;
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
       claim: async (name) => void calls.push(`claim ${name}`),
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -873,6 +954,7 @@ test("ProjectProcessor — a drained re-check knows the add it just answered pro
             cloudflare: null,
             error: null,
             connectedAt: null,
+            claimed: false,
           },
         },
       },
@@ -892,14 +974,16 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
   const calls: string[] = [];
   const processor = new ProjectProcessor(
     () => {
-      calls.push("withItx (another saga ran)");
-      return Promise.reject(new Error("unused"));
+      calls.push("getItx (another saga ran)");
+      throw new Error("unused");
     },
     () => Promise.reject(new Error("unused")),
     () => ({
       reservedZones: [],
       claim: async () => {},
       release: async (name) => void calls.push(`release ${name}`),
+      heldElsewhere: async () => false,
+      proof: proven,
       setPrimaryHostname: async () => {},
       connect: async () => null,
       dnsZone: async () => null,
@@ -935,6 +1019,7 @@ test("ProjectProcessor — the deletion: the saga destroys each context the regi
         cloudflare: observation("active"),
         error: null,
         connectedAt: null,
+        claimed: true,
       },
     },
   };
@@ -982,7 +1067,9 @@ test("ProjectProcessor — the deletion: a context announced while a pass runs (
   const registered = reduceProcessor(processorWithoutHostnames(), ["/a", "/b"].map(childCreated));
   const state: ProjectState = { ...registered, deletion: { offset: 9 } };
   const processor = new ProjectProcessor(
-    () => Promise.reject(new Error("unused")),
+    () => {
+      throw new Error("unused");
+    },
     () => Promise.reject(new Error("unused")),
     () => null,
     () => ({
@@ -1030,7 +1117,9 @@ test("ProjectProcessor — the deletion: a pass that keeps failing runs again af
   const reported: unknown[] = [];
   const incarnation = () =>
     new ProjectProcessor(
-      () => Promise.reject(new Error("unused")),
+      () => {
+        throw new Error("unused");
+      },
       () => Promise.reject(new Error("unused")),
       () => null,
       () => ({
@@ -1093,7 +1182,9 @@ test("template provenance survives replay of the project creation request", () =
 /** The reduce never reaches the context or a template; the saga is the e2e's. */
 function processorWithoutHostnames() {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the reduce reaches no itx")),
+    () => {
+      throw new Error("the reduce reaches no itx");
+    },
     () => Promise.reject(new Error("the reduce downloads no template")),
   );
 }
@@ -1207,7 +1298,9 @@ function modulesOf(commitOid: string) {
 
 function processorPublishingWith(publisher: ReturnType<typeof fakePublisher>) {
   return new ProjectProcessor(
-    () => Promise.reject(new Error("the publication reaches no itx")),
+    () => {
+      throw new Error("the publication reaches no itx");
+    },
     () => Promise.reject(new Error("the publication downloads no template")),
     () => null,
     () => null,
@@ -1260,7 +1353,14 @@ function hostname(verb: "add-requested" | "remove-requested") {
   };
 }
 
-function addSettled(requestOffset: number, status: string | null, error: string | null = null) {
+/** An add's answer: `claimed` whether the project holds the claim after it (by default, when it
+ *  reached Cloudflare); `undefined` spells an answer from before the ownership proof. */
+function addSettled(
+  requestOffset: number,
+  status: string | null,
+  error: string | null = null,
+  claimed: boolean | undefined = Boolean(status),
+) {
   return {
     type: "events.iterate.com/project/hostname-add-settled",
     payload: {
@@ -1268,8 +1368,14 @@ function addSettled(requestOffset: number, status: string | null, error: string 
       requestOffset,
       cloudflare: status && observation(status),
       error,
+      claimed,
     },
   };
+}
+
+/** A fake `ProjectHostnames.proof`: the ownership record for project `prj_test`, found in DNS. */
+async function proven(hostname: string) {
+  return { record: ownershipRecordOf(hostname, "prj_test"), proven: true };
 }
 
 function primary(hostname: string | null) {
@@ -1277,7 +1383,13 @@ function primary(hostname: string | null) {
 }
 
 function liveHostname() {
-  return { requested: null, cloudflare: observation("active"), error: null, connectedAt: null };
+  return {
+    requested: null,
+    cloudflare: observation("active"),
+    error: null,
+    connectedAt: null,
+    claimed: true,
+  };
 }
 
 function removed(requestOffset: number) {
@@ -1315,7 +1427,7 @@ function observation(status: string) {
   return {
     status,
     sslStatus: status,
-    records: [{ name: "www.acme.test", value: "cname.iterate.app" }],
+    records: [{ type: "CNAME" as const, name: "www.acme.test", value: "cname.iterate.app" }],
     connect: null,
     dns: null,
   };

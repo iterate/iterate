@@ -58,6 +58,7 @@ import {
 import { startIssuerSession } from "./issuer-session.ts";
 import { browserAuthorization } from "./browser-client.ts";
 import { ControlPlane } from "./control-plane/edge.ts";
+import { facetStateOf } from "./context-stub.ts";
 import type { UserRecord } from "./control-plane/catalog.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
 import { signInHref } from "./login-search.ts";
@@ -623,13 +624,9 @@ async function personConnectionOf(
   provider: IdentityProvider,
   subject: string,
 ): Promise<string | null> {
-  // The platform's own read of the account facet; `invoke` is untyped across the DO hop, and
-  // `snapshot` answers the account contract's state.
-  const { state } = (await personContext(env, user).invoke(
-    ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
-    [],
-    { principal: { actor: user.id, email: user.email } },
-  )) as { state: AccountState };
+  const state = await facetStateOf<AccountState>(personContext(env, user), "account", {
+    principal: { actor: user.id, email: user.email },
+  });
   const row = Object.values(state.integrations).find(
     (known) => known.provider === provider && known.externalId === subject,
   );
@@ -650,7 +647,11 @@ async function keepSignInToken(
   const caller = { principal: { actor: user.id, email: user.email } };
   const connection = existing || signedIn.identity.sub;
   const merge = Boolean(existing) && !signedIn.tokens.refreshToken;
-  await personContext(env, user).invoke(["itx", "processors", ["enable", "account"]], [], caller);
+  await personContext(env, user).invoke(
+    ["itx", "builtins", "processors", ["enable", "account"]],
+    [],
+    caller,
+  );
   await personContext(env, user).invoke(
     [
       "itx",

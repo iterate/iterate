@@ -17,9 +17,11 @@ const videoArtifactsEnabled = videoMode || !process.env.CI;
  *  fetches through to: the notes project's baseURL. Its session spec also signs in to the Dash
  *  (DASH_BASE_URL). Locally, unset skips it; in CI, unset fails it. */
 const notesBaseUrl = process.env.NOTES_BASE_URL?.replace(/\/+$/, "");
-/** The Agents and Voice apps deployed against that OS: the agents and voice projects' baseURLs.
- *  Locally, unset skips their specs; in CI, unset fails them. */
-const agentsBaseUrl = process.env.AGENTS_BASE_URL?.replace(/\/+$/, "");
+/** The Docs Worker deployed against that OS, which the docs project's config worker fetches
+ *  through to, as Notes'. Locally, unset skips its specs; in CI, unset fails them. */
+const docsBaseUrl = process.env.DOCS_BASE_URL?.replace(/\/+$/, "");
+/** The Voice app deployed against that OS: the voice project's baseURL. Locally, unset skips its
+ *  specs; in CI, unset fails them. */
 const voiceBaseUrl = process.env.VOICE_BASE_URL?.replace(/\/+$/, "");
 /** The Dash and the Admin app deployed against that OS: the dash and admin projects' baseURLs.
  *  Locally, unset skips their specs; in CI, unset fails them. */
@@ -106,28 +108,14 @@ export default defineConfig({
       use: recordedAtViewport({ ...desktopWebUse, baseURL: notesBaseUrl }),
     },
     {
-      name: "agents",
-      testDir: "specs/agents",
-      use: recordedAtViewport({ ...desktopWebUse, baseURL: agentsBaseUrl }),
-    },
-    // the Agents app's upgrade once more at a phone's width, with touch: its sidebar is a sheet there
-    {
-      name: "agents-phone",
-      testDir: "specs/agents",
-      testMatch: ["**/upgrade.spec.ts"],
-      use: recordedAtViewport({ ...devices["Pixel 7"], baseURL: agentsBaseUrl }),
+      name: "docs",
+      testDir: "specs/docs",
+      use: recordedAtViewport({ ...desktopWebUse, baseURL: docsBaseUrl }),
     },
     {
       name: "voice",
       testDir: "specs/voice",
       use: recordedAtViewport({ ...desktopWebUse, baseURL: voiceBaseUrl }),
-    },
-    // Voice's upgrade once more at a phone's width, with touch
-    {
-      name: "voice-phone",
-      testDir: "specs/voice",
-      testMatch: ["**/upgrade.spec.ts"],
-      use: recordedAtViewport({ ...devices["Pixel 7"], baseURL: voiceBaseUrl }),
     },
     {
       name: "dash",
@@ -163,7 +151,7 @@ export default defineConfig({
     ? []
     : [
         {
-          command: `pnpm --dir apps/os dev -- --port ${localWorkerPort}`,
+          command: `node scripts/os-dev.ts -- --port ${localWorkerPort}`,
           url: `${workerBaseUrl}/version`,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

@@ -116,7 +116,7 @@ bearer, on `/api`, through the CLI:
 ([acting as users and admins](../../../docs/dev-environments.md#acting-as-users-and-admins)).
 
 The CLI and `apps/agents/scripts/client.ts` read `APP_CONFIG_SECRETS__ADMIN_BEARER`, the worker's
-own override of `secrets.adminBearer`, before `ITERATE_BEARER_TOKEN`; `scripts/control-plane-load.ts`
+own override of `secrets.adminBearer`, before `ITERATE_BEARER_TOKEN`; `scripts/os/control-plane-load.ts`
 and `examples/serve-localhost.mjs` read that name too. `project-seed.ts`, `seed-instance-secrets.ts`,
 `preview.ts` and the root's `scripts/ci/context-sweep.ts` read `secrets.adminBearer` out of the
 target's Doppler `APP_CONFIG`.

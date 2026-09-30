@@ -1,11 +1,11 @@
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { adminEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
 /** apps/admin as scripts/lib/start-app.ts sees it: the package scripts and vite.config.ts run off this. */
 export const admin = {
   name: "admin",
+  dopplerProject: "admin",
   root: new URL("..", import.meta.url),
   envs: adminEnvs,
 };
-if (isMainModule(import.meta.url)) void startAppCli(admin).run();
+if (import.meta.main) void startAppCli(admin).run();

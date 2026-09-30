@@ -50,12 +50,13 @@ export async function connectX(
   if (scope.rootPath !== "/" && input.client !== "iterate")
     throw codedError("INVALID_INPUT", "Link your X identity through Iterate's X app.");
   const app = appConfigOf(scope.env).integrations.x;
+  using itx = scope.getItx();
   let origin: string | undefined;
   if (input.client === "iterate") {
     if (!app) throw codedError("INVALID_INPUT", "This deployment has no X OAuth client.");
     origin = app.xOrigin;
   } else {
-    const secrets = await scope.withItx((itx) => itx.secrets.list());
+    const secrets = await itx.secrets.list();
     const pin = secrets.find((secret) => secret.path === tokenSecretPathOf("x", input.connection))
       ?.urls[0];
     if (!pin)
@@ -71,15 +72,16 @@ export async function connectX(
       ...(input.scopes || []),
     ]),
   ];
-  const { authorizationUrl, nonce } = await scope.withItx((itx) =>
-    itx.secrets.beginOAuth(tokenSecretPathOf("x", input.connection), {
+  const { authorizationUrl, nonce } = await itx.secrets.beginOAuth(
+    tokenSecretPathOf("x", input.connection),
+    {
       ...endpoints,
       client: input.client === "iterate" ? { platform: "x" } : { project: "x" },
       clientAuth: "client_secret_basic",
       scope: scopes.join(" "),
       next: input.next,
       expectAccount: input.existing?.externalId,
-    }),
+    },
   );
   await scope.storage.put<ConnectionAttempt>(consentAttemptKeyOf("x", input.connection, nonce), {
     client: input.client,

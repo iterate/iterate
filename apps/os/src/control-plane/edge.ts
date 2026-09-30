@@ -19,7 +19,7 @@ import {
   isOpaqueInternalError,
   isPlatformFailureKind,
   logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import type { Caller } from "../caller.ts";
 import { projectHostOf, type AppConfig } from "../app-config.ts";
 import type { Env } from "../env.ts";
@@ -487,6 +487,9 @@ export class ControlPlane {
 
   claimHostname(projectId: string, hostname: string): Promise<void> {
     return this.#call("claimHostname", () => this.#db.claimHostname(projectId, hostname));
+  }
+  hostnameHolder(hostname: string): Promise<string | null> {
+    return this.#call("hostnameHolder", () => this.#db.hostnameHolder(hostname));
   }
   /** Another project's claim, or none, is left alone. */
   releaseHostname(projectId: string, hostname: string): Promise<void> {

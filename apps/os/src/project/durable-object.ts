@@ -37,9 +37,9 @@ import {
 } from "../integrations/verbs.ts";
 import { EntityCollectionRpcTarget } from "./collection.ts";
 import type { ProjectState } from "./contract.ts";
-import { cloudflareCustomHostnameProvider } from "./custom-hostnames.ts";
+import { cloudflareCustomHostnameProvider, ownershipRecordOf } from "./custom-hostnames.ts";
 import { domainConnectLinkOf } from "./domain-connect.ts";
-import { dnsZoneOf } from "./dns-provider.ts";
+import { dnsZoneOf, txtRecordsOf } from "./dns-provider.ts";
 import { ProjectProcessor, type ProjectDeletion, type ProjectHostnames } from "./processor.ts";
 import type { ProjectPublisher } from "./publication.ts";
 
@@ -67,7 +67,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
   ];
 
   processor = new ProjectProcessor(
-    (call) => this.withItx(call),
+    () => this.getItx(),
     downloadPublicGithubTemplate,
     () => this.#hostnames(),
     () => this.#deletion(),
@@ -83,21 +83,29 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     const root = this.env.ITERATE_CONTEXT.getByName(this.ctx.props.iterateContextName);
     return {
       // Over the loopback stub a facet call's answer types as an RPC result; the wire copied it.
-      head: async () =>
-        (await this.withItx((itx) => itx.repos.get("/repos/config").tip())) as unknown as
-          | string
-          | null,
+      head: async () => {
+        using itx = this.getItx();
+        return (await itx.repos.get("/repos/config").tip()) as unknown as string | null;
+      },
       // The repo facet's `modules` answers its files, path → text.
-      files: async (commitOid) =>
-        (await this.withItx((itx) =>
-          itx.repos.get("/repos/config").modules({ commitOid }),
-        )) as unknown as Record<string, string>,
+      files: async (commitOid) => {
+        using itx = this.getItx();
+        return (await itx.repos.get("/repos/config").modules({ commitOid })) as unknown as Record<
+          string,
+          string
+        >;
+      },
       identityOf: (files, mainModule) =>
         moduleIdentityOf(files, mainModule, this.env, `the config repo's ${mainModule}`),
-      probe: (files, mainModule) =>
-        this.withItx((itx) =>
-          itx.invoke(["itx", "workers", ["get", { source: files, mainModule }], ["probe"]]),
-        ),
+      probe: async (files, mainModule) => {
+        using itx = this.getItx();
+        return await itx.invoke([
+          "itx",
+          "workers",
+          ["get", { source: files, mainModule }],
+          ["probe"],
+        ]);
+      },
       // as the platform, and caused by what the follower reacts to: a publication keeps the
       // commit's depth, so the init it sets off runs one deeper than the commit (../cause.ts)
       appendAsPlatform: (...events) =>
@@ -165,6 +173,18 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       reservedZones: config.customHostnames?.reservedZones || [],
       claim: (hostname) => controlPlane.claimHostname(projectId, hostname),
       release: (hostname) => controlPlane.releaseHostname(projectId, hostname),
+      heldElsewhere: async (hostname) => {
+        const holder = await controlPlane.hostnameHolder(hostname);
+        return Boolean(holder) && holder !== projectId;
+      },
+      proof: async (hostname) => {
+        const record = ownershipRecordOf(hostname, projectId);
+        const texts = await txtRecordsOf(record.name).catch((caught: unknown): string[] => {
+          console.warn(`ownership proof for ${hostname}: ${String(caught)}`);
+          return [];
+        });
+        return { record, proven: texts.includes(record.value) };
+      },
       setPrimaryHostname: (hostname) => controlPlane.setPrimaryHostname(projectId, hostname),
       provider: cloudflareCustomHostnameProvider(config),
       // back to the project's Domains page in the dash — addressed by the project's slug, as the
@@ -192,7 +212,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
     if (known) return known;
     const collection = new EntityCollectionRpcTarget(
       slug,
-      (call) => this.withItx(call),
+      () => this.getItx(),
       async () => (await this.snapshot()).state,
     );
     this.#collections.set(slug, collection);
@@ -241,7 +261,7 @@ export class ProjectDurableObject extends StreamProcessorDurableObject<
       env: this.env,
       projectId: DurableObjectNameCodec.parse(this.ctx.props.iterateContextName).projectId,
       rootPath: "/",
-      withItx: (call) => this.withItx(call),
+      getItx: () => this.getItx(),
       storage: this.ctx.storage,
     };
   }

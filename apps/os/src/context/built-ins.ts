@@ -36,12 +36,13 @@ import {
   projectPublicUrlOf,
   type IngressRouting,
 } from "iterate/project-ingress";
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
-import { failureKind, ONCE_NOW, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { missingScopes } from "iterate/integration-scopes";
+import { failureKind, ONCE_NOW, retryPlatformFailures } from "iterate/platform-retry";
 import type { Cause } from "../cause.ts";
-import { refusePlatformIdempotencyKeys, stampCaller, type Caller } from "../caller.ts";
+import { refusePlatformIdempotencyKeys, sha256Hex, stampCaller, type Caller } from "../caller.ts";
 import { sessionSigningSecretOf, type AppConfig } from "../app-config.ts";
 import { Kept } from "../kept.ts";
+import { facetStateOf } from "../context-stub.ts";
 import { TARGET_FAILURE_CODES } from "../stream/subscription-delivery.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "../first-party-facets.ts";
 import {
@@ -52,13 +53,7 @@ import {
 } from "../stream/scheduled-appends.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import type { LibraryRoots } from "../library.ts";
-import {
-  assertSecretPath,
-  hmacSha256Hex,
-  normalizeSecretRecord,
-  originsOf,
-  sha256Hex,
-} from "../secrets.ts";
+import { assertSecretPath, hmacSha256Hex, normalizeSecretRecord, originsOf } from "../secrets.ts";
 import type { LendRevokedReason, SecretCatalog, SecretState } from "../secret/contract.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { deliverToPlatformHook } from "../platform-hook.ts";
@@ -85,13 +80,9 @@ import {
   type FetchRouteTable,
 } from "../fetch-routes.ts";
 import { normalizeSecretOAuth } from "../secret-oauth.ts";
+import { unavailableError } from "../unavailable.ts";
 import { facetSpecOf, hostedFacetMarkerOf } from "../stream/core-processor.ts";
-import {
-  FacetHandle,
-  isMissingRpcMethod,
-  RpcStubHandle,
-  materializeItxHandleReference,
-} from "./dispatch.ts";
+import { FacetHandle, RpcStubHandle, materializeItxHandleReference } from "./dispatch.ts";
 import { signedFileUrl } from "./file-urls.ts";
 import { SNAPSHOT_TTL_MS } from "./rule-snapshots.ts";
 import { assertFacetPlacement, assertLoadedCodePlacement } from "./first-party-facet-placement.ts";
@@ -230,7 +221,7 @@ type PlatformIntegrationsVerbs = {
 export interface BuiltInScope extends LibraryRoots {
   /** THE RESERVED ROOT, typed: the physical spelling of every root below. Not a key of the record
    *  (the resolver strips it); here so a strongly typed holder (the scope a loaded worker's
-   *  `withItx(env.ITX, …)` hands it) can spell `itx.builtins.append(…)`. */
+   *  `getItx()` hands it) can spell `itx.builtins.append(…)`. */
   builtins: Omit<BuiltInScope, "builtins">;
   /** Identify this context. A project's `projectUrl` is its apex, `url()`'s answer (on the primary
    *  hostname when it has one), present when the call carries the platform origin. */
@@ -403,7 +394,7 @@ export interface BuiltInScope extends LibraryRoots {
    *  event, `{ name, target: null }`: the DO deletes the facet the row hosted, storage included, before
    *  the append returns, so a re-enable is a clean rebuild from the log. `list()` is the subscriptions
    *  that host a facet. `consumes` is the subscription's filter (absent = every durable event). A root,
-   *  so loaded code (`withItx(env.ITX, (itx) => itx.processors.enable(…))`) and a sibling
+   *  so loaded code (`using itx = this.getItx(); await itx.processors.enable(…)`) and a sibling
    *  (`itx.cd(p).processors…`) do it through the same built-in as a client. A hosted processor's
    *  `claim(name, at)` is its claim on this context's alarm — "revive me by `at`" while a
    *  `runInBackground` attempt is in flight, `null` to release — durable as a kv row, never an event. */
@@ -790,12 +781,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         path: `/users/${principal.actor}`,
       }),
     );
-    // `invoke` is untyped across the DO hop; the account facet's snapshot is its contract's state.
-    const { state } = (await person.invoke(
-      ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
-      [],
-      hopCaller(),
-    )) as { state: AccountState };
+    const state = await facetStateOf<AccountState>(person, "account", hopCaller());
     const accounts = Object.values(state.integrations).filter(
       (row) => row.provider === provider && row.account === input.account,
     );
@@ -830,12 +816,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       );
       return { connection: account.connection };
     }
-    // `invoke` is untyped across the DO hop; the project facet's snapshot is its contract's state.
-    const { state: project } = (await deps
-      .context(owner.rootPath)
-      .invoke(["itx", "facets", ["get", "project"], ["snapshot"]], [], hopCaller())) as {
-      state: ProjectState;
-    };
+    const project = await facetStateOf<ProjectState>(
+      deps.context(owner.rootPath),
+      "project",
+      hopCaller(),
+    );
     const { authorizationUrl } = (await person.invoke(
       [
         "itx",
@@ -922,12 +907,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
   const disconnectedFromProject = async (secretPath: string) => {
     if (owner.kind !== "project") return;
     const root = deps.context(owner.rootPath);
-    // `invoke` is untyped across the DO hop; the project facet's snapshot is its contract's state.
-    const { state } = (await root.invoke(
-      ["itx", "facets", ["get", "project"], ["snapshot"]],
-      [],
-      hopCaller(),
-    )) as { state: ProjectState };
+    const state = await facetStateOf<ProjectState>(root, "project", hopCaller());
     for (const row of Object.values(state.integrations))
       if (row.ownerUserId && tokenSecretPathOf(row.provider, row.connection) === secretPath)
         await root.invoke(
@@ -1373,12 +1353,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       // The owner root's catalog — strongly consistent with `set` and `delete`, which cross-post
       // their facts there before they answer.
       list: async () => {
-        // `invoke` is untyped across the DO hop; the owner root facet's snapshot is its contract's state.
-        const { state } = (await deps
-          .context(owner.rootPath)
-          .invoke(["itx", "facets", ["get", ownerRootFacet()], ["snapshot"]], [], hopCaller())) as {
-          state: { secrets: SecretCatalog };
-        };
+        const state = await facetStateOf<{ secrets: SecretCatalog }>(
+          deps.context(owner.rootPath),
+          ownerRootFacet(),
+          hopCaller(),
+        );
         return Object.entries(state.secrets).map(([path, row]) => ({ path, ...row }));
       },
       collectFromUser: async (input: CollectSecretInput): Promise<CollectSecretLink> => {
@@ -1515,12 +1494,10 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               );
             const project = projectRoot(projectId);
             if (input.onlyIfConnected) {
-              // `invoke` is untyped across the DO hop; the project facet's snapshot is its state.
-              const { state } = (await project.invoke(
-                ["itx", "builtins", "facets", ["get", "project"], ["snapshot"]],
-                [],
-                { ...hopCaller(), platform: true },
-              )) as { state: ProjectState };
+              const state = await facetStateOf<ProjectState>(project, "project", {
+                ...hopCaller(),
+                platform: true,
+              });
               const row =
                 state.integrations[connectionPathOf(connection.provider, connection.connection)];
               if (row?.ownerUserId !== owner.ownerId) return { connection: connection.connection };
@@ -1637,12 +1614,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "INVALID_CONTEXT",
             "itx.secrets.borrowEveryProjectLends: the deployment's lends are the global root's",
           );
-        // `invoke` is untyped across the DO hop; the instance facet's snapshot is its contract's state.
-        const { state } = (await deps
-          .context(owner.rootPath)
-          .invoke(["itx", "facets", ["get", "instance"], ["snapshot"]], [], hopCaller())) as {
-          state: InstanceState;
-        };
+        const state = await facetStateOf<InstanceState>(
+          deps.context(owner.rootPath),
+          "instance",
+          hopCaller(),
+        );
         const outcome: EveryProjectBorrows = { borrowed: 0, kept: [], failed: [] };
         for (const [secretPath, row] of Object.entries(state.secrets))
           for (const [lendId, lend] of Object.entries(row.lends || {}))
@@ -2374,22 +2350,6 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
   >;
 }
 
-/** A loaded worker's `method` called through the SDK host's `callWithCause` (cause.ts), under
- *  `cause` — or, on an entrypoint that is no SDK host and so has no `callWithCause`, as it is. */
-async function callWithItsCause(
-  entrypoint: Record<string, (...a: unknown[]) => Promise<unknown>>,
-  cause: Cause,
-  method: string,
-  args: unknown[],
-): Promise<unknown> {
-  try {
-    return await entrypoint.callWithCause!(cause, [[method, ...args]]);
-  } catch (error) {
-    if (!isMissingRpcMethod(error, "callWithCause")) throw error;
-    return await entrypoint[method]!(...args);
-  }
-}
-
 /** `itx.workers`: stateless loaded code, loaded where the call is and speaking for the context
  *  `iterateContextName` names — its loader identity, its `env.ITX` (`itxEntrypoint`), the producer
  *  of a source expression run as its loaded code (`invoke`). A context builds it for itself (the
@@ -2432,12 +2392,10 @@ export function workersRoot(deps: {
             `workers.get(spec).${print(methodSteps)}: a WorkerEntrypoint exposes flat methods`,
           );
         const [method, ...callArgs] = call;
-        if (method === "callWithCause")
-          throw codedError(
-            "NOT_A_METHOD",
-            "workers.get(spec).callWithCause: only the platform calls it",
-          );
-        // The cause reaches the SDK host (cause.ts) on the Request, or through `callWithCause`,
+        // Workers RPC reaches both on every loaded entrypoint (iterate src/sdk/loaded-worker.ts).
+        if (method === "callWithCause" || method === "getItx")
+          throw codedError("NOT_A_METHOD", `workers.get(spec).${method}: no caller reaches it`);
+        // The cause reaches the loaded code (cause.ts) on the Request, or through `callWithCause`,
         // which every other method is called through. A loaded worker's `fetch` reads who is
         // asking off its Request (iterate/principal): the call's own caller, stamped here — never
         // what the Request says, which `fetch(url, { headers })` would let the code that called it
@@ -2466,9 +2424,13 @@ export function workersRoot(deps: {
         // WORKAROUND for the Worker Loader defect `isLoadedWorkerPlatformFailure` names: a cached
         // entry that meets it answers it to every call under that loader id, and `itx.abort()`
         // does not change the id. A call that meets it retires the identity, so the next call
-        // loads fresh under `<id>#<n+1>`; THIS call is replayed on it once only when a replay
-        // cannot do anything twice: a GET or HEAD with no body. A request body may have been read
-        // and an RPC method may have run, so those still fail, and the call after them loads fresh.
+        // loads fresh under the next generation; THIS call is replayed on it once only when a
+        // replay cannot do anything twice: a GET or HEAD with no body. A request body may have
+        // been read and an RPC method may have run, so those are not replayed. A call the defect
+        // failed and nothing replayed, or whose replay it failed too, is the platform's failure:
+        // UNAVAILABLE, `disconnected`, which the edge answers 503 with a Retry-After.
+        const unavailableNow = (failure: Error) =>
+          unavailableError("disconnected", `workers.get(spec).${method}: ${failure.message}`);
         let loaderId: string | undefined;
         const attempt = async () => {
           const prepared = await prepareConfinedWorker({
@@ -2499,7 +2461,7 @@ export function workersRoot(deps: {
             const called =
               method === "fetch" || !cause
                 ? Reflect.apply(fn, entrypoint, args)
-                : callWithItsCause(entrypoint, cause, method, args);
+                : entrypoint.callWithCause!(cause, [[method, ...args]]);
             if (method !== "deliverEvent") return await called;
             // A handler's own refusal — a name it called that nothing resolves, a verb it may
             // not call — is its event's failure, retried on that event's ladder: never the
@@ -2533,8 +2495,10 @@ export function workersRoot(deps: {
             loaderId,
             message: error.message,
           });
-          if (!replayable) throw error;
-          return await attempt();
+          if (!replayable) throw unavailableNow(error);
+          return await attempt().catch((failure: unknown) => {
+            throw isLoadedWorkerPlatformFailure(failure) ? unavailableNow(failure) : failure;
+          });
         }
       }),
   };

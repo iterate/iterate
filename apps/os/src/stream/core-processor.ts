@@ -60,7 +60,7 @@ import {
   normalizeRewriteRuleConfigured,
   namesAWorker,
   refuseSelfLoopRow,
-  resolveItxExpression,
+  fixedPointOf,
   type ItxExpressionRewriteRule,
 } from "../context/itx-expression-rewriting.ts";
 import { CoreEventCatalog } from "./core-events.ts";
@@ -126,19 +126,14 @@ export function hostedFacetMarkerOf(
   return namesAWorker(spec) ? { ...marker, source } : marker;
 }
 
-/** Resolve a target through THIS state's rules to the fixed point — or undefined when it cannot be
- *  resolved right now (a prefix nothing names yet, a mask, the depth budget): such a target is stored
- *  as given and hosts nothing until it can. */
+/** A target's fixed point through THIS state's rules (`fixedPointOf`): one that cannot resolve right
+ *  now is stored as given and hosts nothing until it can. */
 function resolveThroughState(state: CoreState, target: ItxExpression): ItxExpression | undefined {
-  try {
-    return resolveItxExpression(
-      () => Object.values(state.itxExpressionRewriteRules),
-      target,
-      implicitRootsAt(state.projectId || "", state.path || "/"),
-    ).at(-1);
-  } catch {
-    return undefined;
-  }
+  return fixedPointOf(
+    () => Object.values(state.itxExpressionRewriteRules),
+    target,
+    implicitRootsAt(state.projectId || "", state.path || "/"),
+  );
 }
 
 /** M1: split a configured target into the SOURCE-LESS target the reduce stores (the ORIGINAL

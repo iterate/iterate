@@ -73,7 +73,7 @@ export type ConsentView =
         /** one of this deployment's own apps, as far as the issuer can tell (`isOwnApp`) */
         ownApp: boolean;
         /** THE PERSON A LINK NAMED: the authorization's `login_hint` (iterate/app-server.ts
-         *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/preview.ts), when it is one of `people`
+         *  `/.auth/login`; a PR body's `Sign in ↗`, scripts/os/preview.ts), when it is one of `people`
          *  under the test email domain (`login.testEmailDomain`, none on prd) and the client one of
          *  our own apps. The page opens on "Sign in as someone else" with
          *  them filled in, and the admin still confirms: `approve` never reads the hint, only the

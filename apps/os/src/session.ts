@@ -11,7 +11,7 @@ import {
   normalizeConfigRepoTemplateReference,
   parseConfigRepoTemplateReference,
   formatConfigRepoTemplateReference,
-} from "@iterate-com/shared/config-repo-template/reference";
+} from "iterate/config-repo-template";
 import type { IterateApi, StreamPage } from "iterate/api";
 import { codedError, reportIssue } from "iterate/lib";
 import { OAuthScope } from "iterate/oauth-scopes";
@@ -41,7 +41,7 @@ import {
 import { type ControlPlane, describeReach, type Reach } from "./control-plane/edge.ts";
 import { OrganizationRole } from "./organization/contract.ts";
 import { iterateAppScopesOf, type AppConfig } from "./app-config.ts";
-import { contextStub } from "./context-stub.ts";
+import { contextStub, facetStateOf } from "./context-stub.ts";
 import type { AccountState, AuthenticationFact } from "./account/contract.ts";
 import { IntegrationProvider } from "./integrations/contract.ts";
 import { IdentityProvider } from "./control-plane/contract.ts";
@@ -234,7 +234,7 @@ export async function appendPlatformFacts(
   const context = ownerContext(contextNamespace, owner, "session");
   const events = Array.isArray(facts) ? facts : [facts];
   const { processor } = ownerAddress(owner);
-  await context.invoke(["itx", "processors", ["enable", processor]], [], caller);
+  await context.invoke(["itx", "builtins", "processors", ["enable", processor]], [], caller);
   const appended = (await context.invoke(["itx", "builtins", ["append", ...events]], [], {
     ...caller,
     platform: true,
@@ -242,7 +242,7 @@ export async function appendPlatformFacts(
   const offset = appended.at(-1)?.offset;
   if (folded && offset !== undefined)
     await context.invoke(
-      ["itx", "facets", ["get", processor], ["waitUntilProcessed", { offset }]],
+      ["itx", "builtins", "facets", ["get", processor], ["waitUntilProcessed", { offset }]],
       [],
       caller,
     );
@@ -284,12 +284,7 @@ async function endLendsOutOfReach(
   userId: string,
 ): Promise<void> {
   const account = ownerContext(input.contextNamespace, { account: userId }, "session");
-  // The platform's own read of the account facet: its contract's state.
-  const { state } = (await account.invoke(
-    ["itx", "builtins", "facets", ["get", "account"], ["snapshot"]],
-    [],
-    { principal: null },
-  )) as { state: AccountState };
+  const state = await facetStateOf<AccountState>(account, "account", { principal: null });
   const reached = new Set(
     (await input.controlPlane.accessibleTo(userId, true)).projects.map((project) => project.id),
   );
@@ -498,7 +493,7 @@ export class SessionRpcTarget extends RpcTarget {
       .exportSecretForProjectSeed(this.#input.appConfig.secrets.adminBearer.exposeSecret());
   }
 
-  /** The deploy's readiness gate's (scripts/preview-readiness.ts), the operator's alone: the version
+  /** The deploy's readiness gate's (scripts/os/preview-readiness.ts), the operator's alone: the version
    *  this edge runs and the one each named project's root context runs, at most eight. A project
    *  nobody has touched gets a brand-new context by the asking, which is the point: while Cloudflare
    *  releases a redeploy, a brand-new Durable Object can still start on the previous version. */
@@ -612,7 +607,7 @@ export class SessionRpcTarget extends RpcTarget {
    *  (iterate-context.ts) — and its `secrets` are the deployment's own, lent to projects
    *  (context/built-ins.ts `lend`). For a person holding the `admin` scope (reach `every` only
    *  while `admins` lists them, oauth.ts), and for the operator bearer itself (actor `admin`, no
-   *  person: a script such as scripts/seed-instance-secrets.ts); not for anyone else, whose global
+   *  person: a script such as scripts/os/seed-instance-secrets.ts); not for anyone else, whose global
    *  contexts stay reached by identity (`user`, `organizations.get`). */
   get global(): IterateContextRpcTarget {
     const { principal, reach, scopes } = this.#authority;
@@ -1170,7 +1165,7 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     const root = sessionInput.contextNamespace.getByName(
       DurableObjectNameCodec.stringify({ projectId: id, path: "/" }),
     );
-    await root.invoke(["itx", "processors", ["enable", "project"]], [], caller);
+    await root.invoke(["itx", "builtins", "processors", ["enable", "project"]], [], caller);
     await root.invoke(
       [
         "itx",

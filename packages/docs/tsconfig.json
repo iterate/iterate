@@ -1,0 +1,9 @@
+{
+  // Worker code, typed against the Cloudflare types: the doc processor runs as a loaded Durable
+  // Object. install.ts and frames.ts also run in the Docs app's browser.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/workers-types"]
+  },
+  "include": ["src", "tsdown.config.ts"]
+}

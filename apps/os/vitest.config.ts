@@ -121,7 +121,7 @@ class LongPolesFirst extends BaseSequencer {
 }
 
 /** EACH WORKERS RUNTIME'S STORAGE: a directory per Miniflare (its `resourcePersistencePath`, which
- *  patches/@cloudflare__vitest-plugin@1.2.5.patch lets through), so the pool knows where the files
+ *  patches/@cloudflare__vitest-plugin@1.3.2.patch lets through), so the pool knows where the files
  *  are and can empty them between two files (`TEST_STORAGE`, __workers-tests__/empty-runtime.ts). A
  *  runtime left alone keeps its storage in a temporary directory of Miniflare's own, where nothing
  *  outside workerd can reach it. Removed when vitest exits. */
@@ -338,7 +338,7 @@ export default defineConfig({
           hookTimeout: 120_000,
           // THE SLOW ROWS (docs/testing.md#slow-rows): a row that waits out real platform time (a quiet
           // minute, a sweep, an alarm) is tagged `slow`, and a PR skips it unless it turns the slow
-          // rows on or edits one: `pnpm preview e2e` picks the rows (scripts/slow-rows.ts). A tag this
+          // rows on or edits one: `pnpm preview e2e` picks the rows (scripts/os/slow-rows.ts). A tag this
           // list does not define fails its row.
           tags: [
             {

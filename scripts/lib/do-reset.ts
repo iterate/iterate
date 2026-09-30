@@ -10,6 +10,10 @@
  * checked-in tombstone can know what a previous deployment left on the
  * worker. A rejected deploy throws, and erase-data stops before any data.
  *
+ * The parked version stays in the worker's version list, and a rollback onto
+ * it deletes every Durable Object again, so it is tagged `erase-parked` with
+ * a message that says so.
+ *
  * The worker script and its routes stay (deleting a script cascades its
  * routes — the historical zombie-route/522 class); the worker serves the
  * parked 503 until the next real deploy, which recreates every class its
@@ -32,15 +36,11 @@ export async function getWorkerDoNamespaces(
 ): Promise<{ className: string; namespaceId: string }[]> {
   const namespaces: { className: string; namespaceId: string }[] = [];
   for (let page = 1; ; page++) {
-    const batch = await ctx.cf<
-      { id: string; script: string | null; class: string; preview?: { name: string } }[]
-    >(`/workers/durable_objects/namespaces?per_page=100&page=${page}`);
+    const batch = await ctx.cf<{ id: string; script: string | null; class: string }[]>(
+      `/workers/durable_objects/namespaces?per_page=100&page=${page}`,
+    );
     for (const namespace of batch) {
-      // A Worker Preview's namespaces are listed under its parent's script, marked `preview`
-      // (`os_pr7_ProjectDurableObject`). They are the preview's: a tombstone on the parent leaves
-      // them and their data alone, and deleting the preview deletes them (measured 2026-09-24 on a
-      // throwaway worker).
-      if (namespace.script === workerName && !namespace.preview) {
+      if (namespace.script === workerName) {
         namespaces.push({ className: namespace.class, namespaceId: namespace.id });
       }
     }
@@ -93,11 +93,6 @@ export async function resetWorkerDurableObjects(input: {
         // Existing zone routes stay untouched (wrangler only manages routes
         // listed in config); don't let a route-less config enable workers.dev.
         workers_dev: false,
-        // A parent's Worker Previews keep serving while it is parked: an unset
-        // `preview_urls` follows `workers_dev` and takes every preview offline
-        // (404, 1042) until the next deploy. Our workers run with preview URLs
-        // on anyway.
-        preview_urls: true,
         exports: Object.fromEntries(
           deletedClasses.map((className) => [
             className,
@@ -108,7 +103,17 @@ export async function resetWorkerDurableObjects(input: {
     );
     await runAsync(
       "pnpm",
-      ["exec", "wrangler", "deploy", "--config", join(parkedDir, "wrangler.json")],
+      [
+        "exec",
+        "wrangler",
+        "deploy",
+        "--config",
+        join(parkedDir, "wrangler.json"),
+        "--tag",
+        "erase-parked",
+        "--message",
+        "erase-data's parked worker: a rollback onto it deletes every Durable Object",
+      ],
       { cwd: input.cwd, env: input.credentials },
     );
   } finally {

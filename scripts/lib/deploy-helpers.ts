@@ -2,7 +2,7 @@
  * Shared primitives for the deploy and ensure-resources scripts under apps/ and apps/os.
  *
  * Each script stays an imperative top-to-bottom program; these are the
- * handful of moves they all make (spawn-and-fail-fast, the vite build, smoke
+ * handful of moves they all make (spawn-and-fail-fast, smoke
  * probes, the wrangler secrets-file deploy, the create-only DNS ensure). Plain
  * functions with explicit params — no config machinery.
  */
@@ -10,10 +10,9 @@ import { spawn } from "node:child_process";
 import { globSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CLOUDFLARE_API, retryPlatformFailures } from "@iterate-com/shared/platform-retry";
+import { CLOUDFLARE_API, retryPlatformFailures } from "iterate/platform-retry";
 import { type DeployableEnv, type EnvContext } from "./env-context.ts";
-
-const CAPTURED_COMMAND_OUTPUT_LIMIT = 64 * 1024;
+import { runStreamingCaptured } from "./vite-build.ts";
 
 /**
  * Spawn a command with inherited stdio and reject on a nonzero exit — the
@@ -43,24 +42,6 @@ export function runAsync(
       }
     });
   });
-}
-
-/**
- * `vite build` of one app for one envs.ts environment, into a fresh dist/: the Cloudflare Vite
- * plugin snapshots that environment's Worker config (CLOUDFLARE_ENV) into dist/, and that snapshot
- * is what deploys and what a per-PR preview starts from. Its output streams as it runs; a failure's
- * error carries the last 40 lines, so a report of it (the PR preview's `deploy failed`) says why.
- */
-export async function viteBuild(appRoot: string, cloudflareEnv: string) {
-  rmSync(join(appRoot, "dist"), { recursive: true, force: true });
-  const result = await runStreamingCaptured("pnpm", ["exec", "vite", "build"], {
-    cwd: appRoot,
-    env: { CLOUDFLARE_ENV: cloudflareEnv },
-  });
-  if (result.code === 0) return;
-  throw new Error(
-    `pnpm exec vite build exited with ${result.code ?? `signal ${result.signal || "unknown"}`}\n${result.output.trimEnd().split("\n").slice(-40).join("\n")}`,
-  );
 }
 
 /**
@@ -102,32 +83,6 @@ export async function runCloudflareCommandWith429Retry(
       describe: () => ({ command: commandLine }),
     },
   );
-}
-
-async function runStreamingCaptured(
-  command: string,
-  args: string[],
-  opts: { cwd: string; env?: Record<string, string> },
-): Promise<{ code: number | null; signal: NodeJS.Signals | null; output: string }> {
-  console.log(`$ ${command} ${args.join(" ")}`);
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      stdio: ["inherit", "pipe", "pipe"],
-      env: { ...process.env, ...opts.env },
-    });
-    let output = "";
-    const relay = (destination: NodeJS.WriteStream) => (chunk: Uint8Array) => {
-      destination.write(chunk);
-      output = `${output}${Buffer.from(chunk).toString("utf8")}`.slice(
-        -CAPTURED_COMMAND_OUTPUT_LIMIT,
-      );
-    };
-    child.stdout.on("data", relay(process.stdout));
-    child.stderr.on("data", relay(process.stderr));
-    child.once("error", reject);
-    child.once("close", (code, signal) => resolve({ code, signal, output }));
-  });
 }
 
 /**

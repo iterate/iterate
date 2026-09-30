@@ -10,7 +10,7 @@
 // caller passes; `finishIntegrationConnect` and a connect with `connectToProject` are the platform's
 // alone. An account another project holds (Slack, GitHub) is offered to move here, and
 // `confirmIntegrationMove` moves it.
-import { missingScopes } from "@iterate-com/shared/integration-scopes";
+import { missingScopes } from "iterate/integration-scopes";
 import type { OAuthIntegrationProvider } from "iterate/api";
 import { codedError, errorCode, reportIssue, withTimeout } from "iterate/lib";
 import { z } from "zod";
@@ -565,15 +565,14 @@ async function disconnectPersonalAccount(
   row: IntegrationConnectionRow,
 ): Promise<void> {
   const secretPath = tokenSecretPathOf(row.provider, row.connection);
-  const deleted = await scope
-    .withItx((itx) => itx.secrets.delete(secretPath))
-    .then(
-      () => true,
-      (error: unknown) => {
-        if (errorCode(error) === "SECRET_NOT_SET") return false;
-        throw error;
-      },
-    );
+  using itx = scope.getItx();
+  const deleted = await itx.secrets.delete(secretPath).then(
+    () => true,
+    (error: unknown) => {
+      if (errorCode(error) === "SECRET_NOT_SET") return false;
+      throw error;
+    },
+  );
   if (!deleted)
     await appendPlatformFact(scope.env, scope.projectId, scope.rootPath, {
       type: `events.iterate.com/${row.provider}/disconnected`,

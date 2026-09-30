@@ -44,7 +44,7 @@ import {
   failureKind,
   isPlatformFailureKind,
   logPlatformFailure,
-} from "@iterate-com/shared/platform-retry";
+} from "iterate/platform-retry";
 import type { StreamPage } from "iterate/api";
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { deepestCause, recordRefusal, type Cause } from "../cause.ts";
@@ -325,7 +325,8 @@ export class SubscriptionDelivery {
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
    *  loop drains a name at a time, and the loop that was draining a row when it was replaced goes on
-   *  to deliver the replacement once its call returns — so the lock outlives `#forgetSubscription`.
+   *  to deliver the replacement once its call returns, unless the replacement is a fan-out row, which
+   *  its pump delivers — so the lock outlives `#forgetSubscription`.
    *  The value is the running loop's promise, so a second kick JOINS it: the alarm's pass awaits a
    *  delivery already in flight and derives its deadline after the ack. Written before the loop's
    *  first turn and deleted by the loop itself, synchronously with its last act. */
@@ -364,23 +365,24 @@ export class SubscriptionDelivery {
   /** Every cursor row's claim on the alarm, earliest first (the loop's deadline is `[0]?.at`):
    *  EXACTLY the persisted `nextAttemptAtMs` of a row not halted — the claim its loop wrote as it
    *  started, a ladder rung, or the claim a death left, ahead or due alike (a due one keeps the alarm
-   *  armed until its pass runs). A fresh incarnation reports the same claims its predecessor did,
-   *  because nothing in memory is one: a caught-up row, a dangling row and a halted row (whose
-   *  persisted cursor may still carry the time that halted it) carry none the alarm reads, and a
-   *  target that owns its progress has no cursor at all. */
+   *  armed until its pass runs). A fresh incarnation reports the claims its predecessor did,
+   *  because nothing in memory adds one — memory only withdraws a fan-out record's claim while its
+   *  call is out past its time (`fanOutClaim`): a caught-up row, a dangling row and a halted row
+   *  (whose persisted cursor may still carry the time that halted it) carry none the alarm reads,
+   *  and a target that owns its progress has no cursor at all. */
   deadlines(): DeliveryDeadline[] {
     const state = this.#stream.coreReducedState;
+    const now = Date.now();
     const deadlines: DeliveryDeadline[] = [];
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
       if (!row || row.halted) continue;
       const at = record.cursor?.nextAttemptAtMs;
       if (at !== undefined) deadlines.push({ name, at, attempt: record.cursor!.attempt });
-      // A fan-out row's delivery records are claims too, each its own: a lease's end or a rung. One
-      // waiting for its target to resolve (no time) claims nothing.
-      for (const delivery of record.deliveries.values())
-        if (delivery.nextAttemptAtMs !== null)
-          deadlines.push({ name, at: delivery.nextAttemptAtMs, attempt: delivery.attempt });
+      for (const delivery of record.deliveries.values()) {
+        const claim = fanOutClaim(record, delivery, now);
+        if (claim !== undefined) deadlines.push({ name, at: claim, attempt: delivery.attempt });
+      }
     }
     return deadlines.sort((a, b) => a.at - b.at);
   }
@@ -388,10 +390,15 @@ export class SubscriptionDelivery {
   /** WHY AN ALARM COMES BACK FOR DELIVERY: the deepest cause among the events the loop owes by
    *  `dueBy` — each fan-out record due, and the next page after each row's cursor whose claim is
    *  (a cursor row's batch, a fan-out row's backlog), each at the cause it was stored with
-   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another. */
+   *  (cause.ts). Only what is due: one deep obligation later never deepens a wake for another.
+   *  Each page is folded in as it is read, so one page is held at a time, never one per due row. */
   owedCause(dueBy: number): Cause | undefined {
     const state = this.#stream.coreReducedState;
-    const owed: StreamEvent[] = [];
+    const now = Date.now();
+    let owed: Cause | undefined;
+    const owe = (events: StreamEvent[]) => {
+      owed = deepestCause([owed, ...events.map((event) => event.source?.cause)]);
+    };
     for (const [name, record] of this.#deliveryRecordByName) {
       const row = state.subscriptions[name];
       if (!row || row.halted) continue;
@@ -402,15 +409,16 @@ export class SubscriptionDelivery {
         cursor.confirmedOffset < this.#stream.highestDurableOffset()
       )
         try {
-          owed.push(...this.#stream.read(cursor.confirmedOffset, 100).events);
+          owe(this.#stream.read(cursor.confirmedOffset, 100).events);
         } catch {
           // an unreadable batch halts its row when the pass reaches it; it causes nothing here
         }
-      for (const delivery of record.deliveries.values())
-        if (delivery.nextAttemptAtMs !== null && delivery.nextAttemptAtMs <= dueBy)
-          owed.push(...this.#readFanOutEvent(delivery.offset));
+      for (const delivery of record.deliveries.values()) {
+        const claim = fanOutClaim(record, delivery, now);
+        if (claim !== undefined && claim <= dueBy) owe(this.#readFanOutEvent(delivery.offset));
+      }
     }
-    return deepestCause(owed.map((event) => event.source?.cause));
+    return owed;
   }
 
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
@@ -532,11 +540,7 @@ export class SubscriptionDelivery {
    *  calls nothing; a lent rpc stub catches up by its own reads. */
   async #catchUpFacetRow(name: string, row: Subscription): Promise<void> {
     const { head } = await this.#evaluateItxExpressionTargetHead(name, row.target);
-    if (
-      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-      row.configuredAtOffset
-    )
-      return;
+    if (!this.#isStillTheRow(name, row)) return;
     if (!(head instanceof FacetHandle)) return;
     try {
       await this.#catchUpFacetFromLog(head, this.#causeAt(row.configuredAtOffset));
@@ -713,13 +717,9 @@ export class SubscriptionDelivery {
       // The row must still be THIS row on BOTH sides of the (async) evaluation — not removed
       // (evaluating a processor's load chain materializes its facet: a push racing a disable must
       // not resurrect what `facets.delete` just removed) and not REPLACED under this name.
-      if (!this.#stream.coreReducedState.subscriptions[name]) return;
+      if (!this.#isStillTheRow(name, row)) return;
       const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
-      if (
-        this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-        row.configuredAtOffset
-      )
-        return;
+      if (!this.#isStillTheRow(name, row)) return;
       if (head instanceof RpcStubHandle) {
         // A LIVE CLIENT owns its offset: fire-and-forget — the pager socket is the queue, and a
         // stalled client blocks nothing but itself. RPC_STUB_OFFLINE is the benign heal-by-pull case
@@ -907,11 +907,7 @@ export class SubscriptionDelivery {
     attempts: number,
     error: unknown,
   ): void {
-    if (
-      this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-      row.configuredAtOffset
-    )
-      return;
+    if (!this.#isStillTheRow(name, row)) return;
     const { nextAttemptAtMs: _spent, ...settled } = cursor;
     this.#adoptCursor(name, { ...settled, attempt: 0 }, true);
     this.#haltRow(name, row.configuredAtOffset, cursor.confirmedOffset, attempts, error);
@@ -935,6 +931,9 @@ export class SubscriptionDelivery {
     )
       return cached;
     const evaluated = await this.#evaluateItxExpressionTargetHead(name, row.target);
+    // A row removed or replaced meanwhile gets its answer and nothing more: the memo, the cursor
+    // and the fan-out state under `name` are the replacement's.
+    if (!this.#isStillTheRow(name, row)) return evaluated;
     this.#deliveryRecordFor(name).evaluatedTargetHead = {
       configuredAtOffset: row.configuredAtOffset,
       rewriteRulesRef,
@@ -1043,8 +1042,9 @@ export class SubscriptionDelivery {
       for (;;) {
         const row = this.#stream.coreReducedState.subscriptions[name];
         if (!row) return this.#forgetSubscription(name);
-        // Re-pointed at a target that owns its progress meanwhile: cursor delivery no longer applies.
-        if (targetOwnsProgress(this.#stream.coreReducedState, row)) return;
+        // Replaced by a fan-out row (its pump delivers it) or re-pointed at a target that owns its
+        // progress meanwhile: cursor delivery no longer applies.
+        if (row.ordered === false || targetOwnsProgress(this.#stream.coreReducedState, row)) return;
         let cursor = this.cursor(name);
         if (!cursor) {
           // A subscription's FIRST cursor: born where the row asked (`afterOffset`; 0 = the whole
@@ -1202,11 +1202,7 @@ export class SubscriptionDelivery {
           // (#forgetSubscription cleared its cursor): this batch, offsets and `cursor` all belong to
           // the OLD target. Advancing now would write the old scan offset into the fresh row's cursor
           // — its afterOffset (a `0` = full history) never applied. Loop back to re-read and re-birth.
-          if (
-            this.#stream.coreReducedState.subscriptions[name]?.configuredAtOffset !==
-            row.configuredAtOffset
-          )
-            continue;
+          if (!this.#isStillTheRow(name, row)) continue;
           if (events.length === 0) {
             // A page the filter emptied: advanced without a call, no attempt spent; the loop goes
             // on to whatever is owed. A claim or a due ladder time that reached here is spent —
@@ -1222,7 +1218,10 @@ export class SubscriptionDelivery {
           const attemptStartedAt = Date.now();
           try {
             const { call } = await this.#evaluateTargetHeadForRow(name, row);
-            if (!this.cursor(name)) continue; // replaced while the target was evaluated
+            // Both checks, here and after the call: a replaced row is another row even when it
+            // brings a cursor of its own (a fan-out row does), and a row re-pointed at a target that
+            // owns its progress is the same row with its cursor dropped (`onCommit`).
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue;
             await withTimeout(
               this.#runAsDelivery(events, () => call(events, range)).catch(
                 // A loop refused (cause.ts): the batch is done, its one fact recorded — never a retry.
@@ -1231,9 +1230,9 @@ export class SubscriptionDelivery {
               CURSOR_DELIVERY_CALL_WATCHDOG_MS,
               `subscription "${name}"`,
             );
-            // Removed or replaced while the call was in flight? Its progress belonged to the old row —
-            // and so did the evaluation: the identity check above re-evaluates for the replacement.
-            if (!this.cursor(name)) continue;
+            // Removed, replaced or re-pointed while the call was in flight: its progress belonged to
+            // the old row, and the next turn starts over for whatever stands under the name now.
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue;
             // THE ACK: attempt 0, no time; a commit that landed during the call is owed by
             // derivation (the loop finds the row behind the mark and goes on). Memory takes the
             // whole span, a head ephemeral's offset included, so the next read returns only what is
@@ -1248,7 +1247,7 @@ export class SubscriptionDelivery {
               persist,
             );
           } catch (error) {
-            if (!this.cursor(name)) continue; // replaced mid-flight: re-evaluated for the new row
+            if (!this.#isStillTheRow(name, row) || !this.cursor(name)) continue; // the old row's failure
             // The target DANGLES: nothing resolves it under this rule table (a `subscribe` before
             // its `provide`, a rule since removed; a sibling context's rule missing at the call).
             // No rung, no halt, no attempt spent: the row waits for its rule — the commit that lands
@@ -1315,6 +1314,9 @@ export class SubscriptionDelivery {
   //   refused for good (PERMANENT_FAILURE,     deleted after its dead letter,
   //   EVENT_TOO_LARGE), or its last attempt    `subscription-delivery-failed` (once, keyed)
   //   the target resolves to nothing           attempt n − 1, no time: the row DANGLES
+  //   the project's config is unpublished      deleted: passed over (the config birth row
+  //   (`itx.config`, `unpublishedConfig`) as   delivers from the commit that publishes it); as
+  //   a table read after the event says        only an older snapshot says, the row DANGLES
   //   the target cannot be called, or GONE     attempt n − 1, no time: the row HALTS
   //   the context dies with the call out       still leased: at its due time a SUSPECT, retried
   //                                            ALONE, once every call out has settled and with
@@ -1329,10 +1331,9 @@ export class SubscriptionDelivery {
   //                                                                      nothing owed, one new event
   //   dangling                  its target resolves to nothing           a durable commit, the alarm;
   //                                                                      with a backlog, its own probe
-  //                                                                      (≤ DELIVERY_MAX_ATTEMPTS), when
-  //                                                                      another context's snapshot
-  //                                                                      refused it at that snapshot's
-  //                                                                      expiry
+  //                                                                      (≤ DELIVERY_MAX_ATTEMPTS), never
+  //                                                                      before another context's
+  //                                                                      snapshot that refused it expires
   //   wedged                    every slot holds a call past its         the incarnation is ended
   //                             watchdog                                 (`abortIncarnation`)
   //   out of room               the in-flight budget is full             the next release
@@ -1574,12 +1575,14 @@ export class SubscriptionDelivery {
     if (outOfRoom) {
       // The next release runs the pump again; a due record left for room keeps a time a watchdog
       // ahead (every call out has given its room back by then), so the alarm never spins on it.
+      // One with no time claims nothing, and gets none here.
       this.#waitForFanOutRoom(name, fanOut);
       for (const delivery of record.deliveries.values())
         if (
           !fanOut.slots.has(delivery.offset) &&
           !givenUp.has(delivery.offset) &&
-          (delivery.nextAttemptAtMs === null || delivery.nextAttemptAtMs <= now)
+          delivery.nextAttemptAtMs !== null &&
+          delivery.nextAttemptAtMs <= now
         )
           writes.push({ ...delivery, nextAttemptAtMs: now + CURSOR_DELIVERY_CALL_WATCHDOG_MS });
     }
@@ -1693,6 +1696,23 @@ export class SubscriptionDelivery {
     const delivery = record.deliveries.get(event.offset);
     if (!delivery) return this.#pumpFanOut(name);
     const code = errorCode(error);
+    // The resolver's marks on a refusal (itx-expression-rewriting.ts `ItxExpressionResolver#route`):
+    // any rejection may carry them or not, so both are read as unknown and checked where used.
+    const { validUntil, unpublishedConfig } = (error ?? {}) as {
+      validUntil?: unknown;
+      unpublishedConfig?: unknown;
+    };
+    // A snapshot read before the event may predate a publication that came before it: the row waits
+    // that snapshot out (dangling, below) and asks again.
+    const readBeforeEvent =
+      typeof validUntil === "number" && validUntil - SNAPSHOT_TTL_MS < Date.parse(event.createdAt);
+    if (code === "NO_ITX_EXPRESSION_MATCH" && unpublishedConfig === true && !readBeforeEvent) {
+      // nothing is owed to a config that is not published: the row delivers from the commit that
+      // publishes it
+      if (record.deliveries.delete(event.offset))
+        this.#stream.storage.deleteSubscriptionDelivery(name, event.offset);
+      return this.#pumpFanOut(name);
+    }
     if (code && TARGET_FAILURE_CODES.has(code)) {
       this.#writeFanOutDelivery(name, {
         ...delivery,
@@ -1704,7 +1724,6 @@ export class SubscriptionDelivery {
         fanOut.dangling = true;
         // another context's snapshot refused it: a read after it expires may name it (a refusal
         // no snapshot gave stands until something changes, `Infinity`: no time to wait for)
-        const { validUntil } = error as { validUntil?: unknown };
         fanOut.refusedUntil =
           typeof validUntil === "number" && Number.isFinite(validUntil) ? validUntil : undefined;
       } else
@@ -1806,12 +1825,12 @@ export class SubscriptionDelivery {
     if ((fanOut.dangling || fanOutPaused(record.cursor)) && backlog) {
       const standing = record.cursor?.nextAttemptAtMs;
       if (standing !== undefined && standing > now) nextAttemptAtMs = standing;
-      else if (fanOut.dangling && fanOut.refusedUntil) {
-        probes = Math.min(probes + 1, DELIVERY_MAX_ATTEMPTS);
-        nextAttemptAtMs = Math.max(now + durableLadderDelayMs(probes), fanOut.refusedUntil);
-      } else if (probes < DELIVERY_MAX_ATTEMPTS) {
+      else if (probes < DELIVERY_MAX_ATTEMPTS) {
         probes += 1;
-        nextAttemptAtMs = now + durableLadderDelayMs(probes);
+        nextAttemptAtMs = Math.max(
+          now + durableLadderDelayMs(probes),
+          (fanOut.dangling && fanOut.refusedUntil) || 0,
+        );
       }
     }
     const {
@@ -1876,6 +1895,20 @@ export class SubscriptionDelivery {
  *  facet or a lent stub is pushed whatever the row says). */
 function isFanOutRow(state: CoreState, row: Subscription): boolean {
   return row.ordered === false && !targetOwnsProgress(state, row);
+}
+
+/** A fan-out delivery record's claim on the alarm: its time — a lease's end or a rung. None while
+ *  it waits for its target (no time), nor once its time has come with its call still out: that
+ *  call's settle runs the pump, and a fresh incarnation, whose slots are empty, claims it again. A
+ *  lease ahead is claimed with its call out, so a death mid-call is retried. */
+function fanOutClaim(
+  record: SubscriptionDeliveryRecord,
+  delivery: FanOutDeliveryRecord,
+  now: number,
+): number | undefined {
+  const at = delivery.nextAttemptAtMs;
+  if (at === null || (at <= now && record.fanOut?.slots.has(delivery.offset))) return undefined;
+  return at;
 }
 
 /** A fan-out row whose last FAN_OUT_PAUSE_AFTER_DISTINCT_FAILURES distinct events failed with no

@@ -107,6 +107,7 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
   const admin = session.authenticate(adminCredentials());
   const project = await admin.projects.create({ project: "seed-hostnames" });
   const { projectId } = await project.whoami();
+  cloudflare.owners["www.seeded.test"] = projectId; // the owner's ownership record
   const hostnameFacts = async (type: string) =>
     (
       (await project.invoke(["itx", ["readEvents", 0, 1000]])) as {
@@ -164,12 +165,13 @@ test("a project's hostnames round-trip through a seed: capture records the ones 
   );
 });
 
-test("apply never takes a hostname another project holds: the restore fails naming it, the holder keeps it, and Cloudflare is not asked", async () => {
+test("apply never takes a hostname another project holds, even with a record naming the restored one: the restore fails naming it, the holder keeps it, and Cloudflare is not asked", async () => {
   const cloudflare = fakeCloudflareCustomHostnames();
   const session = await openSession();
   const admin = session.authenticate(adminCredentials());
   const holder = await admin.projects.create({ project: "seed-hostname-holder" });
   const { projectId: holderId } = await holder.whoami();
+  cloudflare.owners["www.held.test"] = holderId;
   const [asked] = await holder.append({
     type: "events.iterate.com/project/hostname-add-requested",
     payload: { hostname: "www.held.test" },
@@ -181,6 +183,7 @@ test("apply never takes a hostname another project holds: the restore fails nami
   });
   const writes = [...cloudflare.writes];
   const restored = await admin.projects.create({ project: "seed-hostname-restored" });
+  cloudflare.owners["www.held.test"] = (await restored.whoami()).projectId;
   await expect(restoreHostnames(restored, ["www.held.test"])).rejects.toThrow(
     /refused: www\.held\.test \(.*belongs to another project/,
   );
@@ -198,6 +201,7 @@ test("after a real erase the zone still holds the custom hostname: apply's reque
   const admin = session.authenticate(adminCredentials());
   const project = await admin.projects.create({ project: "seed-hostname-erased" });
   const { projectId } = await project.whoami();
+  cloudflare.owners["kept.erased.test"] = projectId; // the owner's record outlives the erase
   expect(await captureHostnames(project)).toEqual([]);
   expect(await restoreHostnames(project, ["kept.erased.test"])).toEqual([
     { hostname: "kept.erased.test", asked: true, status: "active, certificate active" },
@@ -210,10 +214,13 @@ test("after a real erase the zone still holds the custom hostname: apply's reque
 });
 
 test("a project's primary hostname round-trips through a seed: capture records it, apply configures it again after the hostnames, a rerun asks nothing, and a hostname not yet live is not made primary", async () => {
-  fakeCloudflareCustomHostnames({ active: ["www.primary.test"] });
+  const cloudflare = fakeCloudflareCustomHostnames({ active: ["www.primary.test"] });
   const session = await openSession();
   const admin = session.authenticate(adminCredentials());
   const project = await admin.projects.create({ project: "seed-primary-hostname" });
+  const { projectId } = await project.whoami();
+  cloudflare.owners["www.primary.test"] = projectId;
+  cloudflare.owners["pending.primary.test"] = projectId;
   const primaryFacts = async () =>
     (
       (await project.invoke(["itx", ["readEvents", 0, 1000]])) as { events: { type: string }[] }

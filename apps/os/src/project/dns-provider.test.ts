@@ -1,7 +1,12 @@
 // src/project/dns-provider.test.ts — which provider a zone's nameservers name (a table of the
 // customer-facing nameserver names), and the zone walk over DNS-over-HTTPS against a fake.
 import { expect, test } from "vitest";
-import { dnsProviderOfNameservers, dnsZoneOf, isCountryRegistry } from "./dns-provider.ts";
+import {
+  dnsProviderOfNameservers,
+  dnsZoneOf,
+  isCountryRegistry,
+  txtRecordsOf,
+} from "./dns-provider.ts";
 
 test.for([
   { name: "Cloudflare", nameservers: ["giancarlo.ns.cloudflare.com."], provider: "cloudflare" },
@@ -102,4 +107,26 @@ test("the walk stops before a country's registry: a zone that doesn't answer is 
   }) as unknown as typeof fetch);
   expect(found).toBeNull();
   expect(asked).toEqual(["iterate.example.co.uk", "example.co.uk"]);
+});
+
+test("a name's TXT records are their texts, split strings joined; none when the name has none, nor the records of a CNAME's target", async () => {
+  const answer = (body: unknown) => (async () => Response.json(body)) as unknown as typeof fetch;
+  expect(
+    await txtRecordsOf(
+      "_iterate.effect.ninja",
+      answer({
+        Status: 0,
+        Answer: [
+          { name: "_iterate.effect.ninja.", type: 16, data: '"iterate-project=" "prj_1"' },
+          { name: "_iterate.effect.ninja.", type: 16, data: '"v=other"' },
+          // followed through a CNAME: another name's
+          { name: "cname.iterate.app.", type: 16, data: '"iterate-project=prj_2"' },
+        ],
+      }),
+    ),
+  ).toEqual(["iterate-project=prj_1", "v=other"]);
+  expect(await txtRecordsOf("_iterate.nothing.test", answer({ Status: 3 }))).toEqual([]);
+  await expect(txtRecordsOf("_iterate.broken.test", answer({ Status: 2 }))).rejects.toThrow(
+    /DNS status 2/,
+  );
 });

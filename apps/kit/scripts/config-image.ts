@@ -9,7 +9,6 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { encodeDeviceConfiguration, isStatusVoice } from "../src/firmware/config-image.ts";
 
@@ -73,4 +72,4 @@ export function offset(target: string) {
   return row[3];
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "config-image" }).run();
+void createCli({ ...import.meta, name: "config-image" }).run();

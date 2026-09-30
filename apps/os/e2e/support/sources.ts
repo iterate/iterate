@@ -25,10 +25,9 @@ export const SOURCES: Record<string, WorkerSource> = {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { FacetDurableObject } from "iterate/sdk";
 import { LiveState } from "iterate/stream/processor";
-import { withItx } from "iterate/with-itx";
 export class ChatroomDurableObject extends FacetDurableObject {
   static publicMethods = [...super.publicMethods, "post", "state"];
-  #chat = new LiveState({ append: (e) => withItx(this.env.ITX, (itx) => itx.append(e)) }, "chat", { messages: [] });
+  #chat = new LiveState({ append: async (e) => { using itx = this.getItx(); await itx.append(e); } }, "chat", { messages: [] });
   post(from, text) {
     this.#chat.set({ messages: [...this.#chat.get().messages, { from, text }] });
     return { ok: true };
@@ -72,7 +71,6 @@ export class KeeperDurableObject extends FacetDurableObject {
   digest: {
     "package.json": '{"main":"worker.js"}',
     "worker.js": `import { WorkerEntrypoint } from "cloudflare:workers";
-import { withItx } from "iterate/with-itx";
 export default class Digest extends WorkerEntrypoint {
   async processEventBatch(events, range) {
     const poison = events.find((e) => e.payload && e.payload.poison);
@@ -80,11 +78,10 @@ export default class Digest extends WorkerEntrypoint {
       throw Object.assign(new Error("digest: refusing poison at offset " + poison.offset), {
         code: "PERMANENT_FAILURE", // halts NOW, not in 30 min
       });
-    return withItx(this.env.ITX, async (itx) => {
-      const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
-      await itx.kv.put("digested", String(n));
-      return n;
-    });
+    using itx = this.getItx();
+    const n = Number((await itx.kv.get("digested")) ?? 0) + events.length;
+    await itx.kv.put("digested", String(n));
+    return n;
   }
 }`,
   },
@@ -241,7 +238,7 @@ const contract = defineProcessorContract({
 });
 class PrLinterProcessor extends StreamProcessor {
   contract = contract;
-  constructor(withItx) { super(); this.withItx = withItx; }
+  constructor(getItx) { super(); this.getItx = getItx; }
   reduce({ event, state }) {
     if (event.type === INSTALLED && state.installedAt === null) return { installedAt: event.offset };
   }
@@ -262,9 +259,10 @@ class PrLinterProcessor extends StreamProcessor {
       "user-agent": "iterate-pr-linter",
     };
     const github = async (url, init = {}) => {
-      const response = await this.withItx((itx) => itx.fetch(new Request(url, { ...init, headers: { ...headers, ...init.headers } })));
+      using itx = this.getItx();
+      const response = await itx.fetch(new Request(url, { ...init, headers: { ...headers, ...init.headers } }));
       if (!response.ok) throw new Error("GitHub answered " + response.status + " to " + url + ": " + (await response.text()));
-      return response.json();
+      return await response.json();
     };
     const sha = body.pull_request.head.sha;
     const externalId = "pr-linter:" + body.repository.full_name + "#" + body.pull_request.number + "@" + sha;
@@ -272,14 +270,16 @@ class PrLinterProcessor extends StreamProcessor {
     if ((existing.check_runs || []).some((run) => run.external_id === externalId)) return;
     const files = await github(repo + "/pulls/" + body.pull_request.number + "/files");
     const patch = files.map((file) => "--- " + file.filename + "\\n" + (file.patch || "")).join("\\n");
-    const answer = await this.withItx((itx) =>
-      itx.ai.run(MODEL, {
+    let answer;
+    {
+      using itx = this.getItx();
+      answer = await itx.ai.run(MODEL, {
         messages: [
           { role: "system", content: 'Review this diff. Answer JSON: {"conclusion":"success"|"neutral","summary":string}.' },
           { role: "user", content: patch },
         ],
-      }),
-    );
+      });
+    }
     let verdict = { conclusion: "neutral", summary: "The linter could not read the model's answer." };
     try { verdict = { ...verdict, ...JSON.parse(answer.response) }; } catch {}
     await github(repo + "/check-runs", {
@@ -297,7 +297,7 @@ class PrLinterProcessor extends StreamProcessor {
   }
 }
 export class PrLinterDurableObject extends StreamProcessorDurableObject {
-  processor = new PrLinterProcessor((call) => this.withItx(call));
+  processor = new PrLinterProcessor(() => this.getItx());
 }`,
   },
   // A capnweb server as a LOADED WORKER, served behind a project host: pins the SDK's

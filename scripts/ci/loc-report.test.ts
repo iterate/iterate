@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "vitest";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 
 import { computeReport, getChangedFiles, renderBodySection } from "./loc-report.ts";
 
@@ -174,6 +174,40 @@ test("JavaScript comments and non-JavaScript blank lines retain their Significan
   ]);
 });
 
+test("a regex literal holding `//` or a backtick is code, not a comment or a template", () => {
+  using repo = createGitRepo();
+  const scheme = (method: string) =>
+    [`export const scheme = (url: string) => /^https?:\\/\\//i.${method}(url);`, ""].join("\n");
+  const fence = (comment: string) =>
+    ["export const fence = /```/;", `// ${comment}`, "export const value = 1;", ""].join("\n");
+  const base = repo.commit({
+    "src/fence.js": fence("how fences are found"),
+    "src/scheme.ts": scheme("exec"),
+  });
+  const head = repo.commit({
+    "src/fence.js": fence("where fences are found"),
+    "src/scheme.ts": scheme("test"),
+  });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "src/fence.js", added: 1, removed: 1, significantAdded: 0, significantRemoved: 0 },
+    { path: "src/scheme.ts", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
+test("a hashbang is code, not a comment: changing it is Significant", () => {
+  using repo = createGitRepo();
+  const bin = (hashbang: string) => [hashbang, "// run the report", "main();", ""].join("\n");
+  const base = repo.commit({ "bin/report.cjs": bin("#!/usr/bin/env node") });
+  const head = repo.commit({
+    "bin/report.cjs": bin("#!/usr/bin/env -S node --conditions=review"),
+  });
+
+  expect(getChangedFiles(base, head, repo.path)).toMatchObject([
+    { path: "bin/report.cjs", added: 1, removed: 1, significantAdded: 1, significantRemoved: 1 },
+  ]);
+});
+
 test("the PR report explains the TypeScript runtime-line filter", () => {
   expect(renderBodySection(computeReport([]), "1234567890", "abcdef1234")).toContain(
     "TypeScript lines with no runtime output",
@@ -205,7 +239,7 @@ test.for([
 });
 
 function createGitRepo() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const { path } = directory;
   execFileSync("git", ["init", "--quiet"], { cwd: path });
 
