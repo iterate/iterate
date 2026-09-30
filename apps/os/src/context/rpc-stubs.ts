@@ -62,14 +62,14 @@ import { ITERATE_ROUTING_SLUG_HEADER } from "iterate/project-ingress";
 import { ITX_PRINCIPAL_HEADER } from "iterate/principal";
 import { canonicalItxExpressionPrefix, parse, type ItxExpression } from "iterate/expression";
 import { causeHeader } from "../cause.ts";
-import { FetchRouteConfiguredPayload } from "../fetch-routes.ts";
-import { normalizeRewriteRuleConfigured } from "./itx-expression-rewriting.ts";
 import {
   ITX_APP_HEADER,
   ITX_CALLER_PATH_HEADER,
   ITX_GRANT_HEADER,
   type Caller,
 } from "../caller.ts";
+import { FetchRouteConfiguredPayload } from "../fetch-routes.ts";
+import { normalizeRewriteRuleConfigured } from "./itx-expression-rewriting.ts";
 import {
   FETCH_UPGRADE_EYEBALL_HEADER,
   FETCH_UPGRADE_SOCKET_HEADER,
@@ -124,33 +124,33 @@ type RpcStubPagerAttachRequest = {
 /** The header value: URI-encoded JSON — a header is a ByteString, a key or an event is not. */
 export const encodeRpcStubPagerAttachRequest = (request: RpcStubPagerAttachRequest): string =>
   encodeURIComponent(JSON.stringify(request));
+/** JSON.parse yields only plain records, arrays, primitives and null. The tag keeps null/arrays out
+ * of the untrusted attachment object without treating either as a missing optional member. */
+const isJsonRecord = (value: unknown): value is Record<string, unknown> =>
+  Object.prototype.toString.call(value) === "[object Object]";
 /** The inverse — throws on anything that is not a well-formed attach request. */
-function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
+export function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequest {
   const decoded: unknown = JSON.parse(decodeURIComponent(header));
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded))
-    throw new Error("expected an object");
-  const record = decoded as Record<string, unknown>;
+  if (!isJsonRecord(decoded)) throw new Error("expected an object");
+  const record = decoded;
   const allowed = new Set(["rpcStubKey", "attachmentId", "liveProvide", "liveSubscription"]);
   if (Object.keys(record).some((key) => !allowed.has(key)) || typeof record.rpcStubKey !== "string")
     throw new Error("expected { rpcStubKey: string }");
-  if (record.attachmentId !== undefined && typeof record.attachmentId !== "string")
+  if (!["string", "undefined"].includes(typeof record.attachmentId))
     throw new Error("attachmentId must be a string");
   const liveProvide = record.liveProvide;
   if (liveProvide !== undefined) {
-    if (!liveProvide || typeof liveProvide !== "object" || Array.isArray(liveProvide))
-      throw new Error("liveProvide must be an object");
-    const provide = liveProvide as Record<string, unknown>;
+    if (!isJsonRecord(liveProvide)) throw new Error("liveProvide must be an object");
+    const provide = liveProvide;
     if (
       Object.keys(provide).some(
         (key) => !["match", "description", "declaration", "fetchRoute"].includes(key),
       ) ||
       typeof provide.match !== "string" ||
-      (provide.description !== undefined && typeof provide.description !== "string") ||
-      (provide.declaration !== undefined && typeof provide.declaration !== "string") ||
-      (provide.fetchRoute !== undefined &&
-        (!provide.fetchRoute ||
-          typeof provide.fetchRoute !== "object" ||
-          Array.isArray(provide.fetchRoute)))
+      (typeof provide.description !== "undefined" && typeof provide.description !== "string") ||
+      (typeof provide.declaration !== "undefined" && typeof provide.declaration !== "string") ||
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- missing route differs from a malformed present route in the serialized pager header.
+      (typeof provide.fetchRoute !== "undefined" && !isJsonRecord(provide.fetchRoute))
     )
       throw new Error("invalid liveProvide");
     // The attachment is an untrusted HTTP header. Give it the same two normalizers as a durable
@@ -159,16 +159,19 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
       const normalized = normalizeRewriteRuleConfigured({
         match: provide.match as string,
         target: ["itx", "builtins", "rpcStubs", ["get", record.rpcStubKey]],
-        ...(provide.description !== undefined && { description: provide.description }),
-        ...(provide.declaration !== undefined && { declaration: provide.declaration }),
+        description: provide.description as string | undefined,
+        declaration: provide.declaration as string | undefined,
       });
       if (record.rpcStubKey !== canonicalItxExpressionPrefix(normalized.match))
         throw new Error("liveProvide rpcStubKey must equal its canonical match");
       if (
-        provide.fetchRoute !== undefined &&
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- only a present route is schema-checked; absence is the ordinary no-route attachment.
+        typeof provide.fetchRoute !== "undefined" &&
         !FetchRouteConfiguredPayload.safeParse({
           ...(provide.fetchRoute as Record<string, unknown>),
-          target: ["itx", "builtins", "rpcStubs", ["get", record.rpcStubKey]],
+          // Routes re-enter through the provided public name; fetch-route targets may not expose
+          // the fixed `builtins` root to loaded config code.
+          target: parse(provide.match as string),
         }).success
       )
         throw new Error("invalid liveProvide fetchRoute");
@@ -180,17 +183,13 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
   }
   const liveSubscription = record.liveSubscription;
   if (liveSubscription !== undefined) {
-    if (
-      !liveSubscription ||
-      typeof liveSubscription !== "object" ||
-      Array.isArray(liveSubscription)
-    )
-      throw new Error("liveSubscription must be an object");
-    const subscription = liveSubscription as Record<string, unknown>;
+    if (!isJsonRecord(liveSubscription)) throw new Error("liveSubscription must be an object");
+    const subscription = liveSubscription;
     if (
       Object.keys(subscription).some((key) => !["name", "consumes"].includes(key)) ||
       typeof subscription.name !== "string" ||
-      (subscription.consumes !== undefined &&
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- an omitted consumes list differs from a malformed present list at this wire boundary.
+      (typeof subscription.consumes !== "undefined" &&
         (!Array.isArray(subscription.consumes) ||
           subscription.consumes.some((type) => typeof type !== "string")))
     )
@@ -198,6 +197,7 @@ function decodeRpcStubPagerAttachRequest(header: string): RpcStubPagerAttachRequ
     if (record.rpcStubKey !== `subscription:${subscription.name}`)
       throw new Error("liveSubscription rpcStubKey must equal subscription:<name>");
   }
+  // oxlint-disable-next-line iterate/simple-truthiness-check -- both present members are an invalid wire shape; either omitted member is valid.
   if (liveProvide !== undefined && liveSubscription !== undefined)
     throw new Error("a pager is either a provide or a subscription");
   return record as RpcStubPagerAttachRequest;

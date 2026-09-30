@@ -83,7 +83,7 @@ function hasLegacyMarker(value: unknown): boolean {
  *  is kept alone until the next arrives (the append ceiling bounds it). Per incarnation, like every
  *  ephemeral offset. The delivery loop reserves at least this much cursor-read room before a read
  *  that can return nothing else (subscription-delivery.ts). */
-export const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
+const RECENT_EPHEMERALS_BUDGET_CHARS = 1024 * 1024;
 
 /** What a PAUSED stream still accepts: the platform's own records (a paused stream still records
  *  its wake, its delivery ladder still ends, its alarm passes stay observable, a script it started
@@ -186,6 +186,7 @@ export class Stream {
   // every batch, the state on change). Durable events only, so it rebuilds bit-identically. ──
   #coreReducedState: CoreState;
   #coreReducedThroughOffset: number;
+  #reconstructionRefusal: Error | null = null;
 
   constructor(deps: StreamDeps) {
     this.storage = new StreamStorage(deps.storage);
@@ -219,15 +220,16 @@ export class Stream {
     this.#highestDurableOffset = highestDurableOffset;
     this.#highestAssignedOffset = highestDurableOffset;
     // The checkpoint is written in the SAME transaction as the rows it was reduced from, so the two
-    // cannot disagree; one written under ANOTHER contract version re-reduces the durable log from
-    // offset 0 — the one-time cost of a version bump.
+    // cannot disagree; another contract version re-reduces from offset 0 unless its log contains a
+    // shape this version deliberately refuses.
     if (checkpoint?.reducerVersion === CoreContract.version) {
       this.#coreReducedState = checkpoint.state || CoreContract.initialState();
       this.#coreReducedThroughOffset = checkpoint.reducedThroughOffset;
     } else {
-      this.#refuseRemovedCoreSyntax();
+      this.#reconstructionRefusal = this.#removedCoreSyntaxRefusal();
       this.#coreReducedState = CoreContract.initialState();
       this.#coreReducedThroughOffset = 0;
+      if (this.#reconstructionRefusal) return;
       // Budgeted pages (READ_PAGE_BUDGET_BYTES): this runs in the DO constructor, where a page that
       // did not fit the isolate would be a reboot loop — every wake re-running the same re-reduce.
       while (this.#coreReducedThroughOffset < this.#highestDurableOffset) {
@@ -253,13 +255,13 @@ export class Stream {
     }
   }
 
-  /** A v18 reconstruction deliberately does not reinterpret the removed rewrite language or an
-   *  implicit subscription delivery. The log is immutable, so report a typed failure at the first
-   *  operation that opens the context instead of silently dropping a row during re-reduce. */
-  #refuseRemovedCoreSyntax(): void {
+  /** A v18 reconstruction does not reinterpret the removed rewrite language or an implicit
+   *  subscription delivery. Keep the refusal on the Stream so a context can still be inspected or
+   *  destroyed; ordinary calls throw it before reading, appending, or reducing the old log. */
+  #removedCoreSyntaxRefusal(): Error | null {
     let afterOffset = 0;
     for (;;) {
-      const page = this.read(afterOffset, 500);
+      const page = this.#read(afterOffset, 500);
       for (const event of page.events) {
         const payload = event.payload as Record<string, unknown> | undefined;
         const removedDelivery =
@@ -270,15 +272,24 @@ export class Stream {
           event.type === "events.iterate.com/itx/rewrite-rule-configured" &&
           hasRemovedRewriteSyntax(payload);
         if (removedDelivery || removedRewriteSyntax)
-          throw codedError(
+          return codedError(
             "INVALID_INPUT",
             `context ${this.#path} cannot be reconstructed by CoreContract ${CoreContract.version}: event at offset ${event.offset} uses a removed core shape; recreate the context`,
             { offset: event.offset, type: event.type },
           );
       }
-      if (page.atHead) return;
+      if (page.atHead) return null;
       afterOffset = page.scannedThroughOffset;
     }
+  }
+
+  /** A persisted core row this version deliberately cannot reconstruct, if there is one. */
+  get reconstructionRefusal(): Error | null {
+    return this.#reconstructionRefusal;
+  }
+
+  #assertReconstructable(): void {
+    if (this.#reconstructionRefusal) throw this.#reconstructionRefusal;
   }
 
   #wakeRecorded = false;
@@ -290,6 +301,7 @@ export class Stream {
    *  a call's — nothing has an alarm before it exists). A store with rows gets nothing here. Both
    *  events are exempt from pause: a paused stream still records its wake. */
   appendBirthRecord(cause?: Cause, wake: Wake = { cause: "call" }): void {
+    this.#assertReconstructable();
     if (this.#highestDurableOffset !== 0) return;
     const source = cause && { cause };
     this.append(
@@ -320,6 +332,7 @@ export class Stream {
    *  processor's request still owed to the alarm, the pass that would have started it), and
    *  whoever asked reads the settlement, not a second attempt. */
   appendWakeRecord(wake: Wake, cause?: Cause): void {
+    this.#assertReconstructable();
     if (this.#wakeRecorded) return;
     if (wake.cause === "call")
       refuseActPastLimit(
@@ -378,6 +391,7 @@ export class Stream {
    *  or an act the context's delivery made (subscription-delivery.ts). A receipt at the refused
    *  depth: delivered, but nothing can act on it. */
   recordLoopLimit(cause: Cause, error: string): void {
+    this.#assertReconstructable();
     const idempotencyKey = `itx/loop-limit:${cause.chain}`;
     if (this.storage.readEventByIdempotencyKey(idempotencyKey)) return;
     this.append({
@@ -430,11 +444,13 @@ export class Stream {
   /** The core reduced state as of the last commit — what `append`, the dispatcher and the
    *  delivery loop read, synchronously. */
   get coreReducedState(): CoreState {
+    this.#assertReconstructable();
     return this.#coreReducedState;
   }
 
   /** `{ offset, state }` — what `itx.facets.get('core').snapshot()` answers. */
   coreReducedStateSnapshot(): { offset: number; state: CoreState } {
+    this.#assertReconstructable();
     return { offset: this.#coreReducedThroughOffset, state: this.#coreReducedState };
   }
 
@@ -454,6 +470,7 @@ export class Stream {
    *  Every refusal happens before a single write. The two marks are advanced only AFTER the
    *  transaction returns, so a throw leaves them true. */
   append(...events: StreamEventInput[]): StreamEvent[] {
+    this.#assertReconstructable();
     if (events.length === 0) return []; // a pure no-op: nothing checked, minted, or fanned out
     // 1. may this land? — this runtime check is the SOLE enforcement (no boundary validator).
     for (const event of events) {
@@ -640,6 +657,16 @@ export class Stream {
    *  budget bounds ONE read; many large reads at once are an accepted client-behaviour limit
    *  (e2e/isolate-ceilings-deployed, CONCURRENT READERS, says why). */
   read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
+    this.#assertReconstructable();
+    return this.#read(afterOffset, limit, options);
+  }
+
+  /** The context sweep reads durable rows before deciding whether to destroy an orphan. */
+  readForSweep(afterOffset = 0): StreamPage {
+    return this.#read(afterOffset, 500);
+  }
+
+  #read(afterOffset = 0, limit = 500, options: { includeEphemeral?: boolean } = {}): StreamPage {
     limit = Math.min(Math.max(1, limit), READ_PAGE_MAX_EVENTS); // limit 0 crashed the cut check (userspace-reachable)
     const { rows, nextRowDidNotFit } = this.storage.readEventPage(
       afterOffset,
@@ -688,6 +715,7 @@ export class Stream {
    *  → spurious WAIT_TIMEOUT). Waiters are fed from `freshEvents` in append's tail, so EPHEMERAL
    *  events resolve waits too — but only while a waiter is registered, since they never hit the log. */
   waitForEvent(filter: WaitForEventFilter = {}): Promise<StreamEvent> {
+    this.#assertReconstructable();
     const types = filter.type ? [filter.type].flat() : [];
     const payload = Object.entries(filter.payload || {});
     const matches = (event: StreamEvent) =>
@@ -746,6 +774,7 @@ export class Stream {
    *  batch's `nextAt`, epoch ms — none while paused (pause holds every scheduled append) or when
    *  every definition is parked by a failure. */
   nextScheduledAppendAt(): number | null {
+    this.#assertReconstructable();
     if (this.#coreReducedState.paused) return null;
     let earliest: number | null = null;
     for (const row of Object.values(this.#coreReducedState.schedules)) {

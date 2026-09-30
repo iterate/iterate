@@ -16,7 +16,7 @@ type FaultTotals = Record<
   number
 >;
 
-/** The preview's seven first-party workers, in the same order as main's dev/preview workers. */
+/** Every first-party preview worker, in the same order as main's dev/preview workers. */
 export function previewWorkers(name: string): string[] {
   const deployment = previewDeployment(name);
   if (!deployment) throw new Error(`${JSON.stringify(name)} is not a preview deployment name`);

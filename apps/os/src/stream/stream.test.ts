@@ -25,7 +25,7 @@ test("waitForEvent: a registered waiter resolves with the committed event, fed f
   expect(batches.at(-1)?.some((e) => e.offset === got.offset)).toBe(true);
 });
 
-test("a pre-v18 checkpoint with an implicit subscription delivery refuses the next context operation instead of replaying and dropping the row", () => {
+test("a pre-v18 checkpoint with an implicit subscription delivery blocks normal reads without hiding rows from a sweep", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
   first.storage.insertEvent(
@@ -44,18 +44,15 @@ test("a pre-v18 checkpoint with an implicit subscription delivery refuses the ne
     false,
   );
 
-  try {
-    bareStream({ storage });
-    throw new Error("expected the old core shape to be refused");
-  } catch (error) {
-    expect(errorCode(error)).toBe("INVALID_INPUT");
-    expect(error instanceof Error ? error.message : String(error)).toMatch(
-      /cannot be reconstructed.*recreate the context/,
-    );
-  }
+  const rebuilt = bareStream({ storage });
+  expect(errorCode(rebuilt.reconstructionRefusal)).toBe("INVALID_INPUT");
+  expect(() => rebuilt.read()).toThrow(/cannot be reconstructed.*recreate the context/);
+  expect(rebuilt.readForSweep().events).toMatchObject([
+    { type: "events.iterate.com/itx/subscription-configured", offset: 1 },
+  ]);
 });
 
-test("a pre-v18 checkpoint with a pinned rewrite match refuses reconstruction instead of treating its old call as a name", () => {
+test("a pre-v18 checkpoint with a pinned rewrite match blocks append instead of treating its old call as a name", () => {
   const storage = nodeSqliteDurableObjectStorage();
   const first = bareStream({ storage });
   first.storage.insertEvent(
@@ -74,7 +71,11 @@ test("a pre-v18 checkpoint with a pinned rewrite match refuses reconstruction in
     false,
   );
 
-  expect(() => bareStream({ storage })).toThrow(/cannot be reconstructed.*recreate the context/);
+  const rebuilt = bareStream({ storage });
+  expect(() => rebuilt.append({ type: "new" })).toThrow(
+    /cannot be reconstructed.*recreate the context/,
+  );
+  expect(rebuilt.highestDurableOffset()).toBe(1);
 });
 
 test("waitForEvent: the type filter holds a waiter through non-matching commits", async () => {

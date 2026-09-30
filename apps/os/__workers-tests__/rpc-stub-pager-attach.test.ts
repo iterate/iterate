@@ -34,7 +34,9 @@ import {
   Echo,
   openSession,
   ORIGIN,
+  readLog,
   releasePins,
+  rule,
   SRC_ECHO_APP,
   stub,
   until,
@@ -121,6 +123,45 @@ test("a platform-minted loaded worker's raw fetch cannot smuggle a pager attach 
   expect(await itx.rpcStubs.list()).not.toContain("itx.smuggled");
   const { events } = (await itx.invoke("itx.readEvents(0)")) as { events: { type: string }[] };
   expect(events.map((event) => event.type)).not.toContain("smuggled");
+});
+
+test("loaded code cannot lend over reserved itx.config or through a jailed itx.append, and either refusal happens before a pager or durable row", async () => {
+  const ctx = "prj_pager_loaded_lend_walls";
+  const loadedProvide = (match: string) =>
+    runInDurableObject(stub(ctx), (_instance, state) => {
+      const { exports } = state as unknown as {
+        exports: {
+          ItxEntrypoint(opts: { props: { iterateContextName: string; platformOrigin: null } }): {
+            get(): { provide(name: string, target: RpcTarget): Promise<unknown> };
+          };
+        };
+      };
+      return (
+        exports
+          .ItxEntrypoint({
+            props: {
+              iterateContextName: DurableObjectNameCodec.parse(ctx).name,
+              platformOrigin: null,
+            },
+          })
+          .get()
+          // The admission check must refuse before the live target is duplicated or lent.
+          .provide(match, null as unknown as RpcTarget)
+      );
+    });
+
+  await expect(loadedProvide("itx.config")).rejects.toMatchObject({ code: "FORBIDDEN" });
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 0 });
+  expect(await ruleAt(ctx, "itx.config")).toBeNull();
+
+  await stub(ctx).append(rule("itx.append", null));
+  const before = await readLog(ctx);
+  await expect(loadedProvide("itx.live")).rejects.toMatchObject({
+    code: "NO_ITX_EXPRESSION_MATCH",
+  });
+  expect(await transportState(ctx)).toMatchObject({ rpcStubPagers: 0 });
+  expect(await ruleAt(ctx, "itx.live")).toBeNull();
+  expect(await readLog(ctx)).toEqual(before);
 });
 
 test("ATOMIC: a paused stream refuses the attach with 409 + code STREAM_PAUSED, and leaves no socket, no presence, no rule; after resume the same attach lands", async () => {
@@ -371,7 +412,7 @@ test("a HIBERNATED DO whose tunnel pager rode the eviction keeps the fetch route
     expect(await presence(ctx)).toEqual(["itx.tunnels.kept"]);
     expect(await fetchRouteNames(ctx)).toEqual(["tunnel-kept"]);
     expect((await ruleAt(ctx, "itx.tunnels.kept"))?.target).toBe(
-      "itx.rpcStubs.get('itx.tunnels.kept')",
+      "itx.builtins.rpcStubs.get('itx.tunnels.kept')",
     );
   } finally {
     pager.webSocket!.close(1000, "test done");

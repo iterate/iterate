@@ -8,8 +8,7 @@ import { print, type ItxExpression } from "iterate/expression";
 import { codedError } from "iterate/lib";
 import type { StreamEvent, ScannedRange } from "iterate/stream/processor";
 import { nodeSqliteDurableObjectStorage } from "iterate/stream/test-support";
-import { causeOfDelivery, type Cause } from "../cause.ts";
-import { AlarmCoordinator } from "../alarm-coordinator.ts";
+import { type Cause } from "../cause.ts";
 import { registerPipelinedRpcBrand, FacetHandle } from "../context/dispatch.ts";
 import { Stream, type DurableObjectStorageSlice } from "./stream.ts";
 import { SubscriptionDelivery } from "./subscription-delivery.ts";
@@ -49,13 +48,15 @@ test("a matching ephemeral reaches a live processor without creating durable sub
   await rig.release();
   const [ephemeral] = rig.stream.append({ type: "blob", ephemeral: true, payload: { i: 1 } });
   await drainDeliveries();
-  expect(rig.pushes).toEqual([
-    expect.objectContaining({
-      events: [expect.objectContaining({ offset: ephemeral!.offset, ephemeral: true })],
-      range: { after: ephemeral!.offset - 1, through: ephemeral!.offset },
-    }),
-  ]);
-  expect(rig.delivery.cursor("slow")).toBeUndefined();
+  expect(rig.pushes).toHaveLength(1);
+  expect(rig).toMatchObject({
+    pushes: [
+      expect.objectContaining({
+        events: [expect.objectContaining({ offset: ephemeral!.offset, ephemeral: true })],
+        range: { after: ephemeral!.offset - 1, through: ephemeral!.offset },
+      }),
+    ],
+  });
 });
 
 test("a read waits for the processor materialization and its queued push", async () => {
@@ -65,9 +66,13 @@ test("a read waits for the processor materialization and its queued push", async
   void rig.delivery.deliveriesQueuedFor("slow").then(() => rig.facetMethods.push("read"));
   void rig.delivery.deliveriesQueuedFor("unpushed").then(() => rig.facetMethods.push("unpushed"));
   await drainDeliveries();
-  expect(rig.facetMethods).toEqual(["catchUpFromLog", "unpushed"]);
+  expect(rig.facetMethods).toHaveLength(2);
+  expect(rig).toMatchObject({ facetMethods: ["catchUpFromLog", "unpushed"] });
   await rig.release();
-  expect(rig.facetMethods).toEqual(["catchUpFromLog", "unpushed", "processEventBatch", "read"]);
+  expect(rig.facetMethods).toHaveLength(4);
+  expect(rig).toMatchObject({
+    facetMethods: ["catchUpFromLog", "unpushed", "processEventBatch", "read"],
+  });
 });
 
 test.for([{ evicted: false }, { evicted: true }])(
@@ -88,7 +93,6 @@ test.for([{ evicted: false }, { evicted: true }])(
     await rig.release();
     expect(rig.facetMethods.slice(before)).toEqual(["catchUpFromLog"]);
     expect(rig.stream.coreReducedState.subscriptions.slow.halted).toBeUndefined();
-    expect(rig.delivery.cursor("slow")).toBeUndefined();
   },
 );
 
@@ -188,13 +192,6 @@ function incarnation(
   storage: DurableObjectStorageSlice = nodeSqliteDurableObjectStorage(),
 ) {
   let delivery!: SubscriptionDelivery;
-  const coordinator = new AlarmCoordinator({
-    setAlarm: async () => {},
-    deleteAlarm: async () => {},
-    deadlines: () => [delivery.deadlines()[0]?.at ?? null],
-    held: () => false,
-    onOverdue: () => {},
-  });
   const stream = new Stream({
     storage,
     path: "/",
@@ -202,7 +199,6 @@ function incarnation(
     cause: () => causes.getStore(),
     onCommit: (fresh, after, through) => {
       delivery.onCommit(fresh, after, through);
-      coordinator.reconcile();
     },
   });
   delivery = new SubscriptionDelivery({
@@ -220,9 +216,6 @@ function incarnation(
     pushEventBatchToFacet: async (facet, events, range) =>
       await facet.invoke([["processEventBatch", events, range]]),
     catchUpFacetFromLog: async (facet) => await facet.invoke([["catchUpFromLog"]]),
-    reconcileAlarm: () => coordinator.reconcile(),
-    runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
-    abortIncarnation: () => {},
   });
   stream.appendWakeRecord({ cause: "call", caller: "other" }, causes.getStore());
   return { storage, stream, delivery };

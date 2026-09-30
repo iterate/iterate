@@ -46,6 +46,7 @@ import {
   freshProject,
   readLog,
   releasePins,
+  rowOf,
   signedInSession,
   snapshot,
   stub,
@@ -1540,6 +1541,43 @@ test.for([
     expect(configured).toEqual([1, 1, 2, 2]);
   },
 );
+
+test("the private subscriptions facet has no public handle, processor controls, or subscription target", async () => {
+  const ctx = freshProject("prj_subscriptions_private");
+  const s = stub(ctx);
+  for (const call of [
+    ["itx", "facets", ["get", "subscriptions"], ["snapshot"]],
+    ["itx", "facets", ["abort", "subscriptions"]],
+    ["itx", "processors", ["enable", "subscriptions"]],
+    ["itx", "processors", ["disable", "subscriptions"]],
+    ["itx", "processors", ["claim", "subscriptions", Date.now() + 1_000]],
+  ] as ItxExpression[])
+    expect(await outcomeOf(() => s.invoke(call))).toBe("FORBIDDEN");
+
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.privateSubscriptionTarget",
+      target: "itx.facets.get('subscriptions').processEventBatch",
+    },
+  });
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "private-target",
+      target: "itx.privateSubscriptionTarget",
+      delivery: "processor",
+      consumes: ["mark"],
+    },
+  });
+  await s.append({ type: "mark" });
+  expect(
+    await until(
+      "the reserved target is refused",
+      async () => (await rowOf(ctx, "private-target"))?.halted,
+    ),
+  ).toMatchObject({ attempts: 1 });
+});
 
 test("`processors.enable` of a first-party name off its placement is refused before anything is appended: no row, no facet", async () => {
   const session = await signedInSession("placement-enable@example.com");

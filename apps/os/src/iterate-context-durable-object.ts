@@ -138,6 +138,7 @@ import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 import {
   parseSubscriptionDeliveryBridgeRequest,
   parseSubscriptionDeliveryTerminalRequest,
+  type SubscriptionDeliveryBridgeRequest,
 } from "./context/subscription-delivery-bridge.ts";
 
 /** WHO THIS CONTEXT IS: its name, when it was reached by name (every caller but one); reached by
@@ -358,6 +359,17 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // Not awaited: a constructor cannot, and the runtime holds every event until this settles.
     void this.ctx.blockConcurrencyWhile(async () => {
       if (await this.#refuseBirthOfDeletedProjectRoot()) return;
+      if (this.#stream.reconstructionRefusal) {
+        reportIssue(
+          "iterate-context.unsupported-core-contract",
+          this.#stream.reconstructionRefusal,
+          {
+            path: this.#durableObjectAddress.path,
+          },
+        );
+        await this.ctx.storage.deleteAlarm();
+        return;
+      }
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
       // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
       // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
@@ -436,6 +448,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     console.info({ event, message });
     this.ctx.abort(message, options);
   }
+
+  /** Context-local only: a facet restart cannot duplicate an unanswered target call. */
+  readonly #configuredSubscriptionDeliveries = new Set<string>();
+  /** Bodies handed to a target may outlive the runner deadline. This reservation stays here, beside
+   * the raw native call, until that target settles; a timed-out facet cannot release it early. */
+  static readonly #configuredSubscriptionDeliveryBodyBudgetChars = 8 * 1024 * 1024;
+  #configuredSubscriptionDeliveryBodyChars = 0;
 
   /** THE STREAM (stream/stream.ts): the commit pipeline and the core reduce. Its one callback,
    *  `onCommit`, is the post-commit fan-out — the delivery loop, run as THE KERNEL: under
@@ -524,7 +543,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** ONE PAGE OF THIS CONTEXT'S LOG, for the context sweep, which reaches it by id and backs an
    *  orphan up before destroying it: `read`'s page, and like `identity` it records no wake. */
   readForSweep(afterOffset: number): StreamPage {
-    return this.#stream.read(afterOffset);
+    return this.#stream.readForSweep(afterOffset);
   }
 
   /** DESTROY THIS CONTEXT (the project deletion saga, project/processor.ts): every byte it holds
@@ -657,6 +676,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // the root is read by every context of the project, and a wake is an event delivered to each
     // of its rows.
     if (this.#unborn) throw this.#unborn;
+    this.#assertReconstructable();
     this.#residency.inboundCallInOneTurn();
     this.#snapshotLeaseUntil = Math.max(this.#snapshotLeaseUntil, Date.now() + SNAPSHOT_TTL_MS);
     const { snapshotVersion, itxExpressionRewriteRules, fetchRoutes, ingressTarget } =
@@ -679,8 +699,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  the call names one. */
   #inboundRequestInOneTurn(call: string, cause?: Cause): void {
     if (this.#unborn) throw this.#unborn;
+    this.#assertReconstructable();
     this.#residency.inboundCallInOneTurn();
     this.#stream.appendWakeRecord({ cause: "call", caller: "other", call }, cause);
+  }
+
+  #assertReconstructable(): void {
+    if (this.#stream.reconstructionRefusal) throw this.#stream.reconstructionRefusal;
   }
 
   /** SYNCHRONOUS end to end (Stream.append is): the commit, the committed-event effects. Two
@@ -726,6 +751,41 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     return this.#stream.read(afterOffset, limit, options); // sync on the Stream, a promise over Workers RPC
   }
 
+  /** Native operational telemetry for the private durable-delivery facet. It is for host
+   * observability and Workers state proofs; no itx expression or client route exposes it. */
+  async subscriptionDeliveryStatus(): Promise<{
+    readReservedBytes: number;
+    readWaiters: number;
+    pendingEphemeralChars: number;
+    targetBodyChars: number;
+    snapshots: Record<string, unknown>;
+  }> {
+    const hasDurable = Object.values(this.#stream.coreReducedState.subscriptions).some(
+      (row) => row.delivery === "durable",
+    );
+    if (!hasDurable)
+      return {
+        readReservedBytes: 0,
+        readWaiters: 0,
+        pendingEphemeralChars: 0,
+        targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
+        snapshots: {},
+      };
+    const [resources, snapshots] = await Promise.all([
+      this.#facetHost.callFacetAsPlatform("subscriptions", [["deliveryResourceSnapshot"]]),
+      this.#facetHost.callFacetAsPlatform("subscriptions", [["deliverySnapshots"]]),
+    ]);
+    return {
+      ...(resources as {
+        readReservedBytes: number;
+        readWaiters: number;
+        pendingEphemeralChars: number;
+      }),
+      targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
+      snapshots: snapshots as Record<string, unknown>,
+    };
+  }
+
   /** All durable rows share one private cursor facet. It sees identities and source batches, never
    * a target or delivery authority; the bridge below derives both again from this context. */
   #pushDurableSubscriptionFacet(
@@ -759,82 +819,84 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       .catch((error) => reportIssue("subscription-delivery.facet-push", error));
   }
 
-  /** The private counterpart of `ItxEntrypoint.deliverConfiguredSubscription`. A trusted facet can
-   * name only its subscription row and its scanned range: this context re-reads the current row and
-   * source page, resolves that row's target afresh, and derives the delivery caller from those real
-   * events. It never accepts a target, event body, cause, or delivery key over Workers RPC. */
+  /** Native infrastructure read for the private subscriptions facet. This deliberately avoids
+   * itx resolution and inbound wake bookkeeping: a project rule cannot change a cursor's proof. */
+  readSubscriptionDelivery(afterOffset: number, limit: number): StreamPage {
+    this.#assertReconstructable();
+    return this.#stream.read(afterOffset, limit, { includeEphemeral: true });
+  }
+
+  /** Native claim for the private subscriptions facet, kept outside every user-owned namespace. */
+  claimSubscriptionDelivery(at: number | null): void {
+    this.#assertReconstructable();
+    this.#facetHost.claim("subscriptions", at);
+    this.#alarmCoordinator.reconcile();
+  }
+
+  /** A private first-party facet hands over one fresh, bounded source page. It never supplies a
+   * target, caller, or authority: this context validates the page, resolves its configured target,
+   * and derives the delivery caller itself. */
   async deliverConfiguredSubscription(input: unknown): Promise<void> {
     const request = parseSubscriptionDeliveryBridgeRequest(input);
     if (request.range.through <= request.range.after)
       throw codedError("INVALID_INPUT", "delivery range must advance past its after offset");
-    this.#inboundRequestInOneTurn("deliverConfiguredSubscription");
-    const row = this.#stream.coreReducedState.subscriptions[request.name];
-    if (!row || row.configuredAtOffset !== request.configuredAtOffset || row.delivery !== "durable")
-      throw codedError("GONE", "configured subscription no longer exists");
-    // This is the runner's fixed page limit. Reading it here, rather than accepting the facet's
-    // event array, makes a retry's source and delivery authority a property of the log alone. A
-    // later retry may cut differently at the byte budget, so reconstruct until the requested
-    // durable proof rather than requiring this fresh page to end at precisely the old boundary.
-    const sourceEvents: StreamEvent[] = [];
-    let cursor = request.range.after;
-    for (let pages = 0; cursor < request.range.through && pages < 16; pages++) {
-      const page = this.#stream.read(cursor, 100, { includeEphemeral: true });
-      sourceEvents.push(...page.events.filter((event) => event.offset > cursor));
-      if (page.scannedThroughOffset <= cursor) break;
-      cursor = page.scannedThroughOffset;
-    }
-    // A durable range is proved by the log's scanned mark. An ephemeral has no durable mark: the
-    // only safe form is the runner's one-event range, and the ring must still contain that exact
-    // event. It is intentionally best effort — a restart or ring eviction makes it unavailable.
-    const ephemeral =
-      request.range.through === request.range.after + 1
-        ? sourceEvents.find((event) => event.ephemeral && event.offset === request.range.through)
-        : undefined;
-    if (cursor < request.range.through && !ephemeral)
-      throw codedError("GONE", "configured subscription source range is no longer available");
-    const events = (ephemeral ? [ephemeral] : sourceEvents)
-      .filter((event) => event.offset <= request.range.through)
-      .filter((event) => consumesEvent(row.consumes, event));
-    if (events.length === 0)
-      throw codedError("GONE", "configured subscription has no events in its source range");
-    const cause = causeOfDelivery(events);
+    this.#assertReconstructable();
+    const row = this.#configuredSubscriptionRow(request);
+    const events = this.#validatedSubscriptionDeliveryEvents(request, row);
     const fanOut = row.ordered === false;
-    const caller: Caller = {
-      principal: null,
-      cause: fanOut
-        ? {
-            ...cause,
-            writeKey: `${request.name}:${events[0].path}@${events[0].offset}`,
-          }
-        : cause,
-      ...(fanOut && { delivery: await sha256Hex(JSON.stringify(events[0])) }),
-    };
-    // Resolve without delivery authority, then fence the row generation AGAIN before its only
-    // capability call. A reconfigure while a cross-context snapshot or worker load awaited can
-    // therefore never execute the old target under the new row's authority.
-    const args = fanOut ? [events[0]] : [events, request.range];
-    const last = row.target.at(-1);
-    const method = typeof last === "string" && row.target.length > 2 ? last : undefined;
-    const targetPrefix = method ? row.target.slice(0, -1) : row.target;
-    const { value } = await this.#callerStorage.run(
-      this.#withPlatformOrigin({ principal: null, cause }),
-      () => this.#itxExpressionResolver.evaluate(targetPrefix),
-    );
-    const current = this.#stream.coreReducedState.subscriptions[request.name];
+    if (fanOut && events.length !== 1)
+      throw codedError("INVALID_INPUT", "fan-out delivery contains exactly one event");
+
+    const deliveryKey = `${request.name}:${request.configuredAtOffset}:${request.resumeAtOffset ?? 0}:${request.range.after}:${request.range.through}`;
+    if (this.#configuredSubscriptionDeliveries.has(deliveryKey))
+      throw codedError("UNAVAILABLE", "configured subscription delivery is already in flight");
+    // The source page can be at the stream's 8 MiB limit. Reserve its body here, not in the facet:
+    // Promise.race may finish the facet attempt while this native target call still owns the body.
+    const bodyChars = JSON.stringify(events).length;
     if (
-      !current ||
-      current.configuredAtOffset !== request.configuredAtOffset ||
-      current.delivery !== "durable"
+      bodyChars > IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars ||
+      this.#configuredSubscriptionDeliveryBodyChars + bodyChars >
+        IterateContextDurableObject.#configuredSubscriptionDeliveryBodyBudgetChars
     ) {
-      releaseRpcSessions([value]);
-      throw codedError("GONE", "configured subscription changed while its target was resolving");
+      console.warn({
+        event: "subscription-delivery.body-budget-exhausted",
+        context: this.#durableObjectAddress.name,
+        requestedChars: bodyChars,
+        retainedChars: this.#configuredSubscriptionDeliveryBodyChars,
+      });
+      throw codedError("UNAVAILABLE", "configured subscription delivery body budget is exhausted");
     }
+    this.#configuredSubscriptionDeliveries.add(deliveryKey);
+    this.#configuredSubscriptionDeliveryBodyChars += bodyChars;
+    let value: unknown;
     let result: unknown;
     try {
+      const cause = causeOfDelivery(events);
+      const caller: Caller = {
+        principal: null,
+        cause: fanOut
+          ? { ...cause, writeKey: `${request.name}:${events[0].path}@${events[0].offset}` }
+          : cause,
+        ...(fanOut && { delivery: await sha256Hex(JSON.stringify(events[0])) }),
+      };
+      // Hashing crosses an async boundary too; stale generations never even resolve a target.
+      this.#configuredSubscriptionRow(request);
+      // Resolve normally before granting delivery identity. Aliases may end at a hosted processor;
+      // retain the terminal method until after fixed-point resolution so its constrained platform
+      // route is selected rather than exposing a general facet authority.
+      const target = this.#itxExpressionResolver.resolve(row.target).at(-1) ?? row.target;
+      const last = target.at(-1);
+      const method = typeof last === "string" && target.length > 2 ? last : undefined;
+      const targetPrefix = method ? target.slice(0, -1) : target;
+      ({ value } = await this.#callerStorage.run(
+        this.#withPlatformOrigin({ principal: null, cause }),
+        () => this.#itxExpressionResolver.evaluate(targetPrefix),
+      ));
+      // Every await above is outside the row generation. Recheck the exact generation, resume
+      // fence, durable mode, and halt state immediately before the only capability call.
+      this.#configuredSubscriptionRow(request);
+      const args = fanOut ? [events[0]] : [events, request.range];
       result = await this.#callerStorage.run(this.#withPlatformOrigin(caller), async () => {
-        // A FacetHandle deliberately refuses `processEventBatch` through its public expression
-        // surface. Its platform host owns this particular push route; preserve that boundary after
-        // resolving and fencing the configured row above.
         if (value instanceof FacetHandle && method === "processEventBatch")
           return this.#facetHost.callFacetAsPlatform(value, [[method, ...args]]);
         return method
@@ -842,8 +904,70 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : await callOn(value, undefined, args);
       });
     } finally {
+      this.#configuredSubscriptionDeliveries.delete(deliveryKey);
+      this.#configuredSubscriptionDeliveryBodyChars -= bodyChars;
       releaseRpcSessions([value, result]);
     }
+  }
+
+  #configuredSubscriptionRow(request: {
+    name: string;
+    configuredAtOffset: number;
+    resumeAtOffset?: number;
+  }): Subscription {
+    const row = this.#stream.coreReducedState.subscriptions[request.name];
+    if (
+      !row ||
+      row.configuredAtOffset !== request.configuredAtOffset ||
+      row.delivery !== "durable" ||
+      row.halted ||
+      row.resumed?.atOffset !== request.resumeAtOffset
+    )
+      throw codedError("GONE", "configured subscription no longer accepts delivery");
+    return row;
+  }
+
+  #validatedSubscriptionDeliveryEvents(
+    request: SubscriptionDeliveryBridgeRequest,
+    row: Subscription,
+  ): StreamEvent[] {
+    const events: StreamEvent[] = [];
+    let previous = request.range.after;
+    for (const candidate of request.events) {
+      // The private RPC payload is untyped data. Null has typeof "object", so it is a distinct
+      // wire case rather than a declared-object truthiness check.
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- private RPC input is unknown and null is not an event
+      if (candidate === null || typeof candidate !== "object")
+        throw codedError("INVALID_INPUT", "configured subscription event is invalid");
+      const event = candidate as StreamEvent;
+      if (
+        !Number.isSafeInteger(event.offset) ||
+        event.offset <= previous ||
+        event.offset > request.range.through ||
+        // oxlint-disable-next-line iterate/simple-truthiness-check -- this is structural validation of unknown private RPC data
+        typeof event.type !== "string" ||
+        event.path !== this.#durableObjectAddress.path ||
+        !consumesEvent(row.consumes, event)
+      )
+        throw codedError(
+          "INVALID_INPUT",
+          "configured subscription event is outside its source page",
+        );
+      previous = event.offset;
+      events.push(event);
+    }
+    const ephemeral = events.some((event) => event.ephemeral);
+    if (ephemeral) {
+      if (
+        events.length !== 1 ||
+        !events[0].ephemeral ||
+        request.range.through !== request.range.after + 1 ||
+        events[0].offset !== request.range.through
+      )
+        throw codedError("GONE", "ephemeral subscription source event is no longer available");
+    } else if (request.range.through > this.#stream.highestDurableOffset())
+      throw codedError("GONE", "configured subscription source range is no longer durable");
+    return events;
   }
 
   /** Atomically record a runner's terminal outcome only while its configured row still stands. */
@@ -867,29 +991,27 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         .events.find((candidate) => candidate.offset === offset);
       if (!event || event.ephemeral)
         throw codedError("GONE", "fan-out delivery source event is no longer available");
-      this.#appendAndRunCommittedEffects([
-        {
-          type: "events.iterate.com/itx/subscription-delivery-failed",
-          idempotencyKey: `itx/subscription-delivery-failed:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${offset}`,
-          payload: { name: request.name, offset, attempts: request.attempts, error: request.error },
-          source: { cause: event.source?.cause },
-        },
-      ]);
+      this.#stream.append({
+        type: "events.iterate.com/itx/subscription-delivery-failed",
+        idempotencyKey: `itx/subscription-delivery-failed:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${offset}`,
+        payload: { name: request.name, offset, attempts: request.attempts, error: request.error },
+        source: { cause: event.source?.cause },
+      });
       return;
     }
     if (row.halted) return;
-    this.#appendAndRunCommittedEffects([
-      {
-        type: "events.iterate.com/itx/subscription-delivery-halted",
-        idempotencyKey: `itx/subscription-delivery-halted:${request.name}:${request.configuredAtOffset}:${request.afterOffset}`,
-        payload: {
-          name: request.name,
-          afterOffset: request.afterOffset,
-          attempts: request.attempts,
-          error: request.error,
-        },
+    const source = this.#stream.read(request.afterOffset, 1).events[0]?.source;
+    this.#stream.append({
+      type: "events.iterate.com/itx/subscription-delivery-halted",
+      idempotencyKey: `itx/subscription-delivery-halted:${request.name}:${request.configuredAtOffset}:${row.resumed?.atOffset || 0}:${request.afterOffset}`,
+      payload: {
+        name: request.name,
+        afterOffset: request.afterOffset,
+        attempts: request.attempts,
+        error: request.error,
       },
-    ]);
+      ...(source?.cause && { source: { cause: source.cause } }),
+    });
   }
 
   /** THE EFFECTIVE table at `path`, DESCRIBED (itx-expression-rewriting.ts `describeRewriteRules`):
@@ -940,7 +1062,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (!provide.fetchRoute) continue;
       const parsed = FetchRouteConfiguredPayload.safeParse({
         ...provide.fetchRoute,
-        target: ["itx", "builtins", "rpcStubs", ["get", provide.rpcStubKey]],
+        target: normalizedItxExpression(provide.match),
       });
       if (!parsed.success || !parsed.data.requestMatcher || !parsed.data.target) continue;
       routes[parsed.data.fetchRouteName] = {
@@ -1330,23 +1452,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () =>
         this.#itxExpressionResolver.evaluate(itxExpression),
       ),
+    resolveItxExpression: (itxExpression) => this.#itxExpressionResolver.resolve(itxExpression),
     // A facet row's push and catch-up: the facet host's platform entries, past the facet's list.
     pushEventBatchToFacet: (facetHandle, events, range) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [["processEventBatch", events, range]]),
     catchUpFacetFromLog: (facetHandle, cause) =>
       this.#facetHost.callFacetAsPlatform(facetHandle, [["catchUpFromLog"]], cause),
-    reconcileAlarm: () => this.#alarmCoordinator.reconcile(),
-    // A delivery runs one hand-off deeper than what it delivers (cause.ts), and a fan-out call as
-    // the delivery loop's own caller for its one event (caller.ts `Caller.delivery`).
-    runAsDelivery: async (events, call, delivery) => {
-      const caller: Caller = { principal: null, cause: causeOfDelivery(events) };
-      if (delivery) {
-        caller.cause = { ...caller.cause!, writeKey: delivery };
-        caller.delivery = await sha256Hex(JSON.stringify(events[0]));
-      }
-      return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
-    },
-    abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
@@ -1562,6 +1673,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  unclaimed-facet sweep is decided first in every pass; a wake with nothing owed is the sweep's
    *  alone and does nothing else. */
   async alarm(): Promise<void> {
+    if (this.#stream.reconstructionRefusal) return;
     const { armedAt: fired } = this.#alarmCoordinator.snapshot();
     // THE SWEEP'S OWN WAKE: no wake record, no trace, no delivery — in a fresh
     // incarnation (its armer was evicted, the normal end) nothing at all but re-deriving the alarm;
@@ -1736,6 +1848,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     caller: Caller = { principal: null },
   ): Promise<unknown> {
     if (this.#unborn) throw await this.#unbornStill(this.#unborn);
+    this.#assertReconstructable();
     const kind = caller.app ? "loaded" : caller.path ? "context" : "other";
     // A call that names no cause — a person's, an outside request's — begins a chain (cause.ts).
     if (!caller.cause) caller = { ...caller, cause: newChain("a call") };
@@ -1761,6 +1874,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  under `key` — what the send came to — or whether this attempt reserved it now; neither when an
    *  earlier attempt reserved it and recorded nothing. A DO-only verb. */
   reserveSend(key: string): { recorded?: StreamEvent; reserved: boolean } {
+    this.#assertReconstructable();
     const row = this.#stream.storage.readEventByIdempotencyKey(key);
     if (row)
       return {
@@ -1777,6 +1891,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** A reservation's release: its send was refused, so nothing went out (`reserveSend`). */
   releaseSend(key: string): void {
+    this.#assertReconstructable();
     this.ctx.storage.kv.delete(`send:${key}`);
   }
 
@@ -1850,6 +1965,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       const { message } = await this.#unbornStill(this.#unborn);
       return new Response(`421: ${message}\n`, { status: 421 });
     }
+    this.#assertReconstructable();
     const fromLoadedCode = request.headers.get(ITX_APP_HEADER) !== null;
     const kind = fromLoadedCode ? "loaded" : "other";
     this.#stream.appendWakeRecord(

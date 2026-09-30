@@ -8,9 +8,28 @@ import type { RpcStubFetchServer } from "./fetch-upgrade.ts";
 import {
   RpcStubDirectory,
   type BorrowedRpcStub,
+  decodeRpcStubPagerAttachRequest,
+  encodeRpcStubPagerAttachRequest,
   encodeFetchExpression,
   stampCallerHeaders,
 } from "./rpc-stubs.ts";
+
+test("pager codec accepts the live fetch-route attachment the relay sends", () => {
+  const request = decodeRpcStubPagerAttachRequest(
+    encodeRpcStubPagerAttachRequest({
+      rpcStubKey: "itx.tunnels.gone",
+      attachmentId: "route-test",
+      liveProvide: {
+        match: "itx.tunnels.gone",
+        fetchRoute: {
+          fetchRouteName: "tunnel-gone",
+          requestMatcher: { routingSlug: "gone" },
+        },
+      },
+    }),
+  );
+  expect(request.liveProvide?.fetchRoute).toMatchObject({ fetchRouteName: "tunnel-gone" });
+});
 
 test("fetch expression headers preserve Unicode worker source through the HTTP ByteString boundary", () => {
   const expression: ItxExpression = [

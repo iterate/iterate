@@ -88,6 +88,39 @@ test("a core-snapshot probe materializes only created and woken, without subscri
   });
 });
 
+test("a pre-v18 core row refuses normal access yet remains sweepable and destroyable", async () => {
+  const context = "prj_do_legacy_core_contract";
+  const s = stub(context);
+  const [seed] = (await s.append({ type: "seed" })) as unknown as [{ offset: number }];
+  await runInDurableObject(s, async (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE events SET body = ? WHERE offset = ?",
+      JSON.stringify({
+        type: "events.iterate.com/itx/subscription-configured",
+        payload: { name: "legacy", target: "itx.worker.processEventBatch" },
+        ephemeral: false,
+      }),
+      seed.offset,
+    );
+    state.storage.sql.exec(
+      "UPDATE reduce_checkpoints SET reducer_version = '17.0.0' WHERE slug = 'core'",
+    );
+  });
+  await evictDurableObject(s);
+  await runInDurableObject(s, async (instance) => {
+    // Observe the latched refusal inside the native actor call rather than leaving a rejected
+    // loopback RPC promise for workerd's test harness to report after this assertion settles.
+    expect(() => instance.read(0)).toThrow(/cannot be reconstructed.*recreate the context/);
+    expect(instance.readForSweep(0).events).toContainEqual(
+      expect.objectContaining({
+        offset: seed.offset,
+        type: "events.iterate.com/itx/subscription-configured",
+      }),
+    );
+  });
+  await (s.destroy() as Promise<void>).catch(() => undefined); // the reset is the successful erase
+});
+
 test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumbing; a rewrite rule is ONE appended event the append boundary canonicalizes, and a table row is `{ match, target }`, nothing else", async () => {
   const ctx = "prj_do_canonical";
   await runInDurableObject(stub(ctx), async (instance) => {
@@ -141,9 +174,39 @@ test("the private durable-subscription bridge accepts no target, event, caller o
         name: "sink",
         configuredAtOffset: 999,
         range: { after: 0, through: 1 },
+        events: [{ offset: 1, type: "forged", path: "/" }],
       }),
     ).rejects.toMatchObject({ code: "GONE" });
   });
+});
+
+test("a durable alias ending in a hosted processor method preserves the constrained platform batch route", async () => {
+  const context = "prj_do_durable_alias_processor";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: {
+      match: "itx.alias",
+      target: ["itx", "facets", ["get", "project"], "processEventBatch"],
+    },
+  });
+  const [configured] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "aliased", target: "itx.alias", delivery: "durable", consumes: ["mark"] },
+  })) as unknown as [{ offset: number }];
+  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  const event = (await s.read(mark.offset - 1, 1)).events.find(
+    ({ offset }) => offset === mark.offset,
+  )!;
+  await runInDurableObject(s, (instance) =>
+    instance.deliverConfiguredSubscription({
+      name: "aliased",
+      configuredAtOffset: configured.offset,
+      range: { after: mark.offset - 1, through: mark.offset },
+      events: [event],
+    }),
+  );
+  await releasePins(context);
 });
 
 test("a fan-out terminal is one idempotent failed receipt, and stale terminals cannot mutate a replacement or resumed row", async () => {
@@ -231,6 +294,87 @@ test("a fan-out terminal is one idempotent failed receipt, and stale terminals c
   await releasePins(context);
 });
 
+test("an ordered terminal receipt lands outside the control boundary and a resume permits its next terminal receipt", async () => {
+  const context = "prj_do_ordered_terminal_receipts";
+  const s = stub(context);
+  const [configured] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: { name: "ordered", target: "itx.missing", delivery: "durable", consumes: ["mark"] },
+  })) as unknown as [{ offset: number }];
+  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  const terminal = (resumeAtOffset?: number) =>
+    runInDurableObject(s, (instance) =>
+      instance.recordConfiguredSubscriptionTerminal({
+        name: "ordered",
+        configuredAtOffset: configured.offset,
+        afterOffset: mark.offset - 1,
+        attempts: 15,
+        error: "missing target",
+        resumeAtOffset,
+      }),
+    );
+  await terminal();
+  const [resumed] = (await s.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "ordered", afterOffset: mark.offset - 1 },
+  })) as unknown as [{ offset: number }];
+  await terminal(resumed.offset);
+  expect(
+    (await s.read(0)).events.filter(
+      (event) => event.type === "events.iterate.com/itx/subscription-delivery-halted",
+    ),
+  ).toHaveLength(2);
+  expect(
+    (await s.invoke("itx.subscriptions.list()")).find(
+      (row: { name: string }) => row.name === "ordered",
+    ),
+  ).toMatchObject({
+    halted: { afterOffset: mark.offset - 1, attempts: 15 },
+  });
+  await releasePins(context);
+});
+
+test("a resumed durable row accepts its new resume generation through the private bridge", async () => {
+  const context = "prj_do_subscription_resume_bridge";
+  const s = stub(context);
+  const [configured] = (await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "ordered",
+      target: "itx.builtins.platformHook.deliverEvent",
+      delivery: "durable",
+      consumes: ["mark"],
+    },
+  })) as unknown as [{ offset: number }];
+  const [mark] = (await s.append({ type: "mark" })) as unknown as [{ offset: number }];
+  await runInDurableObject(s, (instance) =>
+    instance.recordConfiguredSubscriptionTerminal({
+      name: "ordered",
+      configuredAtOffset: configured.offset,
+      afterOffset: mark.offset - 1,
+      attempts: 25,
+      error: "test halt",
+    }),
+  );
+  const [resumed] = (await s.append({
+    type: "events.iterate.com/itx/subscription-delivery-resumed",
+    payload: { name: "ordered", afterOffset: mark.offset - 1 },
+  })) as unknown as [{ offset: number }];
+  const event = (await s.read(mark.offset - 1, 1)).events.find(
+    ({ offset }) => offset === mark.offset,
+  )!;
+  await runInDurableObject(s, (instance) =>
+    instance.deliverConfiguredSubscription({
+      name: "ordered",
+      configuredAtOffset: configured.offset,
+      resumeAtOffset: resumed.offset,
+      range: { after: mark.offset - 1, through: mark.offset },
+      events: [event],
+    }),
+  );
+  await releasePins(context);
+});
+
 test("the private subscriptions facet owns ordered and fan-out durable progress", async () => {
   const context = "prj_do_subscription_facet";
   const s = stub(context);
@@ -297,12 +441,11 @@ test("the rule table is a MAP: a re-set at the same match REPLACES (one row, not
   expect(await rewriteRuleEventCount(ctx)).toBe(4);
 });
 
-test("un-setting a rule is pure data — the lent stub's transport is untouched: the census holds, the registry still lists the key, the match answers NO_ITX_EXPRESSION_MATCH, and the stub is still reachable THROUGH the registry", async () => {
+test("a live provide shadows a same-named durable rule without writing one, and a durable unset cannot revoke its attached capability", async () => {
   const ctx = "prj_do_unsetlive";
   const s = stub(ctx);
-  // A PHYSICAL stub: a capnweb session lends a client's rpc stub under `itx.livecap` (its pager socket is
-  // one transport in the DO's census) with the pure-data rule `itx.livecap ⇒
-  // itx.rpcStubs.get('itx.livecap')` configured alongside it.
+  // A physical pager attachment shadows this name in memory. Its capability is not written into
+  // the durable rewrite table, so a raw durable unset cannot revoke the live attachment.
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const provided = await itx.provide("itx.livecap", new Alive());
   expect(typeof provided[Symbol.dispose]).toBe("function"); // a DISPOSABLE handle — no offsets, no identities
@@ -310,21 +453,19 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   const rpcStubPagersBefore = await rpcStubPagersOf(ctx);
   expect(rpcStubPagersBefore).toBe(1);
 
-  // The rule un-set AT THE DO'S `append` — the raw event, not the handle. The row pops; the transport is
-  // NOT touched: the census is unchanged, the registry still lists the key, and only the RULE is
-  // gone (default-deny at the match — NO_ITX_EXPRESSION_MATCH, not offline).
+  // A durable unset changes only the underlying table. The attachment still wins until its pager
+  // detaches; it neither creates nor depends on a durable rule.
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.livecap", target: null },
   });
   expect(await rpcStubPagersOf(ctx)).toBe(rpcStubPagersBefore);
   expect(await s.invoke("itx.rpcStubs.list()")).toEqual(["itx.livecap"]);
-  expect(await deniedCode(itx, "itx.livecap.ping()")).toBe("NO_ITX_EXPRESSION_MATCH");
+  expect(await itx.invoke("itx.livecap.ping()")).toBe("alive");
   expect("itx.livecap" in (await rewriteRulesOf(ctx))).toBe(false);
-  // …and the lent stub is still reachable THROUGH THE REGISTRY, rule or no rule.
   expect(await s.invoke("itx.rpcStubs.get('itx.livecap').ping()")).toBe("alive");
 
-  // A NEW rule at the match brings the SAME stub back dotted — the rule was the only thing gone.
+  // A durable rule can be installed beneath the live overlay, ready for after detach.
   await s.append({
     type: "events.iterate.com/itx/rewrite-rule-configured",
     payload: { match: "itx.livecap", target: "itx.rpcStubs.get('itx.livecap')" },
@@ -332,18 +473,18 @@ test("un-setting a rule is pure data — the lent stub's transport is untouched:
   expect(await itx.invoke("itx.livecap.ping()")).toBe("alive");
 });
 
-test("disposing the provide HANDLE is the other half: the stub is recalled — its pager leaves the census, presence shrinks — AND the rule it was provided with is un-set", async () => {
+test("disposing a live provide recalls its pager and reveals no durable row it never wrote", async () => {
   const ctx = "prj_do_disposehandle";
   const s = stub(ctx);
   const itx = await (await openSession()).authenticate(adminCredentials()).projects.get(ctx);
   const provided = await itx.provide("itx.doomed", new Alive());
   expect(await s.invoke("itx.doomed.ping()")).toBe("alive");
-  expect(Object.keys(await rewriteRulesOf(ctx))).toEqual(["itx.doomed"]);
+  expect(Object.keys(await rewriteRulesOf(ctx))).toEqual([]);
   expect(await rpcStubPagersOf(ctx)).toBe(1);
 
   provided[Symbol.dispose](); // the client lets go: capnweb releases the export, the edge recalls
   await until("the pager left the census", async () => (await rpcStubPagersOf(ctx)) === 0);
-  await until("the rule was un-set", async () => !("itx.doomed" in (await rewriteRulesOf(ctx))));
+  expect("itx.doomed" in (await rewriteRulesOf(ctx))).toBe(false);
   expect(await s.invoke("itx.rpcStubs.list()")).toEqual([]); // presence shrank
   expect(await deniedCode(itx, "itx.doomed.ping()")).toBe("NO_ITX_EXPRESSION_MATCH");
 });

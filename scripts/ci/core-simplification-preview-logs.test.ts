@@ -24,11 +24,12 @@ test("derives the complete preview and matched-main worker sets", () => {
     "pr1234-a1b2c3d-dash",
     "pr1234-a1b2c3d-agents",
     "pr1234-a1b2c3d-notes",
+    "pr1234-a1b2c3d-docs",
     "pr1234-a1b2c3d-admin",
     "pr1234-a1b2c3d-voice",
     "pr1234-a1b2c3d-kit",
   ]);
-  expect(mainWorkers).toEqual(["os", "dash", "agents", "notes", "admin", "voice", "kit"]);
+  expect(mainWorkers).toEqual(["os", "dash", "agents", "notes", "docs", "admin", "voice", "kit"]);
 });
 
 test("detects different errors even when totals match, without returning log text", () => {

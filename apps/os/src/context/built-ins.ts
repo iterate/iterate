@@ -1,15 +1,7 @@
-// built-ins.ts — THE BUILT-INS: a plain record whose KEYS are the physical-layer roots (the one list
-// is context/itx-expression-rewriting.ts). Three kinds of key, one record: the AXIOMS (the log, the stub
-// registry, the rule table, the two hosts, addressing), the BINDINGS (`kv`, `secrets`, `ai`,
-// `browser`, `cfArtifacts`, `repos` — a Cloudflare binding only this env holds, exposed or scoped) and THE
-// LIBRARY (`connectTo*`, library.ts — code a user could write, taking only `itx`).
-// THE RECORD IS `itx.builtins`, the reserved root: `itx.builtins.<root>…` runs against it directly
-// and never reads the rule table; a short `itx.<root>…` reaches it through the IMPLICIT PLATFORM ROW
-// unless the context's own table says otherwise (itx-expression-rewriting.ts `implicitRootsAt`) — so a
-// test may shadow `itx.ai`, a context may mask `itx.kv`, and `itx.builtins.…` always reaches the
-// physical scope.
-// Dynamic code has two entry points, one per host kind: `workers.get(spec)` (stateless) and
-// `facets.get(name, spec)` (durable) — the `BuiltInScope` members below say what each takes.
+// built-ins.ts — the private physical implementations behind `itx.builtins`. A short `itx.<root>`
+// reaches one through the context's rewrite rules and can be shadowed or masked; `itx.builtins.<root>`
+// addresses the implementation directly. Dynamic code enters through `workers.get(spec)` or
+// `facets.get(name, spec)`.
 
 import { codedError, errorCode, jsonEqual, reportIssue, resolveContextPath } from "iterate/lib";
 import { z } from "zod";
@@ -302,6 +294,16 @@ function r2ObjectRecord(object: R2Object, prefix: string): R2ObjectRecord {
     range: object.range,
     storageClass: object.storageClass,
   };
+}
+
+/** The durable subscription runner is a private first-party facet. Its context-native bridge owns
+ * its cursor and target call, so no ordinary expression may host, reset, claim, or call it. */
+function refuseSubscriptionsFacet(name: string, verb: string): void {
+  if (name !== "subscriptions") return;
+  throw codedError(
+    "FORBIDDEN",
+    `itx.${verb}(${JSON.stringify(name)}): the subscriptions facet is private to durable delivery`,
+  );
 }
 
 /** A reset's reason (`abort`, `facets.abort`): absent, or one line a person reads — it lands in the
@@ -1733,11 +1735,15 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     waitForEvent: deps.waitForEvent,
     rpcStubs: deps.rpcStubs,
     facets: {
-      get: deps.facets.get,
+      get: (name, spec) => {
+        refuseSubscriptionsFacet(name, "facets.get");
+        return deps.facets.get(name, spec);
+      },
       // The reset, then its fact: the host's abort and restart hold every other event off
       // (facet-host.ts `#restart`), so the fact's own delivery to a processor facet meets the fresh
       // instance, never the one going away.
       abort: async (name, reasonInput) => {
+        refuseSubscriptionsFacet(name, "facets.abort");
         const reason = abortReasonOf(reasonInput, "itx.facets.abort");
         const { path: callerPath, app } = deps.caller(); // who asked, as for `abort` above
         await deps.facets.abort(name, reason);
@@ -1751,6 +1757,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
     subscriptions: deps.subscriptions,
     processors: {
       enable: async (name, spec) => {
+        refuseSubscriptionsFacet(name, "processors.enable");
         // Refused HERE, before anything is appended. A FIRST-PARTY name (first-party-facets.ts) hosts
         // this worker's own class: `consumes` at most, never a source; any other name's spec names
         // the source's host class, and its literal source is under the ceiling. Either is hosted
@@ -1815,13 +1822,17 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
         return { name };
       },
       disable: async (name) => {
+        refuseSubscriptionsFacet(name, "processors.disable");
         await append({
           type: "events.iterate.com/itx/subscription-configured",
           payload: { name, target: null },
         });
       },
       list: async () => (await deps.subscriptions.list()).filter((row) => row.hostedFacet),
-      claim: async (name, at) => deps.claimFacetAlarm(name, at),
+      claim: async (name, at) => {
+        refuseSubscriptionsFacet(name, "processors.claim");
+        return deps.claimFacetAlarm(name, at);
+      },
     },
     rewriteRules: deps.rewriteRules,
     workers: workersRoot({

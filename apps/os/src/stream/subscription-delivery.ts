@@ -1,28 +1,6 @@
-// subscription-delivery.ts — THE ONE DELIVERY LOOP, run from the stream's post-commit hook: for every
-// subscription row, filter the batch by `consumes` and deliver it the way the row's TARGET decides:
-//
-//   • a row configured as a PROCESSOR or a LIVE provider owns its progress. A processor has its
-//     checkpoint and gap-repairs from the log; a live client has its offset and heals with read. The
-//     row's explicit delivery mode, never an alias's current target, decides this before a call.
-//     Those rows get a PUSH of `(events, { after, through })`, one delivery chain per subscription;
-//   • anything else cannot own progress, so THE STREAM KEEPS A CURSOR for it (a `subscription_cursors`
-//     row, never in the log): the awaited call IS the ack, one bounded retry ladder (1s·2ⁿ, ≤30 min,
-//     15 attempts, PERMANENT_FAILURE halts at once) then a `subscription-delivery-halted` fact; an
-//     operator's `subscription-delivery-resumed` un-halts and may seek. Retries ride the DO's own
-//     alarm (facets have none, workerd#6810 — which is why this is kernel code, not a facet processor).
-//   • a row configured `ordered: false` is FAN-OUT delivery (the section at the bottom): one event
-//     per call (`deliverEvent(event)`), up to FAN_OUT_CALLS_IN_FLIGHT at once in any order, each
-//     event a delivery record of its own, retried on its own ladder and dead-lettered alone, so a
-//     failing event never holds up the others and never halts the row.
-//
-// AT-LEAST-ONCE survives an eviction because a cursor row's claim on the DO's alarm is EXACTLY the
-// time its persisted cursor carries (`nextAttemptAtMs`; `deadlines()`, which alarm-coordinator.ts
-// reconciles against): written the instant its loop starts on a row behind the durable mark — inside
-// the commit's own hook, before any read or call — as "an attempt begins: come back by now + 20 s",
-// with the attempt counted; written by the retry ladder as the rung; cleared by the ack; spent when
-// the loop finds nothing owed or a target nothing resolves. So a death anywhere in a delivery is
-// retried by the next incarnation within 20 s, a batch that keeps killing its caller halts after
-// fifteen attempts, as fifteen refusals would, and NOTHING IN MEMORY IS A REASON TO WAKE.
+// subscription-delivery.ts — post-commit delivery for live providers and processor facets.
+// Durable subscription progress, retries, and dead letters live in the private subscriptions facet.
+// Pushes preserve a shared in-flight body budget and a per-row serialized chain.
 //
 // A FACET IS PUSHED THE PLATFORM'S WAY: a row's target evaluates to the facet's FacetHandle, and the
 // loop's push and catch-up hand that handle to the facet host's `callFacetAsPlatform`
@@ -33,8 +11,7 @@
 // Nothing here reads a "kind" off an event: the kind is the evaluated value's brand, minted by the
 // built-in that produced it. Every delivery carries `{ after, through }`; per subscription the loop
 // remembers the last `through` it handed over, so a batch the filter skipped still rides inside the
-// next delivered range. A cursor target receives ephemerals too: its reads merge in the stream's
-// recent-ephemerals ring (stream.ts), so it sees whatever the ring still holds when its loop reads.
+// next delivered range.
 
 import type { ItxExpression } from "iterate/expression";
 import { codedError, errorCode, reportIssue } from "iterate/lib";
@@ -46,19 +23,18 @@ import {
 import { type StreamEvent, consumesEvent, type ScannedRange } from "iterate/stream/processor";
 import { type Cause } from "../cause.ts";
 import { callOn, walkSteps, FacetHandle, RpcStubHandle } from "../context/dispatch.ts";
-import { type Subscription } from "./core-processor.ts";
+import { rowsPushingFacet, type Subscription } from "./core-processor.ts";
 import { type Stream } from "./stream.ts";
 
 /** THE IN-FLIGHT BUDGET, per context: the most serialized event chars ALL rows together may have
  *  handed to calls that have not settled — a push's arguments live in this isolate until the RPC
  *  returns, and per-row bounds would multiply by rows (20 stuck rows × 8 MiB is an isolate). A facet
- *  push or a cursor delivery WAITS for room (its row's pending push folds meanwhile, bounded); a
- *  push to a live client is dropped past it — the client heals by read, every dropped push's contract.
- *  8 MiB, not 16: a FACET push is a LOOPBACK RPC, so each in-flight push holds the event AND its
- *  serialize copy (~2× the charged chars), and the fan-out pins those arg payloads across a burst of
- *  concurrent appends (30 × 7 MiB ephemerals to 10 facets reset the parent at 16 — this budget is
- *  what the fan-out retains on top of the args workerd is deserializing; e2e LARGE EPHEMERAL FAN-OUT). */
+ *  a processor push waits for room while its pending batch folds; a live push drops and heals by
+ *  read. 8 MiB keeps loopback serialization copies below the isolate ceiling. */
 const DELIVERY_IN_FLIGHT_BUDGET_CHARS = 8 * 1024 * 1024;
+
+/** Bound coalesced processor pushes across rows; trimmed batches heal from the stream log. */
+const PENDING_PUSHES_TOTAL_BUDGET_CHARS = 8 * 1024 * 1024;
 /** A failure that can only repeat — halt the row now, not after the ladder: a subscriber's
  *  PERMANENT_FAILURE, or one of OUR codes that a retry cannot change (a target that is not callable,
  *  a checkpoint or an event over its ceiling). Never NO_ITX_EXPRESSION_MATCH: a target nothing
@@ -72,9 +48,7 @@ const deterministicFailure = (error: unknown): boolean =>
     "FORBIDDEN", // a target this context may not reach (a global path that is not its own): a retry cannot change who the caller is
   ].includes(errorCode(error) ?? "");
 
-/** A TARGET's own refusal of a call — a name nothing resolves, a verb it may not call, one it
- *  refuses, a receiver gone — which dangles or halts a fan-out row (`#fanOutFailed`); a handler's
- *  refusal of its own is its event's failure instead (built-ins.ts `workers.get`'s recoding). */
+/** A target refusal that is meaningful to delivery policy. */
 export const TARGET_FAILURE_CODES: ReadonlySet<string> = new Set([
   "NO_ITX_EXPRESSION_MATCH",
   "NOT_A_METHOD",
@@ -103,8 +77,7 @@ type SubscriptionDeliveryRecord = {
    *  into it (one range, one call, one facet commit) — never a closure per commit. Its presence IS
    *  "a delivery closure is coming": the closure takes it before it delivers. */
   pendingPush?: PendingPush;
-  /** The last `through` a PUSH row handed over — a batch the filter skipped rides inside the next
-   *  range. A cursor row's watermark is its cursor. */
+  /** The last `through` a push row handed over; a skipped batch rides in the next range. */
   lastDeliveredThroughOffset?: number;
   /** The evaluated target head, reused across pushes: a row delivered every commit (a PCM stream,
    *  an audio call) would otherwise re-walk its target and re-mint a Facet/RpcStub handle on EVERY
@@ -117,21 +90,19 @@ type SubscriptionDeliveryRecord = {
   } & EvaluatedTargetHead;
 };
 
-/** A target head, evaluated, and the calls a delivery makes on it: a batch `(events, range)` — a
- *  push or a cursor batch — or one event, a fan-out row's. */
+/** A target head and the ordinary batch call it resolves to. */
 type EvaluatedTargetHead = {
   head: unknown;
-  /** Until when the head may be reused: the first rule snapshot of another context its evaluation
-   *  read expires then (`SubscriptionDeliveryDeps.evaluateItxExpression`). */
+  /** Until when the head may be reused: the first rule snapshot of another context expires then. */
   validUntil: number;
   /** Where it resolved: a head evaluated again that resolves elsewhere is a moved target. */
   routedTo: string;
   call: (events: StreamEvent[], range: ScannedRange) => Promise<void>;
-  deliverEvent: (event: StreamEvent) => Promise<void>;
+  pushesFacet: boolean;
 };
 
 /** A CHARS BUDGET with waiters — the most serialized event chars one kind of delivery may hold.
- *  `tryTake` takes the room now or refuses (the live-client push's drop, a fan-out row's wait): a
+ *  `tryTake` takes the room now or refuses (the live-client push's drop, a processor push's wait): a
  *  call larger than the whole budget takes it when nothing is held — never a deadlock. `acquire`
  *  waits until `tryTake` would; `release` wakes every waiter, each re-checks. Two instances, kept
  *  apart on purpose (the constants above). */
@@ -162,11 +133,6 @@ class DeliveryCharsBudget {
     this.#heldChars += chars;
     return true;
   }
-
-  /** Settles at the next `release`: a fan-out row that found no room tries again then. */
-  whenReleased(): Promise<void> {
-    return new Promise<void>((resolve) => this.#waiters.push(resolve));
-  }
 }
 
 type SubscriptionDeliveryDeps = {
@@ -183,6 +149,8 @@ type SubscriptionDeliveryDeps = {
   evaluateItxExpression: (
     expression: ItxExpression,
   ) => Promise<{ value: unknown; validUntil: number; routedTo: string }>;
+  /** Resolves local rewrite aliases without invoking their final method. */
+  resolveItxExpression?: (expression: ItxExpression) => ItxExpression[];
   /** A facet row's push: `processEventBatch(events, range)` on the facet a target evaluated to, the
    *  platform's way (the facet host's `callFacetAsPlatform`). */
   pushEventBatchToFacet: (
@@ -192,33 +160,15 @@ type SubscriptionDeliveryDeps = {
   ) => Promise<unknown>;
   /** A facet row's catch-up from the log, the platform's way, caused by the row's configuration. */
   catchUpFacetFromLog: (facetHandle: FacetHandle, cause: Cause | undefined) => Promise<unknown>;
-  /** A row's claim changed OFF the commit path (a commit's own tail reconciles): the DO
-   *  reconciles its alarm against `deadlines()`. */
-  reconcileAlarm: () => void;
-  /** Runs a delivery's call caused by the `events` it delivers (cause.ts `causeOfDelivery`) — and a
-   *  fan-out call, named `delivery` (`<row>:<path>@<offset>`, its writes' key), as the delivery
-   *  loop's own caller for its one event (caller.ts `Caller.delivery`). */
-  runAsDelivery: <T>(
-    events: StreamEvent[],
-    call: () => Promise<T>,
-    delivery?: string,
-  ) => Promise<T>;
-  /** Ends this incarnation (the DO's `ctx.abort`, after its writes are durable): a fan-out row
-   *  whose every slot holds a call that will not settle. */
-  abortIncarnation: (reason: string) => void;
 };
-
-/** One cursor row's claim on the DO's alarm, for `deadlines()` and the trace: the persisted
- *  `nextAttemptAtMs` and the attempt it belongs to. */
-export type DeliveryDeadline = { name: string; at: number; attempt: number };
 
 export class SubscriptionDelivery {
   readonly #stream: Stream;
   readonly #liveSubscriptions: () => Record<string, Subscription>;
   readonly #evaluateItxExpression: SubscriptionDeliveryDeps["evaluateItxExpression"];
+  readonly #resolveItxExpression: SubscriptionDeliveryDeps["resolveItxExpression"];
   readonly #pushEventBatchToFacet: SubscriptionDeliveryDeps["pushEventBatchToFacet"];
   readonly #catchUpFacetFromLog: SubscriptionDeliveryDeps["catchUpFacetFromLog"];
-  readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Shared bound for live and processor pushes; live callbacks drop and heal by read at capacity. */
@@ -227,9 +177,9 @@ export class SubscriptionDelivery {
     this.#stream = deps.stream;
     this.#liveSubscriptions = deps.liveSubscriptions || (() => ({}));
     this.#evaluateItxExpression = deps.evaluateItxExpression;
+    this.#resolveItxExpression = deps.resolveItxExpression;
     this.#pushEventBatchToFacet = deps.pushEventBatchToFacet;
     this.#catchUpFacetFromLog = deps.catchUpFacetFromLog;
-    this.#runAsDelivery = deps.runAsDelivery;
   }
 
   #subscriptions(): Record<string, Subscription> {
@@ -249,14 +199,6 @@ export class SubscriptionDelivery {
     return record;
   }
 
-  /** Every cursor row's claim on the alarm, earliest first (the loop's deadline is `[0]?.at`):
-   *  EXACTLY the persisted `nextAttemptAtMs` of a row not halted — the claim its loop wrote as it
-   *  started, a ladder rung, or the claim a death left, ahead or due alike (a due one keeps the alarm
-   *  armed until its pass runs). A fresh incarnation reports the claims its predecessor did,
-   *  because nothing in memory adds one — memory only withdraws a fan-out record's claim while its
-   *  call is out past its time (`fanOutClaim`): a caught-up row, a dangling row and a halted row
-   *  (whose persisted cursor may still carry the time that halted it) carry none the alarm reads,
-   *  and a target that owns its progress has no cursor at all. */
   /** The post-commit hook: one pass over the rows. Fire-and-forget from append's view. */
   onCommit(freshEvents: StreamEvent[], afterOffset: number, throughOffset: number): void {
     const rows = this.#subscriptions();
@@ -278,8 +220,7 @@ export class SubscriptionDelivery {
           // at enable time and catches up from the log, so `itx.facets.get(name)` answers before its
           // first consumed event, and a target whose head cannot be evaluated is reported here, at
           // configure. That catch-up is the HEAD of this name's delivery chain, so the first push
-          // queues behind it. A cursor row that asked for HISTORY (`afterOffset`) is delivered from
-          // there NOW — its configure is its wake, as a resume is — not on its next consumed commit.
+          // queues behind it.
           // The payload passed normalizeControlEvent on append, which parsed the name.
           const name = (event.payload as { name: string }).name;
           this.#forgetSubscription(name);
@@ -306,7 +247,7 @@ export class SubscriptionDelivery {
       const events = freshEvents.filter((event) => consumesEvent(row.consumes, event));
       if (row.delivery === "live" || row.delivery === "processor") {
         // Delivery ownership is fixed when the row is configured. A rule may re-point the capability
-        // it calls, but never turns a durable row into a push row or leaves stale cursor state behind.
+        // it calls, but never changes how the configured row is delivered.
         // A skipped batch is NOT handed over: the watermark stays put and the span rides inside the
         // NEXT delivered range.
         if (events.length === 0) continue;
@@ -318,12 +259,12 @@ export class SubscriptionDelivery {
     }
   }
 
-  /** Read-your-writes waits only for live and processor pushes queued to this facet. */
+  /** A facet read waits for the processor pushes already queued to that exact local facet. */
   deliveriesQueuedFor(facetName: string): Promise<unknown> {
     return Promise.all(
-      Object.entries(this.#subscriptions())
-        .filter(([, row]) => row.delivery !== "durable" && row.target.includes(facetName))
-        .map(([name]) => this.#deliveryRecordByName.get(name)?.deliveryChain),
+      rowsPushingFacet(this.#stream.coreReducedState, facetName).map(
+        (name) => this.#deliveryRecordByName.get(name)?.deliveryChain,
+      ),
     );
   }
 
@@ -353,13 +294,63 @@ export class SubscriptionDelivery {
     }
   }
 
+  /** Fold commits arriving behind one in-flight push into one bounded pending batch. */
   #queuePushBehindInFlightDelivery(name: string, events: StreamEvent[], range: ScannedRange): void {
     const record = this.#deliveryRecordFor(name);
-    const row = this.#subscription(name);
-    if (!row) return;
-    record.deliveryChain = record.deliveryChain.then(() =>
-      this.#pushEventBatch(name, row, events, range),
-    );
+    const pending = record.pendingPush;
+    if (pending) {
+      pending.chars = (pending.chars ?? serializedChars(pending.events)) + serializedChars(events);
+      pending.events = pending.events.concat(events);
+      pending.range.through = range.through;
+      this.#dropPendingEventsOverTotalBudget();
+      return;
+    }
+    record.pendingPush = { events, range, droppedEvents: 0 };
+    record.deliveryChain = record.deliveryChain
+      .then(async () => {
+        const current = this.#deliveryRecordByName.get(name);
+        const push = current?.pendingPush;
+        if (current) current.pendingPush = undefined;
+        const row = this.#subscription(name);
+        if (!push || !row || row.halted) return;
+        if (push.droppedEvents > 0)
+          console.warn({
+            event: "delivery.pending-push.dropped",
+            namespace: "subscription-delivery",
+            message: "a subscriber did not keep up: the oldest pending events were dropped",
+            name,
+            droppedEvents: push.droppedEvents,
+            healFromOffset: push.range.after,
+          });
+        await this.#pushEventBatch(name, row, push.events, push.range);
+      })
+      .catch(() => undefined);
+  }
+
+  #dropOldestPendingEvents(pending: PendingPush, keepUnderChars: number): void {
+    let dropCount = 0;
+    while (pending.chars! > keepUnderChars && dropCount < pending.events.length - 1)
+      pending.chars! -= JSON.stringify(pending.events[dropCount++]).length;
+    if (dropCount === 0) return;
+    pending.range.after = pending.events[dropCount - 1]!.offset;
+    pending.events = pending.events.slice(dropCount);
+    pending.droppedEvents += dropCount;
+  }
+
+  #dropPendingEventsOverTotalBudget(): void {
+    for (;;) {
+      let total = 0;
+      let largest: PendingPush | undefined;
+      for (const { pendingPush } of this.#deliveryRecordByName.values()) {
+        if (pendingPush?.chars === undefined) continue;
+        total += pendingPush.chars;
+        if (pendingPush.events.length > 1 && (!largest || pendingPush.chars > largest.chars!))
+          largest = pendingPush;
+      }
+      const excess = total - PENDING_PUSHES_TOTAL_BUDGET_CHARS;
+      if (excess <= 0 || !largest) return;
+      this.#dropOldestPendingEvents(largest, largest.chars! - excess);
+    }
   }
 
   // ── one batch, one row that owns its progress: evaluate, look at the value, push ──
@@ -375,7 +366,7 @@ export class SubscriptionDelivery {
       // (evaluating a processor's load chain materializes its facet: a push racing a disable must
       // not resurrect what `facets.delete` just removed) and not REPLACED under this name.
       if (!this.#isStillTheRow(name, row)) return;
-      const { head, call } = await this.#evaluateTargetHeadForRow(name, row);
+      const { head, call, pushesFacet } = await this.#evaluateTargetHeadForRow(name, row);
       if (!this.#isStillTheRow(name, row)) return;
       if (row.delivery === "live") {
         if (!(head instanceof RpcStubHandle))
@@ -420,7 +411,7 @@ export class SubscriptionDelivery {
           "INVALID_INPUT",
           `subscription ${JSON.stringify(name)} has ${row.delivery} delivery but entered the push path`,
         );
-      if (!(head instanceof FacetHandle) || row.target.at(-1) !== "processEventBatch")
+      if (!(head instanceof FacetHandle) || !pushesFacet)
         throw codedError(
           "INVALID_INPUT",
           `subscription ${JSON.stringify(name)} is configured for processor delivery but its target is not a processor processEventBatch capability`,
@@ -437,8 +428,8 @@ export class SubscriptionDelivery {
           this.#deliveryCharsInFlight.release(chars);
         }
       } catch (error) {
-        // A refusal that can only repeat HALTS the row — the same fact cursor delivery's ladder
-        // ends in — instead of being re-pushed into on every commit; an operator's resume is the
+        // A refusal that can only repeat halts the row instead of being re-pushed on every commit;
+        // an operator's resume is the
         // way back. Anything else is the facet's own gap repair to heal on its next push.
         if (deterministicFailure(error)) {
           this.#haltRow(name, row.configuredAtOffset, range.after, 1, error);
@@ -545,7 +536,7 @@ export class SubscriptionDelivery {
   ): void {
     const current = this.#subscription(name);
     if (current?.configuredAtOffset !== configuredAtOffset || current.halted) return;
-    // A halted row owes nothing; the fact's own commit reconciles the alarm.
+    // A halted row receives no further processor pushes until an operator resumes it.
     this.#stream.append({
       type: "events.iterate.com/itx/subscription-delivery-halted",
       payload: {
@@ -567,12 +558,8 @@ export class SubscriptionDelivery {
   }
 
   /** The memo of the evaluated target head (`evaluatedTargetHead` says what invalidates it). A
-   *  fan-out row whose head, evaluated again, resolves ELSEWHERE than its cursor says it last did
-   *  (`SubscriptionCursor.route`, kept across incarnations) — a rule re-pointed what its target
-   *  names, the project's config pointer moved to a new publication, while this context ran or
-   *  slept — tries its pending deliveries at once (`#retryPendingNow`): each context learns of the
-   *  move lazily, the next time its row reads the rules, and nothing is appended to every context
-   *  to tell it. */
+   *  target can move when a rewrite rule changes, so a cached head is reused only while the rule
+   *  snapshot remains valid. */
   async #evaluateTargetHeadForRow(name: string, row: Subscription): Promise<EvaluatedTargetHead> {
     const rewriteRulesRef = this.#stream.coreReducedState.itxExpressionRewriteRules;
     const cached = this.#deliveryRecordByName.get(name)?.evaluatedTargetHead;
@@ -600,19 +587,20 @@ export class SubscriptionDelivery {
    *  callback: `itx.rpcStubs.get('k')`); a trailing property step names the method to call on it
    *  (`…get('presence').processEventBatch`) — on a facet, the facet host's push. */
   async #evaluateItxExpressionTargetHead(
-    name: string,
+    _name: string,
     target: ItxExpression,
   ): Promise<EvaluatedTargetHead> {
-    const last = target.at(-1);
-    // A trailing name is a METHOD only past the root and one more step: a two-step target
-    // (`itx.<alias>`) IS the callee and is root-called whole — peeling its name would leave the bare
-    // scope root as the head, which nothing can ever match.
-    const method = typeof last === "string" && target.length > 2 ? last : undefined;
+    // Resolve aliases before peeling the terminal platform method. With `itx.alias` pointing at
+    // `itx.facets.get("p").processEventBatch`, peeling the raw two-step expression would invoke the
+    // facet's public wall with no batch; the resolved fixed point exposes the actual facet head.
+    const resolved = this.#resolveItxExpression?.(target).at(-1) ?? target;
+    const last = resolved.at(-1);
+    const method = typeof last === "string" && resolved.length > 2 ? last : undefined;
     const {
       value: head,
       validUntil,
       routedTo,
-    } = await this.#evaluateItxExpression(method ? target.slice(0, -1) : target);
+    } = await this.#evaluateItxExpression(method ? resolved.slice(0, -1) : resolved);
     // Every delivery below AWAITS this only for the ack and IGNORES the return. A Workers-RPC/capnweb
     // call result pins the callee's export table until disposed, so release it here — a live client's
     // push runs on every commit, and leaving each result to GC would leak a slot per delivered batch.
@@ -642,13 +630,7 @@ export class SubscriptionDelivery {
       validUntil,
       routedTo,
       call,
-      // one delivery of one event by this row: the same on every attempt (the writes' key)
-      deliverEvent: (event) =>
-        this.#runAsDelivery(
-          [event],
-          () => invoke([event]),
-          `${name}:${event.path}@${event.offset}`,
-        ),
+      pushesFacet: head instanceof FacetHandle && method === "processEventBatch",
     };
   }
 }

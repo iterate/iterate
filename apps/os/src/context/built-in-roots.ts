@@ -1,4 +1,4 @@
-/** Built-in descriptions before context configuration adds masks, exports, or providers. */
+/** Built-in descriptions before context configuration adds masks or live providers. */
 export const BUILT_IN_ROOT_DESCRIPTIONS = {
   whoami: "who this context is: `itx.whoami()` → { projectId, path }",
   url: "this project's public URL over HTTP — the apex or a routing slug's host, at a path: `url({ routingSlug?, path? })`; only from a session that reached the platform on an origin",

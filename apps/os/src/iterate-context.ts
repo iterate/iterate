@@ -71,10 +71,6 @@ import {
 import { SessionTeardown } from "./session.ts";
 import { contextStub } from "./context-stub.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
-import {
-  parseSubscriptionDeliveryBridgeRequest,
-  parseSubscriptionDeliveryTerminalRequest,
-} from "./context/subscription-delivery-bridge.ts";
 
 export type IterateContextNamespace = DurableObjectNamespace<IterateContextDurableObject>;
 export type WaitUntil = (p: Promise<unknown>) => void;
@@ -410,15 +406,13 @@ export class IterateContextRpcTarget extends RpcTarget {
       () => this.#durableObject,
       target,
       matchString,
-      this.#caller.app
-        ? {}
-        : {
-            provide: {
-              match: matchString,
-              ...description,
-              fetchRoute: options.fetchRoute,
-            },
-          },
+      {
+        provide: {
+          match: matchString,
+          ...description,
+          fetchRoute: options.fetchRoute,
+        },
+      },
       this.#waitUntil,
       { callDeadlineMs },
     );
@@ -506,7 +500,7 @@ export class IterateContextRpcTarget extends RpcTarget {
         () => this.#durableObject,
         input.target as ClientRpcStub, // neither a string nor an array, so a live object or a plain callback
         rpcStubKey,
-        this.#caller.app ? {} : { subscription: { name, consumes: input.consumes } },
+        { subscription: { name, consumes: input.consumes } },
         this.#waitUntil,
         { callDeadlineMs: 20_000 },
       );
@@ -636,7 +630,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     iterateContextName: string;
     platform?: true;
     platformOrigin: string | null;
-    subscription?: { name: string; configuredAtOffset: number };
   }
 > {
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
@@ -673,39 +666,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
           ctx: this.ctx,
         }),
     );
-  }
-
-  /** Private Workers-RPC hand-off for a platform facet that owns a durable subscription cursor.
-   * The entrypoint's props are minted by this worker's `ctx.exports`; loaded code receives a
-   * separate entrypoint without `platform`, so it cannot use this to manufacture delivery authority. */
-  deliverConfiguredSubscription(input: unknown): Promise<void> {
-    const request = parseSubscriptionDeliveryBridgeRequest(input);
-    const subscription = this.ctx.props.subscription;
-    if (
-      this.ctx.props.platform !== true ||
-      !subscription ||
-      subscription.name !== request.name ||
-      subscription.configuredAtOffset !== request.configuredAtOffset
-    )
-      throw codedError("FORBIDDEN", "configured subscription delivery is platform-only");
-    return this.env.ITERATE_CONTEXT.getByName(
-      this.ctx.props.iterateContextName,
-    ).deliverConfiguredSubscription(input);
-  }
-
-  recordConfiguredSubscriptionTerminal(input: unknown): Promise<void> {
-    const request = parseSubscriptionDeliveryTerminalRequest(input);
-    const subscription = this.ctx.props.subscription;
-    if (
-      this.ctx.props.platform !== true ||
-      !subscription ||
-      subscription.name !== request.name ||
-      subscription.configuredAtOffset !== request.configuredAtOffset
-    )
-      throw codedError("FORBIDDEN", "configured subscription terminal is platform-only");
-    return this.env.ITERATE_CONTEXT.getByName(
-      this.ctx.props.iterateContextName,
-    ).recordConfiguredSubscriptionTerminal(input);
   }
 
   /** globalOutbound: every RAW Request a loaded worker sends — a plain `fetch(url)` (egress) or a

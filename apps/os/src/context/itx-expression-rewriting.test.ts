@@ -33,7 +33,7 @@ import {
   refuseLiftingAJail,
   describeRewriteRules,
 } from "./itx-expression-rewriting.ts";
-import { BUILT_IN_ROOT_DESCRIPTIONS } from "./capability-manifest.ts";
+import { BUILT_IN_ROOT_DESCRIPTIONS } from "./built-in-roots.ts";
 
 /** The roots implicit at the owner root (every built-in) and at a child (the context roots) —
  *  `implicitRootsAt` for the two kinds of path, without a projectId. */

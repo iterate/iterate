@@ -12,12 +12,15 @@ test("reads a bounded source page again and invokes it with its scanned proof", 
     slug: "delivery",
     target: ["itx", "target"],
     consumes: ["work"],
-    wakeEventType: "iterate.dev/wake",
     runtime: {
       storage: store,
       read: source.stream.read,
       deliver: delivered,
       scheduleWake: async () => {},
+      abort: (reason) => {
+        throw new Error(reason);
+      },
+      tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
   });
@@ -50,7 +53,6 @@ test("persists a pending scanned range, retries it, then halts through the termi
     slug: "delivery",
     target: "itx.target",
     consumes: ["work"],
-    wakeEventType: "iterate.dev/wake",
     maxAttempts: 1,
     runtime: {
       storage: store,
@@ -58,7 +60,12 @@ test("persists a pending scanned range, retries it, then halts through the termi
       deliver: async () => {
         throw new Error("down");
       },
-      scheduleWake: async (at) => void wakes.push(at),
+      scheduleWake: async (at) => {
+        if (at !== null) wakes.push(at);
+      },
+      abort: (reason) => {
+        throw new Error(reason);
+      },
       terminal,
     },
   });
@@ -69,7 +76,9 @@ test("persists a pending scanned range, retries it, then halts through the termi
   });
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
-  expect(terminal).toHaveBeenCalledWith({ afterOffset: 0, attempts: 1, error: "down" });
+  expect(terminal).toHaveBeenCalledWith(
+    expect.objectContaining({ afterOffset: 0, attempts: 1, error: "down" }),
+  );
   expect(store.values.get("durable-delivery/delivery")).toMatchObject({
     halted: { after: 0, attempts: 1 },
   });
@@ -82,12 +91,15 @@ test("named ephemeral events are best effort and never enter the durable cursor"
     slug: "delivery",
     target: "itx.target",
     consumes: ["poke"],
-    wakeEventType: "iterate.dev/wake",
     runtime: {
       storage: store,
       read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
       deliver: delivered,
       scheduleWake: async () => {},
+      abort: (reason) => {
+        throw new Error(reason);
+      },
+      tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
   });
@@ -118,7 +130,6 @@ test("fan-out persists bounded offsets then calls each event independently", asy
     slug: "fan",
     target: "itx.target",
     consumes: ["work"],
-    wakeEventType: "iterate.dev/wake",
     fanOut: true,
     concurrency: 2,
     runtime: {
@@ -132,6 +143,10 @@ test("fan-out persists bounded offsets then calls each event independently", asy
         active--;
       },
       scheduleWake: async () => {},
+      abort: (reason) => {
+        throw new Error(reason);
+      },
+      tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
   });
@@ -148,6 +163,122 @@ test("fan-out persists bounded offsets then calls each event independently", asy
     fanOut: { admittedThrough: 3, pending: [] },
   });
 });
+
+test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes them", async () => {
+  const store = kv();
+  const ordered = vi.fn(async () => {});
+  const runtime = {
+    storage: store,
+    read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
+    deliver: ordered,
+    scheduleWake: async () => {},
+    abort: (reason: string) => {
+      throw new Error(reason);
+    },
+    tryReservePendingEphemeral: testEphemeralReservation,
+    terminal: async () => {},
+  };
+  const processor = new DurableDeliveryProcessor({
+    slug: "ordered-ephemerals",
+    target: "itx.target",
+    consumes: ["poke"],
+    runtime,
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch(
+    [
+      { ...committedEvent(1, "poke"), ephemeral: true },
+      { ...committedEvent(2, "poke"), ephemeral: true },
+    ],
+    { after: 0, through: 2 },
+  );
+  await settle();
+  expect(ordered).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({
+      events: [expect.objectContaining({ offset: 1 })],
+      range: { after: 0, through: 1 },
+    }),
+  );
+  expect(ordered).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      events: [expect.objectContaining({ offset: 2 })],
+      range: { after: 1, through: 2 },
+    }),
+  );
+
+  const fanOutDeliver = vi.fn(async () => {});
+  const fanOut = new DurableDeliveryProcessor({
+    slug: "fan-ephemerals",
+    target: "itx.target",
+    consumes: ["poke"],
+    fanOut: true,
+    runtime: { ...runtime, deliver: fanOutDeliver },
+  });
+  const fanEngine = new ProcessorEngine(fanOut, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await fanEngine.processEventBatch([{ ...committedEvent(3, "poke"), ephemeral: true }], {
+    after: 2,
+    through: 3,
+  });
+  await settle();
+  expect(fanOutDeliver).not.toHaveBeenCalled();
+});
+
+test("queued ephemeral reservations remain held through delivery and release afterward", async () => {
+  const store = kv();
+  let held = 0;
+  let release!: () => void;
+  const processor = new DurableDeliveryProcessor({
+    slug: "ephemeral-lease",
+    target: "itx.target",
+    consumes: ["poke"],
+    runtime: {
+      storage: store,
+      read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
+      deliver: async () => await new Promise<void>((resolve) => (release = resolve)),
+      scheduleWake: async () => {},
+      abort: (reason) => {
+        throw new Error(reason);
+      },
+      tryReservePendingEphemeral: (chars) => {
+        held += chars;
+        let disposed = false;
+        return {
+          [Symbol.dispose]: () => {
+            if (!disposed) held -= chars;
+            disposed = true;
+          },
+        };
+      },
+      terminal: async () => {},
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([{ ...committedEvent(1, "poke"), ephemeral: true }], {
+    after: 0,
+    through: 1,
+  });
+  await settle();
+  expect(held).toBeGreaterThan(0);
+  release();
+  await settle();
+  expect(held).toBe(0);
+});
+
+const testEphemeralReservation = (): Disposable => ({ [Symbol.dispose]: () => {} });
 
 const kv = (): EngineKv & { values: Map<string, unknown> } => {
   const values = new Map<string, unknown>();

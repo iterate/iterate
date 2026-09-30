@@ -5,10 +5,13 @@ import { z } from "zod";
 export const SubscriptionDeliveryBridgeRequest = z.strictObject({
   name: z.string().min(1).max(200),
   configuredAtOffset: z.number().int().positive(),
+  resumeAtOffset: z.number().int().positive().optional(),
   range: z.strictObject({
     after: z.number().int().nonnegative(),
     through: z.number().int().nonnegative(),
   }),
+  /** Fresh source-page bodies travel only on the private first-party native DO channel. */
+  events: z.array(z.unknown()).min(1).max(1_000),
 });
 
 export type SubscriptionDeliveryBridgeRequest = z.infer<typeof SubscriptionDeliveryBridgeRequest>;

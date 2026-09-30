@@ -43,7 +43,7 @@ import {
   PORTABLE_BUILT_IN_ROOT_NAMES,
   BUILT_IN_ROOT_NAMES,
   type BuiltInRootName,
-} from "./capability-manifest.ts";
+} from "./built-in-roots.ts";
 
 // ── built-in roots ──
 

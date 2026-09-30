@@ -8,10 +8,10 @@
 // read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import type { StreamPage } from "iterate/api";
+import type { StreamPage, WorkerSource } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
-import { COUNTER_SOURCE } from "./sources.ts";
-import { releasePins, snapshot, stub, until } from "./support.ts";
+import { COUNTER_SOURCE, flakyCounter } from "./sources.ts";
+import { releasePins, rowOf, snapshot, stub, until } from "./support.ts";
 
 const DIGEST_MODULES = {
   "package.json": '{"main":"worker.js"}',
@@ -79,6 +79,49 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   expect(p1.events.at(-1)).toMatchObject({ offset: highestDurableOffset + 2 });
   // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
   expect(await digested(s)).toContain(`mark@${highestDurableOffset + 2}`);
+});
+
+test("a processor subscription resolves a provided alias to a facet batch method before its platform call", async () => {
+  const ctx = "prj_rev_processor_alias";
+  const s = stub(ctx);
+  const counter = hostedFacet(
+    { "package.json": '{"main":"worker.js"}', "worker.js": COUNTER_SOURCE },
+    "CounterDurableObject",
+    "alias-counter",
+  );
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.alias", target: [...counter, "processEventBatch"] },
+  });
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "alias",
+      target: "itx.alias",
+      delivery: "processor",
+      consumes: ["tick", "poison"],
+    },
+  });
+
+  const tick = offsetOf(await s.append({ type: "tick" }));
+  await processedThrough(s, "alias-counter", tick);
+  expect((await snapshot<{ n: number }>(ctx, "alias-counter")).state.n).toBeGreaterThan(0);
+
+  const poison = hostedFacet(
+    flakyCounter("alias processor refused", { code: "PERMANENT_FAILURE" }).source,
+    "FlakyDurableObject",
+    "alias-poison",
+  );
+  await s.append({
+    type: "events.iterate.com/itx/rewrite-rule-configured",
+    payload: { match: "itx.alias", target: [...poison, "processEventBatch"] },
+  });
+  await s.append({ type: "poison" });
+  const halted = await until(
+    "the alias processor row halts",
+    async () => (await rowOf(ctx, "alias"))?.halted,
+  );
+  expect(halted).toMatchObject({ attempts: 1, error: "alias processor refused" });
 });
 
 test("enable with a consumes filter: itx.facets.get(name) answers before the first consumed event (the facet is materialized at configure time)", async () => {
@@ -195,6 +238,6 @@ async function processedThrough(s: ReturnType<typeof stub>, facet: string, offse
 
 /** The hosting call as an expression: `itx.facets.get(name, { source, className })` — the source is
  *  the worker's modules, literally. */
-function hostedFacet(source: Record<string, string>, cls: string, name: string): ItxExpression {
+function hostedFacet(source: WorkerSource, cls: string, name: string): ItxExpression {
   return ["itx", "facets", ["get", name, { source, className: cls }]];
 }

@@ -458,9 +458,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
-      reconcileAlarm: () => {},
-      runAsDelivery: (_event, call) => call(),
-      abortIncarnation: () => {},
     });
     stream.append(
       normalizeControlEvent(
@@ -517,9 +514,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
-      reconcileAlarm: () => {},
-      runAsDelivery: (_event, call) => call(),
-      abortIncarnation: () => {},
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
     stream.append(
@@ -650,9 +644,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
-      reconcileAlarm: () => {},
-      runAsDelivery: (_event, call) => call(),
-      abortIncarnation: () => {},
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
     // Every row gets its first call — how many at once is the ledger's decision, measured.
@@ -690,9 +681,6 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
         routedTo: "the facet",
       }),
       ...facetHostPlatformEntries,
-      reconcileAlarm: () => {},
-      runAsDelivery: (_event, call) => call(),
-      abortIncarnation: () => {},
     });
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>
