@@ -1,36 +1,42 @@
-// The metrics copy's decisions: which hours it copies, a data point as a `metrics` row, and the
-// chunks it sends. The reads and sends themselves are proven against the dev account.
+// The metrics copy's decisions: which hours a run copies after its watermark, a data point as a
+// `metrics` row, and the chunks it sends. The reads and sends themselves are proven against the dev
+// account.
 import { expect, test } from "vitest";
 import { chunks, COPY_HOURS, hoursToCopy, metricsRows, type MetricsRow } from "./metrics-copy.ts";
-import { analyticsEngineRows } from "./telemetry.ts";
 
 const HOUR = 3_600;
 const H0 = 1_790_769_600; // 2026-09-30T12:00:00Z
 
-test.for<{ name: string; analyticsEngine: number[]; lake: number[]; hours: number[] }>([
+test.for<{ name: string; copiedThrough: number | undefined; now: number; hours: number[] }>([
   {
-    name: "the hours with points the lake lacks, newest first",
-    analyticsEngine: [H0, H0 + HOUR, H0 + 2 * HOUR],
-    lake: [H0 + HOUR],
-    hours: [H0 + 2 * HOUR, H0],
+    name: "a first run copies the hour that just closed",
+    copiedThrough: undefined,
+    now: H0 + HOUR + 41 * 60,
+    hours: [H0],
   },
   {
-    name: "an hour the lake has any row of is never copied again",
-    analyticsEngine: [H0],
-    lake: [H0],
+    name: "the closed hours after the watermark, oldest first; the current hour is not closed",
+    copiedThrough: H0,
+    now: H0 + 3 * HOUR + 41 * 60,
+    hours: [H0 + HOUR, H0 + 2 * HOUR],
+  },
+  {
+    name: "a watermark at the last closed hour copies nothing",
+    copiedThrough: H0,
+    now: H0 + HOUR + 41 * 60,
     hours: [],
   },
   {
-    name: "a gap longer than a run's cap copies its newest hours first",
-    analyticsEngine: Array.from({ length: COPY_HOURS + 6 }, (_, index) => H0 + index * HOUR),
-    lake: [],
-    hours: Array.from({ length: COPY_HOURS }, (_, index) => H0 + (COPY_HOURS + 5 - index) * HOUR),
+    name: "a backlog longer than a run's cap copies its oldest hours first",
+    copiedThrough: H0,
+    now: H0 + (COPY_HOURS + 7) * HOUR,
+    hours: Array.from({ length: COPY_HOURS }, (_, index) => H0 + (index + 1) * HOUR),
   },
-])("$name", ({ analyticsEngine, lake, hours }) => {
-  expect(hoursToCopy(analyticsEngine, new Set(lake))).toEqual(hours);
+])("$name", ({ copiedThrough, now, hours }) => {
+  expect(hoursToCopy(copiedThrough, new Date(now * 1_000))).toEqual(hours);
 });
 
-test.for<{ name: string; point: Record<string, unknown>; row: MetricsRow }>([
+test.for<{ name: string; point: Record<string, string | number>; row: MetricsRow }>([
   {
     name: "a point is a row as stored, its sample interval the weight",
     point: point({ project_id: "prj_a", path: "/agents/x", weight: 4 }),
@@ -62,8 +68,7 @@ test.for<{ name: string; point: Record<string, unknown>; row: MetricsRow }>([
     },
   },
 ])("$name", ({ point, row }) => {
-  const answer = JSON.stringify({ meta: [], data: [point], rows: 1 });
-  expect(metricsRows(analyticsEngineRows(answer))).toEqual([row]);
+  expect(metricsRows([point])).toEqual([row]);
 });
 
 test("rows are sent in JSON array chunks under 5 MB, every row once, in order", () => {
@@ -78,7 +83,7 @@ test("rows are sent in JSON array chunks under 5 MB, every row once, in order", 
 });
 
 /** A raw point as the copy's Analytics Engine query answers it: a UInt32 `unix` and `weight`. */
-function point(fields: Record<string, unknown>) {
+function point(fields: Record<string, string | number>) {
   return {
     unix: H0 + 7,
     name: "subscription.delivery_ms",

@@ -4,6 +4,7 @@
 import type { StreamEvent } from "iterate/stream/processor";
 import { expect, test } from "vitest";
 import eventsSchema from "../../telemetry/schemas/events.json" with { type: "json" };
+import { rowProblems } from "../../telemetry/src/stream-schema.test-support.ts";
 import { eventsRow } from "./platform-hook.ts";
 
 const source = { worker: "pr3142-a1b2c3d-os", projectId: "prj_1" };
@@ -67,7 +68,7 @@ test.for(rows)("$name", ({ event, row }) => {
 });
 
 test.for(rows)("the events stream's schema accepts the row of $name", ({ event }) => {
-  expect(schemaMismatches(eventsRow(event, source))).toEqual([]);
+  expect(rowProblems(eventsSchema, eventsRow(event, source))).toEqual([]);
 });
 
 /** A committed event: a message someone's code appended at offset 42, and no one's. */
@@ -82,27 +83,3 @@ function committed(overrides: Partial<StreamEvent>): StreamEvent {
     ...overrides,
   };
 }
-
-/** How a row differs from what the stream's schema (Pipelines' field types) accepts: a key it has
- *  no column for, a required column null, a value not of its column's type. */
-function schemaMismatches(row: Record<string, unknown>): string[] {
-  const columns = new Set(eventsSchema.fields.map((field) => field.name));
-  return [
-    ...Object.keys(row)
-      .filter((key) => !columns.has(key))
-      .map((key) => `${key}: no such column`),
-    ...eventsSchema.fields.flatMap(({ name, type, required }) => {
-      // a column the row leaves out is undefined: of no column's type
-      const value = row[name];
-      if (value === null) return required ? [`${name}: null`] : [];
-      return isOfType[type]?.(value) ? [] : [`${name}: not ${type}`];
-    }),
-  ];
-}
-
-const isOfType: Record<string, (value: unknown) => boolean> = {
-  string: (value) => typeof value === "string",
-  int32: (value) => Number.isInteger(value) && Math.abs(Number(value)) < 2 ** 31,
-  int64: (value) => Number.isSafeInteger(value),
-  timestamp: (value) => typeof value === "string" && !Number.isNaN(Date.parse(value)),
-};

@@ -11,10 +11,7 @@ import {
   logPlatformFailure,
   RETRY_AFTER_MS,
 } from "iterate/platform-retry";
-import logsSchema from "../schemas/logs.json";
-import spansSchema from "../schemas/spans.json";
 import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
-import { rowProblems } from "./stream-schema.ts";
 
 /** Pipelines takes at most 5 MB a send; this leaves room for the array around the rows. */
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
@@ -35,15 +32,10 @@ export default {
         ? request.body?.pipeThrough(new DecompressionStream("gzip"))
         : request.body;
     const payload = await new Response(body).json();
-    const { rows, schema, stream } =
+    const { rows, stream } =
       pathname === "/v1/logs"
-        ? { rows: logRows(OtlpLogs.parse(payload)), schema: logsSchema, stream: env.LOGS }
-        : { rows: spanRows(OtlpTraces.parse(payload)), schema: spansSchema, stream: env.SPANS };
-    const problems = rows.flatMap((row) => rowProblems(schema, row));
-    if (problems.length > 0) {
-      console.error({ event: "telemetry.rows-invalid", pathname, problems: problems.slice(0, 10) });
-      return new Response(null, { status: 500 });
-    }
+        ? { rows: logRows(OtlpLogs.parse(payload)), stream: env.LOGS }
+        : { rows: spanRows(OtlpTraces.parse(payload)), stream: env.SPANS };
     try {
       for (const chunk of sends(rows)) await stream.send(chunk);
     } catch (error) {
@@ -60,7 +52,8 @@ export default {
 } satisfies ExportedHandler<{ TELEMETRY_OTLP_SECRET: string; LOGS: Pipeline; SPANS: Pipeline }>;
 
 /** Whether the header carries the secret, compared in time that does not depend on where the two
- *  differ: every byte, no early exit. */
+ *  differ: every byte, no early exit. A loop, not Workers' `crypto.subtle.timingSafeEqual`, which
+ *  the DOM lib in tsconfig.app.json types away. */
 function secretMatches(given: string | null, secret: string) {
   const encoder = new TextEncoder();
   const [a, b] = [encoder.encode(given || ""), encoder.encode(secret)];

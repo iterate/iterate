@@ -1,8 +1,8 @@
 # HEALTH (scripts/monitors/health.ts): the checks, the message and the failure policy are in
 # docs/depot-ci.md#health. Its memory is its own `health-state` artifact, which the next run reads
-# back with the Depot organization token (Doppler _shared/preview). Test a branch, and the Slack
-# hookup, by dispatching it with test-page=true, which posts to #ci only and also forces the DO cost
-# alarm's page with a 1 DO-hour ceiling:
+# back with the Depot organization token (Doppler _shared/preview); it also holds the metrics
+# copy's watermark. Test a branch, and the Slack hookup, by dispatching it with test-page=true,
+# which posts to #ci only and also forces the DO cost alarm's page with a 1 DO-hour ceiling:
 #
 #   depot ci dispatch --org 0p91s0lz49 --repo iterate/iterate --workflow health.yml \
 #     --ref <branch> --input test-page=true

@@ -1,24 +1,48 @@
-// /telemetry — the platform's live metrics from Analytics Engine (docs/telemetry.md "Reading"): the
-// panels of telemetry-panels.ts over the range the URL names, read in the app's Worker with its
-// metrics token (APP_CONFIG `metrics`).
+// /telemetry — the platform's live metrics (docs/telemetry.md "Reading"): each panel one flat
+// Analytics Engine SQL query over the hours the URL names, read in the app's Worker with its metrics
+// token (APP_CONFIG `metrics`).
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
-import { PANELS, RANGES, TelemetryRange } from "../../telemetry-panels.ts";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@iterate-com/ui/components/table";
 
-const Cell = z.union([z.string(), z.number(), z.null()]);
-type Row = Record<string, z.infer<typeof Cell>>;
+/** THE PANELS by title, each over `iterate_metrics` (docs/telemetry.md "Metrics": blob1…6 are name,
+ *  kind, worker, project, path and labels, double1 the value), weighted by `_sample_interval` since
+ *  Analytics Engine samples. `{hours}` is the range, and a chart's bucket `t` is as many minutes, so
+ *  it has 60 points. */
+const PANELS = {
+  "subscription.delivery_ms p50 and p99 (ms)":
+    "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, quantileExactWeighted(0.5)(double1, _sample_interval) AS p50, quantileExactWeighted(0.99)(double1, _sample_interval) AS p99 FROM iterate_metrics WHERE blob1 = 'subscription.delivery_ms' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
+  "subscription.pending, the ten deepest rows":
+    "SELECT blob4 AS project_id, blob5 AS path, blob6 AS labels, max(double1) AS max FROM iterate_metrics WHERE blob1 = 'subscription.pending' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY project_id, path, labels HAVING max > 0 ORDER BY max DESC LIMIT 10",
+  "subscription.retries per minute":
+    "SELECT toStartOfInterval(timestamp, INTERVAL '{hours}' MINUTE) AS t, sum(_sample_interval * double1) / {hours} AS retries FROM iterate_metrics WHERE blob1 = 'subscription.retries' AND timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY t ORDER BY t",
+  "Metric points per worker":
+    "SELECT blob3 AS worker, sum(_sample_interval) AS points, count() AS stored FROM iterate_metrics WHERE timestamp > NOW() - INTERVAL '{hours}' HOUR GROUP BY worker ORDER BY points DESC LIMIT 20",
+};
+
+const Hours = z.number().int().min(1).max(168);
 /** Analytics Engine's `FORMAT JSON` answer: a UInt64 comes as a string, a Float64 as a number. */
-const AnalyticsEngineAnswer = z.object({ data: z.array(z.record(z.string(), Cell)) });
+const AnalyticsEngineAnswer = z.object({
+  data: z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()]))),
+});
+type Row = z.infer<typeof AnalyticsEngineAnswer>["data"][number];
 
-/** Every panel's rows over `range`, for a platform admin alone: this browser's session at the
- *  deployment's own issuer holds the `admin` scope, which that issuer grants to its `admins` only
- *  (apps/os consent.ts). A session connected to another issuer could hold any scope it likes. */
+/** Every panel's rows, or null without a metrics token, for a platform admin alone: this browser's
+ *  session at the deployment's own issuer holds the `admin` scope, which that issuer grants to its
+ *  `admins` only (apps/os consent.ts). A session connected to another issuer could hold any scope. */
 const readPanels = createServerFn({ method: "GET" })
-  .inputValidator(TelemetryRange)
-  .handler(async ({ data: range }) => {
+  .inputValidator(Hours)
+  .handler(async ({ data: hours }) => {
     const { env } = await import("cloudflare:workers");
     const { getRequest } = await import("@tanstack/react-start/server");
     const { appSession } = await import("iterate/app-server");
@@ -31,41 +55,36 @@ const readPanels = createServerFn({ method: "GET" })
     ]);
     if (host?.issuer !== config.urls.os || !scopes?.includes("admin") || !bearer)
       throw new Error("Telemetry is for platform admins: sign in with the admin scope.");
-    if (!config.metrics)
-      return { missing: "This deployment reads no metrics (envs.ts telemetryEnvs)." };
-    const { accountId, dataset, apiToken } = config.metrics;
-    if (!apiToken) return { missing: "APP_CONFIG_METRICS__API_TOKEN is not set (Doppler)." };
-    const panels = await Promise.all(
-      PANELS.map(async (panel) => {
-        const response = await fetch(
-          `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`,
-          {
-            method: "POST",
-            headers: { Authorization: `Bearer ${apiToken}` },
-            body: `${panel.sql(dataset, RANGES[range])} FORMAT JSON`,
-          },
-        );
+    if (!config.metrics?.apiToken) return null;
+    const { accountId, apiToken } = config.metrics;
+    const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`;
+    return Promise.all(
+      Object.entries(PANELS).map(async ([title, sql]) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiToken}` },
+          body: `${sql.replaceAll("{hours}", String(hours))} FORMAT JSON`,
+        });
         if (!response.ok)
           throw new Error(
-            `Analytics Engine answered ${panel.title} with ${response.status}: ${(await response.text()).slice(0, 300)}`,
+            `${title}: Analytics Engine answered ${response.status}: ${await response.text()}`,
           );
         return AnalyticsEngineAnswer.parse(await response.json()).data;
       }),
     );
-    return { panels };
   });
 
 export const Route = createFileRoute("/_auth/telemetry")({
-  validateSearch: z.object({ range: TelemetryRange.default("1h").catch("1h") }),
-  loaderDeps: ({ search }) => ({ range: search.range }),
-  loader: ({ deps }) => readPanels({ data: deps.range }),
+  validateSearch: z.object({ hours: Hours.default(1).catch(1) }),
+  loaderDeps: ({ search }) => ({ hours: search.hours }),
+  loader: ({ deps }) => readPanels({ data: deps.hours }),
   head: () => ({ meta: [{ title: "Telemetry · Admin" }] }),
   component: TelemetryPage,
 });
 
 function TelemetryPage() {
-  const answer = Route.useLoaderData();
-  const { range } = Route.useSearch();
+  const panels = Route.useLoaderData();
+  const { hours } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-8 p-4 md:p-8">
@@ -73,127 +92,103 @@ function TelemetryPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Telemetry</h1>
         <NativeSelect
           aria-label="Time range"
-          value={range}
-          onChange={(event) =>
-            void navigate({ search: { range: TelemetryRange.parse(event.target.value) } })
-          }
+          value={hours}
+          onChange={(event) => void navigate({ search: { hours: Number(event.target.value) } })}
         >
-          {TelemetryRange.options.map((option) => (
-            <NativeSelectOption key={option} value={option}>
-              {RANGES[option].label}
-            </NativeSelectOption>
-          ))}
+          <NativeSelectOption value={1}>Last hour</NativeSelectOption>
+          <NativeSelectOption value={6}>Last 6 hours</NativeSelectOption>
+          <NativeSelectOption value={24}>Last 24 hours</NativeSelectOption>
+          <NativeSelectOption value={168}>Last 7 days</NativeSelectOption>
         </NativeSelect>
       </div>
-      {"missing" in answer ? (
-        <p className="text-sm text-muted-foreground">{answer.missing}</p>
-      ) : (
-        PANELS.map((panel, index) => (
-          <section key={panel.title} className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium">{panel.title}</h2>
-            {answer.panels[index]!.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No points in this range.</p>
-            ) : panel.chart === "series" ? (
-              <SeriesChart rows={answer.panels[index]!} />
-            ) : (
-              <RowsTable rows={answer.panels[index]!} />
-            )}
+      {panels ? (
+        Object.keys(PANELS).map((title, index) => (
+          <section key={title} className="flex flex-col gap-2">
+            <h2 className="text-sm font-medium">{title}</h2>
+            <Panel rows={panels[index]!} hours={hours} />
           </section>
         ))
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          This deployment has no metrics token (Doppler APP_CONFIG_METRICS__API_TOKEN).
+        </p>
       )}
     </div>
   );
 }
 
 /** Categorical slots 1 and 2 of the validated default data-viz palette, light mode. */
-const SERIES_COLORS = ["#2a78d6", "#eb6834"];
-const WIDTH = 600;
-const HEIGHT = 160;
+const COLORS = ["#2a78d6", "#eb6834"];
 
-/** A series panel's lines over its buckets `t` ("2026-09-30 13:00:00", UTC), one per other column,
- *  from 0 to the highest value; hovering a bucket names its values. */
-function SeriesChart({ rows }: { rows: Row[] }) {
-  const names = Object.keys(rows[0]!).filter((column) => column !== "t");
-  const times = rows.map((row) => Date.parse(`${String(row.t).replace(" ", "T")}Z`));
-  const first = times[0]!;
-  const span = times.at(-1)! - first || 1;
-  const max = Math.max(...rows.flatMap((row) => names.map((name) => Number(row[name]))), 1);
-  const x = (index: number) => ((times[index]! - first) / span) * WIDTH;
+/** A panel's rows as a table or, when they have a bucket `t` (UTC), as one line per other column
+ *  across the range up to now, from 0 to the highest value. Each line's newest point is a dot, so a
+ *  line of one point shows; hovering a bucket names its values. */
+function Panel({ rows, hours }: { rows: Row[]; hours: number }) {
+  if (rows.length === 0) return <p className="text-sm text-muted-foreground">No points.</p>;
+  const columns = Object.keys(rows[0]!);
+  if (!columns.includes("t"))
+    return (
+      <Table>
+        <TableHeader>
+          <TableRow>
+            {columns.map((column) => (
+              <TableHead key={column}>{column}</TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row, index) => (
+            <TableRow key={index}>
+              {columns.map((column) => (
+                <TableCell key={column} className="font-mono text-xs">
+                  {format(row[column])}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    );
+  const names = columns.filter((column) => column !== "t");
+  const max = Math.max(...rows.flatMap((row) => names.map((name) => Number(row[name])))) || 1;
+  const now = Date.now();
+  const x = (row: Row) =>
+    600 - ((now - Date.parse(`${String(row.t).replace(" ", "T")}Z`)) / (hours * 3_600_000)) * 600;
+  const y = (value: Row[string]) => 150 - (Number(value) / max) * 150;
   return (
     <figure className="flex flex-col gap-1">
-      <div className="flex gap-4 text-xs text-muted-foreground">
+      <figcaption className="flex gap-4 text-xs text-muted-foreground">
         {names.map((name, index) => (
-          <span key={name} className="flex items-center gap-1.5">
-            <span className="h-0.5 w-3" style={{ background: SERIES_COLORS[index] }} />
-            {name}
+          <span key={name}>
+            <span style={{ color: COLORS[index] }}>●</span> {name}
           </span>
         ))}
         <span className="ml-auto">max {format(max)}</span>
-      </div>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} preserveAspectRatio="none" className="h-40 w-full">
-        <line x1={0} x2={WIDTH} y1={HEIGHT} y2={HEIGHT} stroke="currentColor" opacity={0.2} />
+      </figcaption>
+      <svg viewBox="-10 -5 620 160" className="w-full">
+        <line x1={0} x2={600} y1={150} y2={150} stroke="currentColor" opacity={0.2} />
         {names.map((name, index) => (
-          <polyline
-            key={name}
-            points={rows
-              .map((row, at) => `${x(at)},${HEIGHT - (Number(row[name]) / max) * HEIGHT}`)
-              .join(" ")}
-            fill="none"
-            stroke={SERIES_COLORS[index]}
-            strokeWidth={2}
-            vectorEffect="non-scaling-stroke"
-          />
+          <g key={name} stroke={COLORS[index]} fill={COLORS[index]}>
+            <polyline
+              points={rows.map((row) => `${x(row)},${y(row[name])}`).join(" ")}
+              fill="none"
+              strokeWidth={2}
+            />
+            <circle cx={x(rows.at(-1)!)} cy={y(rows.at(-1)![name])} r={4} />
+          </g>
         ))}
-        {rows.map((row, at) => (
-          <rect
-            key={at}
-            x={x(at) - WIDTH / rows.length / 2}
-            width={WIDTH / rows.length}
-            height={HEIGHT}
-            fill="transparent"
-          >
+        {rows.map((row) => (
+          <rect key={String(row.t)} x={x(row) - 5} width={10} height={150} fill="transparent">
             <title>{`${row.t} UTC · ${names.map((name) => `${name} ${format(row[name])}`).join(" · ")}`}</title>
           </rect>
         ))}
       </svg>
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>{rows[0]!.t} UTC</span>
-        <span>{rows.at(-1)!.t} UTC</span>
-      </div>
     </figure>
   );
 }
 
-function RowsTable({ rows }: { rows: Row[] }) {
-  const columns = Object.keys(rows[0]!);
-  return (
-    <table className="w-full text-sm">
-      <thead className="text-left text-xs text-muted-foreground">
-        <tr>
-          {columns.map((column) => (
-            <th key={column} className="py-1 font-medium">
-              {column}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={index} className="border-t">
-            {columns.map((column) => (
-              <td key={column} className="py-1.5 font-mono text-xs">
-                {format(row[column])}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function format(value: unknown) {
+function format(value: Row[string]) {
   return typeof value === "number"
-    ? value.toLocaleString("en-US", { maximumFractionDigits: 1 })
-    : String(value ?? "");
+    ? value.toLocaleString("en-US", { maximumFractionDigits: 2 })
+    : String(value || "");
 }

@@ -1,15 +1,15 @@
 // metrics.test.ts — the data point each call writes (docs/telemetry.md#metrics), and a point
 // Analytics Engine refuses, dropped with one warning.
 import { expect, test, vi } from "vitest";
-import { type Metrics, type MetricsSource, metrics } from "./metrics.ts";
+import { type Metrics, metrics } from "./metrics.ts";
 
-const context: MetricsSource = { worker: "pr3142-a1b2c3d-os", projectId: "prj_1", path: "/agents" };
+const context = { worker: "pr3142-a1b2c3d-os", projectId: "prj_1", path: "/agents" };
 
 test.for([
   {
-    name: "a count is one unless it says otherwise",
+    name: "a count is its value",
     source: context,
-    call: (m: Metrics) => m.count("subscription.retries", undefined, "row=config"),
+    call: (m: Metrics) => m.count("subscription.retries", 1, "row=config"),
     point: {
       indexes: ["prj_1"],
       blobs: [
@@ -68,7 +68,7 @@ test.for([
 });
 
 test("with no dataset bound, a call writes nothing and throws nothing", () => {
-  expect(() => metrics(undefined, context).count("subscription.retries")).not.toThrow();
+  expect(() => metrics(undefined, context).count("subscription.retries", 1)).not.toThrow();
 });
 
 test("a point past the invocation's limit is dropped, and only the first drop warns", () => {
@@ -81,7 +81,7 @@ test("a point past the invocation's limit is dropped, and only the first drop wa
     },
     context,
   );
-  full.count("subscription.retries");
+  full.count("subscription.retries", 1);
   full.gauge("subscription.pending", 4);
   expect(warn.mock.calls).toMatchObject([
     [{ event: "metrics.point-dropped", name: "subscription.retries" }],

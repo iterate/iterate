@@ -1,9 +1,9 @@
 // Cloudflare's OTLP export flattened into `logs` and `spans` rows (otlp.ts), and each row checked
-// against its stream's schema (stream-schema.ts). The fixtures are Cloudflare's exports of
-// telemetry-spike-producer on the dev account on 2026-09-30, cut to a few records, with the
-// requester's ASN replaced by a documentation one. Three edits add what that Worker never wrote: in
-// logs.json one object line's `msg` is `event`, its `project` is `projectId` beside a `path`, and
-// its int is OTLP JSON's string form; in traces.json the Durable Object's span carries
+// against its stream's schema (stream-schema.test-support.ts). The fixtures are Cloudflare's
+// exports of telemetry-spike-producer on the dev account on 2026-09-30, cut to a few records, with
+// the requester's ASN replaced by a documentation one. Three edits add what that Worker never
+// wrote: in logs.json one object line's `msg` is `event`, its `project` is `projectId` beside a
+// `path`, and its int is OTLP JSON's string form; in traces.json the Durable Object's span carries
 // `iterate.project_id` and `iterate.path`.
 import { expect, test } from "vitest";
 import logsSchema from "../schemas/logs.json" with { type: "json" };
@@ -13,7 +13,7 @@ import preflightLogs from "./fixtures/preflight-logs.json" with { type: "json" }
 import preflightTraces from "./fixtures/preflight-traces.json" with { type: "json" };
 import traces from "./fixtures/traces.json" with { type: "json" };
 import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
-import { rowProblems } from "./stream-schema.ts";
+import { rowProblems } from "./stream-schema.test-support.ts";
 
 const producer = { worker: "telemetry-spike-producer" };
 const run2 = { ...producer, version: "a339ac78-1d12-4f32-9645-6e65199c5be2" };
@@ -21,6 +21,23 @@ const crash = {
   ...producer,
   version: "ea4ed790-bb4e-4a0f-9c8f-30328336f811",
   trace_id: "f48ec96b8d15525c1dbf684f84247360",
+};
+/** The resource of oneLine's line and oneSpan's span. */
+const resource = {
+  attributes: [
+    { key: "cloudflare.script_name", value: { stringValue: "telemetry-spike-producer" } },
+  ],
+};
+/** oneSpan's span as a row. */
+const oneSpanRow = {
+  ...producer,
+  time: "2026-09-30T13:03:12.219Z",
+  trace_id: "6856a5e381eb349528cb7f1a43d05802",
+  span_id: "24ecca8e68383c93",
+  name: "GET",
+  duration_ms: 0,
+  attributes: "{}",
+  attributes_bytes: 2,
 };
 
 test.for([
@@ -228,12 +245,14 @@ test.for([
     name: "a body's falsy values stay what they were",
     rows: logsOf(
       oneLine({
-        kvlistValue: {
-          values: [
-            { key: "empty", value: { stringValue: "" } },
-            { key: "no", value: { boolValue: false } },
-            { key: "zero", value: { intValue: "0" } },
-          ],
+        body: {
+          kvlistValue: {
+            values: [
+              { key: "empty", value: { stringValue: "" } },
+              { key: "no", value: { boolValue: false } },
+              { key: "zero", value: { intValue: "0" } },
+            ],
+          },
         },
       }),
     ),
@@ -249,7 +268,7 @@ test.for([
   },
   {
     name: "a JSON column over 512 KB is cut there and keeps its whole size",
-    rows: logsOf(oneLine({ stringValue: "x".repeat(600_000) })),
+    rows: logsOf(oneLine({ body: { stringValue: "x".repeat(600_000) } })),
     expected: [
       {
         ...producer,
@@ -260,15 +279,41 @@ test.for([
       },
     ],
   },
+  {
+    name: "a line's time, severity and body left out are at OTLP's defaults",
+    rows: logsOf(oneLine({ timeUnixNano: undefined, severityNumber: undefined })),
+    expected: [
+      {
+        ...producer,
+        time: "1970-01-01T00:00:00.000Z",
+        level: "debug",
+        body: "null",
+        body_bytes: 4,
+      },
+    ],
+  },
+  {
+    name: "a span's kind left out is unspecified, and one past OTLP's kinds is its number",
+    rows: [...spansOf(oneSpan({})), ...spansOf(oneSpan({ kind: 9 }))],
+    expected: [
+      { ...oneSpanRow, kind: "unspecified" },
+      { ...oneSpanRow, kind: "9" },
+    ],
+  },
 ])("$name", ({ rows, expected }) => {
   // exact: a row is what lands in the table, and an extra column would fail its stream
   expect(rows).toEqual(expected);
 });
 
-test("every row flattened from the fixtures fits its stream's schema", () => {
+test("every row of the fixtures and of OTLP's defaults fits its stream's schema", () => {
+  const atDefaults = { timeUnixNano: undefined, severityNumber: undefined };
   expect({
-    logs: logsOf(logs).flatMap((row) => rowProblems(logsSchema, row)),
-    spans: spansOf(traces).flatMap((row) => rowProblems(spansSchema, row)),
+    logs: [...logsOf(logs), ...logsOf(oneLine(atDefaults))].flatMap((row) =>
+      rowProblems(logsSchema, row),
+    ),
+    spans: [...spansOf(traces), ...spansOf(oneSpan({}))].flatMap((row) =>
+      rowProblems(spansSchema, row),
+    ),
   }).toEqual({ logs: [], spans: [] });
 });
 
@@ -294,29 +339,26 @@ function spansOf(payload: unknown) {
   return spanRows(OtlpTraces.parse(payload));
 }
 
-/** One `console.log` line of `body`, as Cloudflare exports it. */
-function oneLine(body: object) {
-  return {
-    resourceLogs: [
-      {
-        resource: {
-          attributes: [
-            { key: "cloudflare.script_name", value: { stringValue: "telemetry-spike-producer" } },
-          ],
-        },
-        scopeLogs: [
-          {
-            logRecords: [
-              {
-                timeUnixNano: "1790773392219000000",
-                severityNumber: 9,
-                body,
-                attributes: [{ key: "name", value: { stringValue: "log" } }],
-              },
-            ],
-          },
-        ],
-      },
-    ],
+/** One `console.log` line, as Cloudflare exports it, with `record`'s fields over its own. */
+function oneLine(record: object) {
+  const line = {
+    timeUnixNano: "1790773392219000000",
+    severityNumber: 9,
+    attributes: [{ key: "name", value: { stringValue: "log" } }],
+    ...record,
   };
+  return { resourceLogs: [{ resource, scopeLogs: [{ logRecords: [line] }] }] };
+}
+
+/** One span with no attributes, with `span`'s fields over its own. */
+function oneSpan(span: object) {
+  const own = {
+    traceId: "6856a5e381eb349528cb7f1a43d05802",
+    spanId: "24ecca8e68383c93",
+    name: "GET",
+    startTimeUnixNano: "1790773392219000000",
+    endTimeUnixNano: "1790773392219000000",
+    ...span,
+  };
+  return { resourceSpans: [{ resource, scopeSpans: [{ spans: [own] }] }] };
 }

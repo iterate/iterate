@@ -4,7 +4,7 @@ import { getEnv, telemetryEnvs } from "../../../envs.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
 
 /** vite build → wrangler deploy with the OTLP secret from Doppler → the Worker answers
- *  (scripts/lib/deploy-app.ts). ensure-resources.ts runs it too, after rotating the secret. */
+ *  (scripts/lib/deploy-app.ts). ensure-resources.ts runs it too, once the secret is in Doppler. */
 export default async function deploy(options: { env: string }) {
   const env = getEnv(options.env, telemetryEnvs);
   await deployApp(env, {

@@ -39,7 +39,7 @@ import {
   runAsync,
   smoke,
 } from "../lib/deploy-helpers.ts";
-import { dopplerSecret, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
+import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../ci/await-deploy.ts";
 import { depotApi, workflowsInProgress } from "../ci/depot.ts";
@@ -324,15 +324,15 @@ async function deployStartApp(
   await deployWithSecrets({
     cwd: root,
     builtConfig: findBuiltWranglerConfig(root),
-    secretValues: app.readsMetrics
-      ? {
-          APP_CONFIG_METRICS__API_TOKEN: dopplerSecret(
-            app.dopplerProject,
-            "preview",
-            "APP_CONFIG_METRICS__API_TOKEN",
-          ),
-        }
-      : {},
+    // the admin app's Doppler `APP_CONFIG_*` (its metrics token), as start-app.ts deploys ship them;
+    // without one its /telemetry page says so
+    secretValues:
+      app.name === "admin"
+        ? appConfigSecretsOf(
+            (await resolveEnvContext(getEnv("preview", app.envs), { dopplerProject: "admin" }))
+              .secrets,
+          )
+        : {},
     credentials,
   });
   await smoke(`${url}/healthz`, (response) => response.status === 200, `apps/${app.name} health`);

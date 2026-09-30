@@ -27,7 +27,6 @@ import {
   notesEnvs,
   osEnvs,
   previewDeployment,
-  telemetryEnvs,
   voiceEnvs,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
@@ -59,8 +58,6 @@ export interface StartApp {
   root: URL;
   /** The app's map in envs.ts. */
   envs: Record<string, StartAppEnv>;
-  /** Whether it reads its account's metrics (`APP_CONFIG metrics`): the admin app's /telemetry. */
-  readsMetrics?: boolean;
 }
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
@@ -128,9 +125,6 @@ export function startAppWorkerConfig(
     envName,
     packagesCommit,
   );
-  const telemetry = Object.values(telemetryEnvs).find(
-    (lake) => lake.cloudflareAccountId === env?.cloudflareAccountId,
-  );
   // THE APP'S CONFIGURATION from envs.ts, which the Worker merges its Doppler `APP_CONFIG_*` secrets
   // onto; its schema documents each key (@iterate-com/shared/start-app-config)
   const appConfig = {
@@ -142,10 +136,7 @@ export function startAppWorkerConfig(
     denyZones: ownZones(),
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
     pkgPrNewRef,
-    ...(app.readsMetrics &&
-      telemetry && {
-        metrics: { accountId: telemetry.cloudflareAccountId, dataset: "iterate_metrics" },
-      }),
+    ...(env && { metrics: { accountId: env.cloudflareAccountId } }),
   } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName || app.name,

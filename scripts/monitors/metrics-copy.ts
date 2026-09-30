@@ -1,24 +1,20 @@
 // scripts/monitors/metrics-copy.ts — THE HOURLY METRICS COPY, a step of the health job (./health.ts):
 // Analytics Engine keeps what iterate/metrics writes for 90 days, and the lake's `metrics` table
-// keeps it after (docs/telemetry.md). Each run sends the closed hours the lake lacks to the metrics
-// stream, newest first and COPY_HOURS at most: the hour that just closed lands every run, and a gap
-// backfills over the next runs. A row is one data point as Analytics Engine stored it, its
-// `_sample_interval` the row's weight. Every call uses the account's Cloudflare API token, which
-// reads Analytics Engine and R2 SQL and sends to a stream.
+// keeps it after (docs/telemetry.md). The health state keeps a watermark per lake, the last hour
+// copied whole; each run sends the closed hours after it to the metrics stream, oldest first and
+// COPY_HOURS at most, and a lake's first run starts at the hour that just closed. A row is one data
+// point as Analytics Engine stored it, its `_sample_interval` the row's weight.
 import { z } from "zod";
 import { telemetryEnvs } from "../../envs.ts";
 import {
   analyticsEngineSql,
+  cloudflareApiToken,
   cloudflarePost,
-  telemetryApiToken,
   type AnalyticsEngineRow,
 } from "./telemetry.ts";
 
-/** A day's gap closes in one run; a longer one over the next runs. */
+/** A day's backlog closes in one run; a longer one over the next runs. */
 export const COPY_HOURS = 24;
-/** How long Analytics Engine keeps a data point: three months
- *  (https://developers.cloudflare.com/analytics/analytics-engine/limits/). */
-const RETENTION_HOURS = 90 * 24;
 /** Under a stream's 5 MB per request. */
 const CHUNK_BYTES = 4_500_000;
 const HOUR_S = 3_600;
@@ -36,7 +32,8 @@ export type MetricsRow = {
   weight: number;
 };
 
-/** One data point as HOUR_POINTS reads it: blob1…6 are name, kind, worker, project, path, labels. */
+/** One data point as the hour's query reads it: blob1…6 are name, kind, worker, project, path,
+ *  labels. */
 const Point = z.object({
   unix: z.coerce.number(),
   name: z.string(),
@@ -49,18 +46,14 @@ const Point = z.object({
   weight: z.coerce.number(),
 });
 
-/** R2 SQL's answer to LAKE_HOURS: each hour's start, `2026-09-30T13:00:00.000000Z`. */
-const LakeHours = z.object({
-  result: z.object({ rows: z.array(z.object({ hour: z.string() })) }),
-});
-
-/** The closed hours to copy, by their start in unix seconds: Analytics Engine has points in them
- *  and the lake has none, newest first, COPY_HOURS at most. Pure. */
-export function hoursToCopy(analyticsEngineHours: number[], lakeHours: Set<number>) {
-  return analyticsEngineHours
-    .filter((hour) => !lakeHours.has(hour))
-    .sort((a, b) => b - a)
-    .slice(0, COPY_HOURS);
+/** The closed hours a run copies, by their start in unix seconds: those after the watermark
+ *  `copiedThrough`, oldest first and COPY_HOURS at most; with no watermark, the hour that just
+ *  closed. Pure. */
+export function hoursToCopy(copiedThrough: number | undefined, now: Date) {
+  const current = Math.floor(now.getTime() / 1_000 / HOUR_S) * HOUR_S;
+  const first = copiedThrough === undefined ? current - HOUR_S : copiedThrough + HOUR_S;
+  const count = Math.min(COPY_HOURS, Math.max(0, (current - first) / HOUR_S));
+  return Array.from({ length: count }, (_, index) => first + index * HOUR_S);
 }
 
 /** Analytics Engine's points as `metrics` rows: an unset project or path is null. Pure. */
@@ -101,45 +94,21 @@ export function chunks(rows: MetricsRow[]) {
   return bodies;
 }
 
-/** Copy the closed hours each account's lake lacks (`hoursToCopy`); `send: false` reads and says
- *  what it would send. Throws when a read or a send fails. */
-export async function copyMetrics(input: { send: boolean; now: Date }) {
-  // the hours before the current one are closed; the oldest whole hour Analytics Engine keeps begins
-  // one hour into its retention
-  const until = Math.floor(input.now.getTime() / 1_000 / HOUR_S) * HOUR_S;
-  const since = until - (RETENTION_HOURS - 1) * HOUR_S;
+/** Copy each lake's closed hours after its watermark in `copiedThrough` (by its telemetryEnvs
+ *  name), which moves past each hour once every chunk of it is sent. `send: false` reads, says what
+ *  it would send and moves nothing. Throws when a read or a send fails. */
+export async function copyMetrics(input: {
+  copiedThrough: Record<string, number>;
+  send: boolean;
+  now: Date;
+}) {
   for (const [name, env] of Object.entries(telemetryEnvs)) {
-    const apiToken = telemetryApiToken(env);
-    const census = await analyticsEngineSql(
-      env,
-      apiToken,
-      `SELECT toUnixTimestamp(toStartOfInterval(timestamp, INTERVAL '1' HOUR)) AS hour, count() AS points FROM iterate_metrics WHERE timestamp >= toDateTime(${since}) AND timestamp < toDateTime(${until}) GROUP BY hour`,
-    );
-    const points = new Map(census.map((row) => [Number(row.hour), Number(row.points)]));
-    if (points.size === 0) {
-      console.log(`[metrics copy] ${name}: no points in Analytics Engine's 90 days`);
-      continue;
-    }
-    const lake = await cloudflarePost(
-      `https://api.sql.cloudflarestorage.com/api/v1/accounts/${env.cloudflareAccountId}/r2-sql/query/${env.bucket}`,
-      apiToken,
-      JSON.stringify({
-        query: `SELECT date_trunc('hour', time) AS hour FROM telemetry.metrics WHERE time >= '${new Date(since * 1_000).toISOString()}' AND time < '${new Date(until * 1_000).toISOString()}' GROUP BY date_trunc('hour', time)`,
-      }),
-      { idempotent: true },
-    );
-    const lakeHours = new Set(
-      LakeHours.parse(JSON.parse(lake)).result.rows.map((row) => Date.parse(row.hour) / 1_000),
-    );
-    const hours = hoursToCopy([...points.keys()], lakeHours);
-    console.log(
-      `[metrics copy] ${name}: ${points.size} hours with points, ${lakeHours.size} in the lake, ${hours.length} to copy`,
-    );
-    // AN HOUR IS COPIED ONCE: only while the lake has none of its rows. A chunk the stream failed is
-    // sent again (CLOUDFLARE_API), so it may land twice, which docs/telemetry.md "Failures" dedupes
-    // on the table's key; a send that still fails throws, and leaves its hour partial and the health
-    // job red.
-    for (const hour of hours) {
+    const apiToken = cloudflareApiToken(env);
+    // AN HOUR IS SENT WHOLE: a send that still fails after CLOUDFLARE_API's retries throws before
+    // the watermark passes its hour, so the next run sends the hour again from its first chunk. Its
+    // chunks that had landed then land twice, as a retried chunk can, and `metrics` has no key to
+    // dedupe them on.
+    for (const hour of hoursToCopy(input.copiedThrough[name], input.now)) {
       const rows = metricsRows(
         await analyticsEngineSql(
           env,
@@ -147,11 +116,8 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
           `SELECT toUnixTimestamp(timestamp) AS unix, blob1 AS name, blob2 AS kind, blob3 AS worker, blob4 AS project_id, blob5 AS path, blob6 AS labels, double1 AS value, _sample_interval AS weight FROM iterate_metrics WHERE timestamp >= toDateTime(${hour}) AND timestamp < toDateTime(${hour + HOUR_S})`,
         ),
       );
-      const at = new Date(hour * 1_000).toISOString();
-      if (rows.length !== points.get(hour))
-        throw new Error(`read ${rows.length} of ${at}'s ${points.get(hour)} points`);
       const bodies = chunks(rows);
-      const summary = `${at}: ${rows.length} rows in ${bodies.length} chunk(s)`;
+      const summary = `${name} ${new Date(hour * 1_000).toISOString()}: ${rows.length} rows in ${bodies.length} chunk(s)`;
       if (!input.send) {
         console.log(`[metrics copy] [dry run] would send ${summary}`);
         continue;
@@ -161,10 +127,8 @@ export async function copyMetrics(input: { send: boolean; now: Date }) {
           `https://${env.streams.metrics}.ingest.cloudflare.com`,
           apiToken,
           body,
-          {
-            idempotent: true,
-          },
         );
+      input.copiedThrough[name] = hour;
       console.log(`[metrics copy] sent ${summary}`);
     }
   }

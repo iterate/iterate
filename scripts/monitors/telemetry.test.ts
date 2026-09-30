@@ -1,119 +1,119 @@
-// The telemetry alerts' decisions: each rule against Analytics Engine answers as its SQL API writes
+// The telemetry alerts' decisions: each rule against Analytics Engine rows as its SQL API writes
 // them, Pipelines' dropped rows and the destinations' status as Cloudflare answers them, and what
 // the findings owe the page. The calls themselves are proven against the dev account.
 import { expect, test } from "vitest";
 import {
   ALERT_RULES,
-  analyticsEngineRows,
   destinationFindings,
   droppedRowFindings,
   evaluateRule,
   judgeTelemetry,
+  type AnalyticsEngineRow,
   type Finding,
 } from "./telemetry.ts";
 
 const [pending, deliveryP99] = ALERT_RULES;
 
-test.for<{ name: string; rule: (typeof ALERT_RULES)[number]; answer: string; findings: Finding[] }>(
-  [
-    {
-      name: "a row whose pending max is over the line is a finding named by its context and row",
-      rule: pending!,
-      answer: answer([
-        { project_id: "prj_a", path: "/agents/x", labels: "row=config", value: 2400 },
-        { project_id: "prj_b", path: "/", labels: "row=agent", value: 12 },
-      ]),
-      findings: [
-        {
-          key: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config",
-          text: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config: 2,400",
-        },
-      ],
-    },
-    {
-      name: "rows at or under the line are no finding",
-      rule: pending!,
-      answer: answer([{ project_id: "prj_a", path: "/", labels: "row=config", value: 1000 }]),
-      findings: [],
-    },
-    {
-      name: "a p99 over the line is one finding with no context",
-      rule: deliveryP99!,
-      answer: answer([{ value: 75321.4 }]),
-      findings: [
-        {
-          key: "subscription.delivery_ms p99 over 60,000 ms",
-          text: "subscription.delivery_ms p99 over 60,000 ms: 75,321",
-        },
-      ],
-    },
-    {
-      name: "a p99 over no points is 0, no finding",
-      rule: deliveryP99!,
-      answer: answer([{ value: 0 }]),
-      findings: [],
-    },
-    {
-      name: "a UInt64 value, which the SQL API writes as a string, is compared as a number",
-      rule: pending!,
-      answer: answer([{ project_id: "prj_a", path: "/", labels: "row=config", value: "1500" }]),
-      findings: [
-        {
-          key: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config",
-          text: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config: 1,500",
-        },
-      ],
-    },
-  ],
-)("$name", ({ rule, answer, findings }) => {
-  expect(evaluateRule(rule, analyticsEngineRows(answer))).toEqual(findings);
+test.for<{
+  name: string;
+  rule: (typeof ALERT_RULES)[number];
+  rows: AnalyticsEngineRow[];
+  findings: Finding[];
+}>([
+  {
+    name: "a row whose pending max is over the line is a finding named by its context and row",
+    rule: pending!,
+    rows: [
+      { project_id: "prj_a", path: "/agents/x", labels: "row=config", value: 2400 },
+      { project_id: "prj_b", path: "/", labels: "row=agent", value: 12 },
+    ],
+    findings: [
+      {
+        key: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config",
+        text: "subscription.pending over 1,000 events at project_id=prj_a path=/agents/x labels=row=config: 2,400",
+      },
+    ],
+  },
+  {
+    name: "rows at or under the line are no finding",
+    rule: pending!,
+    rows: [{ project_id: "prj_a", path: "/", labels: "row=config", value: 1000 }],
+    findings: [],
+  },
+  {
+    name: "a p99 over the line is one finding with no context",
+    rule: deliveryP99!,
+    rows: [{ value: 75321.4 }],
+    findings: [
+      {
+        key: "subscription.delivery_ms p99 over 60,000 ms",
+        text: "subscription.delivery_ms p99 over 60,000 ms: 75,321",
+      },
+    ],
+  },
+  {
+    name: "a p99 over no points is 0, no finding",
+    rule: deliveryP99!,
+    rows: [{ value: 0 }],
+    findings: [],
+  },
+  {
+    name: "a UInt64 value, which the SQL API writes as a string, is compared as a number",
+    rule: pending!,
+    rows: [{ project_id: "prj_a", path: "/", labels: "row=config", value: "1500" }],
+    findings: [
+      {
+        key: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config",
+        text: "subscription.pending over 1,000 events at project_id=prj_a path=/ labels=row=config: 1,500",
+      },
+    ],
+  },
+])("$name", ({ rule, rows, findings }) => {
+  expect(evaluateRule(rule, rows)).toEqual(findings);
 });
 
 test.for<{ name: string; groups: unknown[]; findings: Finding[] }>([
   { name: "no user errors is no finding", groups: [], findings: [] },
   {
-    name: "each pipeline and kind of error is a finding, named by the pipeline's name",
+    name: "each of the lake's pipelines and kind of error is a finding, named by the pipeline",
     groups: [
-      {
-        count: 4,
-        dimensions: {
-          pipelineId: "c40d",
-          errorFamily: "deserialization",
-          errorType: "missing_field",
-        },
-      },
-      { count: 1, dimensions: { pipelineId: "ffff", errorFamily: "sink", errorType: "write" } },
+      group({ pipelineId: "1a37", errorFamily: "deserialization", errorType: "missing_field" }),
+      group({ pipelineId: "1a37", errorFamily: "sink", errorType: "write" }),
     ],
     findings: [
       {
-        key: "telemetry_metrics dropped rows (deserialization/missing_field)",
-        text: "telemetry_metrics dropped rows (deserialization/missing_field): 4 in the last hour",
+        key: "telemetry_metrics_pipeline dropped rows (deserialization/missing_field)",
+        text: "telemetry_metrics_pipeline dropped rows (deserialization/missing_field): 4 in the last hour",
       },
       {
-        key: "ffff dropped rows (sink/write)",
-        text: "ffff dropped rows (sink/write): 1 in the last hour",
+        key: "telemetry_metrics_pipeline dropped rows (sink/write)",
+        text: "telemetry_metrics_pipeline dropped rows (sink/write): 4 in the last hour",
       },
     ],
   },
+  {
+    name: "another pipeline on the account, or one no longer listed, is not the lake's",
+    groups: [group({ pipelineId: "e6b2" }), group({ pipelineId: "ffff" })],
+    findings: [],
+  },
 ])("dropped rows: $name", ({ groups, findings }) => {
-  const answer = {
-    data: { viewer: { accounts: [{ pipelinesUserErrorsAdaptiveGroups: groups }] } },
-    errors: null,
-  };
-  expect(droppedRowFindings(answer, new Map([["c40d", "telemetry_metrics"]]))).toEqual(findings);
+  const data = { viewer: { accounts: [{ pipelinesUserErrorsAdaptiveGroups: groups }] } };
+  const pipelines = [
+    { id: "1a37", name: "telemetry_metrics_pipeline" },
+    { id: "e6b2", name: "telemetry_spike_logs_pipeline" },
+  ];
+  expect(droppedRowFindings(data, pipelines)).toEqual(findings);
 });
 
-test("a GraphQL error is thrown, never read as no dropped rows", () => {
-  expect(() =>
-    droppedRowFindings({ data: null, errors: [{ message: "unknown field" }] }, new Map()),
-  ).toThrow("Cloudflare GraphQL: unknown field");
-});
-
-test.for<{ name: string; lastError: string; findings: Finding[] }>([
-  { name: "a destination whose last push succeeded is no finding", lastError: "", findings: [] },
+test.for<{ name: string; destination: Record<string, unknown>; findings: Finding[] }>([
+  {
+    name: "a destination whose last push succeeded is no finding",
+    destination: destination("telemetry-logs", ""),
+    findings: [],
+  },
   {
     name: "a destination with a last_error is failing now",
-    lastError: "2026-09-30T13:16:09Z",
+    destination: destination("telemetry-logs", "2026-09-30T13:16:09Z"),
     findings: [
       {
         key: "OTLP destination telemetry-logs failing",
@@ -121,24 +121,18 @@ test.for<{ name: string; lastError: string; findings: Finding[] }>([
       },
     ],
   },
-])("destinations: $name", ({ lastError, findings }) => {
-  // the list answer's shape, recorded on the dev account 2026-09-30, its headers' secret replaced
-  const destinations = [
-    {
-      slug: "telemetry-logs",
-      enabled: true,
-      configuration: {
-        type: "logpush",
-        headers: { "x-telemetry-secret": "redacted" },
-        jobStatus: {
-          last_complete: "2026-09-30T13:09:46Z",
-          last_error: lastError,
-          error_message: lastError ? "error 503: error pushing" : "",
-        },
-      },
-    },
-  ];
-  expect(destinationFindings(destinations)).toEqual(findings);
+  {
+    name: "another destination on the account is not the lake's, failing or not",
+    destination: destination("telemetry-spike-traces", "2026-09-30T13:16:09Z"),
+    findings: [],
+  },
+  {
+    name: "a destination with no status yet has not failed",
+    destination: { slug: "telemetry-traces", configuration: { type: "logpush" } },
+    findings: [],
+  },
+])("destinations: $name", ({ destination, findings }) => {
+  expect(destinationFindings([destination])).toEqual(findings);
 });
 
 const red = { key: "preview: a over 1", text: "preview: a over 1: 5" };
@@ -199,12 +193,25 @@ test.for<{
   expect({ update: judged.update }).toMatchObject({ update });
 });
 
-/** An Analytics Engine `FORMAT JSON` answer as the SQL API writes it, `meta` cut. */
-function answer(data: Record<string, unknown>[]) {
-  return JSON.stringify({
-    meta: [],
-    data,
-    rows: data.length,
-    rows_before_limit_at_least: data.length,
-  });
+/** One group of Pipelines' user errors as the GraphQL dataset answers it. */
+function group(dimensions: { pipelineId: string; errorFamily?: string; errorType?: string }) {
+  return { count: 4, dimensions: { errorFamily: "sink", errorType: "write", ...dimensions } };
+}
+
+/** One destination as the list answers it, recorded on the dev account 2026-09-30, its headers'
+ *  secret replaced. */
+function destination(slug: string, lastError: string) {
+  return {
+    slug,
+    enabled: true,
+    configuration: {
+      type: "logpush",
+      headers: { "x-telemetry-secret": "redacted" },
+      jobStatus: {
+        last_complete: "2026-09-30T13:09:46Z",
+        last_error: lastError,
+        error_message: lastError ? "error 503: error pushing" : "",
+      },
+    },
+  };
 }

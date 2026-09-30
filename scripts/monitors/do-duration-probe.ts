@@ -35,7 +35,8 @@ interface CfGraphqlResponse<T> {
   errors?: Array<{ message: string }>;
 }
 
-async function cfGraphql<T>(input: {
+/** One query of Cloudflare's GraphQL Analytics API: its data, or a throw naming its errors. */
+export async function cfGraphql<T>(input: {
   apiToken: string;
   query: string;
   variables: Record<string, string>;

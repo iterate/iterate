@@ -2,6 +2,8 @@
  * Cloudflare's OTLP export (OTLP/HTTP JSON, from Workers Observability destinations) flattened into
  * rows of the `logs` and `spans` tables; docs/telemetry.md#tables says what each column holds.
  * The payloads are parsed with the fields the rows read, and nothing else is required of them.
+ * OTLP JSON (proto3) leaves out a field at its default value, so a time, severity or kind of 0
+ * and an empty body parse as those: one record at a default cannot fail its whole batch.
  */
 import { z } from "zod";
 
@@ -38,9 +40,9 @@ export const OtlpLogs = z.object({
         z.object({
           logRecords: z.array(
             z.object({
-              timeUnixNano: z.string(),
-              severityNumber: z.number(),
-              body: AnyValue,
+              timeUnixNano: z.string().default("0"),
+              severityNumber: z.number().default(0),
+              body: AnyValue.default({}),
               attributes: Attributes,
               traceId: z.string().optional(),
               spanId: z.string().optional(),
@@ -64,7 +66,7 @@ export const OtlpTraces = z.object({
               spanId: z.string(),
               parentSpanId: z.string().optional(),
               name: z.string(),
-              kind: z.number(),
+              kind: z.number().default(0),
               startTimeUnixNano: z.string(),
               endTimeUnixNano: z.string(),
               attributes: Attributes,
@@ -121,8 +123,9 @@ export function logRows(payload: z.infer<typeof OtlpLogs>) {
 }
 
 /** One row per span. `attributes` keeps what no column holds, minus what every span of a Worker
- *  repeats (its resource, the scope) and what says who asked: the visitor's whereabouts, user
- *  agent and headers, and the URL's query. */
+ *  repeats (its resource, the scope's name) and what says who asked: the visitor's whereabouts
+ *  (`geo.*`, their network's ASN), user agent and headers, and the URL whole or its query, which
+ *  can carry a token. */
 export function spanRows(payload: z.infer<typeof OtlpTraces>) {
   return payload.resourceSpans.flatMap(({ resource, scopeSpans }) => {
     const { worker, version } = workerOf(resource.attributes);
@@ -166,7 +169,7 @@ export function spanRows(payload: z.infer<typeof OtlpTraces>) {
           parent_span_id: span.parentSpanId || undefined,
           seq: number(seq),
           name: span.name,
-          kind: SPAN_KINDS[span.kind],
+          kind: SPAN_KINDS[span.kind] ?? String(span.kind),
           duration_ms: Number(BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)) / 1e6,
           cpu_ms: number(cpuMs),
           wall_ms: number(wallMs),
@@ -185,13 +188,10 @@ export function spanRows(payload: z.infer<typeof OtlpTraces>) {
   });
 }
 
-/** The attributes a span row drops besides its resource's: the scope's name every span repeats,
- *  the visitor's whereabouts (`geo.*`, their network's ASN), user agent and headers, and the URL
- *  whole or its query, which can carry a token. */
 const DROPPED_SPAN_ATTRIBUTE =
   /^(scope\.name|geo\..*|cloudflare\.asn|user_agent\.original|http\.(request|response)\.header\..*|url\.full|url\.query)$/;
 
-/** OTLP's SpanKind, by number. */
+/** OTLP's SpanKind, by number; one past these is written as its number. */
 const SPAN_KINDS = ["unspecified", "internal", "server", "client", "producer", "consumer"];
 
 /** The Worker a resource is: its script's name and version; neither for one that is no Worker's. */

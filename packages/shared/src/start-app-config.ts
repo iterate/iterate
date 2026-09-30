@@ -58,17 +58,11 @@ export const StartAppConfig = z.object({
    *  pinned as it writes (Docs' "Install Docs"). A config written without it (a test's) goes with
    *  main's. */
   pkgPrNewRef: z.string().trim().default("main"),
-  /** WHERE THE ADMIN APP'S /telemetry PAGE READS METRICS (docs/telemetry.md): the Analytics Engine
-   *  dataset of the account the app is deployed on (envs.ts `telemetryEnvs`), and a token with
-   *  Account Analytics Read (Doppler `APP_CONFIG_METRICS__API_TOKEN`). Read by no other app. Unset,
-   *  or a blank token ⇒ the page says so. */
-  metrics: z
-    .object({
-      accountId: z.string(),
-      dataset: z.string(),
-      apiToken: z.string().trim().default(""),
-    })
-    .optional(),
+  /** WHERE THE ADMIN APP'S /telemetry PAGE READS METRICS (docs/telemetry.md): Analytics Engine's
+   *  `iterate_metrics` on the account the app is deployed on, which start-app.ts names for every
+   *  deployed app and only the admin app reads, with a token that has Account Analytics Read
+   *  (Doppler `APP_CONFIG_METRICS__API_TOKEN`). No token ⇒ the page says so. */
+  metrics: z.object({ accountId: z.string(), apiToken: z.string().trim().default("") }).optional(),
 });
 
 export type StartAppConfig = z.output<typeof StartAppConfig>;

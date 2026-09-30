@@ -84,6 +84,9 @@ export const HealthState = z.object({
   latency: LatencyMemory,
   e2e: E2eMemory,
   telemetry: SignalMemory.optional(),
+  /** Each telemetry lake's metrics watermark, by its telemetryEnvs name: the start, in unix seconds,
+   *  of the last hour ./metrics-copy.ts copied whole. */
+  metricsCopiedThrough: z.record(z.string(), z.number()).optional(),
   pages: OpenPages,
 });
 export type HealthState = z.infer<typeof HealthState>;
@@ -215,8 +218,12 @@ export async function run(options: {
   const telemetry = await attempt("telemetry", () =>
     checkTelemetry({ memory: state.telemetry, testRun, runUrl, now: new Date() }),
   );
-  // a write, so only a real run on main sends: any other prints what it would send
-  await attempt("metrics copy", () => copyMetrics({ send: keep, now: new Date() }));
+  // a write, so only a real run on main sends and moves the watermarks: any other prints what it
+  // would send. Each hour moves them as it is sent, so the hours before a failure stay copied.
+  const metricsCopiedThrough = { ...state.metricsCopiedThrough };
+  await attempt("metrics copy", () =>
+    copyMetrics({ copiedThrough: metricsCopiedThrough, send: keep, now: new Date() }),
+  );
   failures.push(...(real?.failures || []), ...(latency?.failures || []));
 
   const realModel = real?.memory || state.e2e;
@@ -230,6 +237,7 @@ export async function run(options: {
       judgedAt: { "OS real model": realModel.judgedAt["OS real model"] },
     },
     telemetry: telemetry ? telemetry.memory : state.telemetry,
+    metricsCopiedThrough,
     pages: state.pages,
   };
   const updates = [

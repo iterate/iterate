@@ -2,12 +2,13 @@
 // one `writeDataPoint` per call, which never blocks and is never awaited. Call it once per batch,
 // never once per item.
 
-/** Where a point comes from: the Worker that writes it (its `WORKER_NAME` var: the runtime does not
- *  tell a Worker its own name), and the context it belongs to, if any. */
-export type MetricsSource = { worker: string; projectId?: string; path?: string };
-
-/** The metrics of one source. With no dataset bound (local dev, tests) nothing is written. */
-export function metrics(dataset: AnalyticsEngineDataset | undefined, source: MetricsSource) {
+/** The metrics of one source: the Worker that writes them (its `WORKER_NAME` var: the runtime does
+ *  not tell a Worker its own name), and the context they belong to, if any. With no dataset bound
+ *  (local dev, tests) nothing is written. */
+export function metrics(
+  dataset: AnalyticsEngineDataset | undefined,
+  source: { worker: string; projectId?: string; path?: string },
+) {
   const { worker, projectId = null, path = null } = source;
   const write = (name: string, kind: string, value: number, labels = "") => {
     try {
@@ -31,7 +32,7 @@ export function metrics(dataset: AnalyticsEngineDataset | undefined, source: Met
     }
   };
   return {
-    count: (name: string, value = 1, labels?: string) => write(name, "count", value, labels),
+    count: (name: string, value: number, labels?: string) => write(name, "count", value, labels),
     gauge: (name: string, value: number, labels?: string) => write(name, "gauge", value, labels),
     time: (name: string, ms: number, labels?: string) => write(name, "timing", ms, labels),
   };
@@ -39,5 +40,5 @@ export function metrics(dataset: AnalyticsEngineDataset | undefined, source: Met
 
 export type Metrics = ReturnType<typeof metrics>;
 
-/** Once per isolate: the first dropped point says what every later one would. */
+/** Once per isolate, not per invocation: the first drop says what every later one would. */
 let droppedPointWarned = false;

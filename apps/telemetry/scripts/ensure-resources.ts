@@ -2,9 +2,9 @@
  * THE TELEMETRY LAKE OF ONE ACCOUNT, created idempotently (docs/telemetry.md#setting-up-an-account):
  * the bucket and its Data Catalog, the catalog token, compaction and snapshot expiration, and a
  * stream, sink and pipeline per table from apps/telemetry/schemas/. Once envs.ts names those streams,
- * it rotates the OTLP secret, deploys the Worker with it, and points the two OTLP destinations at
- * the Worker with it; a destination's create and update post to the Worker first. A fresh account
- * takes two runs: the first prints the streams for envs.ts.
+ * it deploys the Worker with the OTLP secret, made once when Doppler has none, and points the two
+ * OTLP destinations at the Worker with it; a destination's create and update post to the Worker
+ * first. A fresh account takes two runs: the first prints the streams for envs.ts.
  *
  *   pnpm --dir apps/telemetry ensure-resources --env preview
  */
@@ -12,19 +12,16 @@ import { spawnSync } from "node:child_process";
 import { createCli } from "trpc-cli";
 import { CLOUDFLARE_API, isNotRoutedYet, retryPlatformFailures } from "iterate/platform-retry";
 import { getEnv, telemetryEnvs } from "../../../envs.ts";
-import {
-  CloudflareApiError,
-  cloudflareApi,
-  resolveEnvContext,
-} from "../../../scripts/lib/env-context.ts";
+import { CloudflareApiError, resolveEnvContext } from "../../../scripts/lib/env-context.ts";
 import events from "../schemas/events.json" with { type: "json" };
 import logs from "../schemas/logs.json" with { type: "json" };
 import metrics from "../schemas/metrics.json" with { type: "json" };
 import spans from "../schemas/spans.json" with { type: "json" };
-import type { StreamSchema } from "../src/stream-schema.ts";
 import deploy from "./deploy.ts";
 
 const SCHEMAS = { events, logs, spans, metrics };
+/** A stream's columns, as schemas/*.json holds them and Pipelines reports them. */
+type StreamSchema = (typeof SCHEMAS)[keyof typeof SCHEMAS];
 /** The two OTLP destinations, by the dataset each exports; apps/os's wrangler config names them. */
 const DESTINATIONS = { traces: "telemetry-traces", logs: "telemetry-logs" };
 
@@ -49,8 +46,9 @@ export default async function ensureResources(options: { env: string }) {
   if (!catalog) await cf(`/r2-catalog/${env.bucket}/enable`, { method: "POST" });
 
   // The token the sinks write with, compaction runs with and R2 SQL reads with; never the account's.
+  // One revoked on Cloudflare is not replaced: delete it from Doppler to mint another.
   let catalogToken = secrets.TELEMETRY_CATALOG_TOKEN;
-  if (!catalogToken || !(await tokenIsActive(account, catalogToken))) {
+  if (!catalogToken) {
     const minted = await cf<{ value: string }>("/tokens", {
       method: "POST",
       body: JSON.stringify({
@@ -92,7 +90,7 @@ export default async function ensureResources(options: { env: string }) {
     }),
   });
 
-  type Stream = { id: string; name: string; endpoint: string; schema: StreamSchema };
+  type Stream = { id: string; name: string; schema: StreamSchema };
   const streams = await cf<Stream[]>("/pipelines/v1/streams?per_page=100");
   const sinks = await cf<{ name: string }[]>("/pipelines/v1/sinks?per_page=100");
   const pipelines = await cf<{ name: string }[]>("/pipelines/v1/pipelines?per_page=100");
@@ -151,10 +149,14 @@ export default async function ensureResources(options: { env: string }) {
     throw new Error(`envs.ts is out of date for ${env.name}: update its streams, then run again`);
   }
 
-  const secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  doppler("TELEMETRY_OTLP_SECRET", secret);
+  let secret = secrets.TELEMETRY_OTLP_SECRET;
+  if (!secret) {
+    secret = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    doppler("TELEMETRY_OTLP_SECRET", secret);
+    console.log(`made the OTLP secret, stored as TELEMETRY_OTLP_SECRET`);
+  }
   await deploy({ env: env.name });
   const destinations = await cf<{ slug: string }[]>("/workers/observability/destinations");
   for (const [dataset, name] of Object.entries(DESTINATIONS)) {
@@ -189,7 +191,7 @@ export default async function ensureResources(options: { env: string }) {
         describe: () => ({ name: `destination ${name}` }),
       },
     );
-    console.log(`destination ${name} posts to ${configuration.url} with the new secret`);
+    console.log(`destination ${name} posts to ${configuration.url}`);
   }
   console.log(`✅ ${env.name}'s telemetry lake is set up`);
 }
@@ -198,18 +200,6 @@ export default async function ensureResources(options: { env: string }) {
  *  whatever else Pipelines reports of each. */
 const columnsOf = (schema: StreamSchema) =>
   schema.fields.map(({ name, type, required }) => `${name} ${type} ${required}`).join(", ");
-
-/** Whether a token Doppler holds still works: one deleted or expired reads as a 401. */
-async function tokenIsActive(account: string, token: string) {
-  const api = cloudflareApi(token);
-  const verified = await api<{ status: string }>(`/accounts/${account}/tokens/verify`).catch(
-    (error: unknown) => {
-      if (error instanceof CloudflareApiError && error.status === 401) return undefined;
-      throw error;
-    },
-  );
-  return verified?.status === "active";
-}
 
 /** Whether a destination's create or update failed on a preflight a server answered before it
  *  learned the Worker: Cloudflare's own not-found for a workers.dev hostname it does not route yet

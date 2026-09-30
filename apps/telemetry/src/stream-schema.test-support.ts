@@ -1,13 +1,13 @@
-/** A Pipelines stream's schema, as each of apps/telemetry/schemas/*.json holds one: the columns its
- *  stream was created with (scripts/ensure-resources.ts), and so its table's. */
-export interface StreamSchema {
-  fields: { name: string; type: string; required: boolean }[];
-}
+// stream-schema.test-support.ts — TEST CODE: whether a row fits its Pipelines stream's schema, as
+// apps/telemetry/schemas/*.json holds each. A stream drops a row that does not fit, so the tests of
+// every row builder (otlp.ts here, apps/os platform-hook.ts) check their rows with this.
 
-/** Why `row` does not fit `schema`, one line per column; none when it fits. A stream accepts a row
- *  that does not fit and drops it silently (docs/telemetry.md#failures), so every row is checked
- *  here before it is sent. An absent optional column is undefined or null. */
-export function rowProblems(schema: StreamSchema, row: Record<string, unknown>): string[] {
+/** Why `row` does not fit `schema`, one line per column; none when it fits. An absent optional
+ *  column is undefined or null. */
+export function rowProblems(
+  schema: { fields: { name: string; type: string; required: boolean }[] },
+  row: Record<string, unknown>,
+): string[] {
   const columns = new Set(schema.fields.map((field) => field.name));
   const problems = Object.keys(row)
     .filter((key) => !columns.has(key))
