@@ -1,11 +1,11 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, mkdtempDisposableSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, vi } from "vitest";
 import { createFlake } from "./flake-test.ts";
-import { temporaryDirectory } from "./temporary-directory.ts";
 
 const CHILD_VITEST_MS = 30_000;
 
@@ -29,7 +29,7 @@ test(
       (JSON.parse(readFileSync(vitestPackagePath, "utf8")) as any).bin.vitest,
     );
     const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), "flake-test-fixture");
-    using scratch = temporaryDirectory();
+    using scratch = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const outputFile = join(scratch.path, "results.json");
     const recordDir = join(scratch.path, "records");
 
@@ -220,7 +220,7 @@ test("a relative FLAKE_RECORD_DIR is rebased against GITHUB_WORKSPACE", async ()
   // rebase each package would write under itself and the repo-root CI
   // reporter would find nothing (the bug this test pins).
   const previous = { dir: process.env.FLAKE_RECORD_DIR, root: process.env.GITHUB_WORKSPACE };
-  using workspace = temporaryDirectory();
+  using workspace = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   process.env.GITHUB_WORKSPACE = workspace.path;
   process.env.FLAKE_RECORD_DIR = "test-results/flake-records";
   try {
@@ -268,7 +268,7 @@ function registerWithFakeRunner(
 /** Point FLAKE_RECORD_DIR at a fresh temp dir for the duration of the test. */
 function flakeRecordDir() {
   const previous = process.env.FLAKE_RECORD_DIR;
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   process.env.FLAKE_RECORD_DIR = directory.path;
   return {
     records: () =>

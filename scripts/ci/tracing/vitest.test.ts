@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { assembleTrace } from "./tracing.ts";
 
@@ -87,7 +87,7 @@ test(
 );
 
 function vitestRun(enabled: string) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const startedAt = new Date().toISOString();
   const reporter = fileURLToPath(
     new URL(

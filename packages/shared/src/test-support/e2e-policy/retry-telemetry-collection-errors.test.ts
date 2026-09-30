@@ -1,11 +1,11 @@
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 import { TestTelemetryArtifact } from "../ci-telemetry.ts";
-import { temporaryDirectory } from "../temporary-directory.ts";
 
 const CHILD_VITEST_MS = 30_000;
 
@@ -27,7 +27,7 @@ test.for([
   "preserves a %s failure even when other tests pass",
   { timeout: CHILD_VITEST_MS },
   ([failure, source]) => {
-    using fixture = temporaryDirectory();
+    using fixture = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const reporter = fileURLToPath(new URL("./retry-telemetry-reporter.ts", import.meta.url));
     writeFileSync(join(fixture.path, "passing.test.js"), 'test("unrelated pass", () => {});');
     writeFileSync(join(fixture.path, "broken.test.js"), source);

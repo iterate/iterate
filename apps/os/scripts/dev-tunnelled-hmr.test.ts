@@ -9,13 +9,14 @@
 // (apps/notes/README.md). The row serves a Worker that answers every upgrade, with no platform, so
 // it goes red the day the plugin forwards the socket; the README's caveat goes with the wrapper.
 
+import { tmpdir } from "node:os";
+import { mkdtempDisposableSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 import { createFailing } from "@iterate-com/shared/test-support/failing-test";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { createServer } from "vite";
 import { expect, test } from "vitest";
 import { WebSocket } from "ws";
@@ -72,7 +73,7 @@ export default {
 
 /** `vite dev` with the Cloudflare plugin, as the OS's `pnpm dev` runs it, serving WORKER. */
 async function viteDevServingAWorker() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   await writeFile(join(directory.path, "worker.js"), WORKER);
   const vite = await createServer({
     root: directory.path,

@@ -8,7 +8,7 @@
   // Worker-first routing keeps assets off project hosts and lets the Worker gate consent.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
   // No compatibility_date here: it is the one every Iterate Worker shares
-  // (packages/shared/src/compatibility-date.ts COMPATIBILITY_DATE), which
+  // (iterate/compatibility-date COMPATIBILITY_DATE), which
   // scripts/generate-wrangler-config.ts readWranglerBase sets.
   // nodejs_compat, spelled out: the DO's AsyncLocalStorage (node:async_hooks) needs it. Loaded
   // userspace isolates are the pure-play half — context/worker-loader.ts mints them with

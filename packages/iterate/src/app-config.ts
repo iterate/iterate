@@ -11,7 +11,7 @@
 // never silently kept.
 //
 // The schemas: the platform's in apps/os/src/app-config.ts, the apps on top's in
-// start-app-config.ts.
+// packages/shared/src/start-app-config.ts.
 
 import { z } from "zod";
 

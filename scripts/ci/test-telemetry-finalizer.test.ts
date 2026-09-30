@@ -1,11 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import {
   writeTestTelemetryArtifact,
   type TestTelemetryArtifact,
 } from "@iterate-com/shared/test-support/ci-telemetry";
 import { UNIT_ROW_WARN_EXEMPTIONS } from "@iterate-com/shared/test-support/e2e-policy";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { unitTestWorkspaces } from "./test-telemetry-completeness.ts";
 import finalizeTestTelemetry, { unitRowBudget } from "./test-telemetry-finalizer.ts";
@@ -51,7 +51,7 @@ const artifact: TestTelemetryArtifact = {
 };
 
 test("keeps the raw artifacts and writes a manifest of what they prove", async () => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(
     { ...artifact, context: { ...artifact.context, workspace: "os" } },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
@@ -76,7 +76,7 @@ test("keeps the raw artifacts and writes a manifest of what they prove", async (
 });
 
 test("a workspace that left no artifact fails the job after the manifest is written", async () => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(
     { ...artifact, context: { ...artifact.context, workspace: "iterate-root" } },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
@@ -95,7 +95,7 @@ test("a workspace that left no artifact fails the job after the manifest is writ
 // of workspaces in test.yml is main's. PRs #2985, #2986 and #2991 predated @iterate-com/ci-reports
 // (#2969): every test passed and the finalizer failed on the workspace their head does not have.
 test("the Test job expects its checkout's test workspaces, not main's", async () => {
-  using tree = temporaryDirectory();
+  using tree = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeFileSync(join(tree.path, "pnpm-workspace.yaml"), "packages:\n  - apps/os\n  - apps/docs\n");
   for (const [directory, packageJson] of [
     ["apps/os", { name: "os", scripts: { test: "vitest run" } }],
@@ -104,7 +104,7 @@ test("the Test job expects its checkout's test workspaces, not main's", async ()
     mkdirSync(join(tree.path, directory), { recursive: true });
     writeFileSync(join(tree.path, directory, "package.json"), JSON.stringify(packageJson));
   }
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(
     { ...artifact, context: { ...artifact.context, workspace: "os" } },
     { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") },
@@ -131,7 +131,7 @@ test.for([
   { workflowRunId: "122" },
   { workflowRunAttempt: "2" },
 ])("rejects an older runner artifact from another CI scope %j", async (foreignIdentity) => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(artifact, { TEST_TELEMETRY_ARTIFACT_DIR: join(root.path, "raw") });
   writeTestTelemetryArtifact(
     {
@@ -150,7 +150,7 @@ test.for([
 });
 
 test("fails on a runner's unreplaced sentinel after retaining it", async () => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(
     {
       ...artifact,
@@ -174,7 +174,7 @@ test("fails on a runner's unreplaced sentinel after retaining it", async () => {
 });
 
 test("a runner that finished with an error is failure evidence, not incomplete evidence", async () => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryArtifact(
     {
       ...artifact,
@@ -196,7 +196,7 @@ test("a runner that finished with an error is failure evidence, not incomplete e
 test.for([undefined, "unit", "specs", "preview-e2e"] as const)(
   "retains an empty cancelled manifest without inventing a %s suite result before reporters start",
   async (flakeSuites) => {
-    using root = temporaryDirectory();
+    using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
     const artifactRoot = join(root.path, "ci-telemetry");
 
     const artifacts = await finalizeTestTelemetry({ artifactRoot, cancelled: true, flakeSuites });
@@ -208,7 +208,7 @@ test.for([undefined, "unit", "specs", "preview-e2e"] as const)(
 );
 
 test("rejects duplicate artifact IDs instead of double-counting a retried upload", async () => {
-  using root = temporaryDirectory();
+  using root = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const rawDirectory = join(root.path, "raw");
   mkdirSync(join(rawDirectory, "second"), { recursive: true });
   writeFileSync(join(rawDirectory, "first.json"), JSON.stringify(artifact));

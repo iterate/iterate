@@ -27,7 +27,6 @@
 
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { cloudflareAccounts } from "../../envs.ts";
 import { dopplerSecret } from "../lib/env-context.ts";
 
@@ -361,5 +360,4 @@ export async function probeAccount(options: {
   };
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "do-duration-probe" }).run();
+void createCli({ ...import.meta, name: "do-duration-probe" }).run();

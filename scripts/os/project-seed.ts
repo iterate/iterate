@@ -6,7 +6,6 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import type { ItxExpression } from "iterate/expression";
 import { connectIterate } from "iterate/node";
 import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
@@ -433,4 +432,4 @@ export async function apply(options: {
   );
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "project-seed" }).run();
+void createCli({ ...import.meta, name: "project-seed" }).run();

@@ -4,10 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./app-config": "./src/app-config.ts",
-    "./compatibility-date": "./src/compatibility-date.ts",
     "./depot-api": "./src/depot-api.ts",
-    "./dev/is-main-module": "./src/dev/is-main-module.ts",
     "./integration-scopes": "./src/integration-scopes.ts",
     "./test-support/e2e-policy": "./src/test-support/e2e-policy/budgets.ts",
     "./test-support/failing-test": "./src/test-support/failing-test.ts",
@@ -18,7 +15,6 @@
     "./test-support/test-evidence": "./src/test-support/test-evidence.ts",
     "./test-support/fetch-safe-port": "./src/test-support/fetch-safe-port.ts",
     "./test-support/fixture-slug": "./src/test-support/fixture-slug.ts",
-    "./test-support/temporary-directory": "./src/test-support/temporary-directory.ts",
     "./slugify": "./src/slugify.ts",
     "./start-app-config": "./src/start-app-config.ts",
     "./posthog": {
@@ -35,6 +31,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "iterate": "workspace:*",
     "zod": "catalog:"
   },
   "devDependencies": {

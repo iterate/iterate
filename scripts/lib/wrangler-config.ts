@@ -1,4 +1,4 @@
-import { COMPATIBILITY_DATE } from "@iterate-com/shared/compatibility-date";
+import { COMPATIBILITY_DATE } from "iterate/compatibility-date";
 
 /**
  * The one observability posture every Iterate worker deploys with: full

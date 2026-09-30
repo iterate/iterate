@@ -1,4 +1,3 @@
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { dashEnvs } from "../../../envs.ts";
 import { startAppCli } from "../../../scripts/lib/start-app.ts";
 
@@ -10,4 +9,4 @@ export const dash = {
   root: new URL("..", import.meta.url),
   envs: dashEnvs,
 };
-if (isMainModule(import.meta.url)) void startAppCli(dash).run();
+if (import.meta.main) void startAppCli(dash).run();

@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { readFileSync, mkdtempDisposableSync } from "node:fs";
 import { expect, test } from "vitest";
 import {
   ciTelemetrySourceFromEnvironment,
@@ -8,7 +10,6 @@ import {
   writeTestTelemetryFailureSentinel,
   type TestTelemetryArtifact,
 } from "./ci-telemetry.ts";
-import { temporaryDirectory } from "./temporary-directory.ts";
 
 test("normalizes arbitrary runner errors into one JSON-safe model", () => {
   expect(normalizeTestTelemetryError(new TypeError("boom"))).toMatchObject({
@@ -23,7 +24,7 @@ test("normalizes arbitrary runner errors into one JSON-safe model", () => {
 });
 
 test("writes the artifact into the CI directory, relative to the repository root", () => {
-  using repository = temporaryDirectory();
+  using repository = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const artifact: TestTelemetryArtifact = {
     artifactSchemaVersion: 3,
     artifactId: "vitest:@iterate/example:123:456",
@@ -54,7 +55,7 @@ test("writes the artifact into the CI directory, relative to the repository root
 });
 
 test("leaves an explicit failure artifact when a runner never reaches its end hook", () => {
-  using artifactDirectory = temporaryDirectory();
+  using artifactDirectory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeTestTelemetryFailureSentinel(
     {
       artifactId: "vitest:sentinel",

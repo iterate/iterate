@@ -11,7 +11,6 @@
  *
  *   doppler run --project os --config preview -- sh -c 'APP_CONFIG_SECRETS__ADMIN_BEARER="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm os:control-plane-load --worker-base-url https://pr2828-a1b2c3d-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
  */
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { connectIterate } from "iterate/node";
 import { createCli } from "trpc-cli";
 
@@ -124,5 +123,4 @@ export default async function controlPlaneLoad(options: {
     throw new Error("control-plane-load: refusals, mismatches or an index behind — see above");
   console.log("✅ every triple made, indexed and reachable");
 }
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "control-plane-load" }).run();
+void createCli({ ...import.meta, name: "control-plane-load" }).run();

@@ -1,40 +1,48 @@
 ---
 status: done
-size: small
+size: medium
 ---
 
-# apps/os stops importing `@iterate-com/shared/dev/is-main-module`
+# apps/os stops importing four small pieces of packages/shared
 
-Pre-work item 3 for moving apps/os into `core/` (the packages/shared question), first slice.
+Pre-work item 3 for moving apps/os into `core/` (the packages/shared question), first slice. Core
+builds from a clone of itself, so what apps/os needs has to be in core.
 
-Status: done. The slice shrank: see "What changed from the plan".
+Status: done. Two helpers are deleted outright; the two modules the platform shares with the apps
+move into the `iterate` package.
 
 ## Checklist
 
-- [x] `dev/is-main-module`: apps/os/scripts/getin.ts drops its guard (trpc-cli, given
-      `...import.meta`, already runs only when the file is the entry point); apps/os/scripts/build.ts
-      uses Node's own `import.meta.main` _checked: running either file directly runs it; importing
-      build.ts leaves src/generated untouched and importing getin.ts prints nothing_
-- [ ] ~~`app-config` moves to apps/os~~ _dropped: see below_
-- [ ] ~~`compatibility-date` moves to apps/os~~ _dropped: see below_
-- [ ] ~~apps/os gets its own `temporary-directory`~~ _dropped: only worth it if packages/shared stays
-      outside core_
+- [x] `dev/is-main-module` deleted _every user swept: a guard around `createCli({ ...import.meta })`
+      goes (trpc-cli checks the entry point itself); any other guard is `import.meta.main`; the nine
+      hand-rolled `process.argv[1]?.endsWith(...)` checks went the same way except the two that run
+      on the stock image's Node before setup (preview-paths.ts, preview-tested-commit.ts)_
+- [x] `test-support/temporary-directory` deleted _Node 24.4's `fs.mkdtempDisposableSync` returns
+      the same `{ path, [Symbol.dispose] }` shape; 37 files switched; packages/cli lost its only
+      use of @iterate-com/shared_
+- [x] `app-config` (the APP_CONFIG mechanism) moves to `iterate/app-config`, with its test
+- [x] `compatibility-date` moves to `iterate/compatibility-date`
+- [x] docs: typescript-conventions.md and depot-ci.md describe the new entry-point idiom
 - [x] housekeeping: #3456's task file moves to tasks/complete/
 
-## What changed from the plan
+## Decisions
 
-The repo already draws this line (packages/iterate/README.md, "The SDK/platform line"): a module
-goes in `iterate` when user code runs or speaks it, in apps/os when only the platform's Worker runs
-it, and in packages/shared when more than one app needs it and user code never does. Nothing
-outside apps/os may import apps/os (`import-js/no-restricted-paths` in .oxlintrc.json, pinned by
-lint/oxlintrc-platform-line.test.ts). Moving `app-config` and `compatibility-date` into apps/os broke
-that for packages/shared/src/start-app-config.ts and apps/spa/scripts/deploy.ts, and both modules
-are exactly "more than one app needs it, user code never does".
-
-So packages/shared is by design what the platform and the apps share, and the core/ question is
-which of its modules come into core beside apps/os, not how apps/os stops using them.
+- **Why `iterate`, not apps/os.** Nothing outside apps/os may import apps/os
+  (`import-js/no-restricted-paths`, packages/iterate/README.md "The SDK/platform line"), and the
+  first-party apps use the platform through `iterate/*`. app-config and the compatibility date are
+  needed by the platform and by the apps on top (start-app-config.ts, the deploy scripts), so the
+  one home both sides may import that is inside core is `iterate`. A first attempt that moved them
+  into apps/os was refused by that lint rule.
+- **Node versions.** `import.meta.main` needs Node 24.2 and `mkdtempDisposableSync` 24.4. CI runs
+  .nvmrc's Node 24 (24.19.0 on 2026-09-30): after the setup action, `toolchain.sh node` (Kit
+  Firmware) or `setup-node` (merges-with-main). Only preview-paths.ts and preview-tested-commit.ts
+  run before any of those, so they keep comparing `process.argv[1]`.
 
 ## Implementation notes
 
-- First attempt moved app-config, compatibility-date and a temporary-directory copy into apps/os;
-  lint refused the two cross-imports and the change was reset before committing.
+- packages/shared and apps/spa now depend on `iterate` (workspace); deploy-spa.yml redeploys when
+  packages/iterate changes (depot-workflows.test.ts requires it).
+- Checked: every changed CLI prints its usage when run and nothing when imported; importing
+  apps/os/scripts/build.ts leaves src/generated untouched. Tests: packages/iterate, packages/shared,
+  packages/cli, apps/kit, apps/agents, scripts (all but the macOS-bash toolchain and tracing tests,
+  which fail on main too), apps/os (139 files).

@@ -1,5 +1,4 @@
 import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { ciReportsEnvs } from "../../../envs.ts";
@@ -251,4 +250,4 @@ const LogPage = z.object({
   nextPageToken: z.string().default(""),
 });
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "ci-trace" }).run();
+void createCli({ ...import.meta, name: "ci-trace" }).run();

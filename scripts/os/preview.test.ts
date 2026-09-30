@@ -1,6 +1,6 @@
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { mkdirSync, utimesSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import path from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test } from "vitest";
 import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
 import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
@@ -491,7 +491,7 @@ const later = new Date("2026-09-24T00:42:00Z");
 /** A checkout: its lockfile, and node_modules as pnpm leaves it (`.modules.yaml`, and the
  *  lockfile it installed from as `.pnpm/lock.yaml`), each file with its mtime. */
 function freshInstallCheck(input: { lockfile: [string, Date]; installed?: [string, Date] }) {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(path.join(tmpdir(), "iterate-test-"));
   onTestFinished(directory[Symbol.dispose]);
   const root = directory.path;
   writeFileSync(path.join(root, "pnpm-lock.yaml"), input.lockfile[0]);

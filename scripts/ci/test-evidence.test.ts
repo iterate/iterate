@@ -1,9 +1,9 @@
+import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import type { TestTelemetryArtifact } from "@iterate-com/shared/test-support/ci-telemetry";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import {
   TestEvidenceManifest,
   testEvidencePaths,
@@ -557,7 +557,7 @@ test("a file that changed after the manifest listed it is never sent, and the ma
 });
 
 test("a failed step says why in a warning annotation and a line of the job's summary, and leaves the marker the fallback report looks for", () => {
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const summary = join(runner.path, "summary.md");
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -584,7 +584,7 @@ test("a failed step says why in a warning annotation and a line of the job's sum
 
 test("nothing the upload logs or reports carries the API token or the S3 secret derived from it", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   using _clock = fakeClock();
   await write(folder.path);
   const output: unknown[] = [];
@@ -751,7 +751,7 @@ test("finalize: a suite job whose suite never read a deployed target keeps nothi
 
 test("a manifest not written within a minute is a failed write: reported, and the step goes on to its result", async () => {
   using folder = evidenceFolder({ artifacts: [], check: completeCheck });
-  using runner = temporaryDirectory();
+  using runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   using _clock = { [Symbol.dispose]: () => vi.useRealTimers() };
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -784,7 +784,7 @@ test("a manifest not written within a minute is a failed write: reported, and th
 });
 
 test("the source's tree is the files on disk, changes and new files included, and the index is left alone", async () => {
-  using folder = temporaryDirectory();
+  using folder = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const repo = folder.path;
   const git = (...args: string[]) =>
     execFileSync(
@@ -850,7 +850,7 @@ function finalizeInJob(input: {
     artifacts: [artifact("vitest:os:1", "2026-09-24T07:23:01.000Z", "2026-09-24T07:25:00.000Z")],
     target: input.target ? target : undefined,
   });
-  const runner = temporaryDirectory();
+  const runner = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const repo = folder.path;
   const git = (...args: string[]) =>
     execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", ...args], {
@@ -944,7 +944,7 @@ function evidenceFolder(input: {
   check?: object;
   target?: object;
 }) {
-  const folder = temporaryDirectory();
+  const folder = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const put = (path: string, contents: string) => {
     mkdirSync(join(folder.path, path, ".."), { recursive: true });
     writeFileSync(join(folder.path, path), contents);

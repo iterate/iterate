@@ -9,12 +9,12 @@
 // Loading (.ts, .mjs, CommonJS .js), a missing dependency and reconnecting are packages/cli
 // src/provide.test.ts; the lend's own machinery, e2e/rpc-stubs-*.e2e.test.ts.
 
+import { tmpdir } from "node:os";
 import { execFile, type ChildProcess } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { errorCode } from "iterate/lib";
 import { expect, test } from "vitest";
 import {
@@ -77,7 +77,7 @@ test(
 /** A folder that is a package of its own: `greeter.ts` imports `greeting` from its own
  *  node_modules, which the CLI does not have. */
 function providedFolder() {
-  const folder = temporaryDirectory();
+  const folder = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   writeFileSync(join(folder.path, "package.json"), JSON.stringify({ type: "module" }));
   mkdirSync(join(folder.path, "node_modules/greeting"), { recursive: true });
   writeFileSync(
@@ -106,7 +106,7 @@ function providedFolder() {
 }
 
 async function cliConfig() {
-  const directory = temporaryDirectory();
+  const directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   mkdirSync(join(directory.path, "iterate"));
   writeFileSync(
     join(directory.path, "iterate/config.json"),

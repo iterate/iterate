@@ -32,7 +32,6 @@ import { dirname } from "node:path";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   HttpAnswerError,
@@ -1367,5 +1366,4 @@ export async function previousState(options: { out: string }) {
   });
 }
 
-if (isMainModule(import.meta.url))
-  void createCli({ ...import.meta, name: "prd-fault-alarm" }).run();
+void createCli({ ...import.meta, name: "prd-fault-alarm" }).run();

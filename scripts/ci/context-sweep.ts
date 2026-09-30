@@ -41,7 +41,6 @@ import type { IterateSessionApi } from "iterate/api";
 import { connectIterate, type IterateConnection } from "iterate/node";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
-import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import {
   CI_HTTP,
   failureKind,
@@ -485,4 +484,4 @@ function required(name: string): string {
   return value;
 }
 
-if (isMainModule(import.meta.url)) void createCli({ ...import.meta, name: "context-sweep" }).run();
+void createCli({ ...import.meta, name: "context-sweep" }).run();

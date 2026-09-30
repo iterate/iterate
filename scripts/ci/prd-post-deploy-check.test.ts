@@ -1,7 +1,7 @@
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { fakeSlack } from "./fake-slack.ts";
@@ -253,7 +253,7 @@ test.for<{ case: string; body: string; exit: number; version: string }>([
   { case: "prd answers another error", body: "error code: 1101", exit: 22, version: "" },
   { case: "prd does not answer", body: "", exit: 28, version: "" },
 ])("the version read before a deploy: $case → `$version`", ({ body, exit, version }) => {
-  using directory = temporaryDirectory();
+  using directory = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   // a curl on PATH that answers $BODY with exit code $EXIT, printing an HTTP error's body only
   // under --fail-with-body, as curl does
   writeFileSync(
