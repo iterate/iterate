@@ -16,7 +16,7 @@ appending work that fails climbs one hop a lap, stops at 8, goes quiet", asserts
 `expect(depths.length).toBeLessThan(20)`. About 1–2% of runs append 20 or more `test/work` events
 and fail (CI "Test / test" on PR #3488, Depot run 7v0w6p36fz, job 4vj94xb8p3; the retry passed).
 
-The durable retry ladder is jittered ±20% (`packages/iterate/src/platform-retry.ts`
+The durable retry ladder is jittered ±20% (`core/lib/src/platform-retry.ts`
 `durableLadderDelayMs`, `Math.random()`), so the order in which pending records come due differs
 run to run, and with it how many times the climb restarts.
 
