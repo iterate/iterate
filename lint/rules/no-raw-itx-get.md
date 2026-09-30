@@ -12,7 +12,7 @@ unless an arrow answers it whole (an accessor, `() => this.getItx()`).
 the context is evicted. Releasing the scope in a `finally` is not enough: the calls made through it
 stay open. `getItx()` hands out the same scope, recorded: disposing it releases the scope, every
 call made through it, and every handle it awaited, with the calls made on that handle
-([itx-scope.ts](../../packages/iterate/src/sdk/itx-scope.ts),
+([itx-scope.ts](../../core/lib/src/sdk/itx-scope.ts),
 [residency](../../core/os/docs/residency.md)). `using` disposes it when the block ends;
 `const itx = this.getItx()` never does.
 

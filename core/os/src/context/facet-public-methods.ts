@@ -11,7 +11,7 @@
 //      — the method called on the facet, or the property read off it — must be on that list, or the
 //      call is refused FORBIDDEN before it reaches the facet. Later steps walk what that member
 //      answered: handing that out is the member's own decision.
-//   2. The SDK's facet shells list generously (packages/iterate/src/sdk): `FacetDurableObject`
+//   2. The SDK's facet shells list generously (core/lib/src/sdk): `FacetDurableObject`
 //      lists `fetch`; `StreamProcessorDurableObject` adds `snapshot`, `liveSnapshot` and
 //      `waitUntilProcessed`. A subclass lists its own on top: `[...super.publicMethods, "message"]`.
 //   3. What feeds a facet is on no list: `processEventBatch`, `catchUpFromLog` and `revive` are the

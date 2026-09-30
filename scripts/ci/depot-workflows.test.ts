@@ -1305,7 +1305,7 @@ test("the preview's e2e suite writes the canonical telemetry artifact", () => {
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
   // Core imports nothing outside it, so its workspaces take the reporter by path from the Test job.
-  const core = ["core/os", "packages/iterate"];
+  const core = ["core/os", "core/lib"];
   const runTests = loadWorkflow(".depot/workflows/test.yml")
     .jobs.test?.steps?.flatMap((step) => step.parallel || [step])
     .find((step) => step.id === "tests");

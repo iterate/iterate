@@ -258,7 +258,7 @@ request. `admins` beside `login.password` or paths ingress routing is refused
 except on a preview or local dev: anyone with the password could sign in as an
 admin, and under paths a project's own code runs on the issuer's origin.
 
-The `iterate` CLI (`packages/cli`) takes the bearer from
+The `iterate` CLI (`core/lib/src/cli`) takes the bearer from
 `APP_CONFIG_SECRETS__ADMIN_BEARER`, ahead of `ITERATE_BEARER_TOKEN` and any stored
 login:
 

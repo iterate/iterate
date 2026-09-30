@@ -24,7 +24,7 @@ Read when relevant:
 - [Testing](docs/testing.md) · [Browser specs](./test/playwright/AGENTS.md) · [Vitest patterns and the shape of a test](docs/vitest-patterns.md); a PR that changes residency, alarms, claims or facet lifetimes turns on the [slow e2e rows](docs/testing.md#slow-rows)
 - [Depot CI](docs/depot-ci.md): workflows, running CI without a PR, runs, logs, artifacts, and waiting on checks
 - TypeScript style: [coding style](docs/coding-style.md) · [conventions](docs/typescript-conventions.md) · [code rules](docs/jonasland-rules.md) · [identifiers](docs/identifiers.md)
-- [Event types](packages/iterate/README.md#event-types): naming rules for every `events.iterate.com` type; `lint/event-types.test.ts` enforces them
+- [Event types](core/lib/README.md#event-types): naming rules for every `events.iterate.com` type; `lint/event-types.test.ts` enforces them
 - [Frontend development](docs/frontend-development.md) for the client apps
 - [Brand and tone of voice](docs/brand-and-tone-of-voice.md) for user-facing copy
 - [Instruction maintenance](docs/writing-agent-docs.md): instructions live in `AGENTS.md` files only

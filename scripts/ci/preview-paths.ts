@@ -51,9 +51,8 @@ export const previewPaths = [
   "!apps/kit/firmware/**",
   // the suites that drive the preview: vitest's and Playwright's (test/AGENTS.md)
   "test/**",
-  // test/vitest/os/iterate-cli.e2e.test.ts drives the built CLI.
-  "packages/cli/**",
-  "packages/iterate/**",
+  // the SDK, and the CLI that test/vitest/os/iterate-cli.e2e.test.ts drives built
+  "core/lib/**",
   // the agents and voice rows install these (test/vitest/agents), and the docs spec this one
   "packages/agents/**",
   "packages/voice/**",

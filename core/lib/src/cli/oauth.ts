@@ -8,9 +8,9 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import * as oauth from "oauth4webapi";
-import { isLocalOrigin } from "iterate/lib";
-import { authorizationCodeRequest, authorizationServer } from "iterate/oauth";
-import type { OAuthScope } from "iterate/oauth-scopes";
+import { isLocalOrigin } from "../lib.ts";
+import { authorizationCodeRequest, authorizationServer } from "../client/oauth.ts";
+import type { OAuthScope } from "../oauth-scopes.ts";
 import type { StoredSession } from "./config.ts";
 
 /** The platform API's audience (the RFC 8707 resource) at `osBaseUrl`, local port included. */

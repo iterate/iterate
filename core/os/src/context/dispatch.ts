@@ -4,7 +4,7 @@
 // (facet-host.ts), the subscription delivery loop (stream/subscription-delivery.ts) and a context's
 // RPC `invoke` (iterate-context-durable-object.ts) — so it is core/os's, not the SDK's. The codec it
 // walks (parse ⇄ print) and the dotted surface it answers with (`InvokeHandle`) are the SDK's
-// (packages/iterate/src/expression.ts): user code spells expressions and holds handles too.
+// (core/lib/src/expression.ts): user code spells expressions and holds handles too.
 //   walk      — `walkSteps` / `callOn` and the brands registered at boot
 //   brands    — `FacetHandle` / `RpcStubHandle`, what the delivery loop reads
 //   answers   — `itxAnswerDetachedFromSession` / `materializeItxHandleReference`: a handle on the wire

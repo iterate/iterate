@@ -48,4 +48,16 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
   },
+  {
+    // The `iterate` bin's module (bin/iterate.js imports dist/cli.mjs), with the SDK modules it uses.
+    entry: { cli: "src/cli/cli.ts" },
+    format: "esm",
+    fixedExtension: true,
+    platform: "node",
+    target: "node22",
+    tsconfig: "tsconfig.cli.json",
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
 ]);

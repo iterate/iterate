@@ -9,18 +9,17 @@ import {
   writeFileSync,
   mkdtempDisposableSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget } from "capnweb";
 import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
-import { connectIterate } from "iterate/node";
+import { connectIterate } from "../node.ts";
 import { claudeMcpArgs, claudeMcpCommand, preflightMcp, shellCommand } from "./cli.ts";
 import { MyComputer } from "./use-my-computer.ts";
 
-const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+const bin = fileURLToPath(new URL("../../bin/iterate.js", import.meta.url));
 
 test("bare invocation and all command help work offline", { timeout: 20_000 }, async () => {
   using config = cliConfig("http://127.0.0.1:1");
@@ -247,12 +246,12 @@ test(
 test("a pnpm shim for this package does not redirect source development to stale dist", async () => {
   using scratch = mkdtempDisposableSync(join(tmpdir(), "iterate-test-"));
   const directory = scratch.path;
-  for (const path of ["bin", "src", "dist", "node_modules/.bin", "node_modules/@iterate-com"])
+  for (const path of ["bin", "src/cli", "dist", "node_modules/.bin"])
     mkdirSync(join(directory, path), { recursive: true });
   copyFileSync(bin, join(directory, "bin/iterate.js"));
   writeFileSync(join(directory, "package.json"), '{"type":"module"}');
   writeFileSync(
-    join(directory, "src/cli.ts"),
+    join(directory, "src/cli/cli.ts"),
     'export async function runCli() { console.log("source"); }',
   );
   writeFileSync(
@@ -260,7 +259,7 @@ test("a pnpm shim for this package does not redirect source development to stale
     'export async function runCli() { console.log("build"); }',
   );
   writeFileSync(join(directory, "node_modules/.bin/iterate"), "#!/bin/sh\n");
-  symlinkSync(directory, join(directory, "node_modules/@iterate-com/cli"));
+  symlinkSync(directory, join(directory, "node_modules/iterate"));
   for (const [force, expected] of [
     ["0", "source"],
     ["1", "build"],
@@ -363,7 +362,7 @@ test("menu-bar sharing releases its provision on stdin EOF", { timeout: 15_000 }
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("No port");
   const source = `
-    import { connectIterate } from ${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("iterate/node")).href)};
+    import { connectIterate } from ${JSON.stringify(new URL("../node.ts", import.meta.url).href)};
     import { shareMyComputer } from ${JSON.stringify(new URL("./use-my-computer.ts", import.meta.url).href)};
     using connection = await connectIterate({ baseUrl: "http://127.0.0.1:${address.port}", auth: { type: "bearer", token: "test" } });
     await shareMyComputer({ connection, project: "demo", name: "testComputer", json: true });

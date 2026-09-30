@@ -45,7 +45,7 @@ is the entire runtime-specific binding around the shared client.
 **The shadcn components are vendored** ([packages/ui/AGENTS.md](../packages/ui/AGENTS.md)): each file is exactly what `shadcn add` writes, and nobody edits one. Customise a component at the call site (a `className`, a prop) or in a wrapper of our own in `packages/ui`. They keep upstream's `dark:` classes: don't strip them. Refresh them all with `node scripts/ci/shadcn-drift.ts refresh`, then review the diff. A pull request that touches one runs the drift check (`.depot/workflows/shadcn-drift.yml`), which fails when a file differs from `shadcn add`. `cn` comes from the `cn` package.
 
 The backend surface is the platform's one API — declared in
-[`packages/iterate/src/api.ts`](../packages/iterate/src/api.ts) (never
+[`core/lib/src/api.ts`](../core/lib/src/api.ts) (never
 generated; `core/os` asserts its classes satisfy it), and served by
 [`core/os`](../core/os/README.md).
 
@@ -70,11 +70,11 @@ generated; `core/os` asserts its classes satisfy it), and served by
 The whole tab shares **one** WebSocket — `authenticate()`d with the session the
 app Worker's OAuth gate resolved from its `__Host-` cookie — and everything — the
 shell's project switcher, every page, every live subscription — rides it. The
-connection layer ([`packages/iterate/src/app.ts`](../packages/iterate/src/app.ts),
+connection layer ([`core/lib/src/app.ts`](../core/lib/src/app.ts),
 exported as `iterate/app`) keeps it in module state (outside React), so it
 survives client-side navigation, and makes **reconnect cheap and quiet**:
 connecting tries for a while (`openSocketWithRetry` in
-[`client/socket.ts`](../packages/iterate/src/client/socket.ts), ≈16 s of
+[`client/socket.ts`](../core/lib/src/client/socket.ts), ≈16 s of
 attempts) before an error reaches the page, and the `api` a page holds is a proxy
 to the CURRENT connection — when the socket closes, the next call opens a fresh
 one and pipelines onto it, so a dropped connection costs a reconnect, not the
@@ -87,7 +87,7 @@ What reconnect does not do: a live subscription is bound to the socket it was
 made on. `useLiveState` and `useIterateContext` re-subscribe when the handle you
 pass them changes, and deliberately carry no reconnect/backoff/ping policy of
 their own — "that policy belongs to whoever owns the capnweb session"
-([`client/react.tsx`](../packages/iterate/src/client/react.tsx)).
+([`client/react.tsx`](../core/lib/src/client/react.tsx)).
 
 Rules of thumb (the LiveView analogy — the server owns durable reduced views,
 React owns local interaction):
@@ -103,7 +103,7 @@ React owns local interaction):
 
 A page gets its handles from the route context and its live data from one
 import, `import { … } from "iterate/react"`
-([`packages/iterate/src/client/react.tsx`](../packages/iterate/src/client/react.tsx)).
+([`core/lib/src/client/react.tsx`](../core/lib/src/client/react.tsx)).
 
 ### Get a handle
 
@@ -183,7 +183,7 @@ fast as one of ten) and the page below what it holds on `older.loadOlder()`;
 `history: "all"` reads every page, for a consumer that folds the whole log (the
 agents chat). `ContextView` takes the hook's result whole, as `context`, renders the
 log, the processors with their live state and who is here, and asks for older pages
-as the reader scrolls up (`packages/iterate/src/client/event-log.ts`). An app adds
+as the reader scrolls up (`core/lib/src/client/event-log.ts`). An app adds
 its own sentences per event type (`renderers`, matched by exact type or `prefix*`)
 and inspector bodies (`inspectors`):
 
