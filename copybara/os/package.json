@@ -7,7 +7,6 @@
     "build": "CLOUDFLARE_ENV=self-host pnpm --filter os build"
   },
   "devDependencies": {
-    "@iterate-com/shared": "workspace:*",
     "zod": "catalog:"
   }
 }

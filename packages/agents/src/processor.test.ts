@@ -2,7 +2,7 @@
 // `{ events → state }` rows on the shared harness (iterate/stream/test-support
 // `reduceProcessor`), and the assistant-output parser's rows. The effects — the birth saga, the
 // model call, the script run, the breakers as appends — are proven end to end on the worker
-// (apps/agents/e2e/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
+// (test/vitest/agents/agents.e2e.test.ts, a fake `itx.ai` lent by rule).
 
 import { expect, test, vi } from "vitest";
 import { reduceProcessor } from "iterate/stream/test-support";
@@ -309,16 +309,16 @@ test.for<{
 test.for<{ name: string; source?: { origin: string }; from?: string; label?: string }>([
   {
     name: "another agent's append: its stamp",
-    source: { origin: "/agents/a/sandbox" },
-    label: "/agents/a/sandbox",
+    source: { origin: "/agents/a" },
+    label: "/agents/a",
   },
   { name: "the agent's own words: no sender", source: { origin: "/agents/b" } },
   { name: "the root's append (a member's session, the dash): a person's", source: { origin: "/" } },
   {
     name: "relayed by its own facet (`message`): the sender handed over",
     source: { origin: "/agents/b" },
-    from: "/agents/a/sandbox",
-    label: "/agents/a/sandbox",
+    from: "/agents/a",
+    label: "/agents/a",
   },
   {
     name: "relayed from the root's collection: a person's",
@@ -363,12 +363,12 @@ test("buildChatMessages: text items stay text; the developer's notes read as sys
 test("buildChatMessages: an item another context appended opens with who it is from, attachments or not", () => {
   const [said, attached] = buildChatMessages(
     [
-      { offset: 1, role: "user", content: "hello", from: "/agents/a/sandbox" },
+      { offset: 1, role: "user", content: "hello", from: "/agents/b" },
       { offset: 2, role: "user", content: "see", from: "/agents/a", files: [pdf] },
     ],
     new Map(),
   );
-  expect(said).toEqual({ role: "user", content: "[from /agents/a/sandbox] hello" });
+  expect(said).toEqual({ role: "user", content: "[from /agents/b] hello" });
   expect(attached?.content).toMatch(/^\[from \/agents\/a\] see\n\[Attached file: spec\.pdf/);
 });
 test("buildChatMessages: an image whose bytes are known becomes an image part beside the text — a data: URL", () =>
@@ -464,23 +464,23 @@ test("renderScriptSettlement: a settlement renders as the next developer item; a
 
 // ── the capability tree the model reads ──
 
-test("renderCapabilityTree: one line per row, masks and the sandbox's own link omitted, grouped by the context each row came from", () => {
+test("renderCapabilityTree: one line per row, masks and the agent's own link omitted, grouped by the context each row came from", () => {
   expect(renderCapabilityTree([])).toBeNull();
   expect(
     renderCapabilityTree([
-      { match: "itx", target: "itx.builtins.cd('/agents/a')", context: "/agents/a/sandbox" },
-      { match: "itx.kv", target: null, context: "/agents/a/sandbox" },
+      { match: "itx", target: "itx.builtins.cd('/')", context: "/agents/a" },
+      { match: "itx.kv", target: null, context: "/agents/a" },
       {
         match: "itx.catalogue",
         target: "itx.builtins.cd('/').catalogue",
         description: "search the catalogue: itx.catalogue({ q })",
-        context: "/agents/a/sandbox",
+        context: "/agents/a",
       },
     ]),
   ).toBe(
     [
       "`itx` IS THIS CONTEXT'S CAPABILITY TREE (`await itx.rewriteRules.list()`) — every name below is one you can spell inside a tag; nothing else resolves:",
-      "from /agents/a/sandbox:",
+      "from /agents/a:",
       "itx.catalogue — search the catalogue: itx.catalogue({ q })",
     ].join("\n"),
   );

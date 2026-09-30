@@ -129,7 +129,7 @@ export async function sync(options: {
 }
 
 /**
- * The self-host recipe (apps/os/public/setup-prompt.md) against a fresh clone of iterate/os, as far
+ * The self-host recipe (core/os/public/setup-prompt.md) against a fresh clone of iterate/os, as far
  * as it goes without a Cloudflare account: the install (with --frozen-lockfile, which proves the
  * copy's lockfile), the self-host build, a dry-run deploy, and the SDK imports its later steps run.
  * After all that, `git status` in the clone must be clean.
@@ -156,7 +156,7 @@ function checkSelfHost(input: { repo: string; credentials: string; work: string 
   );
   run("pnpm", ["install", "--frozen-lockfile"], clone);
   run("pnpm", ["--filter", "os", "build"], clone, { CLOUDFLARE_ENV: "self-host" });
-  const os = join(clone, "apps/os");
+  const os = join(clone, "core/os");
   run(
     "pnpm",
     ["exec", "wrangler", "deploy", "--config", "dist/server/wrangler.json", "--dry-run"],
@@ -254,7 +254,7 @@ function copybaraJar() {
 }
 
 /** iterate/os's workspace packages: what copy.bara.sky's `os` workflow copies of this repo's. */
-const OS_PACKAGES = ["apps/os", "packages/iterate", "packages/shared", "packages/ui"];
+const OS_PACKAGES = ["core/os", "packages/iterate", "packages/shared", "packages/ui"];
 const OS_WORKSPACE_HEADER =
   "# iterate/os's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for\n" +
   "# these packages alone, with the same settings and the catalog trimmed to what they use.\n";
@@ -295,16 +295,34 @@ export async function root(options: {
     // With an empty metadata cache of its own, pnpm reads each package's manifest from the registry,
     // where a published version never changes, so every machine writes the same lockfile. A
     // laptop's cache once gave crossws@0.4.4 another peer range than CI's, and the check went stale.
-    execFileSync(
-      "pnpm",
-      [
-        "install",
-        "--lockfile-only",
-        "--ignore-scripts",
-        `--config.cache-dir=${join(scratch, ".pnpm-cache")}`,
-      ],
-      { cwd: scratch, stdio: ["ignore", "ignore", "inherit"] },
+    const lockfileOnly = (extra: string[]) =>
+      execFileSync(
+        "pnpm",
+        [
+          "install",
+          "--lockfile-only",
+          "--ignore-scripts",
+          `--config.cache-dir=${join(scratch, ".pnpm-cache")}`,
+          ...extra,
+        ],
+        { cwd: scratch, stdio: ["ignore", "ignore", "inherit"] },
+      );
+    // pnpm refuses a patch for a package nothing installs, and this repo patches packages the copy
+    // may not use (@cloudflare/vitest-plugin, once only test/ used it): resolve once allowing them,
+    // then keep the patches whose package the copy's lockfile resolves.
+    lockfileOnly(["--config.allow-unused-patches=true"]);
+    const resolved = readFileSync(join(scratch, "pnpm-lock.yaml"), "utf8");
+    const scratchWorkspace = join(scratch, "pnpm-workspace.yaml");
+    writeFileSync(
+      scratchWorkspace,
+      readFileSync(scratchWorkspace, "utf8").replace(
+        /^ {2}"?([^"\s:][^"\n]*?)"?: patches\/.*\n/gmu,
+        (line, key: string) =>
+          resolved.includes(`\n  ${key}(`) || resolved.includes(`\n  '${key}(`) ? line : "",
+      ),
     );
+    cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(scratch, "pnpm-lock.yaml"));
+    lockfileOnly([]);
     const files = {
       "pnpm-workspace.yaml":
         OS_WORKSPACE_HEADER + readFileSync(join(scratch, "pnpm-workspace.yaml"), "utf8"),

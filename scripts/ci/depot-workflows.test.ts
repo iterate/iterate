@@ -96,7 +96,8 @@ const depotWorkflowFiles = readdirSync(resolve(repoRoot, ".depot/workflows"))
 // Every production deploy workflow is `deploy-<app>.yml` for `apps/<app>`.
 const deploymentWorkflows = depotWorkflowFiles.flatMap((file) => {
   const app = /^\.depot\/workflows\/deploy-(.+)\.yml$/.exec(file)?.[1];
-  return app ? [{ file, app }] : [];
+  // the platform is core/os; every other deployed app is in apps/
+  return app ? [{ file, app, directory: app === "os" ? "core/os" : `apps/${app}` }] : [];
 });
 
 const workspaceDirectories = (
@@ -176,11 +177,11 @@ test.for([{ file: ".depot/workflows/test.yml" }, { file: ".depot/workflows/lint-
 
 test.each(deploymentWorkflows)(
   "$file redeploys when its app or a workspace package it depends on changes",
-  ({ file, app }) => {
+  ({ file, directory }) => {
     const workspaceByName = new Map(
       workspaceDirectories.map((directory) => [readPackageJson(directory).name, directory]),
     );
-    const packageJson = readPackageJson(`apps/${app}`);
+    const packageJson = readPackageJson(directory);
     const workspaceDependencies = Object.entries({
       ...packageJson.dependencies,
       ...packageJson.devDependencies,
@@ -191,7 +192,7 @@ test.each(deploymentWorkflows)(
     expect(loadWorkflow(file).on?.push?.paths).toEqual(
       expect.arrayContaining([
         file,
-        `apps/${app}/**`,
+        `${directory}/**`,
         ...workspaceDependencies.map((directory) => `${directory}/**`),
       ]),
     );
@@ -201,7 +202,7 @@ test.each(deploymentWorkflows)(
 test.each(deploymentWorkflows.filter(({ app }) => app !== "os"))(
   "$file does not redeploy for the platform's source, which no client imports",
   ({ file }) => {
-    expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "apps/os/src/worker.ts")).toBe(false);
+    expect(triggers(loadWorkflow(file).on?.push?.paths ?? [], "core/os/src/worker.ts")).toBe(false);
   },
 );
 
@@ -224,7 +225,7 @@ test("deploy-spa.yml ignores the root manifests and lockfile: capnweb ships with
 
 test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests or preview tooling", () => {
   const paths = loadWorkflow(".depot/workflows/deploy-os.yml").on?.push?.paths ?? [];
-  const shipped = ["apps/os/src", "apps/os/public"].flatMap((directory) =>
+  const shipped = ["core/os/src", "core/os/public"].flatMap((directory) =>
     readdirSync(resolve(repoRoot, directory), { recursive: true, withFileTypes: true })
       .filter((entry) => entry.isFile() && !entry.name.endsWith(".test.ts"))
       .map((entry) => relative(repoRoot, join(entry.parentPath, entry.name))),
@@ -233,28 +234,29 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
   expect(shipped.length).toBeGreaterThan(0);
   expect(shipped.filter((file) => !triggers(paths, file))).toEqual([]);
   for (const file of [
-    "apps/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
-    "apps/os/scripts/build.ts",
+    "core/os/public/setup-prompt.md", // served at os.iterate.com/setup-prompt.md
+    "core/os/scripts/build.ts",
     "scripts/os/deploy.ts",
-    "apps/os/scripts/generate-wrangler-config.ts",
-    "apps/os/vite.config.ts",
-    "apps/os/wrangler.base.jsonc",
+    "core/os/scripts/generate-wrangler-config.ts",
+    "core/os/vite.config.ts",
+    "core/os/wrangler.base.jsonc",
     "configs/default/AGENTS.md", // build.ts bakes it into the Worker
     "scripts/lib/deploy-app.ts",
   ]) {
     expect(triggers(paths, file), `${file} deploys`).toBe(true);
   }
   for (const file of [
-    "apps/os/README.md",
-    "apps/os/SELF-HOSTING.md",
-    "apps/os/docs/project-seeds.md",
-    "apps/os/e2e/AGENTS.md",
-    "apps/os/e2e/support/client.ts",
-    "apps/os/src/project/templates.test.ts",
-    "apps/os/__workers-tests__/support.ts",
-    "apps/os/bench/api.bench.ts",
-    "apps/os/perf/push-delivery.perf.test.ts",
-    "apps/os/perf/latency.ts",
+    "core/os/README.md",
+    "core/os/SELF-HOSTING.md",
+    "core/os/docs/project-seeds.md",
+    "test/AGENTS.md",
+    "test/helpers/client.ts",
+    "core/os/src/project/templates.test.ts",
+    "test/vitest/os-workers/support.ts",
+    "test/helpers/fake-artifacts.ts",
+    "test/vitest/os/bench/api.bench.ts",
+    "test/vitest/os/perf/push-delivery.perf.test.ts",
+    "test/vitest/os/perf/latency.ts",
     "scripts/os/preview.ts",
     "scripts/os/preview-config.ts",
     "scripts/os/e2e-soak.ts",
@@ -377,9 +379,8 @@ test("runs OS and Notes stateful proofs only against an isolated preview", () =>
     expect.arrayContaining([
       ".depot/workflows/deploy-os.yml",
       ".depot/workflows/deploy-notes.yml",
-      // the root Playwright suite (specs/AGENTS.md) runs only here
-      "specs/**",
-      "playwright.config.ts",
+      // the suites against a running system (test/AGENTS.md) run only here
+      "test/**",
     ]),
   );
 });
@@ -459,7 +460,7 @@ test("uses only GitHub's job-scoped token for GitHub API calls", () => {
 });
 
 // The agents rows install the published build of the tested commit's merge base with main
-// (apps/agents/e2e/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
+// (test/vitest/agents/support.ts `publishedPackage`), which they ask GitHub for, given the commit: a
 // shallow checkout has no origin/main to find it in. (Preview OS names its tested head at run time.)
 test.for([
   {
@@ -709,7 +710,7 @@ test("the PR time-to-green check's checks are workflows by their names", () => {
 // The health job reads what other workflows keep (scripts/monitors): each is a workflow by its name
 // that uploads the artifact the check reads, whatever its tests' outcome, and the file in it.
 test.for([
-  { ...latencyReport, path: `apps/os/output/${latencyReport.file}` },
+  { ...latencyReport, path: `test/output/${latencyReport.file}` },
   { ...realModelTelemetry, path: "test-results/ci-telemetry" },
 ])("the health job reads $workflow's $artifact", ({ workflow, artifact, path }) => {
   const [measured] = depotWorkflowFiles
@@ -1277,7 +1278,11 @@ test("runs every workspace test script, then Kit's firmware host tests", () => {
     (step) => !!step.run?.includes("pnpm --dir apps/kit firmware:test:host"),
   );
 
-  expect(readPackageJson(".").scripts?.test).toBe("pnpm -r --parallel test");
+  // core/os built once, first: test/'s Workers suite runs the built worker, and no workspace's own
+  // script builds it beside another's
+  expect(readPackageJson(".").scripts?.test).toBe(
+    "pnpm --filter os build && pnpm -r --parallel test",
+  );
   // and no secret: no unit test reads one
   expect(steps[runTests]).toMatchObject({ run: "pnpm test" });
   expect(steps[runTests]?.env?.DOPPLER_TOKEN).toBeUndefined();
@@ -1296,18 +1301,30 @@ test("the Lint check runs the root lint script that local runs use", () => {
 
 test("the preview's e2e suite writes the canonical telemetry artifact", () => {
   // The preview runs `e2e:run` alone (it must not rebuild the deployed dist/); the reporters are a
-  // root option of apps/os's vitest config, so every project's run writes it.
-  expect(readVitestConfig("apps/os")).toMatch(/^ {4}reporters: vitestReporters,$/m);
+  // root option of test/'s vitest config, so every project's run writes it.
+  expect(readVitestConfig("test")).toMatch(/^ {4}reporters: vitestReporters,$/m);
 });
 
 test("every unit-test workspace writes the canonical telemetry artifact", () => {
+  // Core imports nothing outside it, so its workspaces take the reporter by path from the Test job.
+  const core = ["core/os", "packages/iterate"];
+  const runTests = loadWorkflow(".depot/workflows/test.yml")
+    .jobs.test?.steps?.flatMap((step) => step.parallel || [step])
+    .find((step) => step.id === "tests");
+  expect(runTests?.env?.VITEST_EXTRA_REPORTERS).toMatch(
+    /\/packages\/shared\/src\/test-support\/e2e-policy\/retry-telemetry-reporter\.ts$/,
+  );
   const expectedWorkspaces = workspaceDirectories.flatMap((directory) => {
     const packageJson = readPackageJson(directory);
     if (!packageJson.scripts?.test) return [];
     expect(
       readVitestConfig(directory),
       `${directory}/vitest.config.ts must install the canonical test telemetry reporter`,
-    ).toMatch(/reporters: vitestReporters/);
+    ).toMatch(
+      core.includes(directory)
+        ? /process\.env\.VITEST_EXTRA_REPORTERS/
+        : /reporters: vitestReporters/,
+    );
     return [packageJson.name];
   });
 

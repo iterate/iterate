@@ -1,6 +1,6 @@
 # @iterate-com/cli
 
-The `iterate` command for Iterate (`apps/os`). Requires Node >=22.18; no Bun runtime. It is
+The `iterate` command for Iterate (`core/os`). Requires Node >=22.18; no Bun runtime. It is
 built on the SDK, [`iterate`](../iterate/README.md). `npm install -g @iterate-com/cli` installs
 the `iterate` command the examples below use.
 
@@ -34,7 +34,7 @@ commands use neither, nor the stored login: each signs in in the browser with th
 `account` scope for its one call and ends that sign-in, so a stored login mints
 no key. `mcp claude` prints a command that reads the key from
 `$ITERATE_BEARER_TOKEN`, never the key itself. See
-[credentials](../../apps/os/docs/credentials.md).
+[credentials](../../core/os/docs/credentials.md).
 `ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
 
 ## Running scripts
@@ -96,13 +96,13 @@ then the route is gone too, until the tunnel runs again.
 On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
 platform's own origin, such as a per-PR preview), the local server must serve under the printed
 base path (Vite: `--base`). A deployment with a domain gives each tunnel its own origin:
-[custom domain](../../apps/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
+[custom domain](../../core/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
 
 ### Without the CLI
 
 A tunnel is one capnweb session: lend the project a fetch-shaped `RpcTarget` with a fetch route
 to it (`provide`'s `fetchRoute`, which ends with the lend), and delete the route on exit.
-[apps/os/examples/serve-localhost.mjs](../../apps/os/examples/serve-localhost.mjs) is the whole
+[core/os/examples/serve-localhost.mjs](../../core/os/examples/serve-localhost.mjs) is the whole
 thing, runnable (`npm install capnweb@npm:@iterate-com/capnweb`):
 
 ```js

@@ -5,7 +5,7 @@
 //   invoke handle — `InvokeHandle` + the prototype hop: the DOTTED SURFACE, every unknown chain one
 //                   `invoke(expression)` — what `itx.facets.get(name)` and every other mid-chain
 //                   capability of api.ts is, and what a connector builds over a remote API
-// What the PLATFORM does with an expression is apps/os: the rewrite rules (match, rank, rewrite) are
+// What the PLATFORM does with an expression is core/os: the rewrite rules (match, rank, rewrite) are
 // src/context/itx-expression-rewriting.ts, and executing a rewritten call against a live object graph
 // (`walkSteps`, the answer a context hands back) is src/context/dispatch.ts.
 import JSON5 from "json5";
@@ -50,11 +50,11 @@ const RESERVED = new Set(["__proto__", "constructor", "prototype"]);
 // marker is ONE reserved literal, `{ "@": true }`, and the merge entry the key `"...@"` with the value
 // `true` — so the stored form is plain JSON, and those two spellings are unspellable as literals in a
 // target (the codec's one reservation). What `@` MEANS is `fillItxExpressionHoles` in
-// apps/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
+// core/os/src/context/itx-expression-rewriting.ts; here it is only lexed (parse, targets only) and
 // printed back (print, targets only).
 /** The marker's array-half spelling, the one reserved literal. */
 const ITX_EXPRESSION_HOLE = { "@": true } as const;
-/** The merge entry's key — `...@` — read by apps/os `fillItxExpressionHoles`. */
+/** The merge entry's key — `...@` — read by core/os `fillItxExpressionHoles`. */
 export const ITX_EXPRESSION_MERGE_KEY = "...@";
 
 /** A single- or double-quoted string literal (escapes honored) or a JSON5 comment (block or line):
@@ -304,7 +304,7 @@ export function canonicalItxExpressionPrefix(source: ItxExpressionInput): string
 // access, not `in`; a typo'd built-in (`itx.strems`) is a syntactically valid dynamic dispatch that
 // fails at the capability table, not a crisp missing-method error.
 //
-// apps/os's library tier (src/library.ts) builds its connectors on this section and the codec, as a
+// core/os's library tier (src/library.ts) builds its connectors on this section and the codec, as a
 // userspace worker would (library.ts's library rule, which lint enforces).
 
 /** The dispatch method every dotted miss collapses onto. `IterateContextRpcTarget` implements it directly (root
@@ -316,7 +316,7 @@ type InvokeTarget = {
 /** Names that must NEVER become dynamic capability segments — a dispatcher answering them would turn
  *  a plain property probe into a live capability call. Enforced at the prototype-chain hop and at
  *  every depth of the path proxies it hands out, and by the library's connectors, which never grow
- *  a method by one of these names (apps/os library/connection.ts). Two kinds, one set: */
+ *  a method by one of these names (core/os library/connection.ts). Two kinds, one set: */
 export const RESERVED_SEGMENT_NAMES: ReadonlySet<string> = new Set([
   // JS/RPC protocol machinery a framework or capnweb probes on any object (`then` above all: an
   // instance must never look thenable, or every `await` of it would resolve a capability).

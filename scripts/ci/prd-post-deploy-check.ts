@@ -33,7 +33,7 @@ import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } fro
 
 /** Production's project hosts people rely on: the iterate project's apex (envs.ts
  *  `osEnvs.prd.projectWildcard`) and projects' own custom hostnames, which live in the control plane
- *  (apps/os src/project/custom-hostnames.ts) — named here, since this check reads nothing but pages. */
+ *  (core/os src/project/custom-hostnames.ts) — named here, since this check reads nothing but pages. */
 export const PRD_PROJECT_HOST_URLS = [
   osEnvs.prd!.projectWildcard!.hostname,
   "garple.com",
@@ -41,7 +41,7 @@ export const PRD_PROJECT_HOST_URLS = [
   "templestein.com",
 ].map((hostname) => `https://${hostname}/`);
 
-/** `<version id> <origin>` (apps/os/src/worker.ts): the Cloudflare version prd serves. */
+/** `<version id> <origin>` (core/os/src/worker.ts): the Cloudflare version prd serves. */
 const VERSION_URL = `${osEnvs.prd!.baseUrl}/version`;
 
 /** Waits for `/version` to name a version other than --previous-version (the id it named before the

@@ -8,7 +8,7 @@
 //   pnpm os:e2e-soak --runs 10 --redeploy soak-<tag> [--gap <seconds>]
 //
 // The credentials are the deployment's: under `doppler run` its APP_CONFIG is in the environment and
-// apps/os/e2e/support/global-setup.ts reads them out of it.
+// test/helpers/global-setup.ts reads them out of it.
 //
 // THE FIRST MINUTES OF A DEPLOYMENT (`--fresh-previews <prefix>`): each run deploys a brand-new
 // deployment `<prefix>-<n>-<sha7>` (scripts/os/preview.ts deploy --apps none, its readiness gate
@@ -24,7 +24,7 @@
 // brand-new. `--gap` waits that long after each run before the next redeploy.
 //
 // Each run invokes Vitest directly with its JSON reporter written to output/soak/run-<n>.json, then
-// the perf project (the latency and throughput budgets, perf/**) to output/soak/perf-<n>.json — after
+// the perf project (the latency and throughput budgets, test/vitest/os/perf/**) to output/soak/perf-<n>.json — after
 // the suite, never beside it, since beside it a budget measures the suite's contention. The tally is
 // output/soak/summary.json plus the table below, both projects' rows together. Runs are sequential —
 // the point is to see the suite as CI sees it, not to load the worker a hundredfold.
@@ -44,11 +44,11 @@ import {
   resolvePreviewPrefix,
 } from "./preview-config.ts";
 
-// apps/os: the suite runs there and writes under its output/
-const ROOT = path.resolve(import.meta.dirname, "../../apps/os");
+// test/: the suites run there and write under its output/
+const ROOT = path.resolve(import.meta.dirname, "../../test");
 const OUT = path.join(ROOT, "output/soak");
 
-/** apps/os's URL in the deployment scripts/os/preview.ts makes of this checkout for `--name <name>`
+/** core/os's URL in the deployment scripts/os/preview.ts makes of this checkout for `--name <name>`
  *  (preview-config.ts `previewDeploymentName`: `<prefix>-<sha7>`). */
 function deploymentUrl(name: string) {
   const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" });
@@ -251,7 +251,7 @@ export default async function e2eSoak(options: SoakOptions = {}) {
   function deployedRun(n: number, preview: string, { remove }: { remove: boolean }) {
     const pnpmPreview = (command: string, ...args: string[]) =>
       spawnSync("pnpm", ["preview", command, "--name", preview, ...args], {
-        cwd: path.resolve(ROOT, "../.."),
+        cwd: path.resolve(ROOT, ".."),
         env: process.env,
         stdio: ["ignore", "inherit", "inherit"],
       }).status;

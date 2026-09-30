@@ -1,7 +1,7 @@
 // email.ts — EMAIL's events and threads: a project's mail, every message in or out on one context,
-// `/integrations/email` (apps/os src/email/contract.ts), inbound as `email/received` and each
-// `itx.email.send` as `email/sent`, both appended by the platform (apps/os integrations/email.ts).
-// The first-party `email` facet there folds them into threads (apps/os email/processor.ts); a config
+// `/integrations/email` (core/os src/email/contract.ts), inbound as `email/received` and each
+// `itx.email.send` as `email/sent`, both appended by the platform (core/os integrations/email.ts).
+// The first-party `email` facet there folds them into threads (core/os email/processor.ts); a config
 // repo reads its state and parses a message with this contract (configs/default/worker.ts).
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "./stream/processor.ts";

@@ -1,5 +1,5 @@
 // THE CONTEXT SWEEP — what Cloudflare stores against what the platform holds. A project's deletion
-// (apps/os/src/project/processor.ts) destroys the contexts its registry names; a context whose
+// (core/os/src/project/processor.ts) destroys the contexts its registry names; a context whose
 // announcement never landed is not named, so it would outlive its project, stored and billed, with
 // no way to find it by name. Cloudflare lists every object of the context namespace that holds data
 // (the List Objects API, by id alone); each says who it is from its own birth record
@@ -34,8 +34,8 @@
 // The backup bucket was made with Doppler `_shared/prd`'s token (the one os/prd inherits), every
 // object expiring 365 days after it lands:
 //
-//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket create iterate-prd-backups
-//   doppler run --project _shared --config prd -- pnpm --dir apps/os exec wrangler r2 bucket lifecycle add iterate-prd-backups backups-after-365-days --expire-days 365 --force
+//   doppler run --project _shared --config prd -- pnpm --dir core/os exec wrangler r2 bucket create iterate-prd-backups
+//   doppler run --project _shared --config prd -- pnpm --dir core/os exec wrangler r2 bucket lifecycle add iterate-prd-backups backups-after-365-days --expire-days 365 --force
 import { appendFileSync } from "node:fs";
 import type { IterateSessionApi } from "iterate/api";
 import { connectIterate, type IterateConnection } from "iterate/node";
@@ -49,8 +49,8 @@ import {
   type FailureKind,
 } from "iterate/platform-retry";
 import { OS_DOPPLER_PROJECT, backupBucketEnvs, getEnv, osEnvs } from "../../envs.ts";
-import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import type { OsDeployableEnv } from "../../core/os/scripts/os-env.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
 import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
 import { ciBucket } from "./ci-bucket.ts";
@@ -59,7 +59,7 @@ import { getSlackClient, keepPage, pageText, slackChannelIds } from "./slack.ts"
 /** One stored object as the sweep sees it. */
 export type SweptContext = Awaited<ReturnType<IterateSessionApi["contexts"]["identify"]>>[number];
 
-/** What an object with no birth record answers (apps/os iterate-context-durable-object.ts
+/** What an object with no birth record answers (core/os iterate-context-durable-object.ts
  *  `iterateContextAddressOf`): it is empty — destroyed moments ago, and Cloudflare's list still
  *  flags it as holding data for a few minutes (measured on prd, 2026-09-25: up to ~7 min). */
 const EMPTIED = "only a context that was born answers";

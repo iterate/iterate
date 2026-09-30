@@ -47,6 +47,15 @@
     "packages/ui/src/components/textarea.tsx",
     "packages/ui/src/components/tooltip.tsx",
     "packages/ui/src/hooks/use-mobile.ts",
+    "core/os/src/components/ui/avatar.tsx",
+    "core/os/src/components/ui/button.tsx",
+    "core/os/src/components/ui/checkbox.tsx",
+    "core/os/src/components/ui/field.tsx",
+    "core/os/src/components/ui/input.tsx",
+    "core/os/src/components/ui/label.tsx",
+    "core/os/src/components/ui/native-select.tsx",
+    "core/os/src/components/ui/separator.tsx",
+    "core/os/src/components/ui/spinner.tsx",
     "**/routeTree.gen.ts",
     "**/.generated/",
     "**/*.d.ts",
@@ -194,7 +203,19 @@
       "plugins": ["react"]
     },
     {
-      "files": ["**/*.test.ts", "**/*.test.tsx", "specs/**/*.ts"],
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "test/playwright/**/*.ts",
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "iterate/helpers-after-tests": "error",
         "iterate/no-describe": "error",
@@ -219,7 +240,17 @@
       "plugins": ["react"]
     },
     {
-      "files": ["specs/**/*.ts"],
+      "files": [
+        "test/playwright/**/*.ts",
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "iterate/spec-restricted-syntax": "error",
         "middlewright/prefer-locator-waits": "error",
@@ -230,13 +261,22 @@
           {
             "name": "@playwright/test",
             "importNames": ["test"],
-            "message": "Import test from the harness at specs/test-support/test.ts ('../test-support/test.ts' from an app folder such as specs/os/, './test-support/test.ts' from specs/ itself). It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
+            "message": "Import test from the harness at test/helpers/test.ts ('../../helpers/test.ts' from an app folder such as test/playwright/os/, '../helpers/test.ts' from test/playwright/ itself). It wraps Playwright's test with middlewright plugins (spinner waiter, hydration waiter, UI error reporter)."
           }
         ]
       }
     },
     {
-      "files": ["specs/test-support/**"],
+      "files": [
+        "test/helpers/*.spec.ts",
+        "test/helpers/auth-config.ts",
+        "test/helpers/forged-session.ts",
+        "test/helpers/issuer.ts",
+        "test/helpers/operator.ts",
+        "test/helpers/screenshot.ts",
+        "test/helpers/test.ts",
+        "test/helpers/worker-base-url.ts"
+      ],
       "rules": {
         "no-restricted-imports": "off"
       }
@@ -249,10 +289,9 @@
           {
             "zones": [
               {
-                "target": ["./packages/**", "./apps/!(os)/**"],
-                "from": "./apps/os",
-                "except": ["./e2e/support", "./__workers-tests__/support.ts"],
-                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in apps/os. Tests may drive a real platform through apps/os's test harnesses, apps/os/e2e/support/ and apps/os/__workers-tests__/support.ts (packages/iterate/README.md#the-sdkplatform-line)."
+                "target": ["./packages/**", "./apps/**"],
+                "from": "./core/os",
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in core/os. The platform's tests live in test/, which this rule does not cover (packages/iterate/README.md#the-sdkplatform-line)."
               }
             ]
           }
@@ -260,13 +299,25 @@
       }
     },
     {
-      "files": ["apps/os/**"],
+      "files": ["core/**"],
       "rules": {
-        "import-js/no-restricted-paths": "off"
+        "import-js/no-restricted-paths": [
+          "error",
+          {
+            "zones": [
+              {
+                "target": "./core",
+                "from": "./",
+                "except": ["./configs", "./core", "./node_modules", "./packages/iterate"],
+                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The exceptions until they are resolved: packages/iterate, which moves to core/lib, and configs/, the project templates the build bakes in (tasks/core-os.md)."
+              }
+            ]
+          }
+        ]
       }
     },
     {
-      "files": ["apps/os/src/library.ts"],
+      "files": ["core/os/src/library.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -286,7 +337,7 @@
                   "!./library/*.ts"
                 ],
                 "allowTypeImports": true,
-                "message": "The library rule (apps/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression`, `iterate/lib` and `iterate/stream/run`, the entities' contracts and the library's own files. Type-only imports are free."
+                "message": "The library rule (core/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression`, `iterate/lib` and `iterate/stream/run`, the entities' contracts and the library's own files. Type-only imports are free."
               }
             ]
           }
@@ -311,7 +362,7 @@
       }
     },
     {
-      "files": ["apps/os/src/library/**"],
+      "files": ["core/os/src/library/**"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -331,7 +382,7 @@
                   "!../library.ts"
                 ],
                 "allowTypeImports": true,
-                "message": "The library rule (apps/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression` and `iterate/lib`, the entities' contracts and the library's own files. Type-only imports are free."
+                "message": "The library rule (core/os/src/library.ts): a library module takes `itx` and nothing else, so at runtime it imports only what a userspace worker could too: npm packages it would bundle (capnweb, cloudflare:workers, zod), the SDK's pure `iterate/expression` and `iterate/lib`, the entities' contracts and the library's own files. Type-only imports are free."
               }
             ]
           }

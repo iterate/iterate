@@ -35,17 +35,17 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
   // -- Structural (env-gated): legitimately undated — the gate describes the
   // deployment under test, not a parked bug.
   {
-    file: "specs/os/issuer-pages.spec.ts",
+    file: "test/playwright/os/issuer-pages.spec.ts",
     match: "email-code sign-in is not configured",
     note: "env-gated: runs where the deployment offers email-code sign-in (login.emailCode), which a local worker does not",
   },
   {
-    file: "specs/dash/sign-in-link.spec.ts",
+    file: "test/playwright/dash/sign-in-link.spec.ts",
     match: "only a preview's admins sign in through prd",
     note: "env-gated: only a preview sets login.adminIssuer (scripts/os/preview-config.ts); app-config.ts refuses it off an https workers.dev or .test origin",
   },
   {
-    file: "specs/notes/pr-body-link.spec.ts",
+    file: "test/playwright/notes/pr-body-link.spec.ts",
     match: "under subdomains a project's app is an origin of its own",
     note: "env-gated: a proxied app runs on the platform's sign-in only under paths ingress (every preview's); local dev routes projects by subdomain",
   },

@@ -4,7 +4,7 @@
 //
 // A DEPLOYMENT (envs.ts `previewDeployment`) is every worker and resource named
 // `<prefix>-<sha7>-<member>`: the workers `…-os`, `…-dash`, `…-agents`, `…-notes`, `…-admin`,
-// `…-voice`, `…-kit`, and apps/os's resources `…-os-oauth-kv`, `…-os-itx-kv`, `…-os-files`,
+// `…-voice`, `…-kit`, and core/os's resources `…-os-oauth-kv`, `…-os-itx-kv`, `…-os-files`,
 // `…-os-db`, `…-os-repos`. Nothing else on the account has that shape: main on dev is `os`,
 // `os-parent-…`; prd lives on another account; local dev's are `os-dev-…`. A deployment is judged
 // by its newest member's creation stamp (KV has none), so one half deployed or half deleted is
@@ -20,7 +20,7 @@
 // STALE (`planPreviewSweep`, nightly) when
 //   1. its newest member is more than 7 days old, whatever its prefix;
 //   2. its prefix is `pr<n>` and pull request #n is closed or does not exist;
-//   3. it is not its prefix's newest deployment with an apps/os worker (`newestPreviewDeployment`),
+//   3. it is not its prefix's newest deployment with an core/os worker (`newestPreviewDeployment`),
 //      and its newest member is more than an hour old or it has no stamped member left;
 //   4. its prefix names no pull request (a hand-picked name like `exp-…` or `soak`), it is no CI
 //      workflow's own (CI_WORKFLOW_PREVIEWS), and its newest member is more than 24 h old.
@@ -74,7 +74,7 @@ export type PreviewDeploymentListing = {
   newestCreatedAt?: string;
 };
 
-/** The suffix of each member a deployment has, by kind: the workers, then apps/os's resources, the
+/** The suffix of each member a deployment has, by kind: the workers, then core/os's resources, the
  *  KV named as wrangler provisions it (`<worker>-<binding lowercased, _ → ->`). */
 export function previewMemberSuffixes(kvBindings: string[]): Record<PreviewMemberKind, string[]> {
   return {
@@ -127,9 +127,9 @@ export function groupPreviewDeployments(
   });
 }
 
-/** The newest deployment of `prefix` that has its apps/os worker, by its newest member: the one a
+/** The newest deployment of `prefix` that has its core/os worker, by its newest member: the one a
  *  test-only run tests, and the one the sweep keeps (rule 3). A push whose deploy failed or was
- *  cancelled before apps/os uploaded leaves a newer deployment without it, which never displaces
+ *  cancelled before core/os uploaded leaves a newer deployment without it, which never displaces
  *  the last one that deployed — the one the PR body still links. */
 export function newestPreviewDeployment(deployments: PreviewDeploymentListing[], prefix: string) {
   return deployments

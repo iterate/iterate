@@ -5,7 +5,7 @@
 // Copybara copies push to their repositories with another (./copybara.ts). A token lasts an hour.
 import { createSign } from "node:crypto";
 import { z } from "zod";
-import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { parseAppConfig } from "../../core/os/src/app-config.ts";
 import { getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../envs.ts";
 import { resolveEnvContext } from "../lib/env-context.ts";
 

@@ -4,7 +4,7 @@
 // Workers-RPC scope completely when the block ends — the scope and every call made through it, not
 // only the last. A value code keeps from its context past that — an undisposed call, a handle, a
 // stub — keeps the context, and any facet holding it, running and billed: pinned by
-// apps/os/e2e/context-residency.e2e.test.ts ("… does not outlive …"). No workerd import, so the
+// test/vitest/os/context-residency.e2e.test.ts ("… does not outlive …"). No workerd import, so the
 // unit tests run it in node (itx-scope.test.ts). Lint refuses the raw `env.ITX.get()`, and a
 // `getItx()` no `using` binds (iterate/no-raw-itx-get).
 

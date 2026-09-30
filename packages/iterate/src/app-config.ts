@@ -10,7 +10,7 @@
 // A key the schema does not name, in the object or as a var, is warned about loudly and dropped,
 // never silently kept.
 //
-// The schemas: the platform's in apps/os/src/app-config.ts, the apps on top's in
+// The schemas: the platform's in core/os/src/app-config.ts, the apps on top's in
 // packages/shared/src/start-app-config.ts.
 
 import { z } from "zod";

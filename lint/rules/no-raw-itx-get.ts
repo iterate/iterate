@@ -10,7 +10,7 @@ import { getPropertyName } from "./ast.ts";
 type AstNode = { type: string; parent?: AstNode; [key: string]: any };
 
 const MESSAGE =
-  "Reach the context with `using itx = this.getItx()`, which every loaded WorkerEntrypoint and SDK host (IterateConfigEntrypoint, FacetDurableObject, StreamProcessorDurableObject) has; an object that needs reach takes an accessor, `() => this.getItx()`. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (apps/os/docs/residency.md).";
+  "Reach the context with `using itx = this.getItx()`, which every loaded WorkerEntrypoint and SDK host (IterateConfigEntrypoint, FacetDurableObject, StreamProcessorDurableObject) has; an object that needs reach takes an accessor, `() => this.getItx()`. A raw ITX.get() hands out a scope nothing releases, and whatever is kept from it keeps its context, and any facet holding it, resident after the context is evicted (core/os/docs/residency.md).";
 
 /** A raw get in a module handed over as text. */
 const RAW_GET_IN_TEXT = /\bITX\??\.get\(\s*\)/g;
@@ -39,7 +39,7 @@ export const noRawItxGetRule: StrictRule = {
         if (isUnboundGetItx(call))
           report(
             call,
-            "Bind this getItx() scope with `using` (`using itx = this.getItx()`) in the smallest block that holds its calls, or hand it out whole from an accessor (`() => this.getItx()`): nothing else releases it, and a scope nothing releases keeps its context, and any facet holding it, resident (apps/os/docs/residency.md).",
+            "Bind this getItx() scope with `using` (`using itx = this.getItx()`) in the smallest block that holds its calls, or hand it out whole from an accessor (`() => this.getItx()`): nothing else releases it, and a scope nothing releases keeps its context, and any facet holding it, resident (core/os/docs/residency.md).",
           );
       },
       // A module handed over as source text: a `"worker.js": …` (or `.ts`) entry of a source's files

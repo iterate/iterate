@@ -1,6 +1,6 @@
 ---
 name: os-web-performance
-description: Diagnose and improve loading speed of the platform's pages (apps/os sign-in and consent) and the TanStack Start clients, including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
+description: Diagnose and improve loading speed of the platform's pages (core/os sign-in and consent) and the TanStack Start clients, including Core Web Vitals, asset caching, bundle waterfalls, hydration, and the first live-state read. Use when an app feels slow, a route shows a spinner for too long, a warm visit re-downloads or revalidates assets, or a performance PR needs evidence from a deployment.
 ---
 
 # Web performance
@@ -23,7 +23,7 @@ fingerprinted `/assets/*`.
 ## Know the shape before measuring
 
 - **The platform's pages.** `/`, `/login` and the `/oauth2/auth` consent are server-rendered
-  TanStack Start routes in `apps/os/src/routes/`, served by the platform Worker.
+  TanStack Start routes in `core/os/src/routes/`, served by the platform Worker.
 - **The clients.** Each client is its own Worker (`scripts/lib/start-app.ts`). Its signed-in
   layout (`src/routes/_auth.tsx`) is `ssr: false`, because the browser authenticates through
   `createIterateClient`. The HTML is the pending shell, and every page's data comes over the
@@ -55,7 +55,7 @@ fingerprinted `/assets/*`.
 4. Inspect the production graph with `pnpm --dir apps/<app> exec vite build --manifest`, which
    writes `dist/client/.vite/manifest.json`. Count modulepreloads, bytes, and requests before
    FCP/LCP.
-5. Write a red user-facing test (`specs/`), make the narrowest change, prove the package tests,
+5. Write a red user-facing test (`test/playwright/`), make the narrowest change, prove the package tests,
    typecheck, lint and build, then repeat the same captures on the preview.
 6. Read the preview window's Workers Logs for the app's worker and the platform's
    (debug-os-worker skill). Explain every new warning or error.

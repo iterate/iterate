@@ -1,6 +1,6 @@
 # ONE-WAY COPIES OF PARTS OF THIS REPO, one Copybara workflow per copy (tasks/copybara0929-experiment.md):
 #
-#   os         iterate/os0929: apps/os and packages/iterate, today's stand-ins for core/os and
+#   os         iterate/os0929: core/ and packages/iterate, today's stand-ins for core/os and
 #              core/lib (the call's `iterate/os` is `core/`)
 #   packages   iterate/packages0929: every other package
 #
@@ -79,18 +79,16 @@ def copy_workflow(name, repo, files, exclude = []):
 copy_workflow(
     name = "os",
     repo = "os0929",
-    # What the self-host recipe (apps/os/public/setup-prompt.md) builds from: apps/os and the
+    # What the self-host recipe (core/os/public/setup-prompt.md) builds from: core/ and the
     # workspace packages it depends on, the files its build scripts import or read, and the root
     # tsconfigs they extend. The root package.json, pnpm-workspace.yaml and pnpm-lock.yaml are the
     # copy's own, in copybara/os/ (scripts/ci/copybara.ts `root`).
     files = [
-        "apps/os/**",
+        "core/**",
         "packages/iterate/**",
         "packages/shared/**",
         "packages/ui/**",
         "configs/**",
-        "scripts/lib/vite-build.ts",
-        "scripts/lib/wrangler-config.ts",
         "tsconfig.base.json",
         "tsconfig.app.json",
         ".nvmrc",
