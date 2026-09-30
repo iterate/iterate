@@ -38,19 +38,22 @@ run to run, and with it how many times the climb restarts.
 
 Every seed keeps the loop guard's guarantees: every append at depth ≤ 8, exactly one
 `itx/loop-limit` fact, and the chain goes quiet. The count of appends is not something the design
-bounds at 20: it is `8 + (8 − restart depth)` per restart.
+bounds at 20: it is 8 for the first climb, plus `8 − w` for each restart whose wake is at depth `w`.
 
 ## Plan
 
 Assumption (Misha asked for a pinned-failing repro before any fix): the repro pins the row as it
-stands, with a seeded ladder, as `test.fail`. Whether the resolution is a product change or a
-test change is Misha's call, so this PR changes neither.
+stands, with a seeded ladder, as `test.fails`. Whether the resolution is a product change or a
+test change is Misha's call, so this PR changes no behaviour.
 
-- [ ] make the ladder's jitter injectable: `SubscriptionDelivery` takes the random source the DO
+- [x] make the ladder's jitter injectable: `SubscriptionDelivery` takes the random source the DO
       passes as `Math.random`, so a test replays one ordering without stubbing `Math.random`
-- [ ] pinned `test.fail`: the same row, a seeded ladder that restarts the climb twice
-- [ ] survey many seeds: the distribution of the append count, and which restart path each run
-      takes
+      _`SubscriptionDeliveryDeps.random`; `durableLadderDelayMs(attempt, random, capMs)`_
+- [x] pinned `test.fails`: the same row, a seeded ladder that restarts the climb twice
+      _`mulberry32(190)`, depths `[1..8, 2..8, 4..8]`, fails only on `toBeLessThan(20)`; a bare
+      `test.fails` since apps/os imports nothing from `packages/shared` (no `createFailing`)_
+- [x] survey many seeds: the distribution of the append count, and which restart path each run
+      takes _implementation log below_
 - [ ] decide (Misha): is the `itx/loop-limit` ack lifting the pause a defect (a product fix, like
       the wake's ack, which already lifts nothing), or is the bound wrong (drop it, or derive it)?
 - [ ] resolve the flaky row on main along with that decision
