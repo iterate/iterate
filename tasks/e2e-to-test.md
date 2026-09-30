@@ -69,3 +69,8 @@ Status: code done and checked locally (typecheck, lint, knip, apps/os's tests, t
   agents install): 36 passed. The one failure, repos' "a child context with a repo but no egress…",
   fails the same way on main (localOnly, so CI never runs it); spun off as its own task. Node 26
   crashes these runs with `setTypeOfService EINVAL` in undici, on main too.
+- CI round 1: `Test / test` failed twice over. test/'s helpers project ran apps/os's build in a root
+  global setup, whose shallow-clone history fetch raced apps/os's own (`shallow.lock`); the build
+  now runs only in the e2e, perf and bench projects. And the path sweep had rewritten example
+  paths in `packages/ai-linter/src/lint.test.ts`'s glob tests, which are data, not references:
+  restored to main's.
