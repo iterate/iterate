@@ -6,8 +6,9 @@
 // scripts/os/preview-delete.ts. Commands:
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
-//                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
-//                       seed, the PR body's section (the previous one folded first)
+//                       created, the D1 migrated), every app on top, the readiness gate and the wait
+//                       for its packages on pkg.pr.new, the sign-in seed, the PR body's section (the
+//                       previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/os/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
@@ -52,7 +53,11 @@ import { parseAppConfig, type AppConfig } from "../../apps/os/src/app-config.ts"
 import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
 import { buildOs } from "../../apps/os/scripts/build.ts";
 import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
-import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
+import {
+  awaitPublishedPackages,
+  checkoutPublishedPackageCommit,
+  publishedPackagesOf,
+} from "../../apps/os/scripts/published-package-commit.ts";
 import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
@@ -415,8 +420,8 @@ async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: str
 /** apps/os (scripts/os/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
  *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
  *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
- *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
- *  seed and the PR body's section side by side. */
+ *  one fails the deploy, named. Then the readiness gate on apps/os beside the wait for its packages
+ *  on pkg.pr.new, and once both pass the sign-in seed and the PR body's section side by side. */
 async function deployPreviewSteps(
   ctx: EnvContext<OsDeployableEnv>,
   name: string,
@@ -471,16 +476,30 @@ async function deployPreviewSteps(
     ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
     ...appConfigSecretsOf(ctx.secrets),
   });
-  // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
-  // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
-  await traceOperation("Readiness gate", () =>
-    awaitPreviewReady(url, {
-      adminSecret: config.secrets.adminBearer.exposeSecret(),
-      version: versionId,
-      width: 8,
-      consecutive: 3,
-    }),
-  );
+  // Nothing is handed on — the PR body's links, the sign-in seed, the suites — until the gate
+  // passes, three rounds of eight in a row answering in full on this version (preview-readiness.ts
+  // says why), and pkg.pr.new serves this deployment's packages at `packagesCommit`, which every
+  // project it seeds installs through esm.sh. The same push's pkg-pr-new.yml run publishes them
+  // beside this deploy, and esm.sh must not be asked for them first (published-package-commit.ts
+  // `awaitPublishedPackages`). A commit pkg.pr.new already serves costs one HEAD per package.
+  await Promise.all([
+    traceOperation("Readiness gate", () =>
+      awaitPreviewReady(url, {
+        adminSecret: config.secrets.adminBearer.exposeSecret(),
+        version: versionId,
+        width: 8,
+        consecutive: 3,
+      }),
+    ),
+    traceOperation({ name: "Wait for pkg.pr.new", phase: "wait" }, () =>
+      awaitPublishedPackages({
+        commit: packagesCommit,
+        packages: publishedPackagesOf(REPO_ROOT),
+        fetchFn: fetch,
+        log: console.log,
+      }),
+    ),
+  ]);
   console.log(`\ndeployment ${name}: ${url}`);
   const signIn = prNumber
     ? signInLinks({

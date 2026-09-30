@@ -97,8 +97,10 @@ Artifacts namespace** run beside **Build OS** and the client apps' parallel
 **Build <app>** spans. **Deploy OS preview** starts once Build OS and those have
 finished, and holds its **Readiness gate**, apps/os's only smoke. Each
 **Deploy <app>**, its app's smoke included, starts once its own build and the
-wrangler install have finished, beside Deploy OS preview. After the gate,
-**Seed sign-in** and **Write the PR section** run side by side. Overlapping
+wrangler install have finished, beside Deploy OS preview. **Wait for
+pkg.pr.new** runs beside the gate, until pkg.pr.new serves the packages the
+preview's projects install. After both, **Seed sign-in** and **Write the PR
+section** run side by side. Overlapping
 spans must not be added together as wall time.
 
 `traceOperation()` records these nested operations at their actual start/end
