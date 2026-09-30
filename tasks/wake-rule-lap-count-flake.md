@@ -11,7 +11,7 @@ test) and the fix for the flaky row on main.
 
 ## Why
 
-`apps/os/src/stream/subscription-delivery.test.ts`, row "fan-out, the wake rule: a wake handler
+`core/os/src/stream/subscription-delivery.test.ts`, row "fan-out, the wake rule: a wake handler
 appending work that fails climbs one hop a lap, stops at 8, goes quiet", asserts
 `expect(depths.length).toBeLessThan(20)`. About 1–2% of runs append 20 or more `test/work` events
 and fail (CI "Test / test" on PR #3488, Depot run 7v0w6p36fz, job 4vj94xb8p3; the retry passed).
@@ -51,7 +51,7 @@ test change is Misha's call, so this PR changes no behaviour.
       _`SubscriptionDeliveryDeps.random`; `durableLadderDelayMs(attempt, random, capMs)`_
 - [x] pinned `test.fails`: the same row, a seeded ladder that restarts the climb twice
       _`mulberry32(190)`, depths `[1..8, 2..8, 4..8]`, fails only on `toBeLessThan(20)`; a bare
-      `test.fails` since apps/os imports nothing from `packages/shared` (no `createFailing`)_
+      `test.fails` since core/os imports nothing from `packages/shared` (no `createFailing`)_
 - [x] survey many seeds: the distribution of the append count, and which restart path each run
       takes _implementation log below_
 - [ ] decide (Misha): is the `itx/loop-limit` ack lifting the pause a defect (a product fix, like
