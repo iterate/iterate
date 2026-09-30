@@ -223,8 +223,8 @@ test.for([
  *  bucket delete gets the 404/10006 the API client's retry ends with (preview-delete.ts
  *  `deleteR2Bucket`). Each answer is a turn of the event loop later, so deletes run side by side
  *  interleave. `fault` answers a request with a failure instead, when it returns one. A `phantom`
- *  Artifacts namespace is in Cloudflare's phantom-count state: its row says repo_count 1, its repos
- *  list is empty, and its DELETE answers 409/10202 "Namespace is not empty". */
+ *  Artifacts namespace is one Cloudflare will not delete (preview-artifacts.ts
+ *  `StuckArtifactsNamespace`), its row's repo_count 1. */
 function fakeAccount(
   options: {
     fault?: (
