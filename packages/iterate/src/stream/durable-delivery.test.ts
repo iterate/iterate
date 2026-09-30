@@ -278,7 +278,7 @@ test("named ephemeral events are best effort and never enter the durable cursor"
 test("fan-out persists bounded offsets then calls each event independently", async () => {
   const store = kv();
   const source = memoryStream();
-  await source.stream.append({ type: "work" }, { type: "work" }, { type: "work" });
+  await source.stream.append(...Array.from({ length: 16 }, () => ({ type: "work" })));
   let active = 0;
   let high = 0;
   const delivered: number[] = [];
@@ -286,7 +286,6 @@ test("fan-out persists bounded offsets then calls each event independently", asy
     slug: "fan",
     consumes: ["work"],
     fanOut: true,
-    concurrency: 2,
     runtime: {
       storage: store,
       read: durableRead(source.stream.read, ["work"]),
@@ -305,12 +304,14 @@ test("fan-out persists bounded offsets then calls each event independently", asy
   const engine = driver(processor);
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle(40);
-  await engine.processEventBatch([], { after: 3, through: 3 });
+  await engine.processEventBatch([], { after: 16, through: 16 });
   await settle(40);
-  expect(delivered.sort()).toEqual([1, 2, 3]);
-  expect(high).toBe(2);
+  expect(delivered.sort((a, b) => a - b)).toEqual(
+    Array.from({ length: 16 }, (_, index) => index + 1),
+  );
+  expect(high).toBe(8);
   expect(store.values.get("durable-delivery/fan")).toMatchObject({
-    fanOut: { admittedThrough: 3, pending: [] },
+    fanOut: { admittedThrough: 16, pending: [] },
   });
 });
 
@@ -324,8 +325,6 @@ test("a 128-call fan-out takes two one-page alarm passes", async () => {
     slug: "fan-catch-up",
     consumes: ["work"],
     fanOut: true,
-    concurrency: 128,
-    maxPending: 100,
     runtime: {
       storage: store,
       read: durableRead(source.stream.read, ["work"]),

@@ -78,15 +78,13 @@ export type DurableDeliveryOptions = {
   maxAttempts?: number;
   /** One event per call with independent progress; absent preserves ordered batches. */
   fanOut?: true;
-  concurrency?: number;
-  maxPending?: number;
   retryDelayMs?: (attempt: number) => number;
-  /** Bounds one attempt; the context retains the raw call until it settles. */
-  callDeadlineMs?: number;
 };
 
 const pageLimit = 100;
-const defaultCallDeadlineMs = 20_000;
+const fanOutConcurrency = 8;
+const fanOutMaxPending = 1_000;
+const callDeadlineMs = 20_000;
 // The context's 1 MiB live ring owns ephemeral bodies. Keep only enough descriptors for one
 // ordinary source page here, so a push storm cannot build an unbounded scheduling queue.
 const ephemeralQueueLimit = pageLimit;
@@ -139,10 +137,7 @@ const deliveryErrorMessage = (error: unknown): string =>
 /** The SDK replacement for one durable `subscribe` row. It stores only a cursor plus at most one
  * pending scanned range; source bodies stay in the event log and are read again for every attempt. */
 export class DurableDeliveryProcessor {
-  readonly #options: Required<
-    Pick<DurableDeliveryOptions, "maxAttempts" | "concurrency" | "maxPending" | "callDeadlineMs">
-  > &
-    DurableDeliveryOptions;
+  readonly #options: DurableDeliveryOptions & { maxAttempts: number };
   #requested = false;
   #again = false;
   #disposed = false;
@@ -153,16 +148,9 @@ export class DurableDeliveryProcessor {
   constructor(options: DurableDeliveryOptions) {
     if (!options.slug) throw new Error("durable delivery needs slug");
     const maxAttempts = options.maxAttempts ?? 15;
-    const concurrency = options.concurrency ?? 8;
-    const maxPending = options.maxPending ?? 1_000;
-    const callDeadlineMs = options.callDeadlineMs ?? defaultCallDeadlineMs;
-    if (
-      ![maxAttempts, concurrency, maxPending, callDeadlineMs].every(
-        (value) => Number.isSafeInteger(value) && value > 0,
-      )
-    )
-      throw new Error("durable delivery limits must be positive finite integers");
-    this.#options = { ...options, maxAttempts, concurrency, maxPending, callDeadlineMs };
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts <= 0)
+      throw new Error("durable delivery maxAttempts must be a positive finite integer");
+    this.#options = { ...options, maxAttempts };
     this.#resumeAtOffset = options.resumeAtOffset;
   }
 
@@ -433,18 +421,20 @@ export class DurableDeliveryProcessor {
           pending: {
             ...pending,
             attempt,
-            nextAttemptAtMs: Date.now() + this.#options.callDeadlineMs,
+            nextAttemptAtMs: Date.now() + callDeadlineMs,
             resumeAtOffset: stamp.resumeAtOffset,
           },
         });
         try {
           if (pending.attempt >= this.#options.maxAttempts)
             throw new Error(pending.error || "delivery did not settle before its host restarted");
-          await this.#deliverWithinDeadline({
-            range: { after: pending.after, through: pending.through },
-            offsets: pending.offsets,
-            resumeAtOffset: stamp.resumeAtOffset,
-          });
+          await this.#withinDeadline(() =>
+            this.#options.runtime.deliver({
+              range: { after: pending.after, through: pending.through },
+              offsets: pending.offsets,
+              resumeAtOffset: stamp.resumeAtOffset,
+            }),
+          );
           if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, attempt)) return;
           this.#putCursor({ confirmedOffset: pending.through });
           await this.#options.runtime.scheduleWake(atHead ? null : Date.now());
@@ -505,7 +495,7 @@ export class DurableDeliveryProcessor {
     const pending = this.#ephemeralQueue.shift();
     if (!pending) return;
     try {
-      await this.#deliverEphemeralWithinDeadline(pending);
+      await this.#withinDeadline(() => this.#options.runtime.deliverEphemeral(pending));
     } catch (error) {
       // The live ring is the only source. Eviction is therefore visible best-effort loss, not a
       // retry cursor or a copied body in this runner.
@@ -554,7 +544,7 @@ export class DurableDeliveryProcessor {
         return;
       }
     }
-    const room = this.#options.maxPending - fanOut.pending.length;
+    const room = fanOutMaxPending - fanOut.pending.length;
     if (room > 0) {
       const stamp = this.#stamp();
       let page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
@@ -601,11 +591,9 @@ export class DurableDeliveryProcessor {
           (item.nextAttemptAtMs === undefined || item.nextAttemptAtMs <= Date.now()),
       )
       .slice(0, pageLimit);
-    for (let start = 0; start < due.length; start += this.#options.concurrency) {
+    for (let start = 0; start < due.length; start += fanOutConcurrency) {
       await Promise.all(
-        due
-          .slice(start, start + this.#options.concurrency)
-          .map((item) => this.#deliverFanOutItem(item)),
+        due.slice(start, start + fanOutConcurrency).map((item) => this.#deliverFanOutItem(item)),
       );
       if (!this.#isCurrent(drainStamp)) return;
     }
@@ -625,7 +613,7 @@ export class DurableDeliveryProcessor {
       return await this.#options.runtime.scheduleWake(Date.now());
     // A backoff is per event. Keep admitting later pages while there is room so one slow webhook
     // cannot turn a catch-up into one page per retry delay.
-    if (!admittedAtHead && settled.pending.length < this.#options.maxPending)
+    if (!admittedAtHead && settled.pending.length < fanOutMaxPending)
       return await this.#options.runtime.scheduleWake(Date.now());
     if (next !== undefined) await this.#options.runtime.scheduleWake(next);
     else if (settled.pending.length === 0) {
@@ -643,18 +631,21 @@ export class DurableDeliveryProcessor {
     if (!fanOut || !current || current.terminal) return;
     const interruptedAtLimit = current.attempt >= this.#options.maxAttempts;
     if (!interruptedAtLimit) current.attempt += 1;
-    current.nextAttemptAtMs = Date.now() + this.#options.callDeadlineMs;
+    current.nextAttemptAtMs = Date.now() + callDeadlineMs;
     current.resumeAtOffset = stamp.resumeAtOffset;
     const attempt = current.attempt;
+    const offset = current.offset;
     this.#putCursor({ ...cursor, fanOut });
     try {
       if (interruptedAtLimit)
         throw new Error(current.error || "delivery did not settle before its host restarted");
-      await this.#deliverWithinDeadline({
-        range: { after: current.offset - 1, through: current.offset },
-        offsets: [current.offset],
-        resumeAtOffset: stamp.resumeAtOffset,
-      });
+      await this.#withinDeadline(() =>
+        this.#options.runtime.deliver({
+          range: { after: offset - 1, through: offset },
+          offsets: [offset],
+          resumeAtOffset: stamp.resumeAtOffset,
+        }),
+      );
       if (!this.#isCurrent(stamp)) return;
       cursor = this.#cursor();
       fanOut = cursor.fanOut;
@@ -778,25 +769,13 @@ export class DurableDeliveryProcessor {
     );
   }
 
-  async #deliverWithinDeadline(
-    input: Parameters<DurableDeliveryRuntime["deliver"]>[0],
-  ): Promise<void> {
-    return await this.#withinDeadline(() => this.#options.runtime.deliver(input));
-  }
-
-  async #deliverEphemeralWithinDeadline(
-    input: Parameters<DurableDeliveryRuntime["deliverEphemeral"]>[0],
-  ): Promise<void> {
-    return await this.#withinDeadline(() => this.#options.runtime.deliverEphemeral(input));
-  }
-
   async #withinDeadline(deliver: () => Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const result = deliver();
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(
         () => reject(new Error("durable delivery call timed out")),
-        this.#options.callDeadlineMs,
+        callDeadlineMs,
       );
     });
     try {

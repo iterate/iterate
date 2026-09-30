@@ -167,7 +167,6 @@ test("a fan-out backoff still admits the following source page", async () => {
     slug: "fan-backoff",
     consumes: ["work"],
     fanOut: true,
-    concurrency: 100,
     retryDelayMs: () => 60_000,
     runtime: delayed,
   });
@@ -476,7 +475,6 @@ function fanOut(runtime: Runtime) {
     slug: "fan",
     consumes: ["work"],
     fanOut: true,
-    concurrency: 3,
     runtime,
   });
 }
