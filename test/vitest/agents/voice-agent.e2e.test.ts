@@ -11,6 +11,7 @@ import { FakeAi, sseResponse } from "../../helpers/fake-ai.ts";
 import { oauthSession } from "../../helpers/principal.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
+  defaultPreset,
   deployedOnly,
   freshDnsSafeProjectSlug,
   projectUrl,
@@ -249,7 +250,7 @@ const answer = (text: string) =>
 async function voiceCall(model: (call: { websiteUrl: string }) => FakeAi | undefined) {
   const slug = freshDnsSafeProjectSlug("voice");
   const user = { email: `voice-${runId()}@example.com` };
-  const projectId = await registerProject(slug, user);
+  const projectId = await registerProject(slug, user, await defaultPreset());
   const root = openItx(projectId);
   // The provider fixture is ANOTHER project's config worker: this project's own config worker is
   // the website the agent rewrites, and every host of a project reaches it.

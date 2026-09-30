@@ -1,5 +1,5 @@
 // Voice set up as Kit's Prepare and the voice app set it up, through project OAuth, on a project
-// whose default template installs this checkout's published builds. Refusals are install.test's.
+// whose Default preset installs this checkout's published builds. Refusals are install.test's.
 import type {} from "@iterate-com/voice";
 import { ensureVoiceAgent } from "@iterate-com/voice/install";
 import type { IterateContextApiWith } from "iterate/api";
@@ -7,6 +7,7 @@ import { expect } from "vitest";
 import { runId } from "../../helpers/client.ts";
 import { oauthSession } from "../../helpers/principal.ts";
 import {
+  defaultPreset,
   deployedOnly,
   freshDnsSafeProjectSlug,
   registerProject,
@@ -21,7 +22,11 @@ deployedOnly(
     const version = await publishedPackage("@iterate-com/voice");
     await publishedPackage("@iterate-com/agents");
     const user = { email: `kit-install-${runId()}@example.com` };
-    const projectId = await registerProject(freshDnsSafeProjectSlug("kit-voice"), user);
+    const projectId = await registerProject(
+      freshDnsSafeProjectSlug("kit-voice"),
+      user,
+      await defaultPreset(),
+    );
     const { api } = await oauthSession(projectId, user);
     const project = await api.projects.get(projectId);
     await project.kv.put("worker.js", "my existing data");

@@ -1,14 +1,7 @@
 // The agents and voice apps installed as packages by the default template (configs/default).
 import { expect, test } from "vitest";
-import {
-  adminCredentials,
-  createdProject,
-  freshCtx,
-  openItx,
-  readAll,
-  session,
-  until,
-} from "../../helpers/client.ts";
+import { createdProject, freshCtx, openItx, readAll, until } from "../../helpers/client.ts";
+import { defaultPreset } from "../../helpers/project-host.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 import { publishedPackage } from "./support.ts";
@@ -19,12 +12,10 @@ test(
   async () => {
     const agents = await publishedPackage("@iterate-com/agents");
     const voice = await publishedPackage("@iterate-com/voice");
-    const presets = await session().authenticate(adminCredentials()).projects.templates();
-    const { reference } = presets.find(({ label }: { label: string }) => label === "Default");
     const root = await createdProject(
       openItx(freshCtx("agents-template")),
       "agents-template",
-      reference,
+      await defaultPreset(),
     );
     const manifest = await root.repos.get("/repos/config").readFile("package.json");
     expect(JSON.parse(manifest)).toMatchObject({
