@@ -2,7 +2,7 @@
 // deployment's workers.dev hostname is brand-new, and it reaches Cloudflare's servers one by one: for
 // up to about a minute after its deploy (measured 2026-09-28), a connection can land on a server that
 // has not learned it and answers Cloudflare's own not-found (@iterate-com/shared/platform-retry
-// `isNotRoutedYet`). The readiness gate (scripts/preview-readiness.ts) samples connections, so it
+// `isNotRoutedYet`). The readiness gate (scripts/os/preview-readiness.ts) samples connections, so it
 // cannot rule such a server out. The request never reached the Worker, so the process's one
 // transport, undici's global dispatcher (Node's fetch and WebSocket and undici's own go through it),
 // sends it again, whatever its method, on a fresh connection of its own, which lands on another

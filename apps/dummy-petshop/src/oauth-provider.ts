@@ -19,7 +19,7 @@
 import { z } from "zod";
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
 import { nowSeconds } from "./seal.ts";
-import { DEFAULT_ACCESS_TTL_SECONDS, type ShopDeps } from "./state.ts";
+import { ACCESS_TOKEN_TTL_SECONDS, type ShopDeps } from "./state.ts";
 
 /** The fixture password of the shop's logins (any email or username works). */
 export const LOGIN_PASSWORD = "correct-horse";
@@ -126,11 +126,10 @@ export async function handleOauthProviderRequest(
       if (!refresh) return oauthError("invalid_grant", "refresh token unknown or revoked");
       grant = refresh.grant;
     } else return oauthError("unsupported_grant_type");
-    const ttlSeconds = client.client.accessTokenTtlSeconds;
     return Response.json({
-      access_token: await petshop.accessToken(client.clientId, grant, ttlSeconds),
+      access_token: await petshop.accessToken(client.clientId, grant, ACCESS_TOKEN_TTL_SECONDS),
       token_type: "bearer",
-      expires_in: ttlSeconds,
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
       refresh_token: await petshop.refreshToken(client.clientId, grant),
     });
   }
@@ -141,9 +140,9 @@ export async function handleOauthProviderRequest(
       accessToken: await petshop.accessToken(
         "legacy-login",
         { sub: login.data.email },
-        DEFAULT_ACCESS_TTL_SECONDS,
+        ACCESS_TOKEN_TTL_SECONDS,
       ),
-      expiresInSeconds: DEFAULT_ACCESS_TTL_SECONDS,
+      expiresInSeconds: ACCESS_TOKEN_TTL_SECONDS,
     });
   }
   return null;

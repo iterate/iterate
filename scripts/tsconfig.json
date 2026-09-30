@@ -4,5 +4,7 @@
   // it cannot strip.
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  // worker code's importers typecheck with Workers types: os/tsconfig.project-seed.json
+  "exclude": ["os/project-seed*.ts", "node_modules"]
 }

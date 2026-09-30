@@ -9,7 +9,7 @@
  *
  * - `NewSession` — login. Any username, password "correct-horse" (the same
  *   fixture password as /api/legacy-login) → a session token that lives
- *   {@link GRAPHQL_SESSION_TTL_SECONDS}s. A wrong password answers HTTP 200
+ *   {@link ACCESS_TOKEN_TTL_SECONDS}s. A wrong password answers HTTP 200
  *   with a GraphQL-style `failures` array (type `AUTHENTICATION_FAILED`).
  * - The session token is the shop's own access token (oauth-provider.ts) of
  *   the client `graphql-session-login` (`/api/me`'s `clientId`), its account
@@ -20,14 +20,7 @@
  *   logs you in; the API it unlocks is `/api/*`.
  */
 import { LOGIN_PASSWORD, petshopOauth } from "./oauth-provider.ts";
-import type { ShopDeps } from "./state.ts";
-
-/** How long a GraphQL-minted session lives: the pets API's ordinary two
- * minutes (state.ts DEFAULT_ACCESS_TTL_SECONDS). A session must outlive the
- * gap between its mint and its first use, in which a secret's Durable Object
- * appends its `secret/refreshed` fact and which a loaded e2e run stretches; a
- * test forces its 401 through expire-tokens instead. */
-export const GRAPHQL_SESSION_TTL_SECONDS = 120;
+import { ACCESS_TOKEN_TTL_SECONDS, type ShopDeps } from "./state.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -62,7 +55,7 @@ async function mintSession(variables: Record<string, unknown>, deps: ShopDeps): 
   const accessToken = await petshopOauth(deps).accessToken(
     "graphql-session-login",
     { sub: username },
-    GRAPHQL_SESSION_TTL_SECONDS,
+    ACCESS_TOKEN_TTL_SECONDS,
   );
   return json({
     data: {
@@ -76,7 +69,7 @@ async function mintSession(variables: Record<string, unknown>, deps: ShopDeps): 
         customerOrderId: `order-${username}`,
         customerOrderState: "PENDING",
         defaultBranchId: "branch-petshop",
-        expiresIn: GRAPHQL_SESSION_TTL_SECONDS,
+        expiresIn: ACCESS_TOKEN_TTL_SECONDS,
         failures: null,
       },
     },

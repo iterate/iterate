@@ -26,7 +26,7 @@ test("appendPlatformFacts enables the owner's processor, then appends stamped pl
   ).rejects.toThrow("append refused");
   expect(names).toEqual([globalName("/users/u1"), globalName("/users/u1")]); // a stub per call
   expect(calls).toEqual([
-    [["itx", "processors", ["enable", "account"]], [], { principal: null }],
+    [["itx", "builtins", "processors", ["enable", "account"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact]], [], { principal: null, platform: true }],
   ]);
 });
@@ -38,7 +38,7 @@ test("an organization's facts land on its own context, its processor enabled fir
   ).rejects.toThrow("append refused");
   expect(names).toEqual([globalName("/organizations/org_1"), globalName("/organizations/org_1")]);
   expect(calls).toEqual([
-    [["itx", "processors", ["enable", "organization"]], [], { principal: null }],
+    [["itx", "builtins", "processors", ["enable", "organization"]], [], { principal: null }],
     [["itx", "builtins", ["append", fact, fact]], [], { principal: null, platform: true }],
   ]);
 });
@@ -62,7 +62,7 @@ test("appendPlatformFacts `folded` waits on the owner's processor barrier throug
     { folded: true },
   );
   expect(calls.at(-1)).toEqual([
-    ["itx", "facets", ["get", "account"], ["waitUntilProcessed", { offset: 8 }]],
+    ["itx", "builtins", "facets", ["get", "account"], ["waitUntilProcessed", { offset: 8 }]],
     [],
     { principal: null },
   ]);

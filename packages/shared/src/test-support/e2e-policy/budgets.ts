@@ -78,7 +78,7 @@ export function e2eRowTimeoutCeilingMs(row: { slow: boolean }) {
 
 /**
  * The files with e2e rows tagged `slow` (scripts/ci/e2e-policy.test.ts keeps the list exact). A PR
- * that changes one runs the slow rows, as does one that turns them on (apps/os/scripts/slow-rows.ts).
+ * that changes one runs the slow rows, as does one that turns them on (scripts/os/slow-rows.ts).
  */
 export const SLOW_ROW_PATHS = [
   "apps/agents/e2e/install.e2e.test.ts",

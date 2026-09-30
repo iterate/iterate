@@ -4,22 +4,16 @@ import {
   deployWithSecrets,
   findBuiltWranglerConfig,
   smoke,
-  viteBuild,
 } from "./deploy-helpers.ts";
-import {
-  assertProvisioned,
-  resolveEnvContext,
-  type DeployableEnv,
-  type EnvContext,
-} from "./env-context.ts";
+import { resolveEnvContext, type DeployableEnv, type EnvContext } from "./env-context.ts";
+import { viteBuild } from "./vite-build.ts";
 
 /**
  * THE deploy pipeline — the same top-to-bottom program every app runs:
  *
- *   resolve --env → assert resources provisioned → collect secrets →
- *   app-specific prepare (config preflight, synced assets) → build (vite's, or
- *   the app's own) → deploy code+secrets in one version → smoke-probe →
- *   afterDeploy → ✅
+ *   resolve --env → collect secrets → app-specific prepare (config
+ *   preflight, synced assets) → build (vite's, or the app's own) → deploy
+ *   code+secrets in one version → smoke-probe → ✅
  *
  * Durable Object classes are declared in each app's wrangler config
  * `exports` map and reconciled by the server on every deploy — no migration
@@ -28,17 +22,13 @@ import {
  *
  * This is a parameterized imperative function, not a framework: every input
  * is a plain value or a hook called exactly once at a fixed point you can
- * read below. Apps with genuinely unique steps put them in
- * `prepare`/`afterDeploy`.
+ * read below. Apps with genuinely unique steps put them in `prepare`.
  */
 export async function deployApp<
   E extends DeployableEnv & {
     workerName: string;
     /** Public origin: where a smoke path starting with "/" is probed, and the success line. */
     baseUrl: string;
-    /** Resource ids to assert provisioned: absent when the app owns none, or its `prepare`
-     *  creates them (an apps/os per-commit deployment). */
-    resources?: Record<string, string>;
   },
 >(
   /** The deploy script's `--env`, looked up (envs.ts `getEnv`, `getOsEnv`). */
@@ -63,15 +53,9 @@ export async function deployApp<
       credentials: Record<string, string>,
     ) => Promise<void> | void;
     /** Writes dist/, whose one `wrangler.json` is what deploys: `vite build` for the env
-     *  (deploy-helpers.ts `viteBuild`) unless the app builds itself, as the SPA's static files do. */
+     *  (vite-build.ts `viteBuild`) unless the app builds itself, as the SPA's static files do. */
     build?: (ctx: EnvContext<E>) => Promise<void>;
-    /** Runs after a healthy deploy. */
-    afterDeploy?: (
-      ctx: EnvContext<E>,
-      secretValues: Record<string, string>,
-    ) => Promise<void> | void;
-    /** Probed after the deploy, each until it answers healthy. A check that needs the build's
-     *  output to name its URL belongs in `afterDeploy`. */
+    /** Probed after the deploy, each until it answers healthy. */
     smokes: {
       /** Absolute, or a path starting with "/" under `env.baseUrl`. */
       url: string;
@@ -95,7 +79,6 @@ export async function deployApp<
   },
 ) {
   const ctx = await resolveEnvContext(env, { dopplerProject: options.dopplerProject });
-  if (env.resources) assertProvisioned(env.name, env.resources);
   console.log(
     `Deploying ${options.appLabel} to ${env.name} (worker ${env.workerName}, account ${env.cloudflareAccountId})`,
   );
@@ -106,7 +89,9 @@ export async function deployApp<
   };
   const secretValues = collectSecrets(ctx, options.requiredSecrets || []);
   await options.prepare?.(ctx, secretValues, credentials);
-  await (options.build ? options.build(ctx) : viteBuild(options.appRoot, env.name));
+  await (options.build
+    ? options.build(ctx)
+    : viteBuild(options.appRoot, { CLOUDFLARE_ENV: env.name }));
   const builtConfig = findBuiltWranglerConfig(options.appRoot);
   if (options.withoutRoutes) {
     const config = JSON.parse(readFileSync(builtConfig, "utf8"));
@@ -123,7 +108,6 @@ export async function deployApp<
       const url = probe.url.startsWith("/") ? `${env.baseUrl}${probe.url}` : probe.url;
       await smoke(url, probe.ok, probe.label);
     }
-  await options.afterDeploy?.(ctx, secretValues);
 
   console.log(`✅ ${env.name} deployed and serving at ${env.baseUrl}`);
 }

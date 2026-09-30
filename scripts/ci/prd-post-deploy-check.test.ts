@@ -285,7 +285,7 @@ test("every prd deploy checks the project hosts at once, in the deploy job, befo
   const steps = deploySteps();
   const deploy = steps.findIndex((step) => step.id === "deploy");
   const previous = steps.findIndex((step) => step.id === "previous");
-  expect(steps[deploy]?.run).toBe("pnpm run-script deploy --env prd");
+  expect(steps[deploy]?.run).toBe("pnpm os:deploy --env prd");
   // the version live before the deploy is read first, so the check waits for the new one
   expect(previous).toBeGreaterThanOrEqual(0);
   expect(previous).toBeLessThan(deploy);

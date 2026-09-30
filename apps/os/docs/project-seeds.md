@@ -1,14 +1,14 @@
 # Project recovery seeds
 
-Use `pnpm --dir apps/os project-seed` to capture, check and restore selected
+Use `pnpm os:project-seed` to capture, check and restore selected
 projects across a deliberate environment erase. Always select `--env` explicitly.
 
 ```sh
-pnpm --dir apps/os project-seed capture \
+pnpm os:project-seed capture \
   --env prd --project garple --file ~/.iterate/backups/garple-2026-09-22.json
-pnpm --dir apps/os project-seed check \
+pnpm os:project-seed check \
   --env prd --file ~/.iterate/backups/garple-2026-09-22.json
-pnpm --dir apps/os project-seed apply \
+pnpm os:project-seed apply \
   --env prd --yes-i-mean-prd \
   --file ~/.iterate/backups/garple-2026-09-22.json \
   --organization garple --owners jonas@nustom.com misha@nustom.com
@@ -146,9 +146,9 @@ organizations with no project, the deployment's own `admin` organization — is 
 separate file:
 
 ```sh
-pnpm --dir apps/os project-seed structure \
+pnpm os:project-seed structure \
   --env prd --file ~/.iterate/backups/structure-2026-09-22.json
-pnpm --dir apps/os project-seed verify-structure \
+pnpm os:project-seed verify-structure \
   --env prd --file ~/.iterate/backups/structure-2026-09-22.json
 ```
 
@@ -243,8 +243,8 @@ and the old one keeps its data until its owner deletes it. Deploy the new Worker
 beside the old one, restore onto it, then move the routes:
 
 ```sh
-pnpm --dir apps/os ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
-pnpm --dir apps/os run deploy --env prd --without-routes
+pnpm os:ensure-resources --env prd   # D1, KV, R2 and Artifacts namespace; commit the ids
+pnpm os:deploy --env prd --without-routes
 ```
 
 `--without-routes` deploys code, bindings and secrets with no routes: Cloudflare
@@ -256,7 +256,7 @@ rollback.
 For an erase, inventory first:
 
 ```sh
-pnpm --dir apps/os erase-data --env prd --yes-i-mean-prd --dry-run
+pnpm os:erase-data --env prd --yes-i-mean-prd --dry-run
 ```
 
 **Pause merges to `main` from the erase until the last `apply` and `verify-structure`
@@ -290,7 +290,7 @@ If a rollback lands on a parked version anyway, erase again, deploy, and rerun e
 `apply`.
 
 The erase refuses shared data resources while another worker still binds them,
-and refuses preview parents with multiple namespaces for a class. Retire any
+and refuses a worker with two Durable Object namespaces of one class. Retire any
 confirmed predecessor's writers before erasing shared stores. The worker identity
 and routes remain; Durable Objects, both KV stores, R2 objects and Artifacts repositories
 are emptied and verified, and the control plane's D1 loses its schema and migration

@@ -39,11 +39,10 @@ import {
   storedCause,
 } from "../cause.ts";
 import { appConfigOf } from "../app-config.ts";
-import type { Caller } from "../caller.ts";
+import { sha256Hex, type Caller } from "../caller.ts";
 import { DurableObjectNameCodec, resourceScope } from "../context/paths.ts";
 import { ControlPlane } from "../control-plane/edge.ts";
 import type { Env } from "../env.ts";
-import { sha256Hex } from "../secrets.ts";
 import type { ReachableContext } from "../stream/stream.ts";
 import { EMAIL_PATH, emailDomainOf } from "../email/contract.ts";
 import { authenticationOf, isAutomated } from "../email/sender.ts";

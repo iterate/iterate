@@ -552,6 +552,45 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
     fact("appendMsEach", (appendMs / args.batchCount).toFixed(1));
   },
 
+  /** N CURSOR rows behind the same log, each holding the claim a death mid-delivery left, due: the
+   *  alarm that comes back for them asks what caused it (`owedCause`) before its pass runs, reading
+   *  the page after every due row's cursor. `owedCauseDepth` is "none" when nothing was read. */
+  async "cursor-rows-owed-cause"(args) {
+    const storage = nodeSqliteDurableObjectStorage();
+    const stream = bareStream(storage);
+    stream.append(
+      ...Array.from({ length: args.rowCount }, (_, i) =>
+        normalizeControlEvent(
+          {
+            type: "events.iterate.com/itx/subscription-configured",
+            payload: { name: `sink${i}`, target: ["itx", "sink"], consumes: ["blob"] },
+          },
+          "/",
+        ),
+      ),
+    );
+    const confirmedOffset = stream.highestDurableOffset();
+    seedLog(stream, { eventCount: args.eventCount, eventChars: args.eventChars });
+    for (let i = 0; i < args.rowCount; i++)
+      stream.storage.writeSubscriptionCursor(`sink${i}`, {
+        confirmedOffset,
+        attempt: 1,
+        nextAttemptAtMs: Date.now() - 1,
+      });
+    const delivery = new SubscriptionDelivery({
+      stream,
+      evaluateItxExpression: () => Promise.reject(new Error("an alarm's cause calls nothing")),
+      ...facetHostPlatformEntries,
+      reconcileAlarm: () => {},
+      runAsDelivery: (_events, call) => call(),
+      abortIncarnation: () => {},
+    });
+    const cause = delivery.owedCause(Date.now());
+    notePeakHeap();
+    fact("rows", args.rowCount);
+    fact("owedCauseDepth", cause?.depth ?? "none");
+  },
+
   /** N CURSOR rows — plain-function targets: a loader entrypoint, a sibling context — all behind
    *  after an eviction (a first cursor is memory-only, so a fresh incarnation's rows are behind by
    *  everything committed since they were configured), then ONE commit. The COMMIT path drains

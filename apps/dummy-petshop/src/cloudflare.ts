@@ -17,7 +17,7 @@
  */
 import { fakeAuthorizationServer, redirectTo, tokenClient } from "./authorization-server.ts";
 import { accountPicker, discoveryDocument, jwks, signIdToken } from "./oidc.ts";
-import { fakeUserIdOf, type ShopDeps } from "./state.ts";
+import { ACCESS_TOKEN_TTL_SECONDS, fakeUserIdOf, type ShopDeps } from "./state.ts";
 
 interface CloudflareGrant {
   email: string;
@@ -90,10 +90,9 @@ export async function handleCloudflareRequest(
       grant = { email: refresh.grant.email, scope: refresh.grant.scope };
     } else return oauthError("unsupported_grant_type");
     const scopes = grant.scope.split(" ");
-    const ttlSeconds = client.client.accessTokenTtlSeconds;
     return Response.json({
-      access_token: await cloudflare.accessToken(client.clientId, grant, ttlSeconds),
-      expires_in: ttlSeconds,
+      access_token: await cloudflare.accessToken(client.clientId, grant, ACCESS_TOKEN_TTL_SECONDS),
+      expires_in: ACCESS_TOKEN_TTL_SECONDS,
       scope: grant.scope,
       token_type: "bearer",
       ...(scopes.includes("offline_access") && {

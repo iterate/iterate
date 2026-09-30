@@ -3,13 +3,13 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { viteWranglerConfig } from "./scripts/generate-wrangler-config.ts";
+import { deploymentFromEnv, viteWranglerConfig } from "./scripts/generate-wrangler-config.ts";
 
 export default defineConfig(({ command }) => ({
   plugins: [
     cloudflare({
       viteEnvironment: { name: "ssr" },
-      config: viteWranglerConfig(process.env.CLOUDFLARE_ENV, {
+      config: viteWranglerConfig(deploymentFromEnv(process.env), {
         localDev: command === "serve",
         // scripts/dev.ts sets it from the `--port` it forwards to `vite dev`, which overrides
         // `server.port` below.

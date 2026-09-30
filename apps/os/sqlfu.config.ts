@@ -2,7 +2,7 @@
 // README.md "The control plane's database"). Authoring only, so no `db`, as sqlfu's guide has it
 // (packages/sqlfu/docs/guides/cloudflare-d1.md: "For authoring only, omit `db`"): `sqlfu check`
 // and `migrate` run on its scratch node:sqlite `.sqlfu/app.db`, and wrangler migrates every D1
-// (`pnpm db:migrate` locally, scripts/d1.ts for a deployment), keeping its own `d1_migrations`.
+// (`pnpm db:migrate` locally, scripts/os/d1.ts for a deployment), keeping its own `d1_migrations`.
 import { defineConfig } from "sqlfu";
 
 export default defineConfig({

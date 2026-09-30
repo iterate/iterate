@@ -180,6 +180,20 @@ const rows: {
     ],
   },
   {
+    name: "control: an alarm owed by 4 due cursor rows reads what caused it within the budget",
+    scenario: "cursor-rows-owed-cause",
+    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 4 },
+    facts: { owedCauseDepth: 0 },
+  },
+  // An alarm's wake is caused by the deepest event its due rows owe, read before its pass as a page
+  // after each row's cursor: 20 pages held until the last is read would be 160 MiB.
+  {
+    name: "cursor rows: an alarm owed by 20 due cursor rows reads what caused it a page at a time, never a page per row at once",
+    scenario: "cursor-rows-owed-cause",
+    args: { ...CURSOR_ROWS_BEHIND_16_MIB, rowCount: 20 },
+    facts: { owedCauseDepth: 0 },
+  },
+  {
     name: "control: 2 cursor rows fed 900 KiB ephemerals from the ring stay within the budget",
     scenario: "cursor-rows-ephemerals-from-ring",
     args: { ...CURSOR_ROWS_EPHEMERALS_FROM_RING, rowCount: 2, batchCount: 4 },

@@ -49,13 +49,8 @@ import {
   retryPlatformFailures,
   type FailureKind,
 } from "@iterate-com/shared/platform-retry";
-import {
-  OS_DOPPLER_PROJECT,
-  backupBucketEnvs,
-  getEnv,
-  osEnvs,
-  type OsDeployableEnv,
-} from "../../envs.ts";
+import { OS_DOPPLER_PROJECT, backupBucketEnvs, getEnv, osEnvs } from "../../envs.ts";
+import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";
 import { getWorkerDoNamespaces } from "../lib/do-reset.ts";
 import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";

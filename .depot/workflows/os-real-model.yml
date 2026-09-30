@@ -49,7 +49,7 @@ concurrency:
 
 env:
   # THE PREFIX of the workflow's deployments, `real-model-<sha7>`: the deploy's `--name`
-  # (apps/os/scripts/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
+  # (scripts/os/preview-sweep.ts CI_WORKFLOW_PREVIEWS knows it).
   DEPLOYMENT_PREFIX: real-model
 
 jobs:
@@ -70,18 +70,16 @@ jobs:
       - name: Setup
         uses: ./.depot/actions/setup
       # `<prefix>-<sha7>` of main's commit: a fresh deployment when main moved since the last run,
-      # the same one deployed again in place when it has not (apps/os/scripts/preview.ts)
+      # the same one deployed again in place when it has not (scripts/os/preview.ts)
       - name: Deploy main's commit
         id: deploy
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: doppler run --project os --config preview -- pnpm preview deploy --name "$DEPLOYMENT_PREFIX" --apps none
       # The workflow's deployments before this one, deleted now this one is ready
-      # (apps/os/scripts/preview.ts `cleanup-superseded`); never this run's verdict.
+      # (scripts/os/preview.ts `cleanup-superseded`); never this run's verdict.
       - name: Delete the superseded deployments
         continue-on-error: true
-        working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           PREVIEW_DEPLOYMENT: ${{ steps.deploy.outputs.deployment }}

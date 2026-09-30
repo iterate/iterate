@@ -151,7 +151,7 @@ export default defineConfig({
     ? []
     : [
         {
-          command: `pnpm --dir apps/os dev -- --port ${localWorkerPort}`,
+          command: `node scripts/os-dev.ts -- --port ${localWorkerPort}`,
           url: `${workerBaseUrl}/version`,
           reuseExistingServer: !process.env.CI,
           timeout: 120_000,

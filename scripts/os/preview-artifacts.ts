@@ -1,13 +1,13 @@
-// scripts/preview-artifacts.ts — a preview's Artifacts namespace (not auto-provisioned: created by
+// scripts/os/preview-artifacts.ts — a preview's Artifacts namespace (not auto-provisioned: created by
 // the deploy, deleted by the delete and the sweep), and the Cloudflare refusal predicate every
 // preview resource delete tells an expected answer apart by. Its own module so the create's and the
-// delete's loops unit-test against a fake API (preview-artifacts.test.ts); scripts/preview.ts is
+// delete's loops unit-test against a fake API (preview-artifacts.test.ts); scripts/os/preview.ts is
 // the caller.
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
-import type { OsDeployableEnv } from "../../../envs.ts";
-import { pageText } from "../../../scripts/ci/slack.ts";
-import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
+import { pageText } from "../ci/slack.ts";
+import { CloudflareApiError, type EnvContext } from "../lib/env-context.ts";
+import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
  *  Cloudflare's failures sent again, a truncated listing refused). */
@@ -21,18 +21,18 @@ const CloudflareErrors = z.array(z.object({ code: z.number() }));
 /** A Cloudflare refusal with this status and error code. Each one used here was measured:
  *  Artifacts 404/10200 (no such namespace, or repo), 409/10202 (namespace still holds repos),
  *  409/10305 (another delete of the namespace in flight: deleteArtifactsNamespace), 409/10306 and
- *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace); Worker
- *  Previews 404/10025 (no such preview). A deployment's members' not-found answers are
- *  preview-delete.ts `GONE`. */
+ *  409/10201 (the namespace's activation still settling: ensureArtifactsNamespace). A
+ *  deployment's members' not-found answers are preview-delete.ts `GONE`. */
 export const isCloudflareError = (error: unknown, status: number, code: number) =>
   error instanceof CloudflareApiError &&
   error.status === status &&
   (CloudflareErrors.safeParse(error.details).data ?? []).some((entry) => entry.code === code);
 
-/** How many rounds, 2 s apart, an empty namespace may answer "not empty" before it is reported
- *  stuck (~2 minutes). Accepted repo deletes land well inside that: 89 landed in under 15 s in the
- *  2026-09-24 sweep. */
-const STUCK_AFTER_REFUSED_ROUNDS = 60;
+/** How many rounds in a row an empty namespace may answer "not empty" (409/10202, or 409/10305)
+ *  before it is reported stuck: about 18 s, a round being a repos list, a DELETE and a 2 s wait.
+ *  A namespace whose repo deletes are still landing answers the same for under 15 s (measured
+ *  2026-09-24). */
+const STUCK_AFTER_REFUSED_ROUNDS = 5;
 
 /** An Artifacts namespace Cloudflare will not delete: its repos list reads empty, yet the namespace
  *  delete keeps answering 409/10202 "Namespace is not empty". A platform fault, not ours, and not
