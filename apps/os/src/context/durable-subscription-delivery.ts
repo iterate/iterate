@@ -110,19 +110,16 @@ export class DurableSubscriptionDelivery {
         this.#runners.delete(key);
         this.#wakeByRunner.delete(key);
         this.#deps.storage.delete(`durable-delivery/${key}`);
-        this.#deps.storage.delete(`durable-delivery-resumed/${key}`);
       }
     if (!this.#swept) {
       for (const [key] of this.#deps.storage.list({ prefix: "durable-delivery/" }))
         if (!live.has(key.slice("durable-delivery/".length))) this.#deps.storage.delete(key);
-      for (const [key] of this.#deps.storage.list({ prefix: "durable-delivery-resumed/" }))
-        if (!live.has(key.slice("durable-delivery-resumed/".length)))
-          this.#deps.storage.delete(key);
       this.#swept = true;
     }
     for (const row of rows) {
       const key = keyOf(row);
       let runner = this.#runners.get(key);
+      const cursor = this.#deps.storage.get<DurableDeliveryCursor>(`durable-delivery/${key}`);
       if (!runner) {
         runner = new DurableDeliveryProcessor({
           slug: key,
@@ -148,7 +145,7 @@ export class DurableSubscriptionDelivery {
         );
       } else if (
         row.resumedAtOffset !== undefined &&
-        this.#deps.storage.get<number>(`durable-delivery-resumed/${key}`) !== row.resumedAtOffset
+        cursor?.resumeAtOffset !== row.resumedAtOffset
       ) {
         runner.resume(
           row.resumedAfterOffset === undefined
@@ -157,11 +154,9 @@ export class DurableSubscriptionDelivery {
           row.resumedOffset,
           row.resumedAtOffset,
         );
-        this.#deps.storage.put(`durable-delivery-resumed/${key}`, row.resumedAtOffset);
       }
     }
   }
-
 
   #runtime(row: DurableSubscriptionRow): DurableDeliveryRuntime {
     const key = keyOf(row);

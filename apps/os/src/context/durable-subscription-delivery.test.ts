@@ -75,7 +75,44 @@ test("a resume beyond the durable head starts at the current tail", () => {
   });
 
   delivery.sync();
-  expect(delivery.snapshots()["tail@1"]).toEqual({ confirmedOffset: 3 });
+  expect(delivery.snapshots()["tail@1"]).toEqual({ confirmedOffset: 3, resumeAtOffset: 3 });
+  expect(values.has("durable-delivery-resumed/tail@1")).toBe(false);
+});
+
+test("a cold cursor that already applied a resume is not reset again", () => {
+  const values = new Map<string, unknown>([
+    ["durable-delivery/applied@1", { confirmedOffset: 5, resumeAtOffset: 9 }],
+  ]);
+  // The helper uses only synchronous context KV operations; the fake has the same observable shape.
+  const storage = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    delete: (key: string) => values.delete(key),
+    list: ({ prefix }: { prefix: string }) =>
+      new Map([...values].filter(([key]) => key.startsWith(prefix))),
+  } as unknown as DurableObjectStorage["kv"];
+  const delivery = new DurableSubscriptionDelivery({
+    storage,
+    rows: () => [
+      {
+        name: "applied",
+        configuredAtOffset: 1,
+        resumedAtOffset: 9,
+        resumedAfterOffset: 0,
+      },
+    ],
+    currentHead: () => 5,
+    read: () => ({ offsets: [], scannedThroughOffset: 5, atHead: true }),
+    deliver: async () => {},
+    deliverEphemeral: async () => {},
+    terminal: async () => {},
+    run: () => {},
+    wakesChanged: () => {},
+  });
+
+  delivery.sync();
+  expect(delivery.snapshots()["applied@1"]).toEqual({ confirmedOffset: 5, resumeAtOffset: 9 });
+  expect(values.has("durable-delivery-resumed/applied@1")).toBe(false);
 });
 
 test("a halted fan-out cursor never re-arms from its retained pending retry", () => {

@@ -7,6 +7,8 @@ import { consumesEvent, type EngineKv, type ScannedRange, type StreamEvent } fro
 
 export type DurableDeliveryCursor = {
   confirmedOffset: number;
+  /** The core resume fact whose seek/un-halt has already changed this cursor. */
+  resumeAtOffset?: number;
   pending?: {
     after: number;
     through: number;
@@ -311,7 +313,11 @@ export class DurableDeliveryProcessor {
     );
   }
   #putCursor(cursor: DurableDeliveryCursor): void {
-    this.#options.runtime.storage.put(this.#key(), cursor);
+    const { resumeAtOffset: _previousResumeAtOffset, ...withoutPreviousResume } = cursor;
+    this.#options.runtime.storage.put(this.#key(), {
+      ...withoutPreviousResume,
+      ...(this.#resumeAtOffset !== undefined && { resumeAtOffset: this.#resumeAtOffset }),
+    });
   }
 
   #requestDrain(runInBackground: (work: () => Promise<unknown>) => void): void {

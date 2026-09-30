@@ -308,7 +308,7 @@ test("a resume seek replaces an in-flight ordered range", async () => {
   expect(processor.resume(1, undefined, 99)).toBe(true);
   releaseFirst();
   await settle();
-  expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
+  expect(processor.snapshot()).toEqual({ confirmedOffset: 1, resumeAtOffset: 99 });
 
   await drive(processor, 2);
   await settle();
@@ -377,7 +377,7 @@ test("a running ordered row adopts a plain resume fence before its next read", a
   await drive(processor, 1);
   await settle();
   expect(calls).toEqual([1]);
-  expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
+  expect(processor.snapshot()).toEqual({ confirmedOffset: 1, resumeAtOffset: 9 });
 });
 
 test("a fan-out seek replaces admitted work and re-reads from its requested offset", async () => {
@@ -426,7 +426,7 @@ test("a delayed ordered terminal carries the resume fence that was current when 
   receiveTerminal();
   await settle();
   expect(terminals).toEqual([expect.objectContaining({ resumeAtOffset: 7 })]);
-  expect(processor.snapshot()).toEqual({ confirmedOffset: 0 });
+  expect(processor.snapshot()).toEqual({ confirmedOffset: 0, resumeAtOffset: 8 });
 });
 
 test("an interrupted never-settling ordered call retains one bounded scanned range for a fresh runner", async () => {
