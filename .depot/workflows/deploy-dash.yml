@@ -15,7 +15,7 @@ on:
       - apps/dash/**
       - envs.ts
       - scripts/lib/**
-      - packages/iterate/**
+      - core/lib/**
       # the dash renders packages/ui (the context view, the app shell); a change there is a dash change
       - packages/ui/**
       - packages/shared/**

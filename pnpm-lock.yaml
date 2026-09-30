@@ -121,8 +121,8 @@ catalogs:
       specifier: ^4.3.3
       version: 4.3.3
     trpc-cli:
-      specifier: 0.16.0
-      version: 0.16.0
+      specifier: 0.17.0
+      version: 0.17.0
     tsdown:
       specifier: 0.23.0
       version: 0.23.0
@@ -171,9 +171,6 @@ importers:
       '@iterate-com/agents':
         specifier: workspace:*
         version: link:packages/agents
-      '@iterate-com/cli':
-        specifier: workspace:*
-        version: link:packages/cli
       '@iterate-com/docs':
         specifier: workspace:*
         version: link:packages/docs
@@ -206,7 +203,7 @@ importers:
         version: 4.1.0
       iterate:
         specifier: workspace:*
-        version: link:packages/iterate
+        version: link:core/lib
       knip:
         specifier: ^6.38.0
         version: 6.38.0
@@ -251,7 +248,7 @@ importers:
         version: 1.168.58(crossws@0.4.4)(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.10)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -327,7 +324,7 @@ importers:
         version: 0.4.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -376,7 +373,7 @@ importers:
         version: 6.1.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/plugin-transform-runtime@7.29.7(@babel/core@7.29.7))(@babel/runtime@7.29.7)(rolldown@1.2.10)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1)))(babel-plugin-react-compiler@1.0.0)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -409,7 +406,7 @@ importers:
         version: 2.18.2
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       mime:
         specifier: 4.1.0
         version: 4.1.0
@@ -428,7 +425,7 @@ importers:
         version: 0.8.3
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -464,7 +461,7 @@ importers:
         version: 0.4.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -615,7 +612,7 @@ importers:
         version: 0.4.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -701,7 +698,7 @@ importers:
         version: 5.20260929.1
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -740,7 +737,7 @@ importers:
         version: 10.4.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -786,7 +783,7 @@ importers:
         version: 4.3.3
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -816,7 +813,7 @@ importers:
         version: 1.168.58(crossws@0.4.4)(esbuild@0.28.2)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rolldown@1.2.10)(vite@8.3.0(@types/node@26.1.1)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -865,10 +862,10 @@ importers:
         version: 0.8.3
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -901,7 +898,7 @@ importers:
         version: 0.4.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -949,6 +946,52 @@ importers:
         specifier: 4.143.1
         version: 4.143.1(@cloudflare/workers-types@5.20260929.1)(@types/node@26.1.1)
 
+  core/lib:
+    dependencies:
+      capnweb:
+        specifier: 'catalog:'
+        version: '@iterate-com/capnweb@0.12.3'
+      json5:
+        specifier: 'catalog:'
+        version: 2.2.3
+      oauth4webapi:
+        specifier: 'catalog:'
+        version: 3.8.8
+      trpc-cli:
+        specifier: 'catalog:'
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: 'catalog:'
+        version: 5.20260929.1
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.6
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.3.0
+      '@types/ws':
+        specifier: 'catalog:'
+        version: 8.18.1
+      react:
+        specifier: 'catalog:'
+        version: 19.3.0
+      tsdown:
+        specifier: 'catalog:'
+        version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.6)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.13.6)(typescript@7.0.2))(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
+
   core/os:
     dependencies:
       '@base-ui/react':
@@ -983,7 +1026,7 @@ importers:
         version: 2.1.0
       iterate:
         specifier: workspace:*
-        version: link:../../packages/iterate
+        version: link:../lib
       json5:
         specifier: 'catalog:'
         version: 2.2.3
@@ -1053,7 +1096,7 @@ importers:
         version: 4.21.0(typescript@7.0.2)
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1095,7 +1138,7 @@ importers:
         version: 5.20260929.1
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
@@ -1129,7 +1172,7 @@ importers:
         version: 24.13.6
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
@@ -1142,49 +1185,6 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-
-  packages/cli:
-    dependencies:
-      '@clack/prompts':
-        specifier: ^1.0.0
-        version: 1.8.1
-      '@orpc/server':
-        specifier: 'catalog:'
-        version: 1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3)
-      capnweb:
-        specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
-      iterate:
-        specifier: workspace:*
-        version: link:../iterate
-      oauth4webapi:
-        specifier: 'catalog:'
-        version: 3.8.8
-      trpc-cli:
-        specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
-      ws:
-        specifier: 8.21.3
-        version: 8.21.3
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.13.6
-      '@types/ws':
-        specifier: 'catalog:'
-        version: 8.18.1
-      tsdown:
-        specifier: 'catalog:'
-        version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.6)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.13.6)(typescript@7.0.2))(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
 
   packages/docs:
     dependencies:
@@ -1200,7 +1200,7 @@ importers:
         version: 5.20260929.1
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       node-diff3:
         specifier: 3.2.1
         version: 3.2.1
@@ -1224,7 +1224,7 @@ importers:
         version: 5.20260929.1
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
@@ -1237,49 +1237,6 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-
-  packages/iterate:
-    dependencies:
-      capnweb:
-        specifier: 'catalog:'
-        version: '@iterate-com/capnweb@0.12.3'
-      json5:
-        specifier: 'catalog:'
-        version: 2.2.3
-      oauth4webapi:
-        specifier: 'catalog:'
-        version: 3.8.8
-      ws:
-        specifier: 8.21.3
-        version: 8.21.3
-      zod:
-        specifier: 'catalog:'
-        version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: 'catalog:'
-        version: 5.20260929.1
-      '@types/node':
-        specifier: 'catalog:'
-        version: 24.13.6
-      '@types/react':
-        specifier: 'catalog:'
-        version: 19.3.0
-      '@types/ws':
-        specifier: 'catalog:'
-        version: 8.18.1
-      react:
-        specifier: 'catalog:'
-        version: 19.3.0
-      tsdown:
-        specifier: 'catalog:'
-        version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.11(@opentelemetry/api@1.9.0)(@types/node@24.13.6)(jsdom@30.1.1(@noble/hashes@2.2.0))(msw@2.13.3(@types/node@24.13.6)(typescript@7.0.2))(vite@8.3.0(@types/node@24.13.6)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.15)(yaml@2.9.1))
 
   packages/petshop-sdk:
     dependencies:
@@ -1301,7 +1258,7 @@ importers:
     dependencies:
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       zod:
         specifier: 'catalog:'
         version: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
@@ -1374,7 +1331,7 @@ importers:
         version: 6.0.2
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       lucide-react:
         specifier: 'catalog:'
         version: 1.48.0(react@19.3.0)
@@ -1448,7 +1405,7 @@ importers:
         version: 0.28.2
       iterate:
         specifier: workspace:*
-        version: link:../iterate
+        version: link:../../core/lib
       tsdown:
         specifier: 'catalog:'
         version: 0.23.0(oxc-resolver@11.24.2)(tsx@4.23.15)(typescript@7.0.2)
@@ -1484,7 +1441,7 @@ importers:
         version: 0.8.3
       iterate:
         specifier: workspace:*
-        version: link:../packages/iterate
+        version: link:../core/lib
       undici:
         specifier: 'catalog:'
         version: 8.11.2
@@ -1515,7 +1472,7 @@ importers:
         version: 0.151.0
       trpc-cli:
         specifier: 'catalog:'
-        version: 0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
+        version: 0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86))
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
@@ -1566,7 +1523,7 @@ importers:
         version: 0.28.2
       iterate:
         specifier: workspace:*
-        version: link:../packages/iterate
+        version: link:../core/lib
       json5:
         specifier: 'catalog:'
         version: 2.2.3
@@ -7931,8 +7888,8 @@ packages:
       zod:
         optional: true
 
-  trpc-cli@0.16.0:
-    resolution: {integrity: sha512-ixB7Qw3IfsWofsUxF2wlxaRhnePplNIlFckcfc4A4ro6WWLEbuJcNKt+J+UptkGKBre8xwG6uKbuO36Vd73I8Q==}
+  trpc-cli@0.17.0:
+    resolution: {integrity: sha512-qpGbPbg4qSltZ3fytTKDHyJ27bWLUaarQ/2LQ0PHP5lKGTmy7pg41rRD2wFT5B3Ey+lkrn98+J98dVcMpRWudw==}
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -15247,7 +15204,7 @@ snapshots:
       valibot: 1.2.0(typescript@7.0.2)
       zod: 4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)
 
-  trpc-cli@0.16.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)):
+  trpc-cli@0.17.0(@orpc/server@1.15.4(@opentelemetry/api@1.9.0)(crossws@0.4.4)(ws@8.21.3))(@trpc/server@11.12.0(typescript@7.0.2))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@7.0.2)))(effect@3.19.19)(valibot@1.2.0(typescript@7.0.2))(zod@4.6.5(patch_hash=5a57d5a4f788c6fe9e15d60e59511c1f901b7fc1d638126eb2b02cafc9e79a86)):
     dependencies:
       commander: 14.0.3
     optionalDependencies:

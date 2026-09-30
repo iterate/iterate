@@ -1,26 +1,26 @@
-# @iterate-com/cli
+# The iterate CLI
 
 The `iterate` command for Iterate (`core/os`). Requires Node >=22.18; no Bun runtime. It is
-built on the SDK, [`iterate`](../iterate/README.md). `npm install -g @iterate-com/cli` installs
+part of the SDK's package, [`iterate`](../../README.md). `npm install -g iterate` installs
 the `iterate` command the examples below use.
 
 ```sh
-npx @iterate-com/cli                               # offline help
-npx @iterate-com/cli login                         # browser OAuth with project consent
-npx @iterate-com/cli projects list
-npx @iterate-com/cli orgs list
-npx @iterate-com/cli ping
-npx @iterate-com/cli repl --project my-project     # local Node REPL
-npx @iterate-com/cli itx run --project my-project --eval 'return await itx.whoami();'
-npx @iterate-com/cli tokens create --name my-script --project my-project   # a personal access token
-npx @iterate-com/cli tokens list
-npx @iterate-com/cli tokens revoke pat_…
-npx @iterate-com/cli mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
-npx @iterate-com/cli use-my-computer --project my-project --name myComputer
-npx @iterate-com/cli tunnel 5173 --project my-project --name blog  # a local port on a project host
-npx @iterate-com/cli provide ./whatsapp.ts --project my-project  # a local file's functions as itx.whatsapp
-npx @iterate-com/cli menubar --project my-project  # macOS app
-npx @iterate-com/cli logout
+npx iterate                               # offline help
+npx iterate login                         # browser OAuth with project consent
+npx iterate projects list
+npx iterate orgs list
+npx iterate ping
+npx iterate repl --project my-project     # local Node REPL
+npx iterate itx run --project my-project --eval 'return await itx.whoami();'
+npx iterate tokens create --name my-script --project my-project   # a personal access token
+npx iterate tokens list
+npx iterate tokens revoke pat_…
+npx iterate mcp claude                    # Claude Code on /mcp with ITERATE_BEARER_TOKEN
+npx iterate use-my-computer --project my-project --name myComputer
+npx iterate tunnel 5173 --project my-project --name blog  # a local port on a project host
+npx iterate provide ./whatsapp.ts --project my-project  # a local file's functions as itx.whatsapp
+npx iterate menubar --project my-project  # macOS app
+npx iterate logout
 ```
 
 The default server is `https://os.iterate.com`. Login uses that server's OAuth
@@ -34,7 +34,7 @@ commands use neither, nor the stored login: each signs in in the browser with th
 `account` scope for its one call and ends that sign-in, so a stored login mints
 no key. `mcp claude` prints a command that reads the key from
 `$ITERATE_BEARER_TOKEN`, never the key itself. See
-[credentials](../../core/os/docs/credentials.md).
+[credentials](../../../os/docs/credentials.md).
 `ITERATE_SKIP_BROWSER_OPEN=1` prints the login URL without opening a browser.
 
 ## Running scripts
@@ -96,13 +96,13 @@ then the route is gone too, until the tunnel runs again.
 On a deployment that serves projects under paths (`/projects/<project>/<name>/` on the
 platform's own origin, such as a per-PR preview), the local server must serve under the printed
 base path (Vite: `--base`). A deployment with a domain gives each tunnel its own origin:
-[custom domain](../../core/os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
+[custom domain](../../../os/SELF-HOSTING.md#custom-domain-own-origins-for-apps-and-tunnels).
 
 ### Without the CLI
 
 A tunnel is one capnweb session: lend the project a fetch-shaped `RpcTarget` with a fetch route
 to it (`provide`'s `fetchRoute`, which ends with the lend), and delete the route on exit.
-[core/os/examples/serve-localhost.mjs](../../core/os/examples/serve-localhost.mjs) is the whole
+[core/os/examples/serve-localhost.mjs](../../../os/examples/serve-localhost.mjs) is the whole
 thing, runnable (`npm install capnweb@npm:@iterate-com/capnweb`):
 
 ```js

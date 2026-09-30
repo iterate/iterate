@@ -291,7 +291,7 @@
               {
                 "target": ["./packages/**", "./apps/**"],
                 "from": "./core/os",
-                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in packages/iterate; platform-only code stays in core/os. The platform's tests live in test/, which this rule does not cover (packages/iterate/README.md#the-sdkplatform-line)."
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in core/lib; platform-only code stays in core/os. The platform's tests live in test/, which this rule does not cover (core/lib/README.md#the-sdkplatform-line)."
               }
             ]
           }
@@ -308,8 +308,13 @@
               {
                 "target": "./core",
                 "from": "./",
-                "except": ["./configs", "./core", "./node_modules", "./packages/iterate"],
-                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The exceptions until they are resolved: packages/iterate, which moves to core/lib, and configs/, the project templates the build bakes in (tasks/core-os.md)."
+                "except": ["./configs", "./core", "./node_modules"],
+                "message": "core/ builds from a clone of itself (core/AGENTS.md): it imports nothing outside core/. Outside code may import core, never the reverse. The one exception until it is resolved: configs/, the project templates the build bakes in (tasks/core-minimal-template.md)."
+              },
+              {
+                "target": "./core/lib",
+                "from": "./core/os",
+                "message": "The SDK and the first-party apps use the platform the way user code does: through `iterate/*`. A module user code needs belongs in core/lib; platform-only code stays in core/os. The platform's tests live in test/, which this rule does not cover (core/lib/README.md#the-sdkplatform-line)."
               }
             ]
           }
@@ -345,7 +350,7 @@
       }
     },
     {
-      "files": ["packages/iterate/src/stream/contract.ts", "packages/agents/src/contract.ts"],
+      "files": ["core/lib/src/stream/contract.ts", "packages/agents/src/contract.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -354,7 +359,7 @@
               {
                 "group": ["**", "!zod", "!iterate/stream/contract", "!iterate/stream/run"],
                 "allowTypeImports": true,
-                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through @iterate-com/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (packages/iterate/src/stream/contract.ts). Type-only imports are free."
+                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through @iterate-com/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (core/lib/src/stream/contract.ts). Type-only imports are free."
               }
             ]
           }

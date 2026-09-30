@@ -28,15 +28,12 @@ export default defineConfig({
     // cloudflare:workers; inlined so the alias below covers it.
     server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
   },
-  // Node stand-ins: packages/iterate/src/test-support/cloudflare-workers-shim.ts and
+  // Node stand-ins: core/lib/src/test-support/cloudflare-workers-shim.ts and
   // src/test/start-server-entry-shim.ts say why.
   resolve: {
     alias: {
       "cloudflare:workers": fileURLToPath(
-        new URL(
-          "../../packages/iterate/src/test-support/cloudflare-workers-shim.ts",
-          import.meta.url,
-        ),
+        new URL("../lib/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
       "@tanstack/react-start/server-entry": fileURLToPath(
         new URL("./src/test/start-server-entry-shim.ts", import.meta.url),

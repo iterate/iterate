@@ -265,15 +265,13 @@ export default defineConfig({
           // cloudflare:workers; inlined so the alias below covers it.
           server: { deps: { inline: ["@cloudflare/workers-oauth-provider"] } },
         },
-        // Node stand-ins, as core/os's unit tests use: packages/iterate/src/test-support/
+        // Node stand-ins, as core/os's unit tests use: core/lib/src/test-support/
         // cloudflare-workers-shim.ts and core/os/src/test/start-server-entry-shim.ts say why.
         resolve: {
           alias: {
             "cloudflare:workers": fileURLToPath(
-              new URL(
-                "../packages/iterate/src/test-support/cloudflare-workers-shim.ts",
-                import.meta.url,
-              ).href,
+              new URL("../core/lib/src/test-support/cloudflare-workers-shim.ts", import.meta.url)
+                .href,
             ),
             "@tanstack/react-start/server-entry": fileURLToPath(
               new URL("./src/test/start-server-entry-shim.ts", APP_OS).href,

@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { RpcTarget } from "capnweb";
-import type { IterateConnection } from "iterate/node";
+import type { IterateConnection } from "../node.ts";
 
 /** What `iterate provide` reads from a file: its default export, called on every connection with
  *  that connection's project, answers the object whose functions are lent; `description`, when

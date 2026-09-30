@@ -7,7 +7,7 @@ export default defineConfig({
     alias: {
       // src/apps/server.ts reads the Worker's bindings from `env`, which its test fills in.
       "cloudflare:workers": fileURLToPath(
-        new URL("../iterate/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
+        new URL("../../core/lib/src/test-support/cloudflare-workers-shim.ts", import.meta.url),
       ),
     },
   },

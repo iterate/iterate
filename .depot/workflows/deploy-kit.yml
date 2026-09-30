@@ -19,7 +19,7 @@ on:
       - packages/shared/**
       # Prepare's voice check (@iterate-com/voice/install)
       - packages/voice/**
-      - packages/iterate/**
+      - core/lib/**
       - package.json
       - pnpm-lock.yaml
       - pnpm-workspace.yaml

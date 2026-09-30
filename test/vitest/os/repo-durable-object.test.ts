@@ -500,7 +500,7 @@ function memoryStorage() {
 /** The real proxy (`projectScopedArtifacts`) over a namespace that counts the binding's calls and
  *  hands out the fake remote's URL, reached as a facet reaches it through its context: every call on
  *  `get(path)`'s handle is a second dispatch, which walks `get(path)` again
- *  (packages/iterate/src/expression.ts). */
+ *  (core/lib/src/expression.ts). */
 async function countingArtifacts() {
   const artifacts = await FakeArtifacts.start({ [path]: { "worker.ts": "export default 1;\n" } });
   onTestFinished(() => artifacts.close());

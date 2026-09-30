@@ -25,4 +25,4 @@ then finds every producer and consumer.
 A `Set` or array that lists several types for one check may stay, with literal members, and so
 may a TypeScript union of types. A generic mechanism that serves several namespaces, like the
 entity lifecycle's `<slug>/created`, builds the type from its parameter. The naming rules are in
-[packages/iterate/README.md](../packages/iterate/README.md#event-types).
+[core/lib/README.md](../core/lib/README.md#event-types).

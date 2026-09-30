@@ -28,7 +28,6 @@
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
     "@iterate-com/agents": "workspace:*",
-    "@iterate-com/cli": "workspace:*",
     "@iterate-com/docs": "workspace:*",
     "@iterate-com/voice": "workspace:*",
     "@playwright/test": "catalog:",

@@ -15,7 +15,7 @@ import { WebSocketServer } from "ws";
 import { expect, test, vi } from "vitest";
 import { rpcTargetOf, runProvide } from "./provide.ts";
 
-const bin = fileURLToPath(new URL("../bin/iterate.js", import.meta.url));
+const bin = fileURLToPath(new URL("../../bin/iterate.js", import.meta.url));
 
 test(
   "a .ts, a .mjs and a CommonJS .js file are each lent as itx.<name>: a call reaches the file, which reaches the project through its itx; description goes with the lend; Ctrl-C exits 0",

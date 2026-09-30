@@ -12,7 +12,7 @@ export default defineConfig({
   },
   test: {
     // The console's reporter, and whichever others the environment names by path: iterate's CI
-    // adds its telemetry reporter (.depot/workflows/test.yml), which lives outside packages/iterate.
+    // adds its telemetry reporter (.depot/workflows/test.yml), which lives outside core/lib.
     reporters: [
       "default",
       ...(process.env.VITEST_EXTRA_REPORTERS || "").split(",").filter(Boolean),

@@ -770,7 +770,7 @@ type EventCause = { chain: string; depth: number; parent?: string };
  *  append method checks ONE rule by hand: `type` is a non-empty string. */
 export type StreamEventInput = {
   /** `events.iterate.com/<namespace>/<event>` for the platform's types, named by the rules in
-   *  packages/iterate/README.md#event-types; any other string is the appender's own. */
+   *  core/lib/README.md#event-types; any other string is the appender's own. */
   type: string;
   payload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
