@@ -162,12 +162,16 @@ export const DEFAULT_CLOUDFLARE_SCOPES = ["openid", "user-details.read"];
  *  `warnUnknownKeys` needs plain object schemas to check keys against. Every object `prefault`s to
  *  `{}` so a deployment that names none of a block's keys still gets the block. */
 export const AppConfig = z.object({
-  /** Where this deployment answers. Every one optional. */
+  /** Where this deployment answers. `os` identifies this deployment; the others are optional. */
   urls: z
     .object({
-      /** THE ISSUER — the OAuth issuer identifier, the `__Host-` cookie's origin, what resource tokens
-       *  are bound to. Blank ⇒ each request's own origin (a deployment with one hostname, workers.dev). */
-      os: optionalOrigin,
+      /** THE ISSUER — the OAuth issuer identifier, the `__Host-` cookie's origin, and what resource
+       *  tokens are bound to. Every deployment names its one stable public origin. */
+      os: httpOrigin.optional().transform((origin, context) => {
+        if (origin) return origin;
+        context.addIssue({ code: "custom", message: REQUIRED });
+        return z.NEVER;
+      }),
       /** A separate MCP origin. Blank ⇒ `/mcp` on `urls.os`. */
       mcp: optionalOrigin,
       /** The dash (apps/dash) — where the landing page (`/`, routes/index.tsx) sends a person, this
@@ -588,15 +592,10 @@ export function atRestKeysOf(config: AppConfig): { current: string; previous?: s
   return { current: config.secrets.key.exposeSecret(), previous: previous || undefined };
 }
 
-/** Where the platform answers, for the request in hand. `platformOrigin` is the origin the request
- *  reached the platform on — `urls.os` when the deployment names one (prd, a preview: more than one
- *  hostname), else the request's own origin (a self-host: one hostname, workers.dev) — and it IS the
- *  OAuth issuer identifier: the `__Host-` cookie's origin, what the issuer's pages and every composed
- *  URL hang under. `api` and `mcp` are the two resource identifiers a token is bound to, `/api` on
- *  the platform origin and the MCP root (a separate origin's `/` when `urls.mcp` names one, else
- *  `/mcp`). The edge stamps every caller with the origin
- *  (`Caller.platformOrigin`); a context persists what its callers said, for the calls that carry
- *  none (a loaded worker's, an alarm's). */
+/** Where this deployment answers. `platformOrigin` is the configured issuer identifier: the
+ *  `__Host-` cookie's origin and the base of every composed URL. `api` and `mcp` are the resources a
+ *  token is bound to: `/api` on that origin and the MCP root (a separate origin's `/` when
+ *  `urls.mcp` names one, otherwise `/mcp`). */
 export type PlatformAddresses = {
   platformOrigin: string;
   api: string;
@@ -607,9 +606,9 @@ export type PlatformAddresses = {
 /** The userinfo resource's path on the platform origin (`PlatformAddresses.userinfo`). */
 export const USERINFO_PATH = "/oauth2/userinfo";
 
-export function platformAddressesOf(env: AppConfigEnv, request: Request): PlatformAddresses {
+export function platformAddressesOf(env: AppConfigEnv): PlatformAddresses {
   const config = appConfigOf(env);
-  const platformOrigin = config.urls.os || new URL(request.url).origin;
+  const platformOrigin = config.urls.os;
   return {
     platformOrigin,
     api: `${platformOrigin}/api`,

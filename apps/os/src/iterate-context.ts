@@ -629,7 +629,6 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   {
     iterateContextName: string;
     platform?: true;
-    platformOrigin: string | null;
   }
 > {
   /** THE handoff: the genuine itx scope — the same `IterateContextRpcTarget` class a capnweb client
@@ -644,10 +643,8 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
     // LOADED code's handle runs as app code; a class of THIS worker mints its stub with
     // `platform: true` from its own exports (sdk/index.ts) and gets the full handle. A loaded isolate's
     // `ctx.exports` are its own module's, so the prop cannot be forged from inside one. Either speaks
-    // for the project (no principal) at the origin the context was minted with (platform-origin
-    // persisted on the DO): every hop from here — this context, a `cd` to a sibling — carries it, so
-    // a sibling never reached from the edge still composes URLs. The platform's handle `cd`s as an
-    // edge context does, so it carries its own context as `Caller.path`: what it appends elsewhere
+    // for the project (no principal). The platform's handle `cd`s as an edge context does, so it
+    // carries its own context as `Caller.path`: what it appends elsewhere
     // (an entity's certificate on `/`) is stamped with where it came from, not where it landed.
     const address = DurableObjectNameCodec.parse(this.ctx.props.iterateContextName);
     return new IterateContextRpcTarget(
@@ -697,13 +694,10 @@ export class ItxEntrypoint extends cloudflareWorkers.WorkerEntrypoint<
   }
 
   /** Who this entrypoint's calls are: loaded code (`Caller.app`), or — minted `platform: true` by a
-   *  class of THIS worker — the platform at its own context (`Caller.path`). Either speaks for the
-   *  project, at the origin the context was minted with, for the cause the code runs under, or one
-   *  of its own. */
+   *  class of THIS worker — the platform at its own context (`Caller.path`). */
   #caller(address: DurableObjectAddress, cause: Cause | undefined): Caller {
     return {
       principal: null,
-      platformOrigin: this.ctx.props.platformOrigin,
       cause: cause || newChain("loaded code"),
       ...(this.ctx.props.platform ? { path: address.path } : { app: true as const }),
     };

@@ -78,7 +78,7 @@ export function adminSignInClientMetadata(platformOrigin: string) {
  *  asking only who they are, with the cookie that remembers `next` meanwhile. */
 export async function adminSignInResponse(request: Request, env: Env, issuer: string) {
   const config = appConfigOf(env);
-  const { platformOrigin } = platformAddressesOf(env, request);
+  const { platformOrigin } = platformAddressesOf(env);
   const next = sameOriginPath(
     new URL(request.url).searchParams.get("next") || "/login",
     platformOrigin,
@@ -126,7 +126,7 @@ export async function adminSignInCallbackResponse(request: Request, env: Env, is
   };
   const checked = await whoSignedIn({
     issuer,
-    platformOrigin: platformAddressesOf(env, request).platformOrigin,
+    platformOrigin: platformAddressesOf(env).platformOrigin,
     signingSecret: await sessionSigningSecretOf(config),
     request,
   }).catch((error: unknown) => {

@@ -47,7 +47,7 @@ export async function describeConsent(
   ctx: ExecutionContext,
   authorization: string,
 ) {
-  const addresses = platformAddressesOf(env, request);
+  const addresses = platformAddressesOf(env);
   const signedIn = await withTimeout(
     issuerSignIn(request, env),
     ACCOUNT_SETUP_WAIT_MS,
@@ -96,7 +96,7 @@ export async function createConsentProject(
       waitUntil: (promise) => ctx.waitUntil(promise),
       controlPlane: new ControlPlane(env),
       appConfig: appConfigOf(env),
-      platformOrigin: platformAddressesOf(env, request).platformOrigin,
+      platformOrigin: platformAddressesOf(env).platformOrigin,
     },
     teardown,
     {
@@ -157,7 +157,7 @@ export async function approveConsentForm(request: Request, env: Env, ctx: Execut
     impersonate: form?.get("impersonate") ?? undefined,
   });
   if (!approval.success) return new Response("Invalid consent form", { status: 400 });
-  const addresses = platformAddressesOf(env, request);
+  const addresses = platformAddressesOf(env);
   const consent = new ConsentRpcTarget(env, ctx, signedIn.grant, addresses, {
     admittedThisRequest: true,
   });

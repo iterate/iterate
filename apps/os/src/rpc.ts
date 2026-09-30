@@ -28,7 +28,7 @@ export async function rpcResponse(
 ) {
   // THE PLATFORM ADDRESSES this transport reached the platform at (app-config.ts): every address
   // and every caller stamp downstream is at them.
-  const addresses = platformAddressesOf(env, request);
+  const addresses = platformAddressesOf(env);
   const { platformOrigin } = addresses;
   const projects = new Set<string>();
   const teardown = new SessionTeardown();

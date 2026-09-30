@@ -36,7 +36,11 @@ a [custom domain](#custom-domain-own-origins-for-apps-and-tunnels).
 
 The whole configuration is one JSON object, the `APP_CONFIG` secret (`apps/os/src/app-config.ts`
 documents every key). Any key can also be set alone as a var, the path joined by `__`; the Vite build
-sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way.
+sets `APP_CONFIG_URLS__INGRESS_ROUTING` and `APP_CONFIG_URLS__DASH` that way. Before building, set
+`ITERATE_SELF_HOST_ORIGIN` to the one public origin of this deployment, for example
+`https://iterate.<your-account-subdomain>.workers.dev` or `https://os.<your-domain>`. The build
+puts it in `APP_CONFIG_URLS__OS`; a self-host can no longer leave that value blank and learn an
+issuer from its first request.
 
 The recipe signs people in with one password (`login.password`). To add Google, Cloudflare or
 GitHub sign-in, or mailed codes, add `login.google`, `login.cloudflare`, `login.github` or

@@ -47,7 +47,6 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-grant",
     "x-itx-caller-path",
     "x-itx-app",
-    "x-itx-platform-origin",
     "x-itx-rpc-stub-pager",
     "x-itx-fetch-upgrade",
     "x-itx-fetch-upgrade-eyeball",
@@ -62,7 +61,7 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
   stampCallerHeaders(leaving, null);
   expect([...leaving.keys()]).toEqual([]); // leaving the platform: not even the routing slug
   const app = forged();
-  stampCallerHeaders(app, { principal: null, app: true, platformOrigin: "https://os.iterate.com" });
+  stampCallerHeaders(app, { principal: null, app: true });
   expect(app.get("x-itx-expression")).toBeNull();
   expect(app.get("x-iterate-routing-slug")).toBe("forged"); // a hop's caller keeps the edge's word
   expect(Object.fromEntries(trusted.map((name) => [name, app.get(name)]))).toEqual({
@@ -70,7 +69,6 @@ test("stampCallerHeaders strips every header the DO's fetch trusts as the platfo
     "x-itx-grant": null,
     "x-itx-caller-path": null,
     "x-itx-app": "1",
-    "x-itx-platform-origin": "https://os.iterate.com",
     "x-itx-rpc-stub-pager": null,
     "x-itx-fetch-upgrade": null,
     "x-itx-fetch-upgrade-eyeball": null,

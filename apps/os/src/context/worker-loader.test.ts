@@ -79,7 +79,7 @@ test("a producer source runs INSIDE getCode — once per cold isolate, never on 
   // with a key: the producer runs when the key is cold …
   const first = await load("todo@3f2a1c");
   expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@3f2a1c"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "key:todo@3f2a1c"]),
   });
   expect(keys.at(-1)).toBe(first.loaderId);
   await vi.waitFor(() => expect(produced).toBe(1)); // getCode's async body runs, its key digested first
@@ -232,7 +232,7 @@ test("literal modules: the key is their content hash unless the caller names a c
     cacheKey: "v7",
   });
   expect(named).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:v7"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "key:v7"]),
   });
   expect(keys.at(-1)).toBe(named.loaderId);
   await expect(loadConfined(env, { source: { "lib.js": "export default 1" } })).rejects.toThrow(
@@ -251,7 +251,7 @@ test("a main module is one more element of the key, and a module identity names 
       mainModule: "agents.ts",
       moduleIdentity,
     });
-    return JSON.parse((await prepareConfinedWorker(options)).loaderId).slice(4);
+    return JSON.parse((await prepareConfinedWorker(options)).loaderId).slice(3);
   };
   expect(await keyOf("commit-1")).toEqual(["key:commit-1", "agents.ts"]);
   // two commits whose agents.ts is one identity: one isolate identity
@@ -275,7 +275,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   // 1. the producer throws INSIDE getCode — workerd keeps that rejection under the id forever
   const first = await load();
   expect(first).toMatchObject({
-    loaderId: JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"]),
+    loaderId: JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "key:todo@dead"]),
   });
   await expect(warm.get(first.loaderId)).rejects.toThrow(/not landed/);
   expect(produced).toBe(1);
@@ -290,7 +290,7 @@ test("WORKAROUND: a producer that threw marks its id dead; the next attempt prod
   const recovered = await load();
   expect(recovered).toMatchObject({
     loaderId: expect.stringContaining(
-      `${JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:todo@dead"])}#1.`,
+      `${JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "key:todo@dead"])}#1.`,
     ),
   });
   await expect(warm.get(recovered.loaderId)).resolves.toMatchObject({
@@ -341,7 +341,7 @@ test("WORKAROUND, under load: every caller that finds the id dead while its reco
       cacheKey: "c0ffee",
       invoke,
     });
-  const dead = JSON.stringify(["worker", "deploy-1", null, "prj_u.iterate/", "key:c0ffee"]);
+  const dead = JSON.stringify(["worker", "deploy-1", "prj_u.iterate/", "key:c0ffee"]);
   // the first load's producer loses its connection, and again on its one repeat, inside getCode:
   // the id is dead
   await load();
@@ -423,7 +423,7 @@ test("WORKAROUND, under load: a recovery that fails fails every caller waiting o
   const incarnation2 = {} as Fetcher;
   await expect(load(incarnation2)).resolves.toMatchObject({
     loaderId: expect.stringContaining(
-      `${JSON.stringify(["worker", "deploy-1", null, "prj_v.iterate/", "key:site@1"])}#1.`,
+      `${JSON.stringify(["worker", "deploy-1", "prj_v.iterate/", "key:site@1"])}#1.`,
     ),
   });
   expect(produced).toBe(4);
@@ -489,7 +489,6 @@ test("prepare resolves the identity without asking the loader; load() is the one
   expect(JSON.parse(prepared.loaderId)).toEqual([
     "facet",
     "deploy-1",
-    null,
     ["prj_u.iterate/", "Counter"],
     expect.stringMatching(/^content:[0-9a-z]+-[0-9a-z]+-[0-9a-z]+$/),
   ]);
@@ -520,18 +519,6 @@ test("a facet's literal source over the ceiling is refused, coded; a producer ex
       'facet "w"',
     ),
   ).not.toThrow();
-});
-
-test("the platform origin the ITX stub was minted with is part of the loader id: an isolate minted before a self-host learned its origin is never reused after", async () => {
-  const { env } = fakeLoaderEnv();
-  const opts = workerOptions(env, {
-    source: { "package.json": '{"main":"worker.js"}', "worker.js": "export default class A {}" },
-  });
-  const before = await prepareConfinedWorker({ ...opts, platformOrigin: null });
-  const after = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
-  const again = await prepareConfinedWorker({ ...opts, platformOrigin: "https://os.example" });
-  expect(before).not.toMatchObject({ loaderId: after.loaderId });
-  expect(again).toMatchObject({ loaderId: after.loaderId });
 });
 
 // The Worker Loader defect's two spellings, and every look-alike that is not it: code's own error,
@@ -714,16 +701,14 @@ const fakeLoaderEnv = ({ kv = fakeKv().kv }: { kv?: KVNamespace } = {}) => {
 
 type ConfinedWorkerOptions = Parameters<typeof prepareConfinedWorker>[0];
 
-/** A confined worker's options over `env`: a worker of `prj_u.iterate/` on deploy-1 with no platform
- *  origin, a fresh `itxEntrypoint` stand-in (the one cast) and literal modules nothing invokes, with
- *  what a row varies in `overrides`. */
+/** A confined worker's options over `env`: a worker of `prj_u.iterate/` on deploy-1, a fresh
+ *  `itxEntrypoint` stand-in (the one cast), and literal modules nothing invokes. */
 const workerOptions = (
   env: ConfinedWorkerOptions["env"],
   overrides: Partial<ConfinedWorkerOptions> & Pick<ConfinedWorkerOptions, "source">,
 ): ConfinedWorkerOptions => ({
   env,
   deployId: "deploy-1",
-  platformOrigin: null,
   itxEntrypoint: {} as Fetcher,
   kind: "worker",
   owner: "prj_u.iterate/",
@@ -777,7 +762,6 @@ const workersGetOverFailingLoader = (failingEntries: number, failure: Error) => 
     projectId: "prj_u",
     path: "/",
     iterateContextName: `prj_u.iterate/${crypto.randomUUID()}`,
-    platformOrigin: () => null,
     itxEntrypoint: () => itxEntrypoint,
     invoke: () => Promise.reject(new Error("literal modules — nothing to invoke")),
     caller: () => ({ principal: null, app: true }),

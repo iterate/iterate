@@ -243,7 +243,7 @@ export async function identityResponse(request: Request, env: Env) {
             throw new ProviderUnavailable("discovery", error);
           })
       : null;
-  const { platformOrigin } = platformAddressesOf(env, request);
+  const { platformOrigin } = platformAddressesOf(env);
   const redirectUri = `${platformOrigin}${PATHS[provider]}/callback`;
   const signingSecret = await sessionSigningSecretOf(config);
   const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });

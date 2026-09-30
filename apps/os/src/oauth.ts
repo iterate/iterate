@@ -88,7 +88,7 @@ const ACCESS_TOKEN_SECONDS = 3600;
  * authorization server declares (a request naming none, both, or another is `invalid_target`). We
  * own the scopes. */
 export async function parseAuthorization(env: Env, request: Request): Promise<AuthRequest> {
-  const auth = await oauthHelpers(env, platformAddressesOf(env, request)).parseAuthRequest(request);
+  const auth = await oauthHelpers(env, platformAddressesOf(env)).parseAuthRequest(request);
   const scopes = OAuthScopes.safeParse(auth.scope);
   if (!scopes.success)
     throw new AuthorizationError("invalid_scope", {

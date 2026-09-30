@@ -26,7 +26,7 @@ export async function localSignInResponse(request: Request, env: Env): Promise<R
   const url = new URL(request.url);
   if (url.pathname !== "/.auth/local-sign-in" || request.method !== "GET") return null;
   const { login } = appConfigOf(env);
-  const { platformOrigin } = platformAddressesOf(env, request);
+  const { platformOrigin } = platformAddressesOf(env);
   // The request's own origin too, not only worker.ts's 421 before this route: moved above that
   // check, the route would still answer on a loopback origin alone.
   if (!login.testEmailDomain || !isLocalOrigin(platformOrigin) || !isLocalOrigin(url.origin))

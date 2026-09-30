@@ -164,7 +164,6 @@ function namedFacets() {
     iterateContextName: "prj_unit.iterate/x",
     projectId: "prj_unit",
     path: "/x",
-    platformOrigin: () => null,
     itxEntrypoint: () => ({}),
     invoke: () => Promise.reject(new Error("unused")),
     namedWorker: named,

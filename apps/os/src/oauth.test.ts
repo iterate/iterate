@@ -141,7 +141,7 @@ async function accountHoldingKey(usedMinutesAgo: number | null) {
       }),
     },
   } as unknown as Env;
-  const addresses = platformAddressesOf(env, new Request("https://os.test/api"));
+  const addresses = platformAddressesOf(env);
   return {
     env,
     userId,

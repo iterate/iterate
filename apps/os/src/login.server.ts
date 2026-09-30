@@ -26,7 +26,7 @@ export async function loginState(
   search: ReturnType<typeof loginSearchOf>,
 ) {
   const config = appConfigOf(env);
-  const { platformOrigin } = platformAddressesOf(env, request);
+  const { platformOrigin } = platformAddressesOf(env);
   const next = sameOriginPath(search.next || "/login", platformOrigin);
   const session = await browserAuthorization(env, request);
   return {

@@ -557,7 +557,6 @@ export class SessionRpcTarget extends RpcTarget {
     return {
       principal,
       grant,
-      platformOrigin: this.#input.platformOrigin,
       cause: this.#input.cause,
       ...(grant && scopes?.includes("account") && !principal.impersonatedBy && { account: true }),
     };

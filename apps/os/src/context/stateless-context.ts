@@ -34,7 +34,6 @@ import { ruleSnapshots, type RulesSnapshotAnswer } from "./rule-snapshots.ts";
  *  failure policy on every hop), `workers` speaking for it — loaded here, with its loader identity,
  *  its `env.ITX` minted from `ctx`'s exports — and its loaded code resolved here (`loadedCodeAt`:
  *  always statelessly, so a cold load relays nothing through that context). A hop carries
- *  `platformOrigin()` when its caller names none: an alarm's delivery has no caller to carry one.
  *  `ambient` is the call being made, read as it is made — its delivery authority (caller.ts
  *  `Caller.delivery`) and its cause: a context's Durable Object reads its ambient caller's; the
  *  stateless resolver its caller's cause alone, so a call loaded code makes never carries a
@@ -44,14 +43,13 @@ export function contextReach(args: {
   env: Env;
   namespace: Env["ITERATE_CONTEXT"];
   projectId: string;
-  platformOrigin: () => string | null;
   ctx: DurableObjectState | ExecutionContext;
   ambient?: () => Pick<Caller, "delivery" | "cause">;
   /** False for a context's Durable Object, whose calls send on the call it was made: a run's
    *  request is answered up as it came, for its caller's side to read (context-stub.ts). */
   readsRunSettlements?: boolean;
 }) {
-  const { env, namespace, projectId, platformOrigin, readsRunSettlements } = args;
+  const { env, namespace, projectId, readsRunSettlements } = args;
   const ambient: () => Pick<Caller, "delivery" | "cause"> = args.ambient || (() => ({}));
   const nameOf = (path: string) => DurableObjectNameCodec.stringify({ projectId, path });
   const contextOf = (path: string) => namespace.getByName(nameOf(path));
@@ -63,7 +61,7 @@ export function contextReach(args: {
       env,
       namespace,
       address: addressOf(path),
-      caller: { principal: null, app, platformOrigin: platformOrigin(), cause },
+      caller: { principal: null, app, cause },
       ctx: args.ctx,
     });
   const loadedCodeAt = (path: string, cause: Cause | undefined) => (call: ItxExpression) =>
@@ -81,7 +79,7 @@ export function contextReach(args: {
           contextOf(path).rulesSnapshot(ifVersion) as unknown as Promise<RulesSnapshotAnswer>,
       ),
     located: (path: string, expression: ItxExpression, callArgs: unknown[], caller: Caller) => {
-      const callerThere = { ...caller, platformOrigin: caller.platformOrigin || platformOrigin() };
+      const callerThere = caller;
       return callContext(
         () => ({
           fetch: (request) => contextOf(path).fetch(request),
@@ -112,8 +110,7 @@ export function contextReach(args: {
         projectId,
         path,
         iterateContextName: nameOf(path),
-        platformOrigin,
-        itxEntrypoint: () => itxEntrypointFor(args.ctx, nameOf(path), platformOrigin()),
+        itxEntrypoint: () => itxEntrypointFor(args.ctx, nameOf(path)),
         // A producer is loaded code's word at `path`, never the delivery's, under the call's cause.
         invoke: (call) => loadedCodeAt(path, cause())(call),
         // A name is read as the platform from `path` (it only reads rules); the producer of the
@@ -131,7 +128,7 @@ export function contextReach(args: {
   };
 }
 
-/** The loopback stubs `ctx` minted, by context and origin (`itxEntrypointFor`). */
+/** The loopback stubs `ctx` minted, by context (`itxEntrypointFor`). */
 const itxEntrypointsByCtx = new WeakMap<object, Map<string, Fetcher>>();
 
 /** The loopback stub for one context — `ctx.exports.ItxEntrypoint({ props })` on a Durable Object's
@@ -142,21 +139,20 @@ const itxEntrypointsByCtx = new WeakMap<object, Map<string, Fetcher>>();
 export function itxEntrypointFor(
   ctx: DurableObjectState | ExecutionContext,
   iterateContextName: string,
-  platformOrigin: string | null,
 ): Fetcher {
   const minted = itxEntrypointsByCtx.get(ctx) ?? new Map<string, Fetcher>();
   itxEntrypointsByCtx.set(ctx, minted);
-  const key = JSON.stringify([iterateContextName, platformOrigin]);
+  const key = iterateContextName;
   const known = minted.get(key);
   if (known) return known;
   const { exports } = ctx as unknown as {
     exports: {
       ItxEntrypoint(opts: {
-        props: { iterateContextName: string; platformOrigin: string | null };
+        props: { iterateContextName: string };
       }): Fetcher;
     };
   };
-  const stub = exports.ItxEntrypoint({ props: { iterateContextName, platformOrigin } });
+  const stub = exports.ItxEntrypoint({ props: { iterateContextName } });
   minted.set(key, stub);
   return stub;
 }
@@ -174,17 +170,15 @@ export function statelessResolverFor(args: {
   const { env, address, caller } = args;
   const { projectId, path } = address;
   const appConfig = appConfigOf(env);
-  const platformOrigin = caller.platformOrigin || appConfig.urls.os || null;
+  const platformOrigin = appConfig.urls.os;
   const reach = contextReach({
     env,
     namespace: args.namespace,
     projectId,
-    platformOrigin: () => platformOrigin,
     ambient: () => ({ cause: caller.cause }),
     ctx: args.ctx,
   });
   const context = reach.contextOf;
-  const withOrigin = (call: Caller): Caller => ({ ...call, platformOrigin });
   // the catalog's row of the project, read at most once per round trip
   let catalogRow: ReturnType<ControlPlane["getProject"]> | undefined;
   const project = () =>
@@ -217,7 +211,7 @@ export function statelessResolverFor(args: {
           cause: callerNow.cause,
           secretFetch: (secretPath, outbound) => context(secretPath).fetch(outbound),
         }),
-      caller: () => withOrigin(callerNow),
+      caller: () => callerNow,
       invokeAs: (callerThere, call) => resolverUnder(callerThere).invoke(call),
       library,
     });
@@ -229,12 +223,11 @@ export function statelessResolverFor(args: {
           ...projectDeps,
           projectId,
           path,
-          platformOrigin: () => platformOrigin,
           primaryHostname: async () => (await project())?.primaryHostname ?? null,
         }),
       },
       path,
-      caller: () => withOrigin(callerNow),
+      caller: () => callerNow,
     });
   };
   // The library's itx, the platform's own hops (the caller without its `app`, as a context's
@@ -245,6 +238,6 @@ export function statelessResolverFor(args: {
   const libraryItx = new InvokeHandle((steps) =>
     resolverUnder(libraryCaller).invoke(["itx", ...steps]),
   ) as unknown as LibraryItx;
-  const library = buildLibrary(libraryItx, { caller: () => withOrigin(caller), path }).roots;
+  const library = buildLibrary(libraryItx, { caller: () => caller, path }).roots;
   return resolverUnder(caller);
 }

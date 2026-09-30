@@ -21,7 +21,7 @@ export async function browserAuthorization(env: Env, request: Request) {
   const authorization = await authorizationForToken(
     env,
     token,
-    platformAddressesOf(env, request),
+    platformAddressesOf(env),
     "browser-session",
   );
   if (!authorization) await session!.discard();
@@ -29,7 +29,7 @@ export async function browserAuthorization(env: Env, request: Request) {
 }
 
 export function browserClient(request: Request, env: Env, ctx: ExecutionContext) {
-  const { platformOrigin, api } = platformAddressesOf(env, request);
+  const { platformOrigin, api } = platformAddressesOf(env);
   return appAuth(request, {
     sessions: env.BROWSER_SESSION,
     issuer: platformOrigin,

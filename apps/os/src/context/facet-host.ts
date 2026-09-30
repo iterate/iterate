@@ -193,8 +193,6 @@ type FacetHostDeps = {
    *  them (first-party-facet-placement.ts). */
   projectId: string;
   path: string;
-  /** The origin this context is reached on, folded into the loader id (worker-loader.ts). */
-  platformOrigin: () => string | null;
   /** The `env.ITX` stub every worker this context loads receives (the DO's `#itxEntrypoint`). */
   itxEntrypoint: () => Fetcher;
   /** The DO's dispatch: a source expression's producer runs through it (worker-loader.ts). */
@@ -1085,7 +1083,6 @@ export class FacetHost {
         const { loaderId, load, retire } = await prepareConfinedWorker({
           env: this.#deps.env(),
           deployId: this.#deps.deployId,
-          platformOrigin: this.#deps.platformOrigin(),
           itxEntrypoint: this.#deps.itxEntrypoint(),
           kind: "facet",
           owner: [this.#deps.iterateContextName, memo.className],

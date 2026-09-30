@@ -180,7 +180,6 @@ async function serveProjectHost(args: {
       env,
       namespace: env.ITERATE_CONTEXT,
       projectId,
-      platformOrigin: () => caller.platformOrigin || null,
       ctx,
     }).snapshotOf("/");
     const route = matchFetchRoute(routing.fetchRoutes, request);
@@ -194,7 +193,6 @@ async function serveProjectHost(args: {
         resolverUnder({
           principal: null,
           app: true,
-          platformOrigin: caller.platformOrigin,
           cause: caller.cause,
         }),
         () => route.target,
@@ -271,24 +269,15 @@ async function routeRequest(
 
   const appConfig = appConfigOf(env);
   const { deployId } = appConfig;
-  // A blank `urls.os` (a self-host, SELF-HOSTING.md) makes each request's own origin the
-  // platform's, and OAuth takes no plain-http issuer or resource but a loopback one (the library
-  // throws building them): a plain-http request goes to its HTTPS origin first.
-  if (
-    !appConfig.urls.os &&
-    url.protocol === "http:" &&
-    !/^(localhost|127(\.\d{1,3}){3}|\[::1\])$/.test(url.hostname)
-  )
-    return Response.redirect(`https://${url.host}${url.pathname}${url.search}`, 308);
   if (appConfig.urls.mcp && url.origin === appConfig.urls.mcp) {
     // MCP's public root is its protocol endpoint; /api remains Cap'n Web.
     if (url.pathname !== "/" && !url.pathname.startsWith("/.well-known/"))
       return new Response("Not found", { status: 404 });
     return oauthResponse(request, env, ctx);
   }
-  // THE PLATFORM ADDRESSES (app-config.ts `platformAddressesOf`): the origin — `urls.os`, else
-  // this request's own — stamped on every caller from here on, and the two resource identifiers.
-  const addresses = platformAddressesOf(env, request);
+  // THE PLATFORM ADDRESSES (app-config.ts `platformAddressesOf`): the configured issuer origin and
+  // the two resource identifiers.
+  const addresses = platformAddressesOf(env);
   const { platformOrigin } = addresses;
   const controlPlane = new ControlPlane(env);
   const routing = appConfig.urls.ingressRouting;
@@ -395,7 +384,7 @@ async function routeRequest(
         identity,
         basePath: projectHost.basePath,
       }),
-      caller: { principal: identity.principal, grant: identity.grant, platformOrigin, cause },
+      caller: { principal: identity.principal, grant: identity.grant, cause },
     });
     const answer = withoutPlatformHeaders(
       spliceEyeballAnswer(served, (path) =>

@@ -23,7 +23,7 @@ export const getLandingState = createServerFn({ method: "GET" }).handler(async (
   const { env } = issuerRequestContext();
   setResponseHeader("cache-control", "no-store");
   return {
-    issuer: platformAddressesOf(env, request).platformOrigin,
+    issuer: platformAddressesOf(env).platformOrigin,
     dash: appConfigOf(env).urls.dash || null,
   };
 });

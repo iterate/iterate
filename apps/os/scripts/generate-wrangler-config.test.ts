@@ -16,6 +16,12 @@ test.for([
   { name: "self-host", repos: "iterate-repos", files: "iterate-files", db: "iterate-db" },
 ])("$name binds $repos, $files and $db", ({ name, repos, files, db }) => {
   const deployment = name === "self-host" ? name : getOsEnv(name);
+  if (deployment === "self-host") {
+    expect(() => viteWranglerConfig(deployment, { localDev: false, port: "0" })).toThrow(
+      "self-host build needs ITERATE_SELF_HOST_ORIGIN",
+    );
+    return;
+  }
   expect(viteWranglerConfig(deployment, { localDev: false, port: "0" })).toMatchObject({
     artifacts: [{ binding: "ARTIFACTS", namespace: repos }],
     r2_buckets: [{ binding: "FILES", bucket_name: files }],

@@ -109,7 +109,7 @@ async function buildServer(
 ): Promise<McpServer> {
   const controlPlane = new ControlPlane(env);
   const { reach, principal, grant } = authorization;
-  const caller = { principal, grant: grant?.grantId, platformOrigin, cause };
+  const caller = { principal, grant: grant?.grantId, cause };
   const mcpServer = new McpServer(
     { name: "control-plane", version: "0.1.0" },
     instructed
@@ -194,7 +194,7 @@ export async function mcpResponse(request: Request, env: Env, authorization: Aut
     buildServer(
       env,
       authorization,
-      platformAddressesOf(env, request).platformOrigin,
+      platformAddressesOf(env).platformOrigin,
       instructed,
       parseCause(request.headers.get(ITERATE_CAUSE_HEADER)),
     ),

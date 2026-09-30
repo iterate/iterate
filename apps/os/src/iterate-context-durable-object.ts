@@ -79,7 +79,6 @@ import {
 import {
   ITX_EXPRESSION_FETCH_HEADER,
   parseFetchExpression,
-  ITX_PLATFORM_ORIGIN_HEADER,
   itxExpressionEndingInFetch,
   RpcStubDirectory,
   RPC_STUB_PAGER_KEEPALIVE_REQUEST,
@@ -292,22 +291,10 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#durableObjectAddress.projectId,
     this.#durableObjectAddress.path,
   );
-  /** THE PLATFORM ORIGIN this context is reached on — what the edge stamped on its callers
-   *  (`Caller.platformOrigin`), PERSISTED here (`ctx.storage.kv`) the moment a caller says it, so a
-   *  call that carries none (a loaded worker's `env.ITX`, an alarm, a commit's fan-out) composes URLs
-   *  at the same origin the people do — across evictions. Null until the first stamped call. */
-  #platformOrigin: string | null = null;
-  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives, minted with the
-   *  origin this context is reached on (so loaded code's hops carry it) — re-minted when that origin
-   *  is first learned or changes; a stub minted for the current origin is reused. */
-  #itxEntrypointStub: { origin: string | null; stub: Fetcher } | null = null;
+  /** The `env.ITX` / `globalOutbound` stub every worker this context loads receives. Its context
+   *  name is stable for this instance, so the entrypoint helper reuses it. */
   get #itxEntrypoint(): Fetcher {
-    if (!this.#itxEntrypointStub || this.#itxEntrypointStub.origin !== this.#platformOrigin)
-      this.#itxEntrypointStub = {
-        origin: this.#platformOrigin,
-        stub: itxEntrypointFor(this.ctx, this.#durableObjectAddress.name, this.#platformOrigin),
-      };
-    return this.#itxEntrypointStub.stub;
+    return itxEntrypointFor(this.ctx, this.#durableObjectAddress.name);
   }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
@@ -316,7 +303,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     env: this.env,
     namespace: this.env.ITERATE_CONTEXT,
     projectId: this.#durableObjectAddress.projectId,
-    platformOrigin: () => this.#platformOrigin,
     ctx: this.ctx,
     ambient: () => this.#caller,
     // a run this context sends on is its caller's to read, or its runner's (`#scriptExecution`)
@@ -377,12 +363,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         return;
       }
       this.#alarmCoordinator.restore(await this.ctx.storage.getAlarm());
-      // A deployment that names its origin (`urls.os`: prd, the previews — anything with more than one
-      // hostname) knows it outright; one that does not (a self-host on workers.dev) learns it from the
-      // first stamped caller and keeps it here across evictions.
-      this.#platformOrigin =
-        this.#appConfig.urls.os ||
-        ((this.ctx.storage.kv.get("platform-origin") as string | undefined) ?? null);
       // Before this incarnation writes anything: the facets the last one ran are started (and the
       // unclaimed loaded ones reset) — a facet evicted mid-write meets no commit of it stopped.
       await this.#residency.resetUnclaimedFacetsAtBirth();
@@ -494,7 +474,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
         (event) => event.type !== "events.iterate.com/itx/alarm-trace",
       );
       if (events.length === 0) return;
-      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () => {
+      this.#callerStorage.run({ principal: null }, () => {
         this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#pushDurableSubscriptionFacet(events, { after: afterOffset, through: throughOffset });
         this.#startRequestedRuns(events);
@@ -1093,12 +1073,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           : undefined;
       const targetPrefix = method ? target.slice(0, -1) : target;
       ({ value } = await this.#callerStorage.run(
-        this.#withPlatformOrigin({ principal: null, cause }),
+        ({ principal: null, cause }),
         () => this.#itxExpressionResolver.evaluate(targetPrefix),
       ));
       this.#configuredSubscriptionRow(request);
       const args = fanOut ? [events[0]] : [events, request.range];
-      result = await this.#callerStorage.run(this.#withPlatformOrigin(caller), async () => {
+      result = await this.#callerStorage.run(caller, async () => {
         if (value instanceof FacetHandle && method === "processEventBatch")
           return this.#facetHost.callFacetAsPlatform(value, [[method, ...args]]);
         return method
@@ -1395,7 +1375,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     try {
       // Settled within RUN_DEADLINE_MS, its value released (library.ts `runSettlementOf`).
       const settlement = await runSettlementOf(
-        this.#callerStorage.run(this.#withPlatformOrigin({ principal: null, cause }), () =>
+        this.#callerStorage.run({ principal: null, cause }, () =>
           this.#scriptExecution(code),
         ),
       );
@@ -1477,7 +1457,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     reserveSend: async (key) => this.reserveSend(key),
     releaseSend: async (key) => this.releaseSend(key),
     invoke: (call, args = [], caller = this.#caller) =>
-      this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+      this.#callerStorage.run(caller, () =>
         this.#itxExpressionResolver.invoke(call, ...args),
       ),
   };
@@ -1517,7 +1497,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
     iterateAppScopes: () => iterateAppScopesOf(this.#appConfig),
-    platformOrigin: () => this.#platformOrigin,
     // A producer is loaded code's word: walled on its input and on every row it appends.
     invoke: (call) =>
       this.#invokeInProcess(call, [], { principal: null, app: true, cause: this.#caller.cause }),
@@ -1526,10 +1505,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     context: (p) =>
       p === this.#durableObjectAddress.path ? this.#localContext : this.#reach.contextOf(p),
     egress: (request) => this.#egress(request),
-    // The caller a hop hands a sibling (`cd`, a fan-out): the store's, or nobody — either way with
-    // this context's origin filled in, so the sibling composes URLs at the origin the people use even
-    // when the store did not survive to the step (a pipelined chain resolved outside the run scope).
-    caller: () => this.#withPlatformOrigin(this.#caller),
+    // The caller a hop hands a sibling (`cd`, a fan-out): the store's, or nobody.
+    caller: () => this.#caller,
     invokeAs: (caller, call) => this.#invokeInProcess(call, [], caller),
     // `get(key)` is a GENUINE RpcTarget so `itx.rpcStubs.get('k').hello()` pipelines the mid-chain
     // `.hello()` over every transport (workerd's classifier rejects a Proxy, #6873), branded RpcStubHandle
@@ -1647,7 +1624,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // The RESOLVER's `evaluate`, not this class's `invoke`: the loop's evaluation is the kernel's own
     // call — never with delivery authority, whatever the store holds (`runAsDelivery` below).
     evaluateItxExpression: (itxExpression) =>
-      this.#callerStorage.run(this.#withPlatformOrigin({ principal: null }), () =>
+      this.#callerStorage.run({ principal: null }, () =>
         this.#itxExpressionResolver.evaluate(itxExpression),
       ),
     resolveItxExpression: (itxExpression) => this.#itxExpressionResolver.resolve(itxExpression),
@@ -1714,7 +1691,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     projectId: this.#durableObjectAddress.projectId,
     path: this.#durableObjectAddress.path,
     deployId: this.#appConfig.deployId,
-    platformOrigin: () => this.#platformOrigin,
     itxEntrypoint: () => this.#itxEntrypoint,
     // A producer is loaded code's word: walled on its input and on every row it appends.
     invoke: (call) =>
@@ -2117,7 +2093,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
    *  (cause.ts). */
   async #namedWorker(source: ItxExpressionInput): Promise<NamedWorker> {
     const { at, spec, vouched } = await this.#callerStorage.run(
-      this.#withPlatformOrigin({ principal: null, cause: this.#caller.cause }),
+      ({ principal: null, cause: this.#caller.cause }),
       () => this.#itxExpressionResolver.namedWorker(source),
     );
     const { cause } = this.#caller;
@@ -2132,7 +2108,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
 
   #invokeInProcess(call: ItxExpressionInput, args: unknown[], caller: Caller): Promise<unknown> {
-    return this.#callerStorage.run(this.#withPlatformOrigin(caller), () =>
+    return this.#callerStorage.run(caller, () =>
       this.#itxExpressionResolver.invoke(call, ...args),
     );
   }
@@ -2142,21 +2118,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   get #caller(): Caller {
     return this.#callerStorage.getStore() ?? { principal: null };
   }
-  /** THE CALLER THIS CALL RUNS UNDER: what arrived, its origin kept when it names one, else the
-   *  persisted origin filled in — so the caller in ALS ALWAYS carries the effective origin and a hop to
-   *  a sibling context (`deps.caller()`, a `cd`, a fan-out) hands it on; a sibling never reached from
-   *  the edge still composes URLs at the origin the people use. */
-  #withPlatformOrigin(caller: Caller): Caller {
-    if (caller.platformOrigin) {
-      if (caller.platformOrigin !== this.#platformOrigin) {
-        this.#platformOrigin = caller.platformOrigin;
-        this.ctx.storage.kv.put("platform-origin", caller.platformOrigin);
-      }
-      return caller;
-    }
-    return this.#platformOrigin ? { ...caller, platformOrigin: this.#platformOrigin } : caller;
-  }
-
   // ── native fetch: the rpc-stub pager, an `x-itx-expression` fetch, egress ──
 
   /** Ends when the Response is handed back — a body still streaming after that is not counted. */
@@ -2273,10 +2234,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers.get(ITX_PRINCIPAL_HEADER) ?? "null",
         ) as Principal | null;
         const grant = headers.get(ITX_GRANT_HEADER) || undefined;
-        // The platform origin the caller reached the platform on (app-config.ts `platformAddressesOf`): the edge's
-        // stamp, stripped before the app sees the Request (an app composes URLs through `itx.url`).
-        const platformOrigin = headers.get(ITX_PLATFORM_ORIGIN_HEADER);
-        headers.delete(ITX_PLATFORM_ORIGIN_HEADER);
         const callerPath = headers.get(ITX_CALLER_PATH_HEADER) || undefined;
         headers.delete(ITX_CALLER_PATH_HEADER);
         // WHY: the cause the forwarding hop carried, or a request's own new chain (cause.ts).
@@ -2286,14 +2243,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
           headers,
           body: this.#expressionFetchBody(request),
         });
-        const caller = this.#withPlatformOrigin({
+        const caller = {
           principal,
           grant,
           path: callerPath,
-          platformOrigin,
           cause,
           ...(app && { app: true as const }),
-        });
+        };
         const result = await this.#callerStorage.run(caller, () =>
           this.#itxExpressionResolver.invoke(itxExpressionEndingInFetch(itxExpression), forwarded),
         );
@@ -2459,7 +2415,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     // A live lend is still an app's attempted append for authority purposes. Resolve the same
     // `itx.append(event)` through this caller's live table, without dispatching it, so a jail's
     // mask at `itx.append` refuses the lend just as it refuses a durable configuration write.
-    this.#callerStorage.run(this.#withPlatformOrigin(caller), () => {
+    this.#callerStorage.run(caller, () => {
       for (const event of normalized)
         this.#itxExpressionResolver.resolve(["itx", ["append", event]]);
     });

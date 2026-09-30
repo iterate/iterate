@@ -32,10 +32,6 @@ export type Caller = {
    *  `env.ITX`. Under it the resolver walls the INPUT expression (itx-expression-rewriting.ts
    *  `#admit`: no fixed point); rewrites the owner wrote are never subject. */
   app?: true;
-  /** THE PLATFORM ORIGIN the caller reached the platform on — what a public URL is composed from
-   *  (`itx.url`, a signed file URL). Absent for a caller with none (a loaded worker's `env.ITX`, the
-   *  kernel); the context then uses the last one it was reached on. */
-  platformOrigin?: string | null;
   /** Set ONLY by the platform's own code, on the one `itx.builtins.append` of a fact it vouches for
    *  on the principal's behalf — an account's or an organization's (apps/os session.ts
    *  `appendPlatformFacts`, the secrets built-ins' catalog cross-post) — never by a client, who never

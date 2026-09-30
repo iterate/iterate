@@ -34,16 +34,21 @@ const PR123 = "https://pr123-os.iterate-dev-preview.workers.dev";
 
 /** The smallest valid configuration: the key and one sign-in mechanism, as two override vars. */
 const MINIMAL = {
+  APP_CONFIG_URLS__OS: "https://os.test",
   APP_CONFIG_SECRETS__KEY: "secrets-key",
   APP_CONFIG_LOGIN__PASSWORD: "password",
 };
 /** The same, as the one object. */
 const MINIMAL_BLOB = {
-  APP_CONFIG: JSON.stringify({ login: { password: "password" }, secrets: { key: "secrets-key" } }),
+  APP_CONFIG: JSON.stringify({
+    urls: { os: "https://os.test" },
+    login: { password: "password" },
+    secrets: { key: "secrets-key" },
+  }),
 };
-/** What MINIMAL becomes: every optional field blank, the ingress unset, the deploy id defaulted. */
+/** What MINIMAL becomes: optional endpoints blank, the ingress unset, the deploy id defaulted. */
 const MINIMAL_CONFIG = {
-  urls: { os: "", mcp: "", dash: "", ingressRouting: null },
+  urls: { os: "https://os.test", mcp: "", dash: "", ingressRouting: null },
   login: { password: "password" },
   cloudflareApiToken: "",
   posthogProjectKey: "",
@@ -77,12 +82,11 @@ const appConfigRows: {
       urls: { ...MINIMAL_CONFIG.urls, os: "https://from-the-override.test" },
     },
   },
-  // a blank var is unset (a deployment's generated vars may spell a blank), and values are trimmed
+  // A blank optional endpoint is unset, and values are trimmed.
   {
     vars: {
       ...MINIMAL,
       APP_CONFIG_SECRETS__KEY: " secrets-key ",
-      APP_CONFIG_URLS__OS: "   ",
       APP_CONFIG_URLS__MCP: "",
       APP_CONFIG_URLS__INGRESS_ROUTING: "",
     },
@@ -170,16 +174,17 @@ const appConfigRows: {
   },
   // a mechanism to sign in with is required — a deployment nobody can sign in to is refused at boot
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key" },
+    vars: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_SECRETS__KEY: "secrets-key" },
     throws: /^APP_CONFIG login \(APP_CONFIG_LOGIN\): no sign-in mechanism/,
   },
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__PASSWORD: "  " },
+    vars: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__PASSWORD: "  " },
     throws: /no sign-in mechanism/,
   },
   // one of the other two mechanisms alone is enough
   {
     vars: {
+      APP_CONFIG_URLS__OS: "https://os.test",
       APP_CONFIG_SECRETS__KEY: "secrets-key",
       APP_CONFIG_LOGIN__EMAIL_CODE__FROM: "iterate <login@iterate.com>",
     },
@@ -191,6 +196,7 @@ const appConfigRows: {
   // a provider's sign-in is its integration's client: on with it, off (and so no mechanism) without
   {
     vars: {
+      APP_CONFIG_URLS__OS: "https://os.test",
       APP_CONFIG_SECRETS__KEY: "secrets-key",
       APP_CONFIG_LOGIN__CLOUDFLARE: "{}",
       APP_CONFIG_INTEGRATIONS__CLOUDFLARE__OAUTH_CLIENT_ID: "cf-id",
@@ -202,7 +208,7 @@ const appConfigRows: {
     },
   },
   {
-    vars: { APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
+    vars: { APP_CONFIG_URLS__OS: "https://os.test", APP_CONFIG_SECRETS__KEY: "secrets-key", APP_CONFIG_LOGIN__CLOUDFLARE: "{}" },
     throws: /no sign-in mechanism/,
     warns: 1,
   },
@@ -282,7 +288,7 @@ const appConfigRows: {
       login: { ...MINIMAL_CONFIG.login, adminIssuer: PRD },
     },
   },
-  ...[PRD, "http://localhost:8788", ""].map((os) => ({
+  ...[PRD, "http://localhost:8788"].map((os) => ({
     vars: { ...MINIMAL, APP_CONFIG_URLS__OS: os, APP_CONFIG_LOGIN__ADMIN_ISSUER: PRD },
     throws: /^APP_CONFIG login\.adminIssuer .*only for a preview or a test on https/,
   })),
@@ -300,7 +306,7 @@ const appConfigRows: {
       login: { ...MINIMAL_CONFIG.login, testEmailDomain: "preview.iterate.test" },
     },
   },
-  ...[PRD, ""].map((os) => ({
+  ...[PRD].map((os) => ({
     vars: {
       ...MINIMAL,
       APP_CONFIG_URLS__OS: os,
@@ -318,7 +324,7 @@ const appConfigRows: {
   // first use, not a silent lock-out
   {
     vars: { APP_CONFIG_LOGIN__PASSWORD: "password" },
-    throws: /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,
+    throws: /^APP_CONFIG urls\.os \(APP_CONFIG_URLS__OS\): required, but unset or blank/,
   },
   {
     vars: { ...MINIMAL, APP_CONFIG_SECRETS__KEY: "  " },
@@ -353,6 +359,7 @@ const appConfigRows: {
   {
     vars: {
       APP_CONFIG: JSON.stringify({
+        urls: { os: "https://os.test" },
         login: { password: "password", bogus: 1 },
         secrets: { key: "secrets-key" },
       }),
@@ -544,22 +551,10 @@ test("public protocol origins: MCP does not acquire a Cap'n Web or console route
   expect(await request("https://unconfigured.example/api")).toMatchObject({ status: 421 });
 });
 
-test("public protocol origins: /version is `<deployId> <platformOrigin>` — the configured issuer, or the request's own origin where none is configured", async () => {
+test("public protocol origins: /version is `<deployId> <platformOrigin>` for the configured issuer", async () => {
   expect((await (await request("https://os.iterate.com/version")).text()).trim()).toBe(
     "unversioned https://os.iterate.com",
   );
-  // no `urls.os`: a deployment with one hostname (workers.dev) — the issuer is whatever it is called
-  expect(
-    (await (await request("https://iterate.someorg.workers.dev/version", MINIMAL)).text()).trim(),
-  ).toBe("unversioned https://iterate.someorg.workers.dev");
-  expect(
-    await (
-      await request(
-        "https://iterate.someorg.workers.dev/.well-known/oauth-authorization-server",
-        MINIMAL,
-      )
-    ).json(),
-  ).toMatchObject({ issuer: "https://iterate.someorg.workers.dev" });
 });
 
 test("public protocol origins: the issuer stays on the control plane when its zone also has a project wildcard", async () => {
@@ -675,11 +670,6 @@ test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
     name: "a laptop's platform with no test email domain",
     origin: "http://localhost:8788",
     vars: { ...MINIMAL, APP_CONFIG_URLS__OS: "http://localhost:8788" },
-  },
-  {
-    name: "a self-host on a laptop (a blank urls.os)",
-    origin: "http://localhost:8787",
-    vars: MINIMAL,
   },
 ])(
   "public protocol origins: local dev's one click is no route on $name",

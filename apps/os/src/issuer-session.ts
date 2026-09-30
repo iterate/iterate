@@ -49,7 +49,7 @@ export async function startIssuerSession(
   extras: Pick<GrantProps, "picture" | "name"> = {},
 ): Promise<{ setCookie: string; location: string } | { error: string }> {
   startAccount(env, user.id);
-  const addresses = platformAddressesOf(env, request);
+  const addresses = platformAddressesOf(env);
   const { platformOrigin, api } = addresses;
   // The issuer's own session holds every scope but `admin`: it is the person at the issuer, and the
   // consent page creates organizations and projects through it. `admin` is an app's to ask for

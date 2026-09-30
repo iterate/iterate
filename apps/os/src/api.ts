@@ -39,7 +39,7 @@ export function oauthResponse(
   defaultHandler: Handler = notFound,
 ) {
   const url = new URL(request.url);
-  const addresses = platformAddressesOf(env, request);
+  const addresses = platformAddressesOf(env);
   // THE BARE SOCKET: a capnweb client with no credential on the upgrade — a static page on another
   // origin, whose browser cannot put a bearer on a WebSocket — opens the transport empty and presents
   // its token IN-BAND, `authenticate({ type: "bearer", token })` (capnweb's own pattern; session.ts,

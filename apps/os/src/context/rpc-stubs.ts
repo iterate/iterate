@@ -594,15 +594,8 @@ export class RpcStubDirectory {
 
 export const ITX_EXPRESSION_FETCH_HEADER = "x-itx-expression";
 
-/** The platform origin the caller reached the platform on (`Caller.platformOrigin` on the wire),
- *  set beside `ITX_EXPRESSION_FETCH_HEADER` by the edge (worker.ts) and a session's terminal fetch,
- *  and read and stripped by the context DO's `fetch`. Inbound `x-itx-*` headers never survive the
- *  edge, and `ItxEntrypoint.fetch` strips it from a loaded worker's Request, so an outsider's is gone
- *  before this is set. */
-export const ITX_PLATFORM_ORIGIN_HEADER = "x-itx-platform-origin";
-
 /** THE HOP'S CALLER STAMP: every header the DO's fetch trusts as the platform's — the caller's
- *  (principal, grant, caller path, app, platform origin, cause), the protocol's (the pager attach,
+ *  (principal, grant, caller path, app, cause), the protocol's (the pager attach,
  *  which appends past every table, and the fetch-upgrade leg) and the expression a fetch names —
  *  replaced on `headers` by `caller`'s (`null`: none, and no routing slug either, for a Request
  *  leaving the platform). Every hop that forwards a Request stamps through here, so a Request's own
@@ -614,7 +607,6 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
     ITX_GRANT_HEADER,
     ITX_CALLER_PATH_HEADER,
     ITX_APP_HEADER,
-    ITX_PLATFORM_ORIGIN_HEADER,
     RPC_STUB_PAGER_WEBSOCKET_HEADER,
     FETCH_UPGRADE_SOCKET_HEADER,
     FETCH_UPGRADE_EYEBALL_HEADER,
@@ -631,7 +623,6 @@ export function stampCallerHeaders(headers: Headers, caller: Caller | null): voi
   if (caller.grant) headers.set(ITX_GRANT_HEADER, caller.grant);
   if (caller.path) headers.set(ITX_CALLER_PATH_HEADER, caller.path);
   if (caller.app) headers.set(ITX_APP_HEADER, "1");
-  if (caller.platformOrigin) headers.set(ITX_PLATFORM_ORIGIN_HEADER, caller.platformOrigin);
 }
 
 /** THE ONE READER of an `x-itx-expression` header — untrusted: JSON (`encodeFetchExpression`) or

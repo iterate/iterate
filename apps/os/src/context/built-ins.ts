@@ -380,10 +380,8 @@ export interface BuildBuiltInsDeps {
   /** What iterate's app asks for, by provider (app-config.ts `iterateAppScopesOf`): what a project
    *  needs of a person's account it connects. */
   iterateAppScopes: () => Partial<Record<IntegrationProvider, readonly string[]>>;
-  /** THE PLATFORM ORIGIN the current call's caller reached the platform on (the DO's caller record)
-   *  — null when the call carries none: a processor's own turn, a loaded worker's `env.ITX`, the
-   *  delivery loop, an alarm. */
-  platformOrigin: () => string | null;
+  /** The deployment's configured public origin. */
+  platformOrigin: string;
   /** The key `itx.r2.presign` signs a file URL with (app-config.ts `sessionSigningSecretOf`). */
   fileUrlSecret: () => Promise<string>;
   /** Evaluate a producer source expression through THIS context's dispatch (inside the loader's
@@ -1017,12 +1015,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
             "itx.secrets.beginOAuth: the deployment's own secrets are set (itx.secrets.set), never connected",
           );
         // the provider's callback hangs under the platform origin — the caller's, not a DO's
-        const platformOrigin = deps.platformOrigin();
-        if (!platformOrigin)
-          throw codedError(
-            "INVALID_INPUT",
-            "itx.secrets.beginOAuth: this call carries no platform origin for the callback URL — call it from a session",
-          );
+        const platformOrigin = deps.platformOrigin;
         return onSecretContext(secretPath, ["beginOAuth", secretPath, options], async (secret) => {
           await enableSecretRow(secret);
           return (await secretFacet([
@@ -1215,11 +1208,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           throw new Error(
             "itx.secrets.collectFromUser: this platform has no Dash (set APP_CONFIG_URLS__DASH)",
           );
-        const platformOrigin = deps.platformOrigin();
-        if (!platformOrigin)
-          throw new Error(
-            "itx.secrets.collectFromUser: this platform has no public origin yet — call it after a person has reached this instance",
-          );
+        const platformOrigin = deps.platformOrigin;
         const project = await deps.projectInfo();
         if (!project.projectSlug)
           throw new Error(
@@ -1524,12 +1513,7 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
               ? held[0]!.connection
               : crypto.randomUUID().slice(0, 8));
           // GitHub sends an installation's human back under the platform origin this call reached
-          const platformOrigin = deps.platformOrigin() || undefined;
-          if (input.installationId && !platformOrigin)
-            throw codedError(
-              "INVALID_CONTEXT",
-              "itx.integrations.connect: an installation's connect comes back to the platform origin a session reached — call it from a session",
-            );
+          const platformOrigin = deps.platformOrigin;
           // the facet's `connectIntegration` answers where to send the human (integrations/verbs.ts)
           const { authorizationUrl } = (await deps.callFacetAsPlatform(facet, [
             [
@@ -1841,7 +1825,6 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
       projectId,
       path,
       iterateContextName,
-      platformOrigin: deps.platformOrigin,
       itxEntrypoint: deps.itxEntrypoint,
       invoke: deps.invoke,
       caller: deps.caller,
@@ -1940,7 +1923,7 @@ export function buildIdentityRoots(
   return {
     whoami: async () => {
       const project = await deps.projectInfo();
-      const platformOrigin = deps.platformOrigin();
+      const platformOrigin = deps.platformOrigin;
       // the apex, by `itx.url`'s rule, when the caller carries the platform origin to compose it with
       const url =
         project.projectSlug && platformOrigin
@@ -1952,12 +1935,7 @@ export function buildIdentityRoots(
       return { projectId, path, ...project, ...(url && { projectUrl: url.href }) };
     },
     url: async (target: { routingSlug?: string; path?: string } = {}) => {
-      const platformOrigin = deps.platformOrigin();
-      if (!platformOrigin)
-        throw codedError(
-          "INVALID_INPUT",
-          "itx.url: this call carries no platform origin to compose a URL with — call it from a session, or hold the URL a session handed you",
-        );
+      const platformOrigin = deps.platformOrigin;
       const slug = (await deps.projectInfo()).projectSlug;
       if (!slug)
         throw codedError("INVALID_INPUT", "itx.url: only a project's context has a public URL");
@@ -1993,6 +1971,7 @@ export function projectConfigDeps(
       return slug ? { projectSlug: slug } : {};
     },
     ingressRouting: appConfig.urls.ingressRouting,
+    platformOrigin: appConfig.urls.os,
     projectWildcard: appConfig.urls.projectWildcard,
     fileUrlSecret: () => sessionSigningSecretOf(appConfig),
   } satisfies Partial<BuildBuiltInsDeps>;
@@ -2009,6 +1988,7 @@ type PortableBuiltInsDeps = Pick<
   | "ai"
   | "env"
   | "ingressRouting"
+  | "platformOrigin"
   | "projectWildcard"
   | "fileUrlSecret"
   | "context"
@@ -2093,12 +2073,7 @@ export function buildPortableBuiltIns(deps: PortableBuiltInsDeps) {
         };
       },
       presign: async (input) => {
-        // the caller's, or the context's own: the deployment's `urls.os`, else the first one learned
-        const { platformOrigin } = deps.caller();
-        if (!platformOrigin)
-          throw new Error(
-            "files: a signed URL is composed from the platform origin the caller reached the platform on — this call carries none (call it from a session)",
-          );
+        const platformOrigin = deps.platformOrigin;
         // the URL carries the project's slug (the edge admits a project by it); the claim carries
         // the id — a global context (a user's, an organization's) has no URL
         const slug = owner.kind === "project" && (await deps.projectInfo()).projectSlug;
@@ -2193,7 +2168,6 @@ export function workersRoot(deps: {
   projectId: string;
   path: string;
   iterateContextName: string;
-  platformOrigin: () => string | null;
   itxEntrypoint: () => Fetcher;
   invoke: (call: ItxExpression) => Promise<unknown>;
   /** Who makes the call: what a loaded worker's `fetch` reads off its Request. */
@@ -2261,7 +2235,6 @@ export function workersRoot(deps: {
           const prepared = await prepareConfinedWorker({
             env: deps.env,
             deployId: deps.deployId,
-            platformOrigin: deps.platformOrigin(),
             itxEntrypoint: deps.itxEntrypoint(),
             kind: "worker",
             owner: iterateContextName,
