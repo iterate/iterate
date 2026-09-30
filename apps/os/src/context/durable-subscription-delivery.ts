@@ -71,16 +71,22 @@ export class DurableSubscriptionDelivery {
   }
 
   push(rows: DurableSubscriptionRow[], events: StreamEvent[], configurationChanged: boolean): void {
-    this.#reconcile(rows);
+    const fresh = this.#reconcile(rows);
     for (const row of rows) {
       if (row.halted) continue;
+      const key = keyOf(row);
       const relevant =
-        configurationChanged || events.some((event) => consumesEvent(row.consumes, event));
+        fresh.has(key) ||
+        configurationChanged ||
+        events.some(
+          (event) =>
+            consumesEvent(row.consumes, event) && (!event.ephemeral || row.ordered !== false),
+        );
       if (!relevant) continue;
-      const runner = this.#runners.get(keyOf(row));
+      const runner = this.#runners.get(key);
       if (!runner) continue;
       for (const event of events) runner.push(event);
-      this.#drive(keyOf(row));
+      this.#drive(key);
     }
   }
 
@@ -103,7 +109,8 @@ export class DurableSubscriptionDelivery {
     this.#runners.get(key)?.drive((work) => this.#deps.run(work));
   }
 
-  #reconcile(rows: DurableSubscriptionRow[]): void {
+  #reconcile(rows: DurableSubscriptionRow[]): Set<string> {
+    const fresh = new Set<string>();
     const live = new Set(rows.map(keyOf));
     for (const [key, runner] of this.#runners)
       if (!live.has(key)) {
@@ -133,6 +140,7 @@ export class DurableSubscriptionDelivery {
           runtime: this.#runtime(row),
         });
         this.#runners.set(key, runner);
+        fresh.add(key);
       }
       if (row.halted) {
         this.#wakeByRunner.delete(key);
@@ -152,6 +160,7 @@ export class DurableSubscriptionDelivery {
         );
       }
     }
+    return fresh;
   }
 
   #runtime(row: DurableSubscriptionRow): DurableDeliveryRuntime {

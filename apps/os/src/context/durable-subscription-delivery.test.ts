@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import type { StreamEvent } from "iterate/stream/processor";
 import { DurableSubscriptionDelivery } from "./durable-subscription-delivery.ts";
 
 test("a cold context drives a persisted in-flight cursor from the context recovery alarm", async () => {
@@ -204,6 +205,83 @@ test("every durable row uses the stable 25-attempt, four-hour-capped ladder", as
     pending: { nextAttemptAtMs: number };
   };
   expect(cursor.pending.nextAttemptAtMs).toBeGreaterThanOrEqual(before + 4 * 60 * 60_000);
+});
+
+test("a cold commit drives every new row so another row keeps its persisted backoff", async () => {
+  const retryAt = Date.now() + 60_000;
+  const values = new Map<string, unknown>([
+    [
+      "durable-delivery/b@2",
+      {
+        confirmedOffset: 1,
+        pending: {
+          after: 1,
+          through: 2,
+          offsets: [2],
+          attempt: 1,
+          nextAttemptAtMs: retryAt,
+        },
+      },
+    ],
+  ]);
+  const storage = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    delete: (key: string) => values.delete(key),
+    list: ({ prefix }: { prefix: string }) =>
+      new Map([...values].filter(([key]) => key.startsWith(prefix))),
+  } as unknown as DurableObjectStorage["kv"];
+  const rows = [
+    { name: "a", configuredAtOffset: 1 },
+    { name: "b", configuredAtOffset: 2, consumes: ["work"] },
+  ];
+  const runs: Promise<unknown>[] = [];
+  const delivery = new DurableSubscriptionDelivery({
+    storage,
+    rows: () => rows,
+    currentHead: () => 2,
+    read: () => ({ offsets: [], scannedThroughOffset: 2, atHead: true }),
+    deliver: async () => {},
+    deliverEphemeral: async () => {},
+    terminal: async () => {},
+    run: (work) => runs.push(work()),
+    wakesChanged: () => {},
+  });
+
+  delivery.push(rows, [{ offset: 3, type: "events.iterate.com/itx/woken" } as StreamEvent], false);
+  await vi.waitFor(() => expect(runs).toHaveLength(2));
+  await Promise.all(runs);
+  expect(delivery).toMatchObject({ deadline: retryAt });
+});
+
+test("an ephemeral-only commit does not drive a warm fan-out row", () => {
+  const values = new Map<string, unknown>();
+  const storage = {
+    get: <T>(key: string) => values.get(key) as T | undefined,
+    put: (key: string, value: unknown) => values.set(key, structuredClone(value)),
+    delete: (key: string) => values.delete(key),
+    list: ({ prefix }: { prefix: string }) =>
+      new Map([...values].filter(([key]) => key.startsWith(prefix))),
+  } as unknown as DurableObjectStorage["kv"];
+  const rows = [
+    { name: "fanout", configuredAtOffset: 1, ordered: false as const, consumes: ["tick"] },
+  ];
+  const run = vi.fn();
+  const delivery = new DurableSubscriptionDelivery({
+    storage,
+    rows: () => rows,
+    currentHead: () => 1,
+    read: () => ({ offsets: [], scannedThroughOffset: 1, atHead: true }),
+    deliver: async () => {},
+    deliverEphemeral: async () => {},
+    terminal: async () => {},
+    run,
+    wakesChanged: () => {},
+  });
+
+  delivery.sync();
+  delivery.push(rows, [{ offset: 2, type: "tick", ephemeral: true } as StreamEvent], false);
+  expect(run).not.toHaveBeenCalled();
 });
 
 test("a running retry consumes its past wake instead of rearming it while the target is held", async () => {

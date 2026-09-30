@@ -948,7 +948,12 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       !events.some(
         (event) =>
           event.ephemeral &&
-          rows.some((row) => !row.halted && consumesConfiguredSubscriptionEvent(row, event)),
+          rows.some(
+            (row) =>
+              !row.halted &&
+              row.ordered !== false &&
+              consumesConfiguredSubscriptionEvent(row, event),
+          ),
       )
     )
       return;
