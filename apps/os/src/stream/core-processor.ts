@@ -403,13 +403,13 @@ export const CoreContract = {
 export function pauseHolds(state: CoreState, event: StreamEventInput): boolean {
   if (event.type !== "events.iterate.com/itx/rewrite-rule-configured" || event.ephemeral)
     return false;
-  // A rule event's payload is an object whatever its fields (the append boundary parsed it); the
-  // fields are checked below.
-  const payload = (event.payload || {}) as Record<string, unknown>;
+  const payload = event.payload || {};
   if (!("ifTarget" in payload)) return false;
   let matchString: string;
   try {
-    matchString = print(parseItxExpressionPrefix(payload.match as ItxExpressionInput)); // parsed, or refused by the throw
+    // The cast names the input the parser takes; the parser checks whatever `match` holds and
+    // throws on anything else.
+    matchString = print(parseItxExpressionPrefix(payload.match as ItxExpressionInput));
   } catch {
     return false;
   }
@@ -556,11 +556,13 @@ export function reduceCoreEvent(
       // paused the removal is HELD and the row stands until the resume (`pauseHolds`).
       if ("ifTarget" in payload) {
         if (!existing || !jsonEqual(existing.target, payload.ifTarget)) return undefined;
-        if (!state.paused) return withRule(undefined);
-        if (state.heldRuleRemovals[matchString]) return undefined;
-        const heldRuleRemovals = draftOf(state.heldRuleRemovals, draftTables);
-        heldRuleRemovals[matchString] = { match: matchPrefix, ifTarget: existing.target };
-        return { ...state, heldRuleRemovals };
+        if (state.paused) {
+          if (state.heldRuleRemovals[matchString]) return undefined;
+          const heldRuleRemovals = draftOf(state.heldRuleRemovals, draftTables);
+          heldRuleRemovals[matchString] = { match: matchPrefix, ifTarget: existing.target };
+          return { ...state, heldRuleRemovals };
+        }
+        return withRule(undefined);
       }
       const description =
         typeof payload.description === "string" ? { description: payload.description } : {};
