@@ -488,6 +488,52 @@ test("a selective fan-out resume stamps retained terminal work before reporting 
   await settle();
   expect(calls).toEqual([5]);
 });
+test("a cold fan-out terminal takes its resume fence from the cursor root", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const storage = kv();
+  storage.put("durable-delivery/fan", {
+    confirmedOffset: 1,
+    resumeAtOffset: 100,
+    fanOut: {
+      admittedThrough: 1,
+      pending: [{ offset: 1, attempt: 1, terminal: true, error: "one" }],
+    },
+  });
+  const host = runtime(storage, source.stream.read, () => {});
+  const processor = fanOut(host, { resumeAtOffset: 100 });
+
+  await drive(processor, 2);
+  await settle();
+
+  expect(host.terminals).toEqual([
+    expect.objectContaining({ afterOffset: 0, fanOut: true, resumeAtOffset: 100 }),
+  ]);
+});
+
+test("a cold ordered retry takes its resume fence from the cursor root", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const storage = kv();
+  storage.put("durable-delivery/orders", {
+    confirmedOffset: 0,
+    resumeAtOffset: 101,
+    pending: { after: 0, through: 1, offsets: [1], attempt: 0 },
+  });
+  const calls: { offsets: number[]; resumeAtOffset?: number }[] = [];
+  const processor = ordered(
+    runtime(storage, source.stream.read, ({ offsets, resumeAtOffset }) => {
+      calls.push({ offsets, resumeAtOffset });
+    }),
+    { resumeAtOffset: 101 },
+  );
+
+  await drive(processor, 2);
+  await settle();
+
+  expect(calls).toEqual([{ offsets: [1], resumeAtOffset: 101 }]);
+});
+
 test("a running ordered row adopts a plain resume fence before its next read", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" });
@@ -635,12 +681,13 @@ function ordered(runtime: Runtime, overrides: Record<string, unknown> = {}) {
     ...overrides,
   });
 }
-function fanOut(runtime: Runtime) {
+function fanOut(runtime: Runtime, overrides: Record<string, unknown> = {}) {
   return new DurableDeliveryProcessor({
     slug: "fan",
     consumes: ["work"],
     fanOut: true,
     runtime,
+    ...overrides,
   });
 }
 async function drive(processor: DurableDeliveryProcessor, offset: number) {

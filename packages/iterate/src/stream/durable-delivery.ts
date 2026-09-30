@@ -17,14 +17,12 @@ export type DurableDeliveryCursor = {
     attempt: number;
     nextAttemptAtMs?: number;
     error?: string;
-    resumeAtOffset?: number;
   };
   halted?: {
     after: number;
     attempts: number;
     error: string;
     terminalReported?: true;
-    resumeAtOffset?: number;
   };
   fanOut?: { admittedThrough: number; pending: FanOutPending[] };
 };
@@ -34,8 +32,6 @@ type FanOutPending = {
   attempt: number;
   nextAttemptAtMs?: number;
   error?: string;
-  /** Resume control identity captured before the target call begins. */
-  resumeAtOffset?: number;
   terminal?: true;
 };
 
@@ -245,9 +241,8 @@ export class DurableDeliveryProcessor {
               terminal: undefined,
               attempt: 0,
               nextAttemptAtMs: undefined,
-              resumeAtOffset: this.#resumeAtOffset,
             }
-          : { ...item, resumeAtOffset: this.#resumeAtOffset },
+          : item,
       );
       // A terminal receipt is removed after the host acknowledges its dead-letter fact, so a
       // selective operator resume recreates that one item only when ordinary admission has already
@@ -257,7 +252,7 @@ export class DurableDeliveryProcessor {
         offset <= fanOut.admittedThrough &&
         !pending.some((item) => item.offset === offset)
       )
-        pending.push({ offset, attempt: 0, resumeAtOffset: this.#resumeAtOffset });
+        pending.push({ offset, attempt: 0 });
       const { halted: _halted, ...running } = cursor;
       this.#putCursor({ ...running, fanOut: { ...fanOut, pending } });
       return true;
@@ -281,7 +276,7 @@ export class DurableDeliveryProcessor {
       halted?.after === afterOffset &&
       halted.attempts === attempts &&
       halted.error === message &&
-      halted.resumeAtOffset === resumeAtOffset &&
+      cursor.resumeAtOffset === resumeAtOffset &&
       halted.terminalReported
     )
       return false;
@@ -296,7 +291,6 @@ export class DurableDeliveryProcessor {
         attempts,
         error: message,
         terminalReported: true,
-        resumeAtOffset,
       },
     });
     return true;
@@ -432,7 +426,6 @@ export class DurableDeliveryProcessor {
             through,
             offsets,
             attempt: 0,
-            resumeAtOffset: stamp.resumeAtOffset,
           };
           cursor = {
             ...cursor,
@@ -452,7 +445,6 @@ export class DurableDeliveryProcessor {
             ...pending,
             attempt,
             nextAttemptAtMs: Date.now() + callDeadlineMs,
-            resumeAtOffset: stamp.resumeAtOffset,
           },
         });
         try {
@@ -481,7 +473,6 @@ export class DurableDeliveryProcessor {
               pending: {
                 ...pending,
                 nextAttemptAtMs,
-                resumeAtOffset: stamp.resumeAtOffset,
               },
             });
             await this.#options.runtime.scheduleWake(nextAttemptAtMs);
@@ -493,7 +484,6 @@ export class DurableDeliveryProcessor {
               after: pending.after,
               attempts: attempt,
               error: message,
-              resumeAtOffset: stamp.resumeAtOffset,
             };
             this.#putCursor({ confirmedOffset: pending.after, halted });
             await this.#reportHalted(halted);
@@ -511,7 +501,6 @@ export class DurableDeliveryProcessor {
               attempt,
               nextAttemptAtMs,
               error: message,
-              resumeAtOffset: stamp.resumeAtOffset,
             },
           });
           await this.#options.runtime.scheduleWake(nextAttemptAtMs);
@@ -555,14 +544,11 @@ export class DurableDeliveryProcessor {
           attempts: terminal.attempt,
           error: terminal.error || "delivery exhausted",
           fanOut: true,
-          resumeAtOffset: terminal.resumeAtOffset,
+          resumeAtOffset: stamp.resumeAtOffset,
         });
         const current = this.#cursor().fanOut;
         const reported = current?.pending.find(
-          (candidate) =>
-            candidate.offset === terminal.offset &&
-            candidate.terminal &&
-            candidate.resumeAtOffset === terminal.resumeAtOffset,
+          (candidate) => candidate.offset === terminal.offset && candidate.terminal,
         );
         if (!this.#isCurrent(stamp) || !current || !reported) return;
         current.pending.splice(current.pending.indexOf(reported), 1);
@@ -603,7 +589,6 @@ export class DurableDeliveryProcessor {
         const additions = page.offsets.map((offset) => ({
           offset,
           attempt: 0,
-          resumeAtOffset: stamp.resumeAtOffset,
         }));
         currentFanOut.pending.push(...additions);
         currentFanOut.admittedThrough = page.scannedThroughOffset;
@@ -664,7 +649,6 @@ export class DurableDeliveryProcessor {
     for (const [index, item] of wave.entries()) {
       if (!interrupted[index]) item.attempt += 1;
       item.nextAttemptAtMs = Date.now() + callDeadlineMs;
-      item.resumeAtOffset = stamp.resumeAtOffset;
     }
     if (wave.length === 0) return;
     this.#putCursor({ ...cursor, fanOut });
@@ -698,7 +682,6 @@ export class DurableDeliveryProcessor {
         after: fanOut.admittedThrough,
         attempts: current.attempt,
         error: deliveryErrorMessage(refused.reason),
-        resumeAtOffset: stamp.resumeAtOffset,
       };
       this.#generation++;
       this.#resumeAtOffset = stamp.resumeAtOffset;
@@ -741,14 +724,13 @@ export class DurableDeliveryProcessor {
         afterOffset: halted.after,
         attempts: halted.attempts,
         error: halted.error,
-        resumeAtOffset: halted.resumeAtOffset,
+        resumeAtOffset: stamp.resumeAtOffset,
       });
       const current = this.#cursor().halted;
       if (
         this.#isCurrent(stamp) &&
         current?.after === halted.after &&
-        current.attempts === halted.attempts &&
-        current.resumeAtOffset === halted.resumeAtOffset
+        current.attempts === halted.attempts
       )
         this.#putCursor({
           ...this.#cursor(),
@@ -779,8 +761,7 @@ export class DurableDeliveryProcessor {
     return (
       current?.after === pending.after &&
       current.through === pending.through &&
-      current.attempt === attempt &&
-      current.resumeAtOffset === pending.resumeAtOffset
+      current.attempt === attempt
     );
   }
 
