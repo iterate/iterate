@@ -76,8 +76,8 @@ export class DurableSubscriptionDelivery {
       if (row.halted) continue;
       const key = keyOf(row);
       const relevant =
-        fresh.has(key) ||
         configurationChanged ||
+        (fresh.has(key) && events.some((event) => !event.ephemeral)) ||
         events.some(
           (event) =>
             consumesEvent(row.consumes, event) && (!event.ephemeral || row.ordered !== false),
