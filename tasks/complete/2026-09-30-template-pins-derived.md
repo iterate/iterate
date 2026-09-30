@@ -1,5 +1,5 @@
 ---
-status: ready
+status: done
 size: small
 ---
 
@@ -16,15 +16,15 @@ which never merges). `apps/os/scripts/build.ts` embeds the config templates with
   copy's own commits, which pkg.pr.new never built
 - looks up the commit even when no template needs it (in a shallow clone, that fetches history)
 
-Status: not started.
+Status: done. The build pins what it pinned before for today's templates, and leaves a sha-pinned template alone.
 
 ## Checklist
 
-- [ ] `build.ts` pins each `@iterate-com/*` dependency whose version is a pkg.pr.new `@main` URL,
-      and nothing else
-- [ ] the commit lookup (`checkoutPublishedPackageCommit`) runs only when a template needs it
-- [ ] `apps/os/docs/integrations.md` names `iterate/integration-scopes` (moved in #3470)
-- [ ] lint, typecheck, and apps/os's tests (templates.test.ts covers the `@main` case)
+- [x] `build.ts` pins each `@iterate-com/*` dependency whose version is a pkg.pr.new `@main` URL,
+      and nothing else _the `ours` filter over `manifest.dependencies`, as on the experiment branch_
+- [x] the commit lookup (`checkoutPublishedPackageCommit`) runs only when a template needs it _`packagesCommit ||=` inside the filter_
+- [x] `apps/os/docs/integrations.md` names `iterate/integration-scopes` (moved in #3470) _line 147_
+- [x] lint, typecheck, and apps/os's tests (templates.test.ts covers the `@main` case) _oxlint, oxfmt, apps/os tsc (app and scripts), templates/build/published-package-commit tests (20)_
 
 ## Out of scope
 
@@ -32,3 +32,7 @@ Status: not started.
   experiment branch until the copy is set up for real.
 
 ## Implementation notes
+
+- Checked the copy case by hand: with both templates' agents and voice set to
+  `@435de99…` (what the Copybara transform writes), `node scripts/build.ts` embeds them unchanged.
+  With `@main`, it embeds main's build (`5292d07…`, the merge base), as before.
