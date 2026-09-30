@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -10,7 +10,7 @@ PR 2 of 3 from the e2e plan, stacked on iterate/iterate#3479 (`test/` and the vi
 runner (`playwright/`, `vitest/`) and `helpers/` beside them, and `playwright.config.ts` inside
 `test/`.
 
-Status: code done and checked locally (typecheck, lint, knip, the lint and CI script tests, `pnpm spec --list` finds the same 63 tests in 25 files); CI's Browser specs run the moved suite against the preview.
+Status: done. Browser specs green against the preview after the global setup's path fix; reviewed and approved.
 
 ## Moves
 
@@ -34,8 +34,8 @@ Status: code done and checked locally (typecheck, lint, knip, the lint and CI sc
       artifact paths (`test-results/`, `playwright-report/`, blob reports), `specs-shards.ts`
 - [x] lint, knip, `rules/` globs, `.gitignore` entries name the new paths _no `rules/` or `.gitignore` entry named specs/_
 - [x] docs, AGENTS.md files, skills and comments name the new paths
-- [ ] lint, format, knip, typecheck, the specs' own helper specs locally, and CI's Browser specs
-      against the preview
+- [x] lint, format, knip, typecheck, the specs' own helper specs locally, and CI's Browser specs
+      against the preview _green on the second round_
 
 ## Out of scope
 
