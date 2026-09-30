@@ -102,10 +102,9 @@ export default defineConfig({
           environment: "node",
           include: ["vitest/**/*.e2e.test.ts"],
           chaiConfig: { truncateThreshold: 0 },
-          // apps/os's generated modules, then the one shared worker booted and its URL provided
-          // (helpers/setup.ts injects it per file). The helpers project needs neither: its tests are
-          // in-process, and `pnpm test` runs beside apps/os's, whose own build fetches the same history.
-          globalSetup: ["./vitest.global-setup.ts", "./helpers/global-setup.ts"],
+          // Builds apps/os's generated modules, boots the one shared worker and provides its URL
+          // (helpers/setup.ts injects it per file).
+          globalSetup: ["./helpers/global-setup.ts"],
           setupFiles: ["./helpers/setup.ts"],
           testTimeout: 60_000,
           hookTimeout: 120_000,
@@ -150,7 +149,7 @@ export default defineConfig({
           environment: "node",
           include: ["vitest/os/perf/**/*.perf.test.ts"],
           chaiConfig: { truncateThreshold: 0 },
-          globalSetup: ["./vitest.global-setup.ts", "./helpers/global-setup.ts"],
+          globalSetup: ["./helpers/global-setup.ts"],
           // vitest/os/perf/setup.ts: what a failed row leaves for the latency guard beside its message
           setupFiles: ["./helpers/setup.ts", "./vitest/os/perf/setup.ts"],
           testTimeout: 240_000,
@@ -171,7 +170,7 @@ export default defineConfig({
             include: ["vitest/os/bench/**/*.bench.ts"],
             outputJson: process.env.BENCH_OUT,
           },
-          globalSetup: ["./vitest.global-setup.ts", "./helpers/global-setup.ts"],
+          globalSetup: ["./helpers/global-setup.ts"],
           setupFiles: ["./helpers/setup.ts"],
           testTimeout: 300_000,
           hookTimeout: 300_000,

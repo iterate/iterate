@@ -74,3 +74,6 @@ Status: code done and checked locally (typecheck, lint, knip, apps/os's tests, t
   now runs only in the e2e, perf and bench projects. And the path sweep had rewritten example
   paths in `packages/ai-linter/src/lint.test.ts`'s glob tests, which are data, not references:
   restored to main's.
+- Review: `test/vitest.global-setup.ts` folded into `helpers/global-setup.ts`. It only ever ran
+  beside that file, for the same three projects, so the worker's global setup builds apps/os's
+  generated modules first itself.
