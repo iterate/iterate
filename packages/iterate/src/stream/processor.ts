@@ -808,9 +808,9 @@ export type StreamEventInput = {
      *  `principal` by the platform when it appends; absent for the admin secret and the kernel. */
     grant?: string;
     /** WHO A SCRIPT WROTE THIS FOR: the person who asked for the run (`itx.run`, MCP's `run`), the
-     *  grant they asked through, and the request (`<path>@<offset>`). The script called as loaded
-     *  code, so `principal` is absent: this is attribution, never authority. Stamped by the
-     *  platform from a signed token; a writer's own is dropped. */
+     *  grant they asked through, and the request (`<path>@<offset>`). Attribution, never authority:
+     *  gate on `principal`, not this. Stamped by the platform; a writer's own is dropped. Why and
+     *  how: apps/os/src/on-behalf-of.ts. */
     onBehalfOf?: { principal: Principal; grant?: string; run: string };
     /** THE PLATFORM WROTE THIS FACT, on the principal's behalf:
      *  what a processor folding an account's or an organization's facts requires — a client can
