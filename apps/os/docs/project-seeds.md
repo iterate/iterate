@@ -96,13 +96,17 @@ recorded.
 
 After the config is published, `apply` appends `project/hostname-add-requested` for
 each archived hostname the project does not serve. This is the same event the dash's
-Hostnames page appends. `apply` then waits for the answers, 60 s in total for all
+Domains page appends. `apply` then waits for the answers, 60 s in total for all
 of the seed's hostnames, and prints Cloudflare's status for each. A hostname already
 served is left alone, so a rerun requests nothing. A refused hostname fails `apply`
 with its name and the reason; so do answers still missing after 60 s, naming the
 hostnames. `erase-data` does not delete the Cloudflare custom
 hostname and the owner's CNAMEs are on their own DNS, so the add finds the existing
-custom hostname and the answer is usually `active` straight away.
+custom hostname and the answer is usually `active` straight away. The project claims
+a hostname only once its ownership record, the TXT record `_iterate.<hostname>` with
+`iterate-project=<project id>`, is in DNS. A seed restores the project's id, so a
+hostname whose owner added that record is claimed and served again; one without it
+comes back unclaimed, and the Domains page shows the record to add.
 
 `primaryHostname` records the project's primary hostname (one of `hostnames`), or
 null. After the hostnames, `apply` appends `project/primary-hostname-configured` for
@@ -110,7 +114,7 @@ it, the event the dash's Make primary appends, unless the project already has it
 waits for the project processor to reduce it. The reduce takes only a hostname whose
 certificate is active. After an erase Cloudflare still holds it, so it usually is;
 one still pending is not made primary, and `apply` says so rather than failing: make
-it primary on the dash's Hostnames page once it serves.
+it primary on the dash's Domains page once it serves.
 
 Hostnames are restored only when `apply` targets the deployment the archive was
 captured on (`source.platform`), because a custom hostname lives on that

@@ -163,7 +163,7 @@ test("under the base, only a project host: a hostname that fails the grammar is 
   expect(await call(`${ORIGIN}/version`)).toMatchObject({ status: 200 });
 });
 
-test("a project's own hostname: added, the processor claims it and creates its wildcard Cloudflare custom hostname (faked); the edge serves the project's config worker there, `<routingSlug>.<hostname>` with that routing slug; no other project can take it or a name under it; removed, the custom hostname is deleted and the claim released", async () => {
+test("a project's own hostname: added, the processor creates its wildcard Cloudflare custom hostname (faked) and claims it once its ownership record names the project; the edge serves the project's config worker there, `<routingSlug>.<hostname>` with that routing slug; no other project can take it or a name under it, or delete its custom hostname; removed, the custom hostname is deleted and the claim released", async () => {
   const cloudflare = fakeCloudflareCustomHostnames();
   using session = await api();
   const admin = session.authenticate(ADMIN);
@@ -184,24 +184,39 @@ test("a project's own hostname: added, the processor claims it and creates its w
       timeoutMs: 10_000,
     });
   };
+  const { projectId } = await itx.whoami();
+  // before the owner's TXT record names the project: provisioned, the records to add, no claim
   expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
     payload: {
       hostname: "iterate.somedomain.test",
       error: null,
+      claimed: false,
       cloudflare: {
         status: "pending",
         records: [
-          { name: "iterate.somedomain.test", value: "cname.saas.test" },
-          { name: "*.iterate.somedomain.test", value: "cname.saas.test" },
+          { type: "CNAME", name: "iterate.somedomain.test", value: "cname.saas.test" },
+          { type: "CNAME", name: "*.iterate.somedomain.test", value: "cname.saas.test" },
           {
+            type: "CNAME",
             name: "_acme-challenge.iterate.somedomain.test",
             value: "iterate.somedomain.test.dcv-uuid.dcv.cloudflare.com",
+          },
+          {
+            type: "TXT",
+            name: "_iterate.iterate.somedomain.test",
+            value: `iterate-project=${projectId}`,
           },
         ],
       },
     },
   });
   expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  expect(await catalog().projectByHostname(["iterate.somedomain.test"])).toBeNull();
+  // the owner adds it: the check claims it
+  cloudflare.owners["iterate.somedomain.test"] = projectId;
+  expect(await add(itx, "iterate.somedomain.test")).toMatchObject({
+    payload: { error: null, claimed: true },
+  });
   // the apex: the project's config worker, no routing slug
   const apex = await call("https://iterate.somedomain.test/");
   expect(apex, await apex.clone().text()).toMatchObject({ status: 200 });
@@ -210,16 +225,30 @@ test("a project's own hostname: added, the processor claims it and creates its w
   const echo = await call("https://echo.iterate.somedomain.test/");
   expect(echo, await echo.clone().text()).toMatchObject({ status: 200 });
   expect(await echo.json()).toEqual({ host: "echo.iterate.somedomain.test", routingSlug: "echo" });
-  // another project cannot take it or a name under it; the deployment's own zones are refused
+  // another project cannot take it or a name under it, even with a record naming it; the
+  // deployment's own zones are refused; and a remove there leaves the holder's custom hostname
   const other = await admin.projects.create({ project: "own-hostname-other" });
-  for (const hostname of [
-    "iterate.somedomain.test",
-    "echo.iterate.somedomain.test",
-    "x.projects.test",
-  ])
+  expect(await add(other, "iterate.somedomain.test")).toMatchObject({
+    payload: { error: null, claimed: false },
+  });
+  cloudflare.owners["echo.iterate.somedomain.test"] = (await other.whoami()).projectId;
+  for (const hostname of ["echo.iterate.somedomain.test", "x.projects.test"])
     expect(await add(other, hostname)).toMatchObject({
-      payload: { hostname, cloudflare: null, error: expect.any(String) },
+      payload: { hostname, cloudflare: null, error: expect.any(String), claimed: false },
     });
+  const [elsewhere] = await other.append({
+    type: "events.iterate.com/project/hostname-remove-requested",
+    payload: { hostname: "iterate.somedomain.test" },
+  });
+  await other.waitForEvent({
+    type: "events.iterate.com/project/hostname-removed",
+    afterOffset: elsewhere!.offset,
+    timeoutMs: 10_000,
+  });
+  expect(cloudflare).toMatchObject({ hostnames: ["iterate.somedomain.test"] });
+  expect((await catalog().projectByHostname(["iterate.somedomain.test"]))?.project.id).toBe(
+    projectId,
+  );
   const [removal] = await itx.append({
     type: "events.iterate.com/project/hostname-remove-requested",
     payload: { hostname: "iterate.somedomain.test" },
@@ -234,10 +263,11 @@ test("a project's own hostname: added, the processor claims it and creates its w
 });
 
 test("a project's primary hostname: once a live hostname is made primary, itx.url composes on it; a navigation on the ingress base is a 308 to the same routing slug, path and query there; a POST, a fetch and a WebSocket upgrade on the ingress base are served", async () => {
-  fakeCloudflareCustomHostnames({ active: ["primary.somedomain.test"] });
+  const cloudflare = fakeCloudflareCustomHostnames({ active: ["primary.somedomain.test"] });
   using session = await api();
   const admin = session.authenticate(ADMIN);
   const itx = await admin.projects.create({ project: "primary-hostname" });
+  cloudflare.owners["primary.somedomain.test"] = (await itx.whoami()).projectId;
   await publishConfigWorker(itx, [
     "itx",
     "workers",

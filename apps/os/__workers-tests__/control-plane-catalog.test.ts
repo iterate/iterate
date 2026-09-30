@@ -696,6 +696,9 @@ test("hostnames: a claim routes the hostname and the names under it to its proje
   expect(await lookup("iterate.shop.test")).toBeNull();
   await c.claimHostname(shop.id, "iterate.shop.test");
   await c.claimHostname(shop.id, "iterate.shop.test");
+  // who holds a name is exactly that name's claim: none for a name under it
+  expect(await c.hostnameHolder("iterate.shop.test")).toBe(shop.id);
+  expect(await c.hostnameHolder("notes.iterate.shop.test")).toBeNull();
   // the most specific name the lookup was handed wins: the apex, then `<routingSlug>.` under it
   for (const host of ["iterate.shop.test", "notes.iterate.shop.test"])
     expect(await lookup(host)).toEqual({ hostname: "iterate.shop.test", project: shop });

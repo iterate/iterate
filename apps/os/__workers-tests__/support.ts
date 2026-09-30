@@ -458,16 +458,31 @@ export async function until<T>(
 }
 
 /** Cloudflare's custom-hostname API on the SaaS zone (wrangler.test.jsonc `saas.test`), faked in
- *  this isolate's `fetch`; every other request goes through. `active` are custom hostnames the zone
- *  already holds, validated (what an erase leaves behind: it never deletes them); a new one is
- *  pending. `writes` records each POST and DELETE. */
+ *  this isolate's `fetch`, and the owners' ownership records (custom-hostnames.ts
+ *  `ownershipRecordOf`) over DNS-over-HTTPS; every other request goes through. `active` are custom
+ *  hostnames the zone already holds, validated (what an erase leaves behind: it never deletes
+ *  them); a new one is pending. `writes` records each POST and DELETE. `owners` is who each
+ *  hostname's `_iterate` TXT record names, by project id: a test sets it as the owner would. */
 export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string[] } = {}) {
   const hostnames: string[] = [...active];
   const writes: string[] = [];
+  const owners: Record<string, string> = {};
   const through = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     const url = new URL(request.url);
+    const txt = url.searchParams.get("type") === "TXT" && url.searchParams.get("name");
+    if (url.hostname === "cloudflare-dns.com" && txt && txt.startsWith("_iterate.")) {
+      const owner = owners[txt.slice("_iterate.".length)];
+      return Response.json(
+        owner
+          ? {
+              Status: 0,
+              Answer: [{ name: `${txt}.`, type: 16, data: `"iterate-project=${owner}"` }],
+            }
+          : { Status: 3 },
+      );
+    }
     if (url.hostname !== "api.cloudflare.com") return through(request);
     const ok = (result: unknown) => Response.json({ success: true, result });
     const entry = (hostname: string) =>
@@ -494,7 +509,7 @@ export function fakeCloudflareCustomHostnames({ active = [] }: { active?: string
     const asked = url.searchParams.get("hostname");
     return ok(hostnames.filter((hostname) => hostname === asked).map(entry));
   });
-  return { hostnames, writes };
+  return { hostnames, writes, owners };
 }
 
 /** Date faked at 2035-01-01 until the test finishes, so workerd fires no alarm of its own; answers

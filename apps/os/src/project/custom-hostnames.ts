@@ -1,8 +1,9 @@
 // src/project/custom-hostnames.ts — A PROJECT'S OWN HOSTNAMES: `iterate.example.com` serves the
 // project's apex and `<routingSlug>.iterate.example.com` with that routing slug, exactly as `<project>.<hostname>` and
 // `<routingSlug>--<project>.<hostname>` do. Three parts, one file:
-//   the rule        which hostnames a project may add (`customHostnameProblem`) and the DNS records
-//                   its owner adds (`customHostnameRecords`), both pure
+//   the rule        which hostnames a project may add (`customHostnameProblem`), the DNS records
+//                   its owner adds (`customHostnameRecords`) and the TXT record that proves the
+//                   owner's project (`ownershipRecordOf`), all pure
 //   Cloudflare      a WILDCARD Cloudflare for SaaS custom hostname on the deployment's SaaS zone
 //                   (`cloudflareCustomHostnameProvider`); its certificate covers `*.<hostname>`, which
 //                   takes TXT validation — delegated once by the owner's `_acme-challenge` CNAME
@@ -45,13 +46,26 @@ export function customHostnameRecords(
   config: Pick<NonNullable<AppConfig["customHostnames"]>, "zone" | "dcvDelegationUuid">,
 ): CustomHostnameObservation["records"] {
   return [
-    { name: hostname, value: `cname.${config.zone}` },
-    { name: `*.${hostname}`, value: `cname.${config.zone}` },
+    { type: "CNAME", name: hostname, value: `cname.${config.zone}` },
+    { type: "CNAME", name: `*.${hostname}`, value: `cname.${config.zone}` },
     {
+      type: "CNAME",
       name: `_acme-challenge.${hostname}`,
       value: `${hostname}.${config.dcvDelegationUuid}.dcv.cloudflare.com`,
     },
   ];
+}
+
+/** THE OWNERSHIP PROOF: the TXT record that names the project a hostname's owner added it to — what
+ *  a project must see at `_iterate.<hostname>` before it claims the hostname, so nobody holds a
+ *  hostname they don't control. Domain Connect's template writes it with the CNAMEs (version 2 of
+ *  `iterate.com/custom-hostname`, `%project%` being the project's id). Pure. */
+export function ownershipRecordOf(hostname: string, projectId: string) {
+  return {
+    type: "TXT" as const,
+    name: `_iterate.${hostname}`,
+    value: `iterate-project=${projectId}`,
+  };
 }
 
 /** What the project processor needs of Cloudflare, each idempotent: find-or-create (and so re-read)

@@ -43,7 +43,7 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { reduceSecretCatalog } from "../secret/contract.ts";
 import { reduceIntegrations } from "../integrations/contract.ts";
 import { unavailableError } from "../unavailable.ts";
-import { ProjectContract, type ProjectState } from "./contract.ts";
+import { ProjectContract, type CustomHostnameObservation, type ProjectState } from "./contract.ts";
 import { customHostnameProblem, type CustomHostnameProvider } from "./custom-hostnames.ts";
 import type { DomainConnectLink } from "./domain-connect.ts";
 import { configPointer, manifestOf, type ProjectPublisher } from "./publication.ts";
@@ -77,6 +77,14 @@ export type ProjectHostnames = {
   reservedZones: readonly string[];
   claim(hostname: string): Promise<void>;
   release(hostname: string): Promise<void>;
+  /** Whether another project holds `hostname`'s claim: then its Cloudflare custom hostname is
+   *  that project's too, and a remove here leaves it. */
+  heldElsewhere(hostname: string): Promise<boolean>;
+  /** The ownership record for `hostname` and whether DNS has it (custom-hostnames.ts
+   *  `ownershipRecordOf`); a lookup that fails is not proof. */
+  proof(
+    hostname: string,
+  ): Promise<{ record: CustomHostnameObservation["records"][number]; proven: boolean }>;
   setPrimaryHostname(hostname: string | null): Promise<void>;
   provider: CustomHostnameProvider | null;
   /** The signed Domain Connect link that writes `hostname`'s records at its DNS provider, or null
@@ -87,10 +95,12 @@ export type ProjectHostnames = {
   dnsZone(hostname: string): Promise<{ zone: string; provider: string | null } | null>;
 };
 
-/** Whether a hostname serves: Cloudflare says its hostname and its certificate are both active —
- *  what a primary hostname must be. */
+/** Whether a hostname serves: the project holds its claim, and Cloudflare says its hostname and its
+ *  certificate are both active — what a primary hostname must be. */
 const hostnameIsLive = (entry: ProjectState["hostnames"][string] | undefined) =>
-  entry?.cloudflare?.status === "active" && entry.cloudflare.sslStatus === "active";
+  Boolean(entry?.claimed) &&
+  entry?.cloudflare?.status === "active" &&
+  entry.cloudflare.sslStatus === "active";
 
 /** What the deletion saga reaches, for THIS project (durable-object.ts builds it): a context's
  *  destruction, the Artifacts repo a context's path backs, and the project's own kv and files. The
@@ -205,6 +215,7 @@ export class ProjectProcessor extends StreamProcessor<
               cloudflare: known?.cloudflare || null,
               error: null,
               connectedAt: event.payload.connected ? event.createdAt : known?.connectedAt || null,
+              claimed: known?.claimed || false,
             },
           },
         };
@@ -216,7 +227,13 @@ export class ProjectProcessor extends StreamProcessor<
         const known = state.hostnames[hostname];
         if (!known || known.requested?.verb === "remove") return undefined;
         const requested = known.requested?.offset === requestOffset ? null : known.requested;
-        const settled = { ...known, requested, cloudflare: cloudflare || known.cloudflare, error };
+        const settled = {
+          ...known,
+          requested,
+          cloudflare: cloudflare || known.cloudflare,
+          error,
+          claimed: event.payload.claimed ?? Boolean(cloudflare || known.cloudflare),
+        };
         return {
           ...state,
           hostnames: { ...state.hostnames, [hostname]: settled },
@@ -251,7 +268,10 @@ export class ProjectProcessor extends StreamProcessor<
         if (known.requested && known.requested.offset !== requestOffset)
           return {
             ...state,
-            hostnames: { ...state.hostnames, [hostname]: { ...known, cloudflare: null } },
+            hostnames: {
+              ...state.hostnames,
+              [hostname]: { ...known, cloudflare: null, claimed: false },
+            },
           };
         const { [hostname]: _gone, ...hostnames } = state.hostnames;
         return { ...state, hostnames };
@@ -437,10 +457,10 @@ export class ProjectProcessor extends StreamProcessor<
       runInBackground(async () => {
         try {
           // Drain: the newest request as of each pass, never the one just answered again. Whether
-          // the hostname is serving is the worker's own to carry: the state it drains from may not
-          // have reduced its last answer yet.
+          // the project holds the claim is the worker's own to carry: the state it drains from may
+          // not have reduced its last answer yet.
           let answered = 0;
-          let serving = Boolean(entry.cloudflare);
+          let claimed = entry.claimed;
           for (
             let owed = entry;
             owed?.requested && owed.requested.offset !== answered;
@@ -449,11 +469,10 @@ export class ProjectProcessor extends StreamProcessor<
             const { verb, offset } = owed.requested;
             const answer =
               verb === "add"
-                ? await this.#addHostname(hostname, offset, serving)
+                ? await this.#addHostname(hostname, offset, claimed)
                 : await this.#removeHostname(hostname, offset);
             await append(answer);
-            serving =
-              "cloudflare" in answer.payload ? serving || !!answer.payload.cloudflare : false;
+            claimed = "claimed" in answer.payload && answer.payload.claimed;
             answered = offset;
           }
         } finally {
@@ -685,23 +704,28 @@ export class ProjectProcessor extends StreamProcessor<
     }
   }
 
-  /** Claim the hostname, then find-or-create its custom hostname: the answer to an add. A refusal
-   *  after the claim releases it unless the hostname was already serving (a failed re-check keeps it). */
-  async #addHostname(hostname: string, offset: number, provisioned: boolean) {
+  /** Claim the hostname once it is proven the project's (or again, when the project holds it), then
+   *  find-or-create its custom hostname: the answer to an add. A refusal after a claim this answer
+   *  took releases it; a claim held before stays (a failed re-check keeps it). */
+  async #addHostname(hostname: string, offset: number, held: boolean) {
     const hostnames = this.hostnames();
     let cloudflare = null;
     let error = null;
-    let claimed = false;
+    let claimed = held;
     try {
       if (!hostnames?.provider) throw new Error("This deployment cannot add custom hostnames.");
       const problem = customHostnameProblem(hostname, hostnames.reservedZones);
       if (problem) throw new Error(problem);
-      await hostnames.claim(hostname);
-      claimed = true;
+      const proof = await hostnames.proof(hostname);
+      if (held || proof.proven) {
+        await hostnames.claim(hostname);
+        claimed = true;
+      }
       const observed = await hostnames.provider.provision(hostname);
-      // while there is something to add: one click at the owner's DNS provider, and who that
-      // provider is, for the instructions by hand — both best effort, a failure logged and left out
-      const live = observed.status === "active" && observed.sslStatus === "active";
+      // while there is something to add — the ownership record too, once Cloudflare is done: one
+      // click at the owner's DNS provider, and who that provider is, for the instructions by hand —
+      // both best effort, a failure logged and left out
+      const live = claimed && observed.status === "active" && observed.sslStatus === "active";
       const bestEffort = <T>(what: string, ask: () => Promise<T | null>) =>
         live
           ? null
@@ -713,15 +737,18 @@ export class ProjectProcessor extends StreamProcessor<
         bestEffort("domain connect", () => hostnames.connect(hostname)),
         bestEffort("dns zone", () => hostnames.dnsZone(hostname)),
       ]);
-      cloudflare = { ...observed, connect, dns };
+      cloudflare = { ...observed, records: [...observed.records, proof.record], connect, dns };
     } catch (caught) {
       error = caught instanceof Error ? caught.message : String(caught);
-      if (claimed && !provisioned) await hostnames!.release(hostname);
+      if (claimed && !held) {
+        await hostnames!.release(hostname);
+        claimed = false;
+      }
     }
     return {
       type: "events.iterate.com/project/hostname-add-settled" as const,
       idempotencyKey: `project/hostname-add:${hostname}:${offset}`,
-      payload: { hostname, requestOffset: offset, cloudflare, error },
+      payload: { hostname, requestOffset: offset, cloudflare, error, claimed },
     };
   }
 
@@ -757,7 +784,7 @@ export class ProjectProcessor extends StreamProcessor<
     }
     for (const hostname of Object.keys(this.#newestState?.hostnames ?? {})) {
       const hostnames = this.hostnames();
-      await hostnames?.provider?.remove(hostname);
+      if (!(await hostnames?.heldElsewhere(hostname))) await hostnames?.provider?.remove(hostname);
       await hostnames?.release(hostname);
     }
     await deletion.deleteProjectStorage();
@@ -769,10 +796,11 @@ export class ProjectProcessor extends StreamProcessor<
     await deletion.destroyContext("/");
   }
 
-  /** Delete the custom hostname, then release the claim: the answer to a remove. */
+  /** Delete the custom hostname — unless another project holds the claim, whose it is then — and
+   *  release the claim: the answer to a remove. */
   async #removeHostname(hostname: string, offset: number) {
     const hostnames = this.hostnames();
-    await hostnames?.provider?.remove(hostname);
+    if (!(await hostnames?.heldElsewhere(hostname))) await hostnames?.provider?.remove(hostname);
     await hostnames?.release(hostname);
     return {
       idempotencyKey: `project/hostname-remove:${hostname}:${offset}`,
