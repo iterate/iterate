@@ -231,7 +231,9 @@ SELECT date_trunc('hour', time) AS hour,
 FROM telemetry.metrics WHERE name = 'subscription.delivery_ms' GROUP BY 1 ORDER BY 1
 ```
 
-Without the guard, the second query fails as soon as it meets one large payload: `json_get_str()
+The last query's 14:00 hour, copied from Analytics Engine, gave a p99 of 10,887 ms over 8,014
+deliveries (4,754 points); Analytics Engine itself answered 10,894 ms. Without the guard, the second
+query fails as soon as it meets one large payload: `json_get_str()
 argument 1 exceeds the maximum byte length of 2000 (got 2141 bytes)`. A query pays for the columns
 it names: counting one project's events read 608 KB, and summing their payloads too read 1.8 MB, of
 the same 18 files.
