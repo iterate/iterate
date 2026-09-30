@@ -453,14 +453,6 @@ export class FacetHost {
     );
   }
 
-  /** A platform coordinator has no hosting row of its own. Its last configuration removal ends
-   * its facet and the facet's cursor storage together. */
-  deleteFirstPartyFacet(name: string): void {
-    const className = firstPartyFacetClassOf(name);
-    if (!className) throw new Error(`facet "${name}" is not a first-party facet`);
-    this.#deleteFacet(name, className);
-  }
-
   /** THE BIRTH'S FIRST ACT, before this incarnation writes anything (the DO counts the incarnation
    *  after it): every facet the last incarnation called (its `facet-ran:<name>` row) is STARTED, so
    *  one it left evicted mid-write never meets this incarnation's first commit stopped (the platform
