@@ -1964,6 +1964,45 @@ test("fan-out, the wake rule: a wake handler appending work that fails climbs on
   expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
 });
 
+// The row above with its ladder's jitter seeded. The jitter decides how often the climb restarts:
+// this draw restarts it at depth 2, once the row acks its own `itx/loop-limit` fact (a success,
+// which lifts the pause), and at depth 4, when a shallow record is the last to dead-letter (nothing
+// owed, so the paused row admits its wake). Depths [1..8, 2..8, 4..8]: 20 works.
+test.fails("fan-out, the wake rule, pinned: a ladder whose jitter restarts the climb twice still appends fewer than 20 works", async () => {
+  const told: string[] = [];
+  const random = mulberry32(190);
+  let current: ReturnType<typeof incarnation> | undefined;
+  const handler = sink(told, (event) => {
+    if (event.type === WOKEN) current!.stream.append({ type: "test/work" });
+    if (event.type === "test/work") throw new Error("the work fails");
+  });
+  current = incarnation(handler, nodeSqliteDurableObjectStorage(), { random });
+  configure(current, SINK_ROW);
+  await drainDeliveries();
+  current = incarnation(handler, current.storage, { random });
+  await drainDeliveries();
+  fakeClock();
+  for (let laps = 0; laps < 2_000 && current.delivery.deadlines()[0]; laps++) {
+    vi.setSystemTime(current.delivery.deadlines()[0]!.at + 1);
+    current = incarnation(handler, current.storage, {
+      wake: { cause: "alarm", due: ["retry"] },
+      random,
+    });
+    await drainDeliveries();
+    await current.pass();
+    await drainDeliveries();
+  }
+  expect(current.delivery.deadlines()).toEqual([]);
+  const depths = factsOf(current, "test/work").map((event) => event.source!.cause!.depth);
+  expect(depths.slice(0, 8)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  expect(Math.max(...depths)).toBe(8);
+  expect(depths.length).toBeLessThan(20);
+  expect(factsOf(current, "events.iterate.com/itx/loop-limit")).toMatchObject([
+    { payload: { depth: 9 } },
+  ]);
+  expect(told.filter((label) => label.startsWith("woken#")).length).toBeLessThan(60);
+});
+
 function nextMacrotask() {
   return new Promise((r) => setImmediate(r));
 }
@@ -1994,6 +2033,7 @@ function incarnation(
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
     deployId,
+    random = Math.random,
   }: {
     /** How long an evaluation may be reused: the lifetime of the snapshot it was read through. */
     validForMs?: number;
@@ -2009,6 +2049,8 @@ function incarnation(
     birthEvents?: StreamEventInput[];
     /** The deploy this incarnation runs as (a lease names it). */
     deployId?: string;
+    /** The retry ladder's jitter: seeded, the rungs come due in the same order every run. */
+    random?: () => number;
   } = {},
 ) {
   const alarms: number[] = [];
@@ -2062,6 +2104,7 @@ function incarnation(
     // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
     runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
     abortIncarnation: (reason) => void aborts.push(reason),
+    random,
   });
   // created + woken on a fresh store, the wake alone on one with rows, as the DO's first handler
   // records it — an alarm's caused by the deepest delivery it came back for

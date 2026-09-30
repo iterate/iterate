@@ -5,8 +5,9 @@ size: small
 
 # The wake rule's append count depends on the ladder's jitter
 
-Status: explained, repro being pinned. No fix yet: Misha wants the explanation first, then a
-decision on product vs. test.
+Status: explained and pinned; waiting on a decision. The ladder's jitter is injectable and a
+seeded `test.fails` reproduces the 20-append run every time. Not done: the decision (product or
+test) and the fix for the flaky row on main.
 
 ## Why
 
@@ -55,3 +56,19 @@ test change is Misha's call, so this PR changes neither.
 - [ ] resolve the flaky row on main along with that decision
 
 ## Implementation log
+
+2026-09-30. Survey of 2,906 seeds (the whole row, `Math.random` seeded per test):
+
+| appends | 9   | 10  | 11  | 12  | 13  | 14  | 15  | 16  | 17  | 18  | 19  | 20  | 21  |
+| ------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| runs    | 16  | 190 | 394 | 317 | 454 | 479 | 549 | 200 | 170 | 69  | 47  | 16  | 5   |
+
+- 21 of 2,906 (0.7%) reach 20. Every run keeps one `itx/loop-limit`, max depth 8, and goes quiet.
+- Every run acks its own `itx/loop-limit` and restarts; the restart's first append is spread
+  evenly over depths 2–8.
+- "Nothing owed" restarts per run: none 1,006, one 1,704, two 195, three 1. Mostly deep (the
+  deepest record tends to be the last to dead-letter).
+- A restarted climb is not always one hop a lap: 23 of 400 seeds skip hops (`2,3,4,5,8`), when an
+  old deep record's rung comes due mid-climb and causes the wake.
+- No small bound follows from the constants: each restart adds up to 7, and the number of "nothing
+  owed" restarts is bounded only by the probe budget (15 per pause, reset by each ack).
