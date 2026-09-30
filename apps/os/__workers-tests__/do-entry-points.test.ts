@@ -110,9 +110,9 @@ test("a pre-v18 core row refuses normal access yet remains sweepable and destroy
   await runInDurableObject(s, async (instance) => {
     // Workerd exposes even in-actor DO entry points as native RPC promises; await the refusal so
     // its expected INVALID_INPUT is not reported later as an unhandled test rejection.
-    expect(await rejected(instance.read(0))).toThrow(
-      /cannot be reconstructed.*recreate the context/,
-    );
+    expect(await rejected(instance.read(0))).toMatchObject({
+      message: expect.stringMatching(/cannot be reconstructed.*recreate the context/),
+    });
     expect(instance.readForSweep(0).events).toContainEqual(
       expect.objectContaining({
         offset: seed.offset,
@@ -156,19 +156,24 @@ test("the DO's entry points are the stream, invoke, fetch and the rpc-stub plumb
 
 test("the private durable-subscription bridge accepts no target, event, caller or delivery authority from its facet", async () => {
   const context = "prj_do_delivery_bridge";
-  await stub(context).append({
+  const s = stub(context);
+  const [configured] = (await s.append({
     type: "events.iterate.com/itx/subscription-configured",
     payload: { name: "sink", target: "itx.whoami", delivery: "durable", consumes: ["never"] },
-  });
-  await runInDurableObject(stub(context), async (instance) => {
+  })) as unknown as [{ offset: number }];
+  const [source] = (await s.append({ type: "never", payload: { real: true } })) as unknown as [
+    { offset: number },
+  ];
+  await runInDurableObject(s, async (instance) => {
     expect(
       await rejected(
         instance.deliverConfiguredSubscription({
           name: "sink",
-          configuredAtOffset: 1,
-          range: { after: 0, through: 1 },
+          configuredAtOffset: configured.offset,
+          range: { after: configured.offset, through: source.offset },
           target: "itx.attacker",
-          events: [{ type: "forged", offset: 1 }],
+          offsets: [source.offset],
+          event: { type: "forged", offset: source.offset },
           caller: { delivery: "forged" },
         }),
       ),
@@ -177,9 +182,10 @@ test("the private durable-subscription bridge accepts no target, event, caller o
       await rejected(
         instance.deliverConfiguredSubscription({
           name: "sink",
-          configuredAtOffset: 999,
-          range: { after: 0, through: 1 },
-          events: [{ offset: 1, type: "forged", path: "/" }],
+          configuredAtOffset: configured.offset,
+          range: { after: configured.offset, through: source.offset },
+          // The facet cannot omit the locally selected durable event to alter target input.
+          offsets: [],
         }),
       ),
     ).toMatchObject({ code: "GONE" });

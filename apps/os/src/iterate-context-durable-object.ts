@@ -139,6 +139,8 @@ import { SNAPSHOT_TTL_MS, type RulesSnapshotAnswer } from "./context/rule-snapsh
 import { SubscriptionDelivery } from "./stream/subscription-delivery.ts";
 import {
   parseSubscriptionDeliveryBridgeRequest,
+  parseSubscriptionDeliveryEphemeralRequest,
+  parseSubscriptionDeliveryReadRequest,
   parseSubscriptionDeliveryTerminalRequest,
   type SubscriptionDeliveryBridgeRequest,
 } from "./context/subscription-delivery-bridge.ts";
@@ -764,8 +766,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   /** Native operational telemetry for the private durable-delivery facet. It is for host
    * observability and Workers state proofs; no itx expression or client route exposes it. */
   async subscriptionDeliveryStatus(): Promise<{
-    readReservedBytes: number;
-    readWaiters: number;
     pendingEphemeralChars: number;
     targetBodyChars: number;
     activeTargetDeliveries: number;
@@ -784,8 +784,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       activeTargetDeliveries === 0 ? null : Date.now() - Math.min(...startedAt);
     if (!hasDurable)
       return {
-        readReservedBytes: 0,
-        readWaiters: 0,
         pendingEphemeralChars: 0,
         targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
         activeTargetDeliveries,
@@ -797,11 +795,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       this.#facetHost.callFacetAsPlatform("subscriptions", [["deliverySnapshots"]]),
     ]);
     return {
-      ...(resources as {
-        readReservedBytes: number;
-        readWaiters: number;
-        pendingEphemeralChars: number;
-      }),
+      ...(resources as { pendingEphemeralChars: number }),
       targetBodyChars: this.#configuredSubscriptionDeliveryBodyChars,
       activeTargetDeliveries,
       oldestTargetDeliveryAgeMs,
@@ -815,7 +809,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     events: StreamEvent[],
     range: { after: number; through: number },
   ): void {
-    const rows = this.subscriptionDeliveryConfiguration();
+    const configuration = this.subscriptionDeliveryConfiguration();
+    const { rows } = configuration;
     if (rows.length === 0) {
       if (events.some((event) => event.type === "events.iterate.com/itx/subscription-configured"))
         this.#facetHost.deleteFirstPartyFacet("subscriptions");
@@ -837,39 +832,67 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     );
     if (configurationChanged || durableDeliveryDue)
       this.#facetHost.claim("subscriptions", Date.now());
+    const ephemeralEvents = events.filter(
+      (event) =>
+        event.ephemeral && rows.some((row) => !row.halted && consumesEvent(row.consumes, event)),
+    );
     void this.#facetHost
-      .callFacetAsPlatform("subscriptions", [["processEventBatch", events, range, rows]])
+      .callFacetAsPlatform("subscriptions", [
+        ["processEventBatch", ephemeralEvents, range, rows, configuration.throughOffset],
+      ])
       .catch((error) => reportIssue("subscription-delivery.facet-push", error));
   }
 
   /** Core is the durable source of subscription identity. The private facet asks on a claim revive
    * when an asynchronous post-commit push did not reach its KV before an incarnation ended. */
-  subscriptionDeliveryConfiguration(): DurableSubscriptionConfig[] {
+  subscriptionDeliveryConfiguration(): {
+    rows: DurableSubscriptionConfig[];
+    /** Monotonic core source fence for asynchronous push/revive reconciliation. */
+    throughOffset: number;
+  } {
     this.#assertReconstructable();
-    return Object.entries(this.#stream.coreReducedState.subscriptions)
-      .filter(([, row]) => row.delivery === "durable")
-      .map(([name, row]) => ({
-        name,
-        configuredAtOffset: row.configuredAtOffset,
-        consumes: row.consumes,
-        afterOffset: row.afterOffset,
-        ordered: row.ordered,
-        resumedAtOffset: row.resumed?.atOffset,
-        resumedAfterOffset: row.resumed?.afterOffset,
-        resumedOffset: row.resumed?.offset,
-        ...(row.halted && { halted: true as const }),
-        ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
-          maxAttempts: 25,
-          retryCapMs: 4 * 60 * 60_000,
-        }),
-      }));
+    return {
+      rows: Object.entries(this.#stream.coreReducedState.subscriptions)
+        .filter(([, row]) => row.delivery === "durable")
+        .map(([name, row]) => ({
+          name,
+          configuredAtOffset: row.configuredAtOffset,
+          consumes: row.consumes,
+          afterOffset: row.afterOffset,
+          ordered: row.ordered,
+          resumedAtOffset: row.resumed?.atOffset,
+          resumedAfterOffset: row.resumed?.afterOffset,
+          resumedOffset: row.resumed?.offset,
+          halted: row.halted,
+          ...(targetIsWebhook(this.#stream.coreReducedState, row) && {
+            maxAttempts: 25,
+            retryCapMs: 4 * 60 * 60_000,
+          }),
+        })),
+      throughOffset: this.#stream.highestDurableOffset(),
+    };
   }
 
-  /** Native infrastructure read for the private subscriptions facet. This deliberately avoids
-   * itx resolution and inbound wake bookkeeping: a project rule cannot change a cursor's proof. */
-  readSubscriptionDelivery(afterOffset: number, limit: number): StreamPage {
+  /** Native infrastructure reads only metadata for the private subscriptions facet. The core row
+   * is the authority for its identity and filter; durable source bodies never cross this RPC. */
+  readSubscriptionDelivery(input: unknown): {
+    offsets: number[];
+    scannedThroughOffset: number;
+    atHead: boolean;
+  } {
+    const request = parseSubscriptionDeliveryReadRequest(input);
     this.#assertReconstructable();
-    return this.#stream.read(afterOffset, limit, { includeEphemeral: true });
+    const row = this.#configuredSubscriptionRow(request);
+    const page = this.#stream.read(request.afterOffset, request.limit, { includeEphemeral: false });
+    // This synchronous filter is the source proof. Returning only offsets lets the page body die
+    // before Workers RPC or a target-resolution await can retain it in the subscriptions facet.
+    return {
+      offsets: page.events
+        .filter((event) => consumesEvent(row.consumes, event))
+        .map((event) => event.offset),
+      scannedThroughOffset: page.scannedThroughOffset,
+      atHead: page.atHead,
+    };
   }
 
   /** Native claim for the private subscriptions facet, kept outside every user-owned namespace. */
@@ -879,20 +902,103 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     this.#alarmCoordinator.reconcile();
   }
 
-  /** A private first-party facet hands over one fresh, bounded source page. It never supplies a
-   * target, caller, or authority: this context validates the page, resolves its configured target,
-   * and derives the delivery caller itself. */
+  /** Reconstruct a durable attempt from the log. The facet can name an admitted range and selected
+   * offsets, but cannot alter its bodies, cause, hash, or current row filter. */
   async deliverConfiguredSubscription(input: unknown): Promise<void> {
     const request = parseSubscriptionDeliveryBridgeRequest(input);
     if (request.range.through <= request.range.after)
       throw codedError("INVALID_INPUT", "delivery range must advance past its after offset");
     this.#assertReconstructable();
     const row = this.#configuredSubscriptionRow(request);
-    const events = this.#validatedSubscriptionDeliveryEvents(request, row);
     const fanOut = row.ordered === false;
-    if (fanOut && events.length !== 1)
+    // A retry while this row's raw target call is still unsettled cannot produce a new outcome.
+    // Reject it before synchronous Stream.read() materializes its bounded scratch page; the later
+    // single-flight check remains the authority after source reconstruction.
+    const rowKey = `${request.name}@${request.configuredAtOffset}${
+      fanOut ? `#${request.offsets[0] ?? ""}` : ""
+    }`;
+    if (this.#configuredSubscriptionDeliveries.has(rowKey))
+      throw codedError("UNAVAILABLE", "configured subscription delivery is busy", {
+        deliveryBusy: true,
+      });
+    const events = this.#durableSubscriptionDeliveryEvents(request, row);
+    if (fanOut && (events.length !== 1 || request.range.through !== request.range.after + 1))
       throw codedError("INVALID_INPUT", "fan-out delivery contains exactly one event");
+    await this.#deliverConfiguredSubscriptionEvents(request, row, events, fanOut);
+  }
 
+  /** The one body-bearing private handoff. Ephemerals never enter a retry cursor: this validates
+   * that the exact event is still in the current incarnation's ring before invoking it. */
+  async deliverConfiguredEphemeralSubscription(input: unknown): Promise<void> {
+    const ephemeral = parseSubscriptionDeliveryEphemeralRequest(input);
+    this.#assertReconstructable();
+    const row = this.#configuredSubscriptionRow(ephemeral);
+    if (row.ordered === false)
+      throw codedError(
+        "GONE",
+        "fan-out configured subscriptions do not receive ephemeral delivery",
+      );
+    const events = this.#ephemeralSubscriptionDeliveryEvent(ephemeral, row);
+    const request: SubscriptionDeliveryBridgeRequest = {
+      name: ephemeral.name,
+      configuredAtOffset: ephemeral.configuredAtOffset,
+      resumeAtOffset: ephemeral.resumeAtOffset,
+      range: { after: events[0].offset - 1, through: events[0].offset },
+      offsets: [events[0].offset],
+    };
+    await this.#deliverConfiguredSubscriptionEvents(request, row, events, false);
+  }
+
+  #durableSubscriptionDeliveryEvents(
+    request: SubscriptionDeliveryBridgeRequest,
+    row: Subscription,
+  ): StreamEvent[] {
+    if (request.range.through > this.#stream.highestDurableOffset())
+      throw codedError("GONE", "configured subscription source range is no longer durable");
+    const page = this.#stream.read(request.range.after, 100, { includeEphemeral: false });
+    if (page.scannedThroughOffset < request.range.through)
+      throw codedError("GONE", "configured subscription source range is no longer available");
+    const events = page.events.filter(
+      (event) => event.offset <= request.range.through && consumesEvent(row.consumes, event),
+    );
+    const offsets = events.map((event) => event.offset);
+    if (
+      offsets.length !== request.offsets.length ||
+      offsets.some((offset, index) => offset !== request.offsets[index])
+    )
+      throw codedError("GONE", "configured subscription source selection changed");
+    if (events.length === 0)
+      throw codedError("GONE", "configured subscription source selection is empty");
+    // `events` owns only the selected references. Drop the full page before hashing, resolving, or
+    // awaiting a target so unrelated durable bodies cannot survive this synchronous source proof.
+    page.events.length = 0;
+    return events;
+  }
+
+  #ephemeralSubscriptionDeliveryEvent(
+    request: ReturnType<typeof parseSubscriptionDeliveryEphemeralRequest>,
+    row: Subscription,
+  ): StreamEvent[] {
+    if (request.event.path !== this.#durableObjectAddress.path)
+      throw codedError("GONE", "ephemeral subscription source event is no longer available");
+    const actual = this.#stream
+      .read(request.event.offset - 1, 1, { includeEphemeral: true })
+      .events.find((event) => event.offset === request.event.offset && event.ephemeral);
+    if (
+      !actual ||
+      !consumesEvent(row.consumes, actual) ||
+      JSON.stringify(actual) !== JSON.stringify(request.event)
+    )
+      throw codedError("GONE", "ephemeral subscription source event is no longer available");
+    return [actual];
+  }
+
+  async #deliverConfiguredSubscriptionEvents(
+    request: SubscriptionDeliveryBridgeRequest,
+    row: Subscription,
+    events: StreamEvent[],
+    fanOut: boolean,
+  ): Promise<void> {
     const rowKey = `${request.name}@${request.configuredAtOffset}${fanOut ? `#${events[0].offset}` : ""}`;
     const requestKey = `${rowKey}:${request.resumeAtOffset ?? 0}:${request.range.after}:${request.range.through}`;
     const now = Date.now();
@@ -905,8 +1011,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       if (settled.error.code) throw codedError(settled.error.code, settled.error.message);
       throw new Error(settled.error.message);
     }
-    const active = this.#configuredSubscriptionDeliveries.get(rowKey);
-    if (active)
+    if (this.#configuredSubscriptionDeliveries.has(rowKey))
       throw codedError("UNAVAILABLE", "configured subscription delivery is busy", {
         deliveryBusy: true,
       });
@@ -1039,49 +1144,6 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       });
     if (row.halted) throw codedError("GONE", "configured subscription no longer accepts delivery");
     return row;
-  }
-
-  #validatedSubscriptionDeliveryEvents(
-    request: SubscriptionDeliveryBridgeRequest,
-    row: Subscription,
-  ): StreamEvent[] {
-    const events: StreamEvent[] = [];
-    let previous = request.range.after;
-    for (const candidate of request.events) {
-      // The private RPC payload is untyped data. Null has typeof "object", so it is a distinct
-      // wire case rather than a declared-object truthiness check.
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- private RPC input is unknown and null is not an event
-      if (candidate === null || typeof candidate !== "object")
-        throw codedError("INVALID_INPUT", "configured subscription event is invalid");
-      const event = candidate as StreamEvent;
-      if (
-        !Number.isSafeInteger(event.offset) ||
-        event.offset <= previous ||
-        event.offset > request.range.through ||
-        // oxlint-disable-next-line iterate/simple-truthiness-check -- this is structural validation of unknown private RPC data
-        typeof event.type !== "string" ||
-        event.path !== this.#durableObjectAddress.path ||
-        !consumesEvent(row.consumes, event)
-      )
-        throw codedError(
-          "INVALID_INPUT",
-          "configured subscription event is outside its source page",
-        );
-      previous = event.offset;
-      events.push(event);
-    }
-    const ephemeral = events.some((event) => event.ephemeral);
-    if (ephemeral) {
-      if (
-        events.length !== 1 ||
-        !events[0].ephemeral ||
-        request.range.through !== request.range.after + 1 ||
-        events[0].offset !== request.range.through
-      )
-        throw codedError("GONE", "ephemeral subscription source event is no longer available");
-    } else if (request.range.through > this.#stream.highestDurableOffset())
-      throw codedError("GONE", "configured subscription source range is no longer durable");
-    return events;
   }
 
   /** Atomically record a runner's terminal outcome only while its configured row still stands. */
@@ -1766,15 +1828,15 @@ export class IterateContextDurableObject extends DurableObject<Env> {
             }),
           },
         }),
-        ...(snapshot?.halted
-          ? {
+        ...(s.halted
+          ? { halted: s.halted }
+          : snapshot?.halted && {
               halted: {
                 afterOffset: snapshot.halted.after,
                 attempts: snapshot.halted.attempts,
                 error: snapshot.halted.error,
               },
-            }
-          : s.halted && { halted: s.halted }),
+            }),
       };
     });
   }

@@ -4,10 +4,10 @@ import { DurableDeliveryProcessor } from "./durable-delivery.ts";
 import { ProcessorEngine, type EngineKv, type StreamEvent } from "./processor.ts";
 import { committedEvent, memoryStorage, memoryStream, settle } from "./test-support.ts";
 
-test("reuses a bounded source page for its first invoke with scanned proof", async () => {
+test("persists selected offsets with the scanned range for its first invoke", async () => {
   const store = kv();
   const source = memoryStream();
-  const read = vi.fn(source.stream.read);
+  const read = vi.fn(durableRead(source.stream.read, ["work"]));
   const delivered = vi.fn(async () => {});
   await source.stream.append({ type: "work" }, { type: "noise" }, { type: "work" });
   const processor = new DurableDeliveryProcessor({
@@ -17,10 +17,8 @@ test("reuses a bounded source page for its first invoke with scanned proof", asy
       storage: store,
       read,
       deliver: delivered,
+      deliverEphemeral: async () => {},
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
@@ -34,16 +32,50 @@ test("reuses a bounded source page for its first invoke with scanned proof", asy
   await settle();
   expect(delivered).toHaveBeenCalledWith(
     expect.objectContaining({
-      events: [
-        expect.objectContaining({ type: "work", offset: 1 }),
-        expect.objectContaining({ type: "work", offset: 3 }),
-      ],
+      offsets: [1, 3],
       range: { after: 0, through: 3 },
     }),
   );
   expect(store.values.get("durable-delivery/delivery")).toEqual({ confirmedOffset: 3 });
-  // One admission read serves the first invoke; the second observes the caught-up head.
+  // One metadata read admits the range; the second observes the caught-up head.
   expect(read).toHaveBeenCalledTimes(2);
+});
+
+test("a core terminal receipt invalidates an older in-flight runner generation", async () => {
+  const store = kv();
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  let rejectDelivery!: (error: Error) => void;
+  const processor = new DurableDeliveryProcessor({
+    slug: "core-halt",
+    consumes: ["work"],
+    runtime: {
+      storage: store,
+      read: durableRead(source.stream.read, ["work"]),
+      deliver: async () =>
+        await new Promise<void>((_, reject) => {
+          rejectDelivery = reject;
+        }),
+      deliverEphemeral: async () => {},
+      scheduleWake: async () => {},
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal: async () => {},
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await vi.waitFor(() => expect(rejectDelivery).toBeTypeOf("function"));
+  expect(processor.halt(0, 15, "core terminal")).toBe(true);
+  rejectDelivery(new Error("configured subscription no longer accepts delivery"));
+  await settle();
+  expect(processor.snapshot()).toEqual({
+    confirmedOffset: 0,
+    halted: { after: 0, attempts: 15, error: "core terminal", terminalReported: true },
+  });
 });
 
 test("a disposed runner cannot restore a deleted cursor after a late target result", async () => {
@@ -60,15 +92,13 @@ test("a disposed runner cannot restore a deleted cursor after a late target resu
       maxAttempts: 1,
       runtime: {
         storage: store,
-        read: source.stream.read,
+        read: durableRead(source.stream.read, ["work"]),
         deliver: async () =>
           await new Promise<void>((resolve, reject) => {
             settleDelivery = () => (outcome === "success" ? resolve() : reject(new Error("late")));
           }),
+        deliverEphemeral: async () => {},
         scheduleWake,
-        abort: (reason) => {
-          throw new Error(reason);
-        },
         tryReservePendingEphemeral: testEphemeralReservation,
         terminal,
       },
@@ -90,6 +120,39 @@ test("a disposed runner cannot restore a deleted cursor after a late target resu
   }
 });
 
+test("a disposed runner does not reclaim a wake when its source read rejects late", async () => {
+  const store = kv();
+  let rejectRead!: (error: Error) => void;
+  const scheduleWake = vi.fn(async () => {});
+  const processor = new DurableDeliveryProcessor({
+    slug: "disposed-read",
+    runtime: {
+      storage: store,
+      read: async () =>
+        await new Promise<never>((_, reject) => {
+          rejectRead = reject;
+        }),
+      deliver: async () => {},
+      deliverEphemeral: async () => {},
+      scheduleWake,
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal: async () => {},
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await vi.waitFor(() => expect(rejectRead).toBeTypeOf("function"));
+  processor[Symbol.dispose]();
+  rejectRead(new Error("context gone"));
+  await settle();
+  expect(store.values.has("durable-delivery/disposed-read")).toBe(false);
+  expect(scheduleWake).not.toHaveBeenCalled();
+});
+
 test("persists a pending scanned range, retries it, then halts through the terminal callback", async () => {
   const store = kv();
   const wakes: number[] = [];
@@ -102,15 +165,13 @@ test("persists a pending scanned range, retries it, then halts through the termi
     maxAttempts: 1,
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
         throw new Error("down");
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async (at) => {
         if (at !== null) wakes.push(at);
-      },
-      abort: (reason) => {
-        throw new Error(reason);
       },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal,
@@ -131,6 +192,76 @@ test("persists a pending scanned range, retries it, then halts through the termi
   });
 });
 
+test("retries a persisted ordered range without another metadata read", async () => {
+  const store = kv();
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const read = vi.fn(durableRead(source.stream.read, ["work"]));
+  let calls = 0;
+  const processor = new DurableDeliveryProcessor({
+    slug: "retry-without-read",
+    consumes: ["work"],
+    retryDelayMs: () => 0,
+    runtime: {
+      storage: store,
+      read,
+      deliver: async () => {
+        calls++;
+        if (calls === 1) throw new Error("transient");
+      },
+      deliverEphemeral: async () => {},
+      scheduleWake: async () => {},
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal: async () => {},
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await settle();
+  expect(read).toHaveBeenCalledTimes(1);
+  await engine.processEventBatch([committedEvent(2, "work")], { after: 1, through: 2 });
+  await settle();
+  // The only second read is the caught-up check after successful delivery. The retry reused
+  // offsets persisted with the range instead of rereading source metadata.
+  expect(read).toHaveBeenCalledTimes(2);
+  expect(store.values.get("durable-delivery/retry-without-read")).toEqual({ confirmedOffset: 1 });
+});
+
+test("a metadata read failure schedules a bounded wake without an attempt or terminal", async () => {
+  const store = kv();
+  const wakes: (number | null)[] = [];
+  const terminal = vi.fn(async () => {});
+  const processor = new DurableDeliveryProcessor({
+    slug: "read-failure",
+    runtime: {
+      storage: store,
+      read: async () => {
+        throw new Error("context unavailable");
+      },
+      deliver: async () => {},
+      deliverEphemeral: async () => {},
+      scheduleWake: async (at) => void wakes.push(at),
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal,
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await settle();
+  expect(wakes).toHaveLength(1);
+  expect(wakes[0]).toBeGreaterThan(Date.now());
+  expect(store.values.has("durable-delivery/read-failure")).toBe(false);
+  expect(terminal).not.toHaveBeenCalled();
+});
+
 test("named ephemeral events are best effort and never enter the durable cursor", async () => {
   const store = kv();
   const delivered = vi.fn(async () => {});
@@ -139,12 +270,10 @@ test("named ephemeral events are best effort and never enter the durable cursor"
     consumes: ["poke"],
     runtime: {
       storage: store,
-      read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
+      read: async () => ({ offsets: [], scannedThroughOffset: 0, atHead: true }),
       deliver: delivered,
+      deliverEphemeral: delivered,
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
@@ -160,7 +289,7 @@ test("named ephemeral events are best effort and never enter the durable cursor"
   });
   await settle();
   expect(delivered).toHaveBeenCalledWith(
-    expect.objectContaining({ events: [expect.objectContaining({ offset: 7 })] }),
+    expect.objectContaining({ event: expect.objectContaining({ offset: 7 }) }),
   );
   expect(store.values.has("durable-delivery/delivery")).toBe(false);
 });
@@ -179,18 +308,16 @@ test("fan-out persists bounded offsets then calls each event independently", asy
     concurrency: 2,
     runtime: {
       storage: store,
-      read: source.stream.read,
-      deliver: async ({ events }) => {
+      read: durableRead(source.stream.read, ["work"]),
+      deliver: async ({ offsets }) => {
         active++;
         high = Math.max(high, active);
         await new Promise((resolve) => setTimeout(resolve, 5));
-        delivered.push(events[0]!.offset);
+        delivered.push(offsets[0]!);
         active--;
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
@@ -209,17 +336,49 @@ test("fan-out persists bounded offsets then calls each event independently", asy
   });
 });
 
+test("fan-out continues from a non-head metadata page without another push", async () => {
+  const store = kv();
+  const source = memoryStream();
+  await source.stream.append(...Array.from({ length: 101 }, () => ({ type: "work" })));
+  const delivered: number[] = [];
+  const processor = new DurableDeliveryProcessor({
+    slug: "fan-catch-up",
+    consumes: ["work"],
+    fanOut: true,
+    concurrency: 100,
+    maxPending: 100,
+    runtime: {
+      storage: store,
+      read: durableRead(source.stream.read, ["work"]),
+      deliver: async ({ offsets }) => void delivered.push(offsets[0]!),
+      deliverEphemeral: async () => {},
+      scheduleWake: async () => {},
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal: async () => {},
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await settle(100);
+  expect(delivered).toHaveLength(101);
+  expect(store.values.get("durable-delivery/fan-catch-up")).toMatchObject({
+    fanOut: { admittedThrough: 101, pending: [] },
+  });
+});
+
 test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes them", async () => {
   const store = kv();
   const ordered = vi.fn(async () => {});
   const runtime = {
     storage: store,
-    read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
+    read: async () => ({ offsets: [], scannedThroughOffset: 0, atHead: true }),
     deliver: ordered,
+    deliverEphemeral: ordered,
     scheduleWake: async () => {},
-    abort: (reason: string) => {
-      throw new Error(reason);
-    },
     tryReservePendingEphemeral: testEphemeralReservation,
     terminal: async () => {},
   };
@@ -244,15 +403,13 @@ test("ordered ephemerals queue bounded one-offset pushes while fan-out excludes 
   expect(ordered).toHaveBeenNthCalledWith(
     1,
     expect.objectContaining({
-      events: [expect.objectContaining({ offset: 1 })],
-      range: { after: 0, through: 1 },
+      event: expect.objectContaining({ offset: 1 }),
     }),
   );
   expect(ordered).toHaveBeenNthCalledWith(
     2,
     expect.objectContaining({
-      events: [expect.objectContaining({ offset: 2 })],
-      range: { after: 1, through: 2 },
+      event: expect.objectContaining({ offset: 2 }),
     }),
   );
 
@@ -281,24 +438,22 @@ test("ordered ephemerals share the persisted delivery chain", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" });
   let releaseEphemeral!: () => void;
-  const deliver = vi.fn(({ events }: { events: StreamEvent[] }) =>
-    events[0]!.ephemeral
-      ? new Promise<void>((resolve) => {
-          releaseEphemeral = resolve;
-        })
-      : Promise.resolve(),
+  const deliver = vi.fn(async () => {});
+  const deliverEphemeral = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        releaseEphemeral = resolve;
+      }),
   );
   const processor = new DurableDeliveryProcessor({
     slug: "ordered-chain",
     consumes: ["poke", "work"],
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver,
+      deliverEphemeral,
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal: async () => {},
     },
@@ -315,13 +470,10 @@ test("ordered ephemerals share the persisted delivery chain", async () => {
   await settle();
   await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
   await settle();
-  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(deliverEphemeral).toHaveBeenCalledTimes(1);
   releaseEphemeral();
   await settle();
-  expect(deliver).toHaveBeenNthCalledWith(
-    2,
-    expect.objectContaining({ events: [expect.objectContaining({ type: "work" })] }),
-  );
+  expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ offsets: [1] }));
 });
 
 test("deliveryBusy reschedules ordered work without spending an attempt", async () => {
@@ -336,15 +488,13 @@ test("deliveryBusy reschedules ordered work without spending an attempt", async 
     maxAttempts: 1,
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
         throw codedError("UNAVAILABLE", "busy", { deliveryBusy: true });
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async (at) => {
         if (at !== null) wakes.push(at);
-      },
-      abort: (reason) => {
-        throw new Error(reason);
       },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal,
@@ -364,6 +514,43 @@ test("deliveryBusy reschedules ordered work without spending an attempt", async 
   expect(terminal).not.toHaveBeenCalled();
 });
 
+test("a target that is temporarily unavailable retries through the configured attempt bound", async () => {
+  const store = kv();
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const terminal = vi.fn(async () => {});
+  const processor = new DurableDeliveryProcessor({
+    slug: "target-retry",
+    consumes: ["work"],
+    maxAttempts: 2,
+    retryDelayMs: () => 0,
+    runtime: {
+      storage: store,
+      read: durableRead(source.stream.read, ["work"]),
+      deliver: async () => {
+        throw codedError("NOT_A_METHOD", "target is not ready");
+      },
+      deliverEphemeral: async () => {},
+      scheduleWake: async () => {},
+      tryReservePendingEphemeral: testEphemeralReservation,
+      terminal,
+    },
+  });
+  const engine = new ProcessorEngine(processor, {
+    stream: memoryStream().stream,
+    storage: memoryStorage(),
+    kv: kv(),
+  });
+  await engine.processEventBatch([committedEvent(1, "work")], { after: 0, through: 1 });
+  await settle();
+  expect(store.values.get("durable-delivery/target-retry")).toMatchObject({
+    pending: { attempt: 1 },
+  });
+  await engine.processEventBatch([committedEvent(2, "work")], { after: 1, through: 2 });
+  await settle();
+  expect(terminal).toHaveBeenCalledWith(expect.objectContaining({ attempts: 2 }));
+});
+
 test("a context resume fence does not turn a stale ordered call into a halt", async () => {
   const store = kv();
   const source = memoryStream();
@@ -376,15 +563,13 @@ test("a context resume fence does not turn a stale ordered call into a halt", as
     maxAttempts: 1,
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
         throw codedError("GONE", "configured subscription resumed", { resumeAtOffset: 9 });
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async (at) => {
         if (at !== null) wakes.push(at);
-      },
-      abort: (reason) => {
-        throw new Error(reason);
       },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal,
@@ -416,14 +601,12 @@ test("a context resume fence does not dead-letter stale fan-out work", async () 
     maxAttempts: 1,
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
         throw codedError("GONE", "configured subscription resumed", { resumeAtOffset: 9 });
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal,
     },
@@ -454,15 +637,13 @@ test("deliveryBusy reschedules fan-out work without spending an attempt", async 
     maxAttempts: 1,
     runtime: {
       storage: store,
-      read: source.stream.read,
+      read: durableRead(source.stream.read, ["work"]),
       deliver: async () => {
         throw codedError("UNAVAILABLE", "busy", { deliveryBusy: true });
       },
+      deliverEphemeral: async () => {},
       scheduleWake: async (at) => {
         if (at !== null) wakes.push(at);
-      },
-      abort: (reason) => {
-        throw new Error(reason);
       },
       tryReservePendingEphemeral: testEphemeralReservation,
       terminal,
@@ -491,12 +672,10 @@ test("queued ephemeral reservations remain held through delivery and release aft
     consumes: ["poke"],
     runtime: {
       storage: store,
-      read: async () => ({ events: [], scannedThroughOffset: 0, atHead: true }),
-      deliver: async () => await new Promise<void>((resolve) => (release = resolve)),
+      read: async () => ({ offsets: [], scannedThroughOffset: 0, atHead: true }),
+      deliver: async () => {},
+      deliverEphemeral: async () => await new Promise<void>((resolve) => (release = resolve)),
       scheduleWake: async () => {},
-      abort: (reason) => {
-        throw new Error(reason);
-      },
       tryReservePendingEphemeral: (chars) => {
         held += chars;
         let disposed = false;
@@ -527,6 +706,29 @@ test("queued ephemeral reservations remain held through delivery and release aft
 });
 
 const testEphemeralReservation = (): Disposable => ({ [Symbol.dispose]: () => {} });
+
+const durableRead =
+  (
+    read: (
+      after: number,
+      limit: number,
+    ) => Promise<{
+      events: StreamEvent[];
+      scannedThroughOffset: number;
+      atHead: boolean;
+    }>,
+    consumes: readonly string[],
+  ) =>
+  async (after: number, limit: number) => {
+    const page = await read(after, limit);
+    return {
+      offsets: page.events
+        .filter((event) => !event.ephemeral && consumes.includes(event.type))
+        .map((event) => event.offset),
+      scannedThroughOffset: page.scannedThroughOffset,
+      atHead: page.atHead,
+    };
+  };
 
 const kv = (): EngineKv & { values: Map<string, unknown> } => {
   const values = new Map<string, unknown>();

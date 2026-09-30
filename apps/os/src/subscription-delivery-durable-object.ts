@@ -25,20 +25,26 @@ export type DurableSubscriptionConfig = {
   resumedAtOffset?: number;
   resumedAfterOffset?: number;
   resumedOffset?: number;
-  /** Retained rows keep their terminal cursor observable, but never receive new deliveries. */
-  halted?: true;
+  /** Retained rows keep the core terminal receipt observable and invalidate stale runner work. */
+  halted?: { afterOffset: number; attempts: number; error?: string };
   maxAttempts?: number;
   retryCapMs?: number;
 };
 
 type ContextDeliveryBridge = {
   /** Current core row identities after a push was lost between its durable claim and this facet. */
-  subscriptionDeliveryConfiguration(): Promise<DurableSubscriptionConfig[]>;
-  readSubscriptionDelivery(
-    afterOffset: number,
-    limit: number,
-  ): Promise<{
-    events: StreamEvent[];
+  subscriptionDeliveryConfiguration(): Promise<{
+    rows: DurableSubscriptionConfig[];
+    throughOffset: number;
+  }>;
+  readSubscriptionDelivery(input: {
+    name: string;
+    configuredAtOffset: number;
+    resumeAtOffset?: number;
+    afterOffset: number;
+    limit: number;
+  }): Promise<{
+    offsets: number[];
     scannedThroughOffset: number;
     atHead: boolean;
   }>;
@@ -47,7 +53,13 @@ type ContextDeliveryBridge = {
     configuredAtOffset: number;
     resumeAtOffset?: number;
     range: ScannedRange;
-    events: StreamEvent[];
+    offsets: number[];
+  }): Promise<void>;
+  deliverConfiguredEphemeralSubscription(input: {
+    name: string;
+    configuredAtOffset: number;
+    resumeAtOffset?: number;
+    event: StreamEvent;
   }): Promise<void>;
   recordConfiguredSubscriptionTerminal(input: {
     name: string;
@@ -69,13 +81,10 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   static override publicMethods = [...super.publicMethods];
 
   readonly #runners = new Map<string, DurableDeliveryProcessor>();
-  static readonly #pageReservationChars = 8 * 1024 * 1024;
+  #configurationThroughOffset: number | undefined;
   static readonly #pendingEphemeralBudgetChars = 8 * 1024 * 1024;
   #pendingEphemeralChars = 0;
   readonly #wakeByRunner = new Map<string, number>();
-  /** One 8MiB source page at a time across all runners, before any page body is materialized. */
-  #readReserved = false;
-  readonly #readWaiters: Array<() => void> = [];
   readonly #backgroundClaims = new BackgroundClaims({
     claim: async (at) => await this.#context().claimSubscriptionDelivery(at),
     report: (error) =>
@@ -92,11 +101,20 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     events: StreamEvent[],
     _range: ScannedRange,
     rows: DurableSubscriptionConfig[],
+    configurationThroughOffset: number,
   ): Promise<void> {
+    if (this.#acceptedConfigurationThroughOffset() === undefined) {
+      // A deleted facet has no local high-water. Pull once before accepting a retried platform
+      // call, so an older push cannot recreate removed configuration after a cold start.
+      const current = await this.#context().subscriptionDeliveryConfiguration();
+      if (configurationThroughOffset < current.throughOffset) return;
+      rows = current.rows;
+      configurationThroughOffset = current.throughOffset;
+    }
     // A commit is an immediate wake. Its drains either establish a new earliest retry or release
     // the prior one when every cursor is caught up.
+    if (!this.#reconcile(rows, configurationThroughOffset)) return;
     this.#wakeByRunner.clear();
-    this.#reconcile(rows);
     for (const row of rows) {
       if (row.halted) continue;
       const runner = this.#runners.get(`${row.name}@${row.configuredAtOffset}`)!;
@@ -107,13 +125,14 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
 
   /** The context alarm revives a pending cursor after a facet or context incarnation dies. */
   async revive(): Promise<void> {
-    this.#wakeByRunner.clear(); // the alarm spent the prior claim; a runner reclaims only if it still needs one
+    await this.#backgroundClaims.revivedWhileBusy();
     // A context claims this first-party facet before its asynchronous post-commit push. If that
     // push died with the context, the claim revives us with no local configuration yet; core is
     // the durable source of row identity, so pull it afresh rather than retaining a second table.
-    const rows = await this.#context().subscriptionDeliveryConfiguration();
-    this.#reconcile(rows);
-    for (const row of rows) {
+    const configuration = await this.#context().subscriptionDeliveryConfiguration();
+    if (!this.#reconcile(configuration.rows, configuration.throughOffset)) return;
+    this.#wakeByRunner.clear(); // the alarm spent the prior claim; a runner reclaims only if it still needs one
+    for (const row of configuration.rows) {
       if (!row.halted)
         this.#runners.get(`${row.name}@${row.configuredAtOffset}`)?.processEvent(this.#args(null));
     }
@@ -123,28 +142,29 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
   async deliverySnapshots(): Promise<
     Record<string, ReturnType<DurableDeliveryProcessor["snapshot"]>>
   > {
-    if (this.#runners.size === 0)
-      this.#reconcile(await this.#context().subscriptionDeliveryConfiguration());
+    if (this.#runners.size === 0) {
+      const configuration = await this.#context().subscriptionDeliveryConfiguration();
+      this.#reconcile(configuration.rows, configuration.throughOffset);
+    }
     return Object.fromEntries([...this.#runners].map(([key, runner]) => [key, runner.snapshot()]));
   }
 
   /** Platform operational state for the context's bounded durable-delivery resources. It is reached
    * only through IterateContextDurableObject's native diagnostic, never an itx/client capability. */
   deliveryResourceSnapshot(): {
-    readReservedBytes: number;
-    readWaiters: number;
     pendingEphemeralChars: number;
   } {
     return {
-      readReservedBytes: this.#readReserved
-        ? SubscriptionDeliveryDurableObject.#pageReservationChars
-        : 0,
-      readWaiters: this.#readWaiters.length,
       pendingEphemeralChars: this.#pendingEphemeralChars,
     };
   }
 
-  #reconcile(rows: DurableSubscriptionConfig[]): void {
+  #reconcile(rows: DurableSubscriptionConfig[], throughOffset: number): boolean {
+    const acceptedThroughOffset = this.#acceptedConfigurationThroughOffset();
+    if (acceptedThroughOffset !== undefined && throughOffset < acceptedThroughOffset) return false;
+    this.#configurationThroughOffset = throughOffset;
+    if (acceptedThroughOffset !== throughOffset)
+      this.ctx.storage.kv.put("durable-delivery/configuration-through-offset", throughOffset);
     // The facet KV owns cursors only. Core remains the durable authority for row identity and
     // configuration, which the caller supplies afresh on every push or revive.
     const live = new Set(rows.map((row) => `${row.name}@${row.configuredAtOffset}`));
@@ -177,6 +197,15 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
         });
         this.#runners.set(key, runner);
       }
+      if (row.halted) {
+        runner.halt(
+          row.halted.afterOffset,
+          row.halted.attempts,
+          row.halted.error || "configured subscription delivery halted",
+          row.resumedAtOffset,
+        );
+        continue;
+      }
       if (
         row.resumedAtOffset !== undefined &&
         this.ctx.storage.kv.get<number>(`durable-delivery-resumed/${key}`) !== row.resumedAtOffset
@@ -185,6 +214,16 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
         this.ctx.storage.kv.put(`durable-delivery-resumed/${key}`, row.resumedAtOffset);
       }
     }
+    return true;
+  }
+
+  #acceptedConfigurationThroughOffset(): number | undefined {
+    if (this.#configurationThroughOffset !== undefined) return this.#configurationThroughOffset;
+    const persisted = this.ctx.storage.kv.get<number>(
+      "durable-delivery/configuration-through-offset",
+    );
+    if (persisted !== undefined) this.#configurationThroughOffset = persisted;
+    return persisted;
   }
 
   #runtimeFor(row: DurableSubscriptionConfig): DurableDeliveryRuntime {
@@ -192,14 +231,28 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
       storage: this.ctx.storage.kv,
       // Infrastructure uses the kernel-owned context stub. It never resolves through itx,
       // so a project rewrite, provide, or jail cannot alter cursor proof or claims.
-      read: (afterOffset, limit) => this.#readSourcePage(afterOffset, limit),
-      deliver: ({ events, range, resumeAtOffset }) =>
+      read: async (afterOffset, limit, resumeAtOffset) =>
+        await this.#context().readSubscriptionDelivery({
+          name: row.name,
+          configuredAtOffset: row.configuredAtOffset,
+          resumeAtOffset,
+          afterOffset,
+          limit,
+        }),
+      deliver: ({ offsets, range, resumeAtOffset }) =>
         this.#context().deliverConfiguredSubscription({
           name: row.name,
           configuredAtOffset: row.configuredAtOffset,
           resumeAtOffset,
           range,
-          events,
+          offsets,
+        }),
+      deliverEphemeral: ({ event, resumeAtOffset }) =>
+        this.#context().deliverConfiguredEphemeralSubscription({
+          name: row.name,
+          configuredAtOffset: row.configuredAtOffset,
+          resumeAtOffset,
+          event,
         }),
       scheduleWake: async (atMs) => {
         const key = `${row.name}@${row.configuredAtOffset}`;
@@ -207,10 +260,6 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
         else this.#wakeByRunner.set(key, atMs);
         this.#syncClaim();
       },
-      // The context-side single-flight guard owns an unanswered target call across a facet
-      // restart. Resetting this shared facet would discard unrelated rows, so the deadline simply
-      // lets the runner persist bounded retry state while the guard rejects overlap.
-      abort: () => undefined,
       tryReservePendingEphemeral: (chars) => this.#reservePendingEphemeral(chars),
       terminal: async ({ afterOffset, attempts, error, fanOut, resumeAtOffset }) => {
         await this.#context().recordConfiguredSubscriptionTerminal({
@@ -230,47 +279,6 @@ export class SubscriptionDeliveryDurableObject extends FacetDurableObject<{
     return this.env.ITERATE_CONTEXT.getByName(
       this.ctx.props.iterateContextName,
     ) as unknown as ContextDeliveryBridge;
-  }
-
-  async #readSourcePage(
-    afterOffset: number,
-    limit: number,
-  ): Promise<{
-    events: StreamEvent[];
-    scannedThroughOffset: number;
-    atHead: boolean;
-    [Symbol.dispose](): void;
-  }> {
-    await this.#reserveRead();
-    try {
-      const page = await this.#context().readSubscriptionDelivery(afterOffset, limit);
-      let released = false;
-      return {
-        ...page,
-        [Symbol.dispose]: () => {
-          if (released) return;
-          released = true;
-          this.#releaseRead();
-        },
-      };
-    } catch (error) {
-      this.#releaseRead();
-      throw error;
-    }
-  }
-
-  #reserveRead(): Promise<void> {
-    if (!this.#readReserved) {
-      this.#readReserved = true;
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => this.#readWaiters.push(resolve));
-  }
-
-  #releaseRead(): void {
-    const waiter = this.#readWaiters.shift();
-    if (waiter) return waiter();
-    this.#readReserved = false;
   }
 
   #reservePendingEphemeral(chars: number): Disposable | undefined {

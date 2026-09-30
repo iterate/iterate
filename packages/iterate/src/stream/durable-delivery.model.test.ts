@@ -25,11 +25,7 @@ test("an ordered runner replays its persisted pending range after interruption a
   });
 
   const replayed: number[][] = [];
-  const second = runtime(
-    shared,
-    source.stream.read,
-    ({ events }) => void replayed.push(events.map((event) => event.offset)),
-  );
+  const second = runtime(shared, source.stream.read, ({ offsets }) => void replayed.push(offsets));
   vi.useFakeTimers({ now: Date.now() + 20_001, toFake: ["Date"] });
   try {
     await drive(ordered(second), 2);
@@ -45,18 +41,14 @@ test("an ordered runner replays its persisted pending range after interruption a
 test("omitting consumes keeps the normal subscription default: every durable event", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "alpha" }, { type: "beta" });
-  const received: string[] = [];
+  const received: number[] = [];
   const processor = new DurableDeliveryProcessor({
     slug: "all",
-    runtime: runtime(
-      kv(),
-      source.stream.read,
-      ({ events }) => void received.push(...events.map((event) => event.type)),
-    ),
+    runtime: runtime(kv(), source.stream.read, ({ offsets }) => void received.push(...offsets)),
   });
   await drive(processor, 1);
   await settle();
-  expect(received).toEqual(["alpha", "beta"]);
+  expect(received).toEqual([1, 2]);
   expect(processor.contract).toMatchObject({ consumes: ["*"] });
 });
 
@@ -75,7 +67,7 @@ test("fan-out recovery replays only pending source offsets after interruption", 
   const recovered = runtime(
     shared,
     source.stream.read,
-    ({ events }) => void replayed.push(events[0]!.offset),
+    ({ offsets }) => void replayed.push(offsets[0]!),
   );
   vi.useFakeTimers({ now: Date.now() + 20_001, toFake: ["Date"] });
   try {
@@ -94,8 +86,8 @@ test("a fan-out terminal is selectively resumed without replaying already acknow
   const source = memoryStream();
   await source.stream.append({ type: "work" }, { type: "work" });
   const shared = kv();
-  const terminal = runtime(shared, source.stream.read, ({ events }) => {
-    if (events[0]!.offset === 1) throw new Error("only first fails");
+  const terminal = runtime(shared, source.stream.read, ({ offsets }) => {
+    if (offsets[0] === 1) throw new Error("only first fails");
   });
   const processor = new DurableDeliveryProcessor({
     slug: "selective",
@@ -110,7 +102,7 @@ test("a fan-out terminal is selectively resumed without replaying already acknow
     terminals: [{ afterOffset: 0, attempts: 1, error: "only first fails", fanOut: true }],
   });
   const replayed: number[] = [];
-  terminal.deliver = async ({ events }) => void replayed.push(events[0]!.offset);
+  terminal.deliver = async ({ offsets }) => void replayed.push(offsets[0]!);
   expect(processor.resume(undefined, 1, 101)).toBe(true);
   await drive(processor, 2);
   await settle();
@@ -131,7 +123,7 @@ test("terminal ordered work stays halted until an explicit resume, then replays 
   expect(processor.snapshot()).toMatchObject({ halted: { after: 0 } });
 
   const replayed: number[] = [];
-  failed.deliver = async ({ events }) => void replayed.push(...events.map((event) => event.offset));
+  failed.deliver = async ({ offsets }) => void replayed.push(...offsets);
   expect(processor.resume()).toBe(true);
   await drive(processor, 2);
   await settle();
@@ -201,7 +193,7 @@ test("a replacement generation has isolated progress while its predecessor still
   const replacementRuntime = runtime(
     shared,
     source.stream.read,
-    ({ events }) => void replacementCalls.push(...events.map((event) => event.offset)),
+    ({ offsets }) => void replacementCalls.push(...offsets),
   );
   const replacement = new DurableDeliveryProcessor({
     slug: "subscription@2",
@@ -227,10 +219,10 @@ test("seeded recovery worlds preserve each ordered source prefix across retries 
     const delivered: number[] = [];
     let calls = 0;
     for (let generation = 0; generation < 4; generation++) {
-      const current = runtime(shared, source.stream.read, ({ events }) => {
+      const current = runtime(shared, source.stream.read, ({ offsets }) => {
         calls++;
         if ((seed + generation + calls) % 5 === 0) throw new Error("transient");
-        delivered.push(...events.map((event) => event.offset));
+        delivered.push(...offsets);
       });
       await drive(ordered(current, { retryDelayMs: () => 0, maxAttempts: 8 }), generation + 1);
       await settle(25);
@@ -288,12 +280,17 @@ function runtime(
   const terminals: Terminal[] = [];
   return {
     storage,
-    read,
-    deliver: async (input: Parameters<RuntimeDeliver>[0]) => await deliver(input),
-    scheduleWake: async () => {},
-    abort: (reason: string): never => {
-      throw new Error(reason);
+    read: async (after: number, limit: number) => {
+      const page = await read(after, limit);
+      return {
+        offsets: page.events.filter((event) => !event.ephemeral).map((event) => event.offset),
+        scannedThroughOffset: page.scannedThroughOffset,
+        atHead: page.atHead,
+      };
     },
+    deliver: async (input: Parameters<RuntimeDeliver>[0]) => await deliver(input),
+    deliverEphemeral: async () => {},
+    scheduleWake: async () => {},
     tryReservePendingEphemeral: () => ({ [Symbol.dispose]: () => {} }),
     terminal: async (input: Terminal) => {
       terminals.push(input);
@@ -302,9 +299,7 @@ function runtime(
     terminals,
   };
 }
-type RuntimeDeliver = (input: {
-  events: import("./processor.ts").StreamEvent[];
-}) => void | Promise<void>;
+type RuntimeDeliver = (input: { offsets: number[] }) => void | Promise<void>;
 type Terminal = {
   afterOffset: number;
   attempts: number;

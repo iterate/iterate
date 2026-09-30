@@ -230,7 +230,14 @@ export class HoldDurableObject extends StreamProcessorDurableObject {
   processor = new CounterProcessor();
   #release;
   async processEventBatch(events, range) {
-    if (events.some((e) => e.type === "test/held" || e.type.startsWith("test/memory-work-")))
+    if (
+      events.some(
+        (e) =>
+          e.type === "test/held" ||
+          e.type.startsWith("test/held-") ||
+          e.type.startsWith("test/memory-work-"),
+      )
+    )
       await new Promise((resolve) => (this.#release = resolve));
     return super.processEventBatch(events, range);
   }

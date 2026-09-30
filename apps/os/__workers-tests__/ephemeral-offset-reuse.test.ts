@@ -6,7 +6,7 @@
 // are reduced / delivered exactly as at-least-once promises. (Found by the r1 correctness review;
 // the same hunt found that an undisposed facet RPC RESULT pinned the parent after a release — the
 // read-verb cases below are also the pin for that fix: they evict at once after ONE release.)
-import { evictDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
 import type { StreamPage, WorkerSource } from "iterate/api";
 import type { ItxExpression } from "iterate/expression";
@@ -28,7 +28,7 @@ export default class Digest extends WorkerEntrypoint {
 `,
 };
 
-test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor along in memory and persists nothing past the durable mark; after the release + evict the durables re-minted at those offsets are delivered", async () => {
+test("a stream-kept durable cursor never persists an ephemeral offset across eviction", async () => {
   const ctx = "prj_rev_cursorskip";
   const s = stub(ctx);
   await s.append({
@@ -50,33 +50,29 @@ test("stream-kept cursor: an alarm pump with ephemerals at head moves the cursor
   expect(row0).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset } }); // acked on durable ground ✓
 
   await s.append({ type: "blip", ephemeral: true }, { type: "blip", ephemeral: true });
-  // A nonconsumed ephemeral creates neither durable work nor an alarm claim. Its body is best
-  // effort, so a manually invoked context alarm has no contract to advance this private runner.
-  // The eviction below is the proof that matters: no ephemeral offset may survive in its cursor.
   await releasePins(ctx);
   await evictDurableObject(s);
-  // The next observation wakes a fresh context at the first ephemeral's offset. Its background
-  // runner scans that durable wake; wait for its actual progress rather than assuming an alarm's
-  // synchronous timing. This exact offset proves KV never retained either ephemeral offset.
-  const rowKv = await until("the fresh cursor scans its durable wake", async () => {
-    const row = (await s.invoke("itx.subscriptions.get('dig')")) as {
-      cursor?: { confirmedOffset: number };
-    };
-    return row.cursor?.confirmedOffset === highestDurableOffset + 1 ? row : undefined;
-  });
-  expect(rowKv).toMatchObject({ cursor: { confirmedOffset: highestDurableOffset + 1 } });
 
-  // The fresh append records this mark where the second ephemeral was. If the old cursor had
-  // persisted that ephemeral offset, this mark would be skipped.
+  // This native diagnostic begins the new incarnation but records no wake. It observes the private
+  // facet's persisted KV before an external request can create a replacement `itx/woken` record or
+  // asynchronous alarm traces. The cursor must still name the old durable mark exactly.
+  const beforeWake = await runInDurableObject(s, (instance) =>
+    instance.subscriptionDeliveryStatus(),
+  );
+  const configuredAtOffset = row0.configuredAtOffset;
+  expect(beforeWake.snapshots[`dig@${configuredAtOffset}`]).toMatchObject({
+    confirmedOffset: highestDurableOffset,
+  });
+
+  // The first ordinary append now creates woken@mark+1 and this mark@mark+2 in one synchronous
+  // turn. It therefore reuses the two dead ephemeral offsets without relying on alarm timing.
   const secondMark = offsetOf(await s.append({ type: "mark" }));
-  // The cursor passing the second mark is the delivery settled. Had kv held a cursor past the durable
-  // mark, it would already stand beyond this mark and the call would never have been made — the
-  // assertion below, not this wait, is what fails then.
+  expect(secondMark).toBe(highestDurableOffset + 2);
   await cursorReaches(s, "dig", secondMark);
   const p1 = await page(ctx);
-  expect(p1.events.at(-1)).toMatchObject({ offset: highestDurableOffset + 2 });
-  // at-least-once: the second mark, minted where a dead ephemeral sat, reaches the worker.
-  expect(await digested(s)).toContain(`mark@${highestDurableOffset + 2}`);
+  expect(p1.events.at(-1)).toMatchObject({ offset: secondMark });
+  // At-least-once: the mark minted where a dead ephemeral sat reaches the worker.
+  expect(await digested(s)).toContain(`mark@${secondMark}`);
 });
 
 test("a processor subscription resolves a provided alias to a facet batch method before its platform call", async () => {
@@ -209,9 +205,10 @@ async function cursorReaches(
   s: ReturnType<typeof stub>,
   name: string,
   offset: number,
-): Promise<{ cursor?: { confirmedOffset: number } }> {
+): Promise<{ configuredAtOffset: number; cursor?: { confirmedOffset: number } }> {
   return until(`subscription ${name} acked through ${offset}`, async () => {
     const row = (await s.invoke(`itx.subscriptions.get('${name}')`)) as {
+      configuredAtOffset: number;
       cursor?: { confirmedOffset: number };
     };
     return (row.cursor?.confirmedOffset ?? -1) >= offset && row;
@@ -220,7 +217,7 @@ async function cursorReaches(
 
 /** What the digest worker has recorded, `type@offset` per delivered event. */
 async function digested(s: ReturnType<typeof stub>): Promise<string[]> {
-  return JSON.parse(((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) ?? "[]");
+  return JSON.parse(((await s.invoke(["itx", "kv", ["get", "digested"]])) as string) || "[]");
 }
 
 /** The offset the one event `append` was handed committed at (the stub's RPC typing drops the

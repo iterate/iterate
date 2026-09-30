@@ -1,7 +1,7 @@
 // stream/durable-delivery.ts — an ordinary processor that owns durable subscription progress in its
-// facet KV. The context only pushes and wakes the processor; this class reads source pages, retains
-// a bounded scanned range while its call is unsettled, and asks the host to invoke the configured
-// expression under ordinary delivery authority.
+// facet KV. The context only pushes and wakes the processor; this class retains a bounded scanned
+// range plus its selected offsets, and asks the host to invoke the configured expression under
+// ordinary delivery authority.
 
 import { z } from "zod";
 import { errorCode } from "../lib.ts";
@@ -20,6 +20,8 @@ export type DurableDeliveryCursor = {
   pending?: {
     after: number;
     through: number;
+    /** Selected durable event offsets for this scanned range. They make retries body-free. */
+    offsets: number[];
     attempt: number;
     nextAttemptAtMs?: number;
     error?: string;
@@ -50,25 +52,24 @@ export type DurableDeliveryRuntime = {
   read(
     afterOffset: number,
     limit: number,
+    resumeAtOffset?: number,
   ): Promise<{
-    events: StreamEvent[];
+    offsets: number[];
     scannedThroughOffset: number;
     atHead: boolean;
-    /** Native host holds the shared body reservation until this page is disposed. */
-    [Symbol.dispose]?: () => void;
   }>;
-  /** Resolve and invoke the stored subscribe target afresh under Caller.delivery. */
+  /** Re-read and invoke the stored durable target under Caller.delivery. */
   deliver(input: {
-    events: StreamEvent[];
     range: ScannedRange;
+    offsets: number[];
     /** Resume control identity captured before this call began. */
     resumeAtOffset?: number;
     deliveryKey?: string;
   }): Promise<void>;
+  /** The only body-bearing path: one ephemeral still held in the live ring. */
+  deliverEphemeral(input: { event: StreamEvent; resumeAtOffset?: number }): Promise<void>;
   scheduleWake(atMs: number | null): Promise<void>;
-  /** Ends this facet incarnation when an invoke exceeds its persisted deadline. */
-  abort(reason: string): void;
-  /** Reserves aggregate facet memory for an ephemeral body held outside a page lease. */
+  /** Reserves aggregate facet memory for a queued ephemeral body. */
   tryReservePendingEphemeral(chars: number): Disposable | undefined;
   terminal(input: {
     afterOffset: number;
@@ -130,7 +131,6 @@ const permanentFailure = (error: unknown): boolean =>
   [
     "PERMANENT_FAILURE",
     "GONE",
-    "NOT_A_METHOD",
     "REDUCE_CHECKPOINT_TOO_LARGE",
     "EVENT_TOO_LARGE",
     "FORBIDDEN",
@@ -246,6 +246,27 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     this.#requestDrain(runInBackground);
   }
 
+  /** Core already appended this terminal receipt. Adopt it before an older target call can write
+   * a local failure, and mark it reported so the runner never appends a duplicate receipt. */
+  halt(afterOffset: number, attempts: number, error: string, resumeAtOffset?: number): boolean {
+    if (this.#disposed) return false;
+    const cursor = this.#cursor();
+    if (
+      cursor.halted?.after === afterOffset &&
+      cursor.halted.attempts === attempts &&
+      cursor.halted.error === error &&
+      cursor.halted.resumeAtOffset === resumeAtOffset &&
+      cursor.halted.terminalReported
+    )
+      return false;
+    this.#generation++;
+    this.#putCursor({
+      confirmedOffset: afterOffset,
+      halted: { after: afterOffset, attempts, error, terminalReported: true, resumeAtOffset },
+    });
+    return true;
+  }
+
   /** The subscriptions facet applies the existing resume control fact before calling drive. */
   resume(afterOffset?: number, offset?: number, resumeAtOffset?: number): boolean {
     if (this.#disposed) return false;
@@ -320,16 +341,8 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   async #drain(): Promise<void> {
     if (this.#disposed) return;
     if (this.#options.fanOut) return await this.#drainFanOut();
-    await this.#drainEphemerals();
     for (;;) {
       let cursor = this.#cursor();
-      let admitted:
-        | {
-            pending: NonNullable<DurableDeliveryCursor["pending"]>;
-            page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
-            events: StreamEvent[];
-          }
-        | undefined;
       if (cursor.halted) {
         if (cursor.halted.terminalReported) return;
         const stamp = this.#stamp();
@@ -363,26 +376,38 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
       }
       if (!cursor.pending) {
         const stamp = this.#stamp();
-        const page = await this.#options.runtime.read(cursor.confirmedOffset, pageLimit);
-        let retainPage = false;
+        let page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
         try {
+          page = await this.#options.runtime.read(
+            cursor.confirmedOffset,
+            pageLimit,
+            stamp.resumeAtOffset,
+          );
+        } catch {
+          if (this.#isCurrent(stamp))
+            await this.#options.runtime.scheduleWake(Date.now() + busyRetryDelayMs);
+          return;
+        }
+        {
           if (!this.#isCurrent(stamp)) return;
           cursor = this.#cursor();
           if (cursor.pending || cursor.halted) continue;
           if (page.scannedThroughOffset <= cursor.confirmedOffset) {
+            // Ephemerals share this runner's chain. Do not let a live ring body overtake a
+            // persisted durable range which was already admitted before it.
+            await this.#drainEphemerals();
+            if (!this.#isCurrent(stamp)) return;
             await this.#options.runtime.scheduleWake(null);
             return;
           }
-          const events = page.events.filter(
-            (event) => !event.ephemeral && consumesEvent(this.#options.consumes, event),
-          );
-          if (events.length === 0) {
+          if (page.offsets.length === 0) {
             this.#putCursor({ confirmedOffset: page.scannedThroughOffset });
             continue;
           }
           const pending = {
             after: cursor.confirmedOffset,
             through: page.scannedThroughOffset,
+            offsets: page.offsets,
             attempt: 0,
             resumeAtOffset: stamp.resumeAtOffset,
           };
@@ -391,28 +416,12 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
             pending,
           };
           this.#putCursor(cursor);
-          // The admission read is already the source proof for the first call. Keep its lease
-          // through that call; retries re-read the durable source as before.
-          admitted = { pending, page, events };
-          retainPage = true;
-        } finally {
-          if (!retainPage) page[Symbol.dispose]?.();
         }
       }
       const pending = cursor.pending!;
       const stamp = this.#stamp();
-      const page = admitted
-        ? admitted.page
-        : await this.#options.runtime.read(pending.after, pageLimit);
-      try {
+      {
         if (!this.#isCurrent(stamp) || !this.#isCurrentPending(pending, pending.attempt)) return;
-        const events = admitted
-          ? admitted.events
-          : page.events
-              .filter((event) => event.offset <= pending.through)
-              .filter((event) => !event.ephemeral && consumesEvent(this.#options.consumes, event));
-        // Only selected bodies cross the target call; release skipped page bodies before it awaits.
-        page.events.length = 0;
         const attempt = pending.attempt + 1;
         this.#putCursor({
           ...this.#cursor(),
@@ -425,8 +434,8 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
         });
         try {
           await this.#deliverWithinDeadline({
-            events,
             range: { after: pending.after, through: pending.through },
+            offsets: pending.offsets,
             resumeAtOffset: stamp.resumeAtOffset,
             deliveryKey: `${this.#options.slug}:${pending.after}-${pending.through}`,
           });
@@ -501,8 +510,6 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
           await this.#options.runtime.scheduleWake(nextAttemptAtMs);
           return;
         }
-      } finally {
-        page[Symbol.dispose]?.();
       }
     }
   }
@@ -512,9 +519,8 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
       const pending = this.#ephemeralQueue.shift()!;
       this.#ephemeralQueueChars -= pending.chars;
       try {
-        await this.#deliverWithinDeadline({
-          events: [pending.event],
-          range: { after: pending.event.offset - 1, through: pending.event.offset },
+        await this.#deliverEphemeralWithinDeadline({
+          event: pending.event,
           resumeAtOffset: pending.resumeAtOffset,
         });
       } catch (error) {
@@ -534,6 +540,7 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   async #drainFanOut(): Promise<void> {
     let cursor = this.#cursor();
     const fanOut = cursor.fanOut || { admittedThrough: cursor.confirmedOffset, pending: [] };
+    let admittedAtHead: boolean | undefined;
     for (const item of fanOut.pending.filter((item) => item.terminal)) {
       const stamp = this.#stamp();
       try {
@@ -562,11 +569,19 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     const room = this.#options.maxPending - fanOut.pending.length;
     if (room > 0) {
       const stamp = this.#stamp();
-      const page = await this.#options.runtime.read(
-        fanOut.admittedThrough,
-        Math.min(pageLimit, room),
-      );
+      let page: Awaited<ReturnType<DurableDeliveryRuntime["read"]>>;
       try {
+        page = await this.#options.runtime.read(
+          fanOut.admittedThrough,
+          Math.min(pageLimit, room),
+          stamp.resumeAtOffset,
+        );
+      } catch {
+        if (this.#isCurrent(stamp))
+          await this.#options.runtime.scheduleWake(Date.now() + busyRetryDelayMs);
+        return;
+      }
+      {
         if (!this.#isCurrent(stamp)) return;
         cursor = this.#cursor();
         const currentFanOut = cursor.fanOut || {
@@ -575,19 +590,16 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
         };
         if (currentFanOut.admittedThrough !== fanOut.admittedThrough)
           return await this.#drainFanOut();
-        const additions = page.events
-          .filter((event) => !event.ephemeral && consumesEvent(this.#options.consumes, event))
-          .map((event) => ({
-            offset: event.offset,
-            attempt: 0,
-            resumeAtOffset: stamp.resumeAtOffset,
-          }));
+        const additions = page.offsets.map((offset) => ({
+          offset,
+          attempt: 0,
+          resumeAtOffset: stamp.resumeAtOffset,
+        }));
         currentFanOut.pending.push(...additions);
         currentFanOut.admittedThrough = page.scannedThroughOffset;
         cursor = { ...cursor, fanOut: currentFanOut };
         this.#putCursor(cursor);
-      } finally {
-        page[Symbol.dispose]?.();
+        admittedAtHead = page.atHead;
       }
     }
     const currentFanOut = this.#cursor().fanOut || fanOut;
@@ -615,81 +627,70 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
     if (settled.pending.some((item) => !item.terminal && !item.nextAttemptAtMs))
       return await this.#drainFanOut();
     if (next !== undefined) await this.#options.runtime.scheduleWake(next);
-    else if (settled.pending.length === 0) await this.#options.runtime.scheduleWake(null);
+    else if (settled.pending.length === 0) {
+      if (admittedAtHead) await this.#options.runtime.scheduleWake(null);
+      else return await this.#drainFanOut();
+    }
   }
 
   async #deliverFanOutItem(item: FanOutPending): Promise<void> {
     const stamp = this.#stamp();
-    const page = await this.#options.runtime.read(item.offset - 1, 1);
+    if (!this.#isCurrent(stamp)) return;
+    let cursor = this.#cursor();
+    let fanOut = cursor.fanOut;
+    let current = fanOut?.pending.find((candidate) => candidate.offset === item.offset);
+    if (!fanOut || !current || current.terminal) return;
+    current.attempt += 1;
+    current.nextAttemptAtMs = Date.now() + this.#options.callDeadlineMs;
+    current.resumeAtOffset = stamp.resumeAtOffset;
+    const attempt = current.attempt;
+    this.#putCursor({ ...cursor, fanOut });
     try {
+      await this.#deliverWithinDeadline({
+        range: { after: current.offset - 1, through: current.offset },
+        offsets: [current.offset],
+        resumeAtOffset: stamp.resumeAtOffset,
+        deliveryKey: `${this.#options.slug}:${current.offset}`,
+      });
       if (!this.#isCurrent(stamp)) return;
-      let cursor = this.#cursor();
-      let fanOut = cursor.fanOut;
-      let current = fanOut?.pending.find((candidate) => candidate.offset === item.offset);
-      if (!fanOut || !current || current.terminal) return;
-      const event = page.events.find((candidate) => candidate.offset === current!.offset);
-      if (!event) {
-        current.attempt = this.#options.maxAttempts;
-        current.error = "delivery source event is no longer readable";
-        current.terminal = true;
-        this.#putCursor({ ...cursor, fanOut });
-        return;
+      cursor = this.#cursor();
+      fanOut = cursor.fanOut;
+      current = fanOut?.pending.find(
+        (candidate) =>
+          candidate.offset === item.offset &&
+          candidate.attempt === attempt &&
+          candidate.resumeAtOffset === stamp.resumeAtOffset,
+      );
+      if (!fanOut || !current) return;
+      fanOut.pending.splice(fanOut.pending.indexOf(current), 1);
+    } catch (error) {
+      if (!this.#isCurrent(stamp)) return;
+      cursor = this.#cursor();
+      fanOut = cursor.fanOut;
+      current = fanOut?.pending.find(
+        (candidate) =>
+          candidate.offset === item.offset &&
+          candidate.attempt === attempt &&
+          candidate.resumeAtOffset === stamp.resumeAtOffset,
+      );
+      if (!fanOut || !current) return;
+      if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
+        current.attempt = attempt - 1;
+        current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
+        current.error = undefined;
+      } else {
+        current.error = error instanceof Error ? error.message : String(error);
+        if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts)
+          current.terminal = true;
+        else
+          current.nextAttemptAtMs =
+            Date.now() +
+            (this.#options.retryDelayMs || ((n) => Math.min(1_000 * 2 ** (n - 1), 30 * 60_000)))(
+              current.attempt,
+            );
       }
-      current.attempt += 1;
-      current.nextAttemptAtMs = Date.now() + this.#options.callDeadlineMs;
-      current.resumeAtOffset = stamp.resumeAtOffset;
-      const attempt = current.attempt;
-      this.#putCursor({ ...cursor, fanOut });
-      try {
-        await this.#deliverWithinDeadline({
-          events: [event],
-          range: { after: current.offset - 1, through: current.offset },
-          resumeAtOffset: stamp.resumeAtOffset,
-          deliveryKey: `${this.#options.slug}:${event.path}@${event.offset}`,
-        });
-        if (!this.#isCurrent(stamp)) return;
-        cursor = this.#cursor();
-        fanOut = cursor.fanOut;
-        current = fanOut?.pending.find(
-          (candidate) =>
-            candidate.offset === item.offset &&
-            candidate.attempt === attempt &&
-            candidate.resumeAtOffset === stamp.resumeAtOffset,
-        );
-        if (!fanOut || !current) return;
-        fanOut.pending.splice(fanOut.pending.indexOf(current), 1);
-      } catch (error) {
-        if (!this.#isCurrent(stamp)) return;
-        cursor = this.#cursor();
-        fanOut = cursor.fanOut;
-        current = fanOut?.pending.find(
-          (candidate) =>
-            candidate.offset === item.offset &&
-            candidate.attempt === attempt &&
-            candidate.resumeAtOffset === stamp.resumeAtOffset,
-        );
-        if (!fanOut || !current) return;
-        if (deliveryBusy(error) || staleResume(error, stamp.resumeAtOffset)) {
-          current.attempt = attempt - 1;
-          current.nextAttemptAtMs = Date.now() + busyRetryDelayMs;
-          current.error = undefined;
-        } else {
-          current.error = error instanceof Error ? error.message : String(error);
-          if (permanentFailure(error) || current.attempt >= this.#options.maxAttempts)
-            current.terminal = true;
-          else
-            current.nextAttemptAtMs =
-              Date.now() +
-              (this.#options.retryDelayMs || ((n) => Math.min(1_000 * 2 ** (n - 1), 30 * 60_000)))(
-                current.attempt,
-              );
-        }
-      }
-      if (this.#isCurrent(stamp) && fanOut && current)
-        this.#putCursor({ ...this.#cursor(), fanOut });
-    } finally {
-      page[Symbol.dispose]?.();
     }
+    if (this.#isCurrent(stamp) && fanOut && current) this.#putCursor({ ...this.#cursor(), fanOut });
   }
 
   #stamp(): { generation: number; resumeAtOffset: number | undefined } {
@@ -720,23 +721,26 @@ export class DurableDeliveryProcessor extends StreamProcessor<Record<string, nev
   async #deliverWithinDeadline(
     input: Parameters<DurableDeliveryRuntime["deliver"]>[0],
   ): Promise<void> {
+    return await this.#withinDeadline(() => this.#options.runtime.deliver(input));
+  }
+
+  async #deliverEphemeralWithinDeadline(
+    input: Parameters<DurableDeliveryRuntime["deliverEphemeral"]>[0],
+  ): Promise<void> {
+    return await this.#withinDeadline(() => this.#options.runtime.deliverEphemeral(input));
+  }
+
+  async #withinDeadline(deliver: () => Promise<void>): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const deliver = this.#options.runtime.deliver(input);
+    const result = deliver();
     const deadline = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        try {
-          this.#options.runtime.abort(
-            `durable delivery call exceeded ${this.#options.callDeadlineMs}ms`,
-          );
-        } catch (error) {
-          reject(error);
-          return;
-        }
-        reject(new Error("durable delivery call timed out"));
-      }, this.#options.callDeadlineMs);
+      timer = setTimeout(
+        () => reject(new Error("durable delivery call timed out")),
+        this.#options.callDeadlineMs,
+      );
     });
     try {
-      await Promise.race([deliver, deadline]);
+      await Promise.race([result, deadline]);
     } finally {
       if (timer) clearTimeout(timer);
     }

@@ -4,88 +4,159 @@
 
 import { runInDurableObject } from "cloudflare:test";
 import { expect, test } from "vitest";
-import { HOLD } from "./sources.ts";
+import { FANOUT_HOLD, HOLD } from "./sources.ts";
 import { releasePins, stub, until } from "./support.ts";
 
 const MiB = 1024 * 1024;
+type Status = {
+  targetBodyChars: number;
+  activeTargetDeliveries: number;
+  snapshots: Record<string, { confirmedOffset?: number; pending?: { attempt?: number } }>;
+};
 
-test("twenty durable rows share one source-page reservation, then drain after their held target releases", async () => {
-  const context = "prj_subscription_delivery_memory";
+test("a held 7MiB selected target leaves twenty disjoint tiny rows free to settle", async () => {
+  const context = "prj_subscription_delivery_body_local";
   const s = stub(context);
-  const target = ["itx", "facets", ["get", "hold", HOLD], "processEventBatch"];
-  const configured = await s.append(
+  const slowTarget = ["itx", "facets", ["get", "slow-hold", HOLD], "processEventBatch"];
+  await s.append(
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "slow",
+        target: slowTarget,
+        delivery: "durable",
+        consumes: ["test/held-large"],
+      },
+    },
     ...Array.from({ length: 20 }, (_, i) => ({
       type: "events.iterate.com/itx/subscription-configured",
       payload: {
-        name: "row-" + i,
-        target,
+        name: `tiny-${i}`,
+        target: "itx.whoami",
         delivery: "durable",
-        consumes: ["test/memory-work-" + i],
+        consumes: [`test/tiny-${i}`],
       },
     })),
   );
-  const work = await s.append(
-    { type: "noise", payload: { blob: "x".repeat(7 * MiB) } },
-    ...Array.from({ length: 20 }, (_, i) => ({ type: "test/memory-work-" + i, payload: { i } })),
+  const appended = (await s.append(
+    { type: "test/held-large", payload: { blob: "x".repeat(7 * MiB) } },
+    ...Array.from({ length: 20 }, (_, i) => ({ type: `test/tiny-${i}`, payload: { i } })),
+  )) as { type: string; offset: number }[];
+  const tinyThrough = appended.at(-1)!.offset;
+  await until("the selected 7MiB target is held", async () =>
+    Boolean(await s.invoke(["itx", "facets", ["get", "slow-hold", HOLD], ["holding"]])),
   );
-  const workOffsets = new Set(
-    (work as { type: string; offset: number }[])
-      .filter((event) => event.type.startsWith("test/memory-work-"))
-      .map((event) => event.offset),
-  );
-
-  await until("the held target has accepted the first durable delivery", async () =>
-    Boolean(await s.invoke(["itx", "facets", ["get", "hold", HOLD], ["holding"]])),
-  );
-  const status = (await runInDurableObject(s, (instance) =>
-    instance.subscriptionDeliveryStatus(),
-  )) as {
-    readReservedBytes: number;
-    readWaiters: number;
-    pendingEphemeralChars: number;
-    targetBodyChars: number;
-    snapshots: Record<string, { pending?: unknown }>;
-  };
-  expect(status).toMatchObject({
-    readReservedBytes: 8 * MiB,
-    readWaiters: 19,
-    pendingEphemeralChars: 0,
-  });
-  expect(status.targetBodyChars).toBeLessThanOrEqual(8 * MiB);
-  expect(Object.values(status.snapshots).filter((snapshot) => snapshot.pending)).not.toHaveLength(
-    0,
-  );
-
-  for (let i = 0; i < 20; i++) {
-    await s.invoke(["itx", "facets", ["get", "hold", HOLD], ["release"]]);
-    if (i < 19)
-      await until("held target starts next delivery", async () =>
-        Boolean(await s.invoke(["itx", "facets", ["get", "hold", HOLD], ["holding"]])),
-      );
-  }
-  await until("all durable rows acknowledge their tiny matched event", async () => {
-    const current = (await runInDurableObject(s, (instance) =>
+  await until("twenty disjoint tiny rows settle beside the held body", async () => {
+    const status = (await runInDurableObject(s, (instance) =>
       instance.subscriptionDeliveryStatus(),
-    )) as {
-      readReservedBytes: number;
-      readWaiters: number;
-      pendingEphemeralChars: number;
-      targetBodyChars: number;
-      snapshots: Record<string, { confirmedOffset?: number }>;
-    };
-    const confirmed = Object.values(current.snapshots)
-      .map((snapshot) => snapshot.confirmedOffset)
-      .filter((offset): offset is number => offset !== undefined);
+    )) as Status;
+    return Object.entries(status.snapshots)
+      .filter(([key]) => key.startsWith("tiny-"))
+      .every(([, row]) => row.confirmedOffset !== undefined && row.confirmedOffset >= tinyThrough);
+  });
+  const during = (await runInDurableObject(s, (instance) =>
+    instance.subscriptionDeliveryStatus(),
+  )) as Status;
+  expect(during.activeTargetDeliveries).toBeGreaterThan(1);
+  expect(during.targetBodyChars).toBeLessThanOrEqual(8 * MiB);
+  await s.invoke(["itx", "facets", ["get", "slow-hold", HOLD], ["release"]]);
+  await until("the held 7MiB body settles", async () => {
+    const status = (await runInDurableObject(s, (instance) =>
+      instance.subscriptionDeliveryStatus(),
+    )) as Status;
+    return status.targetBodyChars === 0 && status.activeTargetDeliveries === 0;
+  });
+  await releasePins(context);
+});
+
+test("a second 5MiB target waits busy without consuming an attempt, then advances after release", async () => {
+  const context = "prj_subscription_delivery_body_busy";
+  const s = stub(context);
+  const target = (name: string) => ["itx", "facets", ["get", name, HOLD], "processEventBatch"];
+  await s.append(
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "a",
+        target: target("hold-a"),
+        delivery: "durable",
+        consumes: ["test/held-a"],
+      },
+    },
+    {
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "b",
+        target: target("hold-b"),
+        delivery: "durable",
+        consumes: ["test/held-b"],
+      },
+    },
+  );
+  await s.append({ type: "test/held-a", payload: { blob: "a".repeat(5 * MiB) } });
+  await until("the first 5MiB target holds", async () =>
+    Boolean(await s.invoke(["itx", "facets", ["get", "hold-a", HOLD], ["holding"]])),
+  );
+  await s.append({ type: "test/held-b", payload: { blob: "b".repeat(5 * MiB) } });
+  await until("the second body is busy without an attempt", async () => {
+    const status = (await runInDurableObject(s, (instance) =>
+      instance.subscriptionDeliveryStatus(),
+    )) as Status;
+    const second = Object.entries(status.snapshots).find(([key]) => key.startsWith("b@"))?.[1];
+    return status.activeTargetDeliveries === 1 && second?.pending?.attempt === 0;
+  });
+  await s.invoke(["itx", "facets", ["get", "hold-a", HOLD], ["release"]]);
+  await until("the second 5MiB target starts after the first release", async () =>
+    Boolean(await s.invoke(["itx", "facets", ["get", "hold-b", HOLD], ["holding"]])),
+  );
+  await s.invoke(["itx", "facets", ["get", "hold-b", HOLD], ["release"]]);
+  await until("both 5MiB calls settle", async () => {
+    const status = (await runInDurableObject(s, (instance) =>
+      instance.subscriptionDeliveryStatus(),
+    )) as Status;
+    return status.activeTargetDeliveries === 0 && status.targetBodyChars === 0;
+  });
+  await releasePins(context);
+});
+
+test("a fan-out target has exactly eight overlapping calls", async () => {
+  const context = "prj_subscription_delivery_fanout_eight";
+  const s = stub(context);
+  await s.append({
+    type: "events.iterate.com/itx/subscription-configured",
+    payload: {
+      name: "fanout",
+      target: ["itx", "facets", ["get", "fanout-hold", FANOUT_HOLD], "deliverEvent"],
+      delivery: "durable",
+      ordered: false,
+      consumes: ["test/fanout"],
+    },
+  });
+  const events = (await s.append(
+    ...Array.from({ length: 16 }, (_, i) => ({ type: "test/fanout", payload: { i } })),
+  )) as { offset: number }[];
+  const target = (step: unknown[]) =>
+    s.invoke(["itx", "facets", ["get", "fanout-hold", FANOUT_HOLD], step]);
+  await until(
+    "the first fan-out admission fills eight calls",
+    async () => (await target(["holding"])) === 8,
+  );
+  const during = (await runInDurableObject(s, (instance) =>
+    instance.subscriptionDeliveryStatus(),
+  )) as Status;
+  expect(during).toMatchObject({ activeTargetDeliveries: 8 });
+  for (let i = 0; i < events.length; i++) await target(["release"]);
+  await until("all fan-out calls settle", async () => {
+    const status = (await runInDurableObject(s, (instance) =>
+      instance.subscriptionDeliveryStatus(),
+    )) as Status;
+    const cursor = Object.entries(status.snapshots).find(([key]) => key.startsWith("fanout@"))?.[1];
     return (
-      confirmed.length === 20 &&
-      confirmed.every((offset) => offset >= Math.max(...workOffsets)) &&
-      current.readReservedBytes === 0 &&
-      current.readWaiters === 0 &&
-      current.pendingEphemeralChars === 0 &&
-      current.targetBodyChars === 0
+      status.activeTargetDeliveries === 0 &&
+      cursor?.confirmedOffset !== undefined &&
+      cursor.confirmedOffset >= events.at(-1)!.offset
     );
   });
-  expect(configured).toHaveLength(20);
   await releasePins(context);
 });
 
