@@ -834,6 +834,12 @@ Two jobs keep one page in #error-pulse per red signal, with `scripts/monitors/he
     reply in its thread, and two complete hours under the ceiling resolve it. A page is open for
     48 hours: an incident that lasts longer is paged again, and the new page resolves the older
     one naming no one.
+  - **telemetry** (`scripts/monitors/telemetry.ts`): on each account's telemetry lake, the alert
+    rules (one Analytics Engine query and a line each), Pipelines' dropped rows over the last hour
+    and each OTLP destination's `last_error`. One page while any is red, naming each.
+  - **metrics copy** (`scripts/monitors/metrics-copy.ts`), not a signal: a run on main copies each
+    closed hour of Analytics Engine metrics the lake lacks into its `metrics` table
+    ([telemetry](telemetry.md)), 24 at most, newest first; any other run prints what it would send.
 
 What each verdict owes its signal's page (`scripts/monitors/page.ts`):
 

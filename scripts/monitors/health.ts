@@ -11,6 +11,10 @@
 //                             (./ttg.ts)
 //   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
 //                             its own daily thread and pages
+//   telemetry                 the health job: the alert rules, Pipelines' dropped rows and the OTLP
+//                             destinations of every telemetry lake (./telemetry.ts); after the checks,
+//                             a real run on main copies the closed hours of metrics into the lake
+//                             (./metrics-copy.ts)
 //
 // Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
 // `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
@@ -57,7 +61,9 @@ import {
 import { checkDoCost } from "./do-cost.ts";
 import { checkMainE2e, checkRealModel, E2eMemory, mainE2eRecords } from "./e2e.ts";
 import { checkLatency, LatencyMemory } from "./latency.ts";
-import type { PageContent, PageUpdate } from "./page.ts";
+import { copyMetrics } from "./metrics-copy.ts";
+import { SignalMemory, type PageContent, type PageUpdate } from "./page.ts";
+import { checkTelemetry } from "./telemetry.ts";
 import { checkTtg, TtgMemory } from "./ttg.ts";
 
 /** Where each job leaves its state for its next run: the workflow's `name:`, its artifact, the file. */
@@ -77,6 +83,7 @@ export const HealthState = z.object({
   ttg: TtgMemory,
   latency: LatencyMemory,
   e2e: E2eMemory,
+  telemetry: SignalMemory.optional(),
   pages: OpenPages,
 });
 export type HealthState = z.infer<typeof HealthState>;
@@ -205,6 +212,11 @@ export async function run(options: {
   const ttg = await attempt("PR time to green", () =>
     checkTtg({ depot, memory: state.ttg, now: Date.now(), testRun, runUrl }),
   );
+  const telemetry = await attempt("telemetry", () =>
+    checkTelemetry({ memory: state.telemetry, testRun, runUrl, now: new Date() }),
+  );
+  // a write, so only a real run on main sends: any other prints what it would send
+  await attempt("metrics copy", () => copyMetrics({ send: keep, now: new Date() }));
   failures.push(...(real?.failures || []), ...(latency?.failures || []));
 
   const realModel = real?.memory || state.e2e;
@@ -217,12 +229,14 @@ export async function run(options: {
       suites: { "real-model e2e": realModel.suites["real-model e2e"] },
       judgedAt: { "OS real model": realModel.judgedAt["OS real model"] },
     },
+    telemetry: telemetry ? telemetry.memory : state.telemetry,
     pages: state.pages,
   };
   const updates = [
     ...(real?.updates || []),
     ...(latency?.updates || []),
     ...(ttg?.update ? [ttg.update] : []),
+    ...(telemetry?.update ? [telemetry.update] : []),
   ];
   await postThenKeep({ updates, testRun, dryRun, keep, stateOut: options.stateOut, next });
   const events = [...(ttg?.events || []), ...(latency?.events || [])];

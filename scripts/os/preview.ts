@@ -39,7 +39,7 @@ import {
   runAsync,
   smoke,
 } from "../lib/deploy-helpers.ts";
-import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
+import { dopplerSecret, resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
 import { buildStartApp, type StartApp } from "../lib/start-app.ts";
 import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../ci/await-deploy.ts";
 import { depotApi, workflowsInProgress } from "../ci/depot.ts";
@@ -308,8 +308,9 @@ async function deploymentToTest(prefix: string) {
 
 /** One app on top, from its own build for `envName` (start-app.ts `startAppWorkerConfig`: a
  *  per-commit deployment's signs in against that deployment's apps/os and links to its apps), and
- *  the smoke that it answers at `url`. An app is an OAuth client and nothing else: no secrets, no
- *  data of its own, one Durable Object class for the browser session. */
+ *  the smoke that it answers at `url`. An app is an OAuth client and nothing else: no data of its
+ *  own, one Durable Object class for the browser session, and no secret but the admin app's
+ *  metrics token (@iterate-com/shared/start-app-config `metrics`). */
 async function deployStartApp(
   app: StartApp,
   envName: string,
@@ -323,7 +324,15 @@ async function deployStartApp(
   await deployWithSecrets({
     cwd: root,
     builtConfig: findBuiltWranglerConfig(root),
-    secretValues: {},
+    secretValues: app.readsMetrics
+      ? {
+          APP_CONFIG_METRICS__API_TOKEN: dopplerSecret(
+            app.dopplerProject,
+            "preview",
+            "APP_CONFIG_METRICS__API_TOKEN",
+          ),
+        }
+      : {},
     credentials,
   });
   await smoke(`${url}/healthz`, (response) => response.status === 200, `apps/${app.name} health`);

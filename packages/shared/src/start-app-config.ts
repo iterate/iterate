@@ -3,11 +3,12 @@
 // else — but notes and docs, which a project's config worker serves under its hosts, on the host's sign-in. The platform's mechanism (app-config.ts): one `APP_CONFIG` object, and any key set alone
 // as an `APP_CONFIG_*` var merged on top.
 //
-//   { urls: { os, dash, agents, notes, docs, admin, voice, kit }, denyZones, posthogProjectKey, pkgPrNewRef }
+//   { urls: { os, dash, agents, notes, docs, admin, voice, kit }, denyZones, posthogProjectKey, pkgPrNewRef, metrics }
 //
 // scripts/lib/start-app.ts writes it from envs.ts as the Worker's one `APP_CONFIG` var
 // (`startAppWorkerConfig`), and a per-PR preview swaps in the same PR's origins
-// (`startAppPreviewConfig`). The apps hold no secrets, so nothing comes from Doppler. Local dev
+// (`startAppPreviewConfig`). An app's Doppler config's `APP_CONFIG_*` keys ship beside it as
+// secrets; the admin app's metrics token is the only one. Local dev
 // starts from prd's and names a local platform, or a local app, in the app's gitignored
 // `.dev.vars`:
 //
@@ -57,6 +58,17 @@ export const StartAppConfig = z.object({
    *  pinned as it writes (Docs' "Install Docs"). A config written without it (a test's) goes with
    *  main's. */
   pkgPrNewRef: z.string().trim().default("main"),
+  /** WHERE THE ADMIN APP'S /telemetry PAGE READS METRICS (docs/telemetry.md): the Analytics Engine
+   *  dataset of the account the app is deployed on (envs.ts `telemetryEnvs`), and a token with
+   *  Account Analytics Read (Doppler `APP_CONFIG_METRICS__API_TOKEN`). Read by no other app. Unset,
+   *  or a blank token ⇒ the page says so. */
+  metrics: z
+    .object({
+      accountId: z.string(),
+      dataset: z.string(),
+      apiToken: z.string().trim().default(""),
+    })
+    .optional(),
 });
 
 export type StartAppConfig = z.output<typeof StartAppConfig>;

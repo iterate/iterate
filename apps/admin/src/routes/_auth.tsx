@@ -10,7 +10,7 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { FolderKanban, Globe, Users } from "lucide-react";
+import { Activity, FolderKanban, Globe, Users } from "lucide-react";
 import { createIterateClient } from "iterate/app";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import { usePosthogIdentity } from "@iterate-com/ui/components/posthog";
@@ -73,6 +73,12 @@ function Shell() {
                 >
                   <Globe />
                   <span>Global</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton tooltip="Telemetry" render={<Link to="/telemetry" />}>
+                  <Activity />
+                  <span>Telemetry</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>

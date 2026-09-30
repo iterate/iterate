@@ -4,8 +4,14 @@ The platform's admin app, at https://admin.iterate.com: every project and person
 and the raw context explorer over any of their contexts. To use an app as one of those people,
 sign in to that app again (its account menu's Switch account…) and pick them at the issuer's
 consent: [acting as users and admins](../../docs/dev-environments.md#acting-as-users-and-admins). An ordinary OAuth client of the platform, like the
-dash (`appAuth`, `createIterateClient`), with no secrets and no state of its own; it frames itself
+dash (`appAuth`, `createIterateClient`), with no state of its own; it frames itself
 in packages/ui's `AppShell`.
+
+`/telemetry` charts the account's Analytics Engine metrics (`src/telemetry-panels.ts`,
+[docs/telemetry.md](../../docs/telemetry.md)), read in the Worker for a platform admin with its one
+secret, `APP_CONFIG_METRICS__API_TOKEN` in Doppler `admin/<config>`: an account token with Account
+Analytics Read. `admin/preview` has one; a deployment whose account has no `telemetryEnvs` entry
+says so on the page.
 
 Local dev: `pnpm dev` (Vite, with the Cloudflare plugin's local workerd). It talks to
 `https://os.iterate.com` by default; to use a local OS (`pnpm --dir ../os dev -- --port 8788`)

@@ -27,10 +27,11 @@ import {
   notesEnvs,
   osEnvs,
   previewDeployment,
+  telemetryEnvs,
   voiceEnvs,
 } from "../../envs.ts";
 import { deployApp } from "./deploy-app.ts";
-import { ensureProxiedDnsRecord } from "./deploy-helpers.ts";
+import { appConfigSecretsOf, ensureProxiedDnsRecord } from "./deploy-helpers.ts";
 import { resolveEnvContext } from "./env-context.ts";
 import { viteBuild } from "./vite-build.ts";
 import { OBSERVABILITY, registrableDomainOf } from "./wrangler-config.ts";
@@ -58,6 +59,8 @@ export interface StartApp {
   root: URL;
   /** The app's map in envs.ts. */
   envs: Record<string, StartAppEnv>;
+  /** Whether it reads its account's metrics (`APP_CONFIG metrics`): the admin app's /telemetry. */
+  readsMetrics?: boolean;
 }
 
 /** THE FIRST-PARTY APPS by name — `StartApp.name`, the key the apps look each other up by in
@@ -125,8 +128,11 @@ export function startAppWorkerConfig(
     envName,
     packagesCommit,
   );
-  // THE APP'S CONFIGURATION, all of it from envs.ts; its schema documents each key
-  // (@iterate-com/shared/start-app-config)
+  const telemetry = Object.values(telemetryEnvs).find(
+    (lake) => lake.cloudflareAccountId === env?.cloudflareAccountId,
+  );
+  // THE APP'S CONFIGURATION from envs.ts, which the Worker merges its Doppler `APP_CONFIG_*` secrets
+  // onto; its schema documents each key (@iterate-com/shared/start-app-config)
   const appConfig = {
     urls: {
       os: platform.baseUrl,
@@ -136,6 +142,10 @@ export function startAppWorkerConfig(
     denyZones: ownZones(),
     ...(env?.posthogProjectKey && { posthogProjectKey: env.posthogProjectKey }),
     pkgPrNewRef,
+    ...(app.readsMetrics &&
+      telemetry && {
+        metrics: { accountId: telemetry.cloudflareAccountId, dataset: telemetry.metricsDataset },
+      }),
   } satisfies z.input<typeof StartAppConfig>;
   return {
     name: env?.workerName || app.name,
@@ -240,6 +250,9 @@ async function deploy(app: StartApp, options: { env: string }) {
     dopplerProject: app.dopplerProject,
     appRoot: fileURLToPath(app.root),
     appLabel: `apps/${app.name}`,
+    prepare: (ctx, secretValues) => {
+      Object.assign(secretValues, appConfigSecretsOf(ctx.secrets));
+    },
     smokes: [{ url: "/healthz", ok: (response) => response.status === 200, label: "health" }],
   });
 }

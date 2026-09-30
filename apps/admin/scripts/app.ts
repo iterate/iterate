@@ -7,5 +7,6 @@ export const admin = {
   dopplerProject: "admin",
   root: new URL("..", import.meta.url),
   envs: adminEnvs,
+  readsMetrics: true,
 };
 if (import.meta.main) void startAppCli(admin).run();

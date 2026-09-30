@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as IndexRouteImport } from "./routes/index.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
+import { Route as AuthTelemetryRouteImport } from "./routes/_auth/telemetry.tsx";
 import { Route as AuthUsersRouteImport } from "./routes/_auth/users.tsx";
 import { Route as AuthGlobalSplatRouteImport } from "./routes/_auth/global.$.tsx";
 import { Route as AuthProjectsIndexRouteImport } from "./routes/_auth/projects.index.tsx";
@@ -24,6 +25,11 @@ const IndexRoute = IndexRouteImport.update({
 const AuthRoute = AuthRouteImport.update({
   id: "/_auth",
   getParentRoute: () => rootRouteImport,
+} as any);
+const AuthTelemetryRoute = AuthTelemetryRouteImport.update({
+  id: "/telemetry",
+  path: "/telemetry",
+  getParentRoute: () => AuthRoute,
 } as any);
 const AuthUsersRoute = AuthUsersRouteImport.update({
   id: "/users",
@@ -48,6 +54,7 @@ const AuthProjectsSlugSplatRoute = AuthProjectsSlugSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute;
+  "/telemetry": typeof AuthTelemetryRoute;
   "/users": typeof AuthUsersRoute;
   "/global/$": typeof AuthGlobalSplatRoute;
   "/projects/": typeof AuthProjectsIndexRoute;
@@ -55,6 +62,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute;
+  "/telemetry": typeof AuthTelemetryRoute;
   "/users": typeof AuthUsersRoute;
   "/global/$": typeof AuthGlobalSplatRoute;
   "/projects": typeof AuthProjectsIndexRoute;
@@ -64,6 +72,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/": typeof IndexRoute;
   "/_auth": typeof AuthRouteWithChildren;
+  "/_auth/telemetry": typeof AuthTelemetryRoute;
   "/_auth/users": typeof AuthUsersRoute;
   "/_auth/global/$": typeof AuthGlobalSplatRoute;
   "/_auth/projects/": typeof AuthProjectsIndexRoute;
@@ -71,13 +80,26 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: "/" | "/users" | "/global/$" | "/projects/" | "/projects/$slug/$";
+  fullPaths:
+    | "/"
+    | "/telemetry"
+    | "/users"
+    | "/global/$"
+    | "/projects/"
+    | "/projects/$slug/$";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/" | "/users" | "/global/$" | "/projects" | "/projects/$slug/$";
+  to:
+    | "/"
+    | "/telemetry"
+    | "/users"
+    | "/global/$"
+    | "/projects"
+    | "/projects/$slug/$";
   id:
     | "__root__"
     | "/"
     | "/_auth"
+    | "/_auth/telemetry"
     | "/_auth/users"
     | "/_auth/global/$"
     | "/_auth/projects/"
@@ -104,6 +126,13 @@ declare module "@tanstack/react-router" {
       fullPath: "/";
       preLoaderRoute: typeof AuthRouteImport;
       parentRoute: typeof rootRouteImport;
+    };
+    "/_auth/telemetry": {
+      id: "/_auth/telemetry";
+      path: "/telemetry";
+      fullPath: "/telemetry";
+      preLoaderRoute: typeof AuthTelemetryRouteImport;
+      parentRoute: typeof AuthRoute;
     };
     "/_auth/users": {
       id: "/_auth/users";
@@ -137,6 +166,7 @@ declare module "@tanstack/react-router" {
 }
 
 interface AuthRouteChildren {
+  AuthTelemetryRoute: typeof AuthTelemetryRoute;
   AuthUsersRoute: typeof AuthUsersRoute;
   AuthGlobalSplatRoute: typeof AuthGlobalSplatRoute;
   AuthProjectsIndexRoute: typeof AuthProjectsIndexRoute;
@@ -144,6 +174,7 @@ interface AuthRouteChildren {
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
+  AuthTelemetryRoute: AuthTelemetryRoute,
   AuthUsersRoute: AuthUsersRoute,
   AuthGlobalSplatRoute: AuthGlobalSplatRoute,
   AuthProjectsIndexRoute: AuthProjectsIndexRoute,
