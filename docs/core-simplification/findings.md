@@ -12,14 +12,14 @@ fix. Main subsequently reached `e9f059e8c` with #3460.
 ## Latest published checkpoint
 
 Source draft [#3461](https://github.com/iterate/iterate/pull/3461) is published
-at immutable `5eff1bf859f710c714806d84c8a33f3fcd397048`. It is a tested source
+at immutable `0739e06e8e01766b50015e2bc0b72d75acb50b6c`. It is a tested source
 checkpoint, not release proof. The prior private `subscriptions` facet was an
 intermediate experiment and is not a claimed net deletion from main; durable
 delivery now belongs in the context alongside the log, cursor, target authority,
 and recovery wake.
 
-The frozen `5eff` full root run is green: OS reports 154 passing files, 2,314
-passing tests, and 14 existing expected failures; 51 SDK suites and full
+The frozen `0739` full root run is green: OS reports 154 passing files, 2,315
+passing tests, and 14 existing expected failures; 51 SDK delivery/model tests and full
 typecheck, lint, formatting, and Knip also pass. Its runtime count is 18,081
 core lines plus 7,497 SDK lines, or 25,578 combined: 42 below the 25,620 main
 baseline. That is the current comparison, not the agent-stat count that includes
@@ -31,15 +31,36 @@ lose another filtered row's persisted wake. Published
 reconciled row once while preserving warm ephemeral fan-out suppression. The
 old condition fails two regressions; the repair passes nine focused units and
 the full root suite: 154 OS files, 2,315 passing tests, and 14 expected
-failures, plus 51 SDK suites and full typecheck, lint, formatting, and Knip.
+failures, plus 51 SDK delivery/model tests and full typecheck, lint, formatting, and Knip.
 This validates the source repair locally, not its external operation.
+
+The exact-head automatic preview `7gjzqkmj38` is green on tested merge
+`2688ca92a9e77cc197b28deb83bdad30db69d9d3`: all 16 jobs, 11 browser shards,
+and 329 E2E tests pass (10 expected failures and 34 skipped). The slow
+in-flight test and 22 residency tests actually executed, including quiet-minute
+and claim tests. This is deployed correctness evidence, not complete release proof.
+
+The isolated latency run `cjhhslxdkd` fails one budget: cross-context append
+p50 is 117 ms against 100 ms, with 40 samples, p95 138 ms, and max 245 ms.
+Loaded append is 21 ms against 60 ms; cross-context throughput is 257.7
+events/s against 50 events/s. All other recorded budgets pass. The report is
+Depot artifact `01a0f10c-f102-7042-b26d-39e68c3ddfd2`. The repeated cross-append
+miss needs a baseline comparison and source-path diagnosis, not reruns until
+green or a silently relaxed threshold. An isolated preview of pinned main
+`e9f059e8c` is being measured by `0w6h6gfg31`; no production state is written.
+
+The complete 100-run soak `5xq58s3spm` is still running on immutable ref
+`soak/core-simplification-0739e06`, distinct preview `soak-cs-3461-0739`,
+with residency timing enabled and no test filter. Partial runs do not count
+as a completed soak. Matched eight-main/eight-preview Workers Logs analysis
+is pending. The candidate does not yet satisfy all operational gates.
 
 External evidence for `5eff` is incomplete and does not pass release gates. The
 `lpdbw2tv6d` 100-run soak was cancelled and is invalid, not a passing soak. Its
 completed latency run measured cross-append at 108 ms against a 100 ms budget,
 although the other metrics were good; it is archived rather than final evidence.
-Preview, performance, soak, and log comparison must restart on the next
-published head. Predecessor `8d` had all 11 browser checks green and 326 E2E
+Preview, performance, soak, and log comparison were restarted on `0739`.
+Predecessor `8d` had all 11 browser checks green and 326 E2E
 passes; three stale fixtures were repaired before `5eff`. Those results do not
 replace the required external validation.
 
