@@ -48,7 +48,7 @@ export const deployedSubdomainsOnly = test.skipIf(
 
 /** How the worker under test reaches projects (src/app-config.ts `urls.ingressRouting`): subdomains
  *  under `localhost` for the local worker (worker-config.ts), the deployed worker's routing
- *  (global-setup: envs.ts, or PROJECT_INGRESS_ROUTING) otherwise. */
+ *  (global-setup: its `session.info()`, or PROJECT_INGRESS_ROUTING) otherwise. */
 export function ingressRouting(): IngressRouting {
   const routing = process.env.PROJECT_INGRESS_ROUTING;
   if (!routing)

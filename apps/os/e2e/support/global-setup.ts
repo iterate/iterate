@@ -60,12 +60,12 @@ export default async function setup(project: TestProject): Promise<() => Promise
     ),
   );
   // DEPLOYED-TARGET MODE — the proof that counts: `WORKER_BASE_URL=https://os.iterate.com pnpm e2e`
-  // runs the SAME suite against the deployed worker, no local boot. Its credentials and routing come
-  // from the deployment's APP_CONFIG in the environment (`doppler run`) and its envs.ts entry
+  // runs the SAME suite against the deployed worker, no local boot. Its credentials come from the
+  // deployment's APP_CONFIG in the environment (`doppler run`), its routing from the worker itself
   // (support/deployed-target.ts).
   const deployedWorkerBaseUrl = process.env.WORKER_BASE_URL;
   if (deployedWorkerBaseUrl) {
-    const target = deployedTarget(deployedWorkerBaseUrl);
+    const target = await deployedTarget(deployedWorkerBaseUrl);
     project.provide("workerBaseUrl", deployedWorkerBaseUrl);
     project.provide("adminBearer", target.adminBearer);
     project.provide("loginPassword", target.loginPassword);

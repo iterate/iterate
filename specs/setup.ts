@@ -6,11 +6,11 @@ import { OsPlaywrightAuthEnv } from "./test-support/auth-config.ts";
 import { workerBaseUrl } from "./test-support/worker-base-url.ts";
 
 /** Runs once before test workers; their environments inherit the prepared values. */
-export default function setup() {
+export default async function setup() {
   const startedAt = Date.now();
   let targetEnv: Record<string, string>;
   try {
-    targetEnv = osTargetEnv();
+    targetEnv = await osTargetEnv();
   } catch (error) {
     throw new Error(
       [
@@ -38,7 +38,7 @@ export default function setup() {
 /** A local worker (apps/os/scripts/dev.ts) has fixed dev credentials and routes projects by
  *  subdomain under localhost. A deployment's come out of its own `APP_CONFIG` under `doppler run`
  *  (apps/os/e2e/support/deployed-target.ts, which the vitest e2e suite reads too). */
-function osTargetEnv(): Record<string, string> {
+async function osTargetEnv(): Promise<Record<string, string>> {
   if (new URL(workerBaseUrl).hostname === "localhost") {
     return {
       APP_CONFIG_SECRETS__ADMIN_BEARER: "dev-admin-api-secret",
@@ -47,7 +47,7 @@ function osTargetEnv(): Record<string, string> {
       MCP_BASE_URL: `${workerBaseUrl}/mcp`,
     };
   }
-  const target = deployedTarget(workerBaseUrl);
+  const target = await deployedTarget(workerBaseUrl);
   return {
     APP_CONFIG_SECRETS__ADMIN_BEARER: target.adminBearer,
     LOGIN_PASSWORD: target.loginPassword,

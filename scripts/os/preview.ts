@@ -725,7 +725,7 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
  *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (apps/os/e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
- *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
+ *  process's environment and the worker's own `session.info()`): the vitest suite in its global-setup,
  *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
  *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
  *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their

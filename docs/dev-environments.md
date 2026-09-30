@@ -349,7 +349,7 @@ pnpm spec specs/os/auth.spec.ts --headed
 Against a deployment, the specs validate one env contract. The config reads
 the deployment's credentials out of `APP_CONFIG` (the password for sign-in, the
 operator bearer for fixture setup), its project routing and MCP origin out of
-`envs.ts`: the entry the URL is, or the per-commit deployment it names
+the worker itself, which `session.info()` tells
 (`apps/os/e2e/support/deployed-target.ts`). `WORKER_BASE_URL` is the
 only target override; when it is unset, Playwright boots the local dev server.
 It never infers credentials from redirects.

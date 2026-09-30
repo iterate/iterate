@@ -150,8 +150,8 @@ sharding are measured ([reliability defaults](depot-ci.md#reliability-defaults))
 retries as well as the time before changing either.
 
 Each runner derives the deployed target itself, once, from the deployment's
-own `APP_CONFIG` (parsed exactly as the worker parses it) and its `envs.ts`
-entry (`apps/os/e2e/support/deployed-target.ts`): the Vitest suite in its
+own `APP_CONFIG` (parsed exactly as the worker parses it) and the worker's
+own `session.info()` (`apps/os/e2e/support/deployed-target.ts`): the Vitest suite in its
 global setup, the specs in `specs/setup.ts`. The prepared values are
 inherited by workers, including when running `pnpm spec` locally. Fixtures
 read those settings synchronously and mint their own sessions. A missing
@@ -188,8 +188,9 @@ doppler run --project os --config <cfg> -- env WORKER_BASE_URL=<url> pnpm <suite
 ```
 
 The Doppler config supplies the deployment's own credentials (`APP_CONFIG` and
-`APP_CONFIG_SECRETS__KEY`, parsed the way the worker parses them); the URL's `envs.ts` entry supplies
-its routing and MCP origin, so a per-PR preview inherits its parent's. There are no per-run
+`APP_CONFIG_SECRETS__KEY`, parsed the way the worker parses them); the worker itself supplies
+its routing and MCP origin (`session.info()`), so a per-PR preview inherits its parent's credentials
+and reports its own routing. There are no per-run
 credential overrides.
 
 ```bash
@@ -223,7 +224,7 @@ platform answers 403). A fixture the deployed worker calls is deployed itself (t
 
 The rule: **one name per control, and no variable without a real setter**.
 The deployment under test is described by its own `APP_CONFIG` from the
-Doppler config and its `envs.ts` entry — tests never invent parallel names
+Doppler config and what the worker reports — tests never invent parallel names
 for it. The Playwright config additionally honors the Playwright-conventional
 `CI` and `VIDEO_MODE`.
 
@@ -279,7 +280,7 @@ a layer — never sideways into a copy.
 | Layer                     | Home                                                                                                                                                   | Charter                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | L0 policy & infra         | `packages/shared/src/test-support/`                                                                                                                    | Runner-agnostic: the retry policy and timeout ladder (`e2e-policy/budgets.ts`, exported as `@iterate-com/shared/test-support/e2e-policy`) and the retry telemetry reporter (`e2e-policy/retry-telemetry-reporter.ts`), the CI telemetry contract (`ci-telemetry.ts`), flake records and suite summaries (`flake-record.ts`, `flake-suite-summary.ts`), the `createFlake` / `createFailing` wrappers, and `listenOnFetchSafePort` (`fetch-safe-port.ts`), a loopback listener fetch and browsers will connect to. |
-| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                                                                        | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials, routing and MCP origin out of `APP_CONFIG` and `envs.ts`. Consumed by both suites' configs.                                                                                                                                                                                                                                                                            |
+| L1 environment & identity | `apps/os/scripts/` and `apps/os/e2e/support/deployed-target.ts`                                                                                        | The deployment under test and who you are against it: dev server, build, deploy and preview lifecycle; the deployed target's credentials out of `APP_CONFIG`, its routing and MCP origin out of the worker's `session.info()`. Consumed by both suites' configs.                                                                                                                                                                                                                                                 |
 | L2 surface clients        | `apps/os/e2e/support/` (itx surface) · `specs/test-support/` (browser surface)                                                                         | Suite-specific clients and fixtures: admin itx sessions, fresh projects, principals and fakes on the itx side; signed-in browser sessions and page plugins on the Playwright side.                                                                                                                                                                                                                                                                                                                               |
 | L3 domain harnesses       | `packages/iterate/src/stream/test-support.ts`, `apps/os/src/stream/test-support.ts`, `apps/os/__workers-tests__/support.ts`, colocated with the domain | Unit- and Workers-suite fakes implementing real interfaces (`memoryStream`, node-SQLite Durable Object storage); never imported by L2 or above.                                                                                                                                                                                                                                                                                                                                                                  |
 
