@@ -232,7 +232,9 @@ export class DurableDeliveryProcessor {
     if (this.#disposed) return false;
     const cursor = this.#cursor();
     const fanOut =
-      cursor.fanOut ||
+      (this.#options.fanOut && afterOffset !== undefined
+        ? { admittedThrough: afterOffset, pending: [] }
+        : cursor.fanOut) ||
       (this.#options.fanOut && offset !== undefined
         ? { admittedThrough: afterOffset ?? cursor.confirmedOffset, pending: [] }
         : undefined);
@@ -260,7 +262,6 @@ export class DurableDeliveryProcessor {
       this.#putCursor({ ...running, fanOut: { ...fanOut, pending } });
       return true;
     }
-    if (!cursor.halted && afterOffset === undefined) return false;
     this.#resumeAtOffset = resumeAtOffset;
     this.#generation++;
     this.#putCursor({

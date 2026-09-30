@@ -223,6 +223,42 @@ test("a fan-out resume can recreate an offset before it has admitted a page", ()
   });
 });
 
+test("a running ordered row adopts a plain resume fence before its next read", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" });
+  const calls: number[] = [];
+  const processor = ordered(
+    runtime(kv(), source.stream.read, ({ offsets }) => void calls.push(...offsets)),
+  );
+  expect(processor.resume(undefined, undefined, 9)).toBe(true);
+  await drive(processor, 1);
+  await settle();
+  expect(calls).toEqual([1]);
+  expect(processor.snapshot()).toEqual({ confirmedOffset: 1 });
+});
+
+test("a fan-out seek replaces admitted work and re-reads from its requested offset", async () => {
+  const source = memoryStream();
+  await source.stream.append({ type: "work" }, { type: "work" });
+  const calls: { offsets: number[]; resumeAtOffset?: number }[] = [];
+  const processor = fanOut(
+    runtime(kv(), source.stream.read, ({ offsets, resumeAtOffset }) => {
+      calls.push({ offsets, resumeAtOffset });
+    }),
+  );
+  await drive(processor, 1);
+  await settle();
+  expect(calls.map(({ offsets }) => offsets[0])).toEqual([1, 2]);
+
+  expect(processor.resume(0, undefined, 10)).toBe(true);
+  await drive(processor, 2);
+  await settle();
+  expect(calls.slice(2)).toEqual([
+    { offsets: [1], resumeAtOffset: 10 },
+    { offsets: [2], resumeAtOffset: 10 },
+  ]);
+});
+
 test("a delayed ordered terminal carries the resume fence that was current when it was created", async () => {
   const source = memoryStream();
   await source.stream.append({ type: "work" });
@@ -384,7 +420,10 @@ function runtime(
     terminals,
   };
 }
-type RuntimeDeliver = (input: { offsets: number[] }) => void | Promise<void>;
+type RuntimeDeliver = (input: {
+  offsets: number[];
+  resumeAtOffset?: number;
+}) => void | Promise<void>;
 type Terminal = {
   afterOffset: number;
   attempts: number;
