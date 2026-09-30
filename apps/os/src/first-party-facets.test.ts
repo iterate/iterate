@@ -6,11 +6,14 @@ import type { ItxExpression } from "iterate/expression";
 import { facetSpecFromHostingTarget } from "./stream/core-processor.ts";
 import { FIRST_PARTY_FACET_CLASSES, firstPartyFacetClassOf } from "./first-party-facets.ts";
 
-test("a first-party name hosts its exported class with no source; other names need a spec", () => {
+test("first-party classes stay reserved; author-hostable names produce source-free specs", () => {
   for (const [name, className] of Object.entries(FIRST_PARTY_FACET_CLASSES)) {
     expect(firstPartyFacetClassOf(name)).toBe(className);
+    if (name === "subscriptions") continue;
     expect(facetSpecFromHostingTarget(target(["get", name]))).toEqual({ name, className });
   }
+  expect(firstPartyFacetClassOf("subscriptions")).toBe("SubscriptionDeliveryDurableObject");
+  expect(facetSpecFromHostingTarget(target(["get", "subscriptions"]))).toBeUndefined();
   expect(firstPartyFacetClassOf("agent")).toBeUndefined();
   expect(firstPartyFacetClassOf("agents")).toBeUndefined();
   expect(firstPartyFacetClassOf("presence")).toBeUndefined();

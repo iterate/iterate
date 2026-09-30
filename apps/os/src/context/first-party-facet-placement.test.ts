@@ -113,11 +113,20 @@ test.for(LOADED_WORKER_PLACEMENT_ROWS)(
   },
 );
 
-test("every first-party facet has a row where it may be hosted", () => {
+test("every author-hostable first-party facet has a row where it may be hosted", () => {
   const placed = FIRST_PARTY_FACET_PLACEMENT_ROWS.filter((row) => row.allowed).map(
     (row) => row.facet,
   );
-  for (const facet of Object.keys(FIRST_PARTY_FACET_CLASSES)) expect(placed).toContain(facet);
+  for (const facet of Object.keys(FIRST_PARTY_FACET_CLASSES))
+    if (facet !== "subscriptions") expect(placed).toContain(facet);
+});
+
+test("the private subscriptions class is reserved without an author placement row", () => {
+  const placed = FIRST_PARTY_FACET_PLACEMENT_ROWS.map((row) => row.facet);
+  expect(FIRST_PARTY_FACET_CLASSES).toMatchObject({
+    subscriptions: "SubscriptionDeliveryDurableObject",
+  });
+  expect(placed).not.toContain("subscriptions");
 });
 
 test("each refusal names what was refused, where it belongs, and the context", () => {
