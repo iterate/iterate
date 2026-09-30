@@ -30,7 +30,7 @@ export default {
       // agents.ts as the module the agents app's facets load their classes from, and voice.ts as
       // voice's service and relay.
       entry: ["configs/*/worker.ts", "configs/*/agents.ts", "configs/*/voice.ts"],
-      project: ["*.ts", "specs/**/*.ts", "configs/**/*.{ts,js}"],
+      project: ["*.ts", "configs/**/*.{ts,js}"],
       ignoreDependencies: [
         // The `iterate` bin: `pnpm exec iterate` from the root (docs/dev-environments.md).
         "@iterate-com/cli",
@@ -87,18 +87,24 @@ export default {
       wrangler: false,
       ignoreDependencies: ["tailwindcss", "cloudflare"],
     },
+    lint: {
+      // oxlint loads it as a JS plugin (.oxlintrc.json `jsPlugins`), and with it lint/rules/*
+      entry: ["oxlint-plugin-iterate.ts"],
+    },
     test: {
-      // The suites that drive a running worker. Knip's vitest plugin reads vitest.config.ts (its
-      // global setups and the helpers' tests); the suites' files are entries, and helpers/** is
-      // project code, so an unused helper export is reported.
+      // The suites that drive a running worker or a browser. Knip's vitest and Playwright plugins
+      // read the two configs (their global setups, the helpers' tests); the suites' files are
+      // entries, and helpers/** is project code, so an unused helper export is reported.
       entry: [
         "vitest/**/*.e2e.test.ts",
         "vitest/os/perf/**/*.perf.test.ts",
         "vitest/os/bench/**/*.ts",
         // read as text and handed over as the presence facet's source (helpers/sources.ts)
         "helpers/presence/durable-object.ts",
+        "playwright/**/*.spec.ts",
+        "helpers/*.spec.ts",
       ],
-      project: ["helpers/**/*.ts", "vitest/**/*.ts"],
+      project: ["helpers/**/*.ts", "vitest/**/*.ts", "playwright/**/*.ts"],
     },
     // The Start apps: knip's vite and TanStack Start plugins find the Worker entry.
     ...Object.fromEntries(

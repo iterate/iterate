@@ -212,7 +212,7 @@ export function viteWranglerConfig(
               testEmailDomain: TEST_EMAIL_DOMAIN,
             },
             // `pnpm getin`'s person, so the admin app and "view as" work locally, and the admin
-            // the specs sign in as (specs/admin, as on a per-commit deployment: envs.ts
+            // the specs sign in as (test/playwright/admin, as on a per-commit deployment: envs.ts
             // `previewDeployment`)
             admins: [`test@${TEST_EMAIL_DOMAIN}`, `admin@${TEST_EMAIL_DOMAIN}`],
             secrets: { adminBearer: "dev-admin-api-secret" },

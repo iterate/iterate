@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": { "types": ["node"], "noImplicitAny": true },
-  "include": ["*.ts"]
+  "include": ["*.ts", "../knip.ts"]
 }

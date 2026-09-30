@@ -2,7 +2,7 @@
 // come out of the deployment's own two secrets (`APP_CONFIG`, `APP_CONFIG_SECRETS__KEY` — in the
 // environment under `doppler run`), its project routing and MCP origin out of envs.ts: the entry the
 // URL is, or the per-commit deployment it names. The vitest suite's global-setup and
-// the root Playwright suite's specs/setup.ts both read it, each for its own workers.
+// the root Playwright suite's test/playwright/global-setup.ts both read it, each for its own workers.
 
 import { osEnvs, previewDeployment } from "../../envs.ts";
 import { parseAppConfig } from "../../apps/os/src/app-config.ts";

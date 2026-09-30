@@ -7,7 +7,7 @@
 //               from cloudflare:workers, never a source import of the Start entry.
 // Package test scripts run the Vite build before Vitest starts. Global setup refreshes generated
 // modules for unit tests and fixtures. The suites that drive a running worker (e2e, perf, bench) are
-// test/vitest.config.ts's; the browser suite is the root Playwright one (specs/AGENTS.md).
+// test/vitest.config.ts's; the browser suite is the root Playwright one (test/playwright/AGENTS.md).
 
 import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";

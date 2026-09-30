@@ -72,5 +72,5 @@ plus `pnpm --dir apps/<app> ensure-resources --env prd` once for the proxied DNS
   link in an isolated browser session, sign in to the preview as `admin@preview.iterate.test`
   with its password, confirm **Sign in as someone else**, and check that the app lands inside
   project `pr<n>`.
-- Browser specs go under `specs/<app>/`, with a Playwright project in `playwright.config.ts`
+- Browser specs go under `test/playwright/<app>/`, with a Playwright project in `test/playwright.config.ts`
   and a base URL that `runSuite` (`scripts/os/preview.ts`) passes. Voice is the example.

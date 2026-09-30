@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run --configLoader runner --project helpers --silent=passed-only",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p playwright",
     "e2e": "pnpm --filter os build && pnpm e2e:run",
     "e2e:run": "vitest run --configLoader runner --project e2e --sequence.concurrent",
     "perf": "pnpm --filter os build && pnpm perf:run",

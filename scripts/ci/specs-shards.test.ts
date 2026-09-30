@@ -23,7 +23,7 @@ test.for(["preview-os.yml", "main-os-e2e.yml"])(
     const listed = JSON.parse(
       execFileSync(
         resolve(repoRoot, "node_modules/.bin/playwright"),
-        ["test", "--config", "playwright.config.ts", "--list", "--reporter=json"],
+        ["test", "--config", "test/playwright.config.ts", "--list", "--reporter=json"],
         // CI's workers, and the whole suite rather than one shard of it
         { cwd: repoRoot, env: { ...process.env, CI: "1", SPECS_SHARD: "" }, encoding: "utf8" },
       ),
