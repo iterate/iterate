@@ -73,7 +73,7 @@ streams example app's CI coverage to 3 of ~37 tests while the rest rotted).
 | Kit host         | `pnpm --dir apps/kit firmware:test:host` (needs cmake)            | `apps/kit/firmware/tests/`                                                                                            | Depot **Test** workflow, every PR (its own step after `pnpm test`)                                                                                         | Firmware logic compiled for the host and run under CTest.                                                                                                                                                                                                                                                                                                                                         |
 | Kit ESP builds   | `node apps/kit/scripts/firmware-release.ts build …`               | `apps/kit/firmware/targets/`, `apps/kit/scripts/firmware-release.ts`                                                  | **Kit Firmware** workflow, firmware PRs and main (not required)                                                                                            | Builds each changed board with ESP-IDF (active), checks its flash layout, its inputs and an unchanged tree; main publishes the releases.                                                                                                                                                                                                                                                          |
 | Dummy petshop    | `pnpm test` (its sealing and state units)                         | `apps/dummy-petshop/src/`                                                                                             | Depot **Test** workflow; the fixture itself deploys from `main` (Deploy dummy-petshop)                                                                     | The OAuth/API fixture the OS secret and connection e2e rows dial (`PETSHOP_BASE_URL`, default `https://dummy-petshop.iterate.workers.dev`).                                                                                                                                                                                                                                                       |
-| Soak             | `pnpm --dir apps/os e2e:soak --runs N` (`WORKER_BASE_URL`)        | `apps/os/scripts/e2e-soak.ts`                                                                                         | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                                         | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time; never a real model.                                                                                                                                                                                                                                    |
+| Soak             | `pnpm os:e2e-soak --runs N` (`WORKER_BASE_URL`)                   | `scripts/os/e2e-soak.ts`                                                                                              | **Manual** — dispatch `os-e2e-soak.yml`; a measurement, not a gate                                                                                         | The e2e suite N times against one deployed worker, each run followed by the perf budgets, tallying every row that did not pass every time; never a real model.                                                                                                                                                                                                                                    |
 | Perf budgets     | `pnpm --dir apps/os perf` (`WORKER_BASE_URL`)                     | `apps/os/perf/*.perf.test.ts`, every metric and budget in `apps/os/perf/latency.ts`                                   | The latency guard below; every soak run, after the e2e suite                                                                                               | Latency and throughput budgets over the same client and worker, measured alone: files one at a time, rows in order, each budget on the median of its rounds (p95 where a run has dozens).                                                                                                                                                                                                         |
 | Latency guard    | Dispatch `os-latency.yml`                                         | `.depot/workflows/os-latency.yml`, `scripts/monitors/latency.ts`                                                      | **OS latency**, every 3 hours, beside everything (nothing waits on it); Health judges each report and pages #error-pulse                                   | The perf suite against main's commit deployed as `latency-<sha7>`: every metric to PostHog (`os latency measured`), paged red once when it crossed its budget or a sharp regression on its rolling baseline two runs in a row, green once when back.                                                                                                                                              |
 | Real model       | Dispatch `os-real-model.yml`                                      | `REAL:` rows (`realModelOnly`), `.depot/workflows/os-real-model.yml`, `scripts/monitors/e2e.ts`                       | **OS real model**, daily and every main push to the agents runtime, on its own preview; Health pages #error-pulse                                          | The turns every other run gives a fake provider, against real models: OpenAI's astra (the default) and Workers AI accept the request and answer. [Real-model rows](#real-model-rows).                                                                                                                                                                                                             |
@@ -85,7 +85,7 @@ recursively runs every workspace's `test` script, including the `iterate` CLI,
 Kit's and dummy-petshop's unit suites; Kit's firmware host tests are a separate step of the same job
 that runs even when `pnpm test` fails. OS's `test`, `e2e` and `bench` scripts build first, so every
 suite tests the built worker. Preview OS's E2E tests and Browser specs jobs run the OS e2e project
-and `pnpm spec` against the PR's preview (`apps/os/scripts/preview.ts` `runSuite`), and both fail
+and `pnpm spec` against the PR's preview (`scripts/os/preview.ts` `runSuite`), and both fail
 rather than skip when the deploy did not succeed.
 
 Any suite a CI job does not run in full is a wiring bug unless the table names
@@ -95,8 +95,8 @@ so exclusion is always visible where the test lives: `deployedOnly`,
 `localOnly`, `deployedSubdomainsOnly` and `realModelOnly` in
 `apps/os/e2e/support/project-host.ts` are the one gate each ("never copy the regex").
 
-Smoke tests: `apps/os/scripts/deploy.ts` probes the deployment it just made (`/version`), a preview
-deploy waits for its readiness gate (`apps/os/scripts/preview-readiness.ts`) and every client's
+Smoke tests: `scripts/os/deploy.ts` probes the deployment it just made (`/version`), a preview
+deploy waits for its readiness gate (`scripts/os/preview-readiness.ts`) and every client's
 `/healthz`, and production's deploy runs only non-mutating probes plus a read-only check of the
 project hosts (`scripts/ci/prd-post-deploy-check.ts`). The mutating suites run only on previews: the
 PR's, and Main OS e2e's.
@@ -139,7 +139,7 @@ anything a covering e2e already proves.
 OS preview CI waits for the deployment to be live before starting either
 Playwright or Vitest: the `deploy` job only succeeds once the readiness gate
 has seen the new deployment answer in full (its edge and brand-new contexts on
-the new version, `apps/os/scripts/preview-readiness.ts`) and every client
+the new version, `scripts/os/preview-readiness.ts`) and every client
 answers `/healthz`, and the `e2e` job only
 starts after a successful deploy. This shared readiness time belongs to
 CI setup, not individual test durations. Both suites run concurrently once
@@ -418,7 +418,7 @@ the 5 s snapshot TTL, and voice's row in `apps/agents/e2e/voice-install.e2e.test
 the commit's pkg.pr.new build and then a new project's first publication. The
 claimed-work row in `context-residency.e2e.test.ts` is not `slow`: it waits 30 s and runs on every PR.
 
-`pnpm preview e2e` chooses whether they run (`apps/os/scripts/slow-rows.ts`) and prints
+`pnpm preview e2e` chooses whether they run (`scripts/os/slow-rows.ts`) and prints
 `[slow-rows] <run|skip|only>: <reason>`:
 
 | Run                          | The slow rows                                                                                                                                                                                  |
@@ -460,7 +460,7 @@ visible. (A stability marathon is stricter: any absorbed retry stops the streak.
   `kind: "unknown"` flake record ([below](#flakes-and-pinned-failures)), and so does one that
   failed every attempt.
 - **Volume**: probabilistic regressions need run volume: the soak (`os-e2e-soak.yml`, or
-  `pnpm --dir apps/os e2e:soak --runs N` with `WORKER_BASE_URL`) runs the e2e suite N times against
+  `pnpm os:e2e-soak --runs N` with `WORKER_BASE_URL`) runs the e2e suite N times against
   one deployed worker, each run followed by the perf budgets, and names every row that did not pass
   every time. A row that fails once in a hundred is a flake; one that fails every time is a bug.
 - **Latency is not an e2e assertion**: the e2e run puts 16 files, their rows concurrent, on one

@@ -15,7 +15,7 @@ export function deployedTarget(workerBaseUrl: string): {
   mcpBaseUrl: string;
 } {
   // The deployment's own object (src/app-config.ts), parsed the way the worker parses it — the two
-  // secrets scripts/deploy.ts ships, nothing else in the environment.
+  // secrets scripts/os/deploy.ts ships, nothing else in the environment.
   if (!process.env.APP_CONFIG)
     throw new Error(
       "APP_CONFIG unset — the deployed worker's own config, which holds the admin bearer (and the sign-in password, where it sets one) the e2e sessions use (run under `doppler run --project os --config <preview|prd>`)",

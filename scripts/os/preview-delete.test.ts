@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
-import { CloudflareApiError } from "../../../scripts/lib/env-context.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
+import { CloudflareApiError } from "../lib/env-context.ts";
+import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
 import type { Cf } from "./preview-artifacts.ts";
 import { deletePreviewDeployments } from "./preview-delete.ts";
 import {

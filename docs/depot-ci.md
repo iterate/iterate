@@ -150,7 +150,7 @@ secret (the Depot organization token, `scripts/ci/depot.ts` `depotApi`; the Slac
 reads a secret into its shell. The one other form is for commands that act on an OS deployment
 with its configuration in their environment, as a developer's terminal runs them: the preview
 tooling (`pnpm preview …`) and the suites against a deployment (`pnpm e2e`, `pnpm e2e:run`,
-`pnpm e2e:soak`, `pnpm perf:run`) run under
+`pnpm os:e2e-soak`, `pnpm perf:run`) run under
 `doppler run --project os --config <the deployment's config> --`. `depot-workflows.test.ts` fails a
 step that calls Doppler any other way. The test evidence upload's token
 is fetched beside the tests into a Doppler fallback file and read offline after them
@@ -194,7 +194,7 @@ depot ci run --org 0p91s0lz49 --workflow .depot/workflows/test.yml --job test --
 ```
 
 When done: `git push origin --delete ci-soak/<name>`, remove the worktree, and delete any preview
-the soak named (`pnpm --dir apps/os preview delete --name soak-<name>`).
+the soak named (`pnpm preview delete --name soak-<name>`).
 
 ### The commit a run reports on
 
@@ -673,7 +673,7 @@ fullest shard holds `ceil(specs / shards)`.
 A suite job with `needs: deploy` would start only once the deploy ended, so
 Depot's hand-off (about 3 s), the sandbox's boot (about 2 s), the checkout and
 setup (about 7 s), Node loading
-`apps/os/scripts/preview.ts` and the test runner's start would all come between
+`scripts/os/preview.ts` and the test runner's start would all come between
 the deploy's end and the first test. So the suites of Preview OS and Main OS e2e
 have no `needs:`. Each starts with the run and, while the preview deploys:
 
@@ -720,12 +720,12 @@ the first test follows the deploy's end by 3.9 s (E2E tests) and 2.1 s
 Main OS e2e deploys each pushed commit as a deployment of its own, `main-<sha7>` (apps/os and every
 app on top, envs.ts `previewDeployment`), tests it, and deletes the `main-…` deployments before it
 (Clean up superseded). The latency guard does the same under `latency`, and the real-model suite
-under `real-model` (`CI_WORKFLOW_PREVIEWS` in `apps/os/scripts/preview-sweep.ts`); when main has not
+under `real-model` (`CI_WORKFLOW_PREVIEWS` in `scripts/os/preview-sweep.ts`); when main has not
 moved since their last run, they deploy the same deployment again, in place.
 
 A brand-new worker's Durable Objects can answer Cloudflare's `internal error; reference = …` for
 seconds after it is created (10–40 s on brand-new Worker Previews, 2026-09), and the deploy's
-readiness gate (`apps/os/scripts/preview-readiness.ts`) waits that out. A worker redeployed in place
+readiness gate (`scripts/os/preview-readiness.ts`) waits that out. A worker redeployed in place
 has another window: Cloudflare releases the new version eventually consistently, so for a while an
 edge can still serve the previous version and a brand-new Durable Object can still start on it, and
 an object on it later resets with "Durable Object reset because its code was updated.", failing
@@ -773,7 +773,7 @@ and OTLP JSON export.
 #error-pulse is for what someone must act on, and every message there mentions Jonas and Misha
 (`onCallMention` in `scripts/ci/slack.ts`), thread replies included: the [health](#health) pages,
 the prd fault alarm, the prd post-deploy check (`scripts/ci/prd-post-deploy-check.ts`), the preview
-sweep's pages (`apps/os/scripts/preview.ts sweep`), a failed context sweep
+sweep's pages (`scripts/os/preview.ts sweep`), a failed context sweep
 (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other failed scheduled workflow
 (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each pull request event as one
 top-level line (its title cut to 80 characters, its base named only when it is not `main`), each

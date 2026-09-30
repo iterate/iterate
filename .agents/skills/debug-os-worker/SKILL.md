@@ -27,7 +27,7 @@ node -e 'import("./envs.ts").then((m) => console.log(m.osEnvs.prd.workerName, m.
 | a PR's deployment | `pr<n>-<sha7>-os` (envs.ts `previewDeployment`) | `preview`                                           |
 
 A PR's deployment is `pr<n>-<sha7>`, the tested commit's first 7 digits
-(`previewDeploymentName` in `apps/os/scripts/preview-config.ts`). The PR body shows it. Hosted apps log under their own workers (`<app>Envs.*.workerName`).
+(`previewDeploymentName` in `scripts/os/preview-config.ts`). The PR body shows it. Hosted apps log under their own workers (`<app>Envs.*.workerName`).
 
 Under those Doppler configs, `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` read Workers
 Logs. The dashboard is `https://dash.cloudflare.com/<account id>/workers-and-pages/observability`.

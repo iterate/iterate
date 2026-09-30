@@ -1,5 +1,5 @@
-// scripts/preview-delete.ts — A PER-COMMIT DEPLOYMENT DELETED: its workers, then its KV, R2 bucket,
-// D1 and Artifacts namespace (preview-artifacts.ts), for scripts/preview.ts's cleanup of the
+// scripts/os/preview-delete.ts — A PER-COMMIT DEPLOYMENT DELETED: its workers, then its KV, R2 bucket,
+// D1 and Artifacts namespace (preview-artifacts.ts), for scripts/os/preview.ts's cleanup of the
 // deployments a run's own supersedes, a closed PR's delete and the nightly sweep. Two of them can
 // delete one deployment at once: Main OS e2e runs every main commit, and two runs close together
 // both supersede the deployment before them. So a member already gone counts as deleted, told

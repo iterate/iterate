@@ -1,5 +1,5 @@
 // __workers-tests__/deployment-versions.test.ts — `session.versions` (src/session.ts), the deploy's
-// readiness gate's view (scripts/preview-readiness.ts): the version the edge and each named project's
+// readiness gate's view (scripts/os/preview-readiness.ts): the version the edge and each named project's
 // root context run, the operator's alone. One worker here, so every answer names its one version; a
 // preview mid-release is what the gate itself measures.
 import { env } from "cloudflare:workers";

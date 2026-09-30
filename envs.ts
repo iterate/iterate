@@ -279,14 +279,14 @@ export const PREVIEW_DEPLOYMENT_APPS = [
  *  set stays under 63 characters (`<name>-agents`, `<name>-os-oauth-kv`). */
 const PREVIEW_DEPLOYMENT_NAME = /^(?<prefix>[a-z0-9]+(?:-[a-z0-9]+)*)-(?<sha>[0-9a-f]{7})$/;
 
-/** THE PER-COMMIT DEPLOYMENTS (apps/os/scripts/preview.ts): every PR run and every CI workflow that
+/** THE PER-COMMIT DEPLOYMENTS (scripts/os/preview.ts): every PR run and every CI workflow that
  *  tests a deployment gets a fresh set of plain Workers on the dev/preview account for the commit
  *  it tests, apps/os and each app on top, named `<name>-<app>` for a `name` of `<prefix>-<sha7>`:
  *  `pr3144-a1b2c3d-os` at `https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev`,
  *  `pr3144-a1b2c3d-dash`, …. The name decides everything, so the build, the deploy, the suites and
  *  the delete each derive the same set from it. apps/os's resources are named after its worker and
  *  provisioned by its first deploy: KV by wrangler (`<worker>-oauth-kv`, `<worker>-itx-kv`), the
- *  D1, R2 bucket and Artifacts namespace by scripts/deploy.ts. Nothing is redeployed in place: the
+ *  D1, R2 bucket and Artifacts namespace by scripts/os/deploy.ts. Nothing is redeployed in place: the
  *  next commit gets a set of its own, and the older one is deleted (preview.ts `cleanup-superseded`,
  *  preview-sweep.ts). Undefined for a name of any other shape. */
 export function previewDeployment(name: string) {
@@ -339,7 +339,7 @@ export function getEnv<E>(name: string, envs: Record<string, E>): E & { name: st
 /** THE apps/os DEPLOYMENT A NAME NAMES: an `osEnvs` entry (`prd`, `preview`), or a per-commit
  *  deployment derived from its name (`pr3144-a1b2c3d`, `previewDeployment`), with that name on
  *  it; throws for any other name. What deploying and previewing apps/os by name look up
- *  (apps/os/scripts/deploy.ts, preview.ts), so neither needs to tell the two apart; each hands the
+ *  (scripts/os/deploy.ts, preview.ts), so neither needs to tell the two apart; each hands the
  *  result to the build (apps/os/scripts/build.ts `viteBuildOs`), which looks nothing up. */
 export function getOsEnv(name: string): OsDeployableEnv {
   const env = osEnvs[name] || previewDeployment(name)?.os;

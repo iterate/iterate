@@ -9,7 +9,7 @@
  * load. Nothing here is cleaned up: deleting the deployment is (`pnpm preview delete`, or the next
  * push's Clean up superseded).
  *
- *   doppler run --project os --config preview -- sh -c 'APP_CONFIG_SECRETS__ADMIN_BEARER="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm control-plane-load --worker-base-url https://pr2828-a1b2c3d-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
+ *   doppler run --project os --config preview -- sh -c 'APP_CONFIG_SECRETS__ADMIN_BEARER="$(node -p "JSON.parse(process.env.APP_CONFIG).secrets.adminBearer")" pnpm os:control-plane-load --worker-base-url https://pr2828-a1b2c3d-os.iterate-dev-preview.workers.dev --triples 1000 --sockets 50'
  */
 import { isMainModule } from "@iterate-com/shared/dev/is-main-module";
 import { connectIterate } from "iterate/node";

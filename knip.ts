@@ -46,6 +46,8 @@ export default {
         "monitors/{health,do-duration-probe}.ts",
         "ci/flake-dashboard/update.ts",
         "ci/tracing/{cli,tracing}.ts",
+        // iterate's apps/os tooling, run by the root package.json's `preview` and `os:*` scripts
+        "os/{deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,seed-instance-secrets,e2e-soak}.ts",
       ],
     },
     "apps/os": {
@@ -62,10 +64,10 @@ export default {
         "__workers-tests__/**/*.ts",
         "bench/**/*.ts",
         "src/**/*.test.ts",
-        // the node programs (build/dev/deploy/preview and the operator CLIs) and their tests, so the
-        // library modules beside them (preview-config, preview-sweep, generate-wrangler-config) get
+        // the node programs (build and dev; iterate's deploy and preview tooling is scripts/os at the
+        // root) and their tests, so the library modules beside them (generate-wrangler-config) get
         // unused-export checks
-        "scripts/{build,dev,deploy,preview,ensure-resources,erase-data,control-plane-load,project-seed,e2e-soak}.ts",
+        "scripts/{build,dev}.ts",
         // read by the sqlfu CLI (`pnpm db:*`)
         "sqlfu.config.ts",
         "scripts/*.test.ts",

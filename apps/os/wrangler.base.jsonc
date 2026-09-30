@@ -60,7 +60,7 @@
   // local runs (`pnpm dev`, `pnpm e2e`) has a namespace of its own on the dev/preview account
   // (created by hand), so local runs never write repos into prd's. A deployment's is
   // `<resourceNamePrefix>-repos` (scripts/os-env.ts `osResourceNames`, ensure-resources); a per-commit
-  // deployment's is `<name>-os-repos`, created by scripts/deploy.ts and deleted with the deployment.
+  // deployment's is `<name>-os-repos`, created by scripts/os/deploy.ts and deleted with the deployment.
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "os-dev-repos" }],
 
   // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
@@ -99,8 +99,8 @@
   // invitations, custom hostnames and OAuth grants (src/control-plane/db/definitions.sql). This top
   // level is local dev's (`pnpm db:migrate` migrates it, scripts/dev.ts first thing); a deployment's
   // is `<resourceNamePrefix>-db` (envs.ts `resources.dbId`, ensure-resources) and a per-commit
-  // deployment's `<name>-os-db` (scripts/deploy.ts), each migrated by wrangler from `migrations_dir`
-  // before its code uploads (scripts/d1.ts).
+  // deployment's `<name>-os-db` (scripts/os/deploy.ts), each migrated by wrangler from `migrations_dir`
+  // before its code uploads (scripts/os/d1.ts).
   "d1_databases": [
     {
       "binding": "DB",

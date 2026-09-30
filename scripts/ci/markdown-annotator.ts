@@ -1,7 +1,7 @@
 // scripts/ci/markdown-annotator.ts — THE MANAGED SECTIONS CI writes into a pull request's body
 // (docs/pull-requests.md): a line `<!-- <label> -->`, the contents, a line `<!-- /<label> -->`, the
 // markup Bugbot's `CURSOR_SUMMARY` section has too. The LOC report's (scripts/ci/loc-report.ts) and
-// the preview's (apps/os/scripts/preview-config.ts). A marker is a line of its own: one a person
+// the preview's (scripts/os/preview-config.ts). A marker is a line of its own: one a person
 // quotes inside a sentence is prose.
 
 function markerLines(lines: string[], label: string) {

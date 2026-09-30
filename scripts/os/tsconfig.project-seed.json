@@ -1,0 +1,8 @@
+{
+  // project-seed.ts and its test import worker code (apps/os/src), so they typecheck the way
+  // apps/os's tests do (its tsconfig.tests.json): Workers types and node's, no DOM lib.
+  // ../tsconfig.json leaves them out.
+  "extends": "../../apps/os/tsconfig.json",
+  "compilerOptions": { "types": ["@cloudflare/workers-types", "node"] },
+  "include": ["project-seed*.ts"]
+}

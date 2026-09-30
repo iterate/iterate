@@ -1,13 +1,13 @@
-// scripts/preview-artifacts.ts — a preview's Artifacts namespace (not auto-provisioned: created by
+// scripts/os/preview-artifacts.ts — a preview's Artifacts namespace (not auto-provisioned: created by
 // the deploy, deleted by the delete and the sweep), and the Cloudflare refusal predicate every
 // preview resource delete tells an expected answer apart by. Its own module so the create's and the
-// delete's loops unit-test against a fake API (preview-artifacts.test.ts); scripts/preview.ts is
+// delete's loops unit-test against a fake API (preview-artifacts.test.ts); scripts/os/preview.ts is
 // the caller.
 import { setTimeout as sleep } from "node:timers/promises";
 import { z } from "zod";
-import { pageText } from "../../../scripts/ci/slack.ts";
-import { CloudflareApiError, type EnvContext } from "../../../scripts/lib/env-context.ts";
-import type { OsDeployableEnv } from "./os-env.ts";
+import { pageText } from "../ci/slack.ts";
+import { CloudflareApiError, type EnvContext } from "../lib/env-context.ts";
+import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 
 /** The Cloudflare API on the parent's account (scripts/lib/env-context.ts: the envelope checked,
  *  Cloudflare's failures sent again, a truncated listing refused). */

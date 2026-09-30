@@ -37,7 +37,7 @@ Each test job of Preview OS and Main OS e2e expects its own workspace in
 `TEST_TELEMETRY_EXPECTED_WORKSPACES` (`os` for E2E tests, `iterate-root` for Browser specs), passes
 its own `TEST_EVIDENCE_STEPS` (`e2e=…`, `specs=…`), and writes and uploads only once its suite read
 the deployed target. The suite jobs start beside the deploy and wait for it
-([Depot CI](depot-ci.md#suites-start-with-the-run)); `runSuite` (`apps/os/scripts/preview.ts`)
+([Depot CI](depot-ci.md#suites-start-with-the-run)); `runSuite` (`scripts/os/preview.ts`)
 writes `target.json` once there is a preview, before the suite: the preview, the OS deployment
 `/version` named, and the apps' URLs. So a job whose deploy failed or was cancelled, or that never
 had a preview, keeps no folder. A `target.json` it cannot write fails the job before the suite, so
@@ -51,7 +51,7 @@ a different tree than the deploy built: compare `target.deploymentId` with the d
 | --------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Vitest, every unit workspace and the OS e2e suite (`retry-telemetry-reporter.ts`) | `ci-telemetry/raw/`                                                 | `TEST_TELEMETRY_ARTIFACT_DIR`, set by the workflows                                                    |
 | Playwright telemetry reporter                                                     | `ci-telemetry/raw/`                                                 | the same variable                                                                                      |
-| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `apps/os/scripts/preview.ts` per suite (from `testEvidencePaths`)    |
+| createFlake, createFailing, retried plain tests                                   | `flake-records/`                                                    | `FLAKE_RECORD_DIR`: test.yml, and `scripts/os/preview.ts` per suite (from `testEvidencePaths`)         |
 | Playwright output, HTML and JSON reporters                                        | `playwright-output/`, `playwright-html/`, `playwright-results.json` | `playwright.config.ts`, from `testEvidencePaths`                                                       |
 | The telemetry finalizer                                                           | `ci-telemetry/manifest.json`, `suite-summary.json`                  | `scripts/ci/test-evidence.ts finalize`, which runs `scripts/ci/test-telemetry-finalizer.ts`            |
 | The evidence writer                                                               | `manifest.json`                                                     | `scripts/ci/test-evidence.ts finalize`, after the finalizer                                            |

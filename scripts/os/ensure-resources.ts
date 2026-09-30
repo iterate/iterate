@@ -1,9 +1,9 @@
 import { createCli } from "trpc-cli";
-import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../../envs.ts";
-import { resolveEnvContext } from "../../../scripts/lib/env-context.ts";
-import { ensureProxiedDnsRecord } from "../../../scripts/lib/deploy-helpers.ts";
-import { osResourceNames } from "./os-env.ts";
-import { routedHostnames } from "./generate-wrangler-config.ts";
+import { OS_DOPPLER_PROJECT, getEnv, osEnvs } from "../../envs.ts";
+import { resolveEnvContext } from "../lib/env-context.ts";
+import { ensureProxiedDnsRecord } from "../lib/deploy-helpers.ts";
+import { osResourceNames } from "../../apps/os/scripts/os-env.ts";
+import { routedHostnames } from "../../apps/os/scripts/generate-wrangler-config.ts";
 import { ensureD1 } from "./d1.ts";
 import { ensureArtifactsNamespace } from "./preview-artifacts.ts";
 
@@ -30,7 +30,7 @@ export default async function ensureResources(options: { env: string }) {
   }
   const names = osResourceNames(ctx.env.resourceNamePrefix);
   // The control plane's D1 (the wrangler generator binds it as DB); the deploy migrates it
-  // (scripts/d1.ts).
+  // (scripts/os/d1.ts).
   resources.dbId = (await ensureD1(ctx.cf, names.db, "weur")).uuid;
   // The one R2 bucket behind `itx.r2`.
   const bucketName = names.files;
@@ -48,7 +48,7 @@ export default async function ensureResources(options: { env: string }) {
     `/zones?account.id=${ctx.env.cloudflareAccountId}&per_page=500`,
   );
   // every routed hostname; a project's own custom hostnames are the worker's, at runtime
-  // (src/project/custom-hostnames.ts)
+  // (apps/os/src/project/custom-hostnames.ts)
   for (const { hostname } of routedHostnames(ctx.env))
     await ensureProxiedDnsRecord(ctx, zones, hostname, "Clean-room OAuth deployment");
   // IDs live in git, so bring-up always ends in a reviewed commit: on a mismatch with envs.ts, print

@@ -1464,9 +1464,18 @@ importers:
       aws4fetch:
         specifier: 1.0.20
         version: 1.0.20
+      capnweb:
+        specifier: 'catalog:'
+        version: '@iterate-com/capnweb@0.12.3'
       fflate:
         specifier: 'catalog:'
         version: 0.8.3
+      iterate:
+        specifier: workspace:*
+        version: link:../packages/iterate
+      undici:
+        specifier: 'catalog:'
+        version: 8.11.2
       yaml:
         specifier: 'catalog:'
         version: 2.9.1

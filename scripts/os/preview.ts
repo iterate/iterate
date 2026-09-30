@@ -1,14 +1,14 @@
-// scripts/preview.ts — A FRESH SET OF PLAIN WORKERS PER TESTED COMMIT on the dev/preview account:
+// scripts/os/preview.ts — A FRESH SET OF PLAIN WORKERS PER TESTED COMMIT on the dev/preview account:
 // apps/os and each app on top, `<prefix>-<sha7>-<app>` (envs.ts `previewDeployment`), deployed by
-// the same build and `wrangler deploy` as prd (scripts/deploy.ts, deployApp). The effects half; the
-// pure halves are scripts/preview-config.ts (naming, the PR body's section) and
-// scripts/preview-sweep.ts (which deployments go), and a deployment's deletes are
-// scripts/preview-delete.ts. Commands:
+// the same build and `wrangler deploy` as prd (scripts/os/deploy.ts, deployApp). The effects half; the
+// pure halves are scripts/os/preview-config.ts (naming, the PR body's section) and
+// scripts/os/preview-sweep.ts (which deployments go), and a deployment's deletes are
+// scripts/os/preview-delete.ts. Commands:
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
 //                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
 //                       seed, the PR body's section (the previous one folded first)
-//   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/slow-rows.ts) or the Playwright
+//   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/os/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
 //   cleanup-superseded  delete the prefix's deployments PREVIEW_DEPLOYMENT supersedes
@@ -31,7 +31,7 @@ import {
   TestEvidenceTarget,
   testEvidencePaths,
 } from "@iterate-com/shared/test-support/test-evidence";
-import { OS_DOPPLER_PROJECT, getEnv, getOsEnv, osEnvs, previewDeployment } from "../../../envs.ts";
+import { OS_DOPPLER_PROJECT, getEnv, getOsEnv, osEnvs, previewDeployment } from "../../envs.ts";
 import {
   appConfigSecretsOf,
   collectSecrets,
@@ -39,27 +39,25 @@ import {
   findBuiltWranglerConfig,
   runAsync,
   smoke,
-} from "../../../scripts/lib/deploy-helpers.ts";
-import { resolveEnvContext, type EnvContext } from "../../../scripts/lib/env-context.ts";
-import { buildStartApp, type StartApp } from "../../../scripts/lib/start-app.ts";
-import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../../../scripts/ci/await-deploy.ts";
-import { depotApi, workflowsInProgress } from "../../../scripts/ci/depot.ts";
-import { createOctokit, getOctokit, getRepo } from "../../../scripts/ci/github.ts";
-import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
-import {
-  githubPullRequestBody,
-  writePullRequestBody,
-} from "../../../scripts/ci/pull-request-body.ts";
-import { getSlackClient, keepPage, slackChannelIds } from "../../../scripts/ci/slack.ts";
-import { traceOperation } from "../../../scripts/ci/tracing/tracing.ts";
-import { parseAppConfig, type AppConfig } from "../src/app-config.ts";
-import { TEST_EMAIL_DOMAIN } from "../src/test-email-domain.ts";
-import { buildOs } from "./build.ts";
+} from "../lib/deploy-helpers.ts";
+import { resolveEnvContext, type EnvContext } from "../lib/env-context.ts";
+import { buildStartApp, type StartApp } from "../lib/start-app.ts";
+import { awaitDeployOfThisRun, SUITE_BOUND_MS } from "../ci/await-deploy.ts";
+import { depotApi, workflowsInProgress } from "../ci/depot.ts";
+import { createOctokit, getOctokit, getRepo } from "../ci/github.ts";
+import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
+import { githubPullRequestBody, writePullRequestBody } from "../ci/pull-request-body.ts";
+import { getSlackClient, keepPage, slackChannelIds } from "../ci/slack.ts";
+import { traceOperation } from "../ci/tracing/tracing.ts";
+import { parseAppConfig, type AppConfig } from "../../apps/os/src/app-config.ts";
+import { TEST_EMAIL_DOMAIN } from "../../apps/os/src/test-email-domain.ts";
+import { buildOs } from "../../apps/os/scripts/build.ts";
+import { readWranglerBase } from "../../apps/os/scripts/generate-wrangler-config.ts";
+import { checkoutPublishedPackageCommit } from "../../apps/os/scripts/published-package-commit.ts";
+import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
-import { readWranglerBase } from "./generate-wrangler-config.ts";
-import type { OsDeployableEnv } from "./os-env.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   renderStuckArtifactsNamespacesPage,
@@ -103,11 +101,11 @@ import {
   type PullRequestState,
   type SweptNamespace,
 } from "./preview-sweep.ts";
-import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 import { chooseSlowRows, slowRowsTagsFilter, type SlowRows } from "./slow-rows.ts";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
-const REPO_ROOT = path.resolve(ROOT, "../..");
+// apps/os: its suites run there and write under its output/
+const ROOT = path.resolve(import.meta.dirname, "../../apps/os");
+const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const OUTPUT_DIR = path.join(ROOT, "output");
 
 const Command = z.enum([
@@ -321,7 +319,7 @@ async function deployStartApp(
   /** a per-commit deployment's packages' commit (start-app.ts `startAppWorkerConfig`) */
   packagesCommit: string | undefined,
 ) {
-  const root = path.resolve(import.meta.dirname, "../..", app.name);
+  const root = path.resolve(REPO_ROOT, "apps", app.name);
   await buildStartApp(app, envName, packagesCommit);
   await deployWithSecrets({
     cwd: root,
@@ -334,7 +332,7 @@ async function deployStartApp(
 }
 
 /** MAIN ON THE DEV/PREVIEW ACCOUNT, from this checkout, in place: apps/os's `os` (envs.ts
- *  osEnvs.preview) as any OS deployment deploys (scripts/deploy.ts: its own resources, its Doppler
+ *  osEnvs.preview) as any OS deployment deploys (scripts/os/deploy.ts: its own resources, its Doppler
  *  secrets, its smokes), and each app's from its `preview` build, which signs in against `os` and
  *  links to the others (start-app.ts startAppWorkerConfig). preview-parents.yml runs this on every
  *  push to main. Nothing a PR deploys depends on it. Side by side; every one settles before the
@@ -365,7 +363,7 @@ async function deployParents(ctx: EnvContext<OsDeployableEnv>) {
 /** THE NIGHTLY RESET of main on dev's own data (preview-sweep.yml): what people and agents left on
  *  os.iterate-dev-preview.workers.dev and the apps signed in against it — its Durable Objects, its
  *  D1's rows (users, organizations, projects), KV, R2 and Artifacts repos — erased
- *  (scripts/erase-data.ts), then it is deployed again from this checkout. The per-commit
+ *  (scripts/os/erase-data.ts), then it is deployed again from this checkout. The per-commit
  *  deployments are workers of their own and keep serving throughout. The apps hold nothing worth
  *  a reset: a browser session each, which the next sign-in replaces. */
 async function resetParent(options: { dryRun: boolean }) {
@@ -401,7 +399,7 @@ async function deployPreview(
 
 /** The version this deploy made current, as Cloudflare records it: the worker's latest deployment
  *  (the first listed), all of its traffic on one version, the id `/version` answers with
- *  (src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
+ *  (apps/os/src/worker.ts). Read from the API, not from `/version`, because a brand-new workers.dev hostname
  *  answers 404 from some locations for seconds after the deploy's smokes have passed. */
 async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: string) {
   const { deployments } = await ctx.cf<{
@@ -415,7 +413,7 @@ async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: str
   return versions[0]!.version_id;
 }
 
-/** apps/os (scripts/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
+/** apps/os (scripts/os/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
  *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
  *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
  *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
@@ -443,7 +441,7 @@ async function deployPreviewSteps(
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
-  // what an app installs in a project (Docs' "Install Docs"), as build.ts pins the template's agents:
+  // what an app installs in a project (Docs' "Install Docs"), as apps/os/scripts/build.ts pins the template's agents:
   // worked out before the builds, since in a shallow CI checkout it fetches history
   const packagesCommit = checkoutPublishedPackageCommit(REPO_ROOT, process.env.PREVIEW_HEAD_SHA);
   const steps = [
@@ -565,8 +563,8 @@ async function changedPaths(prNumber: string | undefined) {
  *  `templateQuickLaunches`), each the app's own sign-in naming the PR's test person
  *  `pr<N>@preview.iterate.test`, whose project `pr<N>` seedSignIn creates. The link is public and
  *  grants nothing: a reviewer signs in to the deployment as themselves, one of prd's admins
- *  (src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
- *  which the link pre-fills (src/consent.ts). The admin app's names nobody: an admin opens it as
+ *  (apps/os/src/admin-sign-in.ts), and confirms signing the app in as the test person on the consent page,
+ *  which the link pre-fills (apps/os/src/consent.ts). The admin app's names nobody: an admin opens it as
  *  themselves, and so does a proxied app's (Notes, Docs), which is the app's page in `pr<N>`, whose
  *  organization seedSignIn makes the admins members of. The heading's lands in the Dash's
  *  `/projects/pr<N>` when the Dash was deployed, else on the issuer's own sign-in page. */
@@ -615,7 +613,7 @@ function signInLinks(preview: {
 }
 
 /** Seed the PR's test person and project — created as them through the operator's bearer (`as`),
- *  the same idempotent call as e2e/support/project-host.ts `registerProject`, so the Dash link
+ *  the same idempotent call as apps/os/e2e/support/project-host.ts `registerProject`, so the Dash link
  *  lands inside it. Then what a proxied app's link needs: a fetch route per proxied app to the
  *  deployment's own Worker (preview-config.ts `proxiedAppRoute`), and the deployment's `admins`
  *  members of the project's organization, so a reviewer signed in as themselves opens it. Each admin
@@ -701,7 +699,7 @@ const PREVIEW_SUITE_TELEMETRY: Record<"specs" | "preview-e2e", Record<string, st
 async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"]) {
   if (!process.env.TEST_TELEMETRY_ARTIFACT_DIR) return;
   const url = previewDeploymentUrls(name).os;
-  // `<deployId> <platformOrigin>` (src/worker.ts)
+  // `<deployId> <platformOrigin>` (apps/os/src/worker.ts)
   const deploymentId = await fetch(`${url}/version`, { signal: AbortSignal.timeout(10_000) })
     .then(async (response) => (response.ok ? (await response.text()).split(" ")[0] : undefined))
     .catch(() => undefined);
@@ -727,14 +725,14 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
 /** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
  *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
  *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
- *  derives the deployed target itself (e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
+ *  derives the deployed target itself (apps/os/e2e/support/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
  *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
  *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
  *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their
  *  specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
- *  label and paths say (scripts/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
- *  each row to its timeout ceiling (e2e/support/setup.ts), and the PR's number as
+ *  label and paths say (scripts/os/slow-rows.ts). Vitest gets the choice as E2E_SLOW_ROWS, which holds
+ *  each row to its timeout ceiling (apps/os/e2e/support/setup.ts), and the PR's number as
  *  PREVIEW_PR_NUMBER, by which the pkg.pr.new rows find the PR's own builds. */
 async function runSuite(
   suite: "e2e" | "specs",
@@ -1013,7 +1011,7 @@ async function pullRequestState(number: number): Promise<PullRequestState> {
  *  Cloudflare deletes what it names, and a Cloudflare escalation takes weeks. */
 const PAGE_LOOKBACK_HOURS = 30 * 24;
 
-/** The stale deployments (scripts/preview-sweep.ts), then the Durable Object namespaces no worker
+/** The stale deployments (scripts/os/preview-sweep.ts), then the Durable Object namespaces no worker
  *  holds. A run on main keeps one #error-pulse page per kind of resource Cloudflare left
  *  (keepPage); a run on any other ref prints its pages. A 🧪 test run deletes nothing and posts what
  *  it would page to #ci. */
@@ -1160,7 +1158,7 @@ type PreviewOptions = {
   /** the apps on top: all (default: a PR's, a CI workflow's) or none (a soak of apps/os alone) */
   apps?: "all" | "none";
   /** e2e: which rows tagged `slow` run — run, skip or only (default: as the PR's paths and label
-   *  say, scripts/slow-rows.ts) */
+   *  say, scripts/os/slow-rows.ts) */
   slowRows?: "run" | "skip" | "only";
   /** print the plan instead of acting */
   dryRun?: boolean;
@@ -1194,7 +1192,7 @@ export default class Preview {
   async delete(options: PreviewOptions = {}) {
     await main("delete", options);
   }
-  /** the stale deployments (scripts/preview-sweep.ts) */
+  /** the stale deployments (scripts/os/preview-sweep.ts) */
   async sweep(options: PreviewOptions = {}) {
     await main("sweep", options);
   }

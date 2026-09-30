@@ -5,14 +5,17 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p os/tsconfig.project-seed.json"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "@slack/web-api": "^8.1.1",
     "aws4fetch": "1.0.20",
+    "capnweb": "catalog:",
     "fflate": "catalog:",
+    "iterate": "workspace:*",
+    "undici": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:"
   },

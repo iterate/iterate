@@ -2,10 +2,10 @@ import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { temporaryDirectory } from "@iterate-com/shared/test-support/temporary-directory";
 import { expect, onTestFinished, test } from "vitest";
-import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../../envs.ts";
-import { replaceMarkedSection } from "../../../scripts/ci/markdown-annotator.ts";
-import { parseAppConfig } from "../src/app-config.ts";
-import { viteWranglerConfig } from "./generate-wrangler-config.ts";
+import { getOsEnv, osEnvs, PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
+import { replaceMarkedSection } from "../ci/markdown-annotator.ts";
+import { parseAppConfig } from "../../apps/os/src/app-config.ts";
+import { viteWranglerConfig } from "../../apps/os/scripts/generate-wrangler-config.ts";
 import {
   APPS,
   appSignInLink,
@@ -289,7 +289,7 @@ test("the seed's route for a proxied app: the routing slug of its name, members 
 });
 
 test("every configs/ directory is a config template", () => {
-  expect(configTemplateNames(path.resolve(import.meta.dirname, "../../.."))).toEqual(
+  expect(configTemplateNames(path.resolve(import.meta.dirname, "../.."))).toEqual(
     expect.arrayContaining(["default", "minimal"]),
   );
 });
@@ -343,7 +343,26 @@ test("template quick-launch: the Dash reads the PR head's reference back out of 
   });
 });
 
-// ── a deployment's wrangler config: the one prd's goes through (generate-wrangler-config.ts) ──
+// ── a deployment's wrangler config: the one prd's goes through (apps/os/scripts/generate-wrangler-config.ts) ──
+
+// iterate's deployments' Artifacts namespace, R2 bucket and D1: each `<resourceNamePrefix>-…`
+// (apps/os/scripts/os-env.ts `osResourceNames`), the prefix envs.ts gives it.
+test.for([
+  { name: "prd", repos: "os-prd-repos", files: "os-prd-files", db: "os-prd-db" },
+  { name: "preview", repos: "os-parent-repos", files: "os-parent-files", db: "os-parent-db" },
+  {
+    name: "pr3144-a1b2c3d",
+    repos: "pr3144-a1b2c3d-os-repos",
+    files: "pr3144-a1b2c3d-os-files",
+    db: "pr3144-a1b2c3d-os-db",
+  },
+])("$name binds $repos, $files and $db", ({ name, repos, files, db }) => {
+  expect(viteWranglerConfig(getOsEnv(name), { localDev: false, port: "0" })).toMatchObject({
+    artifacts: [{ binding: "ARTIFACTS", namespace: repos }],
+    r2_buckets: [{ binding: "FILES", bucket_name: files }],
+    d1_databases: [{ binding: "DB", database_name: db }],
+  });
+});
 
 test("a deployment's apps/os config: its own worker, KV binding-only for wrangler to provision, the D1 by name for the deploy to create and migrate, R2 and Artifacts named after its worker, no routes", () => {
   const config = viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" });
@@ -402,7 +421,7 @@ test("a deployment's apps/os config: vars are its own origin, its dash, projects
       APP_CONFIG_LOGIN__GITHUB: "{}",
     },
   });
-  // the GitHub App carries a key: scripts/deploy.ts ships it as a secret, never a var
+  // the GitHub App carries a key: scripts/os/deploy.ts ships it as a secret, never a var
   expect(
     viteWranglerConfig(getOsEnv("pr3144-a1b2c3d"), { localDev: false, port: "0" }).vars,
   ).not.toHaveProperty("APP_CONFIG_INTEGRATIONS__GITHUB");

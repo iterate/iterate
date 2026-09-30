@@ -28,7 +28,7 @@ function configVars(env: OsEnv) {
   // THE PET SHOP'S FAKES as iterate's Slack app and Google and Cloudflare clients, and sign-in with
   // Google, Cloudflare and GitHub through them, each keeping its token as the person's connection
   // (a fake admits addresses under `testEmailDomain` alone). The GitHub App carries a key, so
-  // scripts/deploy.ts ships it as a secret.
+  // scripts/os/deploy.ts ships it as a secret.
   if (env.petshopOrigin) {
     vars.APP_CONFIG_INTEGRATIONS__SLACK = JSON.stringify({
       ...PREVIEW_SLACK_APP,
@@ -124,7 +124,7 @@ function localWranglerConfig() {
  *  bindings. An envs.ts deployment names its resources by id. A per-commit deployment
  *  (`previewDeployment`) has no ids: its KV is binding-only, which wrangler provisions as
  *  `<worker>-oauth-kv` and `<worker>-itx-kv` on the first deploy, and its D1 is named without an id,
- *  which wrangler finds by name once scripts/deploy.ts has created and migrated it. */
+ *  which wrangler finds by name once scripts/os/deploy.ts has created and migrated it. */
 function deploymentWranglerConfig(env: OsEnv) {
   const {
     d1_databases: [localDatabase],
