@@ -1237,7 +1237,7 @@ const plugin: StrictPlugin = {
         type: "problem",
         docs: {
           description:
-            "The Playwright spec house style (specs/AGENTS.md): locators over expect, no toBe(true/false), no waitForURL, no baseURL in goto",
+            "The Playwright spec house style (test/playwright/AGENTS.md): locators over expect, no toBe(true/false), no waitForURL, no baseURL in goto",
         },
       },
       create: (context) => {

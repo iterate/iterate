@@ -53,5 +53,7 @@ jobs:
       - run: pnpm --dir packages/docs build
       # --pnpm: pack with `pnpm pack` so publishConfig.exports (dist remap)
       # is applied — `npm pack` would ship the dev exports pointing at src/.
-      # pkg.pr.new requires every monorepo package in one invocation.
+      # pkg.pr.new requires every monorepo package in one invocation. A preview deploy reads the
+      # packages off this line and waits until pkg.pr.new serves each of them
+      # (scripts/os/preview-packages.ts `publishedPackagesOf`).
       - run: pnpm exec pkg-pr-new publish --pnpm ./packages/iterate ./packages/cli ./packages/petshop-sdk ./packages/agents ./packages/voice ./packages/github-sync ./packages/ai-linter ./packages/docs

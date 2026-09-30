@@ -32,7 +32,7 @@ export const realModelOnly = test.skipIf(
   projectHostsAreLocal() || process.env.E2E_REAL_MODELS !== "1",
 );
 /** `test`, skipped against a DEPLOYED worker — for rows that lend the fake git remote
- *  (apps/os/test-support/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
+ *  (test/helpers/fake-git-server.ts, listening on THIS machine's 127.0.0.1): the repo facet fetches its
  *  remote over the worker's egress, and a deployed worker cannot reach a loopback address (the
  *  platform answers 403). Rows that only touch the proxy (create, its failure) still run deployed —
  *  the fake proxy is called back over the WebSocket; the real binding's rows run in every environment, the

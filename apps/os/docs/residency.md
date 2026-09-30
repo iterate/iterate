@@ -125,8 +125,8 @@ preview, 2026-09-23). So:
   `src/context/dispatch.test.ts` (2).
 - Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
   decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.
-- Workers suite: `__workers-tests__/alarm-and-pins.test.ts` (4),
-  `__workers-tests__/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh
+- Workers suite: `test/vitest/os-workers/alarm-and-pins.test.ts` (4),
+  `test/vitest/os-workers/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh
   incarnation).
 - Workers suite, the sweep's clock: `facets.test.ts` also decides that loaded code's
   calls never restart it and a project host's HTTP always does.

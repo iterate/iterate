@@ -9,7 +9,7 @@
 // providers, with a Durable Object adapter that serializes a grant's exchanges) is the fix it
 // proposes. When the library ships storage with strongly consistent grants, switch to it and
 // delete this file and control-plane/oauth-grants.ts. The pinned test in
-// __workers-tests__/oauth.test.ts ("the library's own grant storage…") runs the library with no
+// test/vitest/os-workers/oauth.test.ts ("the library's own grant storage…") runs the library with no
 // shim and fails until then.
 //
 // WHAT THIS ASSUMES OF THE LIBRARY (1.0.0; re-check on every upgrade):
@@ -18,7 +18,7 @@
 //     by `updateClient`, which the platform never calls, and by the renewal of a registration past
 //     half its lifetime — a stale copy of that is still a valid client, so it stays in KV. A new
 //     rewritten key outside `grant:` would silently stay in KV with the stale-read bug; the
-//     tripwire test in __workers-tests__/oauth.test.ts ("the library writes no key but a grant
+//     tripwire test in test/vitest/os-workers/oauth.test.ts ("the library writes no key but a grant
 //     twice") fails on it.
 //   • The `metadata` of a grant's put (its client, resource and redirect URI, since 1.0) is dropped,
 //     and `list` answers none: the library then reads each listed grant whole. Only

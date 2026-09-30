@@ -22,8 +22,6 @@ on:
       - "!apps/os/*.md"
       - "!apps/os/docs/**"
       - "!apps/os/**/*.test.ts"
-      - "!apps/os/__workers-tests__/**"
-      - "!apps/os/test-support/**"
       - "!apps/os/scripts/preview*.ts"
       - configs/**
       # the default template the Worker embeds pins @iterate-com/agents at the deployed commit

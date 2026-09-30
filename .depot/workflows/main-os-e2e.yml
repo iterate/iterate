@@ -58,8 +58,6 @@ on:
       # kit's firmware ships as GitHub releases (kit-firmware.yml), never in its Worker
       - "!apps/kit/firmware/**"
       - test/**
-      - specs/**
-      - playwright.config.ts
       - packages/cli/**
       - packages/iterate/**
       - packages/agents/**

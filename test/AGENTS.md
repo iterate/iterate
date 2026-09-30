@@ -1,14 +1,9 @@
-# Tests against a running worker
+# Tests outside every app
 
-These Vitest suites exercise public routes against a live deployment: one real worker, local workerd by default or a deployed one. `vitest/os/` holds the platform's, `vitest/agents/` the Agents app's, and `helpers/` what they share. None of it goes into the public copy of apps/os: apps/os keeps only its in-process tests (unit and `__workers-tests__`), and the fixtures those share with these suites are `apps/os/test-support/`. Browser product specs live in root `specs/`.
+Every test beyond a simple unit test lives here: tests that stage the platform in-process, run it in the Workers pool, drive a running worker, or drive a browser. None of it goes into the public copy of apps/os, and each app keeps only its simple unit tests.
 
-- `vitest.config.ts` (its `e2e` project) owns selection, global setup and concurrency. `pnpm --dir test e2e` includes `vitest/**/*.e2e.test.ts`; every file runs in parallel and every test within a file concurrently.
-- Use `helpers/client.ts` for the admin itx client (`openItx`) and `freshCtx` for isolated test projects. Do not share project state between tests; a row that genuinely needs an order says so itself (`test.sequential`, or `test.sequential.for` for a table; `iterate/no-describe` bans `describe`, see [test-style rules](../lint/test-style-rules.md)).
-- `<topic>.e2e.test.ts` files are hand-written engine contracts. Fix product regressions rather than weakening assertions.
-- A row that runs on every PR finishes within 60 s at its p95, declares at most a 90 s timeout and makes no fixed wait over 30 s ([the row budget](../docs/testing.md#the-row-budget)).
-- A row that must wait out real platform time is tagged `slow` (`{ tags: ["slow"] }`) and its file listed in `SLOW_ROW_PATHS` ([slow rows](../docs/testing.md#slow-rows)).
-- A latency or throughput budget is never an e2e assertion: it is a `vitest/os/perf/<topic>.perf.test.ts` row that records its metric with `recordLatency` under a budget in `vitest/os/perf/latency.ts` ([perf rows](../docs/testing.md#retry-telemetry)).
-- A PR's run never calls a real model: shadow `itx.ai` with the one fake provider (`support.provide("itx.ai", new FakeAi([...]))`, `helpers/fake-ai.ts`), and mark a row that must pay for an inference `realModelOnly` and title it `REAL:` ([real-model rows](../docs/testing.md#real-model-rows)).
-- Assert only what the deployment guarantees. A read Cloudflare documents as eventually consistent (a KV `list` after a write, up to about 60 s) is not a deadline to wait on here; pin that logic in the workers project (`__workers-tests__/`), where miniflare's KV reads its own writes (`kv-list-pagination.test.ts`).
+- `vitest/`: the vitest suites, a folder per subject: `os/` and `agents/` (e2e rows against a running worker, and in-process tests), `os-workers/` and `agents-workers/` (the Workers pool); [vitest/AGENTS.md](vitest/AGENTS.md), config `vitest.config.ts`.
+- `playwright/`: the browser specs, a folder per app; [playwright/AGENTS.md](playwright/AGENTS.md), config `playwright.config.ts`.
+- `helpers/`: what the suites share: the itx client, the deployed target, fakes and fixtures, the Playwright harness.
 
-Run from the repository root: `pnpm --dir test e2e [-t <filter>]` boots a local worker. Against a deployment: `doppler run --project os --config <config> -- env WORKER_BASE_URL=<url> pnpm --dir test e2e [-t <filter>]`; its credentials come from that config's `APP_CONFIG` (`helpers/deployed-target.ts`). Environment variables, retries, timeouts and acceptance requirements are in [testing](../docs/testing.md).
+From the repository root, `pnpm test` runs the in-process and Workers suites (after building apps/os), `pnpm e2e` the vitest e2e suite, and `pnpm spec` the specs.

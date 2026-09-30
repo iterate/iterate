@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run --configLoader runner --project helpers --silent=passed-only",
-    "typecheck": "tsc --noEmit",
+    "test": "vitest run --configLoader runner --project node --project workers --silent=passed-only",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p playwright",
     "e2e": "pnpm --filter os build && pnpm e2e:run",
     "e2e:run": "vitest run --configLoader runner --project e2e --sequence.concurrent",
     "perf": "pnpm --filter os build && pnpm perf:run",
@@ -12,6 +12,9 @@
     "bench": "pnpm --filter os build && vitest bench --configLoader runner --run --project bench"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "catalog:",
+    "@cloudflare/vitest-plugin": "^1.3.2",
+    "@cloudflare/workers-oauth-provider": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
@@ -23,6 +26,8 @@
     "capnweb": "catalog:",
     "esbuild": "catalog:",
     "iterate": "workspace:*",
+    "json5": "catalog:",
+    "sqlfu": "catalog:",
     "typescript": "catalog:",
     "undici": "catalog:",
     "vite": "catalog:",

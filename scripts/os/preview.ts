@@ -6,8 +6,9 @@
 // scripts/os/preview-delete.ts. Commands:
 //   config              build apps/os for this commit's deployment and name the config it wrote
 //   deploy              this commit's deployment: apps/os (its D1, R2 bucket and Artifacts namespace
-//                       created, the D1 migrated), every app on top, the readiness gate, the sign-in
-//                       seed, the PR body's section (the previous one folded first)
+//                       created, the D1 migrated), every app on top, the readiness gate and the wait
+//                       for its packages on pkg.pr.new, the sign-in seed, the PR body's section (the
+//                       previous one folded first)
 //   e2e, specs          the vitest e2e suite (`--slow-rows`, scripts/os/slow-rows.ts) or the Playwright
 //                       specs against a deployment: beside its run's deploy, this commit's, once that
 //                       deploy is done (PREVIEW_AWAIT_DEPLOY_JOB); else the prefix's newest
@@ -57,6 +58,7 @@ import type { OsDeployableEnv } from "../../apps/os/scripts/os-env.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
+import { awaitPublishedPackages, publishedPackagesOf } from "./preview-packages.ts";
 import { awaitPreviewReady } from "./preview-readiness.ts";
 import {
   renderStuckArtifactsNamespacesPage,
@@ -417,8 +419,8 @@ async function deployedVersion(ctx: EnvContext<OsDeployableEnv>, workerName: str
 /** apps/os (scripts/os/deploy.ts: its resources created, its D1 migrated, its secrets, its smokes) and
  *  each app on top, side by side, each a span in the CI trace (docs/ci-traces.md); every URL is
  *  known before anything deploys (envs.ts `previewDeployment`). Every step settles before a failed
- *  one fails the deploy, named. Then the readiness gate on apps/os, and once it passes the sign-in
- *  seed and the PR body's section side by side. */
+ *  one fails the deploy, named. Then the readiness gate on apps/os beside the wait for its packages
+ *  on pkg.pr.new, and once both pass the sign-in seed and the PR body's section side by side. */
 async function deployPreviewSteps(
   ctx: EnvContext<OsDeployableEnv>,
   name: string,
@@ -473,16 +475,28 @@ async function deployPreviewSteps(
     ...collectSecrets(ctx, ["APP_CONFIG", "APP_CONFIG_SECRETS__KEY"]),
     ...appConfigSecretsOf(ctx.secrets),
   });
-  // The gate (preview-readiness.ts says why): nothing is handed on — the PR body's links, the
-  // sign-in seed, the suites — until three rounds of eight in a row answer in full on this version.
-  await traceOperation("Readiness gate", () =>
-    awaitPreviewReady(url, {
-      adminSecret: config.secrets.adminBearer.exposeSecret(),
-      version: versionId,
-      width: 8,
-      consecutive: 3,
-    }),
-  );
+  // Nothing is handed on — the PR body's links, the sign-in seed, the suites — until the gate
+  // passes, three rounds of eight in a row answering in full on this version (preview-readiness.ts
+  // says why), and pkg.pr.new serves the packages its projects install at `packagesCommit`
+  // (preview-packages.ts says why).
+  await Promise.all([
+    traceOperation("Readiness gate", () =>
+      awaitPreviewReady(url, {
+        adminSecret: config.secrets.adminBearer.exposeSecret(),
+        version: versionId,
+        width: 8,
+        consecutive: 3,
+      }),
+    ),
+    traceOperation({ name: "Wait for pkg.pr.new", phase: "wait" }, () =>
+      awaitPublishedPackages({
+        commit: packagesCommit,
+        packages: publishedPackagesOf(REPO_ROOT),
+        fetchFn: fetch,
+        log: console.log,
+      }),
+    ),
+  ]);
   console.log(`\ndeployment ${name}: ${url}`);
   const signIn = prNumber
     ? signInLinks({
@@ -725,10 +739,10 @@ async function writeDeployedTarget(name: string, apps: TestEvidenceTarget["apps"
 
 /** THE PROOF, one suite per CI job (preview-os.yml's E2E tests and Browser specs), against the
  *  live deployment in deployed-target mode: `e2e`, the vitest e2e suite, and `specs`, the root
- *  Playwright specs (specs/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
+ *  Playwright specs (test/playwright/AGENTS.md) — the suites `pnpm e2e` and `pnpm spec` run. Each runner
  *  derives the deployed target itself (test/helpers/deployed-target.ts, from the `APP_CONFIG` in this
  *  process's environment and envs.ts `previewDeployment`): the vitest suite in its global-setup,
- *  the specs in specs/setup.ts. Every spec project runs, the app projects against this
+ *  the specs in test/playwright/global-setup.ts. Every spec project runs, the app projects against this
  *  deployment's Notes, Docs, Voice, Dash and Admin apps, the Notes session specs signing out in
  *  its Dash (NOTES_BASE_URL, DOCS_BASE_URL, VOICE_BASE_URL, DASH_BASE_URL, ADMIN_BASE_URL; their
  *  specs fail in CI without them). The job's check is the verdict. The e2e rows tagged `slow` run as asked, else as the PR's
@@ -767,7 +781,7 @@ async function runSuite(
             "playwright",
             "test",
             "--config",
-            "playwright.config.ts",
+            "test/playwright.config.ts",
             "--list",
             "--reporter=null",
           ],
@@ -781,7 +795,7 @@ async function runSuite(
     tests = await traceOperation({ name: "Set up the suite", phase: "setup" }, async () => {
       if (suite === "specs") {
         // The headless shell alone, which headless Chromium with no `channel`
-        // (playwright.config.ts) launches: a no-op when CI restored it.
+        // (test/playwright.config.ts) launches: a no-op when CI restored it.
         if (process.env.CI)
           await runAsync("pnpm", ["exec", "playwright", "install", "--only-shell", "chromium"], {
             cwd: REPO_ROOT,

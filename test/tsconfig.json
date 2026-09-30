@@ -1,10 +1,20 @@
 {
-  // The suites that drive a running worker, and their helpers. They import apps/os's source, which
-  // needs the Workers types, and run in Node: both sets of types, as apps/os's tsconfig.tests.json.
+  // The vitest suites (in-process, the Workers pool, and against a running worker) and their helpers.
+  // They import apps/os's source, which needs the Workers types, and run in Node or in the Workers
+  // pool: the Workers, Node and vitest-plugin types together. The Playwright specs' helpers are playwright/tsconfig.json's (DOM types).
   "extends": "../apps/os/tsconfig.json",
   "compilerOptions": {
-    "types": ["@cloudflare/workers-types", "node", "vite/client"]
+    "types": ["@cloudflare/workers-types", "node", "vite/client", "@cloudflare/vitest-plugin/types"]
   },
   "include": ["helpers", "vitest", "vitest.config.ts"],
-  "exclude": []
+  "exclude": [
+    "helpers/*.spec.ts",
+    "helpers/auth-config.ts",
+    "helpers/forged-session.ts",
+    "helpers/issuer.ts",
+    "helpers/operator.ts",
+    "helpers/screenshot.ts",
+    "helpers/test.ts",
+    "helpers/worker-base-url.ts"
+  ]
 }

@@ -2,7 +2,7 @@
 // account recorded within the hour is not recorded again, whichever isolate admits the grant next,
 // and a recorded use never admits a grant whose end has landed. And an account read that stalls is
 // named while it waits. The account is a fake that answers what the `account` facet's snapshot
-// answers; the real one is __workers-tests__/oauth.test.ts's.
+// answers; the real one is test/vitest/os-workers/oauth.test.ts's.
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { AccountState } from "./account/contract.ts";
 import { platformAddressesOf } from "./app-config.ts";

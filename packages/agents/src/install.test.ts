@@ -91,8 +91,11 @@ test.for([
       type: [UPDATED, FAILED],
       payload: { commitOid: "commit-1" },
       afterOffset: 0,
-      timeoutMs: 120_000,
+      timeoutMs: expect.any(Number),
     });
+    // the deadline is read a moment before the wait starts, so the clock may tick in between
+    const [[wait]] = vi.mocked(config.project.waitForEvent).mock.calls;
+    expect(wait.timeoutMs).toBeGreaterThan(119_900);
   },
 );
 

@@ -76,7 +76,7 @@ attachment the default.
 
 ## Automated browser specs
 
-The automated browser suite is `pnpm spec` ([specs/AGENTS.md](../specs/AGENTS.md); against a
+The automated browser suite is `pnpm spec` ([test/playwright/AGENTS.md](../test/playwright/AGENTS.md); against a
 deployment: [Testing](testing.md#running-a-suite-against-an-environment)).
 
 Use a disposable project and verify the resulting state. Do not reuse

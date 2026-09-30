@@ -1,5 +1,5 @@
 // context/rule-snapshots.test.ts — the rule snapshot cache and which commits wait out older
-// snapshots; the same across real contexts is __workers-tests__/rule-snapshots.test.ts.
+// snapshots; the same across real contexts is test/vitest/os-workers/rule-snapshots.test.ts.
 import { expect, test, vi } from "vitest";
 import { parseItxExpressionPrefix, print } from "iterate/expression";
 import {

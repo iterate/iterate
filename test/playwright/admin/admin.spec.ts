@@ -1,0 +1,138 @@
+// The Admin app (apps/admin): a platform admin — a person `APP_CONFIG.admins` lists, signed in with
+// the `admin` scope — sees every project and person, and opens any context of a project or of the
+// global namespace. And any app signs such an admin in as someone else for an hour, from the
+// issuer's consent ("Sign in as someone else…"): the session is theirs, every event names the admin
+// beside them, and Stop impersonating signs the app back in as the admin.
+import { expect, type Page } from "@playwright/test";
+import { signInWithPassword } from "../../helpers/issuer.ts";
+import { test } from "../../helpers/test.ts";
+
+// the admin a per-commit deployment and local dev both list (apps/os/scripts/generate-wrangler-config.ts
+// `PREVIEW_ADMIN_EMAIL`)
+const ADMIN_EMAIL = "admin@preview.iterate.test";
+
+test("an admin opens any project's contexts and the global namespace, and signs the Dash in as another person", async ({
+  page,
+  helpers,
+}) => {
+  const dash = helpers.appOrigin("dash");
+  // someone else's project, with a context in it; this browser is signed in to the issuer as them
+  await using fixture = await helpers.createFixture("admin-target");
+  const person = `forged-${fixture.project.slug}@example.com`;
+  await fixture.itx
+    .cd("/demo/one")
+    .append({ type: "manual/note-added", payload: { text: "the person's own note" } });
+
+  await test.step("sign in to the Admin app as the admin", async () => {
+    // the app asks for its scopes (`iterate admin`) as it signs in (apps/admin/src/scopes.ts)
+    await page.goto("/projects");
+    // noWaitAfter: Switch account posts to the issuer's logout, navigating to sign-in, which the
+    // Email field waits for
+    await page
+      .getByRole("button", { name: "Switch account", exact: true })
+      .click({ noWaitAfter: true });
+    await signInWithPassword(page, ADMIN_EMAIL);
+    await authorize(page);
+    await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+  });
+
+  await test.step("every project, and any context of one", async () => {
+    await page.getByRole("link", { name: fixture.project.slug, exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Contexts" })
+      .getByRole("link", { name: "/demo/one", exact: true })
+      .click();
+    await page.getByRole("log", { name: "Events" }).getByText("the person's own note").waitFor();
+  });
+
+  await test.step("the global namespace: the person's account context", async () => {
+    await page.getByRole("link", { name: "Global", exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Contexts" })
+      .getByRole("link", { name: /^\/users\// })
+      .first()
+      .waitFor();
+  });
+
+  await test.step("sign in to the Dash as the admin", async () => {
+    await page.goto(`${dash}/projects`);
+    await authorize(page);
+  });
+
+  await test.step("Switch account… and sign the Dash in as the person", async () => {
+    await page.getByRole("button", { name: "Account", exact: true }).click();
+    // noWaitAfter: Switch account… posts to the Dash's logout and signs in again, navigating
+    await page
+      .getByRole("menuitem", { name: "Switch account…", exact: true })
+      .click({ noWaitAfter: true });
+    // the Dash's logout → its login → the issuer's consent, where the admin alone gets the link
+    await page.getByRole("button", { name: "Sign in as someone else…", exact: true }).click({
+      // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+      timeout: 10_000,
+    });
+    await page.getByRole("combobox", { name: "Their email", exact: true }).fill(person);
+    // the confirm names the client as the platform verified it, and what it would hold
+    await page.getByRole("region", { name: "The client" }).getByText("Resource").waitFor();
+    // noWaitAfter: the confirm posts and the issuer hands the browser back to the Dash
+    await page
+      .getByRole("button", { name: `Sign iterate Dash in as ${person} for an hour`, exact: true })
+      .click({ noWaitAfter: true });
+    await page.getByText(`You are ${ADMIN_EMAIL}`).waitFor({
+      // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+      timeout: 10_000,
+    });
+  });
+  const marker = page.getByRole("button", { name: "Stop impersonating", exact: true });
+
+  await page.goto(`${dash}/projects/${fixture.project.slug}/contexts/demo/one`);
+  await page.getByRole("button", { name: "Append event", exact: true }).click();
+  await page
+    .getByRole("textbox", { name: "Events to append" })
+    .fill("type: manual/note-added\npayload: { text: appended while viewing as them }\n");
+  await page.getByRole("button", { name: "Append", exact: true }).click();
+  await page
+    .getByRole("log", { name: "Events" })
+    .getByText("appended while viewing as them")
+    .waitFor();
+  // the person is the event's principal; the admin is recorded beside them
+  const appended = (await fixture.itx.cd("/demo/one").readEvents(0, 100)).events.find((event) =>
+    JSON.stringify(event.payload).includes("viewing as them"),
+  );
+  const principal = appended?.source?.principal;
+  expect([principal?.email, principal?.impersonatedBy?.email]).toEqual([person, ADMIN_EMAIL]);
+
+  // noWaitAfter: Stop impersonating posts to the Dash's logout and signs in again, navigating; the
+  // page it leaves shows the person's "Account", so every wait from here names the admin
+  await marker.click({ noWaitAfter: true });
+  await authorize(page);
+  // the Dash is the admin's again
+  await page
+    .getByRole("button", { name: "Account", exact: true })
+    .filter({ hasText: ADMIN_EMAIL })
+    .waitFor();
+
+  // the Admin app kept its own session throughout
+  await page.goto("/projects");
+  await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+});
+
+/** The issuer's consent for an app, when it asks: Review permissions, then Authorize. It waits for
+ *  consent or the app signed in as the admin, never any "Account": a page being left that shows
+ *  someone else's would satisfy the wait before the navigation ends
+ *  (test/helpers/navigating-post.spec.ts). */
+async function authorize(page: Page) {
+  const review = page.getByRole("button", { name: "Review permissions", exact: true });
+  const signedIn = page
+    .getByRole("button", { name: "Account", exact: true })
+    .filter({ hasText: ADMIN_EMAIL });
+  // From Stop impersonating this is a post and two cross-origin redirects (the Dash's logout → its
+  // login → the issuer's consent), ~1.4 s on a preview; between them no page of ours is on screen.
+  await review.or(signedIn).waitFor({
+    // timeout: no loading UI can show mid-redirect, so the spinner-waiter has nothing to extend by
+    timeout: 10_000,
+  });
+  if (!(await review.isVisible())) return;
+  await review.click();
+  // noWaitAfter: Authorize posts and the issuer hands the browser back to the app
+  await page.getByRole("button", { name: "Authorize", exact: true }).click({ noWaitAfter: true });
+}

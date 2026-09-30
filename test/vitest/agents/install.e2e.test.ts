@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import { freshCtx, openItx, publishConfig, readAll, until } from "../../helpers/client.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
 import { facetStartedAt } from "../../helpers/residency-facets.ts";
-import { agentsWorkspaceConfig } from "../../../apps/agents/__workers-tests__/agents-workspace-config.ts";
+import { agentsWorkspaceConfig } from "../agents-workers/agents-workspace-config.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 import { installWorkspaceApps } from "./support.ts";
 

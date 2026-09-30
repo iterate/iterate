@@ -140,7 +140,7 @@ const CONTEXT_ROOT_SET: ReadonlySet<string> = new Set<string>(CONTEXT_ROOTS);
  *  the outside world — a kv, r2 or Artifacts prefix is the project's, a binding the deployment's,
  *  egress substitutes the project's secrets, a library verb takes the caller's origin. A SECURITY
  *  SURFACE: a root belongs here only if it answers identically at every context of a project but
- *  for whom it names as the caller. __workers-tests__/rule-snapshots.test.ts compares kv, r2, files
+ *  for whom it names as the caller. test/vitest/os-workers/rule-snapshots.test.ts compares kv, r2, files
  *  and fetch at a child against the root's answers, and email.test.ts has a child's mail name the
  *  child. */
 const PORTABLE_ROOTS = [

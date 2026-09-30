@@ -1,7 +1,7 @@
 /// <reference types="node" />
 // subscription-delivery.test.ts — the one delivery loop (push, cursor and fan-out rows) in node over
 // the real Stream, `evaluateItxExpression` standing in for the context's dispatch. Out of scope: the
-// memory budget (memory-budget.test.ts) and real fan-out targets (__workers-tests__/fan-out-targets).
+// memory budget (test/vitest/os/memory-budget.test.ts) and real fan-out targets (test/vitest/os-workers/fan-out-targets).
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, onTestFinished, test, vi } from "vitest";

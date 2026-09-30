@@ -10,12 +10,12 @@
 //   • the lend recalled: its rule and route go with it, and the host is the config worker's once the
 //     edge's snapshot of the route expires; a route deleted by hand at once
 //   • `set` refuses a malformed route and appends nothing for a route that stands
-// The workerd twin (no network) is __workers-tests__/fetch-routes.test.ts.
+// The workerd twin (no network) is vitest/os-workers/fetch-routes.test.ts.
 
 import { RpcTarget, upgradeWebSocketResponse, WebSocketPair } from "capnweb";
 import { expect, test } from "vitest";
 import { adminCredentials, rejection, session, untilValue } from "../../helpers/client.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import {
   fetchProjectUrl,
   freshDnsSafeProjectSlug,

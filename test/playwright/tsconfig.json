@@ -1,0 +1,10 @@
+{
+  // The Playwright program: the specs, the config, the helpers' own specs, and every helper the
+  // specs import. DOM types: a spec's callbacks run in the page.
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["**/*.ts", "../playwright.config.ts", "../helpers/*.spec.ts"]
+}

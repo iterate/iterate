@@ -659,7 +659,7 @@ test("public protocol origins: a preview's admin sign-in (admin-sign-in.ts) asks
 });
 
 // Local dev's one click (local-sign-in.ts) exists on a laptop's platform alone: a loopback `urls.os`
-// with a test email domain. Where it signs in is __workers-tests__/local-sign-in.test.ts's.
+// with a test email domain. Where it signs in is test/vitest/os-workers/local-sign-in.test.ts's.
 test.for<{ name: string; origin: string; vars: Record<string, unknown> }>([
   { name: "prd", origin: PRD, vars: origins },
   {

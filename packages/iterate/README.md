@@ -18,8 +18,8 @@ subpath in `package.json`'s `exports` is one public module; nothing else is impo
 - Outside apps/os, no package and no app imports apps/os. `import-js/no-restricted-paths` in
   `.oxlintrc.json` resolves each import under `packages/**` and `apps/**` to a file, so type
   imports, re-exports, dynamic `import()` and an app added later are covered, and
-  `lint/oxlintrc-platform-line.test.ts` pins it. Tests may import apps/os's two harnesses,
-  `test/helpers/` and `apps/os/__workers-tests__/support.ts`, which drive a real platform.
+  `lint/oxlintrc-platform-line.test.ts` pins it. The platform's tests live in `test/`, which
+  the rule does not cover: they may import apps/os, and apps/os keeps only simple unit tests.
 - No private core package behind a thin `iterate`: apps/os would then import modules user code
   cannot, and the SDK's types would have to be bundled or published anyway.
 

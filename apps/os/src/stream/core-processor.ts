@@ -220,7 +220,7 @@ export function rowsPushingFacet(state: CoreState, facetName: string) {
 
 /** THE DRAFT TABLES OF ONE BATCH: a table is copied ONCE per batch, on its first touch, and mutated
  *  in place from then on, so a page of N control events costs O(rows + N), not N copies of the whole
- *  table (the O(rows²) constructor re-reduce memory-budget.test.ts pins). The set is fresh per batch
+ *  table (the O(rows²) constructor re-reduce test/vitest/os/memory-budget.test.ts pins). The set is fresh per batch
  *  and never holds a published table, so the state a caller handed in stays immutable; only the
  *  batch's own intermediate states share a draft, and nothing observes those. */
 type DraftTables = WeakSet<object> | undefined;

@@ -56,9 +56,6 @@ test("apps/os imports only these files outside apps/os and packages/", () => {
   );
   expect(outside.sort()).toMatchInlineSnapshot(`
     [
-      "apps/dummy-petshop/src/memory-state.ts <- apps/os/__workers-tests__/support.ts",
-      "apps/dummy-petshop/src/state.ts <- apps/os/__workers-tests__/identity.test.ts",
-      "apps/dummy-petshop/src/state.ts <- apps/os/__workers-tests__/integrations.test.ts",
       "configs/default/worker.ts <- apps/os/src/project/default-template.test.ts",
       "configs/heartbeat/worker.ts <- apps/os/src/project/default-template.test.ts",
       "scripts/lib/vite-build.ts <- apps/os/scripts/build.ts",

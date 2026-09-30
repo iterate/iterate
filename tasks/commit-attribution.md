@@ -50,7 +50,7 @@ committer and no trailers.
   client name needs it carried from the OAuth admission through the caller, the run request and
   the token (#3480): a core decision for another day.
 - **No e2e changes at first**: #3479 was moving the e2e suites to `test/`. The repo facet's own Node test
-  (src/repo/durable-object.test.ts, over the fake git remote) drives a commit under a real token.
+  (test/vitest/os/repo-durable-object.test.ts since #3485, over the fake git remote) drives a commit under a real token.
   Once #3479 lands, the MCP e2e can assert the committer too.
 - **`Iterate-Run:` is `<path>@<offset>`, not a dash link**: the repo facet knows neither the
   project's slug nor its sign-in origin. The dash opens it as `…/contexts/?event=<offset>`.
@@ -65,7 +65,7 @@ committer and no trailers.
       `Via: <its name>`
 - [x] tests: the trailers helper; git-wire's committer round trip; the repo facet committing under
       a token (committer, author, trailers after an agent's `Via:`), naming another author
-      (`Requested-by:`), and under none (committer only) _(repo/durable-object.test.ts; the helper's own unit tests went with the helper)_
+      (`Requested-by:`), and under none (committer only) _(test/vitest/os/repo-durable-object.test.ts; the helper's own unit tests went with the helper)_
 - [x] once #3479 lands: the MCP e2e asserts an MCP script's commit is committed by `iterate` and names its run _(test/vitest/os/mcp-project-root.e2e.test.ts, after merging main with #3479)_
 
 ## Implementation log

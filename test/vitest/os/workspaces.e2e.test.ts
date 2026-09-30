@@ -11,8 +11,8 @@
 // (`itx.repos.list()`); reads fall through to a mount's repo facet at its tip; a write shadows until
 // `gitCommit` lands ONE mount's changes on its repo's `main`; a delete is a whiteout until then;
 // `/workspace/…` is scratch — never committed. Locally the physical tier is a fake git REMOTE
-// (apps/os/test-support/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
-// (apps/os/test-support/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
+// (test/helpers/fake-git-server.ts) behind a FAKE `itx.cfArtifacts` proxy lent to each repo's context
+// (test/helpers/fake-artifacts.ts), keyed by the repo's PATH as the real one is — the repo facet speaks
 // the real wire codec to it. Those rows are `localOnly` — the fake remote listens on THIS machine's
 // loopback, which a deployed worker's egress cannot reach (403). The "against real Artifacts" row runs
 // the same story on the real binding in every environment (the local worker binds Artifacts too).
@@ -28,7 +28,7 @@ import {
   rejection,
   repoFactTypes,
 } from "../../helpers/client.ts";
-import { FakeArtifacts } from "../../../apps/os/test-support/fake-artifacts.ts";
+import { FakeArtifacts } from "../../helpers/fake-artifacts.ts";
 import { localOnly } from "../../helpers/project-host.ts";
 
 const SEED = { "/repos/config": { "worker.ts": "export default 1;\n", "notes/log.md": "# log\n" } };

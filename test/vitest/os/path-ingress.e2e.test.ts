@@ -14,7 +14,7 @@ import { request } from "undici";
 import { expect } from "vitest";
 import { startOwnWorker } from "../../helpers/own-worker.ts";
 import { issuerCookie } from "../../helpers/principal.ts";
-import { publishConfigWorker } from "../../../apps/os/test-support/config-worker.ts";
+import { publishConfigWorker } from "../../helpers/config-worker.ts";
 import { freshDnsSafeProjectSlug, localOnly } from "../../helpers/project-host.ts";
 
 /** A config worker that answers a routing slug with what it was handed: the URL it saw, its base

@@ -303,7 +303,7 @@ export function previewDeployment(name: string) {
     // named whether or not the run deploys the dash (a soak deploys apps/os alone)
     dashBaseUrl: origin("dash"),
     ingressRouting: { type: "paths" },
-    // prd's admins, and the test person the admin app's specs sign in as (specs/admin)
+    // prd's admins, and the test person the admin app's specs sign in as (test/playwright/admin)
     admins: [...osEnvs.prd!.admins!, `admin@${TEST_EMAIL_DOMAIN}`],
     adminIssuer: osEnvs.prd!.baseUrl,
     testEmailDomain: TEST_EMAIL_DOMAIN,

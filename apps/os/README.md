@@ -35,7 +35,7 @@ pages people see (`/`, `/login`, the `/oauth2/auth` consent) are server-rendered
 `src/routes/` using the shared `@iterate-com/ui` components. The build emits the Worker and its
 `dist/server/wrangler.json`, which the tests, deploys and previews use. `WORKER_BASE_URL` selects
 a deployed target for the integration tests and the browser tests (`pnpm spec`,
-[specs/](../../specs/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
+[test/playwright/](../../test/playwright/AGENTS.md) at the repo root). See [testing](../../docs/testing.md) for the
 suite boundary and required evidence.
 
 ## Configuration and deployment
