@@ -508,9 +508,7 @@ test("a paused stream admits a handle's compare-and-set removal of a row that st
   });
   expect(() => stream.append(removal(["itx", "tab1"]))).toThrow(/stream paused/); // already held
   stream.append({ type: "events.iterate.com/itx/resumed" });
-  expect(stream.coreReducedState).toEqual(
-    expect.objectContaining({ itxExpressionRewriteRules: {} }),
-  );
+  expect(Object.keys(stream.coreReducedState.itxExpressionRewriteRules)).toEqual([]);
 });
 
 test("a raw subscription-configured lands at the stream: a name is normalizeControlEvent's to refuse (core-processor.test.ts pins `core` and the prototype keys)", () => {
