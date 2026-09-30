@@ -37,8 +37,12 @@ The base path handling is Notes', shared in
   its quote finds ([src/editor/comment-marks.ts](src/editor/comment-marks.ts)). `Stream ↗` beside
   the doc's path opens its context in the dash.
 
-What's next (docs.iterate.com, and the rest):
-[tasks/complete/2026-09-30-docs-app.md](../../tasks/complete/2026-09-30-docs-app.md), "Later".
+The prd iterate project serves it at `docs--iterate.iterate.app` and `docs.iterate.com`: two
+members-only fetch routes on the project, one by routing slug and one by hostname, to the prd
+Worker.
+
+What's next: [tasks/complete/2026-09-30-docs-app.md](../../tasks/complete/2026-09-30-docs-app.md),
+"Later".
 
 Local dev is Notes': `pnpm dev`, reached through a project behind `iterate tunnel`
 ([Notes' README](../notes/README.md)). The browser proof is [specs/docs](../../specs/docs).
