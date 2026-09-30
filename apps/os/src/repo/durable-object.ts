@@ -36,7 +36,6 @@ import type { ItxEntrypointScope } from "../iterate-context.ts";
 import { assertCreated, EntityLifecycleProcessor } from "../project/entity-lifecycle.ts";
 import { verifyOnBehalfOf } from "../on-behalf-of.ts";
 import { isSecretPlaceholder } from "../secrets.ts";
-import { attributionTrailers, authorOf, PLATFORM, withTrailers } from "./commit-attribution.ts";
 import {
   ZERO_OID,
   buildPack,
@@ -61,6 +60,9 @@ import { OriginSet, RepoContract, type CommitCompleted, type RepoState } from ".
 
 /** The one branch every repo operation addresses. */
 const REF = "refs/heads/main";
+/** The platform, as git names it: every commit's committer, and the author of a commit nobody
+ *  asked for. */
+const PLATFORM = { email: "config@iterate.com", name: "iterate" };
 /** How long a minted git credential lives — and how long this facet reuses one before minting again. */
 const TOKEN_TTL_SECONDS = 300;
 /** Reuse a token only while this much of its life remains — an operation must not outlive it. */
@@ -357,14 +359,24 @@ export class RepoDurableObject extends StreamProcessorDurableObject<
     // A commit is an act: past the loop limit nothing is pushed (../cause.ts).
     refuseActPastLimit(cause, "a commit");
     return this.#serialized(async () => {
-      // a script's commit for someone is theirs, and says so (./commit-attribution.ts)
+      // a script's commit for someone is theirs (their email as name and address, as apps/docs
+      // writes authors), and names the run that made it, and them when it names another author
       const onBehalfOf = await this.#onBehalfOfIn(cause);
+      const email = onBehalfOf?.principal.email;
+      const trailers: string[] = [];
+      if (onBehalfOf) {
+        trailers.push(`Iterate-Run: ${onBehalfOf.run}`);
+        if (input.author && input.author.email !== email)
+          trailers.push(`Requested-by: ${email || onBehalfOf.principal.actor}`);
+      }
+      // into a last paragraph that is already trailers (an agent's `Via:`, a `Co-authored-by:`),
+      // since git and GitHub read only the last paragraph as trailers
+      const message = input.message.trimEnd();
+      const joiner = /\n\n(?:[\w-]+: .+\n?)+$/.test(message) ? "\n" : "\n\n";
       return this.#commitFiles({
         ...input,
-        author: input.author || authorOf(onBehalfOf?.principal),
-        message: onBehalfOf
-          ? withTrailers(input.message, attributionTrailers(onBehalfOf, input.author))
-          : input.message,
+        author: input.author || (email ? { name: email, email } : undefined),
+        message: trailers.length ? message + joiner + trailers.join("\n") : input.message,
       });
     });
   }

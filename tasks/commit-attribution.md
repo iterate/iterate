@@ -60,12 +60,12 @@ committer and no trailers.
 
 - [x] `encodeCommit` takes a committer; `parseCommit` and `RepoLogEntry` report it _(repo/git-wire.ts; iterate/api `RepoLogEntry.committer`)_
 - [x] the repo facet commits as `iterate`, and adds `Iterate-Run:` and `Requested-by:` for a
-      commit made on someone's behalf (a trailers helper beside it) _(repo/durable-object.ts `commitFiles`; repo/commit-attribution.ts)_
+      commit made on someone's behalf _(repo/durable-object.ts `commitFiles`, inlined there after review)_
 - [x] the MCP instructions and packages/docs/AGENTS.md tell an agent to end a commit message with
       `Via: <its name>`
 - [x] tests: the trailers helper; git-wire's committer round trip; the repo facet committing under
       a token (committer, author, trailers after an agent's `Via:`), naming another author
-      (`Requested-by:`), and under none (committer only) _(repo/commit-attribution.test.ts, repo/durable-object.test.ts)_
+      (`Requested-by:`), and under none (committer only) _(repo/durable-object.test.ts; the helper's own unit tests went with the helper)_
 - [x] once #3479 lands: the MCP e2e asserts an MCP script's commit is committed by `iterate` and names its run _(test/vitest/os/mcp-project-root.e2e.test.ts, after merging main with #3479)_
 
 ## Implementation log
@@ -74,3 +74,7 @@ committer and no trailers.
   its env) and commits under it with `runningUnder`; with the facet ignoring the token, it fails.
 - The one e2e file touched is `e2e/support/fake-git-server.ts`, one line: `encodeCommit` takes a
   committer now. #3479 moves the file; git carries a one-line edit across a rename.
+- Review: the helper module (`authorOf`, `attributionTrailers`, `withTrailers`) was split more than
+  the logic needed; it's inlined in `commitFiles`, and its unit tests are gone. The join into a last
+  paragraph of trailers stayed as one regex: without it, an agent's `Co-authored-by:` stops being a
+  trailer once `Iterate-Run:` is added in a paragraph of its own.
