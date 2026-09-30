@@ -19,6 +19,7 @@ export type DurableDeliveryCursor = {
   };
   halted?: {
     after: number;
+    sourceOffset?: number;
     attempts: number;
     error: string;
     terminalReported?: true;
@@ -58,6 +59,7 @@ export type DurableDeliveryRuntime = {
   scheduleWake(atMs: number | null): Promise<void>;
   terminal(input: {
     afterOffset: number;
+    sourceOffset?: number;
     attempts: number;
     error: string;
     fanOut?: true;
@@ -256,7 +258,7 @@ export class DurableDeliveryProcessor {
       this.#putCursor({
         ...running,
         ...(pending.length > 0 && { fanOut: pending }),
-        ...(afterOffset !== undefined && { confirmedOffset: afterOffset }),
+        confirmedOffset: afterOffset ?? cursor.confirmedOffset,
       });
       return true;
     }
@@ -288,7 +290,7 @@ export class DurableDeliveryProcessor {
     this.#discardEphemerals();
     this.#putCursor({
       confirmedOffset: afterOffset,
-      ...(cursor.fanOut && { fanOut: cursor.fanOut }),
+      fanOut: cursor.fanOut,
       halted: {
         after: afterOffset,
         attempts,
@@ -481,6 +483,7 @@ export class DurableDeliveryProcessor {
           if (permanentFailure(error) || attempt >= this.#options.maxAttempts) {
             const halted = {
               after: pending.after,
+              sourceOffset: pending.offsets[0],
               attempts: attempt,
               error: message,
             };
@@ -526,7 +529,7 @@ export class DurableDeliveryProcessor {
   }
 
   async #drainFanOut(): Promise<void> {
-    let cursor = this.#cursor();
+    const cursor = this.#cursor();
     if (cursor.halted) {
       await this.#reportHalted(cursor.halted);
       return;
@@ -665,6 +668,7 @@ export class DurableDeliveryProcessor {
       const current = wave[refusedIndex]!;
       const halted = {
         after: cursor.confirmedOffset,
+        sourceOffset: current.offset,
         attempts: current.attempt,
         error: deliveryErrorMessage(refused.reason),
       };
@@ -707,6 +711,7 @@ export class DurableDeliveryProcessor {
     try {
       await this.#options.runtime.terminal({
         afterOffset: halted.after,
+        sourceOffset: halted.sourceOffset,
         attempts: halted.attempts,
         error: halted.error,
         resumeAtOffset: stamp.resumeAtOffset,

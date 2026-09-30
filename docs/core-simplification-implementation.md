@@ -111,7 +111,18 @@ target and writes its combined outcomes once, rather than rewriting the whole
 cursor for each item. The cursor root owns the resume acknowledgement; pending
 ranges, fan-out items and halt records no longer duplicate that identity. Each
 call captures the current identity in memory, with generation checks on both
-sides of every await.
+sides of every await. Fan-out admission uses the existing confirmed offset,
+rather than another persisted counter. Retrying items no longer store the
+previous attempt's error; if the final attempt is interrupted by a host reset,
+the terminal receipt says it did not settle before its host restarted. Final
+terminal errors remain until their receipt is acknowledged.
+
+A cold request drives every newly constructed durable runner, so an unrelated
+wildcard row cannot clear the context's recovery alarm while a filtered row has
+a persisted retry. Ephemeral commits never drive fan-out rows. Empty admission
+pages do not rewrite the cursor. Resume clears old ephemeral descriptors, and
+row-halt receipts carry the selected source offset instead of borrowing a cause
+from the first unconsumed event or an offset beyond the head.
 
 Failure and halt receipts reach a durable target only when its consumes list
 names the exact event type. This relaxes implicit wildcard delivery of the
@@ -129,18 +140,19 @@ current deletion.
 
 ## Validation boundary
 
-The runner and model suite has 50 passing tests, and the unchanged ordinary
+The runner and model suite has 51 passing tests, and the unchanged ordinary
 processor engine has 64 passing tests. Three new Workers fault probes pass:
 implicit failure-receipt reentry, a large retry range ending at an ephemeral
 position, and terminal acknowledgement of an invalid selective resume. Existing
 cold recovery, admission, halt/resume, replacement and ephemeral offset-reuse
 probes remain in the full Workers suite.
 
-The assembled source passes the full root test command, including socket
+The published 8d checkpoint passes the full root test command, including socket
 suites: OS has 154 passing files, 2,310 passing tests and 14 existing expected
 failures. Lint, typecheck, formatting and Knip pass. The new deployed-target
 fixture supplies its already known OS URL alongside Doppler secrets; the
 Worker, preview readiness gate and test harness share that configured origin.
+The compact cursor and cold-wake repairs are being rerun on a frozen head.
 Local success does not replace the deployed slow residency rows, browser specs,
 latency/throughput budgets, 100-run soak and same-window Workers Logs comparison.
 
@@ -154,9 +166,9 @@ review used immutable source 179629660f and identified the resume, receipt,
 wake, range and fan-out persistence faults now addressed in this checkpoint.
 It did not execute tests or review later source changes.
 
-The tracked working count is **18,066 core lines plus 7,527 SDK lines = 25,593**,
-versus main's **18,806 plus 6,814 = 25,620**. This is only **27 lines smaller**:
-core fell by 740 lines while the SDK grew by 713. Restoring the existing
+The tracked working count is **18,081 core lines plus 7,497 SDK lines = 25,578**,
+versus main's **18,806 plus 6,814 = 25,620**. This is only **42 lines smaller**:
+core fell by 725 lines while the SDK grew by 683. Restoring the existing
 processor claim code removes the now single-caller `BackgroundClaims` class;
 moved responsibility and deleted tests do not count as runtime deletion. This
 is a real but inadequate combined reduction, and further simplification remains

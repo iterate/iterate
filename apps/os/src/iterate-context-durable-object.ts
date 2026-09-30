@@ -161,6 +161,7 @@ type SubscriptionDeliveryRequest = DeliveryIdentity & {
 type DeliveryEphemeralRequest = DeliveryIdentity & { offset: number; type: string };
 type DeliveryTerminalRequest = DeliveryIdentity & {
   afterOffset: number;
+  sourceOffset?: number;
   attempts: number;
   error: string;
   fanOut?: true;
@@ -574,8 +575,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       );
       if (events.length === 0) return;
       this.#callerStorage.run({ principal: null }, () => {
-        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#pushDurableSubscriptionDelivery(events);
+        this.#subscriptionDelivery.onCommit(events, afterOffset, throughOffset);
         this.#startRequestedRuns(events);
       });
       const woken = events.find((event) => event.type === "events.iterate.com/itx/woken");
@@ -1275,9 +1276,9 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return;
     }
     if (row.halted) return;
-    const offset = request.afterOffset + 1;
+    const offset = request.sourceOffset ?? request.afterOffset + 1;
     const source = this.#stream
-      .readForDurableDelivery(request.afterOffset, 1, offset)
+      .readForDurableDelivery(offset - 1, 1, offset)
       .events.find(
         (candidate) =>
           candidate.offset === offset && consumesConfiguredSubscriptionEvent(row, candidate),

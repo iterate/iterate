@@ -25,7 +25,11 @@ test("a future retry survives eviction, alarms a cold context, and delivers once
   await until("first target failure is persisted", async () => {
     const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
     const pending = Object.values(status.snapshots)[0]?.pending;
-    return pending?.error === "target refused" && pending.nextAttemptAtMs ? status : undefined;
+    return pending?.attempt === 1 &&
+      pending.nextAttemptAtMs !== undefined &&
+      pending.nextAttemptAtMs <= Date.now() + 1_000
+      ? status
+      : undefined;
   });
   await releasePins(context);
   await evictDurableObject(s);

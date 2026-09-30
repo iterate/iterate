@@ -16,7 +16,7 @@ type Status = {
     {
       confirmedOffset?: number;
       pending?: { attempt?: number };
-      fanOut?: { admittedThrough: number; pending: unknown[] };
+      fanOut?: unknown[];
     }
   >;
 };
@@ -169,9 +169,8 @@ test("a fan-out target has exactly eight overlapping calls", async () => {
     const cursor = Object.entries(status.snapshots).find(([key]) => key.startsWith("fanout@"))?.[1];
     return (
       status.activeTargetDeliveries === 0 &&
-      cursor?.fanOut &&
-      cursor.fanOut.admittedThrough >= events.at(-1)!.offset &&
-      cursor.fanOut.pending.length === 0
+      (cursor?.confirmedOffset ?? -1) >= events.at(-1)!.offset &&
+      (cursor?.fanOut?.length ?? 0) === 0
     );
   });
   await releasePins(context);

@@ -3,6 +3,41 @@ import { expect, test, vi } from "vitest";
 import { flakyCounter } from "./sources.ts";
 import { readLog, releasePins, rowOf, stub, until } from "./support.ts";
 
+test.for([true, false])(
+  "a halted ordered=%s row retains the selected event's cause",
+  async (ordered) => {
+    const context = `prj_durable_halt_cause_${ordered}`;
+    const s = stub(context);
+    await s.append({
+      type: "events.iterate.com/itx/subscription-configured",
+      payload: {
+        name: "refuses",
+        target: [
+          "itx",
+          "facets",
+          ["get", "refusal", flakyCounter("gone", { code: "GONE" })],
+          "processEventBatch",
+        ],
+        delivery: "durable",
+        ...(ordered === false && { ordered: false }),
+        consumes: ["wanted"],
+      },
+    });
+    const [, selected] = (await s.append({ type: "ignored" }, { type: "wanted" })) as {
+      offset: number;
+    }[];
+    const halt = await until("the configured refusal halts with a receipt", async () =>
+      (await readLog(context)).find(
+        (event) => event.type === "events.iterate.com/itx/subscription-delivery-halted",
+      ),
+    );
+    const source = (await readLog(context)).find((event) => event.offset === selected.offset);
+    expect(halt.source?.cause).toEqual(source?.source?.cause);
+    expect(source?.source?.cause).toBeDefined();
+    await releasePins(context);
+  },
+);
+
 test("a default-consuming permanent failure does not redeliver its own failed receipt", async () => {
   const context = "prj_durable_failure_receipt";
   const s = stub(context);
@@ -43,15 +78,15 @@ test("a default-consuming permanent failure does not redeliver its own failed re
     const current = await runInDurableObject(s, (instance) =>
       instance.subscriptionDeliveryStatus(),
     );
-    const fanOut = Object.values(current.snapshots)[0]?.fanOut;
+    const cursor = Object.values(current.snapshots)[0];
     const failures = (await readLog(context)).filter(
       (event) => event.type === "events.iterate.com/itx/subscription-delivery-failed",
     );
     return (
-      fanOut &&
+      cursor &&
       failures[0] &&
-      fanOut.admittedThrough >= failures[0].offset &&
-      fanOut.pending.length === 0
+      cursor.confirmedOffset >= failures[0].offset &&
+      (cursor.fanOut?.length ?? 0) === 0
     );
   });
   expect(await s.invoke(["itx", "facets", ["get", "refusal"], ["tries"]])).toHaveLength(1);
@@ -82,7 +117,9 @@ test("a retry whose range ends at an ephemeral offset survives a later body-budg
   await until("the first range has a persisted retry", async () => {
     const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
     const pending = Object.values(status.snapshots)[0]?.pending;
-    return pending?.error === "first delivery fails" && pending.nextAttemptAtMs
+    return pending?.attempt === 1 &&
+      pending.nextAttemptAtMs !== undefined &&
+      pending.nextAttemptAtMs <= Date.now() + 1_000
       ? status
       : undefined;
   });
@@ -139,9 +176,9 @@ test("a fan-out selective resume of an ephemeral gap records one failure without
   });
   await until("fan-out admits the unconsumed range", async () => {
     const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
-    const fanOut = Object.values(status.snapshots)[0]?.fanOut;
-    return fanOut && fanOut.admittedThrough >= tail.offset && fanOut.pending.length === 0
-      ? fanOut
+    const cursor = Object.values(status.snapshots)[0];
+    return cursor && cursor.confirmedOffset >= tail.offset && (cursor.fanOut?.length ?? 0) === 0
+      ? cursor
       : undefined;
   });
 
@@ -156,8 +193,10 @@ test("a fan-out selective resume of an ephemeral gap records one failure without
         (event.payload as { name?: string; offset?: number }).name === "selective",
     );
     const status = await runInDurableObject(s, (instance) => instance.subscriptionDeliveryStatus());
-    const fanOut = Object.values(status.snapshots)[0]?.fanOut;
-    return failures.length === 1 && fanOut && fanOut.pending.length === 0 ? failures[0] : undefined;
+    const cursor = Object.values(status.snapshots)[0];
+    return failures.length === 1 && cursor && (cursor.fanOut?.length ?? 0) === 0
+      ? failures[0]
+      : undefined;
   });
   expect(failure).toMatchObject({ payload: { offset: gap.offset } });
   const ignored = (await readLog(context)).find((event) => event.offset === unconsumed.offset);
