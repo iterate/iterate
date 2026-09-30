@@ -1,0 +1,505 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+          { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+          {
+            "key": "cloudflare.script_name",
+            "value": { "stringValue": "telemetry-spike-producer" }
+          },
+          { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+          { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+          { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "faas.version",
+            "value": { "stringValue": "ea4ed790-bb4e-4a0f-9c8f-30328336f811" }
+          },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } },
+          { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": { "stringValue": "ea4ed790-bb4e-4a0f-9c8f-30328336f811" }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "workers-observability" },
+          "spans": [
+            {
+              "traceId": "f48ec96b8d15525c1dbf684f84247360",
+              "spanId": "946881827bbbdf68",
+              "name": "GET",
+              "kind": 2,
+              "startTimeUnixNano": "1790774697686000000",
+              "endTimeUnixNano": "1790774697705000000",
+              "attributes": [
+                { "key": "cloudflare.execution_model", "value": { "stringValue": "stateless" } },
+                { "key": "cloudflare.handler_type", "value": { "stringValue": "fetch" } },
+                {
+                  "key": "faas.invocation_id",
+                  "value": { "stringValue": "6f0e1b7f37245f2a9334ee564c4d1749" }
+                },
+                { "key": "cloudflare.ray_id", "value": { "stringValue": "a4338d04285dc51c" } },
+                { "key": "faas.trigger", "value": { "stringValue": "http" } },
+                {
+                  "key": "url.full",
+                  "value": {
+                    "stringValue": "https://telemetry-spike-producer.iterate-dev-preview.workers.dev/crash?m=crash-16"
+                  }
+                },
+                { "key": "http.request.method", "value": { "stringValue": "GET" } },
+                { "key": "http.request.header.accept", "value": { "stringValue": "*/*" } },
+                {
+                  "key": "http.request.header.accept-encoding",
+                  "value": { "stringValue": "gzip, br" }
+                },
+                { "key": "user_agent.original", "value": { "stringValue": "curl/8.7.1" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "cloudflare.verified_bot_category", "value": { "stringValue": "" } },
+                { "key": "cloudflare.asn", "value": { "intValue": 64496 } },
+                { "key": "geo.timezone", "value": { "stringValue": "Europe/London" } },
+                { "key": "geo.continent.code", "value": { "stringValue": "EU" } },
+                { "key": "geo.country.code", "value": { "stringValue": "GB" } },
+                { "key": "geo.locality.name", "value": { "stringValue": "London" } },
+                { "key": "geo.locality.region", "value": { "stringValue": "England" } },
+                { "key": "server.port", "value": { "stringValue": "" } },
+                {
+                  "key": "server.address",
+                  "value": {
+                    "stringValue": "telemetry-spike-producer.iterate-dev-preview.workers.dev"
+                  }
+                },
+                { "key": "url.path", "value": { "stringValue": "/crash" } },
+                { "key": "url.query", "value": { "stringValue": "m=crash-16" } },
+                { "key": "url.scheme", "value": { "stringValue": "https" } },
+                { "key": "network.protocol.name", "value": { "stringValue": "https" } },
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 1 } },
+                { "key": "cloudflare.response.time_to_first_byte_ms", "value": { "intValue": 19 } },
+                { "key": "http.response.status_code", "value": { "intValue": 500 } },
+                { "key": "cloudflare.outcome", "value": { "stringValue": "exception" } },
+                { "key": "cpu_time_ms", "value": { "intValue": 1 } },
+                { "key": "wall_time_ms", "value": { "intValue": 2 } },
+                { "key": "scope.name", "value": { "stringValue": "workers-observability" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+                {
+                  "key": "cloudflare.script_name",
+                  "value": { "stringValue": "telemetry-spike-producer" }
+                },
+                { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+                { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+                { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "faas.version",
+                  "value": { "stringValue": "ea4ed790-bb4e-4a0f-9c8f-30328336f811" }
+                },
+                { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+                {
+                  "key": "telemetry.sdk.name",
+                  "value": { "stringValue": "workers-observability" }
+                },
+                { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "cloudflare.script_version.id",
+                  "value": { "stringValue": "ea4ed790-bb4e-4a0f-9c8f-30328336f811" }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [
+                {
+                  "attributes": [
+                    { "key": "exception.type", "value": { "stringValue": "Error" } },
+                    {
+                      "key": "exception.message",
+                      "value": { "stringValue": "producer crash crash-16" }
+                    },
+                    {
+                      "key": "exception.stacktrace",
+                      "value": { "stringValue": "    at Object.fetch (index.js:80:13)" }
+                    }
+                  ],
+                  "name": "exception",
+                  "timeUnixNano": "1790774697705000000",
+                  "droppedAttributesCount": 0
+                }
+              ],
+              "droppedEventsCount": 0,
+              "status": { "code": 2 },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+          { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+          {
+            "key": "cloudflare.script_name",
+            "value": { "stringValue": "telemetry-spike-producer" }
+          },
+          { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+          { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+          { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "faas.version",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } },
+          { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "workers-observability" },
+          "spans": [
+            {
+              "traceId": "6856a5e381eb349528cb7f1a43d05802",
+              "spanId": "24ecca8e68383c93",
+              "parentSpanId": "2a6bbb744f907ed5",
+              "name": "jsRpcCall",
+              "kind": 3,
+              "startTimeUnixNano": "1790773366612000002",
+              "endTimeUnixNano": "1790773366825000000",
+              "attributes": [
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 4 } },
+                { "key": "jsrpc.target_kind", "value": { "stringValue": "fetcher" } },
+                { "key": "jsrpc.operation", "value": { "stringValue": "call" } },
+                { "key": "jsrpc.method", "value": { "stringValue": "many" } },
+                { "key": "scope.name", "value": { "stringValue": "workers-observability" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+                {
+                  "key": "cloudflare.script_name",
+                  "value": { "stringValue": "telemetry-spike-producer" }
+                },
+                { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+                { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+                { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "faas.version",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                },
+                { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+                {
+                  "key": "telemetry.sdk.name",
+                  "value": { "stringValue": "workers-observability" }
+                },
+                { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "cloudflare.script_version.id",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": { "code": 0 },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+          { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+          {
+            "key": "cloudflare.script_name",
+            "value": { "stringValue": "telemetry-spike-producer" }
+          },
+          { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+          { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+          { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+          { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "faas.version",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } },
+          { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "workers-observability" },
+          "spans": [
+            {
+              "traceId": "6856a5e381eb349528cb7f1a43d05802",
+              "spanId": "d5b70df1fe520a24",
+              "parentSpanId": "24ecca8e68383c93",
+              "name": "jsrpc",
+              "kind": 2,
+              "startTimeUnixNano": "1790773366815000000",
+              "endTimeUnixNano": "1790773366817000000",
+              "attributes": [
+                { "key": "iterate.project_id", "value": { "stringValue": "prj_spike" } },
+                { "key": "iterate.path", "value": { "stringValue": "/agents/web/spike" } },
+                { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+                {
+                  "key": "cloudflare.durable_object.id",
+                  "value": {
+                    "stringValue": "f1915ced7778f63ddc6f71c626344e02f5f8feaa1a978e4c5331966c0bcb06aa"
+                  }
+                },
+                {
+                  "key": "cloudflare.execution_model",
+                  "value": { "stringValue": "durableObject" }
+                },
+                { "key": "cloudflare.handler_type", "value": { "stringValue": "jsrpc" } },
+                {
+                  "key": "faas.invocation_id",
+                  "value": { "stringValue": "9e587341d6744bc91a302006863bdf20" }
+                },
+                { "key": "cloudflare.ray_id", "value": { "stringValue": "a4336c84b8e89503" } },
+                { "key": "faas.trigger", "value": { "stringValue": "jsrpc" } },
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 1 } },
+                { "key": "jsrpc.method", "value": { "stringValue": "many" } },
+                { "key": "cloudflare.outcome", "value": { "stringValue": "ok" } },
+                { "key": "cpu_time_ms", "value": { "intValue": 4 } },
+                { "key": "wall_time_ms", "value": { "intValue": 13 } },
+                { "key": "scope.name", "value": { "stringValue": "workers-observability" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+                {
+                  "key": "cloudflare.script_name",
+                  "value": { "stringValue": "telemetry-spike-producer" }
+                },
+                { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+                { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+                { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+                { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "faas.version",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                },
+                { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+                {
+                  "key": "telemetry.sdk.name",
+                  "value": { "stringValue": "workers-observability" }
+                },
+                { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "cloudflare.script_version.id",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": { "code": 0 },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+          { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+          {
+            "key": "cloudflare.script_name",
+            "value": { "stringValue": "telemetry-spike-producer" }
+          },
+          { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+          { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+          { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+          { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "faas.version",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } },
+          { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "workers-observability" },
+          "spans": [
+            {
+              "traceId": "7ab858c2876449612d99a87ec1e9c349",
+              "spanId": "a9a62d8fe0c3f156",
+              "parentSpanId": "daae73018eee76df",
+              "name": "durable_object_storage_get",
+              "kind": 3,
+              "startTimeUnixNano": "1790773391774000001",
+              "endTimeUnixNano": "1790773391774000001",
+              "attributes": [
+                { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+                {
+                  "key": "cloudflare.durable_object.id",
+                  "value": {
+                    "stringValue": "5827984be1809baab53f34f8d04a14448cd5b9cebfaaf516610f20fe6b138f40"
+                  }
+                },
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 3 } },
+                { "key": "scope.name", "value": { "stringValue": "workers-observability" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+                {
+                  "key": "cloudflare.script_name",
+                  "value": { "stringValue": "telemetry-spike-producer" }
+                },
+                { "key": "cloudflare.entrypoint", "value": { "stringValue": "SpikeDO" } },
+                { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+                { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+                { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "faas.version",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                },
+                { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+                {
+                  "key": "telemetry.sdk.name",
+                  "value": { "stringValue": "workers-observability" }
+                },
+                { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "cloudflare.script_version.id",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": { "code": 0 },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    },
+    {
+      "resource": {
+        "attributes": [
+          { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+          { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+          {
+            "key": "cloudflare.script_name",
+            "value": { "stringValue": "telemetry-spike-producer" }
+          },
+          { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+          { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+          { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "faas.version",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          },
+          { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } },
+          { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+          {
+            "key": "cloudflare.script_version.id",
+            "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+          }
+        ],
+        "droppedAttributesCount": 0
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "workers-observability" },
+          "spans": [
+            {
+              "traceId": "eaa416fc30ce6e27406aed948320e968",
+              "spanId": "939702851ab71ffa",
+              "parentSpanId": "1b4f6d4e620888d8",
+              "name": "fetch",
+              "kind": 3,
+              "startTimeUnixNano": "1790773392017000000",
+              "endTimeUnixNano": "1790773392060000000",
+              "attributes": [
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 5 } },
+                { "key": "network.protocol.name", "value": { "stringValue": "http" } },
+                { "key": "network.protocol.version", "value": { "stringValue": "HTTP/1.1" } },
+                { "key": "http.request.method", "value": { "stringValue": "GET" } },
+                {
+                  "key": "url.full",
+                  "value": { "stringValue": "https://dyn.example/?m=run2-2&throw=1" }
+                },
+                { "key": "url.scheme", "value": { "stringValue": "https" } },
+                { "key": "url.path", "value": { "stringValue": "/" } },
+                { "key": "url.query", "value": { "stringValue": "m=run2-2&throw=1" } },
+                { "key": "server.port", "value": { "stringValue": "" } },
+                { "key": "server.address", "value": { "stringValue": "dyn.example" } },
+                { "key": "scope.name", "value": { "stringValue": "workers-observability" } },
+                { "key": "cloudflare.colo", "value": { "stringValue": "LHR" } },
+                { "key": "faas.invoked_region", "value": { "stringValue": "WEUR" } },
+                {
+                  "key": "cloudflare.script_name",
+                  "value": { "stringValue": "telemetry-spike-producer" }
+                },
+                { "key": "cloud.provider", "value": { "stringValue": "cloudflare" } },
+                { "key": "cloud.platform", "value": { "stringValue": "cloudflare.workers" } },
+                { "key": "faas.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "faas.version",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                },
+                { "key": "telemetry.sdk.language", "value": { "stringValue": "js" } },
+                {
+                  "key": "telemetry.sdk.name",
+                  "value": { "stringValue": "workers-observability" }
+                },
+                { "key": "service.name", "value": { "stringValue": "telemetry-spike-producer" } },
+                {
+                  "key": "cloudflare.script_version.id",
+                  "value": { "stringValue": "a339ac78-1d12-4f32-9645-6e65199c5be2" }
+                }
+              ],
+              "droppedAttributesCount": 0,
+              "events": [],
+              "droppedEventsCount": 0,
+              "status": { "code": 0 },
+              "links": [],
+              "droppedLinksCount": 0,
+              "flags": 257
+            }
+          ]
+        }
+      ],
+      "schemaUrl": ""
+    }
+  ]
+}

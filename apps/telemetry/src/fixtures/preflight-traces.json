@@ -1,0 +1,33 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "cloudflare-workers-observability" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "pre-flight-check" } },
+          { "key": "telemetry.sdk.version", "value": { "stringValue": "1.0.0" } }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": { "name": "pre-flight-check", "version": "1.0.0" },
+          "spans": [
+            {
+              "traceId": "b33c69f2bb0b36a5b50d47a584d1d692",
+              "spanId": "c67f47610b13ab27",
+              "name": "Hello from Cloudflare 👋 (telemetry-spike-traces)",
+              "kind": 1,
+              "startTimeUnixNano": "1790772940040000000",
+              "endTimeUnixNano": "1790772940050000000",
+              "attributes": [
+                { "key": "pre-flight-check", "value": { "boolValue": true } },
+                { "key": "source", "value": { "stringValue": "cloudflare-workers-observability" } }
+              ],
+              "status": { "code": 1 }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

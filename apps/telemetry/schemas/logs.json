@@ -1,0 +1,18 @@
+{
+  "fields": [
+    { "name": "time", "type": "timestamp", "required": true },
+    { "name": "worker", "type": "string", "required": true },
+    { "name": "project_id", "type": "string", "required": false },
+    { "name": "path", "type": "string", "required": false },
+    { "name": "version", "type": "string", "required": false },
+    { "name": "level", "type": "string", "required": true },
+    { "name": "trace_id", "type": "string", "required": false },
+    { "name": "span_id", "type": "string", "required": false },
+    { "name": "seq", "type": "int32", "required": false },
+    { "name": "event", "type": "string", "required": false },
+    { "name": "body", "type": "string", "required": true },
+    { "name": "body_bytes", "type": "int32", "required": true },
+    { "name": "exception", "type": "string", "required": false },
+    { "name": "stack", "type": "string", "required": false }
+  ]
+}

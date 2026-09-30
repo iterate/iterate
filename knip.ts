@@ -123,6 +123,12 @@ export default {
       // vite.config.ts names the Worker's main inline.
       entry: ["src/worker.ts!"],
     },
+    "apps/telemetry": {
+      // vite.config.ts names the Worker's main inline, and builds only for an env deploy.ts names,
+      // so knip reads it as a file rather than loading it.
+      entry: ["src/worker.ts!"],
+      vite: false,
+    },
     "apps/spa": {
       // public/index.html loads app.js, and its import map resolves @iterate-com/capnweb from a CDN.
       // The deploy (scripts/lib/deploy-app.ts) runs `pnpm exec wrangler` in the app's directory.

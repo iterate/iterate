@@ -233,6 +233,7 @@ test("the sweep deletes on the dev/preview account, and envs.ts's workers there 
     "kit",
     "notes",
     "os",
+    "telemetry",
     "voice",
   ]);
 });

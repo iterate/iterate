@@ -16,6 +16,7 @@ The Iterate context platform runs at **https://os.iterate.com**. `apps/os` owns 
 | `apps/browser-extension` | Chrome side panel that lends a browser to a project             |
 | `apps/dummy-petshop`     | Deployed OAuth/API fixture that the OS e2e tests use            |
 | `apps/ci-reports`        | Opens CI traces and Playwright reports from Depot artifacts     |
+| `apps/telemetry`         | Every Worker's logs and spans into the telemetry lake           |
 | `packages/iterate`       | `iterate/*` SDK                                                 |
 | `packages/cli`           | The `iterate` CLI and the macOS menu bar (`@iterate-com/cli`)   |
 | `packages/agents`        | The agents app a project installs (`@iterate-com/agents`)       |

@@ -1,0 +1,13 @@
+{
+  "fields": [
+    { "name": "time", "type": "timestamp", "required": true },
+    { "name": "worker", "type": "string", "required": true },
+    { "name": "project_id", "type": "string", "required": false },
+    { "name": "path", "type": "string", "required": false },
+    { "name": "name", "type": "string", "required": true },
+    { "name": "kind", "type": "string", "required": true },
+    { "name": "labels", "type": "string", "required": true },
+    { "name": "value", "type": "float64", "required": true },
+    { "name": "weight", "type": "float64", "required": true }
+  ]
+}

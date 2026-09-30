@@ -9,7 +9,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import type { FetchRouteInput } from "iterate/api";
 import { projectUrlOf, type IngressRouting } from "iterate/project-ingress";
-import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs } from "../../envs.ts";
+import { ciReportsEnvs, osEnvs, previewDeployment, spaEnvs, telemetryEnvs } from "../../envs.ts";
 import { agents } from "../../apps/agents/scripts/app.ts";
 import { dash } from "../../apps/dash/scripts/app.ts";
 import { docs } from "../../apps/docs/scripts/app.ts";
@@ -89,10 +89,11 @@ export function previewDeploymentUrls(name: string) {
 // ── what on the account is never a preview's ──────────────────────────────────────────────────
 
 /** envs.ts's workers on the dev/preview account: main on dev (`os`, each app's) and every other
- *  deployment there (the CI reports viewer, the SPA example). The sweep never deletes one. */
+ *  deployment there (the CI reports viewer, the SPA example, the telemetry receiver). The sweep
+ *  never deletes one. */
 export function accountWorkerNames() {
   return new Set(
-    [osEnvs, ...APPS.map((app) => app.envs), spaEnvs, ciReportsEnvs]
+    [osEnvs, ...APPS.map((app) => app.envs), spaEnvs, ciReportsEnvs, telemetryEnvs]
       .flatMap((envs) => Object.values(envs))
       .filter((env) => env.cloudflareAccountId === MAIN_ON_DEV.cloudflareAccountId)
       .map((env) => env.workerName),

@@ -1,0 +1,33 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "cloudflare-workers-observability" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "pre-flight-check" } },
+          { "key": "telemetry.sdk.version", "value": { "stringValue": "1.0.0" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "pre-flight-check", "version": "1.0.0" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1790772941257000000",
+              "observedTimeUnixNano": "1790772941257000000",
+              "severityNumber": 9,
+              "severityText": "INFO",
+              "body": { "stringValue": "Hello from Cloudflare 👋 (telemetry-spike-logs)" },
+              "attributes": [
+                { "key": "pre-flight-check", "value": { "boolValue": true } },
+                { "key": "source", "value": { "stringValue": "cloudflare-workers-observability" } }
+              ],
+              "traceId": "e7cb138b4a86c957b7f491d18703c5fc",
+              "spanId": "166607169713cb8c"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

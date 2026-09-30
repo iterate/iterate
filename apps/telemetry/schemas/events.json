@@ -1,0 +1,16 @@
+{
+  "fields": [
+    { "name": "time", "type": "timestamp", "required": true },
+    { "name": "worker", "type": "string", "required": true },
+    { "name": "project_id", "type": "string", "required": true },
+    { "name": "path", "type": "string", "required": true },
+    { "name": "offset", "type": "int64", "required": true },
+    { "name": "type", "type": "string", "required": true },
+    { "name": "actor", "type": "string", "required": false },
+    { "name": "cause_chain", "type": "string", "required": true },
+    { "name": "cause_depth", "type": "int32", "required": true },
+    { "name": "cause_parent", "type": "string", "required": false },
+    { "name": "payload", "type": "string", "required": true },
+    { "name": "payload_bytes", "type": "int32", "required": true }
+  ]
+}

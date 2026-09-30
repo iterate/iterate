@@ -1,0 +1,27 @@
+{
+  "fields": [
+    { "name": "time", "type": "timestamp", "required": true },
+    { "name": "worker", "type": "string", "required": true },
+    { "name": "project_id", "type": "string", "required": false },
+    { "name": "path", "type": "string", "required": false },
+    { "name": "version", "type": "string", "required": false },
+    { "name": "trace_id", "type": "string", "required": true },
+    { "name": "span_id", "type": "string", "required": true },
+    { "name": "parent_span_id", "type": "string", "required": false },
+    { "name": "seq", "type": "int32", "required": false },
+    { "name": "name", "type": "string", "required": true },
+    { "name": "kind", "type": "string", "required": true },
+    { "name": "duration_ms", "type": "float64", "required": true },
+    { "name": "cpu_ms", "type": "float64", "required": false },
+    { "name": "wall_ms", "type": "float64", "required": false },
+    { "name": "outcome", "type": "string", "required": false },
+    { "name": "entrypoint", "type": "string", "required": false },
+    { "name": "object_id", "type": "string", "required": false },
+    { "name": "rpc_method", "type": "string", "required": false },
+    { "name": "http_status", "type": "int32", "required": false },
+    { "name": "url_path", "type": "string", "required": false },
+    { "name": "exception", "type": "string", "required": false },
+    { "name": "attributes", "type": "string", "required": true },
+    { "name": "attributes_bytes", "type": "int32", "required": true }
+  ]
+}
