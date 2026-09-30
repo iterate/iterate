@@ -64,7 +64,9 @@ test("a stale configuration push after replacement and facet restart retains the
   const before = await until("replacement records its future retry", async () => {
     const status = await deliveryStatus(context);
     const cursor = status.snapshots[`swap@${replacement.offset}`];
-    return cursor?.pending?.attempt === 1 && (cursor.pending.nextAttemptAtMs ?? 0) > Date.now()
+    return cursor?.pending?.attempt === 1 &&
+      cursor.pending.error === "retry later" &&
+      (cursor.pending.nextAttemptAtMs ?? 0) > Date.now()
       ? { status, cursor }
       : undefined;
   });
@@ -287,7 +289,10 @@ const deliveryStatus = async (context: string) =>
   )) as {
     snapshots: Record<
       string,
-      { confirmedOffset: number; pending?: { attempt: number; nextAttemptAtMs?: number } }
+      {
+        confirmedOffset: number;
+        pending?: { attempt: number; nextAttemptAtMs?: number; error?: string };
+      }
     >;
   };
 
