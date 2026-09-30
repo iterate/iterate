@@ -63,3 +63,8 @@ Status: code done and checked locally (typecheck, lint, knip, the lint and CI sc
 - LOC report counts all of `test/**` as tests (PR 1's helpers had counted as code).
 - Left alone: `flake sentinel (specs)` and the flake suite named `specs` are labels, and the CI
   scripts' test fixtures use example paths.
+- CI round 1: every Browser specs shard failed in the global setup, which found the repository as
+  `new URL("..", import.meta.url)`: one folder deeper, that is `test/`. It and two specs'
+  `resolve(import.meta.dirname, "../../apps/…")` reads take one more `..` (the move script
+  rewrote specifiers, not bare `..` or `import.meta.dirname` joins). The E2E failures that run
+  were the preview's weather (34 lost WebSockets, 24 retried rows; main's run of every row passed).

@@ -28,7 +28,7 @@ test("a no-build mini-app served by a project persists a note through its own ca
   // beside a router that branches on x-iterate-routing-slug. (The fixture's operator handle here; a
   // project owner commits the same worker to their config repo.)
   const miniApp = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../apps/os/examples/mini-app.ts"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../../apps/os/examples/mini-app.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   ).code;
   const router = `import { WorkerEntrypoint } from "cloudflare:workers";

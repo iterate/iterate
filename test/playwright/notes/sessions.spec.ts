@@ -46,7 +46,7 @@ test("the Notes app works through a project config worker, keeps a note, and end
   // Notes Worker under test: its host and protocol (the source names production's, over https; a
   // local Notes answers http).
   const source = transformSync(
-    readFileSync(resolve(import.meta.dirname, "../../apps/notes/config-worker.ts"), "utf8"),
+    readFileSync(resolve(import.meta.dirname, "../../../apps/notes/config-worker.ts"), "utf8"),
     { loader: "ts", format: "esm" },
   )
     .code.replace('"notes.iterate.com"', JSON.stringify(notes.host))

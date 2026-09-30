@@ -29,7 +29,7 @@ export default function setup() {
   // the pkg.pr.new commit of this checkout's packages (published-package-commit.ts), which the specs
   // that install one wait for: worked out once, since in a shallow CI checkout it fetches history
   process.env.PUBLISHED_PACKAGE_COMMIT = checkoutPublishedPackageCommit(
-    fileURLToPath(new URL("..", import.meta.url)),
+    fileURLToPath(new URL("../..", import.meta.url)),
     process.env.PREVIEW_HEAD_SHA,
   );
   console.log(`[playwright] auth setup complete (${Date.now() - startedAt}ms)`);
