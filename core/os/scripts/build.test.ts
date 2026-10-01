@@ -5,8 +5,7 @@ import { expect, test } from "vitest";
 
 // core/ builds from a clone of itself (core/AGENTS.md): outside code may import it, it imports
 // nothing outside. The lint rule checks every file's imports as written; this follows the build's
-// own, as esbuild resolves them. (The build still reads the project templates from configs/ at run
-// time: the open exception in core/AGENTS.md.)
+// own, as esbuild resolves them.
 test("the build reaches nothing outside core/", async () => {
   const repo = path.resolve(import.meta.dirname, "../../..");
   const { metafile } = await build({

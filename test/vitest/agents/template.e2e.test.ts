@@ -1,17 +1,22 @@
 // The agents and voice apps installed as packages by the default template (configs/default).
 import { expect, test } from "vitest";
 import { createdProject, freshCtx, openItx, readAll, until } from "../../helpers/client.ts";
+import { defaultPreset } from "../../helpers/project-host.ts";
 import { FakeAi } from "../../helpers/fake-ai.ts";
 import { assistantWords, configureModel } from "./fixtures.ts";
 import { publishedPackage } from "./support.ts";
 
 test(
-  "a project with no template pins this checkout's agents and voice builds, its init installs them, and an agent answers",
+  "a project on the Default preset pins this checkout's agents and voice builds, its init installs them, and an agent answers",
   { timeout: 90_000 },
   async () => {
     const agents = await publishedPackage("@iterate-com/agents");
     const voice = await publishedPackage("@iterate-com/voice");
-    const root = await createdProject(openItx(freshCtx("agents-template")), "agents-template");
+    const root = await createdProject(
+      openItx(freshCtx("agents-template")),
+      "agents-template",
+      await defaultPreset(),
+    );
     const manifest = await root.repos.get("/repos/config").readFile("package.json");
     expect(JSON.parse(manifest)).toMatchObject({
       dependencies: { "@iterate-com/agents": agents, "@iterate-com/voice": voice },

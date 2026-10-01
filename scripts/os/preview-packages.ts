@@ -1,6 +1,6 @@
 // scripts/os/preview-packages.ts — A PREVIEW'S PACKAGES, SERVED BEFORE ANYTHING INSTALLS THEM. Every
 // project a preview seeds installs this repository's packages at the deployment's packages commit
-// (core/os/scripts/published-package-commit.ts says which) through esm.sh. The push that starts
+// (scripts/os/published-package-commit.ts says which) through esm.sh. The push that starts
 // the preview deploy starts .github/workflows/pkg-pr-new.yml too, and pkg.pr.new serves the build
 // only once that run has published it, so the deploy (scripts/os/preview.ts) waits for it here
 // before it hands the deployment on.

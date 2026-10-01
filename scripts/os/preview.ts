@@ -53,8 +53,9 @@ import { parseAppConfig, type AppConfig } from "../../core/os/src/app-config.ts"
 import { TEST_EMAIL_DOMAIN } from "../../core/os/src/test-email-domain.ts";
 import { buildOs } from "../../core/os/scripts/build.ts";
 import { readWranglerBase } from "../../core/os/scripts/generate-wrangler-config.ts";
-import { checkoutPublishedPackageCommit } from "../../core/os/scripts/published-package-commit.ts";
 import type { OsDeployableEnv } from "../../core/os/scripts/os-env.ts";
+import { configTemplates } from "./config-templates.ts";
+import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 import type { D1Row } from "./d1.ts";
 import deployOs from "./deploy.ts";
 import eraseData from "./erase-data.ts";
@@ -1257,7 +1258,7 @@ async function main(command: Command, options: PreviewOptions) {
   const urls = previewDeploymentUrls(name);
   console.log(`deployment ${name} → ${urls.os}`);
   if (command === "config") {
-    await buildOs(getOsEnv(name));
+    await buildOs(getOsEnv(name), configTemplates(REPO_ROOT));
     console.log(`wrote ${findBuiltWranglerConfig(ROOT)}`);
     return;
   }

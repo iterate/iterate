@@ -12,6 +12,7 @@ import {
   PREVIEW_GITHUB_APP,
   previewGithubAppPrivateKey,
 } from "../../core/os/scripts/preview-github-app.ts";
+import { configTemplates } from "./config-templates.ts";
 import { ensureArtifactsNamespace, isCloudflareError } from "./preview-artifacts.ts";
 import { applyD1Migrations, ensureD1 } from "./d1.ts";
 
@@ -55,7 +56,7 @@ export default async function deploy(options: {
         ...secretValues,
       });
       const [, databaseId] = await Promise.all([
-        build(),
+        build({ templates: configTemplates(fileURLToPath(new URL("../..", import.meta.url))) }),
         ctx.env.resources?.dbId || createResources(ctx),
       ]);
       await applyD1Migrations(ctx.cf, {

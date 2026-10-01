@@ -1,6 +1,5 @@
 // The core boundary (core/AGENTS.md): core/ builds from a clone of itself, so nothing in it imports
-// outside it. One exception remains: the project templates in configs/, which the build bakes in.
-// Outside code may import core. The rows run .oxlintrc.json's own overrides for
+// outside it. Outside code may import core. The rows run .oxlintrc.json's own overrides for
 // `import-js/no-restricted-paths`, copied verbatim, over one temp project linted once by the real
 // oxlint binary; `reported` says whether the rule flags that file.
 
@@ -10,7 +9,7 @@ import { resolve } from "node:path";
 import { expect, test } from "vitest";
 import { createOxlintFixture } from "./oxlint-fixture.ts";
 
-test("nothing in core/ imports outside core/ but configs/ and npm packages", () => {
+test("nothing in core/ imports outside core/ but npm packages", () => {
   const rows = [
     { path: "core/os/scripts/build.ts", source: 'import { x } from "../../../scripts/lib/x.ts";' },
     { path: "core/os/src/envs.ts", source: 'import { x } from "../../../envs.ts";' },
@@ -27,7 +26,6 @@ test("nothing in core/ imports outside core/ but configs/ and npm packages", () 
     {
       path: "core/os/src/template.test.ts",
       source: 'import { x } from "../../../configs/default/agents.ts";',
-      allowed: true,
     },
     {
       path: "core/os/src/sdk.ts",

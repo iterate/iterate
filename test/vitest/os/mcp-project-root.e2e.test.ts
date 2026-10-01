@@ -96,8 +96,8 @@ test("MCP has its authorized project's root capabilities: read, commit, publish,
   });
   expect(await root.repos.get("/repos/config").readFile("notes.txt")).toBe("Hello from MCP");
   expect(
-    await success('async (itx) => itx.repos.get("/repos/config").readFile("AGENTS.md")'),
-  ).toContain("Project configuration");
+    await success('async (itx) => itx.repos.get("/repos/config").readFile("package.json")'),
+  ).toContain('"main": "worker.ts"');
   expect(
     await success(
       'async (itx) => { await itx.cd("/notes/mcp").append({ type: "note", payload: { ok: true } }); await itx.kv.put("mcp", "root"); return itx.kv.get("mcp"); }',

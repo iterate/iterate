@@ -131,11 +131,30 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
  *  the worker's own /api, the catalog row on global:/, the saga opened on the project's / — on the admin
  *  session (the project lands in the deployment's own org) or as `as` (a user's session: their org,
  *  with them a member) — so its host serves, and return its minted id: the DO is addressed by the
- *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Idempotent; identical against
- *  the local and the deployed worker. */
-export async function registerProject(slug: string, as?: { email: string }): Promise<string> {
-  using itx = await session().authenticate(adminCredentials(as)).projects.create({ project: slug });
+ *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Seeded from `configRepoTemplate`
+ *  (`defaultPreset()` for the agents and voice apps), else core's minimal config. Idempotent;
+ *  identical against the local and the deployed worker. */
+export async function registerProject(
+  slug: string,
+  as?: { email: string },
+  configRepoTemplate?: string,
+): Promise<string> {
+  using itx = await session()
+    .authenticate(adminCredentials(as))
+    .projects.create({ project: slug, configRepoTemplate });
   return (await itx.whoami()).projectId;
+}
+
+/** The Default preset among the templates the platform under test was built with
+ *  (scripts/os/config-templates.ts): a project on it runs the agents and voice apps, as one a person
+ *  creates in the dash or through an app's sign-in does. */
+export async function defaultPreset(): Promise<string> {
+  const presets: { label: string; reference: string }[] = await session()
+    .authenticate(adminCredentials())
+    .projects.templates();
+  const preset = presets.find(({ label }) => label === "Default");
+  if (!preset) throw new Error("the platform under test offers no Default preset (pnpm os:build)");
+  return preset.reference;
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry
