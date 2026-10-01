@@ -39,6 +39,7 @@ on:
       - .depot/workflows/deploy-kit.yml
       - .depot/workflows/preview-os.yml
       - core/os/**
+      - core/configs/**
       - configs/**
       - apps/dash/**
       - apps/agents/**
@@ -50,7 +51,6 @@ on:
       - "!apps/kit/firmware/**"
       - test/**
       - core/lib/**
-      - packages/agents/**
       - packages/voice/**
       - packages/docs/**
       - packages/shared/**

@@ -77,14 +77,15 @@ not restore exactly.
 
 `apply` restores a config tree byte for byte, so a tree written for an older platform must be
 migrated in a checkout before capture, with `--config-repo` naming it. For a platform whose SDK has
-`IterateConfigEntrypoint` (configs/default is the reference):
+`IterateConfigEntrypoint` (core/configs/default is the reference):
 
 - `worker.ts` extends `IterateConfigEntrypoint` from `iterate/sdk`, not `ConfigWorker`, and types
   `processEvent`'s argument as `IterateConfigProcessEventArgs`;
 - its `processEvent` has the init case: `installAgents(itx)` on the platform's
   `events.iterate.com/project/worker-updated` on `/`;
 - `agents.ts` re-exports `AgentCollectionDurableObject` and `AgentDurableObject` from
-  `@iterate-com/agents`, which the root `package.json` lists in `dependencies` at a commit;
+  `iterate/agents`, which the platform ships, and the root `package.json` lists no
+  `@iterate-com/agents`;
 - the `agents/` folder and `iterate.json` are gone.
 
 ## Hostnames

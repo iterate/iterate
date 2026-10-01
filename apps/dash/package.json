@@ -12,7 +12,6 @@
     "routes:check": "node scripts/app.ts generate-route-tree --check"
   },
   "dependencies": {
-    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@tanstack/react-router": "catalog:",

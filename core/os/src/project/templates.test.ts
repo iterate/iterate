@@ -8,15 +8,13 @@ const reference = `github:example/config#${"a".repeat(40)}&path:starter`;
 const worker = "export default {fetch() {return new Response('My project')}}";
 const manifest = '{"main":"worker.ts"}';
 
-test("omitting a template seeds core's minimal config: a homepage, and no packages", async () => {
+test("omitting a template seeds core/configs/minimal: a homepage, and no packages", async () => {
   const fixture = project();
   await deliver(fixture, requested());
   expect(fixture.files()?.["worker.ts"]).toContain("Homepage of project");
-  expect(JSON.parse(fixture.files()!["package.json"]!)).toEqual({
-    private: true,
-    type: "module",
-    main: "worker.ts",
-  });
+  const manifest = JSON.parse(fixture.files()!["package.json"]!);
+  expect(manifest).toMatchObject({ private: true, type: "module", main: "worker.ts" });
+  expect(manifest).not.toHaveProperty("dependencies");
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
   // an unborn `main` is its own check (`parent: null`): no read of the tip comes first
   expect(fixture.repo.tip).not.toHaveBeenCalled();
@@ -66,7 +64,7 @@ test("copies the pinned subdirectory into a fresh root commit before project/cre
 
 test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, one HEAD per version; devDependencies and other manifests keep their bytes", async () => {
   const commit = "d".repeat(40);
-  const agentsMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@main";
+  const voiceMain = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@main";
   const head = vi.fn(
     async () => new Response(null, { headers: { "x-commit-key": `iterate:iterate:${commit}` } }),
   );
@@ -74,12 +72,12 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
   const manifestOf = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
   const root = manifestOf({
     main: "worker.ts",
-    dependencies: { "@iterate-com/agents": agentsMain, hono: "^4" },
+    dependencies: { "@iterate-com/voice": voiceMain, hono: "^4" },
     devDependencies: { iterate: "https://pkg.pr.new/iterate/iterate/iterate@main" },
   });
   const agents = manifestOf({
     main: "index.ts",
-    dependencies: { "@iterate-com/agents": agentsMain },
+    dependencies: { "@iterate-com/voice": voiceMain },
   });
   const fixture = project(undefined, async () => [
     { path: "package.json", content: root },
@@ -89,21 +87,21 @@ test("a template's pkg.pr.new branch is seeded at the commit pkg.pr.new serves, 
     { path: "fixtures/package.json", content: '{"name":"fixture"}' },
   ]);
   await deliver(fixture, requested(reference));
-  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${commit}`;
+  const pinned = `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@${commit}`;
   expect(fixture.files()).toMatchObject({
-    "package.json": root.replace(agentsMain, pinned),
-    "agents/package.json": agents.replace(agentsMain, pinned),
+    "package.json": root.replace(voiceMain, pinned),
+    "agents/package.json": agents.replace(voiceMain, pinned),
     "fixtures/package.json": '{"name":"fixture"}',
   });
   expect(head).toHaveBeenCalledExactlyOnceWith(
-    agentsMain,
+    voiceMain,
     expect.objectContaining({ method: "HEAD" }),
   );
   expect(fixture.order.at(-1)).toBe("events.iterate.com/project/created");
 });
 
 test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creation, and nothing is seeded", async () => {
-  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/agents@no-such-branch";
+  const missing = "https://pkg.pr.new/iterate/iterate/@iterate-com/voice@no-such-branch";
   // pkg.pr.new's 404 echoes the ref it was asked for
   vi.stubGlobal(
     "fetch",
@@ -118,7 +116,7 @@ test("a template's pkg.pr.new branch that pkg.pr.new cannot pin fails the creati
       path: "package.json",
       content: JSON.stringify({
         main: "worker.ts",
-        dependencies: { "@iterate-com/agents": missing },
+        dependencies: { "@iterate-com/voice": missing },
       }),
     },
     { path: "worker.ts", content: worker },

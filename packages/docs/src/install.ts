@@ -41,7 +41,7 @@ as ${docsAgentGuide} says.
 /** Install Docs in a project's config at `version` (a pkg.pr.new build at its commit, or an npm
  *  version): `docs.ts` and the root package.json's pin, one commit, then the config's publication
  *  of it. Resolves once the project runs it; throws with the platform's reason when it refused the
- *  commit. `upgradeAgents` (@iterate-com/agents/install) does the same for agents. */
+ *  commit. `upgradeVoice` (@iterate-com/voice/install) does the same for voice. */
 export async function installDocs(
   project: Pick<IterateContextApi, "waitForEvent"> & {
     repos: { get(path: string): Pick<RepoHandle, "tip" | "readFile" | "commitFiles"> };

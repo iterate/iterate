@@ -104,7 +104,7 @@ export const ProjectContract = defineProcessorContract({
     lastPublicationFactOffset: z.number().int().positive().nullable().default(null),
     /** THE COMMIT THE PROJECT RUNS: the latest `project/worker-updated`'s, which the tip is not
      *  while its publication is owed or was refused — what an installed app's build is read at
-     *  (@iterate-com/agents `agentsVersion`). Null until the first publication. */
+     *  (@iterate-com/voice `voiceVersion`). Null until the first publication. */
     publishedCommit: z.string().min(1).nullable().default(null),
     /** THE CUSTOM HOSTNAMES (custom-hostnames.ts), by hostname: the request the processor owes (an
      *  add — which is also a re-check — or a remove, by the OFFSET of the request), Cloudflare's last

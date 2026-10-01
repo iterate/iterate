@@ -8,7 +8,8 @@ import { touchesPreview } from "./preview-paths.ts";
 // GitHub's `paths` semantics: any file whose last matching pattern is a positive one triggers.
 test.for([
   { files: ["core/os/src/worker.ts"], preview: true },
-  { files: ["configs/default/AGENTS.md"], preview: true },
+  { files: ["core/configs/default/AGENTS.md"], preview: true },
+  { files: ["configs/voice/AGENTS.md"], preview: true },
   { files: ["package.json"], preview: true },
   { files: [".depot/workflows/preview-os.yml"], preview: true },
   // the root manifest only: an app's own package.json is inside its app's pattern

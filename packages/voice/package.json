@@ -41,7 +41,6 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@iterate-com/agents": "workspace:*",
     "pako": "catalog:"
   },
   "peerDependencies": {

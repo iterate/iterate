@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { installAgents } from "@iterate-com/agents/install";
+import { installAgents } from "iterate/agents/install";
 import { pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { installVoice } from "@iterate-com/voice/install";
 import { build } from "esbuild";
@@ -15,7 +15,7 @@ export async function openAgentItx(context: string) {
 }
 
 /** The agents app, and voice when given its `voiceBundle` (`voiceWorkspaceBundle`), on `root` as a
- *  project's config repo installs them (configs/default): `agentsWorkspaceConfig` published as its
+ *  project's config repo installs them (core/configs/default): `agentsWorkspaceConfig` published as its
  *  config, then the installs its init case calls. The names they add on the root answer in every
  *  other context once the snapshots read before them expired, which this waits out. */
 export async function installWorkspaceApps(

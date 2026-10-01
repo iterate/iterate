@@ -1,5 +1,5 @@
 import { RUN_DEADLINE_MS, RunRequested, RunSettled } from "iterate/stream/run";
-import { AgentContract, AgentLlmRequestCancelReason } from "@iterate-com/agents/contract";
+import { AgentContract, AgentLlmRequestCancelReason } from "iterate/agents/contract";
 import { appendText, sliceText, type StreamText } from "../chunked-text.ts";
 import type { StreamEvent } from "./stream-event.ts";
 
@@ -380,7 +380,7 @@ function reduceAgentUiEvent(
     case "events.iterate.com/agent/context-added": {
       const role = readString(event, "role");
       const text = readString(event, "content");
-      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (@iterate-com/agents durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
+      // oxlint-disable-next-line iterate/simple-truthiness-check -- empty content is a real message: a person can send attachments alone (iterate/agents durable-object.ts message()), and an assistant's committed text replaces the streamed preview even when empty
       if (text == null) return state;
       const actor = readRecord(event, "actor");
       const actorType = typeof actor?.type === "string" ? actor.type : undefined;

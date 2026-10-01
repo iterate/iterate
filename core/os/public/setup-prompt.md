@@ -32,17 +32,15 @@ so say which flow a page is for when you open it.
 ```bash
 git clone --depth 1 https://github.com/iterate/core iterate   # gitignored
 cd iterate && pnpm install
-CLOUDFLARE_ENV=self-host pnpm --filter os build \
-  --template "github:iterate/packages#main&path:configs/default" \
-  --template "github:iterate/packages#main&path:configs/heartbeat"
+CLOUDFLARE_ENV=self-host pnpm --filter os build
 # writes core/os/dist/server/wrangler.json
 ```
 
-Each `--template` is a project template the deployment offers, downloaded from GitHub (iterate's
-live in https://github.com/iterate/packages) and pinned to the commit `main` is at then. A new
-project, the user's first included, starts from `default`: the agents and voice apps. A bare
-homepage ("Blank" in the dash) is always offered; without any `--template`, every project starts as
-one.
+The deployment offers core's project templates (`core/configs/`). A new project, the user's first
+included, starts from `default`: the agents app. A bare homepage ("Blank" in the dash) is always
+offered too. To offer another template, add `--template <GitHub reference>` to the build for each,
+such as iterate's voice template, `--template "github:iterate/packages#main&path:configs/voice"`:
+it is downloaded and pinned to the commit `main` is at then.
 
 ## 2. Log in
 
@@ -203,11 +201,11 @@ dash's projects page. That starts a new attempt.
   - `<origin>/mcp` (remote HTTP) for other clients, where the password lives, and that each client signs in the same way;
   - the dash: `https://dash.iterate.com/.auth/connect?issuer=<origin>`;
   - voice: `https://voice.iterate.com/.auth/connect?issuer=<origin>`, to talk to the project from
-    the laptop mic. The page installs the voice agent itself, asking for an OpenAI key the first
-    time.
+    the laptop mic. It needs a project whose config installs voice, such as one from iterate's
+    voice template (step 1's `--template`); the page asks for an OpenAI key the first time.
   - kit: `https://k.iterate.com/.auth/connect?issuer=<origin>`, to flash a voice board (e.g. a Home
     Assistant Voice Preview Edition) over USB from Chrome or Edge, so it talks to the project too.
-    It installs the voice agent the same way.
+    It needs voice the same way.
 
 ## Integrations
 
