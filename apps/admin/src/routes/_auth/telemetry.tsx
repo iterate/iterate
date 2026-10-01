@@ -197,12 +197,20 @@ function Panel({
         value: Number(row[name]),
       })),
     );
+    // ticks on round UTC times: every ten minutes of an hour, every four hours of a day, each day
+    // of a week
+    const from = at - hours * 3_600_000;
+    const step = (hours > 24 ? 24 * 60 : hours * 10) * 60_000;
+    const values = Array.from(
+      { length: Math.floor(at / step) - Math.ceil(from / step) + 1 },
+      (_, index) => (Math.ceil(from / step) + index) * step,
+    );
     return defineChart({
       marks: [lineY(points, { x: "t", y: "value", z: "series", points: true })],
       scales: {
         x: {
-          scale: scaleLinear().domain([at - hours * 3_600_000, at]),
-          axis: { ticks: { format: (ms) => `${time.format(ms)} UTC` } },
+          scale: scaleLinear().domain([from, at]),
+          axis: { ticks: { values, format: (ms) => `${time.format(ms)} UTC` } },
         },
         y: { scale: scaleLinear, nice: true, grid: true },
       },
