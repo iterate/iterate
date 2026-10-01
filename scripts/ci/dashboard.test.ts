@@ -60,6 +60,34 @@ test("a row another poster's edit dropped in the same second is written again", 
   ]);
 });
 
+test("two posters setting the same row at once leave the newer write standing, and neither throws", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-10-01T09:00:00Z") });
+  await setRow(
+    slack.client,
+    row("2026-10-01T09:00:00Z", "prd deploys", "green", "OS live at `aaa`"),
+  );
+  // a second deploy finishing in the same second sets the row right after this edit lands
+  const [dashboard] = slack.channel("#error-pulse");
+  const update = slack.client.chat.update.bind(slack.client.chat);
+  let raced = false;
+  slack.client.chat.update = (async (args: Parameters<typeof update>[0]) => {
+    const answer = await update(args);
+    if (!raced) {
+      raced = true;
+      await setRow(
+        slack.client,
+        row("2026-10-01T09:01:00Z", "prd deploys", "green", "Agents live at `bbb`"),
+      );
+    }
+    return answer;
+  }) as typeof update; // the fake's own method, wrapped
+  await setRow(
+    slack.client,
+    row("2026-10-01T09:01:00Z", "prd deploys", "green", "Dash live at `bbb`"),
+  );
+  expect(dashboard!.text.split("\n").slice(1)).toEqual(["🟢 prd deploys: Agents live at `bbb`"]);
+});
+
 test("two posters posting today's dashboard at once keep the older one", async () => {
   const slack = fakeSlack({ now: Date.parse("2026-10-01T00:01:00Z") });
   const channel = slackChannelIds["#error-pulse"];

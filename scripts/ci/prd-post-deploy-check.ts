@@ -6,29 +6,32 @@
 // OAuth metadata smokes and the fault alarm (a 421 is no error) stay green. Faults on the new version
 // are the prd fault alarm's (scripts/ci/prd-fault-alarm.ts, every 15 minutes).
 //
-// One page while the hosts are down (./slack.ts): a failing check edits the open page with what is
-// down now and how many deploys it has failed since; the next passing check resolves it. The page
-// names the exact version to roll back to, or says not to roll back. A check that paged or edited
-// says `paged=true` in its step's outputs, so the deploy's notify job does not page the same failure
-// again (docs/depot-ci.md#slack-channels).
+// One page while the hosts are down (./slack.ts), in today's #error-pulse dashboard thread and sent
+// to the channel too (prd is down): a failing check edits the open page with what is down now and
+// how many deploys it has failed since; the next passing check resolves it. The page names the exact
+// version to roll back to, or says not to roll back. A check that paged or edited says `paged=true`
+// in its step's outputs, so the deploy's notify job does not page the same failure again
+// (docs/depot-ci.md#slack-channels). Every check sets the dashboard's "prd hosts" row
+// (postDeployRow): what is down, or the version every host answers on.
 //
 // After an erase, prd serves erase-data's parked worker (scripts/lib/do-reset.ts), and deploy-os.yml
 // passes `--previous-version parked`. Every project host answers 421 until `project-seed apply`
 // recreates its project, and a rollback onto the parked worker deletes every Durable Object. So hosts
 // that answer 421 then are the restore window (inRestoreWindow): one post to #ci that says not to roll
-// back, and the check passes.
+// back, an amber row, and the check passes.
 // READ-ONLY: `/version` and page GETs — it never creates a project, a user or an account.
 //
 //   node scripts/ci/prd-post-deploy-check.ts check [--previous-version <id>|parked] [--dry-run] [--test-run]
 //
 // `--dry-run` prints the page and posts nothing; `--test-run` posts what the check would, marked 🧪,
-// to #ci, and reads no page.
+// to #ci, and reads no page and sets no row.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { osEnvs } from "../../envs.ts";
+import { setRow, type RowState } from "./dashboard.ts";
 import { getSlackClient, keepPage, pageText, resolvedText, slackChannelIds } from "./slack.ts";
 
 /** Production's project hosts people rely on: the iterate project's apex (envs.ts
@@ -61,17 +64,14 @@ export async function check(
     restoreWindow,
     previousVersion: options.previousVersion,
     liveVersion,
+    hosts,
     sha: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
     // the Depot job the page links; a local --dry-run has none
     runUrl: process.env.DEPOT_JOB_URL || null,
     now: new Date(),
+    testRun: Boolean(options.testRun),
   };
   if (options.dryRun) console.log(postDeployTestText(reading));
-  else if (options.testRun)
-    await getSlackClient().chat.postMessage({
-      channel: slackChannelIds["#ci"],
-      text: postDeployTestText(reading),
-    });
   else {
     const step = await reportPostDeploy(getSlackClient(), reading);
     console.log(`[prd-post-deploy-check] ${step}`);
@@ -181,9 +181,12 @@ type PostDeployReading = {
   restoreWindow: boolean;
   previousVersion?: string;
   liveVersion?: string;
+  hosts: { url: string; status: number }[];
   sha: string;
   runUrl: string | null;
   now: Date;
+  /** A 🧪 run: posts what it would to #ci alone, and reads no page and sets no row. */
+  testRun: boolean;
 };
 
 const passedWhy = (reading: PostDeployReading) =>
@@ -224,25 +227,57 @@ export function postDeployTestText(reading: PostDeployReading) {
   return page ? postDeployPageText(page, true) : resolvedText(passedWhy(reading), true);
 }
 
+/** The dashboard's "prd hosts" row for this reading: red naming each host that is down and its
+ *  answer (or, with every host up, what `/version` did), amber in the restore window, green with the
+ *  version every host answers on. Pure. */
+function postDeployRow(reading: PostDeployReading): { state: RowState; text: string } {
+  const down = reading.hosts
+    .filter((host) => hostIsDown(host.status))
+    .map((host) => `${new URL(host.url).hostname} ${host.status || "no answer"}`)
+    .join(", ");
+  if (reading.restoreWindow)
+    return { state: "amber", text: `after an erase, until \`project-seed apply\`: ${down}` };
+  if (reading.findings.length === 0) return { state: "green", text: passedWhy(reading) };
+  return { state: "red", text: down || reading.findings.join("; ") };
+}
+
 /** One check's report: in the restore window, one post to #ci and no page; otherwise its page in
- *  #error-pulse (keepPage): a failure posts the page or edits the open one; a pass resolves it.
- *  Returns the step taken. */
+ *  #error-pulse (keepPage, sent to the channel too): a failure posts the page or edits the open one;
+ *  a pass resolves it. Then the dashboard's "prd hosts" row (postDeployRow). A 🧪 test run posts
+ *  postDeployTestText to #ci alone. Returns the step taken. */
 export async function reportPostDeploy(slack: WebClient, reading: PostDeployReading) {
-  if (reading.restoreWindow) {
-    const text = restoreWindowText(reading, false);
+  if (reading.testRun) {
+    const text = postDeployTestText(reading);
     await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text });
-    return "restore-window";
+    return "test-run";
   }
-  return keepPage(slack, {
-    marker: MARKER,
-    sinceHours: 24,
+  const step = reading.restoreWindow
+    ? await postRestoreWindow(slack, reading)
+    : await keepPage(slack, {
+        marker: MARKER,
+        sinceHours: 24,
+        now: reading.now,
+        render: async (openText) => {
+          const page = postDeployPage(reading, openText);
+          return page && postDeployPageText(page, false);
+        },
+        why: passedWhy(reading),
+        broadcast: true,
+      });
+  await setRow(slack, {
+    channel: slackChannelIds["#error-pulse"],
     now: reading.now,
-    render: async (openText) => {
-      const page = postDeployPage(reading, openText);
-      return page && postDeployPageText(page, false);
-    },
-    why: passedWhy(reading),
+    signal: "prd hosts",
+    ...postDeployRow(reading),
   });
+  return step;
+}
+
+/** The restore window's one post to #ci (restoreWindowText), in place of a page. */
+async function postRestoreWindow(slack: WebClient, reading: PostDeployReading) {
+  const text = restoreWindowText(reading, false);
+  await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text });
+  return "restore-window" as const;
 }
 
 /** A project host that answers 421 (no project is served there) or a 5xx is down; 0 is no answer. */

@@ -120,28 +120,36 @@ Design (from mapping every poster, 2026-10-01):
   any 5xx on iterate.com, www or a first-party host, context sweep failed, Kit firmware or crash
   hunt red, DO cost over its page tier. Sent to the channel too ("prd is down"): post-deploy check
   failing, a prd deploy failing, a 5xx burst on iterate.com/www or a first-party host, DO cost at
-  5× its page tier. Row only: PR time to green, latency, real-model e2e, slow e2e rows, preview
-  sweep, minor prd faults (fewer than 10 in a window, projects' own hosts).
+  $50/h (a dollar figure: prd's page tier is $0.06/h, so its 5× would be $0.28/h). Row only: PR
+  time to green, latency, real-model e2e, slow e2e rows, minor prd faults (fewer than 10 in a
+  window, projects' own hosts). The preview sweep keeps its page (escalating stuck namespaces to
+  Cloudflare is someone's job), not sent to the channel.
 - **The fault alarm's minor incidents** live on an unposted page (no ts) that only its row shows;
   a ping-worthy incident posts it.
 - **No pin.** The bot has no `pins:write` scope (checked 2026-10-01); the dashboard is the newest
   top-level message most of the day anyway. Adding the scope and pinning is a follow-up.
 - **Edit window.** Bot edits worked on 31-hour-old pages, so a day's message stays editable.
 
-- [ ] scripts/ci/dashboard.ts: find or post today's dashboard, set a row, render
-- [ ] fake-slack: metadata, `include_all_metadata`, `latest`
-- [ ] slack.ts: `postPage`, `findOpenPages` over dashboard threads and legacy pages, escalations
+- [x] scripts/ci/dashboard.ts: find or post today's dashboard, set a row, render _rows are a flat
+      list: Slack metadata nests one level; a newer write of the same row stands (two deploys)_
+- [x] fake-slack: metadata, `include_all_metadata` _and deleting a reply; `latest` not needed_
+- [x] slack.ts: `postPage`, `findOpenPages` over dashboard threads and legacy pages, escalations
       and frozen pages into today's thread
 - [ ] fault alarm: row; unposted page for minor incidents; channel for a 5xx burst on the site's
       apex/www or a first-party host
-- [ ] health: a row per signal; latency, PR time to green, real-model e2e and slow e2e rows row only
-- [ ] do-cost: row; page into the thread; 5× sent to the channel
-- [ ] notify: deploy and workflow rows; deploy failure sent to the channel
-- [ ] post-deploy check: row; failure sent to the channel
-- [ ] preview sweep, context sweep: rows; preview sweep row only
-- [ ] `dashboard.ts close-legacy-pages`: list the top-level 🚨 pages nothing tracks; `--resolve`
+- [x] health: a row per signal; latency, PR time to green, real-model e2e and slow e2e rows row only
+      _`ROW_ONLY_SIGNALS` in sendUpdates; PR 1's `heldOnMainPage` went with it_
+- [x] do-cost: row; page into the thread; $50/h sent to the channel
+- [x] notify: deploy and workflow rows; deploy failure sent to the channel
+- [x] post-deploy check: row; failure sent to the channel _amber row in the restore window after
+      an erase_
+- [x] preview sweep, context sweep: rows; preview sweep keeps its page _preview's page logic moved
+      to preview-sweep.ts `keepSweepPages`, since preview.ts runs its CLI on import_
+- [x] `dashboard.ts close-legacy-pages`: list the top-level 🚨 pages nothing tracks; `--resolve`
       edits them resolved (run only with Misha's yes)
-- [ ] docs/depot-ci.md "Slack channels" rewritten around the dashboard
+- [x] docs/depot-ci.md "Slack channels" rewritten around the dashboard
+- [ ] fold quiet green rows into one line? (asked Misha after the DM preview, 2026-10-01)
+- [ ] pin the dashboard: needs the Slack app reinstalled with `pins:write`
 
 ## iterate.com site (the iterate project's config repo)
 

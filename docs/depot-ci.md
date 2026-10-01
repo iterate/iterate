@@ -769,34 +769,46 @@ and OTLP JSON export.
 
 ## Slack channels
 
-#error-pulse is for what someone must act on. A page and each escalation in its thread mention Jonas
-and Misha (`onCallMention` in `scripts/ci/slack.ts`); a resolution mentions nobody. The posters: the
-[health](#health) pages, the prd fault alarm, the prd post-deploy check
-(`scripts/ci/prd-post-deploy-check.ts`), the preview sweep's pages (`scripts/os/preview.ts sweep`),
-a failed context sweep (`scripts/ci/context-sweep.ts post`), a failed prd deploy and any other
-failed scheduled workflow (`scripts/ci/notify.ts`). Routine posts go to #ci and mention nobody: each
-pull request event as one top-level line (its title cut to 80 characters, its base named only when
-it is not `main`), each app's prd deploy as `🚀 <App> live · run` in the thread of its merge's line
-(`(re-run)` for a second run of the same commit; top-level with its sha when the deploy was
-dispatched or no merge's line appears within 3 minutes), the PR dashboard, the Durable Object cost
-alarm's daily thread, each context sweep's result, the orphans it destroyed included (the crash hunt
-leaves some every night), and the 🧪 test pages.
+#error-pulse is for what someone must act on. Its top level is one message a day, the **dashboard**
+(`scripts/ci/dashboard.ts`): one row per signal, 🔴 red, 🟡 open but quiet or slow, 🟢 fine, ⚪ the
+probe's own trouble, each edited in place by the poster that judges it, which notifies nobody. The
+first poster after 00:00 UTC posts the day's dashboard with the previous day's rows, so a signal
+nobody judged today still shows what it last was. The rows live in the message's Slack metadata,
+and the text is rendered from them.
 
-Every page keeps one message per incident (`scripts/ci/slack.ts`): `🚨 <what> <mentions>`, then
-`Impact:`, `Do:`, the ids to act on and one link. A later run that finds the incident still there
-edits the page, which notifies nobody; one that finds it worse replies in its thread with both
-mentions, never sent to the channel. The first run that finds it gone edits the page: its first line
-starts `✅ resolved:` and a second line says why. That edit is the whole resolution, so it pings no
-one. Older open pages of the same incident are marked resolved naming no one. A page Slack can no
-longer edit is posted again by its next edit. One still in the channel (past the workspace's edit
-window) is closed by a reply in its thread sent to the channel too, starting `✅ resolved:` and
-naming no one, which later runs read as closed. A deleted page's resolution sends nothing. The
-page's first line, or that reply, is its state, so the channel's history is the only state a poster
-keeps; a run that sees only part of an incident (the preview sweep's stuck namespaces, the apps that
-failed on a commit) carries forward what the open page names. Only a run on main pages; a 🧪 test run
-(each workflow's `test-run` input, each `notify.ts` command's `--test-run`) posts to #ci, mentions
-nobody and never reads #error-pulse. `notify.ts deploy-success --test-run` with a merged commit's
-`GITHUB_SHA` replies in that merge's thread, as its deploy did.
+Every page is a reply in today's dashboard thread (`postPage` in `scripts/ci/slack.ts`):
+`🚨 <what> <mentions>`, then `Impact:`, `Do:`, the ids to act on and one link. It mentions Jonas and
+Misha (`onCallMention`), and so does an escalation, a reply in the same thread naming what got
+worse. "prd is down" is also sent to the channel: a failing post-deploy check, a failed prd deploy,
+a burst of visitor 5xx on iterate.com, www or a first-party host, and Durable Object cost at 5× its
+page tier. Signals that should not ping post no page at all, only their row: PR time to green,
+latency, real-model e2e, slow e2e rows and the prd fault alarm's minor incidents (fewer than 10 in a
+window, a project's own host). Once mentioned in a dashboard's thread, Jonas and Misha follow it, so
+any reply there notifies them.
+
+A later run that finds the incident still there edits the page. The first run that finds it gone
+edits the page: its first line starts `✅ resolved:` and a second line says why. That edit and the
+row are the whole resolution, so it pings no one. Older open pages of the same incident are marked
+resolved naming no one. A page Slack can no longer edit is posted again by its next edit. One still
+in the channel (past the workspace's edit window) is closed by a reply in today's dashboard thread
+whose metadata names the page (`error_pulse_page_closed`), which later runs read as closed. A
+deleted page's resolution sends nothing. A poster with no state of its own finds its open pages in
+the dashboards' threads (`findOpenPages`), and in the top-level pages from before the dashboard; a
+run that sees only part of an incident (the preview sweep's stuck namespaces, the apps that failed
+on a commit) carries forward what the open page names. `node scripts/ci/dashboard.ts
+close-legacy-pages` lists the top-level 🚨 pages from before the dashboard, and `--resolve` edits
+them resolved.
+
+Only a run on main pages or sets a row; a 🧪 test run (each workflow's `test-run` input, each
+`notify.ts` command's `--test-run`) posts its pages top-level to #ci, mentions nobody and never
+reads #error-pulse. Routine posts go to #ci and mention nobody: each pull request event as one
+top-level line (its title cut to 80 characters, its base named only when it is not `main`), each
+app's prd deploy as `🚀 <App> live · run` in the thread of its merge's line (`(re-run)` for a second
+run of the same commit; top-level with its sha when the deploy was dispatched or no merge's line
+appears within 3 minutes), the PR dashboard, the Durable Object cost alarm's daily thread, each
+context sweep's result, the orphans it destroyed included (the crash hunt leaves some every night),
+and the 🧪 test pages. `notify.ts deploy-success --test-run` with a merged commit's `GITHUB_SHA`
+replies in that merge's thread, as its deploy did.
 
 | Poster                                                  | One page per   | Resolved by                                                  |
 | ------------------------------------------------------- | -------------- | ------------------------------------------------------------ |
@@ -805,8 +817,8 @@ nobody and never reads #error-pulse. `notify.ts deploy-success --test-run` with 
 | `notify.ts workflow-failure` (Kit firmware, crash hunt) | workflow       | its next green run (`workflow-resolved`)                     |
 
 Another app failing on the same commit, an app live again, or another deploy failing the host check
-is an edit of the page, not a reply; a red workflow whose failed jobs change also replies in its
-thread. Kit firmware's green run is one that built and published: a run that plans no release
+is an edit of the page, not a reply; a red workflow whose failed jobs change also replies in today's
+dashboard thread. Kit firmware's green run is one that built and published: a run that plans no release
 skips both and resolves nothing. A deploy step posts to #ci only when its whole job succeeded,
 and a failed post never turns the deploy red. Each PR event's line posts from `pr-dashboard.yml`'s
 `notify` job, which has no concurrency group: a group cancels the pending run a newer one replaces,

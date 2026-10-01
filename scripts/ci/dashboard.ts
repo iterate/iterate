@@ -51,7 +51,7 @@ export const SIGNALS = [
   "main e2e",
   "DO cost",
   "context sweep",
-  "Kit firmware",
+  "Kit Firmware",
   "OS crash hunt",
   "real-model e2e",
   "slow e2e rows",
@@ -146,8 +146,10 @@ const ROW_WRITES = 3;
 
 /**
  * Sets `signal`'s row on today's dashboard (todaysDashboard) to `state` and `text`, unless it
- * already says that. It reads the message back after its edit and writes again when another
- * poster's edit dropped the row; after ROW_WRITES it throws. Returns the dashboard's ts, whose
+ * already says that. It reads the message back after its edit and writes again when the row is
+ * missing or back to what it said before: another poster wrote the whole message from a copy read
+ * before this edit. A different row for the same signal is a newer write of it (two deploys
+ * finishing at once), which stands. After ROW_WRITES it throws. Returns the dashboard's ts, whose
  * thread holds today's pages.
  */
 export async function setRow(
@@ -155,10 +157,15 @@ export async function setRow(
   input: { channel: string; now: Date; signal: string; state: RowState; text: string },
 ): Promise<string> {
   const { channel, now, signal } = input;
-  let dashboard = await todaysDashboard(slack, { channel, now });
-  for (let write = 0; write < ROW_WRITES; write++) {
+  const wanted = `${input.state} ${input.text}`;
+  const said = (dashboard: Dashboard) => {
     const row = dashboard.payload.rows.find((existing) => existing.signal === signal);
-    if (row?.state === input.state && row.text === input.text) return dashboard.ts;
+    return row && `${row.state} ${row.text}`;
+  };
+  let dashboard = await todaysDashboard(slack, { channel, now });
+  const before = said(dashboard);
+  if (before === wanted) return dashboard.ts;
+  for (let write = 0; write < ROW_WRITES; write++) {
     const payload: DashboardPayload = {
       ...dashboard.payload,
       rows: [
@@ -173,9 +180,10 @@ export async function setRow(
       metadata: { event_type: DASHBOARD_EVENT, event_payload: payload },
     });
     dashboard = await readDashboard(slack, { channel, ts: dashboard.ts });
+    const after = said(dashboard);
+    // this write, or a newer one of the same row by another poster: either stands
+    if (after === wanted || (after && after !== before)) return dashboard.ts;
   }
-  const row = dashboard.payload.rows.find((existing) => existing.signal === signal);
-  if (row?.state === input.state && row.text === input.text) return dashboard.ts;
   throw new Error(`the dashboard's ${signal} row did not hold after ${ROW_WRITES} writes`);
 }
 
