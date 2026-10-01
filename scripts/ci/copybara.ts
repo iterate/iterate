@@ -33,6 +33,7 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { createCli } from "trpc-cli";
 import { parse as parseYaml, parseDocument, YAMLMap } from "yaml";
+import { z } from "zod";
 import { iterateAppFromPrd, iterateAppToken } from "./iterate-app-token.ts";
 
 const COPYBARA = {
@@ -348,7 +349,7 @@ export async function workspaceFiles(options: {
     );
     // With an empty metadata cache of its own, pnpm reads each package's manifest from the registry,
     // where a published version never changes, so every machine writes the same lockfile. A
-    // laptop's cache once gave crossws@0.4.4 another peer range than CI's, and the check went stale.
+    // machine's own cache can hold another peer range for the same version than CI's.
     const lockfileOnly = (extra: string[]) =>
       run(
         "pnpm",
@@ -422,6 +423,20 @@ export async function workspaceFiles(options: {
   }
 }
 
+const Dependency = z.object({ specifier: z.string(), version: z.string() });
+
+/** The parts of a pnpm lockfile `checkSubset` compares. */
+const Lockfile = z.object({
+  importers: z.record(z.string(), z.record(z.string(), z.record(z.string(), Dependency))),
+  packages: z.record(z.string(), z.object({ resolution: z.unknown() })).optional(),
+  catalogs: z.object({ default: z.record(z.string(), Dependency).optional() }).optional(),
+});
+
+const RootManifest = z.object({
+  packageManager: z.string(),
+  devDependencies: z.record(z.string(), z.string()).optional(),
+});
+
 /**
  * The copy resolves nothing this repo doesn't: every package it locks is locked here at the same
  * version with the same integrity, each copied package asks for the same specifiers and gets the
@@ -431,15 +446,9 @@ export async function workspaceFiles(options: {
  * reaches is marked optional.
  */
 function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": string }) {
-  type Dependency = { specifier: string; version: string };
-  const lock = (text: string) =>
-    parseYaml(text) as {
-      importers: Record<string, Record<string, Record<string, Dependency>>>;
-      packages?: Record<string, { resolution: unknown }>;
-      catalogs?: { default?: Record<string, Dependency> };
-    };
+  const lock = (text: string) => Lockfile.parse(parseYaml(text));
   // `1.168.58(crossws@0.4.4)(…)` → `1.168.58`: a version without the peers pnpm resolved it with
-  const withoutPeers = (dependency: Dependency | undefined) =>
+  const withoutPeers = (dependency: z.infer<typeof Dependency> | undefined) =>
     dependency && { specifier: dependency.specifier, version: dependency.version.split("(")[0] };
   const ours = lock(readFileSync(join(REPO_ROOT, "pnpm-lock.yaml"), "utf8"));
   const theirs = lock(files["pnpm-lock.yaml"]);
@@ -469,11 +478,7 @@ function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": s
       )
       .map(([name]) => `catalog ${name} is not what this repo locks`),
   ];
-  const rootManifest = (path: string) =>
-    JSON.parse(readFileSync(path, "utf8")) as {
-      packageManager: string;
-      devDependencies?: Record<string, string>;
-    };
+  const rootManifest = (path: string) => RootManifest.parse(JSON.parse(readFileSync(path, "utf8")));
   const ourRoot = rootManifest(join(REPO_ROOT, "package.json"));
   const theirRoot = rootManifest(join(REPO_ROOT, "copybara/core/package.json"));
   if (theirRoot.packageManager !== ourRoot.packageManager)
