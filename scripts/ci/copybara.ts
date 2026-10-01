@@ -60,6 +60,8 @@ export async function sync(options: {
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),
     owner: "iterate",
+    // Copybara's fetch from iterate/iterate gets this token too. It can't read iterate/iterate,
+    // which is fine while that repo is public; a private source repo has to be listed here.
     repositories: COPIES,
     permissions: { contents: "write" },
   });
