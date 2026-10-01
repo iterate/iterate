@@ -10,6 +10,8 @@ npx shadcn@latest add iterate/packages/context-view
 
 `npx shadcn@latest list iterate/packages` lists the components.
 
+Licenses: Apache-2.0 for every package with a LICENSE of its own (all but `packages/shared`), the `packages/ui` components included, and for the templates in `configs/`; AGPL-3.0 ([LICENSE](LICENSE)) for the rest.
+
 This repo is a read-only copy of `packages/` and `configs/` from iterate's own repo, made by [Copybara](https://github.com/google/copybara) after each production deploy. Paths are the same in both, and each commit ends in `GitOrigin-RevId: <sha>`, naming the commit it came from.
 
 - Found a bug, or want something? [Open an issue](https://github.com/iterate/packages/issues).
