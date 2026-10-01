@@ -35,14 +35,14 @@ cd iterate && pnpm install
 sha=$(git rev-parse HEAD)
 CLOUDFLARE_ENV=self-host pnpm --filter os build \
   --template "github:iterate/iterate#$sha&path:configs/default" \
-  --template "github:iterate/iterate#$sha&path:configs/heartbeat" \
-  --template "github:iterate/iterate#$sha&path:configs/minimal"
+  --template "github:iterate/iterate#$sha&path:configs/heartbeat"
 # writes core/os/dist/server/wrangler.json
 ```
 
 Each `--template` is a project template the deployment offers, downloaded from GitHub. A new
-project, the user's first included, starts from `default`: the agents and voice apps. Without any
-`--template`, every project starts with a bare homepage and nothing else.
+project, the user's first included, starts from `default`: the agents and voice apps. A bare
+homepage ("Blank" in the dash) is always offered; without any `--template`, every project starts as
+one.
 
 ## 2. Log in
 
