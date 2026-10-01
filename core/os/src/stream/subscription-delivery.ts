@@ -309,7 +309,7 @@ type SubscriptionDeliveryDeps = {
   abortIncarnation: (reason: string) => void;
   /** The retry ladder's jitter (`durableLadderDelayMs`): `Math.random` in the DO. A test seeds it
    *  to replay one order of rungs. */
-  random: () => number;
+  rng: () => number;
 };
 
 /** One cursor row's claim on the DO's alarm, for `deadlines()` and the trace: the persisted
@@ -324,7 +324,7 @@ export class SubscriptionDelivery {
   readonly #reconcileAlarm: SubscriptionDeliveryDeps["reconcileAlarm"];
   readonly #runAsDelivery: SubscriptionDeliveryDeps["runAsDelivery"];
   readonly #abortIncarnation: SubscriptionDeliveryDeps["abortIncarnation"];
-  readonly #random: SubscriptionDeliveryDeps["random"];
+  readonly #rng: SubscriptionDeliveryDeps["rng"];
   /** What the loop remembers per row, by name (SubscriptionDeliveryRecord). */
   readonly #deliveryRecordByName = new Map<string, SubscriptionDeliveryRecord>();
   /** Cursor delivery's lock, per NAME and outside the record on purpose: one `#deliverFromCursor`
@@ -348,7 +348,7 @@ export class SubscriptionDelivery {
     this.#reconcileAlarm = deps.reconcileAlarm;
     this.#runAsDelivery = deps.runAsDelivery;
     this.#abortIncarnation = deps.abortIncarnation;
-    this.#random = deps.random;
+    this.#rng = deps.rng;
     // The persisted cursors and fan-out delivery records seed memory once, here — after this,
     // memory is the one truth.
     for (const [name, cursor] of this.#stream.storage.listSubscriptionCursors())
@@ -1287,7 +1287,7 @@ export class SubscriptionDelivery {
               this.#haltCursorRow(name, row, cursor, attempt, error);
               return;
             }
-            const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt, this.#random);
+            const nextAttemptAtMs = Date.now() + durableLadderDelayMs(attempt, this.#rng);
             // The ladder's time IS the row's claim from here (durable, so it survives eviction).
             this.#adoptCursor(name, { ...cursor, attempt, nextAttemptAtMs }, true);
             return;
@@ -1768,11 +1768,11 @@ export class SubscriptionDelivery {
     if (!targetIsWebhook(this.#stream.coreReducedState, row))
       return {
         maxAttempts: DELIVERY_MAX_ATTEMPTS,
-        delayMs: (attempt) => durableLadderDelayMs(attempt, this.#random),
+        delayMs: (attempt) => durableLadderDelayMs(attempt, this.#rng),
       };
     return {
       maxAttempts: WEBHOOK_MAX_ATTEMPTS,
-      delayMs: (attempt) => durableLadderDelayMs(attempt, this.#random, WEBHOOK_LADDER_CAP_MS),
+      delayMs: (attempt) => durableLadderDelayMs(attempt, this.#rng, WEBHOOK_LADDER_CAP_MS),
     };
   }
 
@@ -1836,7 +1836,7 @@ export class SubscriptionDelivery {
       else if (probes < DELIVERY_MAX_ATTEMPTS) {
         probes += 1;
         nextAttemptAtMs = Math.max(
-          now + durableLadderDelayMs(probes, this.#random),
+          now + durableLadderDelayMs(probes, this.#rng),
           (fanOut.dangling && fanOut.refusedUntil) || 0,
         );
       }

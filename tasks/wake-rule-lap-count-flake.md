@@ -48,7 +48,7 @@ test change is Misha's call, so this PR changes no behaviour.
 
 - [x] make the ladder's jitter injectable: `SubscriptionDelivery` takes the random source the DO
       passes as `Math.random`, so a test replays one ordering without stubbing `Math.random`
-      _`SubscriptionDeliveryDeps.random`; `durableLadderDelayMs(attempt, random, capMs)`_
+      _`SubscriptionDeliveryDeps.rng`; `durableLadderDelayMs(attempt, rng, capMs)`_
 - [x] pinned `test.fails`: the same row, a seeded ladder that restarts the climb twice
       _`mulberry32(190)`, depths `[1..8, 2..8, 4..8]`, fails only on `toBeLessThan(20)`; a bare
       `test.fails` since core/os imports nothing from `packages/shared` (no `createFailing`)_

@@ -1228,7 +1228,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
-    random: Math.random,
+    rng: Math.random,
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──

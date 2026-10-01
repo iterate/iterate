@@ -1970,23 +1970,23 @@ test("fan-out, the wake rule: a wake handler appending work that fails climbs on
 // owed, so the paused row admits its wake). Depths [1..8, 2..8, 4..8]: 20 works.
 test.fails("fan-out, the wake rule, pinned: a ladder whose jitter restarts the climb twice still appends fewer than 20 works", async () => {
   const told: string[] = [];
-  const random = mulberry32(190);
+  const rng = mulberry32(190);
   let current: ReturnType<typeof incarnation> | undefined;
   const handler = sink(told, (event) => {
     if (event.type === WOKEN) current!.stream.append({ type: "test/work" });
     if (event.type === "test/work") throw new Error("the work fails");
   });
-  current = incarnation(handler, nodeSqliteDurableObjectStorage(), { random });
+  current = incarnation(handler, nodeSqliteDurableObjectStorage(), { rng });
   configure(current, SINK_ROW);
   await drainDeliveries();
-  current = incarnation(handler, current.storage, { random });
+  current = incarnation(handler, current.storage, { rng });
   await drainDeliveries();
   fakeClock();
   for (let laps = 0; laps < 2_000 && current.delivery.deadlines()[0]; laps++) {
     vi.setSystemTime(current.delivery.deadlines()[0]!.at + 1);
     current = incarnation(handler, current.storage, {
       wake: { cause: "alarm", due: ["retry"] },
-      random,
+      rng,
     });
     await drainDeliveries();
     await current.pass();
@@ -2033,7 +2033,7 @@ function incarnation(
     wake = { cause: "call", caller: "other" },
     birthEvents = [],
     deployId,
-    random = Math.random,
+    rng = Math.random,
   }: {
     /** How long an evaluation may be reused: the lifetime of the snapshot it was read through. */
     validForMs?: number;
@@ -2050,7 +2050,7 @@ function incarnation(
     /** The deploy this incarnation runs as (a lease names it). */
     deployId?: string;
     /** The retry ladder's jitter: seeded, the rungs come due in the same order every run. */
-    random?: () => number;
+    rng?: () => number;
   } = {},
 ) {
   const alarms: number[] = [];
@@ -2104,7 +2104,7 @@ function incarnation(
     // as the DO runs a delivery: one hand-off deeper than what it delivers (cause.ts)
     runAsDelivery: (events, call) => causes.run(causeOfDelivery(events), call),
     abortIncarnation: (reason) => void aborts.push(reason),
-    random,
+    rng,
   });
   // created + woken on a fresh store, the wake alone on one with rows, as the DO's first handler
   // records it — an alarm's caused by the deepest delivery it came back for

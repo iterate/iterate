@@ -461,7 +461,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
-      random: Math.random,
+      rng: Math.random,
     });
     stream.append(
       normalizeControlEvent(
@@ -520,7 +520,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
-      random: Math.random,
+      rng: Math.random,
     });
     const typeOf = (i: number) => (args.disjointTypes ? `blob-${i % args.rowCount}` : "blob");
     stream.append(
@@ -586,7 +586,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       reconcileAlarm: () => {},
       runAsDelivery: (_events, call) => call(),
       abortIncarnation: () => {},
-      random: Math.random,
+      rng: Math.random,
     });
     const cause = delivery.owedCause(Date.now());
     notePeakHeap();
@@ -653,7 +653,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
-      random: Math.random,
+      rng: Math.random,
     });
     stream.append({ type: "blob", payload: { n: -1 } }); // ONE commit
     // Every row gets its first call — how many at once is the ledger's decision, measured.
@@ -694,7 +694,7 @@ const scenarios: Record<string, (args: Record<string, number>) => Promise<void>>
       reconcileAlarm: () => {},
       runAsDelivery: (_event, call) => call(),
       abortIncarnation: () => {},
-      random: Math.random,
+      rng: Math.random,
     });
     stream.append(
       ...Array.from({ length: args.rowCount }, (_, i) =>
