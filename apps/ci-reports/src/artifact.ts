@@ -43,9 +43,9 @@ export async function serveDepotArtifact(
     return new Response("Invalid path", { status: 400 });
   }
   if (file && !safePath(file)) return new Response("Invalid path", { status: 400 });
-  const depot = (method: string, body: object) =>
-    depotCiApi(method, body, token, { fetch: fetchArtifact });
-  const download = await depot("GetArtifactDownloadURL", { artifactId }).catch((error: unknown) => {
+  const download = await depotCiApi("GetArtifactDownloadURL", { artifactId }, token, {
+    fetch: fetchArtifact,
+  }).catch((error: unknown) => {
     if (error instanceof HttpAnswerError && error.status === 404) return undefined;
     throw error;
   });
