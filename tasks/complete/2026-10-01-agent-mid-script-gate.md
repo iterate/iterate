@@ -1,11 +1,11 @@
 ---
-status: ready
+status: done
 size: small
 ---
 
 # The mid-script reply row holds its script with a gate, not a KV key
 
-Status: spec only, nothing built.
+Status: done. The row lends the script `itx.go` (a `Gate` RpcTarget) and opens it in `finally`; passes locally 4/4. Deployed proof is this PR's Preview OS E2E run.
 
 ## Why
 
@@ -36,6 +36,6 @@ await support.provide("itx.go", new Gate(go.promise)); // hypothetical shape
 `provide` lends a live RpcTarget like `FakeAi` (agents-partner-response-stream.e2e.test.ts already
 holds a model stream on a test-owned promise).
 
-- [ ] swap the KV handshake for a provided gate in the row
-- [ ] run the row locally, several times
-- [ ] typecheck, lint, format
+- [x] swap the KV handshake for a provided gate in the row _`Gate` at the bottom of agents.e2e.test.ts; script is `await itx.go.wait()`_
+- [x] run the row locally, several times _4/4 pass, 15–16.5 s; the old KV version also takes 15–16.5 s locally, where KV reads its own writes_
+- [x] typecheck, lint, format _plus knip; all clean_
