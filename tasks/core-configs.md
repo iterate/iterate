@@ -68,7 +68,7 @@ voice browser spec, which now pick the Voice preset.
       _(`coreConfigTemplates` in core/os `scripts/build.ts`; the generated module exports
       `minimalConfigFiles`)_
 - [x] Copybara: README of each copy, the PR check's folder gets an `origin`
-- [x] setup prompt: a bare build _(and voice/Kit say they need a voice project)_
+- [x] setup prompt: a bare build _(and an "Adding voice" section: the setup agent adds voice to the user's existing config over MCP, rather than creating a second project)_
 - [x] pkg.pr.new stops publishing agents; workflow path filters, `published-package-commit.ts`,
       preview paths _(and the PR body's template quick-launch links cover both folders)_
 - [x] tests: config-templates, the agents template e2e, voice rows on the Voice preset
