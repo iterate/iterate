@@ -143,21 +143,13 @@ const coreConfigs = path.resolve(root, "../configs");
 
 /**
  * Core's own configs (core/configs/<name>), each under its GitHub reference at this checkout's
- * commit, in the repository the checkout's `origin` names: iterate/iterate in iterate's own
- * checkouts, iterate/core in a self-host's clone of the copy, which keeps the same paths. Either
- * way the reference resolves on GitHub, so another deployment can create from it too.
+ * commit (`githubHeadOf`). In a self-host's clone of iterate/core, which keeps the same paths, the
+ * reference resolves on GitHub, so another deployment can create from it too. Once iterate's own
+ * checkouts are of iterate/private, theirs resolves for nobody else: a build seeds its presets from
+ * its own copy (src/project/processor.ts `presetFiles`).
  */
 function coreConfigTemplates(): ConfigTemplate[] {
-  const git = (...args: string[]) =>
-    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-  const origin = git("remote", "get-url", "origin");
-  const repository = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(origin);
-  if (!repository)
-    throw new Error(
-      `core's configs are offered under a GitHub reference, so this checkout's origin must be a github.com repository, not ${origin}`,
-    );
-  const [, owner, repo] = repository;
-  const commit = git("rev-parse", "HEAD");
+  const head = githubHeadOf(root);
   const names = readdirSync(coreConfigs, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
@@ -168,14 +160,25 @@ function coreConfigTemplates(): ConfigTemplate[] {
       "core/configs/default is missing: the dash and the consent page start a person's project from it",
     );
   return ["default", ...names.filter((name) => name !== "default")].map((name) => ({
-    reference: formatConfigRepoTemplateReference({
-      owner: owner!,
-      repo: repo!,
-      ref: commit,
-      path: `core/configs/${name}`,
-    }),
+    reference: formatConfigRepoTemplateReference({ ...head, path: `core/configs/${name}` }),
     files: trackedFiles(path.join(coreConfigs, name)),
   }));
+}
+
+/** The checkout at `checkout` as a template reference names it, without a folder: the GitHub
+ *  repository its `origin` names, at its HEAD commit. Every template a build offers is named so
+ *  (`github:<owner>/<repo>#<commit>&path:<folder>`), core's and those iterate's tooling gives it. */
+export function githubHeadOf(checkout: string) {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: checkout, encoding: "utf8" }).trim();
+  const origin = git("remote", "get-url", "origin");
+  const repository = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(origin);
+  if (!repository)
+    throw new Error(
+      `config templates are offered under a GitHub reference, so this checkout's origin must be a github.com repository, not ${origin}`,
+    );
+  const [, owner, repo] = repository;
+  return { owner: owner!, repo: repo!, ref: git("rev-parse", "HEAD") };
 }
 
 /** A folder's files as git tracks them: not the node_modules/ an `npm install` for a local `tsc`

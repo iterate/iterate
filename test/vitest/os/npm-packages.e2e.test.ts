@@ -9,7 +9,7 @@
 //   • an npm alias of a platform package: zod 3 as `zod3`, beside the deployment's own zod.
 // The first two answer the pet shop's catalogue for the shopper whose bearer the request carries:
 // the seeded pets, and whatever the suite's other pet-shop rows added meanwhile.
-import { isPkgPrNewCommit, pinPkgPrNewVersion } from "iterate/pkg-pr-new";
+import { isPkgPrNewCommit, pinPkgPrNewVersion, pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { expect, test } from "vitest";
 import { openItx, runId } from "../../helpers/client.ts";
 import { publishConfigWorker } from "../../helpers/config-worker.ts";
@@ -54,8 +54,7 @@ test("a loaded worker imports npm packages by name: hono routes, @iterate-com/ca
 });
 
 test("a vendor's SDK from pkg.pr.new: @iterate-com/petshop-sdk, typed, lists the shopper's pets", async () => {
-  const sdkAt = (ref: string) =>
-    `https://pkg.pr.new/iterate/iterate/@iterate-com/petshop-sdk@${ref}`;
+  const sdkAt = (ref: string) => pkgPrNewVersion("@iterate-com/petshop-sdk", ref);
   const pr = process.env.PREVIEW_PR_NUMBER?.trim();
   // The PR's own build answers with its commit. A number the PR published nothing under is a 404,
   // or a 200 for another build pkg.pr.new matched to it, which names no commit: main's, then.

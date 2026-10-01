@@ -25,8 +25,14 @@ export const docsModule = {
 
 const RootManifest = z.object({ dependencies: z.record(z.string(), z.string()).optional() });
 
-/** The guide an agent follows to work on docs (this package's AGENTS.md), on main. */
+/** The guide an agent follows to work on docs (this package's AGENTS.md), on main of the public
+ *  copy of this repository's packages, which keeps their paths. */
 export const docsAgentGuide =
+  "https://raw.githubusercontent.com/iterate/packages/main/packages/docs/AGENTS.md";
+
+/** The guide's address on iterate/iterate, which configs that installed Docs before it moved to
+ *  iterate/packages still name; iterate/iterate becomes an archive. */
+const formerDocsAgentGuide =
   "https://raw.githubusercontent.com/iterate/iterate/main/packages/docs/AGENTS.md";
 
 /** What `installDocs` adds to the config's AGENTS.md, which an agent on the platform's MCP server
@@ -56,22 +62,15 @@ export async function installDocs(
   // the pin set in place: every other field and dependency keeps its value and its order
   const { dependencies } = RootManifest.parse(manifest);
   manifest.dependencies = { ...dependencies, "@iterate-com/docs": version };
-  // the guide's pointer, once: a section already there (a reinstall, the owner's own words) stays
   const agents = (await repo.readFile("AGENTS.md")) || "";
+  const pointed = withGuidePointer(agents);
   const { commitOid } = await repo.commitFiles({
     message: `Install @iterate-com/docs at ${version}`,
     parent: tip,
     changes: [
       docsModule,
       { path: "package.json", content: `${JSON.stringify(manifest, null, 2)}\n` },
-      ...(agents.includes(docsAgentGuide)
-        ? []
-        : [
-            {
-              path: "AGENTS.md",
-              content: agents ? `${agents.trimEnd()}\n\n${docsAgentsSection}` : docsAgentsSection,
-            },
-          ]),
+      ...(pointed === agents ? [] : [{ path: "AGENTS.md", content: pointed }]),
     ],
   });
   // one deadline for the whole wait: a give-up for now does not restart it
@@ -125,4 +124,12 @@ export async function ensureDoc(
     consumes: [EDIT_FRAME, COMMIT_NOTICED, DOC_LEFT, ...commentEvents],
   });
   return context;
+}
+
+/** The config's AGENTS.md pointing at the guide, once: a section already there (a reinstall, the
+ *  owner's own words) stays, its former address replaced; otherwise the section is appended. */
+function withGuidePointer(agents: string) {
+  const pointed = agents.replaceAll(formerDocsAgentGuide, docsAgentGuide);
+  if (pointed.includes(docsAgentGuide)) return pointed;
+  return agents ? `${agents.trimEnd()}\n\n${docsAgentsSection}` : docsAgentsSection;
 }

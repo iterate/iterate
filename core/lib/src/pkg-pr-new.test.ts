@@ -1,5 +1,10 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { buildStanding, pinPkgPrNewVersion } from "./pkg-pr-new.ts";
+import {
+  buildStanding,
+  pinPkgPrNewVersion,
+  pkgPrNewRepository,
+  pkgPrNewVersion,
+} from "./pkg-pr-new.ts";
 
 const commit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
 
@@ -92,7 +97,14 @@ test.for([
       [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
       [agentsAt(older)]: served(`iterate:iterate:${older}`, 200, earlier),
     },
-    standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
+    standing: {
+      kind: "behind",
+      installed: older,
+      installedRepository: pkgPrNewRepository,
+      newest: newer,
+      newestRepository: pkgPrNewRepository,
+      version: agentsAt(newer),
+    },
   },
   {
     name: "main's newest build is the newest",
@@ -101,7 +113,7 @@ test.for([
       [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
       [agentsAt(newer)]: served(`iterate:iterate:${newer}`, 200, later),
     },
-    standing: { kind: "newest", installed: newer },
+    standing: { kind: "newest", installed: newer, installedRepository: pkgPrNewRepository },
   },
   {
     name: "a build published after main's newest (a pull request's) is ahead, with no upgrade",
@@ -110,7 +122,13 @@ test.for([
       [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, earlier),
       [agentsAt(older)]: served(`iterate:iterate:${older}`, 200, later),
     },
-    standing: { kind: "ahead", installed: older, newest: newer },
+    standing: {
+      kind: "ahead",
+      installed: older,
+      installedRepository: pkgPrNewRepository,
+      newest: newer,
+      newestRepository: pkgPrNewRepository,
+    },
   },
   {
     name: "a build pkg.pr.new no longer serves is behind",
@@ -119,7 +137,14 @@ test.for([
       [agentsAt("main")]: served(`iterate:iterate:${newer}`, 200, later),
       [agentsAt(older)]: served(`iterate:iterate:${older}`, 404),
     },
-    standing: { kind: "behind", installed: older, newest: newer, version: agentsAt(newer) },
+    standing: {
+      kind: "behind",
+      installed: older,
+      installedRepository: pkgPrNewRepository,
+      newest: newer,
+      newestRepository: pkgPrNewRepository,
+      version: agentsAt(newer),
+    },
   },
 ])("$name", async ({ installed, answers, standing }) => {
   const head = vi.fn(async (url: string | URL | Request) => answers[String(url)]!);
@@ -127,11 +152,28 @@ test.for([
   expect(head.mock.calls.map(([url]) => url).sort()).toEqual(Object.keys(answers).sort());
 });
 
+test("a build iterate/iterate published before the move is ours, behind main's newest, each commit in its own repository", async () => {
+  const beforeTheMove = `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${older}`;
+  const answers: Record<string, Response> = {
+    [agentsAt("main")]: served(`iterate:private:${newer}`, 200, later),
+    [beforeTheMove]: served(`iterate:iterate:${older}`, 200, earlier),
+  };
+  const head = vi.fn(async (url: string | URL | Request) => answers[String(url)]!);
+  expect(await buildStanding("@iterate-com/agents", beforeTheMove, head)).toEqual({
+    kind: "behind",
+    installed: older,
+    installedRepository: "iterate/iterate",
+    newest: newer,
+    newestRepository: pkgPrNewRepository,
+    version: agentsAt(newer),
+  });
+});
+
 test.for([
   ["an npm range", "^1.2.0"],
   ["a branch, which the loader refuses", agentsAt("main")],
   ["a fork's build", `https://pkg.pr.new/someone/fork/@iterate-com/agents@${older}`],
-  ["another package's build", `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@${older}`],
+  ["another package's build", pkgPrNewVersion("@iterate-com/voice", older)],
 ])("%s is the project's own, and pkg.pr.new is never asked", async ([, installed]) => {
   const head = vi.fn(async () => served(`iterate:iterate:${newer}`, 200, later));
   expect(await buildStanding("@iterate-com/agents", installed, head)).toEqual({
@@ -185,7 +227,7 @@ test("pkg.pr.new failing main's HEAD twice fails the standing within its bound, 
 });
 
 function agentsAt(ref: string) {
-  return `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${ref}`;
+  return pkgPrNewVersion("@iterate-com/agents", ref);
 }
 
 /** pkg.pr.new's answer to a HEAD: `status`, naming `key` in `x-commit-key`, and the build's

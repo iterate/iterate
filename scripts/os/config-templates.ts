@@ -3,23 +3,24 @@
 // suites offer a creation beside core's own (core/configs, which every build offers). Each template
 // is its tracked files (not the node_modules/ an `npm install` for a local `tsc` leaves there), its
 // packages of ours at this checkout's pkg.pr.new build, never `@main`, which moves, under its GitHub
-// reference at this checkout's commit.
+// reference at this checkout's commit, in the repository its `origin` names (`githubHeadOf`).
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { formatConfigRepoTemplateReference } from "iterate/config-repo-template";
 import { pkgPrNewVersion } from "iterate/pkg-pr-new";
-import type { ConfigTemplate } from "../../core/os/scripts/build.ts";
+import { githubHeadOf, type ConfigTemplate } from "../../core/os/scripts/build.ts";
 import { checkoutPublishedPackageCommit } from "./published-package-commit.ts";
 
 export function configTemplates(repoRoot: string): ConfigTemplate[] {
-  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" });
+  const head = githubHeadOf(repoRoot);
   // this checkout's build of the packages, worked out only when a template names `@main`
   let packagesCommit: string | undefined;
   const configs = path.join(repoRoot, "configs");
   return readdirSync(configs, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
-      reference: `github:iterate/iterate#${commit.trim()}&path:configs/${entry.name}`,
+      reference: formatConfigRepoTemplateReference({ ...head, path: `configs/${entry.name}` }),
       files: execFileSync("git", ["ls-files", "-z"], {
         cwd: path.join(configs, entry.name),
         encoding: "utf8",

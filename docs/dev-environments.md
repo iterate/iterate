@@ -165,10 +165,9 @@ read secrets.
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
   (core/os's into the Dash's project), and with the Dash one per template in
   `core/configs` and `configs` ("New project from template"), which lands in the Dash's New project
-  sheet with that template chosen (`/projects?new=1&template=<name>`). A
-  template the PR changes is linked at the PR head instead
-  (`template=github:iterate/iterate#<head>&path:<folder>`, the
-  custom field prefilled), so the project is born from the unmerged template.
+  sheet with that template chosen (`/projects?new=1&template=<name>`). The
+  deployment's build offers the PR's copy of every template, so a template the
+  PR changes is born as the PR has it.
   Each link is the app's own sign-in naming the PR's test person,
   `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test&provider_hint=os.iterate.com`
   (`signInLinkOf` in `scripts/os/preview-config.ts`). `provider_hint`

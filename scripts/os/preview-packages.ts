@@ -6,7 +6,7 @@
 // before it hands the deployment on.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { pkgPrNewVersion } from "iterate/pkg-pr-new";
+import { pkgPrNewRepository, pkgPrNewVersion } from "iterate/pkg-pr-new";
 import {
   fetchRetryingPlatformFailures,
   httpFailureFields,
@@ -38,7 +38,7 @@ export const AWAIT_PUBLISHED = { pollMs: 5_000, boundMs: 10 * 60_000 };
 
 /**
  * WAIT UNTIL pkg.pr.new SERVES every one of `packages` at `commit`: a HEAD of each
- * `https://pkg.pr.new/iterate/iterate/<package>@<commit>` every AWAIT_PUBLISHED.pollMs, asking
+ * `pkgPrNewVersion(<package>, <commit>)` every AWAIT_PUBLISHED.pollMs, asking
  * only for those not yet served, until each answers 200. A 404 is pkg.pr.new not serving it yet.
  * It asks pkg.pr.new and never esm.sh, through which the platform installs a project's pkg.pr.new
  * dependencies (core/os/src/context/module-resolution.ts): esm.sh answers "tarball … not found"
@@ -80,7 +80,7 @@ export async function awaitPublishedPackages(input: {
     reported = state;
     if (Date.now() - started >= AWAIT_PUBLISHED.boundMs)
       throw new Error(
-        `pkg.pr.new did not serve ${unserved.join(", ")} at ${commit} within ${AWAIT_PUBLISHED.boundMs / 60_000} minutes; pkg-pr-new.yml's run for the commit publishes them (https://github.com/iterate/iterate/actions/workflows/pkg-pr-new.yml). The last answers:\n${missing.map(({ name, answer }) => `  ${pkgPrNewVersion(name, commit)} ${answer}`).join("\n")}`,
+        `pkg.pr.new did not serve ${unserved.join(", ")} at ${commit} within ${AWAIT_PUBLISHED.boundMs / 60_000} minutes; pkg-pr-new.yml's run for the commit publishes them (https://github.com/${pkgPrNewRepository}/actions/workflows/pkg-pr-new.yml). The last answers:\n${missing.map(({ name, answer }) => `  ${pkgPrNewVersion(name, commit)} ${answer}`).join("\n")}`,
       );
     await new Promise((resolve) => setTimeout(resolve, AWAIT_PUBLISHED.pollMs));
   }

@@ -11,9 +11,9 @@ of iterate/iterate. This is the inventory and the plan.
 
 ## Status
 
-- Phase 0 (this branch): in progress. It changes nothing for users today; it makes the later switch
-  to iterate/private a one-line constant plus a sweep of literal URLs, and removes the two template
-  paths that download from GitHub.
+- Phase 0 (this branch): done, pending CI and review. It changes nothing for users today; it makes
+  the later switch to iterate/private a one-line constant plus a sweep of literal URLs, and removes
+  the two template paths that download from GitHub.
 - Misha has answered the three questions (see Decisions).
 - Phase 2 (the switch) and the config-repo fix-up come after iterate/private exists.
 
@@ -73,12 +73,12 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
 
 ### Related repo names in the same code paths
 
-| Where                                                                                                                                | Problem                                                                                                                                          | Becomes                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/docs/src/install.ts:30` `docsAgentGuide`                                                                                   | `raw.githubusercontent.com/iterate/iterate/main/…`, written into projects' AGENTS.md. Goes stale once the repo is archived                       | `iterate/packages`, which keeps the same paths (Phase 0)                                                                                                                 |
-| `packages/ui/src/components/app-build.tsx:155,184`                                                                                   | Commit and compare links to iterate/iterate                                                                                                      | Each commit links to its own repo; no compare link between repos (Phase 0)                                                                                               |
-| `repository`/`homepage`/`bugs` in `core/lib/package.json` and `packages/{voice,docs,github-sync,petshop-sdk,ai-linter}/package.json` | Point at the archive                                                                                                                             | `iterate/core` / `iterate/packages` with `directory` (Phase 0)                                                                                                           |
-| `apps/dash/src/routes/_auth/projects/index.tsx:386` `templateFields`                                                                 | Existing bug: it matches `configs/<name>` only, so `?template=heartbeat` and `?template=minimal` quick-launch links land on the default template | Match `core/configs/<name>` too (Phase 0). `apps/dash` may move in the apps → packages work (`tasks/apps-into-packages.md`); whichever lands second carries the fix over |
+| Where                                                                                                                                | Problem                                                                                                                    | Becomes                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `packages/docs/src/install.ts:30` `docsAgentGuide`                                                                                   | `raw.githubusercontent.com/iterate/iterate/main/…`, written into projects' AGENTS.md. Goes stale once the repo is archived | `iterate/packages`, which keeps the same paths (Phase 0)                                                          |
+| `packages/ui/src/components/app-build.tsx:155,184`                                                                                   | Commit and compare links to iterate/iterate                                                                                | Each commit links to its own repo; no compare link between repos (Phase 0)                                        |
+| `repository`/`homepage`/`bugs` in `core/lib/package.json` and `packages/{voice,docs,github-sync,petshop-sdk,ai-linter}/package.json` | Point at the archive                                                                                                       | `iterate/core` / `iterate/packages` with `directory` (Phase 0)                                                    |
+| `apps/dash/src/routes/_auth/projects/index.tsx` `templateFields`                                                                     | Matched `configs/<name>` only, so `?template=heartbeat` and `?template=minimal` landed on the default template             | ~~Match `core/configs/<name>` too~~ Already fixed on main (it matches by folder name) by the time Phase 0 started |
 
 ### Handled elsewhere
 
@@ -94,20 +94,24 @@ The org-wide pkg-pr-new GitHub App install already covers iterate/private
 
 ### Phase 0: now, on iterate/iterate (this branch; no behavior change today)
 
-- [ ] `pkgPrNewRepository = "iterate/iterate"` in `core/lib/src/pkg-pr-new.ts`. `pkgPrNewVersion`,
+- [x] `pkgPrNewRepository = "iterate/iterate"` in `core/lib/src/pkg-pr-new.ts`. `pkgPrNewVersion`,
       the error link in `preview-packages.ts`, the npm-packages e2e and the "our build" test fixtures
-      use it, so the switch is one line plus a sweep of literal URLs
-- [ ] `buildStanding` counts builds from `iterate/iterate` and from `pkgPrNewRepository` as ours,
+      use it, so the switch is one line plus a sweep of literal URLs _(the e2e and
+      `pkg-pr-new.test.ts` go through `pkgPrNewVersion`; other fixtures stay literal so they read
+      plainly, and fail loudly at the switch until swept)_
+- [x] `buildStanding` counts builds from `iterate/iterate` and from `pkgPrNewRepository` as ours,
       `newest` is always `pkgPrNewRepository`'s `@main`, and the standing says which repo each
-      commit is in. Comparing by `last-modified` already works across repos
-- [ ] The build card links each commit to its own repo, and links a compare only when both commits
-      are in the same one
-- [ ] `config-templates.ts` and `os-dev.ts` take the preset's owner/repo from `origin`, through one
-      helper shared with `build.ts`
-- [ ] A creation naming one of the build's own presets at another commit is seeded from the build's
-      copy, with no GitHub request
-- [ ] Quick-launch links use names only; `templateFields` matches `core/configs/<name>`
-- [ ] `docsAgentGuide` → iterate/packages; `package.json` `repository` fields → the public copies
+      commit is in. Comparing by `last-modified` already works across repos _(`installedRepository`
+      and `newestRepository` on the standing)_
+- [x] The build card links each commit to its own repo, and links a compare only when both commits
+      are in the same one _(`Commit` in `packages/ui/src/components/app-build.tsx` takes a repository)_
+- [x] `config-templates.ts` and `os-dev.ts` take the preset's owner/repo from `origin`, through one
+      helper shared with `build.ts` _(`githubHeadOf` in `core/os/scripts/build.ts`)_
+- [x] A creation naming one of the build's own presets at another commit is seeded from the build's
+      copy, with no GitHub request _(`presetFiles` in `core/os/src/project/processor.ts`)_
+- [x] Quick-launch links use names only _(`templateQuickLaunches` takes no changed paths or head; the `templateFields` half was already on main)_
+- [x] `docsAgentGuide` → iterate/packages; `package.json` `repository` fields → the public copies
+      _(a reinstall rewrites the guide's old address in place rather than adding a second section)_
 
 ### Phase 1: the move (Misha and Jonas)
 
@@ -184,3 +188,11 @@ bumped, a risk that exists today and that the move doesn't change.
   issues enabled.
 - 2026-10-01: plan updated for fresh history in iterate/private and Misha's answers; Phase 0 starts
   on branch `package-urls-repo-move`.
+- Phase 0: main had already made the Dash's `templateFields` match presets by folder name, so the
+  Dash needed no change. Changing `docsAgentGuide` would have made a reinstall append a second Docs
+  section to configs that name the old address (`installDocs` looks for the URL), so a reinstall
+  now rewrites the old address in place. The generated preset reference is unchanged today:
+  `github:iterate/iterate#<HEAD>&path:configs/voice`, now read from `origin`.
+- Local checks: typecheck, lint, knip and format clean; tests of core/lib, core/os, packages/docs,
+  packages/ui and scripts/os pass. `scripts/ci/toolchain.test.ts` and the shell-hook rows fail on
+  macOS's bash 3.2 (`inherit_errexit`), on main too.
