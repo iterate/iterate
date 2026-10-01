@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
 # The "CI trace" commit status is a link, never a verdict
 
-**Status:** spec written; implementation next.
+**Status:** done. `publish` posts `success` for every trace; tests and docs updated.
 
 ## Problem
 
@@ -38,9 +38,9 @@ the same problem: the trace exists, and the run's own checks already say it was 
 
 ## Checklist
 
-- [ ] `cli.ts` `publish`: state `success` for every trace
-- [ ] `cli.test.ts`: the three cases expect `success`, descriptions unchanged
-- [ ] `docs/ci-traces.md`: say the state is always success and the description carries the verdict
+- [x] `cli.ts` `publish`: state `success` for every trace _`state: "success" as const`; the doc comment says why_
+- [x] `cli.test.ts`: the three cases expect `success`, descriptions unchanged _the `test.for` table at the top_
+- [x] `docs/ci-traces.md`: say the state is always success and the description carries the verdict _the two-status list at the top_
 
 ## Out of scope
 
