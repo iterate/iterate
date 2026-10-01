@@ -7,12 +7,12 @@ current` reads the run from Depot and writes `trace.html` and `trace.json`, uplo
 [test evidence](test-evidence.md)). `cli.ts publish` then posts two commit statuses
 (`statuses: write`), each linking a report in the viewer below:
 
-- **CI trace**: success with the time to green, failure with the time to red,
-  or error when the run has no verdict (cancelled).
-- **Playwright report**: success whenever the Browser specs job uploaded one.
+- **CI trace**: its description the time to green, the time to red, or no verdict (cancelled).
+- **Playwright report**: whenever the Browser specs job uploaded one.
 
-A status means the report exists; the run's own checks carry the verdict. The trace job is never a
-gate. A PR that changes no preview path gets no trace.
+A status means the report exists, so both are always `success`; the run's own checks carry the
+verdict, and a red here would show one failure twice. The trace job is never a gate. A PR that
+changes no preview path gets no trace.
 
 ## The viewer
 

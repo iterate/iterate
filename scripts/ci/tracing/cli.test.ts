@@ -14,9 +14,9 @@ test.for([
   ],
   [
     { "ci.status": "failed", "ci.time_to_red_ms": "40000" },
-    { state: "failure", description: "Time to red 0m 40s" },
+    { state: "success", description: "Time to red 0m 40s" },
   ],
-  [{ "ci.status": "cancelled" }, { state: "error", description: "No verdict (cancelled)" }],
+  [{ "ci.status": "cancelled" }, { state: "success", description: "No verdict (cancelled)" }],
 ] as const)("a %o trace posts the CI trace status %o", async ([attributes, expected]) => {
   await using collected = await collectedTrace(attributes, [traceArtifact]);
 

@@ -109,10 +109,11 @@ export default class CiTrace {
   }
 
   /**
-   * Post the run's report links as commit statuses: **CI trace**, with the time to green or red, and
-   * **Playwright report** when the e2e job uploaded one. Each opens its Depot artifact in the
-   * ci-reports viewer (apps/ci-reports). A status says the report exists; the run's own checks carry
-   * the verdict. Runs after the upload step: Depot lists an artifact once its upload finished.
+   * Post the run's report links as commit statuses: **CI trace**, its description the time to green
+   * or red, and **Playwright report** when the e2e job uploaded one. Each opens its Depot artifact in
+   * the ci-reports viewer (apps/ci-reports). A status says the report exists, so both are `success`;
+   * the run's own checks carry the verdict. Runs after the upload step: Depot lists an artifact once
+   * its upload finished.
    */
   async publish(directory: string) {
     const trace = TraceFile.parse(JSON.parse(await readFile(`${directory}/trace.json`, "utf8")));
@@ -155,7 +156,7 @@ export default class CiTrace {
     const red = attribute("ci.time_to_red_ms");
     const statuses = [
       {
-        state: green ? ("success" as const) : red ? ("failure" as const) : ("error" as const),
+        state: "success" as const,
         context: "CI trace",
         description: green
           ? `Time to green ${duration(Number(green))}`
