@@ -12,9 +12,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
 import { cn } from "cn";
-import { Input } from "../input.tsx";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../sheet.tsx";
 import { navigateToPath, PathLink, type ContextPathLinks } from "./context-path.tsx";
+import { Input } from "#/components/ui/input.tsx";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "#/components/ui/sheet.tsx";
 
 type TreeRow = { path: string; name: string; depth: number; context: boolean };
 

@@ -12,7 +12,7 @@ import {
   PlusIcon,
   SquareIcon,
 } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,8 +21,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@iterate-com/ui/components/dropdown-menu";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/dropdown-menu";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import { cn } from "cn";
 import { CodeEditor } from "@iterate-com/ui/components/code-editor";
 import { AttachmentChips, AttachmentFileInput } from "./composer-attachments.tsx";

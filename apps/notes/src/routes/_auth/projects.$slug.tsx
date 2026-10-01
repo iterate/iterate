@@ -2,10 +2,10 @@ import { createFileRoute, useRouterState } from "@tanstack/react-router";
 import { useState, type FormEvent } from "react";
 import { z } from "zod";
 import { useContextStub, useFacetLiveState } from "iterate/react";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldLabel } from "@iterate-com/ui/components/field";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { Field, FieldLabel } from "@iterate-com/ui/components/ui/field";
 import { ProjectAppShell } from "@iterate-com/ui/components/project-app-shell";
-import { Textarea } from "@iterate-com/ui/components/textarea";
+import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 
 // Notes edits a file in the config repo through a project workspace.
 const REPO = "/repos/config";

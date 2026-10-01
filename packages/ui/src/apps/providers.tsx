@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
-import { initPosthog } from "../components/posthog.tsx";
-import { Toaster } from "../components/sonner.tsx";
-import { TooltipProvider } from "../components/tooltip.tsx";
+import { initPosthog } from "#/components/posthog.tsx";
+import { Toaster } from "#/components/ui/sonner.tsx";
+import { TooltipProvider } from "#/components/ui/tooltip.tsx";
 
 /** Every client app's root providers. PostHog starts when the app has a key (envs.ts hands one to
  *  prd only). */

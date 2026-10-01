@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { createAppRouter } from "@iterate-com/ui/apps/router";
-import { buttonVariants } from "@iterate-com/ui/components/button";
+import { buttonVariants } from "@iterate-com/ui/components/ui/button";
 import { DefaultNotFoundComponent } from "@iterate-com/ui/components/route-defaults";
 import { routeTree } from "./routeTree.gen.ts";
 

@@ -1,6 +1,6 @@
 // The attachment chips and the hidden `<input type="file">` behind `openFilePicker`.
 import { XIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { formatFileSize } from "../lib/agent-events.ts";
 import type { AttachmentEntry, ComposerAttachments } from "./use-composer-attachments.ts";
 

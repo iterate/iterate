@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { cn } from "cn";
 import { ArrowDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";

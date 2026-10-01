@@ -7,9 +7,14 @@ import { useFormStatus } from "react-dom";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { z } from "zod";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
 import {
   Sheet,
   SheetClose,
@@ -18,8 +23,8 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -27,7 +32,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@iterate-com/ui/components/table";
+} from "@iterate-com/ui/components/ui/table";
 import { ListPage } from "../../../../components/list-page.tsx";
 import { dateOf } from "../../../../lib/dates.ts";
 

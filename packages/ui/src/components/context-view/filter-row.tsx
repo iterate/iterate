@@ -5,9 +5,9 @@
 import { useCallback } from "react";
 import { SearchIcon } from "lucide-react";
 import { cn } from "cn";
-import { InputGroup, InputGroupAddon, InputGroupInput } from "../input-group.tsx";
 import { FILTER_CLEARED, type ContextViewState } from "./context-view-search.ts";
 import { offsetBound, shortEventType, typeChips, type ContextViewFilter } from "./filters.tsx";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "#/components/ui/input-group.tsx";
 
 export function FilterRow({
   filter,

@@ -21,12 +21,12 @@ import {
   type GrantKind,
   type GrantRecord,
 } from "iterate/api";
-import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
-import { Checkbox } from "@iterate-com/ui/components/checkbox";
-import { Input } from "@iterate-com/ui/components/input";
-import { Label } from "@iterate-com/ui/components/label";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/ui/avatar";
+import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
+import { Checkbox } from "@iterate-com/ui/components/ui/checkbox";
+import { Input } from "@iterate-com/ui/components/ui/input";
+import { Label } from "@iterate-com/ui/components/ui/label";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
 import {
   Sheet,
@@ -35,8 +35,8 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,7 +47,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@iterate-com/ui/components/alert-dialog";
+} from "@iterate-com/ui/components/ui/alert-dialog";
 import { ConnectButton } from "@iterate-com/ui/components/connect-button";
 import { useContextStub, useFacetLiveState } from "iterate/react";
 import { Identifier } from "../../components/identifier.tsx";

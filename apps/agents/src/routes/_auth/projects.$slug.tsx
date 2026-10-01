@@ -22,11 +22,16 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "@iterate-com/ui/components/breadcrumb";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
-import { SidebarGroup, SidebarGroupContent } from "@iterate-com/ui/components/sidebar";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+} from "@iterate-com/ui/components/ui/breadcrumb";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@iterate-com/ui/components/ui/empty";
+import { SidebarGroup, SidebarGroupContent } from "@iterate-com/ui/components/ui/sidebar";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/ui/tabs";
 import { cn } from "cn";
 import { ContextView } from "@iterate-com/ui/components/context-view/context-view";
 import {

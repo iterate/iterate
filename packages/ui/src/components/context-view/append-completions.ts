@@ -2,8 +2,8 @@
 // event's four fields at the start of a mapping, and after `type:` the event types this context
 // knows — the ones some processor here consumes, then the ones in the loaded log, most frequent
 // first.
-import type { CodeEditorCompletions } from "../code-editor.client.tsx";
 import { shortEventType } from "./filters.tsx";
+import type { CodeEditorCompletions } from "#/components/code-editor.client.tsx";
 
 /** One event type the composer can offer, with why it is known. */
 export type KnownEventType = { type: string; detail: string; section: string };

@@ -30,12 +30,12 @@ import {
   usePaletteShortcut,
 } from "./app-shell-palette.tsx";
 import {
-  plainLeftClick,
   readSidebarNav,
   type AppPaletteEntry,
   type SidebarNavItem,
 } from "./app-shell-palette-entries.ts";
-import { Avatar, AvatarFallback } from "./avatar.tsx";
+import { plainLeftClick } from "#/lib/plain-left-click.ts";
+import { Avatar, AvatarFallback } from "#/components/ui/avatar.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,8 +44,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "./dropdown-menu.tsx";
-import { IterateLogo } from "./iterate-logo.tsx";
+} from "#/components/ui/dropdown-menu.tsx";
+import { IterateLogo } from "#/components/iterate-logo.tsx";
 import {
   Sidebar,
   SidebarContent,
@@ -59,8 +59,8 @@ import {
   SidebarRail,
   SidebarTrigger,
   useSidebar,
-} from "./sidebar.tsx";
-import { resetPosthog } from "./posthog.tsx";
+} from "#/components/ui/sidebar.tsx";
+import { resetPosthog } from "#/components/posthog.tsx";
 
 /** A project as the switcher lists it; `org` is its organization, when the app knows it — grouped
  *  by the id (two organizations may share a name), labelled by the name. */

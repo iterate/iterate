@@ -1,11 +1,11 @@
-import { buttonVariants } from "@iterate-com/ui/components/button";
+import { buttonVariants } from "@iterate-com/ui/components/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@iterate-com/ui/components/card";
+} from "@iterate-com/ui/components/ui/card";
 import { cn } from "cn";
 import { stepUpUrl } from "../lib/scopes.ts";
 

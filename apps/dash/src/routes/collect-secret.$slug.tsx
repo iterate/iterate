@@ -19,17 +19,17 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import type { IterateContextApiWith } from "iterate/api";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { Field, FieldLabel } from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   ErrorMessage,
   StandaloneCard,
   StandalonePage,
 } from "@iterate-com/ui/components/standalone-page";
-import { Textarea } from "@iterate-com/ui/components/textarea";
+import { Textarea } from "@iterate-com/ui/components/ui/textarea";
 import { iterateClient } from "../lib/iterate-client.ts";
 import { SECRET_NAME, SECRETS_PREFIX, secretMaterialOf } from "../lib/secrets.ts";
 

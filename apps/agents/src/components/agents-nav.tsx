@@ -14,7 +14,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@iterate-com/ui/components/sidebar";
+} from "@iterate-com/ui/components/ui/sidebar";
 import { toast } from "sonner";
 import { cn } from "cn";
 import {

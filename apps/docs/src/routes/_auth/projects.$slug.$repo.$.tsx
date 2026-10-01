@@ -7,15 +7,15 @@ import { docContextPath } from "@iterate-com/docs/frames";
 import { docsModule, ensureDoc, installDocs } from "@iterate-com/docs/install";
 import { pinPkgPrNewVersion, pkgPrNewVersion } from "iterate/pkg-pr-new";
 import { startAppConfigOf } from "@iterate-com/shared/start-app-config";
-import { Button } from "@iterate-com/ui/components/button";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   Empty,
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
-} from "@iterate-com/ui/components/empty";
+} from "@iterate-com/ui/components/ui/empty";
 import { StreamLink } from "@iterate-com/ui/components/stream-link";
 import { DocEditor } from "../../components/doc-editor.tsx";
 import { DocSession } from "../../editor/doc-session.ts";

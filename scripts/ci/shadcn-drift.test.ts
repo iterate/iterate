@@ -11,7 +11,7 @@ const repoRoot = resolve(import.meta.dirname, "../..");
 const viewOutput = `- Resolving items.
 ┌ shadcn add skeleton, use-mobile (dry run)
 │
-├ src/components/skeleton.tsx (overwrite) 4 lines
+├ src/components/ui/skeleton.tsx (overwrite) 4 lines
 │ ┌──────────────────────────────────────────────
 │ │ import { cn } from "cn"
 │ │ 
@@ -31,7 +31,7 @@ const viewOutput = `- Resolving items.
 test("reads each file of the dry run's view by its repository path, with its exact content", () => {
   expect(parseView(viewOutput, "packages/ui")).toEqual([
     {
-      path: "packages/ui/src/components/skeleton.tsx",
+      path: "packages/ui/src/components/ui/skeleton.tsx",
       action: "overwrite",
       content: 'import { cn } from "cn"\n\n  export { Skeleton }\n',
     },
@@ -59,23 +59,23 @@ test("no drift when every vendored file holds upstream's bytes and globals.css n
 
 test("drift names an overwritten file, whitespace the CLI ignores, a file off the list, a file upstream stopped writing, and CSS", () => {
   const { files, repository, current } = inSync();
-  const button = files.find((file) => file.path === "packages/ui/src/components/button.tsx")!;
+  const button = files.find((file) => file.path === "packages/ui/src/components/ui/button.tsx")!;
   Object.assign(button, { action: "overwrite", content: "upstream's button\n" });
   repository.set(
-    "packages/ui/src/components/skeleton.tsx",
-    "packages/ui/src/components/skeleton.tsx\n\n",
+    "packages/ui/src/components/ui/skeleton.tsx",
+    "packages/ui/src/components/ui/skeleton.tsx\n\n",
   );
   const withoutInputGroup = files.filter((file) => !file.path.endsWith("/input-group.tsx"));
   withoutInputGroup.push(
-    { path: "packages/ui/src/components/kbd.tsx", action: "create", content: "kbd\n" },
+    { path: "packages/ui/src/components/ui/kbd.tsx", action: "create", content: "kbd\n" },
     { path: "packages/ui/src/styles/globals.css", action: "update", content: "@theme {}\n" },
   );
   expect(driftOf(withoutInputGroup, current)).toEqual([
-    "packages/ui/src/components/button.tsx (overwrite)",
-    "packages/ui/src/components/skeleton.tsx (whitespace)",
-    "packages/ui/src/components/kbd.tsx (create, not on the vendored list)",
+    "packages/ui/src/components/ui/button.tsx (overwrite)",
+    "packages/ui/src/components/ui/skeleton.tsx (whitespace)",
+    "packages/ui/src/components/ui/kbd.tsx (create, not on the vendored list)",
     "packages/ui/src/styles/globals.css (update)",
-    "packages/ui/src/components/input-group.tsx (upstream no longer writes it)",
+    "packages/ui/src/components/ui/input-group.tsx (upstream no longer writes it)",
   ]);
 });
 

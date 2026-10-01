@@ -4,7 +4,7 @@
 // trace is a shareable link. The Events view is the raw log: one row per event, click to inspect.
 import { useState } from "react";
 import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react";
-import { Button } from "@iterate-com/ui/components/button";
+import { Button } from "@iterate-com/ui/components/ui/button";
 import { CodeBlock, SerializedObjectCodeBlock } from "@iterate-com/ui/components/code-block";
 import {
   Sheet,
@@ -12,10 +12,10 @@ import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
+} from "@iterate-com/ui/components/ui/sheet";
 import { toast } from "sonner";
-import { Spinner } from "@iterate-com/ui/components/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/ui/tabs";
 import { cn } from "cn";
 import { parseCodemodeResponse } from "@iterate-com/agents/codemode-format";
 import type { StreamEvent } from "../lib/events/stream-event.ts";

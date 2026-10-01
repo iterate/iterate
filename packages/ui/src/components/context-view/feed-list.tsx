@@ -15,13 +15,13 @@
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { ArrowDownIcon } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Spinner } from "../spinner.tsx";
 import { EventRow, RowGutter } from "./event-row.tsx";
 import { DaySeparator, HousekeepingRow, RepeatRow } from "./feed-rows.tsx";
 import { actorLabel } from "./filters.tsx";
 import { type FeedItem, lastEventOf } from "./folds.tsx";
 import { useStickToBottom } from "./stick-to-bottom.ts";
 import type { ContextViewEvent, ContextViewMode, EventRenderers } from "./types.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 /** A member of an opened fold, listed under it. */
 type MemberRow = {

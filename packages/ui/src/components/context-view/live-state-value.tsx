@@ -1,10 +1,10 @@
 // One live state in the processors panel — the core reduce's under the name `core`, a hosted
 // facet's under its own — Pretty (fields, pretty-state.tsx; the core reduce read as its tables) or
 // Raw (YAML), as the panel's toggle says.
-import { SerializedObjectCodeBlock } from "../code-block.tsx";
-import { Spinner } from "../spinner.tsx";
 import { CorePrettyState, PrettyFields } from "./pretty-state.tsx";
 import type { LiveStateView } from "./types.tsx";
+import { SerializedObjectCodeBlock } from "#/components/code-block.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 export function LiveStateValue({
   state,
