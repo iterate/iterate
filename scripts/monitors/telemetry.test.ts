@@ -358,7 +358,7 @@ function pipeline(table: string, status = "running") {
   return { id: table, name: `telemetry_${table}_pipeline`, status };
 }
 
-/** One group of Pipelines' user errors as the GraphQL dataset answers it. */
+/** One group of Basin Pipelines' user errors as the GraphQL dataset answers it. */
 function group(dimensions: { pipelineId: string; errorFamily?: string; errorType?: string }) {
   return { count: 4, dimensions: { errorFamily: "sink", errorType: "write", ...dimensions } };
 }

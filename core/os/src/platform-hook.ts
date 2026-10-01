@@ -19,7 +19,7 @@ const EVENTS_PAYLOAD_MAX_BYTES = 512 * 1024;
  *  keeps a row under it unless another field is that big (an event type, a path). */
 const ROW_MAX_BYTES = 1_000_000;
 
-/** Pipelines takes at most 5 MB a send; this leaves room for the array around the rows, as
+/** Basin Pipelines takes at most 5 MB a send; this leaves room for the array around the rows, as
  *  apps/telemetry's sends do. */
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
 

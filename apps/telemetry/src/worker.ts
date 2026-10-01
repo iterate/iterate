@@ -18,7 +18,7 @@ import {
 } from "iterate/platform-retry";
 import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
 
-/** Pipelines takes at most 5 MB a send; this leaves room for the array around the rows. */
+/** Basin Pipelines takes at most 5 MB a send; this leaves room for the array around the rows. */
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
 
 /** A stream takes no row over 1 MB, and fails the whole send that carries one. The texts' cuts

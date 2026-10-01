@@ -162,8 +162,9 @@ labelled `row=<subscription>`:
   datasets, and the Observability page's Query Builder charts Workers Logs live, our own log
   fields included ("What Cloudflare already keeps", below); for Analytics Engine, Cloudflare names
   Grafana.
-- **History** — Basin SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
-  (1.4+) attached to the catalog. Basin SQL reads only the columns a query names, from the files whose
+- **History** — Basin SQL over the four tables, or DuckDB (1.4+) attached to the catalog:
+  `WRANGLER_BASIN_SQL_AUTH_TOKEN=<the catalog token> wrangler basin sql query <account id>_iterate-telemetry "<sql>"`,
+  or its HTTP API. Basin SQL reads only the columns a query names, from the files whose
   statistics its filters cannot rule out, and answers with the bytes it scanned: $2.50 per TB, 10
   MB at least. Nothing is sorted, so a filter on an id (a trace, a project) reads that column of
   every file in range: bound such a query by `time`.
@@ -176,11 +177,11 @@ is kept for us already, it is what Cloudflare's own dashboards chart, and it kno
 bucket or an object's id, never a project or a path, so beside our rows it would join to nothing.
 Read it where it is, with the Cloudflare MCP's `cloudflare.request` or the same call by hand.
 
-| source                  | holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | kept                | read with                                                                                                                    |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Analytics API (GraphQL) | 243 datasets an account, 60 a zone. For what `core/os` runs on: Workers (requests, errors, CPU and wall time, memory, subrequests), Durable Objects (each object's active time, WebSockets and memory a minute; invocations; stored bytes), Pipelines (rows in, delivered, dropped), R2 (operations, bytes, catalog maintenance, R2 SQL queries), D1, KV, AI Gateway (requests, errors, spend), Workers AI, Browser Rendering, email sending, Artifacts, Logpush health | 90 days, 32 a query | `POST /graphql`; `{ __type(name: "account") { fields { name } } }` lists the datasets                                        |
-| Workers Logs            | every log line and invocation of every Worker, any field of them counted, summed or ranked by percentile: the dashboard's Query Builder                                                                                                                                                                                                                                                                                                                                 | 7 days              | `POST /accounts/{id}/workers/observability/telemetry/query`                                                                  |
-| Analytics Engine        | `iterate_metrics`, before the hourly copy                                                                                                                                                                                                                                                                                                                                                                                                                               | 90 days             | `POST /accounts/{id}/analytics_engine/sql` with a token by hand: its answer is not the API's envelope, which the MCP refuses |
+| source                  | holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | kept                | read with                                                                                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API (GraphQL) | 243 datasets an account, 60 a zone. For what `core/os` runs on: Workers (requests, errors, CPU and wall time, memory, subrequests), Durable Objects (each object's active time, WebSockets and memory a minute; invocations; stored bytes), Pipelines (rows in, delivered, dropped), R2 (operations, bytes, catalog maintenance, Basin SQL queries), D1, KV, AI Gateway (requests, errors, spend), Workers AI, Browser Rendering, email sending, Artifacts, Logpush health | 90 days, 32 a query | `POST /graphql`; `{ __type(name: "account") { fields { name } } }` lists the datasets                                        |
+| Workers Logs            | every log line and invocation of every Worker, any field of them counted, summed or ranked by percentile: the dashboard's Query Builder                                                                                                                                                                                                                                                                                                                                    | 7 days              | `POST /accounts/{id}/workers/observability/telemetry/query`                                                                  |
+| Analytics Engine        | `iterate_metrics`, before the hourly copy                                                                                                                                                                                                                                                                                                                                                                                                                                  | 90 days             | `POST /accounts/{id}/analytics_engine/sql` with a token by hand: its answer is not the API's envelope, which the MCP refuses |
 
 Live Durable Objects are the Analytics API's: `durableObjectsPeriodicGroups` by `datetimeMinute`.
 Its `sum.activeTime`, in microseconds, divided by a minute's 60 million is how many objects ran at
@@ -191,9 +192,13 @@ which makes it a project's cost.
 ## Basin
 
 Cloudflare's name, since 2026-10-01, for what the lake is built on: Pipelines, R2 Data Catalog and
-R2 SQL are Basin Pipelines, Basin Catalog and Basin SQL. Every path, binding, token and command
-here is the older one, which still works and has no end date: `/pipelines/v1`, `/r2-catalog`, the
-sink type `r2_data_catalog`, `wrangler r2 sql query` (`wrangler basin` needs wrangler 4.145).
+R2 SQL are Basin Pipelines, Basin Catalog and Basin SQL. The lake uses Basin's names wherever it
+has them: the catalog's API (`/basin-catalog`), the sink type `basin_catalog`, `wrangler basin`
+(wrangler 4.146), Basin SQL's HTTP path (`/basin-sql/query/<bucket>`). What Cloudflare has not
+renamed keeps its name: Pipelines' API (`/pipelines/v1`), the `pipelines` key of a Worker's config
+and the `cloudflare:pipelines` module, the analytics datasets (`pipelines…`), a token's permission
+groups. The dev account's four sinks were made the day before as `r2_data_catalog`, which a sink
+keeps: the same sink, under its older name.
 
 - **Why a Worker still receives the export.** Basin Pipelines takes four Logpush datasets, none of
   them OpenTelemetry. The one that is Workers', `workers_trace_events`, has no spans, no trace or
@@ -333,8 +338,8 @@ took in over two days. Half of a run's spans are a Durable Object's storage oper
 
 ## Queries
 
-Each ran on PR 3478's preview (`pr3478-7cede58`, 2026-09-30) with `wrangler r2 sql query` or the
-HTTP API, and the catalog token; what each scanned and cost was measured on 2026-10-01, once
+Each ran on PR 3478's preview (`pr3478-7cede58`, 2026-09-30) through Basin SQL's HTTP API, with the
+catalog token; what each scanned and cost was measured on 2026-10-01, once
 compaction had merged each table's files into six. Basin SQL answers every query with the bytes it
 scanned, and bills $2.50 per TB of them, 10 MB at least, past the 10 GB a month included. `offset`
 is a reserved word: quote it, `"offset"`.

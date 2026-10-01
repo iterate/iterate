@@ -420,7 +420,7 @@ export const AppConfig = z.object({
       }),
     ),
   /** THE TELEMETRY LAKE this deployment sends to (docs/telemetry.md), by the names of its bindings:
-   *  the Pipelines stream the platform hook sends every durable event to, and the Analytics Engine
+   *  the Basin Pipelines stream the platform hook sends every durable event to, and the Analytics Engine
    *  dataset iterate/metrics writes. Unset ⇒ no lake: nothing is sent and nothing written. A name
    *  the Worker has no binding under throws at its first use (`appConfigOf`): silence there would
    *  look like a quiet day. */

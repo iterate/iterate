@@ -1,6 +1,6 @@
 /**
  * THE TELEMETRY LAKE OF ONE ACCOUNT, created idempotently (docs/telemetry.md#setting-up-an-account):
- * the bucket and its Data Catalog, the catalog token, compaction and snapshot expiration, and a
+ * the bucket and its Basin Catalog, the catalog token, compaction and snapshot expiration, and a
  * stream, sink and pipeline per table from apps/telemetry/schemas/. Once envs.ts names those streams,
  * it deploys the Worker with the OTLP secret, made once when Doppler has none, and points the two
  * OTLP destinations at the Worker with it; a destination's create and update post to the Worker
@@ -21,7 +21,7 @@ import spans from "../schemas/spans.json" with { type: "json" };
 import deploy from "./deploy.ts";
 
 const SCHEMAS = { events, logs, spans, metrics };
-/** A stream's columns, as schemas/*.json holds them and Pipelines reports them. */
+/** A stream's columns, as schemas/*.json holds them and Basin Pipelines reports them. */
 type StreamSchema = (typeof SCHEMAS)[keyof typeof SCHEMAS];
 /** The two OTLP destinations, by the dataset each exports; core/os's wrangler config names them. */
 const DESTINATIONS = { traces: "telemetry-traces", logs: "telemetry-logs" };
@@ -40,13 +40,14 @@ export default async function ensureResources(options: { env: string }) {
   const { buckets } = await cf<{ buckets: { name: string }[] }>("/r2/buckets?per_page=1000");
   if (!buckets.some((bucket) => bucket.name === env.bucket))
     await cf("/r2/buckets", { method: "POST", body: JSON.stringify({ name: env.bucket }) });
-  const catalog = await cf(`/r2-catalog/${env.bucket}`).catch((error: unknown) => {
+  const catalog = await cf(`/basin-catalog/${env.bucket}`).catch((error: unknown) => {
     if (error instanceof CloudflareApiError && error.status === 404) return undefined;
     throw error;
   });
-  if (!catalog) await cf(`/r2-catalog/${env.bucket}/enable`, { method: "POST" });
+  if (!catalog) await cf(`/basin-catalog/${env.bucket}/enable`, { method: "POST" });
 
-  // The token the sinks write with, compaction runs with and R2 SQL reads with; never the account's.
+  // The token the sinks write with, compaction runs with and Basin SQL reads with; never the
+  // account's.
   // One revoked on Cloudflare is not replaced: delete it from Doppler to mint another.
   let catalogToken = secrets.TELEMETRY_CATALOG_TOKEN;
   if (!catalogToken) {
@@ -54,8 +55,9 @@ export default async function ensureResources(options: { env: string }) {
       method: "POST",
       body: JSON.stringify({
         name: `${env.bucket}-catalog`,
-        // Permission groups by id (GET /accounts/{id}/tokens/permission_groups). A Data Catalog sink
-        // refuses a token whose Data Catalog Write is the bucket's alone (measured 2026-09-30).
+        // Permission groups by id (GET /accounts/{id}/tokens/permission_groups), whose names are
+        // still the ones from before Basin. A catalog sink refuses a token whose Data Catalog Write
+        // is the bucket's alone (measured 2026-09-30).
         policies: [
           {
             effect: "allow",
@@ -79,11 +81,11 @@ export default async function ensureResources(options: { env: string }) {
     doppler("TELEMETRY_CATALOG_TOKEN", catalogToken);
     console.log(`minted the catalog token, stored as TELEMETRY_CATALOG_TOKEN`);
   }
-  await cf(`/r2-catalog/${env.bucket}/credential`, {
+  await cf(`/basin-catalog/${env.bucket}/credential`, {
     method: "POST",
     body: JSON.stringify({ token: catalogToken }),
   });
-  await cf(`/r2-catalog/${env.bucket}/maintenance-configs`, {
+  await cf(`/basin-catalog/${env.bucket}/maintenance-configs`, {
     method: "POST",
     body: JSON.stringify({
       compaction: { state: "enabled", target_size_mb: "128" },
@@ -126,12 +128,14 @@ export default async function ensureResources(options: { env: string }) {
     // (https://developers.cloudflare.com/basin-pipelines/sinks/available-sinks/r2-data-catalog/), so
     // the table is dropped too, with its rows, or takes a new name as a column change does
     // (docs/telemetry.md#setting-up-an-account).
+    // `basin_catalog` is the type of a catalog sink since Basin; one made before it reads
+    // `r2_data_catalog` for good (the dev account's first four), and is the same sink.
     if (!sinks.some((candidate) => candidate.name === sinkName))
       await cf("/pipelines/v1/sinks", {
         method: "POST",
         body: JSON.stringify({
           name: sinkName,
-          type: "r2_data_catalog",
+          type: "basin_catalog",
           format: { type: "parquet", compression: "zstd", row_group_bytes: 32 * 1024 * 1024 },
           config: {
             account_id: account,
@@ -208,7 +212,7 @@ export default async function ensureResources(options: { env: string }) {
 }
 
 /** A schema's columns as one string: what the stream holds is compared by name, type and required,
- *  whatever else Pipelines reports of each. */
+ *  whatever else Basin Pipelines reports of each. */
 const columnsOf = (schema: StreamSchema) =>
   schema.fields.map(({ name, type, required }) => `${name} ${type} ${required}`).join(", ");
 

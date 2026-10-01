@@ -1,5 +1,5 @@
 // The receiver through its `fetch` (worker.ts): what each request is answered, what reaches the
-// two streams and what is logged. The streams are fakes that hold Pipelines' two limits
+// two streams and what is logged. The streams are fakes that hold Basin Pipelines' two limits
 // (docs/telemetry.md). What a row holds is otlp.test.ts's.
 import { gzipSync } from "node:zlib";
 import type { Pipeline } from "cloudflare:pipelines";
@@ -278,7 +278,7 @@ function lines(...records: object[]) {
 }
 
 /** A stream as the Worker binds one. It fails every send with `fails`, and otherwise refuses what
- *  Pipelines does: a send over 5 MB, and one holding a row over 1 MB. `sends` takes how many rows
+ *  Basin Pipelines does: a send over 5 MB, and one holding a row over 1 MB. `sends` takes how many rows
  *  each send it accepted held. */
 function stream(sends: number[], fails?: Error): Pipeline {
   const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;

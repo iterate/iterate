@@ -68,8 +68,8 @@ export const kitEnvs = {
 } satisfies Record<string, KitEnv>;
 
 /** apps/telemetry — one Cloudflare account's telemetry lake (docs/telemetry.md), by env name: the R2
- *  bucket whose Data Catalog holds the four tables under the namespace `telemetry`, and each table's
- *  Pipelines stream id (its HTTP endpoint is `https://<id>.ingest.cloudflare.com`). The Worker
+ *  bucket whose Basin Catalog holds the four tables under the namespace `telemetry`, and each table's
+ *  Basin Pipelines stream id (its HTTP endpoint is `https://<id>.ingest.cloudflare.com`). The Worker
  *  receives the OTLP export and fills `logs` and `spans`. `pnpm --dir apps/telemetry
  *  ensure-resources --env <env>` creates all of it and prints the streams to put here. Doppler
  *  project `telemetry` holds the catalog token (TELEMETRY_CATALOG_TOKEN) and the OTLP secret. */

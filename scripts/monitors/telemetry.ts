@@ -3,7 +3,7 @@
 //   rules          each of ALERT_RULES, one flat Analytics Engine query over the lake's one judged
 //                  Worker (envs.ts `alertRulesWorkerName`), against its line
 //   pipelines      each of the lake's four pipelines that is missing or not running
-//   dropped rows   Pipelines' user errors: rows one of the lake's streams accepted and dropped
+//   dropped rows   Basin Pipelines' user errors: rows one of the lake's streams accepted and dropped
 //   stalled sinks  each of the lake's pipelines that took records in and whose sink wrote none
 //   destinations   each of the lake's two OTLP destinations that is missing, disabled, or failing
 //                  (its `last_error`, set while a push fails)
