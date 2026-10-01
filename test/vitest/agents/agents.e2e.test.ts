@@ -339,15 +339,13 @@ test("a script that returns nothing ends the turn: no result item, no further re
 test("words sent while a script runs are answered at once: the feed shows the reply above the still-running script, which settles into one clean activity", async () => {
   const itx = await openAgentItx(freshCtx("agent-reply-mid-script"));
   const support = itx.cd("/agents/support");
+  const go = Promise.withResolvers<void>();
+  await support.provide("itx.go", () => go.promise);
   const ai = new FakeAi([
     '<codemode status="Waiting for go">\nawait itx.go();\n</codemode>',
     "Still waiting for go.",
   ]);
   await support.provide("itx.ai", ai);
-  // The script's `await itx.go()` answers once the test resolves `go`. Not a KV key: Workers KV
-  // caches the script's first "not found" reads, for up to a minute after the put.
-  const go = Promise.withResolvers<void>();
-  await support.provide("itx.go", () => go.promise);
   await itx.agents.create("/agents/support");
   const agent = itx.agents.get("/agents/support");
   await operatorPrompt(support);
