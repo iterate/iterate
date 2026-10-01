@@ -5,7 +5,6 @@
 
 import { redirect } from "@tanstack/react-router";
 import { z } from "zod";
-import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
 import { errorCode, withTimeout } from "iterate/lib";
 import { appConfigOf, platformAddressesOf } from "./app-config.ts";
 import { browserAuthorization } from "./browser-client.ts";
@@ -114,17 +113,13 @@ export async function createConsentProject(
       "id" in input.organization
         ? input.organization.id
         : (await session.organizations.create({ name: input.organization.name })).id;
-    // A person's project starts as the dash starts one when they pick nothing: from the preset whose
-    // folder is `default`, when this deployment was built with one (scripts/build.ts `--template`),
-    // else from core's minimal config. Its root context is the platform's to hold, not this page's.
-    const preset = templates.find(
-      ({ reference }) =>
-        parseConfigRepoTemplateReference(reference).path?.split("/").at(-1) === "default",
-    );
+    // A person's project starts as the dash starts one when they pick nothing: from
+    // core/configs/default, which every build lists first (scripts/build.ts). Its root context is
+    // the platform's to hold, not this page's.
     await session.projects.create({
       project: input.slug,
       orgId,
-      configRepoTemplate: preset?.reference,
+      configRepoTemplate: templates[0].reference,
     });
     return { orgId };
   } catch (error) {
