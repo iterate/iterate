@@ -190,11 +190,11 @@ export const CLOUDFLARE_API: Schedule = {
 };
 
 /** THE DURABLE LADDER's wait before attempt `attempt` (1-based) of a delivery that failed: 1 s·2ⁿ,
- *  capped at `capMs` (30 minutes, unless a longer ladder names its own), ±20% jitter drawn from
- *  `rng`. Durable: the rung is written down and an alarm fires it, so an overloaded failure is
- *  repeated here and never in the call. */
-export const durableLadderDelayMs = (attempt: number, rng: () => number, capMs = 30 * 60_000) =>
-  Math.round(Math.min(1_000 * 2 ** (attempt - 1), capMs) * (0.8 + rng() * 0.4));
+ *  capped at `capMs` (30 minutes, unless a longer ladder names its own), ±20% jitter. Durable: the
+ *  rung is written down and an alarm fires it, so an overloaded failure is repeated here and never
+ *  in the call. */
+export const durableLadderDelayMs = (attempt: number, capMs = 30 * 60_000) =>
+  Math.round(Math.min(1_000 * 2 ** (attempt - 1), capMs) * (0.8 + Math.random() * 0.4));
 
 /**
  * `attempt`, made again after each of the schedule's waits while it fails with a platform failure

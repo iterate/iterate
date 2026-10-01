@@ -5,9 +5,9 @@ size: small
 
 # The wake rule's append count depends on the ladder's jitter
 
-Status: explained and pinned; waiting on a decision. The ladder's jitter is injectable and a
-seeded `test.fails` reproduces the 20-append run every time. Not done: the decision (product or
-test) and the fix for the flaky row on main.
+Status: explained and pinned; waiting on a decision. A `test.fails` with `Math.random` seeded
+reproduces the 20-append run every time. Not done: the decision (product or test) and the fix for
+the flaky row on main.
 
 ## Why
 
@@ -43,14 +43,13 @@ bounds at 20: it is 8 for the first climb, plus `8 − w` for each restart whose
 ## Plan
 
 Assumption (Misha asked for a pinned-failing repro before any fix): the repro pins the row as it
-stands, with a seeded ladder, as `test.fails`. Whether the resolution is a product change or a
-test change is Misha's call, so this PR changes no behaviour.
+stands, with `Math.random` seeded, as `test.fails`. Whether the resolution is a product change or
+a test change is Misha's call, so this PR changes no product code.
 
-- [x] make the ladder's jitter injectable: `SubscriptionDelivery` takes the random source the DO
-      passes as `Math.random`, so a test replays one ordering without stubbing `Math.random`
-      _`SubscriptionDeliveryDeps.rng`; `durableLadderDelayMs(attempt, rng, capMs)`_
-- [x] pinned `test.fails`: the same row, a seeded ladder that restarts the climb twice
-      _`mulberry32(190)`, depths `[1..8, 2..8, 4..8]`, fails only on `toBeLessThan(20)`; a bare
+- [x] ~~make the ladder's jitter injectable~~ _built, then reverted on review: Misha prefers
+      `vi.spyOn(Math, "random")` to threading an `rng` through `SubscriptionDelivery`_
+- [x] pinned `test.fails`: the same row, `Math.random` seeded so the climb restarts twice
+      _`mulberry32(185)`, depths `[1..8, 2..8, 4..8]`, fails only on `toBeLessThan(20)`; a bare
       `test.fails` since core/os imports nothing from `packages/shared` (no `createFailing`)_
 - [x] survey many seeds: the distribution of the append count, and which restart path each run
       takes _implementation log below_
