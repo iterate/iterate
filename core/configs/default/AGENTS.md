@@ -11,8 +11,8 @@ processor imports `StreamProcessor` and `defineProcessorContract` from `iterate/
   project's root; `itx.cd(event.path)` is the event's own context. Keep no state in the worker:
   read it from the project.
   - The `events.iterate.com/project/worker-updated` case is the init hook. It runs after every
-    published commit: it installs the agents app. The project sets no schedule, so an
-    idle project sleeps (the `heartbeat` template shows one that wakes it every five minutes).
+    published commit: it installs the agents app. It sets no schedule, so an idle project
+    sleeps; uncommenting the heartbeat there sets one that wakes it every five minutes.
   - The `events.iterate.com/email/received` case hands each email a member sends to the project
     to an agent of its own per thread, `/agents/email/t<thread>`, once the `email` facet has
     folded it into its thread; the agent replies with `itx.email.send({ inReplyToOffset })`. An
