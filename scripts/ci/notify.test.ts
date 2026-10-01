@@ -1,7 +1,8 @@
-// The posts scripts/ci/notify.ts makes: which channel each goes to, what it says, and how a page is
-// edited and resolved. A page to #error-pulse mentions Jonas and Misha; a routine post to #ci
-// mentions nobody.
+// The posts scripts/ci/notify.ts makes: which channel each goes to, what it says, how a page is
+// edited and resolved, and the dashboard row each sets. A page to #error-pulse is a reply in today's
+// dashboard thread and mentions Jonas and Misha; a routine post to #ci mentions nobody.
 import { expect, test, vi } from "vitest";
+import { DASHBOARD_EVENT, PAGE_CLOSED_EVENT } from "./dashboard.ts";
 import { fakeSlack } from "./fake-slack.ts";
 import {
   announceDeploy,
@@ -15,6 +16,7 @@ import {
   resolveWorkflowPage,
   type Clock,
 } from "./notify.ts";
+import { slackChannelIds } from "./slack.ts";
 
 const now = Date.parse("2026-09-28T12:00:00Z");
 const mention = "<@U067G4QRFK2> <@U099JH9TAF2>";
@@ -191,82 +193,111 @@ test("a dispatched redeploy has no merge's line: it posts top-level at once", as
 
 // ---- deploy failure and its resolution
 
+test("a failed deploy pages in today's dashboard thread, sent to the channel too, and turns the prd deploys row red", async () => {
+  const slack = fakeSlack({ now });
+
+  await pageDeployFailure(slack.client, failure("OS"));
+
+  expect({ errorPulse: shape(slack), rows: rows(slack) }).toEqual({
+    errorPulse: [
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ 🚨 prd deploy failed at 0123456 (A change &amp; more): OS ${mention} (also sent to the channel)`,
+    ],
+    rows: ["🔴 prd deploys: OS failed at 0123456"],
+  });
+});
+
 test("two apps failing on one commit are one page, the second edited into it", async () => {
   const slack = fakeSlack({ now });
 
   await pageDeployFailure(slack.client, failure("OS"));
   await pageDeployFailure(slack.client, failure("Agents", true));
 
-  expect(slack.channel("#error-pulse")).toHaveLength(1);
-  const [page] = slack.channel("#error-pulse");
-  expect(page?.text).toBe(
-    [
-      `🚨 prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
-      "Impact: prd still serves the previous OS; Agents uploaded, then the deploy job failed",
-      "Do: open the run: re-run it if Cloudflare or the network failed, else fix forward or revert 0123456",
-      "<https://depot.dev/OS|run>",
-    ].join("\n"),
-  );
-  // "failed too" is an edit: nobody is pinged twice for one commit
-  expect(page?.replies).toEqual([]);
+  expect({
+    channel: slack.channel("#error-pulse").length,
+    // "failed too" is an edit: nobody is pinged twice for one commit
+    pages: slack.channel("#error-pulse")[0]!.replies.map((reply) => reply.text),
+    rows: rows(slack),
+  }).toEqual({
+    channel: 1,
+    pages: [
+      [
+        `🚨 prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
+        "Impact: prd still serves the previous OS; Agents uploaded, then the deploy job failed",
+        "Do: open the run: re-run it if Cloudflare or the network failed, else fix forward or revert 0123456",
+        "<https://depot.dev/OS|run>",
+      ].join("\n"),
+    ],
+    rows: ["🔴 prd deploys: OS, Agents failed at 0123456"],
+  });
 });
 
-test("two pages posted for one commit at once: the younger deletes itself into the older", async () => {
+test("two apps' pages posted for one commit at once: the younger deletes itself into the older", async () => {
   const slack = fakeSlack({ now });
-  const history = slack.client.conversations.history.bind(slack.client.conversations);
-  let reads = 0;
-  // the other app's page lands between this app's read and its post
-  const other = vi.spyOn(slack.client.conversations, "history").mockImplementation(async (args) => {
-    if (++reads === 2)
-      slack.seed(
-        "#error-pulse",
-        [
-          `🚨 prd deploy failed at 0123456 (A change): Agents ${mention}`,
-          "Impact: prd still serves the previous Agents",
-          "Do: open the run",
-          "<https://depot.dev/Agents|run>",
-        ].join("\n"),
-        { ageHours: 0.001 },
-      );
-    return history(args);
-  });
+  // Agents' whole deploy-failure step runs between OS's read of the open pages and its page's post
+  const post = slack.client.chat.postMessage.bind(slack.client.chat);
+  let raced = false;
+  slack.client.chat.postMessage = (async (args: Parameters<typeof post>[0]) => {
+    if (!raced && "thread_ts" in args && args.thread_ts) {
+      raced = true;
+      await pageDeployFailure(slack.client, failure("Agents"));
+    }
+    return await post(args);
+  }) as typeof post; // the fake's own method, wrapped
 
   await pageDeployFailure(slack.client, failure("OS"));
 
-  expect(slack.channel("#error-pulse").map((message) => message.text.split("\n")[0])).toEqual([
-    `🚨 prd deploy failed at 0123456 (A change): Agents, OS ${mention}`,
-  ]);
-  expect(slack.calls.map((call) => call.method)).toContain("chat.delete");
-  other.mockRestore();
+  expect({
+    errorPulse: shape(slack),
+    rows: rows(slack),
+    deletes: slack.calls.filter((call) => call.method === "chat.delete").length,
+  }).toEqual({
+    errorPulse: [
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ 🚨 prd deploy failed at 0123456 (A change &amp; more): Agents, OS ${mention} (also sent to the channel)`,
+    ],
+    rows: ["🔴 prd deploys: Agents, OS failed at 0123456"],
+    deletes: 1,
+  });
 });
 
-test("each app live again is an edit; the page resolves when the last app is back", async () => {
+test("each app live again is an edit; the page resolves when the last app is back, and the row turns green", async () => {
   const slack = fakeSlack({ now });
   await pageDeployFailure(slack.client, failure("OS"));
   await pageDeployFailure(slack.client, failure("Agents"));
   const descends = async () => true;
+  const [page] = slack.channel("#error-pulse")[0]!.replies;
 
   await resolveDeployPages(slack.client, { app: "OS", sha: fix, now: new Date(now), descends });
-  const [page] = slack.channel("#error-pulse");
-  expect(page?.text.split("\n").slice(0, 2)).toEqual([
-    `🚨 prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
-    "Impact: prd still serves the previous Agents; live again: OS at 89abcde",
-  ]);
-  expect(page?.replies).toEqual([]);
+  expect({ page: page!.text.split("\n").slice(0, 2), rows: rows(slack) }).toEqual({
+    page: [
+      `🚨 prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
+      "Impact: prd still serves the previous Agents; live again: OS at 89abcde",
+    ],
+    rows: ["🔴 prd deploys: Agents failed at 0123456"],
+  });
 
   await resolveDeployPages(slack.client, { app: "Agents", sha: fix, now: new Date(now), descends });
-  expect(page?.text.split("\n").slice(0, 2)).toEqual([
-    `✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
-    "✅ every app is live again: OS at 89abcde, Agents at 89abcde",
-  ]);
-  // the resolution is the edit alone: no reply, so it notifies nobody
-  expect(page?.replies).toEqual([]);
+  expect({
+    page: page!.text.split("\n").slice(0, 2),
+    rows: rows(slack),
+    // the resolution is the edit alone: no reply, so it notifies nobody
+    replies: slack.channel("#error-pulse")[0]!.replies.length,
+  }).toEqual({
+    page: [
+      `✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
+      "✅ every app is live again: OS at 89abcde, Agents at 89abcde",
+    ],
+    rows: ["🟢 prd deploys: Agents live at 89abcde"],
+    replies: 1,
+  });
 });
 
-test("a re-run of an older commit resolves nothing", async () => {
+test("a re-run of an older commit resolves nothing, and the row stays red", async () => {
   const slack = fakeSlack({ now });
   await pageDeployFailure(slack.client, failure("OS"));
-  const before = slack.channel("#error-pulse")[0]?.text;
+  const [page] = slack.channel("#error-pulse")[0]!.replies;
+  const before = page!.text;
 
   await resolveDeployPages(slack.client, {
     app: "OS",
@@ -275,7 +306,10 @@ test("a re-run of an older commit resolves nothing", async () => {
     descends: async () => false,
   });
 
-  expect(slack.channel("#error-pulse")[0]?.text).toBe(before);
+  expect({ page: page!.text, rows: rows(slack) }).toEqual({
+    page: before,
+    rows: ["🔴 prd deploys: OS failed at 0123456"],
+  });
 });
 
 test.for(["edit_window_closed", "cant_update_message"])(
@@ -284,7 +318,7 @@ test.for(["edit_window_closed", "cant_update_message"])(
     const slack = fakeSlack({ now });
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await pageDeployFailure(slack.client, failure("OS"));
-    const [stuck] = slack.channel("#error-pulse");
+    const [stuck] = slack.channel("#error-pulse")[0]!.replies;
     stuck!.updateError = updateError;
     await pageDeployFailure(slack.client, failure("Agents"));
     for (const app of ["OS", "OS", "Agents", "Agents", "Agents"])
@@ -295,19 +329,20 @@ test.for(["edit_window_closed", "cant_update_message"])(
         descends: async () => true,
       });
 
-    const pages = slack.channel("#error-pulse");
+    const [, moved] = slack.channel("#error-pulse")[0]!.replies;
     expect({
-      pages: pages.map((message) => message.text.split(" (")[0]),
-      closed: stuck!.replies.map((reply) => [reply.text, reply.reply_broadcast]),
-      resolved: pages[1]!.text.split("\n")[1],
-      replies: pages[1]!.replies,
+      errorPulse: shape(slack),
+      resolved: moved!.text.split("\n")[1],
+      rows: rows(slack),
     }).toEqual({
-      pages: ["🚨 prd deploy failed at 0123456", "✅ resolved: prd deploy failed at 0123456"],
-      closed: [
-        ["✅ resolved: this page moved to a new message, which Slack lets this bot edit", true],
+      errorPulse: [
+        "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+        `  ↳ 🚨 prd deploy failed at 0123456 (A change &amp; more): OS ${mention} (also sent to the channel)`,
+        `  ↳ ✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
+        `  ↳ ✅ resolved: this page moved to a new message, which Slack lets this bot edit (closes ${stuck!.ts})`,
       ],
       resolved: "✅ every app is live again: OS at 89abcde, Agents at 89abcde",
-      replies: [],
+      rows: ["🟢 prd deploys: Agents live at 89abcde"],
     });
   },
 );
@@ -315,6 +350,7 @@ test.for(["edit_window_closed", "cant_update_message"])(
 test("a page that cannot be read leaves the others to resolve, then fails the step", async () => {
   const slack = fakeSlack({ now });
   await pageDeployFailure(slack.client, failure("OS"));
+  // a top-level page from before the dashboard
   slack.seed("#error-pulse", `🚨 prd deploy failed at ??? (x): OS ${mention}`, { ageHours: 0.001 });
 
   await expect(
@@ -324,12 +360,24 @@ test("a page that cannot be read leaves the others to resolve, then fails the st
       now: new Date(now),
       descends: async () => true,
     }),
-  ).rejects.toThrow("1 open deploy page(s) were not resolved");
+  ).rejects.toThrow("1 update(s) of the deploy's pages and row failed");
 
-  expect(slack.channel("#error-pulse").map((message) => message.text.split(" (")[0])).toEqual([
-    "🚨 prd deploy failed at ???",
-    "✅ resolved: prd deploy failed at 0123456",
-  ]);
+  expect({ errorPulse: shape(slack), rows: rows(slack) }).toEqual({
+    errorPulse: [
+      `🚨 prd deploy failed at ??? (x): OS ${mention}`,
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ ✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS ${mention} (also sent to the channel)`,
+    ],
+    // the page this run could not update is still open as far as anyone knows
+    rows: ["🔴 prd deploys: 1 page(s) not read"],
+  });
+});
+
+test("a failure on a later commit keeps the earlier commit's apps still down on the row", async () => {
+  const slack = fakeSlack({ now });
+  await pageDeployFailure(slack.client, failure("OS"));
+  await pageDeployFailure(slack.client, { ...failure("Agents"), sha: "fedcba9876543210" });
+  expect(rows(slack)).toEqual(["🔴 prd deploys: Agents failed at fedcba9; OS failed at 0123456"]);
 });
 
 test("a deploy page reads back from Slack's history as it was rendered", () => {
@@ -356,7 +404,7 @@ test("a deploy page reads back from Slack's history as it was rendered", () => {
 
 // ---- scheduled workflows
 
-test("a red workflow pages, repeats edit the page, other failing jobs reply, green resolves", async () => {
+test("a red workflow pages in today's dashboard thread, not sent to the channel; repeats edit the page, other failing jobs reply, green resolves; its row follows", async () => {
   const slack = fakeSlack({ now });
   const run = (jobs: string[], sha: string) =>
     pageWorkflowFailure(slack.client, {
@@ -365,52 +413,84 @@ test("a red workflow pages, repeats edit the page, other failing jobs reply, gre
       sha,
       runUrl: `https://depot.dev/${sha}`,
       now: new Date(now),
+      testRun: false,
     });
+  const green = (workflow: string, sha: string) =>
+    resolveWorkflowPage(slack.client, { workflow, sha, now: new Date(now), testRun: false });
 
   await run(["crash-hunt"], "aaaaaaa1");
   await run(["crash-hunt"], "bbbbbbb2");
-  const [page] = slack.channel("#error-pulse");
-  expect(slack.channel("#error-pulse")).toHaveLength(1);
-  expect(page?.text).toBe(
-    [
+  const [page] = slack.channel("#error-pulse")[0]!.replies;
+  expect({ errorPulse: shape(slack), page: page!.text, rows: rows(slack) }).toEqual({
+    errorPulse: [
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ 🚨 OS crash hunt failed: crash-hunt ${mention}`,
+    ],
+    page: [
       `🚨 OS crash hunt failed: crash-hunt ${mention}`,
       "Impact: OS crash hunt is red since aaaaaaa, 2 runs",
       "Do: open the run and read the failed job's log",
       "<https://depot.dev/bbbbbbb2|run>",
     ].join("\n"),
-  );
-  expect(page?.replies).toEqual([]);
+    rows: ["🔴 OS crash hunt: failed in crash-hunt"],
+  });
 
   await run(["plan", "crash-hunt"], "ccccccc3");
-  expect(page?.replies.map((reply) => reply.text)).toEqual([
-    `🚨 OS crash hunt now fails in plan, crash-hunt ${mention}`,
-  ]);
-  expect(page?.text).toContain("red since aaaaaaa, 3 runs");
-
-  await resolveWorkflowPage(slack.client, {
-    workflow: "OS crash hunt",
-    sha: "ddddddd4",
-    now: new Date(now),
+  await green("OS crash hunt", "ddddddd4");
+  expect({
+    errorPulse: shape(slack),
+    resolved: page!.text.split("\n")[1],
+    rows: rows(slack),
+  }).toEqual({
+    errorPulse: [
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ ✅ resolved: OS crash hunt failed: plan, crash-hunt ${mention}`,
+      // the escalation is the one reply besides the page: the resolution only edits the page
+      `  ↳ 🚨 OS crash hunt now fails in plan, crash-hunt ${mention}`,
+    ],
+    resolved: "✅ OS crash hunt green again at ddddddd",
+    rows: ["🟢 OS crash hunt: green at ddddddd"],
   });
-  expect(page?.text.split("\n").slice(0, 2)).toEqual([
-    `✅ resolved: OS crash hunt failed: plan, crash-hunt ${mention}`,
-    "✅ OS crash hunt green again at ddddddd",
-  ]);
-  // the escalation is the thread's one reply: the resolution only edits the page
-  expect(page?.replies.map((reply) => [reply.text, Boolean(reply.reply_broadcast)])).toEqual([
-    [`🚨 OS crash hunt now fails in plan, crash-hunt ${mention}`, false],
-  ]);
+
   // the next red run is a new incident; another workflow's green run resolves nothing of it
   await run(["crash-hunt"], "eeeeeee5");
-  await resolveWorkflowPage(slack.client, {
-    workflow: "Kit firmware",
-    sha: "fffffff6",
-    now: new Date(now),
+  await green("Kit Firmware", "fffffff6");
+  expect({ errorPulse: shape(slack).slice(3), rows: rows(slack) }).toEqual({
+    errorPulse: [`  ↳ 🚨 OS crash hunt failed: crash-hunt ${mention}`],
+    rows: ["🟢 Kit Firmware: green at fffffff", "🔴 OS crash hunt: failed in crash-hunt"],
   });
-  expect(slack.channel("#error-pulse").map((message) => message.text.split(" ")[0])).toEqual([
-    "✅",
-    "🚨",
-  ]);
+});
+
+test("a test run posts its page or resolution to #ci alone, marked 🧪: #error-pulse is neither read nor written", async () => {
+  const slack = fakeSlack({ now });
+
+  await pageDeployFailure(slack.client, { ...failure("OS"), testRun: true });
+  await pageWorkflowFailure(slack.client, {
+    workflow: "OS crash hunt",
+    jobs: ["crash-hunt"],
+    sha: "aaaaaaa1",
+    runUrl: "https://depot.dev/aaaaaaa1",
+    now: new Date(now),
+    testRun: true,
+  });
+  await resolveWorkflowPage(slack.client, {
+    workflow: "OS crash hunt",
+    sha: "bbbbbbb2",
+    now: new Date(now),
+    testRun: true,
+  });
+
+  expect({
+    errorPulse: slack.calls.filter((call) => call.channel === slackChannelIds["#error-pulse"]),
+    ci: slack.channel("#ci").map((message) => message.text.split("\n")[0]),
+  }).toEqual({
+    errorPulse: [],
+    ci: [
+      "🧪 TEST RUN — 🚨 prd deploy failed at 0123456 (A change &amp; more): OS",
+      "🧪 TEST RUN — 🚨 OS crash hunt failed: crash-hunt",
+      "🧪 TEST RUN — ✅ resolved: OS crash hunt green again at bbbbbbb",
+    ],
+  });
 });
 
 test("a workflow's failed jobs are those whose result is failure", () => {
@@ -451,5 +531,34 @@ function failure(app: string, uploaded = false) {
     subject: "A change & more",
     runUrl: `https://depot.dev/${app}`,
     now: new Date(now),
+    testRun: false,
   };
+}
+
+/** #error-pulse as a reader sees it: each top-level message's first line, each reply's first line
+ *  indented under it, marked when it was sent to the channel too, and a reply that closes a page by
+ *  its metadata naming the page's ts. */
+function shape(slack: ReturnType<typeof fakeSlack>) {
+  return slack
+    .channel("#error-pulse")
+    .flatMap((message) => [
+      message.text.split("\n")[0],
+      ...message.replies.map((reply) =>
+        [
+          `  ↳ ${reply.text.split("\n")[0]}`,
+          reply.reply_broadcast ? " (also sent to the channel)" : "",
+          reply.metadata?.event_type === PAGE_CLOSED_EVENT
+            ? ` (closes ${String(reply.metadata.event_payload.ts)})`
+            : "",
+        ].join(""),
+      ),
+    ]);
+}
+
+/** The newest dashboard's rows, as its text shows them. */
+function rows(slack: ReturnType<typeof fakeSlack>) {
+  const dashboards = slack
+    .channel("#error-pulse")
+    .filter((message) => message.metadata?.event_type === DASHBOARD_EVENT);
+  return dashboards.at(-1)!.text.split("\n").slice(1);
 }

@@ -1,9 +1,16 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../../envs.ts";
 import { readWranglerBase } from "../../core/os/scripts/generate-wrangler-config.ts";
+import { fakeSlack } from "../ci/fake-slack.ts";
+import {
+  renderStuckArtifactsNamespacesPage,
+  STUCK_ARTIFACTS_PAGE_MARKER,
+  type StuckArtifactsNamespace,
+} from "./preview-artifacts.ts";
 import { accountWorkerNames, MAIN_ON_DEV } from "./preview-config.ts";
 import {
   groupPreviewDeployments,
+  keepSweepPages,
   newestPreviewDeployment,
   planPreviewSweep,
   planSupersededCleanup,
@@ -11,8 +18,10 @@ import {
   renderWorkerlessNamespacesPage,
   unmappedWorkers,
   workerlessNamespaces,
+  WORKERLESS_PAGE_MARKER,
   type PreviewMember,
   type PullRequestState,
+  type SweptNamespace,
 } from "./preview-sweep.ts";
 
 const NOW = Date.parse("2026-09-25T12:00:00Z");
@@ -271,6 +280,96 @@ test.for([
     "• LegacyDurableObject (n3), worker unnamed",
     "<https://depot.dev/orgs/x/workflows/y|run>",
   ]);
+});
+
+test("the sweep keeps a page per kind of namespace Cloudflare left in today's dashboard thread, not sent to the channel, and its row grey; a night that finds none resolves them and turns the row green", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-10-01T04:40:00Z") });
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  const night = (stuck: StuckArtifactsNamespace[], workerless: SweptNamespace[]) =>
+    keepSweepPages(slack.client, {
+      incidents: [
+        {
+          marker: STUCK_ARTIFACTS_PAGE_MARKER,
+          render: async () =>
+            stuck.length > 0
+              ? {
+                  text: renderStuckArtifactsNamespacesPage(stuck, {
+                    jobUrl: undefined,
+                    testRun: false,
+                  }),
+                  namespaces: stuck.length,
+                }
+              : undefined,
+        },
+        {
+          marker: WORKERLESS_PAGE_MARKER,
+          render: async () =>
+            workerless.length > 0
+              ? {
+                  text: renderWorkerlessNamespacesPage(workerless, {
+                    jobUrl: undefined,
+                    testRun: false,
+                  }),
+                  namespaces: workerless.length,
+                }
+              : undefined,
+        },
+      ],
+      now: new Date(slack.clock.now),
+    });
+
+  const failures = [
+    await night(
+      [
+        { namespace: "os-pr3159-repos", repoCount: 1, createdAt: "2026-09-20T08:00:00Z" },
+        { namespace: "os-pr3271-repos", repoCount: 1, createdAt: "2026-09-22T13:11:36Z" },
+      ],
+      [{ id: "n3", name: "LegacyDurableObject" }],
+    ),
+  ];
+  const [firstNight] = slack.channel("#error-pulse");
+  const paged = {
+    pages: firstNight!.replies.map((reply) => [
+      reply.text.split("\n")[0],
+      Boolean(reply.reply_broadcast),
+    ]),
+    rows: firstNight!.text.split("\n").slice(1),
+  };
+  slack.clock.now = Date.parse("2026-10-02T04:40:00Z");
+  failures.push(await night([], []));
+
+  expect({
+    failures,
+    paged,
+    pages: firstNight!.replies.map((reply) => reply.text.split("\n").slice(0, 2)),
+    rows: slack.channel("#error-pulse")[1]!.text.split("\n").slice(1),
+  }).toEqual({
+    failures: [[], []],
+    paged: {
+      pages: [
+        [
+          "🚨 preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) <@U067G4QRFK2> <@U099JH9TAF2>",
+          false,
+        ],
+        [
+          "🚨 preview sweep: 1 Durable Object namespace(s) outlived their worker <@U067G4QRFK2> <@U099JH9TAF2>",
+          false,
+        ],
+      ],
+      rows: ["⚪ preview sweep: 3 namespaces stuck (Cloudflare)"],
+    },
+    pages: [
+      [
+        "✅ resolved: preview sweep: Cloudflare will not delete 2 Artifacts namespace(s) <@U067G4QRFK2> <@U099JH9TAF2>",
+        "✅ Cloudflare deleted them",
+      ],
+      [
+        "✅ resolved: preview sweep: 1 Durable Object namespace(s) outlived their worker <@U067G4QRFK2> <@U099JH9TAF2>",
+        "✅ Cloudflare deleted them",
+      ],
+    ],
+    rows: ["🟢 preview sweep: no namespaces stuck"],
+  });
 });
 
 function hoursAgo(hours: number) {

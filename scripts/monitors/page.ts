@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { slackEscape } from "../ci/slack.ts";
+import type { RowState } from "../ci/dashboard.ts";
+import { cutText, slackEscape } from "../ci/slack.ts";
 
 /** A signal's state as its page tells it: green with no page open, or red, or unjudged (`broken`: a
  *  run that proved nothing), each with its own page. */
@@ -9,7 +10,7 @@ export type PageState = z.infer<typeof PageState>;
 /** What a signal's verdict owes the channel (`decide`):
  *    post      open a page
  *    edit      edit the open page in place, which notifies nobody
- *    escalate  edit it and reply in its thread, with both mentions: it got worse
+ *    escalate  edit it and reply in today's dashboard thread, with both mentions: it got worse
  *    resolve   edit it to say resolved and why (../ci/slack.ts `resolvedPageText`), which
  *              notifies nobody
  *    replace   resolve the open page and open another: red and unjudged are two incidents, so an
@@ -73,7 +74,7 @@ export type PageUpdate =
       signal: string;
       kind: "escalate";
       page: PageContent;
-      /** The thread reply: what got worse. */
+      /** The reply in today's dashboard thread: what got worse, naming the signal. */
       news: string;
     }
   | { signal: string; kind: "resolve"; why: string }
@@ -84,6 +85,18 @@ export function commitText(commit: { sha: string; subject: string }) {
   const sha = shortSha(commit.sha);
   return commit.subject ? `${sha} (${slackEscape(commit.subject)})` : sha;
 }
+
+/** A commit as a dashboard row names it: commitText with the subject cut to 60 characters before
+ *  it is escaped, so the row's own cut (../ci/dashboard.ts `renderDashboard`) never lands inside an
+ *  escape. Pure. */
+export function rowCommitText(commit: { sha: string; subject: string }) {
+  return commitText({ sha: commit.sha, subject: cutText(commit.subject, 60) });
+}
+
+/** A signal's row on #error-pulse's daily dashboard as a run judged it, which only a real run on
+ *  main sets, after its updates are sent (./health.ts `postThenKeep`, ../ci/dashboard.ts
+ *  `setRow`). */
+export type DashboardRow = { signal: string; state: RowState; text: string };
 
 /** A sha as a page names it. Pure. */
 export function shortSha(sha: string) {

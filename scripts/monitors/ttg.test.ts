@@ -8,6 +8,7 @@ import {
   pushEvents,
   renderPage,
   summarizePushes,
+  ttgRow,
   type RunMetrics,
   type TtgMemory,
 } from "./ttg.ts";
@@ -649,6 +650,32 @@ test("a median that hovers around its line pages once and resolves once", async 
     { p50: 160, kind: "resolve" },
     { p50: 175, kind: null },
   ]);
+});
+
+// PR time to green pages nothing (./health.ts ROW_ONLY_SIGNALS): its row is amber as soon as a median
+// is over its line, without the 10% margin a page needs.
+test.for([
+  {
+    p50: 169,
+    row: { state: "amber", text: "p50 169 s (line 165 s), p90 169 s (line 200 s)" },
+  },
+  { p50: 160, row: { state: "green", text: "under its lines: p50 160 s, p90 160 s" } },
+])("20 pushes at $p50 s: PR time to green's row is $row.state", ({ p50, row }) => {
+  const summary = summarizePushes(
+    Array.from({ length: 20 }, (_, minute) =>
+      push({ seconds: p50, e2e: "slow-rows-skipped", minute }),
+    ),
+    { from: Date.parse("2026-09-24T12:00:00Z"), to: Date.parse("2026-09-24T13:00:00Z") },
+  );
+  expect(ttgRow(summary)).toEqual({ signal: "PR time to green", ...row });
+});
+
+test("with too few pushes PR time to green's row is grey", () => {
+  expect(ttgRow(summarizePushes([], { from: 0, to: 1 }))).toEqual({
+    signal: "PR time to green",
+    state: "grey",
+    text: "not judged below 20 pushes: 0 green",
+  });
 });
 
 // 20 pushes that skipped the slow rows, all green and ended by Browser specs, a red one that ran every

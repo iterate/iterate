@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync, mkdtempDisposableSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { expect, test } from "vitest";
 import { parse as parseYaml } from "yaml";
+import { DASHBOARD_EVENT } from "./dashboard.ts";
 import { fakeSlack } from "./fake-slack.ts";
 import {
   inRestoreWindow,
@@ -13,6 +14,7 @@ import {
   readPostDeployPage,
   reportPostDeploy,
 } from "./prd-post-deploy-check.ts";
+import { slackChannelIds } from "./slack.ts";
 
 test("production's project hosts come from envs.ts", () => {
   expect(PRD_PROJECT_HOST_URLS).toEqual([
@@ -110,14 +112,16 @@ test("after an erase, a /version that never answered 200 is no restore window: i
 });
 
 const now = Date.parse("2026-09-28T12:00:00Z");
+const downHosts = [
+  { url: "https://iterate.com/", status: 421 },
+  { url: "https://garple.com/", status: 200 },
+  { url: "https://lispwoso.com/", status: 0 },
+];
+const upHosts = downHosts.map((host) => ({ ...host, status: 200 }));
 const findings = postDeployFindings({
   previousVersion: "0f3a9c21-7d4e-4b8a-9c1e-2a6b5d8e4f70",
   liveVersion: "0f3a9c21-7d4e-4b8a-9c1e-2a6b5d8e4f70",
-  hosts: [
-    { url: "https://iterate.com/", status: 421 },
-    { url: "https://garple.com/", status: 200 },
-    { url: "https://lispwoso.com/", status: 0 },
-  ],
+  hosts: downHosts,
 });
 
 test("the page names a /version that did not move and each host that is down, and links the run", () => {
@@ -172,7 +176,7 @@ test.for<{ rollbackTo: string; action: string }>([
   });
 });
 
-test("a failing check pages, the next failing check edits that page, and a pass resolves it", async () => {
+test("a failing check pages in today's dashboard thread, sent to the channel too; the next failing check edits that page, and a pass resolves it", async () => {
   const slack = fakeSlack({ now });
 
   const first = reading("aaaaaaa1111", true);
@@ -180,8 +184,13 @@ test("a failing check pages, the next failing check edits that page, and a pass 
   // the version live before the next deploy failed the check too: the page keeps the one before
   const next = { ...reading("bbbbbbb2222", true), previousVersion: first.liveVersion };
   expect(await reportPostDeploy(slack.client, next)).toBe("edit");
-  const [page] = slack.channel("#error-pulse");
-  expect(slack.channel("#error-pulse")).toHaveLength(1);
+  const [dashboard] = slack.channel("#error-pulse");
+  const [page] = dashboard!.replies;
+  expect({
+    channel: slack.channel("#error-pulse").length,
+    replies: dashboard!.replies.length,
+  }).toEqual({ channel: 1, replies: 1 });
+  expect(page).toMatchObject({ reply_broadcast: true });
   expect(page?.text).toContain("failing since aaaaaaa, 2 deploys");
   expect(page?.text).toContain(`wrangler rollback ${first.previousVersion} --name os-prd`);
   expect(page?.text).toContain("<https://depot.dev/run/bbbbbbb2222|run>");
@@ -192,20 +201,47 @@ test("a failing check pages, the next failing check edits that page, and a pass 
     "✅ every project host answers on `1f3a9c21`",
   ]);
   // the resolution is the edit alone: no reply, so it notifies nobody
-  expect(page?.replies).toEqual([]);
+  expect(dashboard!.replies).toHaveLength(1);
   // the next failure is a new incident: a new page, counting from one
   expect(await reportPostDeploy(slack.client, reading("ddddddd4444", true))).toBe("post");
-  expect(slack.channel("#error-pulse").at(-1)?.text).toContain("failing since ddddddd, 1 deploy");
+  expect(dashboard!.replies.at(-1)?.text).toContain("failing since ddddddd, 1 deploy");
 });
 
-test("a passing check with no page open posts nothing", async () => {
+test("every check sets the prd hosts row: each host that is down, else what /version did, then the version they answer on", async () => {
+  const slack = fakeSlack({ now });
+  const seen: string[][] = [];
+  const versionStuck = {
+    ...reading("bbbbbbb2222", true),
+    hosts: upHosts,
+    findings: postDeployFindings({ previousVersion: "old", liveVersion: "old", hosts: upHosts }),
+  };
+  for (const each of [reading("aaaaaaa1111", true), versionStuck, reading("ccccccc3333", false)]) {
+    await reportPostDeploy(slack.client, each);
+    seen.push(rows(slack));
+  }
+  expect(seen).toEqual([
+    ["🔴 prd hosts: iterate.com 421, lispwoso.com no answer"],
+    [
+      "🔴 prd hosts: https://os.iterate.com/version still names `old`, the version live before the deploy",
+    ],
+    ["🟢 prd hosts: every project host answers on `1f3a9c21`"],
+  ]);
+});
+
+test("a passing check with no page open posts no page, only its row", async () => {
   const slack = fakeSlack({ now });
 
   expect(await reportPostDeploy(slack.client, reading("aaaaaaa1111", false))).toBe("none");
-  expect(slack.channel("#error-pulse")).toEqual([]);
+  expect({
+    replies: slack.channel("#error-pulse")[0]!.replies,
+    rows: rows(slack),
+  }).toEqual({
+    replies: [],
+    rows: ["🟢 prd hosts: every project host answers on `1f3a9c21`"],
+  });
 });
 
-test("after an erase, hosts answering 421 post to #ci, page no one and warn off the rollback", async () => {
+test("after an erase, hosts answering 421 post to #ci, page no one, warn off the rollback, and turn the row amber", async () => {
   const slack = fakeSlack({ now });
   const hosts = [
     { url: "https://iterate.com/", status: 421 },
@@ -213,20 +249,47 @@ test("after an erase, hosts answering 421 post to #ci, page no one and warn off 
   ];
   const restoring = {
     ...reading("aaaaaaa1111", true),
+    hosts,
     findings: postDeployFindings({ previousVersion: "parked", liveVersion: "new", hosts }),
     previousVersion: "parked",
     restoreWindow: true,
   };
 
   expect(await reportPostDeploy(slack.client, restoring)).toBe("restore-window");
-  expect(slack.channel("#error-pulse")).toEqual([]);
-  expect(slack.channel("#ci").map((message) => message.text)).toEqual([
-    [
-      "The os-prd deploy at aaaaaaa is the first since an erase: its project hosts answer 421 until `project-seed apply` recreates their projects (the project host https://iterate.com/ answered 421)",
-      "Do NOT roll back: the version live before this deploy is erase-data's parked worker, and a rollback onto it deletes every Durable Object",
-      "<https://depot.dev/run/aaaaaaa1111|run>",
-    ].join("\n"),
-  ]);
+  expect({
+    pages: slack.channel("#error-pulse")[0]!.replies,
+    rows: rows(slack),
+    ci: slack.channel("#ci").map((message) => message.text),
+  }).toEqual({
+    pages: [],
+    rows: ["🟡 prd hosts: after an erase, until `project-seed apply`: iterate.com 421"],
+    ci: [
+      [
+        "The os-prd deploy at aaaaaaa is the first since an erase: its project hosts answer 421 until `project-seed apply` recreates their projects (the project host https://iterate.com/ answered 421)",
+        "Do NOT roll back: the version live before this deploy is erase-data's parked worker, and a rollback onto it deletes every Durable Object",
+        "<https://depot.dev/run/aaaaaaa1111|run>",
+      ].join("\n"),
+    ],
+  });
+});
+
+test("a test run posts to #ci alone, marked 🧪: #error-pulse is neither read nor written", async () => {
+  const slack = fakeSlack({ now });
+
+  const step = await reportPostDeploy(slack.client, {
+    ...reading("aaaaaaa1111", true),
+    testRun: true,
+  });
+
+  expect({
+    step,
+    errorPulse: slack.calls.filter((call) => call.channel === slackChannelIds["#error-pulse"]),
+    ci: slack.channel("#ci").map((message) => message.text.split("\n")[0]),
+  }).toEqual({
+    step: "test-run",
+    errorPulse: [],
+    ci: ["🧪 TEST RUN — 🚨 prd post-deploy check failed after the os-prd deploy at aaaaaaa"],
+  });
 });
 
 /** What erase-data's parked worker (scripts/lib/do-reset.ts) answers every request, `/version` too. */
@@ -316,8 +379,18 @@ function reading(sha: string, failing: boolean) {
     restoreWindow: false,
     previousVersion: "9e2b7c10-5a4d-4c3b-8f1e-7d6c5b4a3f21",
     liveVersion: "1f3a9c21-7d4e-4b8a-9c1e-2a6b5d8e4f70",
+    hosts: failing ? downHosts : upHosts,
     sha,
     runUrl: `https://depot.dev/run/${sha}`,
     now: new Date(now),
+    testRun: false,
   };
+}
+
+/** The newest dashboard's rows, as its text shows them. */
+function rows(slack: ReturnType<typeof fakeSlack>) {
+  const dashboards = slack
+    .channel("#error-pulse")
+    .filter((message) => message.metadata?.event_type === DASHBOARD_EVENT);
+  return dashboards.at(-1)!.text.split("\n").slice(1);
 }

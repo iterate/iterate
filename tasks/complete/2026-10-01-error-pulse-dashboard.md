@@ -1,12 +1,12 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # #error-pulse: fewer pings, one daily dashboard
 
-Status: PR 1 (stop the worst noise, #3502) is done and ready for review; the stale pages are
-cleaned up. PR 2 (the daily dashboard) is stacked on it. The iterate.com site fix is live
+Status: done. #3502 (fewer pings) merged; #3504 (the daily dashboard) merges with this file moved;
+the stale pages are cleaned up. The iterate.com site fix is live
 (config repo commit 528dc1b).
 
 ## Why
@@ -86,7 +86,7 @@ Assumptions (mine, not Misha's; flag if wrong):
 One top-level message per UTC day in #error-pulse, edited in place:
 
 ```
-📟 Thu 1 Oct · updated 15:02 UTC
+📟 error-pulse · Thu 1 Oct · 15:02 UTC
 🔴 main e2e: red at 916a48f (#3495) since 14:53 · 1 row
 🟢 prd hosts: all answer on 7b49a601
 🟡 prd faults: ReadableStream disconnected 33 (last 14:50)
@@ -96,24 +96,62 @@ One top-level message per UTC day in #error-pulse, edited in place:
 🟡 PR time to green: p50 169 s (line 165 s)
 🟢 DO cost: $4.94/day
 ⚪ preview sweep: 16 namespaces stuck (Cloudflare)
-🟢 sweeps · firmware · crash hunt
+🟢 context sweep · Kit firmware · OS crash hunt
 ```
 
-- [ ] scripts/ci/dashboard.ts: today's message (posted by the first poster after 00:00 UTC, carrying
-      over yesterday's rows), one row per signal in a fixed order, row state in the message's Slack
-      metadata, each poster rewriting only its own row (re-read after the edit, retry when another
-      poster's edit raced it)
-- [ ] a row is one line: at most two named incidents, then "+N"; detail lives in the incident's reply
-- [ ] every page becomes a reply in today's dashboard thread, with mentions; edits stay edits;
-      resolving edits the reply and the row
-- [ ] "prd is down" replies are sent to the channel too: post-deploy check failing, a prd deploy
-      failing, a 5xx burst on iterate.com/www or a first-party host, DO cost at 5× its page tier
-- [ ] slow signals ping nobody, row only: PR time to green, latency, real-model e2e, preview sweep's
-      stuck namespaces, minor prd faults (fewer than 10 in a window, projects' own hosts)
-- [ ] pin today's message and unpin yesterday's (`pins:write`; log and carry on without it)
-- [ ] check the workspace's message edit window is at least 24 h (the code already meets
-      `edit_window_closed`); if not, the dashboard reposts when it freezes
-- [ ] the old top-level pages: resolved without replies by the first run
+Design (from mapping every poster, 2026-10-01):
+
+- **Where state lives.** The dashboard's rows are in its Slack message metadata
+  (`event_type: error_pulse_dashboard`, payload `{ day, rows: { <signal>: { state, text, at } } }`),
+  read back with `include_all_metadata`. Its text is rendered from the rows, so nothing parses it.
+- **Finding today's.** History from 00:00 UTC, this bot's top-level message whose metadata says
+  today (as do-cost's #ci headline does). The first poster after midnight posts it, copying
+  yesterday's rows. Each poster rewrites only its own row and re-reads after the edit: another
+  poster's edit in the same second can drop a row, so it writes again (at most three times).
+- **Pages are replies in today's dashboard thread.** `slack.ts` `postPage` replaces every top-level
+  page post. Edits stay edits. A page that pings mentions Jonas and Misha, and once mentioned they
+  follow the thread, so any reply in it notifies them: signals that should not ping post no reply,
+  only their row.
+- **Finding open pages** (`findOpenPages`, for keepPage, notify, do-cost) reads the replies of each
+  dashboard in its window, plus top-level messages for pages posted before the dashboard.
+- **Escalations** reply in today's dashboard thread with mentions, naming the incident (a reply
+  cannot have its own thread).
+- **A page Slack can no longer edit** is closed by a reply in today's thread whose metadata names
+  the page's ts (`error_pulse_page_closed`), which `findOpenPages` reads; it used to be a broadcast
+  reply in the page's own thread.
+- **Pings.** Ping (reply with mentions): main e2e red, a new prd fault burst (10+ in a window) or
+  any 5xx on iterate.com, www or a first-party host, context sweep failed, Kit firmware or crash
+  hunt red, DO cost over its page tier. Sent to the channel too ("prd is down"): post-deploy check
+  failing, a prd deploy failing, a 5xx burst on iterate.com/www or a first-party host, DO cost at
+  $50/h (a dollar figure: prd's page tier is $0.06/h, so its 5× would be $0.28/h). Row only: PR
+  time to green, latency, real-model e2e, slow e2e rows, minor prd faults (fewer than 10 in a
+  window, projects' own hosts). The preview sweep keeps its page (escalating stuck namespaces to
+  Cloudflare is someone's job), not sent to the channel.
+- **The fault alarm's minor incidents** live on an unposted page (no ts) that only its row shows;
+  a ping-worthy incident posts it.
+- **No pin.** The bot has no `pins:write` scope (checked 2026-10-01); the dashboard is the newest
+  top-level message most of the day anyway. Adding the scope and pinning is a follow-up.
+- **Edit window.** Bot edits worked on 31-hour-old pages, so a day's message stays editable.
+
+- [x] scripts/ci/dashboard.ts: find or post today's dashboard, set a row, render _rows are a flat
+      list: Slack metadata nests one level; a newer write of the same row stands (two deploys)_
+- [x] fake-slack: metadata, `include_all_metadata` _and deleting a reply; `latest` not needed_
+- [x] slack.ts: `postPage`, `findOpenPages` over dashboard threads and legacy pages, escalations
+      and frozen pages into today's thread
+- [x] fault alarm: row; unposted page for minor incidents; channel for a 5xx burst on the site's
+      apex/www or a first-party host _`FIRST_PARTY_HOSTS`, `loud` (once a page), held pages with `ts: ""`_
+- [x] health: a row per signal; latency, PR time to green, real-model e2e and slow e2e rows row only
+      _`ROW_ONLY_SIGNALS` in sendUpdates; PR 1's `heldOnMainPage` went with it_
+- [x] do-cost: row; page into the thread; $50/h sent to the channel
+- [x] notify: deploy and workflow rows; deploy failure sent to the channel
+- [x] post-deploy check: row; failure sent to the channel _amber row in the restore window after
+      an erase_
+- [x] preview sweep, context sweep: rows; preview sweep keeps its page _preview's page logic moved
+      to preview-sweep.ts `keepSweepPages`, since preview.ts runs its CLI on import_
+- [ ] ~~`dashboard.ts close-legacy-pages`~~ _dropped (Misha, 2026-10-01): it ran once, by hand, and its job is done_
+- [x] docs/depot-ci.md "Slack channels" rewritten around the dashboard
+- [ ] ~~fold quiet green rows into one line~~ _Misha, 2026-10-01: a line per row is fine for now_
+- [ ] ~~pin the dashboard~~ _Misha, 2026-10-01: no need for a real pin_
 
 ## iterate.com site (the iterate project's config repo)
 

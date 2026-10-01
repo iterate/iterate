@@ -1,6 +1,7 @@
-// scripts/os/preview-sweep.ts — WHICH PER-COMMIT DEPLOYMENTS GO, pure. scripts/os/preview.ts lists the
-// account's workers, KV namespaces, R2 buckets, D1s and Artifacts namespaces; this module groups
-// them into deployments by name and decides; preview-sweep.test.ts is its table.
+// scripts/os/preview-sweep.ts — WHICH PER-COMMIT DEPLOYMENTS GO, pure but for the Slack writes at its
+// end. scripts/os/preview.ts lists the account's workers, KV namespaces, R2 buckets, D1s and
+// Artifacts namespaces; this module groups them into deployments by name and decides;
+// preview-sweep.test.ts is its table.
 //
 // A DEPLOYMENT (envs.ts `previewDeployment`) is every worker and resource named
 // `<prefix>-<sha7>-<member>`: the workers `…-os`, `…-dash`, `…-agents`, `…-notes`, `…-admin`,
@@ -34,8 +35,14 @@
 // Cloudflare's: a worker's delete takes its namespaces, and the API deletes no namespace alone. The
 // sweep keeps one #error-pulse page for them while any is still listed at the end of a run
 // (renderWorkerlessNamespacesPage), since each counts toward the account's 500.
+//
+// THE SWEEP'S #ERROR-PULSE SIDE (`keepSweepPages`, this module's one write, through the Slack
+// client it is given): one page per kind of namespace Cloudflare left, in today's dashboard thread
+// and not sent to the channel, and the dashboard's "preview sweep" row.
+import type { WebClient } from "@slack/web-api";
 import { PREVIEW_DEPLOYMENT_APPS, previewDeployment } from "../../envs.ts";
-import { pageText } from "../ci/slack.ts";
+import { setRow, type RowState } from "../ci/dashboard.ts";
+import { keepPage, pageText, slackChannelIds } from "../ci/slack.ts";
 import { previewPullRequestNumber } from "./preview-config.ts";
 
 /** What GitHub said about a pull request: "unknown" when the lookup failed. */
@@ -255,4 +262,65 @@ export function renderWorkerlessNamespacesPage(
     link: input.jobUrl || null,
     testRun: input.testRun,
   });
+}
+
+/** How far back the sweep looks for its own open pages: a page stays open, edited each night, until
+ *  Cloudflare deletes what it names, and a Cloudflare escalation takes weeks. */
+const PAGE_LOOKBACK_HOURS = 30 * 24;
+
+/** One kind of namespace Cloudflare left: its page's marker, and the page this run renders given the
+ *  open page's text, with how many namespaces it names; undefined once none is left. */
+export type SweepIncident = {
+  marker: string;
+  render: (
+    openText: string | undefined,
+  ) => Promise<{ text: string; namespaces: number } | undefined>;
+};
+
+/**
+ * A sweep on main's #error-pulse side: each incident's page kept (scripts/ci/slack.ts `keepPage`),
+ * a reply in today's dashboard thread not sent to the channel, which the first night that finds
+ * none left resolves; then the dashboard's "preview sweep" row, grey with how many namespaces the
+ * pages name, green when they name none. A page or row Slack refused leaves the others to be kept;
+ * resolves to what failed, for the run to fail on.
+ */
+export async function keepSweepPages(
+  slack: WebClient,
+  input: { incidents: SweepIncident[]; now: Date },
+) {
+  const { now } = input;
+  const failures: string[] = [];
+  const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  let stuck = 0;
+  for (const { marker, render } of input.incidents) {
+    await keepPage(slack, {
+      marker,
+      sinceHours: PAGE_LOOKBACK_HOURS,
+      now,
+      render: async (openText) => {
+        const page = await render(openText);
+        if (!page) return undefined;
+        console.log(page.text);
+        stuck += page.namespaces;
+        return page.text;
+      },
+      why: "Cloudflare deleted them",
+      broadcast: false,
+    })
+      .then((step) => console.log(`#error-pulse page "${marker}": ${step}`))
+      .catch((error: unknown) =>
+        failures.push(`keeping the #error-pulse page: ${describe(error)}`),
+      );
+  }
+  const row: { state: RowState; text: string } =
+    stuck > 0
+      ? { state: "grey", text: `${stuck} namespaces stuck (Cloudflare)` }
+      : { state: "green", text: "no namespaces stuck" };
+  await setRow(slack, {
+    channel: slackChannelIds["#error-pulse"],
+    now,
+    signal: "preview sweep",
+    ...row,
+  }).catch((error: unknown) => failures.push(`setting the dashboard's row: ${describe(error)}`));
+  return failures;
 }

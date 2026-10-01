@@ -1,7 +1,8 @@
 // The DO cost alarm's decisions and wording, over a fake Slack. The probe itself (a Cloudflare
 // GraphQL call) is out of scope: readings are built by `reading` below.
 import { expect, test, vi } from "vitest";
-import { fakeSlack } from "../ci/fake-slack.ts";
+import { fakeSlack, type FakeMessage } from "../ci/fake-slack.ts";
+import { slackChannelIds } from "../ci/slack.ts";
 import {
   ACCOUNTS,
   type AccountReading,
@@ -12,7 +13,6 @@ import {
 } from "./do-cost.ts";
 
 const CI = "C0B3QJSU32A";
-const PULSE = "C09K1CTN4M7";
 const MENTIONS = "<@U067G4QRFK2> <@U099JH9TAF2>";
 const now = new Date("2026-09-04T05:41:00Z");
 const runUrl = "https://depot.dev/orgs/0p91s0lz49/workflows/w?job=j&attempt=a";
@@ -227,7 +227,10 @@ test.for([
       kind: "edit",
       ts: "100.0",
       text: expect.stringContaining("Impact: peak 8,307 DO-hours/h (~$47/h); top spenders"),
-      escalation: `🚨 DO cost for dev/preview passed 2× its page tier: ~$47/h (≈ $1,121/day) ${MENTIONS}`,
+      escalation: {
+        text: `🚨 DO cost for dev/preview passed 2× its page tier: ~$47/h (≈ $1,121/day) ${MENTIONS}`,
+        broadcast: false,
+      },
     },
   },
   {
@@ -364,42 +367,66 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
     "09-22T17:41 prd resolve",
   ]);
 
-  // #error-pulse: 3 pages and 2 escalations in the first one's thread, with both mentions, and
-  // nothing else: each resolution edited its page, whose first line now starts "✅ resolved:" and
-  // whose second says why.
-  const pulse = slack.timeline("#error-pulse");
-  expect(pulse.map((message) => message.text.split("\n").slice(0, 2))).toEqual([
-    [
-      `✅ resolved: DO cost page for dev/preview: ~$0.22/h (≈ $5.40/day), 0.1× the ceiling ${MENTIONS}`,
-      "✅ back under 500 DO-hours/h since 06:00",
-    ],
-    [`🚨 DO cost for dev/preview passed 2× its page tier: ~$37/h (≈ $882/day) ${MENTIONS}`],
-    [`🚨 DO cost for dev/preview passed 5× its page tier: ~$50/h (≈ $1,209/day) ${MENTIONS}`],
-    [
-      `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
-      "✅ back under 2 DO-hours/h since 04:00",
-    ],
-    [
-      `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
-      "✅ back under 2 DO-hours/h since 15:00",
-    ],
-  ]);
-  // Where each sits: a top-level page (null) or a reply in page N's thread, and sent to the channel
-  // or not.
-  expect(
-    pulse.map((message) => ({
-      thread: message.thread_ts ? pulse.findIndex((page) => page.ts === message.thread_ts) : null,
+  // #error-pulse: one dashboard a day, its DO cost row set by every run. Its thread holds 3 pages and
+  // 2 escalations, each with both mentions; the first reply at $50/h also goes to the channel, and
+  // prd's pages, under $5/h, do not. A resolution is an edit: the page's first line starts
+  // "✅ resolved:" and its second says why.
+  const [sep21, sep22] = slack.channel("#error-pulse");
+  const thread = (dashboard: FakeMessage | undefined) =>
+    dashboard!.replies.map((message) => ({
+      lines: message.text.split("\n").slice(0, 2),
       broadcast: Boolean(message.reply_broadcast),
-    })),
-  ).toEqual([
-    { thread: null, broadcast: false },
-    { thread: 0, broadcast: false },
-    { thread: 0, broadcast: false },
-    { thread: null, broadcast: false },
-    { thread: null, broadcast: false },
-  ]);
+    }));
+  expect({
+    dashboards: slack.channel("#error-pulse").map((message) => message.text),
+    sep21: thread(sep21),
+    sep22: thread(sep22),
+  }).toEqual({
+    dashboards: [
+      "📟 error-pulse · Mon 21 Sep · 23:41 UTC\n🔴 DO cost: $1,517/day · paged: dev/preview, prd",
+      "📟 error-pulse · Tue 22 Sep · 18:41 UTC\n🟡 DO cost: $92/day · over its ceiling today: dev/preview 13 h, prd 6 h",
+    ],
+    sep21: [
+      {
+        lines: [
+          `✅ resolved: DO cost page for dev/preview: ~$0.22/h (≈ $5.40/day), 0.1× the ceiling ${MENTIONS}`,
+          "✅ back under 500 DO-hours/h since 06:00",
+        ],
+        broadcast: false,
+      },
+      {
+        lines: [
+          `🚨 DO cost for dev/preview passed 2× its page tier: ~$37/h (≈ $882/day) ${MENTIONS}`,
+        ],
+        broadcast: false,
+      },
+      {
+        lines: [
+          `🚨 DO cost for dev/preview passed 5× its page tier: ~$50/h (≈ $1,209/day) ${MENTIONS}`,
+        ],
+        broadcast: true,
+      },
+      {
+        lines: [
+          `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
+          "✅ back under 2 DO-hours/h since 04:00",
+        ],
+        broadcast: false,
+      },
+    ],
+    sep22: [
+      {
+        lines: [
+          `✅ resolved: DO cost page for prd: ~$0.01/h (≈ $0.14/day), 0.5× the ceiling ${MENTIONS}`,
+          "✅ back under 2 DO-hours/h since 15:00",
+        ],
+        broadcast: false,
+      },
+    ],
+  });
   // Each page keeps the peak it showed.
-  expect([pulse[0], pulse[3], pulse[4]].map((page) => page!.text.split("\n")[2])).toEqual([
+  const pages = [sep21!.replies[0], sep21!.replies[3], sep22!.replies[0]];
+  expect(pages.map((page) => page!.text.split("\n")[2])).toEqual([
     "Impact: peak 10,610 DO-hours/h (~$60/h)",
     "Impact: peak 909 DO-hours/h (~$5.11/h)",
     "Impact: peak 668 DO-hours/h (~$3.76/h)",
@@ -418,6 +445,62 @@ test("the 09-21/22 incident: three pages, edited hourly, two escalations, each r
       false,
       "🔴 dev/preview: 17:00 → 683 DO-hours (~$3.84/h) · today 46,011 ≈ $259 · 13 of 18 h over 500",
     ],
+  ]);
+});
+
+// A page is a reply in today's dashboard thread; $50/h (≈ 8,889 DO-hours/h) is as urgent as prd
+// being down, so its page is sent to the channel too.
+test.for([
+  { name: "a page under $50/h is a reply alone", doHours: 2000, broadcast: false },
+  { name: "a page first at $50/h is sent to the channel too", doHours: 9000, broadcast: true },
+])("$name", async ({ doHours, broadcast }) => {
+  const at = new Date("2026-09-28T12:41:00Z");
+  const slack = fakeSlack({ now: at.getTime() });
+  await postDailyThread({
+    slack: slack.client,
+    now: at,
+    readings: [reading("dev/preview", [{ hour: "2026-09-28T11:00:00Z", doHours }])],
+    runUrl,
+    testRun: false,
+  });
+  const [dashboard] = slack.channel("#error-pulse");
+  expect(dashboard!.replies).toMatchObject([
+    {
+      text: expect.stringMatching(/^🚨 DO cost page for dev\/preview:/),
+      reply_broadcast: broadcast || undefined,
+    },
+  ]);
+});
+
+// The dashboard's DO cost row after an hourly run, from one account's readings at 20:41.
+test.for([
+  {
+    name: "green with no hour over the ceiling today",
+    reading: reading("dev/preview", [{ hour: "2026-09-24T19:00:00Z", doHours: 40 }]),
+    row: "🟢 DO cost: $5.40/day",
+  },
+  {
+    name: "amber when an account had a complete hour over its ceiling today",
+    reading: reading("prd", [{ hour: "2026-09-24T19:00:00Z", doHours: 3 }]),
+    row: "🟡 DO cost: $0.40/day · over its ceiling today: prd 1 h",
+  },
+  {
+    name: "red while an account's page is open",
+    reading: reading("dev/preview", [{ hour: "2026-09-24T19:00:00Z", doHours: 2000 }]),
+    row: "🔴 DO cost: $270/day · paged: dev/preview",
+  },
+])("DO cost's row is $name", async ({ reading, row }) => {
+  const at = new Date("2026-09-24T20:41:00Z");
+  const slack = fakeSlack({ now: at.getTime() });
+  await postDailyThread({
+    slack: slack.client,
+    now: at,
+    readings: [reading],
+    runUrl,
+    testRun: false,
+  });
+  expect(slack.channel("#error-pulse").map((message) => message.text)).toEqual([
+    `📟 error-pulse · Thu 24 Sep · 20:41 UTC\n${row}`,
   ]);
 });
 
@@ -449,7 +532,7 @@ test("a test run posts its thread and its page to #ci, 🧪 and with no mention,
       .map((message) => message.text)
       .join("\n"),
   ).not.toContain("<@");
-  expect(reads(slack)).not.toContain(PULSE);
+  expect(reads(slack)).not.toContain(slackChannelIds["#error-pulse"]);
 });
 
 test("an old 🧪 page in #error-pulse is no incident: the real run posts its own page", async () => {
@@ -473,7 +556,7 @@ test("an old 🧪 page in #error-pulse is no incident: the real run posts its ow
 
 // A page is open for OPEN_PAGE_HOURS (48): past that, an incident is paged again, and the new page
 // resolves the older one naming no one: by an edit, or, when Slack can no longer edit it, by a reply
-// in its thread sent to the channel too, which closes it for every later run.
+// in today's dashboard thread whose metadata names it, which closes it for every later run.
 test.for([
   { name: "is resolved by an edit alone", updateError: undefined },
   { name: "that Slack can no longer edit is closed by a reply", updateError: "edit_window_closed" },
@@ -491,31 +574,37 @@ test.for([
       runUrl,
       testRun: false,
     });
-    expect(pages).toEqual([{ label: "dev/preview", action: "post" }]);
-    expect(writes(slack).filter((call) => call.channel === PULSE)).toEqual([
-      {
-        method: "chat.update",
-        channel: PULSE,
-        ts: older.ts,
-        text: expect.stringMatching(/^✅ resolved: DO cost page for dev\/preview: ~\$12\/h/),
-      },
-      ...(updateError
-        ? [
-            {
-              method: "chat.postMessage",
-              channel: PULSE,
-              thread_ts: older.ts,
-              reply_broadcast: true,
-              text: "✅ resolved: a newer page follows this incident",
-            },
-          ]
-        : []),
-      {
-        method: "chat.postMessage",
-        channel: PULSE,
-        text: expect.stringMatching(/^🚨 DO cost page for dev\/preview: ~\$11\/h/),
-      },
-    ]);
+    const [, dashboard] = slack.channel("#error-pulse");
+    expect({
+      pages,
+      older: older.text.split("\n")[0],
+      thread: dashboard!.replies.map(({ text, metadata }) => ({
+        text: text.split("\n")[0],
+        metadata,
+      })),
+    }).toEqual({
+      pages: [{ label: "dev/preview", action: "post" }],
+      older: updateError
+        ? `:rotating_light: DO cost page for dev/preview: ~$12/h (≈ $287/day), 4.2× the ceiling ${MENTIONS}`
+        : `✅ resolved: DO cost page for dev/preview: ~$12/h (≈ $287/day), 4.2× the ceiling ${MENTIONS}`,
+      thread: [
+        ...(updateError
+          ? [
+              {
+                text: "✅ resolved: a newer page follows this incident",
+                metadata: {
+                  event_type: "error_pulse_page_closed",
+                  event_payload: { ts: older.ts },
+                },
+              },
+            ]
+          : []),
+        {
+          text: `🚨 DO cost page for dev/preview: ~$11/h (≈ $270/day), 4.0× the ceiling ${MENTIONS}`,
+          metadata: undefined,
+        },
+      ],
+    });
   },
 );
 
@@ -618,7 +707,7 @@ test("the day's headline is found behind a busy #ci's first page, and rewritten,
     runUrl,
     testRun: false,
   });
-  expect(writes(slack)).toMatchObject([
+  expect(writes(slack).filter((call) => call.channel === CI)).toMatchObject([
     { method: "chat.postMessage", channel: CI, thread_ts: headline.ts },
     {
       method: "chat.update",
@@ -629,7 +718,7 @@ test("the day's headline is found behind a busy #ci's first page, and rewritten,
   ]);
 });
 
-test("a probe that could not run fails the run once the thread says so", async () => {
+test("a probe that could not run fails the run once the thread and the row say so", async () => {
   const slack = fakeSlack({ now: now.getTime() });
   await expect(
     postDailyThread({
@@ -653,6 +742,9 @@ test("a probe that could not run fails the run once the thread says so", async (
   expect(slack.timeline("#ci")).toMatchObject([
     { text: expect.stringContaining("prd: probe failed") },
     { text: expect.stringContaining("⚠️ prd: probe failed: Cloudflare GraphQL errors") },
+  ]);
+  expect(slack.channel("#error-pulse").map((message) => message.text)).toEqual([
+    "📟 error-pulse · Fri 4 Sep · 05:41 UTC\n⚪ DO cost: $0/day · probe failed: prd",
   ]);
 });
 

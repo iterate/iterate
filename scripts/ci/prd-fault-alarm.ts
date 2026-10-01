@@ -1,21 +1,30 @@
 // Prd fault alarm (prd-fault-alarm.yml, every 15 minutes): reads the first-party prd Workers' Logs
-// since its last run and pages #error-pulse on a 5xx a visitor was answered, a burst of
+// since its last run and reports to #error-pulse a 5xx a visitor was answered, a burst of
 // platform-failure heals, or an error. It reads the logs because the platform's recovery can keep
 // most requests green through a Cloudflare fault, so the heals and errors it logs are the only sign.
 //
 // Each fault is an incident, keyed by its cause: a deploy's reset or version skew in a Worker, a
 // visitor 5xx's host, a healed facet's name or an error message. A UTC day has one page
-// (slack.ts pageText): the first run that sees an incident that day posts it, and later runs edit it
-// in place with each incident's running count and when it was last seen, new incidents included.
-// The page's thread hears only of a change of state, each reply mentioning Jonas and Misha and
-// staying in the thread: a new incident in a burst, an incident grown tenfold, or back in a burst
-// after an hour's quiet. Once its last incident has gone a day unseen, the page is edited resolved,
-// which notifies nobody. An incident seen after it closed joins that day's page.
+// (slack.ts pageText) that the day's new incidents join, each listed with its running count and when
+// it was last seen. The dashboard's "prd faults" row (dashboard.ts, faultRow) names the biggest open
+// incidents: red while one was seen in the last hour, amber once all are quiet, green with none.
+//
+// An incident pings when it comes in a burst (BURST in one window) or is a visitor 5xx on the
+// iterate.com site or a first-party host (FIRST_PARTY_HOSTS). A minor one (a lone error, a
+// project's own host such as garple.com) pings nobody: its page stays unposted, in the state and the
+// row only, until an incident that pings joins it. Then the page is posted, a reply in today's
+// dashboard thread mentioning Jonas and Misha (slack.ts postPage). Later runs edit it in place,
+// which notifies nobody; today's thread hears, with both mentions, only of a change of state: an
+// incident that pings joining the page, an incident grown tenfold, or back in a burst after an
+// hour's quiet. Only prd being down is sent to the channel too: a burst of visitor 5xx on the site
+// or a first-party host. Once a page's last incident has gone a day unseen, it is edited resolved,
+// which notifies nobody, or, never posted, dropped. An incident seen after it closed joins that
+// day's page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
-// open pages with their incidents. Only a run on main posts and keeps it; any other run prints what
-// it would post. A run without a state it can parse reads the last half hour and pages everything as
-// new: a repeat, never a miss.
+// open pages with their incidents, an unposted page with no ts. Only a run on main posts and keeps
+// it; any other run prints what it would post. A run without a state it can parse reads the last half
+// hour and reports everything as new: a repeat, never a miss.
 //
 // A workaround that heals a platform fault logs `console.warn({ event:
 // "<area>.platform-failure-<action>", name, … })` (core/os context/facet-host.ts); naming it so
@@ -54,21 +63,24 @@ import {
   voiceEnvs,
 } from "../../envs.ts";
 import { dopplerSecret } from "../lib/env-context.ts";
+import { type RowState, setRow } from "./dashboard.ts";
 import { depotApi, saveNewestArtifactFile } from "./depot.ts";
 import {
+  cutText,
   editPage,
   escalationText,
   getSlackClient,
   onCallMention,
   pageChannel,
   pageText,
+  postPage,
   resolvePage,
   slackEscape,
 } from "./slack.ts";
 
 /** Every first-party Worker in production: the platform and its clients. A 5xx or an error in any
- *  of them pages, a client's as much as the platform's. */
-const PRD_WORKERS = [
+ *  of them is a fault, a client's as much as the platform's. */
+const PRD_ENVS = [
   osEnvs.prd!,
   dashEnvs.prd,
   agentsEnvs.prd,
@@ -78,7 +90,22 @@ const PRD_WORKERS = [
   voiceEnvs.prd,
   kitEnvs.prd,
   spaEnvs.prd,
-].map((env) => env.workerName);
+];
+const PRD_WORKERS = PRD_ENVS.map((env) => env.workerName);
+
+// envs.ts gives prd a projectWildcard: iterate.com, the iterate project's site
+const site = osEnvs.prd!.projectWildcard!;
+/** The hosts whose visitor 5xx always ping: the site's apex and www, which the iterate project's
+ *  worker serves itself (its config's SITE_HOSTS), and every first-party app's. A project's own host
+ *  (garple.com, `<slug>.iterate.app`) pings only in a burst. */
+const FIRST_PARTY_HOSTS = new Set([
+  site.hostname,
+  `www.${site.hostname}`,
+  ...site.excludedHostnames!,
+  ...[osEnvs.prd!.mcpBaseUrl, ...PRD_ENVS.map((env) => env.baseUrl)].map(
+    (url) => new URL(url).host,
+  ),
+]);
 
 /** Where one run leaves its state for the next: the workflow's `name:`, the artifact and its file. */
 export const stateArtifact = {
@@ -152,8 +179,9 @@ const BACK_EVERY_MS = 6 * HOUR_MS;
  *  ~1,800 heals); a sporadic error recurs one at a time. */
 const BURST = 10;
 
-/** One open or closed incident on a page. `told` is the count the channel last heard; `back` when
- *  the channel last heard it was back after a quiet hour. `hosts` are a cause's visitor 5xx by host. */
+/** One open or closed incident on a page. `told` is the count the channel last heard, 0 while the
+ *  incident is minor and has pinged nobody; `back` when the channel last heard it was back after a
+ *  quiet hour. `hosts` are a cause's visitor 5xx by host. */
 const Incident = z.object({
   what: z.string(),
   label: z.string(),
@@ -167,11 +195,15 @@ const Incident = z.object({
 });
 type Incident = z.infer<typeof Incident>;
 
-/** A page as posted: its message's ts, its text as last posted or edited, and its incidents. */
+/** A page: its message's ts, "" while it is unposted (its incidents are all minor), its text as last
+ *  rendered, and its incidents. */
 const Page = z.object({
   ts: z.string(),
   text: z.string(),
   incidents: z.record(z.string(), Incident),
+  // whether the page, or a reply about it, was sent to the channel: prd being down reaches the
+  // channel once a page. A state from before this field reads false: one more send at most.
+  loud: z.boolean().default(false),
 });
 type Page = z.infer<typeof Page>;
 
@@ -257,10 +289,11 @@ export function runMode(options: {
 
 /**
  * Reads `window` (logWindow) and makes #error-pulse (#ci for `testRun`) what triageIncidents says:
- * edits, thread replies and a new page. `slack: null` posts nothing. It resolves to what it posted
- * (or would post) and the next state, so a paged run ends green: a scheduled run reports on main's
- * head commit, where red reads as "this commit broke". It throws only when it could not read prd
- * (readWindow) or post (the Slack client throws on an error).
+ * edits, replies in today's dashboard thread and posted pages, all as of the window's end. Then a
+ * run on main sets the dashboard's "prd faults" row (faultRow). `slack: null` posts nothing. It
+ * resolves to what it posted (or would post) and the next state, so a paged run ends green: a
+ * scheduled run reports on main's head commit, where red reads as "this commit broke". It throws
+ * only when it could not read prd (readWindow) or post (the Slack client throws on an error).
  */
 export async function alarm(input: {
   window: LogWindow;
@@ -270,50 +303,58 @@ export async function alarm(input: {
   testRun: boolean;
 }) {
   const { window, testRun } = input;
+  const now = window.to;
   const reading = await readWindow(window, input.cloudflare);
   console.log(JSON.stringify({ window, reading }));
   const triage = triageIncidents(reading, window, input.state, testRun);
-  // A test run shows the page alone: the pins keep their state on main.
+  // A test run shows the page alone: the pins and the row keep their state on main.
   const pinned = testRun
     ? { pins: {}, posts: [] }
     : pinnedWorkarounds(reading.healEvents, window, input.state);
-  // Only a run that owes a post needs Slack: a quiet run stays green whatever its token does.
+  // The row as the last run left it, judged at the end of its window. A run without state takes it
+  // as quiet: after a lost state, a quiet prd leaves a stale row until the next fault, and a quiet
+  // run never needs Slack.
+  const before = input.state
+    ? faultRow(input.state.pages, Date.parse(input.state.readUntil))
+    : faultRow([], now.getTime());
+  const row = faultRow(triage.pages, now.getTime());
+  const rowChanged = !testRun && (row.state !== before.state || row.text !== before.text);
+  // Only a run that owes Slack a call builds a client: a quiet run stays green whatever its token does.
   const owed =
-    triage.page ||
+    triage.posts.length > 0 ||
     triage.updates.length > 0 ||
     triage.resolved.length > 0 ||
-    pinned.posts.length > 0;
+    pinned.posts.length > 0 ||
+    rowChanged;
   const slack = owed ? input.slack?.() : undefined;
   const channel = pageChannel(testRun);
-  const pages = triage.pages;
   for (const update of triage.updates) {
     let ts = update.ts;
-    if (update.text && slack) ts = await editPage(slack, { channel, ts, text: update.text });
-    const page = pages.find((open) => open.ts === update.ts);
+    if (update.text && slack) ts = await editPage(slack, { channel, ts, text: update.text, now });
+    const page = triage.pages.find((open) => open.ts === update.ts);
     if (page) page.ts = ts;
-    if (update.reply)
-      await slack?.chat.postMessage({
-        channel,
-        thread_ts: ts,
-        text: update.reply.text,
-        reply_broadcast: update.reply.broadcast,
-      });
+    // in today's dashboard thread: a page is a reply, which cannot have a thread of its own
+    if (update.reply && slack) await postPage(slack, { channel, ...update.reply, now });
   }
-  for (const page of triage.resolved) if (slack) await resolvePage(slack, { channel, ...page });
-  if (triage.page && slack) {
-    const posted = await slack.chat.postMessage({ channel, text: triage.page.text });
-    // The client throws on an error, and every posted message has its ts.
-    pages.push({ ts: posted.ts!, text: triage.page.text, incidents: triage.page.incidents });
-  }
-  for (const text of pinned.posts) await slack?.chat.postMessage({ channel, text });
+  for (const page of triage.resolved)
+    if (slack) await resolvePage(slack, { channel, ...page, now });
+  for (const { page, broadcast } of triage.posts)
+    if (slack) page.ts = await postPage(slack, { channel, text: page.text, broadcast, now });
+  for (const text of pinned.posts)
+    if (slack) await postPage(slack, { channel, text, broadcast: false, now });
+  if (slack && !testRun) await setRow(slack, { channel, now, signal: "prd faults", ...row });
+  const sentToo = (broadcast: boolean) => (broadcast ? ", sent to the channel too" : "");
   const summary = [
-    triage.page?.text,
+    ...triage.posts.map(({ page, broadcast }) => `post${sentToo(broadcast)}:\n${page.text}`),
+    ...triage.held.map((page) => `hold, the dashboard row only:\n${page.text}`),
     ...triage.updates.flatMap((update) => [
       update.text && `edit ${update.ts}:\n${update.text}`,
-      update.reply && `reply in ${update.ts}:\n${update.reply.text}`,
+      update.reply &&
+        `reply in today's dashboard thread${sentToo(update.reply.broadcast)}:\n${update.reply.text}`,
     ]),
     ...triage.resolved.map((page) => `resolve ${page.ts}: ${page.why}`),
     ...pinned.posts,
+    rowChanged && `row prd faults: ${row.state}, ${row.text}`,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -321,10 +362,26 @@ export async function alarm(input: {
     summary: summary || "prd is quiet",
     next: {
       readUntil: window.to.toISOString(),
-      pages,
+      pages: triage.pages,
       pins: pinned.pins,
     } satisfies AlarmState,
   };
+}
+
+/** The dashboard's "prd faults" row for the open `pages` at `now`: red while an open incident was
+ *  seen in the last QUIET_AFTER_MS, amber while incidents are open but all quiet, green "quiet" with
+ *  none. Its text names the two biggest open incidents and how many more. Pure. */
+export function faultRow(pages: Page[], now: number): { state: RowState; text: string } {
+  const open = pages
+    .flatMap((page) => Object.values(page.incidents))
+    .filter((incident) => !incident.closed)
+    .sort((a, b) => b.count - a.count);
+  if (!open.length) return { state: "green", text: "quiet" };
+  const recent = open.some((incident) => now - Date.parse(incident.lastSeen) < QUIET_AFTER_MS);
+  // the dashboard cuts a row at 110 characters: cut the names first, so "+N more" stays
+  const named = cutText(open.slice(0, 2).map(describe).join(" · "), 90);
+  const more = open.length > 2 ? ` · +${open.length - 2} more` : "";
+  return { state: recent ? "red" : "amber", text: `${named}${more}` };
 }
 
 /** What PINNED_WORKAROUNDS owe after `window`: each pin's next state, and the posts of those whose
@@ -430,7 +487,18 @@ function mergeCounts(a: Record<string, number>, b: Record<string, number>) {
   return merged;
 }
 
-/** One existing page's owed changes: its new text (null when unchanged) and a thread reply. */
+/** How many of a sighting's visitor 5xx were on a first-party host (FIRST_PARTY_HOSTS): a visitor
+ *  5xx's own, or those of a deploy's cause. An error or a heal has none. Pure. */
+function firstParty5xx(sighting: Sighting) {
+  const hosts =
+    sighting.what === "visitor 5xx" ? { [sighting.label]: sighting.count } : sighting.hosts;
+  return Object.entries(hosts)
+    .filter(([host]) => FIRST_PARTY_HOSTS.has(host))
+    .reduce((sum, [, count]) => sum + count, 0);
+}
+
+/** One posted page's owed changes: its new text (null when unchanged) and a reply in today's
+ *  dashboard thread, sent to the channel too when prd is down. */
 type PageUpdate = {
   ts: string;
   text: string | null;
@@ -438,15 +506,22 @@ type PageUpdate = {
 };
 
 /**
- * What a window owes Slack. Each incident it sees that is open on a page counts there: the page is
- * edited with the running count, and its thread hears of a change of state — grown tenfold since
- * the channel last heard, or back in a burst after an hour's quiet (at most every six hours). An
- * incident with no open incident joins the open page first posted the same UTC day (todaysPage),
- * by an edit, and its thread hears of it when it came in a burst; with no such page, those
- * incidents open one new page. So a day has one fault page, however many hosts a scanner walks.
+ * What a window owes Slack. Each incident it sees that is open on a page counts there, and the page
+ * is edited with the running count. An incident with no open incident joins today's page
+ * (todaysPage), or opens a new one, unposted. So a day has one fault page, however many hosts a
+ * scanner walks.
+ *
+ * A sighting pings when it is a burst or has a first-party host's visitor 5xx. The channel hears of
+ * an incident first when it pings: a page still unposted is posted then (`posts`), and a posted
+ * page's news is a reply in today's dashboard thread (`updates`). After that it hears of a change
+ * of state: the incident grown tenfold since the channel last heard, or back in a burst after an
+ * hour's quiet (at most every six hours). News of a first-party host's burst of visitor 5xx (prd is
+ * down) is sent to the channel too. An unposted page that changed with no news is `held`: the
+ * dashboard's row shows it. A 🧪 test run posts its page whatever it holds, to show what one reads.
+ *
  * An incident unseen for a day closes; a page whose incidents all closed is `resolved` (slack.ts
- * resolvePage) and leaves the state. `pages` is the next state's open pages, the new one to be
- * added once posted. Pure.
+ * resolvePage), or, unposted, dropped, and leaves the state. `pages` is the next state's open
+ * pages, each one in `posts` to get its ts once posted. Pure.
  */
 export function triageIncidents(
   reading: FaultReading,
@@ -459,27 +534,32 @@ export function triageIncidents(
   for (const page of pages)
     for (const incident of Object.values(page.incidents))
       if (now - Date.parse(incident.lastSeen) >= CLOSE_AFTER_MS) incident.closed = true;
-  const opened: Record<string, Incident> = {};
-  const replies = new Map<string, string[]>();
-  const today = todaysPage(pages, window.to);
+  const news = new Map<Page, { lines: string[]; down: boolean }>();
+  const tell = (page: Page, line: string, sighting: Sighting) => {
+    const told = news.get(page) || { lines: [], down: false };
+    const down = firstParty5xx(sighting) >= BURST;
+    news.set(page, { lines: [...told.lines, line], down: told.down || down });
+  };
   for (const [key, sighting] of incidentsOf(reading)) {
+    const pings = sighting.count >= BURST || firstParty5xx(sighting) > 0;
     const page = pages.find((open) => open.incidents[key]?.closed === false);
     if (!page) {
-      const incident = {
+      const today = todaysPage(pages, window.to) || {
+        ts: "",
+        text: "",
+        incidents: {},
+        loud: false,
+      };
+      if (!pages.includes(today)) pages.push(today);
+      today.incidents[key] = {
         ...sighting,
-        told: sighting.count,
+        told: pings ? sighting.count : 0,
         firstSeen: window.to.toISOString(),
         lastSeen: window.to.toISOString(),
         back: null,
         closed: false,
       };
-      if (!today) {
-        opened[key] = incident;
-        continue;
-      }
-      today.incidents[key] = incident;
-      if (sighting.count >= BURST)
-        replies.set(today.ts, [...(replies.get(today.ts) ?? []), `• new: ${describe(sighting)}`]);
+      if (pings) tell(today, `• new: ${describe(sighting)}`, sighting);
       continue;
     }
     const incident = page.incidents[key]!;
@@ -490,24 +570,33 @@ export function triageIncidents(
       lastSeen: window.to.toISOString(),
       hosts: mergeCounts(incident.hosts, sighting.hosts),
     });
-    const lines = replies.get(page.ts) ?? [];
-    if (incident.count >= 10 * incident.told) {
-      lines.push(`• grew tenfold: ${describe(incident)}`);
+    // told 0: a minor incident that has pinged nobody yet, which a trickle never changes
+    if (incident.told === 0 && pings) {
+      tell(page, `• new: ${describe(incident)}`, sighting);
+      incident.told = incident.count;
+    } else if (incident.told > 0 && incident.count >= 10 * incident.told) {
+      tell(page, `• grew tenfold: ${describe(incident)}`, sighting);
       incident.told = incident.count;
     } else if (
       quiet &&
       sighting.count >= BURST &&
       (!incident.back || now - Date.parse(incident.back) >= BACK_EVERY_MS)
     ) {
-      lines.push(`• back after quiet since ${stamp(quietSince, now)}: ${describe(sighting)}`);
+      tell(
+        page,
+        `• back after quiet since ${stamp(quietSince, now)}: ${describe(sighting)}`,
+        sighting,
+      );
       incident.told = incident.count;
       incident.back = window.to.toISOString();
     }
-    if (lines.length) replies.set(page.ts, lines);
   }
   const updates: PageUpdate[] = [];
+  const posts: { page: Page; broadcast: boolean }[] = [];
+  const held: Page[] = [];
   const resolved: { ts: string; text: string; why: string }[] = [];
   const open: Page[] = [];
+  const span = `${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC`;
   for (const page of pages) {
     const incidents = Object.values(page.incidents);
     const text = renderFaultPage(page.incidents, now, testRun);
@@ -516,53 +605,43 @@ export function triageIncidents(
         .map((incident) => incident.lastSeen)
         .sort()
         .at(-1)!;
-      resolved.push({
-        ts: page.ts,
-        text,
-        why: `no sighting for a day, quiet since ${stamp(lastSeen, now)}`,
-      });
+      const why = `no sighting for a day, quiet since ${stamp(lastSeen, now)}`;
+      // an unposted page leaves the state with nothing sent
+      if (page.ts) resolved.push({ ts: page.ts, text, why });
       continue;
     }
-    const lines = replies.get(page.ts);
-    updates.push({
-      ts: page.ts,
-      text: text === page.text ? null : text,
-      reply: lines
-        ? {
-            text: [
-              escalationText(
-                `prd fault escalated, ${window.from.toISOString().slice(11, 16)}–${window.to.toISOString().slice(11, 16)} UTC`,
-                testRun,
-              ),
-              ...lines,
-            ].join("\n"),
-            broadcast: false,
-          }
-        : null,
-    });
-    open.push({ ...page, text });
+    const changed = text !== page.text;
+    page.text = text;
+    open.push(page);
+    const told = news.get(page);
+    if (!page.ts) {
+      page.loud = Boolean(told?.down);
+      if (told || testRun) posts.push({ page, broadcast: page.loud });
+      else if (changed) held.push(page);
+      continue;
+    }
+    const broadcast = Boolean(told?.down) && !page.loud;
+    page.loud ||= broadcast;
+    const reply = told
+      ? {
+          text: [escalationText(`prd fault escalated, ${span}`, testRun), ...told.lines].join("\n"),
+          broadcast,
+        }
+      : null;
+    if (changed || reply) updates.push({ ts: page.ts, text: changed ? text : null, reply });
   }
-  const page = Object.keys(opened).length
-    ? { text: renderFaultPage(opened, now, testRun), incidents: opened }
-    : null;
-  return {
-    page,
-    updates: updates.filter((update) => update.text || update.reply),
-    resolved,
-    pages: open,
-  };
+  return { posts, held, updates, resolved, pages: open };
 }
 
-/** The open page the window's new incidents join: the newest one first posted on `to`'s UTC day,
- *  by its earliest incident. Pure. */
+/** The open page the window's new incidents join: the newest with an incident first seen on `to`'s
+ *  UTC day, which only today's page has, else the unposted page, whatever day it was opened (there
+ *  is one at most: new incidents join it until it is posted). Pure. */
 function todaysPage(pages: Page[], to: Date) {
   const day = to.toISOString().slice(0, 10);
-  return pages.findLast(
-    (page) =>
-      Object.values(page.incidents)
-        .map((incident) => incident.firstSeen)
-        .sort()[0]
-        ?.slice(0, 10) === day,
+  return (
+    pages.findLast((page) =>
+      Object.values(page.incidents).some((incident) => incident.firstSeen.slice(0, 10) === day),
+    ) || pages.find((page) => !page.ts)
   );
 }
 
