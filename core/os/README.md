@@ -189,8 +189,8 @@ that.
 
 The MCP endpoint is `/mcp` on each platform deployment (production also serves
 https://mcp.iterate.com). It exposes `run({ project?, script })`, where `script` is an
-`async (itx) => …` function. The deployed integration test
-[shows runnable examples](../../test/vitest/os/mcp-project-root.e2e.test.ts). An MCP client signs in with OAuth or
+`async (itx) => …` function. [examples/mcp-run-scripts.mjs](examples/mcp-run-scripts.mjs) has
+runnable scripts, which the instructions link and an e2e test runs. An MCP client signs in with OAuth or
 presents a personal access token; [credentials](docs/credentials.md) says which bearer works
 where, and why the operator bearer is `/api`'s alone.
 
