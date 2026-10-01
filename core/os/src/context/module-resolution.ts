@@ -9,8 +9,9 @@
 // - `iterate/*` and `zod` — THIS deployment's own build of the SDK (platform-modules.js,
 //   core/os/scripts/build.ts): first-party code and user code link the same modules; on a preview,
 //   the PR's SDK. A subpath of either that the platform does not ship is refused by name.
-// - anything else — esm.sh, from package.json's `dependencies`: an npm version, or a pkg.pr.new URL
-//   at a commit (`https://pkg.pr.new/<owner>/<repo>/<package>@<40-hex sha>`, a vendor's build). The
+// - anything else — esm.sh, from package.json's `dependencies`: an npm version, an npm alias
+//   (`"foo": "npm:bar@1.2.3"`: bar, imported as `foo` and `foo/<subpath>`), or a pkg.pr.new URL at
+//   a commit (`https://pkg.pr.new/<owner>/<repo>/<package>@<40-hex sha>`, a vendor's build). The
 //   graph is crawled once per dependency set, as written, and LOCKED in the module store: every
 //   later load of that set, in any project, gets the same modules and never touches the network. An
 //   exact version or a commit is one build. A range or a dist-tag (`latest`) keeps its first
@@ -19,9 +20,11 @@
 //   moving ref asks to follow it, which a lock cannot do without asking pkg.pr.new on every cold
 //   start, and a project's builds would then differ by when each host started. Whatever writes a
 //   dependency pins it as it writes (iterate/pkg-pr-new `pinPkgPrNewVersion`). esm.sh
-//   keeps the platform packages external, so a library's zod is the SDK's.
+//   keeps the platform packages external, so a library's zod is the SDK's. An alias OF a platform
+//   package (`"zod3": "npm:zod@3"`) is a second copy its source asked for by another name: its own
+//   modules import each other at its version (`npmSelfImportOf`).
 
-import { isPkgPrNewCommit, pkgPrNewVersionOf } from "iterate/pkg-pr-new";
+import { isPkgPrNewCommit, pkgPrNewBuildOf } from "iterate/pkg-pr-new";
 import { failureKind, httpFailureKind, isPlatformFailureKind } from "iterate/platform-retry";
 import { parse } from "es-module-lexer/js";
 import { transform } from "sucrase";
@@ -364,7 +367,7 @@ async function lockedDependencyGraph(
     externals: [...WORKERD_BUILTINS, ...platformPackages(opts.platform)],
   };
   // The prefix names the lock's shape and the rewrite rules: a change to either is a new prefix.
-  const key = `module-lock-2/${await sha256Hex(JSON.stringify(lockInput))}`;
+  const key = `module-lock-3/${await sha256Hex(JSON.stringify(lockInput))}`;
   const stored = await opts.store.get(key);
   if (stored) return JSON.parse(stored) as DependencyGraph;
   const graph = await resolveFromEsm(lockInput, bases, opts);
@@ -381,21 +384,35 @@ function esmModuleName(url: URL): string {
   return `node_modules/.esm${path}${query}.js`.replace(/\/+/g, "/");
 }
 
-/** esm.sh's URL for a package at a version: `/<name>@<version>` for an npm version, and
- *  `/pr/<owner>/<repo>/<name>@<commit>` for a pkg.pr.new URL of the package it is listed under at a
- *  full commit. Any other pkg.pr.new URL is refused, naming the fix: a branch or a PR number moves
- *  (this file's header), and esm.sh cannot resolve one for a scoped package anyway. */
+/** esm.sh's URL for the package dependency `name` is listed as, at its version. The source imports
+ *  it by `name`, whichever package that is (npm installs an alias under the name it is listed by):
+ *  - an npm version: `/<name>@<version>`;
+ *  - an npm alias, `npm:<package>@<version>`: `/<package>@<version>`, its `latest` when it names no
+ *    version. esm.sh does not read an alias itself: asked for `/react@npm:preact@10`, it serves react;
+ *  - a pkg.pr.new URL at a full commit, of `name` or of another package (an alias):
+ *    `/pr/<owner>/<repo>/<package>@<commit>`. Any other pkg.pr.new URL is refused, naming the fix: a
+ *    branch or a PR number moves (this file's header), and esm.sh cannot resolve one for a scoped
+ *    package anyway. */
 function esmPackageBase(name: string, version: string, where: string): string {
+  if (version.startsWith("npm:")) {
+    const alias = version.slice("npm:".length).match(/^((?:@[^/@]+\/)?[^/@]+)(?:@([^:/]+))?$/);
+    if (!alias)
+      throw new Error(
+        `${where}: package.json lists ${name} as ${version}; an alias names a package on npm and its version: npm:<package>@<version>`,
+      );
+    return `${ESM_ORIGIN}/${alias[1]}@${alias[2] || "latest"}`;
+  }
   if (!version.startsWith("https://pkg.pr.new/")) return `${ESM_ORIGIN}/${name}@${version}`;
-  const pkgPrNew = pkgPrNewVersionOf(name, version);
-  const pinned = `https://pkg.pr.new/<owner>/<repo>/${name}@<40-hex sha>`;
-  if (!pkgPrNew)
-    throw new Error(`${where}: package.json lists ${name} as ${version}; pin it as ${pinned}`);
-  if (!isPkgPrNewCommit(pkgPrNew.ref))
+  const build = pkgPrNewBuildOf(version);
+  if (!build)
     throw new Error(
-      `${where}: package.json lists ${name} at ${JSON.stringify(pkgPrNew.ref)}, which is not a commit, so it could name another build tomorrow; pin the commit: ${pinned} (a HEAD of the URL names it in x-commit-key)`,
+      `${where}: package.json lists ${name} as ${version}; pin it as https://pkg.pr.new/<owner>/<repo>/${name}@<40-hex sha>`,
     );
-  return `${ESM_ORIGIN}/pr/${pkgPrNew.owner}/${pkgPrNew.repo}/${name}@${pkgPrNew.ref}`;
+  if (!isPkgPrNewCommit(build.ref))
+    throw new Error(
+      `${where}: package.json lists ${name} at ${JSON.stringify(build.ref)}, which is not a commit, so it could name another build tomorrow; pin the commit: https://pkg.pr.new/<owner>/<repo>/${build.name}@<40-hex sha> (a HEAD of the URL names it in x-commit-key)`,
+    );
+  return `${ESM_ORIGIN}/pr/${build.owner}/${build.repo}/${build.name}@${build.ref}`;
 }
 
 /** An esm.sh module's text, read whole; anything but a JavaScript 200 is refused. esm.sh out of
@@ -433,6 +450,17 @@ function prSelfImportOf(specifier: string, importer: URL): string | undefined {
   const pr = importer.pathname.match(/^\/pr\/([^/]+\/[^/]+\/(?:@[^/]+\/)?[^/@]+)@([^/]+)\//);
   if (!pr || !specifier.startsWith(`${pr[1]}/`)) return undefined;
   return `/pr/${pr[1]}@${pr[2]}/${specifier.slice(pr[1]!.length + 1)}`;
+}
+
+/** A bare `<package>/<subpath>` in a module esm.sh serves under `/<package>@<version>/…`: the path
+ *  of that subpath at the same version. esm.sh spells a package's import of its OWN export bare when
+ *  the package is external, so this is a platform package an alias loads from npm
+ *  (`"iterate-2026-10-01": "npm:iterate@0.4.0"`): its own modules are the aliased version's, never
+ *  the platform's build. */
+function npmSelfImportOf(specifier: string, importer: URL): string | undefined {
+  const own = importer.pathname.match(/^\/((?:@[^/]+\/)?[^/@]+)@([^/]+)\//);
+  if (!own || packageName(specifier) !== own[1]) return undefined;
+  return `/${own[1]}@${own[2]}${specifier.slice(own[1].length)}`;
 }
 
 /** Crawl esm.sh from each specifier's entry, pipelined: a module is rewritten and its own imports
@@ -474,6 +502,7 @@ async function resolveFromEsm(
       for (const edit of importsOf(code, href, where)) {
         const { specifier } = edit;
         const builtin = specifier.match(/^\/?(cloudflare:[^?]+)/)?.[1];
+        const self = prSelfImportOf(specifier, url) || npmSelfImportOf(specifier, url);
         if (builtin) {
           edits.push({ ...edit, specifier: builtin });
         } else if (specifier.startsWith("node:")) {
@@ -489,10 +518,11 @@ async function resolveFromEsm(
           const childName = esmModuleName(child);
           load(child.href, childName);
           edits.push({ ...edit, specifier: relativeSpecifier(name, childName) });
-        } else if (prSelfImportOf(specifier, url)) {
+        } else if (self) {
           // esm.sh's `/pr/` route spells a package's import of its OWN exported subpath bare, as
-          // `<owner>/<repo>/<package>/<subpath>`; the importing module's URL names the commit.
-          const child = new URL(`${prSelfImportOf(specifier, url)}?${query}`, ESM_ORIGIN);
+          // `<owner>/<repo>/<package>/<subpath>`, and its npm route as `<package>/<subpath>` for an
+          // aliased platform package; the importing module's URL names the commit or version.
+          const child = new URL(`${self}?${query}`, ESM_ORIGIN);
           const childName = esmModuleName(child);
           load(child.href, childName);
           edits.push({ ...edit, specifier: relativeSpecifier(name, childName) });
