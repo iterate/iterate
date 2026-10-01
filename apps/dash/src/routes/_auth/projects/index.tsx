@@ -198,6 +198,13 @@ function NewProjectForm({
   const [picked, setPicked] = useState<string | null>(null);
   const orgId = picked || orgs[0]?.id || "";
   const [orgName, setOrgName] = useState("");
+  // the preset whose folder is `default`, which the select's first option stands for (the consent
+  // page starts a project from it too, core/os consent-page.server.ts); "Blank", the platform's
+  // minimal config, when the platform offers none
+  const defaultPreset = templateOptions.find(
+    (option) =>
+      parseConfigRepoTemplateReference(option.reference).path?.split("/").at(-1) === "default",
+  );
   const initial = templateFields(initialTemplate, templateOptions);
   const [template, setTemplate] = useState(initial.template);
   const [customTemplate, setCustomTemplate] = useState(initial.customTemplate);
@@ -221,7 +228,9 @@ function NewProjectForm({
       using created = await api.projects.create({
         project: name.trim(),
         orgId: chosenOrgId || undefined,
-        configRepoTemplate: (template === "custom" ? customTemplate.trim() : template) || undefined,
+        configRepoTemplate:
+          (template === "custom" ? customTemplate.trim() : template || defaultPreset?.reference) ||
+          undefined,
       });
       // the slug as the platform slugged it, off the root context handed back
       const { projectId, projectSlug } = await created.whoami();
@@ -268,12 +277,14 @@ function NewProjectForm({
             value={template}
             onChange={(event) => setTemplate(event.target.value)}
           >
-            <NativeSelectOption value="">Blank</NativeSelectOption>
-            {templateOptions.map((option) => (
-              <NativeSelectOption key={option.reference} value={option.reference}>
-                {option.label}
-              </NativeSelectOption>
-            ))}
+            <NativeSelectOption value="">{defaultPreset?.label || "Blank"}</NativeSelectOption>
+            {templateOptions
+              .filter((option) => option !== defaultPreset)
+              .map((option) => (
+                <NativeSelectOption key={option.reference} value={option.reference}>
+                  {option.label}
+                </NativeSelectOption>
+              ))}
             <NativeSelectOption value="custom">Custom GitHub template…</NativeSelectOption>
           </NativeSelect>
           <FieldDescription>
@@ -357,9 +368,8 @@ function NewProjectForm({
 }
 
 /** `?template=` as the sheet's two template fields: a `github:` reference goes in the custom field;
- *  a name is the preset whose path is `configs/<name>`, and no name is `default` when the platform
- *  offers one. A name that is none, like a platform built with no presets, is "Blank": the
- *  platform's minimal config. */
+ *  a name is the preset whose path is `configs/<name>`. No name, `default`, and a name that is none
+ *  are the select's first option (the default preset, else "Blank"). */
 function templateFields(
   template: string | undefined,
   options: { reference: string }[],
@@ -367,8 +377,8 @@ function templateFields(
   if (template?.startsWith("github:")) return { template: "custom", customTemplate: template };
   const builtIn = options.find(
     (option) =>
-      parseConfigRepoTemplateReference(option.reference).path ===
-      `configs/${template || "default"}`,
+      template !== "default" &&
+      parseConfigRepoTemplateReference(option.reference).path === `configs/${template}`,
   );
   return { template: builtIn?.reference || "", customTemplate: "" };
 }
