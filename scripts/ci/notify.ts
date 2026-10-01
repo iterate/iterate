@@ -6,27 +6,35 @@
 //   deploy-success     a prd deploy job's step, once the job succeeded: `🚀 <App> live · run` in
 //                      #ci, in the thread of the merge's line (a dispatched redeploy's, top-level).
 //                      Then each open deploy page naming the app, for a commit this one descends
-//                      from, is edited "live again", and resolved once every app on it is.
+//                      from, is edited "live again", and resolved once every app on it is. The
+//                      dashboard's "prd deploys" row turns green naming the app, or stays red while
+//                      a deploy page is open.
 //   deploy-failure     the same job's step when its deploy did not succeed (and, on OS, the host
-//                      check did not page): one page in #error-pulse per failing commit. Another app
-//                      failing on that commit is edited into its page.
-//   workflow-failure   a scheduled workflow's notify job: one page per workflow while it is red. A
-//                      repeat edits it; a new set of failed jobs also replies in its thread.
-//   workflow-resolved  the same job on a green run: resolves that page.
+//                      check did not page): one page per failing commit, in today's #error-pulse
+//                      dashboard thread and sent to the channel too (prd is down), and the "prd
+//                      deploys" row red. Another app failing on that commit is edited into its page.
+//   workflow-failure   a scheduled workflow's notify job: one page per workflow while it is red, in
+//                      today's dashboard thread, and the dashboard's row named by the workflow red.
+//                      A repeat edits the page; a new set of failed jobs also replies in today's
+//                      dashboard thread, naming the workflow.
+//   workflow-resolved  the same job on a green run: resolves that page and turns the row green.
 //
 // A page's first line and impact are its state: a run reads them back from the open page and
 // renders the page again. `--test-run` posts what the command would post, marked 🧪, to #ci, and
-// reads and edits no page. deploy-success's reads #ci once and replies in the thread of GITHUB_SHA's
-// merge line when it finds one, so a merged commit's sha proves the thread reply without a deploy.
+// reads and edits no page or row. deploy-success's reads #ci once and replies in the thread of
+// GITHUB_SHA's merge line when it finds one, so a merged commit's sha proves the thread reply
+// without a deploy.
 //
 // Two apps failing on one commit can post two pages in the same second. Each re-reads after it
 // posts, and the younger page deletes itself and is edited into the older. Two younger pages folding
-// into the older at once can lose one app from its list: that race is accepted.
+// into the older at once can lose one app from its list, and the row names the apps its last writer
+// saw: those races are accepted.
 import { execFileSync } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
+import { setRow, type RowState } from "./dashboard.ts";
 import { depotWorkflowUrl } from "./depot.ts";
 import { getOctokit, getRepo, readEventPayload, type GithubEventPayload } from "./github.ts";
 import {
@@ -36,6 +44,7 @@ import {
   findOpenPages,
   getSlackClient,
   pageText,
+  postPage,
   resolvePage,
   resolvedText,
   slackChannelIds,
@@ -237,12 +246,27 @@ export type DeployPage = {
 /** How long a deploy page stays open to its apps' next deploys. */
 const DEPLOY_PAGE_HOURS = 168;
 const DEPLOY_MARKER = "prd deploy failed at ";
+/** The dashboard's row (./dashboard.ts) for prd deploys. */
+const DEPLOY_SIGNAL = "prd deploys";
+
+/** The apps that failed on a page's commit and are not live again since. Pure. */
+function stillDown(page: DeployPage) {
+  const back = new Set(page.live.map((entry) => entry.app));
+  return page.failed.filter((entry) => !back.has(entry.app));
+}
+
+/** Apps' names as a page lists them, `OS, Agents`. Pure. */
+const names = (entries: { app: string }[]) => entries.map((entry) => entry.app).join(", ");
+
+/** The "prd deploys" row's text while deploy pages are open: each one's apps still down and its
+ *  commit, `OS, Agents failed at 0123456`. Pure. */
+function deployRowText(pages: DeployPage[]) {
+  return pages.map((page) => `${names(stillDown(page))} failed at ${page.sha}`).join("; ");
+}
 
 /** A failed commit's page. Pure. */
 export function deployPageText(page: DeployPage, testRun: boolean) {
-  const back = new Set(page.live.map((entry) => entry.app));
-  const down = page.failed.filter((entry) => !back.has(entry.app));
-  const names = (entries: { app: string }[]) => entries.map((entry) => entry.app).join(", ");
+  const down = stillDown(page);
   const notUploaded = down.filter((entry) => !entry.uploaded);
   const uploaded = down.filter((entry) => entry.uploaded);
   const impact = [
@@ -302,8 +326,10 @@ function withFailure(page: DeployPage, app: { app: string; uploaded: boolean }):
   };
 }
 
-/** Pages #error-pulse with `app`'s failure at `sha`: into that commit's open page when there is one,
- *  else a new page, which folds itself into an older one posted in the same moment. */
+/** A failed deploy's Slack side: `app`'s failure at `sha` paged (writeDeployPage), then the
+ *  dashboard's "prd deploys" row red, naming the apps still down on every open deploy page, this
+ *  commit's and any earlier one's (openDeployRow). A 🧪 test run posts the page it would post to #ci
+ *  alone. */
 export async function pageDeployFailure(
   slack: WebClient,
   input: {
@@ -313,9 +339,74 @@ export async function pageDeployFailure(
     subject: string;
     runUrl: string;
     now: Date;
+    testRun: boolean;
   },
 ) {
+  if (input.testRun) {
+    const text = deployPageText(newDeployPage(input), true);
+    await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text });
+    return;
+  }
+  await writeDeployPage(slack, input);
   const channel = slackChannelIds["#error-pulse"];
+  const open = await findOpenPages(slack, {
+    channel,
+    marker: DEPLOY_MARKER,
+    sinceHours: DEPLOY_PAGE_HOURS,
+    now: input.now,
+  });
+  await setRow(slack, {
+    channel,
+    now: input.now,
+    signal: DEPLOY_SIGNAL,
+    state: "red",
+    text: openDeployRow(open.map((found) => found.text)),
+  });
+}
+
+/** The "prd deploys" row's text for the open pages `texts`: each page's apps still down, and how many
+ *  pages could not be read (a format from before), which are down too as far as anyone knows. Pure. */
+function openDeployRow(texts: string[]) {
+  const pages: DeployPage[] = [];
+  let unread = 0;
+  for (const text of texts) {
+    try {
+      pages.push(readDeployPage(text));
+    } catch {
+      unread += 1;
+    }
+  }
+  return [pages.length > 0 && deployRowText(pages), unread > 0 && `${unread} page(s) not read`]
+    .filter(Boolean)
+    .join("; ");
+}
+
+/** A commit's first page, for `app` that failed on it. Pure. */
+function newDeployPage(input: {
+  app: string;
+  uploaded: boolean;
+  sha: string;
+  subject: string;
+  runUrl: string;
+}): DeployPage {
+  return {
+    head: deployPageHead(input.sha, input.subject),
+    sha: input.sha.slice(0, 7),
+    failed: [{ app: input.app, uploaded: input.uploaded }],
+    live: [],
+    runUrl: input.runUrl,
+  };
+}
+
+/** `app`'s failure at `sha` edited into that commit's open page when there is one, else a new page
+ *  in today's dashboard thread, sent to the channel too (prd is down), which folds itself into an
+ *  older one posted in the same moment. Resolves to the page as written. */
+async function writeDeployPage(
+  slack: WebClient,
+  input: Parameters<typeof pageDeployFailure>[1],
+): Promise<DeployPage> {
+  const channel = slackChannelIds["#error-pulse"];
+  const { now } = input;
   const failure = { app: input.app, uploaded: input.uploaded };
   const oldestFirst = async () =>
     (
@@ -323,36 +414,32 @@ export async function pageDeployFailure(
         channel,
         marker: `${DEPLOY_MARKER}${input.sha.slice(0, 7)}`,
         sinceHours: DEPLOY_PAGE_HOURS,
-        now: input.now,
+        now,
       })
     ).reverse();
-  const fold = (page: { ts: string; text: string }) =>
-    editPage(slack, {
-      channel,
-      ts: page.ts,
-      text: deployPageText(withFailure(readDeployPage(page.text), failure), false),
-    });
-  const [existing] = await oldestFirst();
-  if (existing) {
-    await fold(existing);
-    return;
-  }
-  const page: DeployPage = {
-    head: deployPageHead(input.sha, input.subject),
-    sha: input.sha.slice(0, 7),
-    failed: [failure],
-    live: [],
-    runUrl: input.runUrl,
+  const fold = async (found: { ts: string; text: string }) => {
+    const folded = withFailure(readDeployPage(found.text), failure);
+    await editPage(slack, { channel, ts: found.ts, text: deployPageText(folded, false), now });
+    return folded;
   };
-  const posted = await slack.chat.postMessage({ channel, text: deployPageText(page, false) });
+  const [existing] = await oldestFirst();
+  if (existing) return await fold(existing);
+  const page = newDeployPage(input);
+  const ts = await postPage(slack, {
+    channel,
+    text: deployPageText(page, false),
+    broadcast: true,
+    now,
+  });
   const [oldest] = await oldestFirst();
-  if (!oldest || oldest.ts === posted.ts || !posted.ts) return;
-  await slack.chat.delete({ channel, ts: posted.ts });
-  await fold(oldest);
+  if (!oldest || oldest.ts === ts) return page;
+  await slack.chat.delete({ channel, ts });
+  return await fold(oldest);
 }
 
 /** After `app` went live at `sha`: each open page it failed on, at a commit `sha` descends from, is
- *  edited "live again", and resolved once all its apps are. */
+ *  edited "live again", and resolved once all its apps are. Then the dashboard's "prd deploys" row:
+ *  red naming the pages this run left open, else green naming `app` at `sha`. */
 export async function resolveDeployPages(
   slack: WebClient,
   input: {
@@ -372,39 +459,59 @@ export async function resolveDeployPages(
   });
   // one page that cannot be read or written leaves the others to resolve, and fails the step after
   const errors: unknown[] = [];
+  const stillOpen: string[] = [];
   for (const found of open) {
     try {
-      await resolveDeployPage(slack, { ...input, channel, found });
+      const page = await resolveDeployPage(slack, { ...input, channel, found });
+      if (page) stillOpen.push(deployPageText(page, false));
     } catch (error) {
       errors.push(error);
+      // its incident is still open as far as anyone knows: the row stays red for it
+      stillOpen.push(found.text);
     }
   }
+  const row: { state: RowState; text: string } =
+    stillOpen.length > 0
+      ? { state: "red", text: openDeployRow(stillOpen) }
+      : { state: "green", text: `${input.app} live at ${input.sha.slice(0, 7)}` };
+  await setRow(slack, { channel, now: input.now, signal: DEPLOY_SIGNAL, ...row }).catch(
+    (error: unknown) => errors.push(error),
+  );
   if (errors.length > 0)
-    throw new AggregateError(errors, `${errors.length} open deploy page(s) were not resolved`);
+    throw new AggregateError(
+      errors,
+      `${errors.length} update(s) of the deploy's pages and row failed`,
+    );
 }
 
+/** Edits or resolves one open deploy page for `app` live at `sha`. Resolves to the page as this run
+ *  left it while it is still open, or undefined once it is resolved. */
 async function resolveDeployPage(
   slack: WebClient,
   input: Parameters<typeof resolveDeployPages>[1] & {
     channel: string;
     found: { ts: string; text: string };
   },
-) {
-  const { channel, found } = input;
+): Promise<DeployPage | undefined> {
+  const { channel, found, now } = input;
   const page = readDeployPage(found.text);
   const failed = page.failed.some((entry) => entry.app === input.app);
   const back = page.live.some((entry) => entry.app === input.app);
-  if (!failed || back || !(await input.descends(page.sha, input.sha))) return;
+  if (!failed || back || !(await input.descends(page.sha, input.sha))) return page;
   const next = { ...page, live: [...page.live, { app: input.app, sha: input.sha.slice(0, 7) }] };
   const text = deployPageText(next, false);
-  if (next.failed.every((entry) => next.live.some((live) => live.app === entry.app)))
-    await resolvePage(slack, {
-      channel,
-      ts: found.ts,
-      text,
-      why: `every app is live again: ${next.live.map((entry) => `${entry.app} at ${entry.sha}`).join(", ")}`,
-    });
-  else await editPage(slack, { channel, ts: found.ts, text });
+  if (stillDown(next).length > 0) {
+    await editPage(slack, { channel, ts: found.ts, text, now });
+    return next;
+  }
+  await resolvePage(slack, {
+    channel,
+    ts: found.ts,
+    text,
+    why: `every app is live again: ${next.live.map((entry) => `${entry.app} at ${entry.sha}`).join(", ")}`,
+    now,
+  });
+  return undefined;
 }
 
 /** The prd deploy its job's step reports: APP_DISPLAY_NAME at GITHUB_SHA, linking the job. */
@@ -466,24 +573,11 @@ export async function deployFailure(options: { testRun?: boolean } = {}) {
       encoding: "utf8",
     }).trim(),
   };
-  const slack = getSlackClient();
-  if (options.testRun) {
-    await slack.chat.postMessage({
-      channel: slackChannelIds["#ci"],
-      text: deployPageText(
-        {
-          head: deployPageHead(failure.sha, failure.subject),
-          sha: failure.sha.slice(0, 7),
-          failed: [{ app: failure.app, uploaded: failure.uploaded }],
-          live: [],
-          runUrl: failure.runUrl,
-        },
-        true,
-      ),
-    });
-    return;
-  }
-  await pageDeployFailure(slack, { ...failure, now: new Date() });
+  await pageDeployFailure(getSlackClient(), {
+    ...failure,
+    now: new Date(),
+    testRun: Boolean(options.testRun),
+  });
 }
 
 // ---- scheduled workflows -------------------------------------------------------------------------
@@ -545,43 +639,85 @@ const workflowPages = (slack: WebClient, workflow: string, now: Date) =>
     now,
   });
 
-/** Pages #error-pulse with `workflow`'s red run: its open page edited (and a reply in its thread
- *  when other jobs fail now), or a new page. */
+/** Pages #error-pulse with `workflow`'s red run, not sent to the channel: its open page edited (and
+ *  a reply in today's dashboard thread, naming the workflow, when other jobs fail now), or a new
+ *  page in that thread. Then the dashboard's row named by the workflow turns red. A 🧪 test run
+ *  posts the page it would post to #ci alone. */
 export async function pageWorkflowFailure(
   slack: WebClient,
-  input: { workflow: string; jobs: string[]; sha: string; runUrl: string; now: Date },
+  input: {
+    workflow: string;
+    jobs: string[];
+    sha: string;
+    runUrl: string;
+    now: Date;
+    testRun: boolean;
+  },
 ) {
-  const channel = slackChannelIds["#error-pulse"];
-  const [found] = await workflowPages(slack, input.workflow, input.now);
-  if (!found) {
-    const page = { ...input, since: input.sha, runs: 1 };
-    await slack.chat.postMessage({ channel, text: workflowPageText(page, false) });
+  if (input.testRun) {
+    const text = workflowPageText({ ...input, since: input.sha, runs: 1 }, true);
+    await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text });
     return;
   }
-  const page = readWorkflowPage(input.workflow, found.text);
-  const next = { ...page, jobs: input.jobs, runs: page.runs + 1, runUrl: input.runUrl };
-  const ts = await editPage(slack, { channel, ts: found.ts, text: workflowPageText(next, false) });
-  if ([...page.jobs].sort().join() !== [...input.jobs].sort().join())
-    await slack.chat.postMessage({
-      channel,
-      thread_ts: ts,
-      text: escalationText(`${input.workflow} now fails in ${input.jobs.join(", ")}`, false),
-    });
+  const channel = slackChannelIds["#error-pulse"];
+  const { now } = input;
+  const [found] = await workflowPages(slack, input.workflow, now);
+  if (found) {
+    const page = readWorkflowPage(input.workflow, found.text);
+    const next = { ...page, jobs: input.jobs, runs: page.runs + 1, runUrl: input.runUrl };
+    await editPage(slack, { channel, ts: found.ts, text: workflowPageText(next, false), now });
+    if ([...page.jobs].sort().join() !== [...input.jobs].sort().join())
+      await postPage(slack, {
+        channel,
+        text: escalationText(`${input.workflow} now fails in ${input.jobs.join(", ")}`, false),
+        broadcast: false,
+        now,
+      });
+  } else {
+    const page = { ...input, since: input.sha, runs: 1 };
+    await postPage(slack, { channel, text: workflowPageText(page, false), broadcast: false, now });
+  }
+  await setRow(slack, {
+    channel,
+    now,
+    signal: input.workflow,
+    state: "red",
+    text: `failed in ${input.jobs.join(", ")}`,
+  });
 }
 
-/** Resolves `workflow`'s page after a green run. */
+/** Resolves `workflow`'s page after a green run, and turns its row on the dashboard green. A 🧪
+ *  test run posts the resolution it would make to #ci alone. */
 export async function resolveWorkflowPage(
   slack: WebClient,
-  input: { workflow: string; sha: string; now: Date },
+  input: { workflow: string; sha: string; now: Date; testRun: boolean },
 ) {
-  for (const found of await workflowPages(slack, input.workflow, input.now)) {
+  const why = `${input.workflow} green again at ${input.sha.slice(0, 7)}`;
+  if (input.testRun) {
+    await slack.chat.postMessage({
+      channel: slackChannelIds["#ci"],
+      text: resolvedText(why, true),
+    });
+    return;
+  }
+  const channel = slackChannelIds["#error-pulse"];
+  const { now } = input;
+  for (const found of await workflowPages(slack, input.workflow, now)) {
     await resolvePage(slack, {
-      channel: slackChannelIds["#error-pulse"],
+      channel,
       ts: found.ts,
       text: workflowPageText(readWorkflowPage(input.workflow, found.text), false),
-      why: `${input.workflow} green again at ${input.sha.slice(0, 7)}`,
+      why,
+      now,
     });
   }
+  await setRow(slack, {
+    channel,
+    now,
+    signal: input.workflow,
+    state: "green",
+    text: `green at ${input.sha.slice(0, 7)}`,
+  });
 }
 
 /** This run's workflow (GITHUB_WORKFLOW) at GITHUB_SHA, linking its page on Depot (DEPOT_JOB_URL
@@ -600,29 +736,20 @@ export async function workflowFailure(options: { testRun?: boolean } = {}) {
     ...workflowInput(),
     jobs: failedJobs(WorkflowNeeds.parse(JSON.parse(readOption("NEEDS")))),
   };
-  const slack = getSlackClient();
-  if (options.testRun) {
-    await slack.chat.postMessage({
-      channel: slackChannelIds["#ci"],
-      text: workflowPageText({ ...input, since: input.sha, runs: 1 }, true),
-    });
-    return;
-  }
-  await pageWorkflowFailure(slack, { ...input, now: new Date() });
+  await pageWorkflowFailure(getSlackClient(), {
+    ...input,
+    now: new Date(),
+    testRun: Boolean(options.testRun),
+  });
 }
 
 /** Resolves the workflow's page, if one is open, after its green run. */
 export async function workflowResolved(options: { testRun?: boolean } = {}) {
-  const input = workflowInput();
-  const slack = getSlackClient();
-  if (options.testRun) {
-    await slack.chat.postMessage({
-      channel: slackChannelIds["#ci"],
-      text: resolvedText(`${input.workflow} green again at ${input.sha.slice(0, 7)}`, true),
-    });
-    return;
-  }
-  await resolveWorkflowPage(slack, { ...input, now: new Date() });
+  await resolveWorkflowPage(getSlackClient(), {
+    ...workflowInput(),
+    now: new Date(),
+    testRun: Boolean(options.testRun),
+  });
 }
 
 void createCli(import.meta).run();

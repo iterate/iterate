@@ -12,6 +12,7 @@ import {
   judgeReport,
   judgeRun,
   latencyEvents,
+  latencyRow,
   readReport,
   rememberRun,
   renderPage,
@@ -389,6 +390,46 @@ test("a run that kept no report is red: the report and every metric it would hav
       redBecause: "not a platform failure",
     })),
   );
+  expect(judged).toMatchObject({
+    row: {
+      signal: "latency",
+      state: "grey",
+      text: "unjudged at `abc`: broken probe the perf report",
+    },
+  });
+});
+
+test.for([
+  {
+    name: "red naming its red metrics, whatever broke beside them",
+    red: ["context.wake", "mcp.call"] as LatencyMetricName[],
+    broken: [{ probe: "a row", error: "Error: boom", redBecause: "not a platform failure" }],
+    row: { state: "red", text: "over its lines at `012345678`: context.wake, mcp.call" },
+  },
+  {
+    name: "grey while a broken probe fails the run, the row's name escaped",
+    red: [],
+    broken: [{ probe: "perf > a row", error: "Error: boom", redBecause: "not a platform failure" }],
+    row: { state: "grey", text: "unjudged at `012345678`: broken probe perf &gt; a row" },
+  },
+  {
+    name: "green when the platform broke a probe once, which is only recorded",
+    red: [],
+    broken: [
+      {
+        probe: "a row",
+        error: "Error: boom",
+        platform: "edge-stall" as const,
+        redBecause: undefined,
+      },
+    ],
+    row: { state: "green", text: "under its lines at `012345678`" },
+  },
+])("latency's dashboard row is $name", ({ red, broken, row }) => {
+  expect(latencyRow({ red, broken, sha: "0123456789abcdef" })).toEqual({
+    signal: "latency",
+    ...row,
+  });
 });
 
 test.for([
@@ -636,7 +677,6 @@ test.for([
     expected: {
       kind: "escalate",
       news: "latency: rules.300.newest over its lines too at `3b6b1c8b0` (A &lt;change&gt;)",
-      broadcast: false,
     },
   },
   {

@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iterate/iterate",
+    "url": "git+https://github.com/iterate/packages",
     "directory": "packages/petshop-sdk"
   },
   "type": "module",

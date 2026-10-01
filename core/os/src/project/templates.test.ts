@@ -30,6 +30,18 @@ test("a preset the build was given is seeded from the build: nothing is download
   );
 });
 
+test("a preset named at a commit from before a deploy is seeded from this build: nothing is downloaded", async () => {
+  // the Dash sends the reference it listed when the page loaded; downloading it would fail when the
+  // preset's repository is private
+  const previousBuild = PRESET.reference.replace("b".repeat(40), "c".repeat(40));
+  const fixture = project();
+  await deliver(fixture, requested(previousBuild));
+  expect(fixture.downloadTemplate).not.toHaveBeenCalled();
+  expect(fixture.files()).toEqual(
+    Object.fromEntries(PRESET.files.map((file) => [file.path, file.content])),
+  );
+});
+
 test("copies the pinned subdirectory into a fresh root commit before project/created", async () => {
   const fixture = project(undefined, async () => [
     { path: "package.json", content: manifest },

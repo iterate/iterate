@@ -1,29 +1,28 @@
 // scripts/monitors/e2e.ts — THE E2E CHECKS: main's e2e run and the suites that run beside it, each red
-// or green, each with a page of its own while it is red (./page.ts `advance`). Main OS e2e's own page
-// job pages its two suites as soon as its run has settled (./health.ts `mainE2e`); the hourly health
-// job pages real-model e2e (./health.ts `run`).
+// or green. Each verdict is the suite's row on #error-pulse's daily dashboard and what it owes its
+// page (./page.ts `advance`); only main e2e pages, the others are rows alone (./health.ts
+// ROW_ONLY_SIGNALS). Main OS e2e's own page job judges its two suites as soon as its run has settled
+// (./health.ts `mainE2e`); the hourly health job judges real-model e2e (./health.ts `run`).
 //
 //   main e2e        each push run of Main OS e2e (.depot/workflows/main-os-e2e.yml): red when a job
 //                   failed or timed out (Depot cancels a timed-out job), green when Deploy preview,
 //                   E2E tests and Browser specs all passed. Its page names the failed jobs and the
-//                   failing rows.
+//                   failing rows, a red slow row among them, since a red slow row fails E2E tests.
 //   slow e2e rows   the rows tagged `slow` in that run's E2E tests job, which most PRs skip
-//                   (docs/testing.md#slow-rows): a suite of their own, so a slow row that breaks while
-//                   main is already red still pages.
+//                   (docs/testing.md#slow-rows): a suite of their own.
 //   real-model e2e  the `REAL:` rows of each settled scheduled or push run of OS real model
 //                   (.depot/workflows/os-real-model.yml).
 //
-// Each run is judged once, oldest first, so a page names the run where its suite changed state; a
-// first run judges only the newest. The verdicts come from Depot's records: the jobs' results, and
-// the rows from what the jobs kept, the suite summary beside each e2e job's flake records in its
-// test results (`main-os-test-artifacts-attempt-<id>`) and the real-model job's telemetry
-// (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner that did not
-// finish, one of its rows not run) is a BROKEN PROBE. Real-model e2e's pages nothing and fails the
-// health job. Slow e2e rows' is a state of its own, `broken`, "unjudged" on a page of its own like a
-// verdict's, and fails nothing: Main OS e2e's page job reports on the commit its run tested, where red
-// reads as "this commit broke main e2e", and main e2e's verdict comes from the jobs whatever the slow
-// rows' summary says. A run a person cancelled, or a push a newer one replaced in the queue, is left
-// out.
+// Each run is judged once, oldest first, so a page names the run where its suite changed state, and a
+// row the newest run judged; a first run judges only the newest. The verdicts come from Depot's
+// records: the jobs' results, and the rows from what the jobs kept, the suite summary beside each e2e
+// job's flake records in its test results (`main-os-test-artifacts-attempt-<id>`) and the real-model
+// job's telemetry (`os-real-model-telemetry`). A suite whose run proves nothing (no results, a runner
+// that did not finish, one of its rows not run) is a BROKEN PROBE, its row grey. Real-model e2e's
+// fails the health job. Slow e2e rows' is a state of its own, `broken`, "unjudged" like a verdict,
+// and fails nothing: Main OS e2e's page job reports on the commit its run tested, where red reads as
+// "this commit broke main e2e", and main e2e's verdict comes from the jobs whatever the slow rows'
+// summary says. A run a person cancelled, or a push a newer one replaced in the queue, is left out.
 import { z } from "zod";
 import { FlakeSuiteSummary } from "@iterate-com/shared/test-support/flake-suite-summary";
 import {
@@ -37,9 +36,12 @@ import { testTelemetryFailed } from "../ci/test-telemetry-completeness.ts";
 import {
   advance,
   commitText,
+  rowCommitText,
   shortSha,
   sinceText,
   SignalMemory,
+  type DashboardRow,
+  type PageAction,
   type PageState,
   type PageUpdate,
 } from "./page.ts";
@@ -184,12 +186,37 @@ export function telemetryRows(
   );
 }
 
-/** What one run's verdict of a suite owes its page (./page.ts `advance`), and the suite's memory
- *  after it; a run with no verdict owes nothing and leaves the memory as it was. Red's failures are
- *  its failed jobs and rows, so a red run that fails a job or row its open page has not named
- *  escalates. A test page tells the verdict now, whatever the memory: a page for red or unjudged,
- *  the resolution for green. Pure. */
-export function suiteUpdate(input: {
+/** What one run's verdict of a suite owes its page (./page.ts `advance`), the suite's memory after
+ *  it, and its dashboard row, which names the commit as the page's `what` does ("red at `012345678`
+ *  (its subject)"); a run with no verdict owes nothing, sets no row and leaves the memory as it was.
+ *  Red's failures are its failed jobs and rows, so a red run that fails a job or row its open page
+ *  has not named escalates. A test page tells the verdict now, whatever the memory: a page for red
+ *  or unjudged, the resolution for green. Pure. */
+export function suiteUpdate(input: SuiteVerdict): {
+  update: PageUpdate | null;
+  memory: SignalMemory | undefined;
+  row: DashboardRow | null;
+} {
+  const { suite, verdict, previous } = input;
+  if (!verdict) return { update: null, memory: previous, row: null };
+  const failures =
+    verdict === "red" ? [...input.failedJobs, ...input.failingRows.map(({ name }) => name)] : [];
+  const advanced = advance(previous, { state: verdict, sha: input.commit.sha, failures });
+  const kind = input.testRun ? (verdict === "green" ? "resolve" : "post") : advanced.action;
+  const row: DashboardRow = {
+    signal: suite,
+    state: verdict === "broken" ? "grey" : verdict,
+    text: `${verdict === "broken" ? "unjudged" : verdict} at ${rowCommitText(input.commit)}`,
+  };
+  return {
+    update: kind && pageUpdate(input, { kind, news: advanced.news, memory: advanced.memory }),
+    memory: advanced.memory,
+    row,
+  };
+}
+
+/** One run's verdict of a suite, as suiteUpdate judges it. */
+type SuiteVerdict = {
   suite: (typeof SUITES)[number];
   previous: SignalMemory | undefined;
   verdict: PageState | undefined;
@@ -200,15 +227,16 @@ export function suiteUpdate(input: {
   broken?: string;
   runUrl?: string;
   testRun: boolean;
-}): { update: PageUpdate | null; memory: SignalMemory | undefined } {
-  const { suite, verdict, previous } = input;
-  if (!verdict) return { update: null, memory: previous };
-  const failures =
-    verdict === "red" ? [...input.failedJobs, ...input.failingRows.map(({ name }) => name)] : [];
-  const advanced = advance(previous, { state: verdict, sha: input.commit.sha, failures });
-  const kind = input.testRun ? (verdict === "green" ? "resolve" : "post") : advanced.action;
-  const { memory } = advanced;
-  if (!kind) return { update: null, memory };
+};
+
+/** The update `kind` a suite's verdict owes its page, given the failures new to it (`news`) and the
+ *  suite's memory after the verdict. Pure. */
+function pageUpdate(
+  input: SuiteVerdict,
+  owed: { kind: PageAction; news: string[]; memory: SignalMemory },
+): PageUpdate {
+  const { suite, previous } = input;
+  const { kind, memory } = owed;
   const commit = commitText(input.commit);
   if (kind === "resolve") {
     const why = {
@@ -216,9 +244,9 @@ export function suiteUpdate(input: {
       broken: `${suite} judged again at ${commit}: green`,
       green: `${suite} green at ${commit}`,
     }[previous?.state || "green"];
-    return { update: { signal: suite, kind, why }, memory };
+    return { signal: suite, kind, why };
   }
-  if (memory?.state !== "red" && memory?.state !== "broken")
+  if (memory.state !== "red" && memory.state !== "broken")
     throw new Error(`${suite}: a ${kind} with no open page`);
   const page =
     memory.state === "broken"
@@ -236,29 +264,22 @@ export function suiteUpdate(input: {
         };
   if (kind === "replace")
     return {
-      update: {
-        signal: suite,
-        kind,
-        why:
-          memory.state === "broken"
-            ? `${suite} unjudged at ${commit}, on a page of its own`
-            : `${suite} judged again at ${commit}: red, on a page of its own`,
-        page,
-      },
-      memory,
+      signal: suite,
+      kind,
+      why:
+        memory.state === "broken"
+          ? `${suite} unjudged at ${commit}, on a page of its own`
+          : `${suite} judged again at ${commit}: red, on a page of its own`,
+      page,
     };
   if (kind === "escalate")
     return {
-      update: {
-        signal: suite,
-        kind,
-        page,
-        news: `${suite} has new failures at ${commit}: ${advanced.news.join("; ")}`,
-        broadcast: false,
-      },
-      memory,
+      signal: suite,
+      kind,
+      page,
+      news: `${suite} has new failures at ${commit}: ${owed.news.join("; ")}`,
     };
-  return { update: { signal: suite, kind, page }, memory };
+  return { signal: suite, kind, page };
 }
 
 /** A red page's failed jobs and failing rows, the first eight rows with their first failure. Pure. */
@@ -307,14 +328,20 @@ export const mainE2eRecords = {
  *  ended, each against the suites' verdicts the one before it left, so a page names the run where
  *  its suite changed state: every run since the newest `memory` judged, or, on a first run (nothing
  *  judged yet) and a test run, only the newest. A `current` that is not newer than the newest judged
- *  (a re-run keeps its creation time) is not judged again. */
+ *  (a re-run keeps its creation time) is not judged again. Each suite's row is the newest run's that
+ *  judged it. */
 async function judgeEachRun(
   input: { depot: DepotApi; memory: E2eMemory; testRun: boolean; current?: SettledWorkflow },
   workflow: { name: keyof E2eMemory["judgedAt"]; triggers: string[] },
   judge: (
     run: SettledWorkflow,
     suites: E2eMemory["suites"],
-  ) => Promise<{ updates: PageUpdate[]; suites: E2eMemory["suites"]; failures: string[] }>,
+  ) => Promise<{
+    updates: PageUpdate[];
+    suites: E2eMemory["suites"];
+    failures: string[];
+    rows: DashboardRow[];
+  }>,
 ) {
   const after = input.testRun ? undefined : input.memory.judgedAt[workflow.name];
   const { current } = input;
@@ -326,6 +353,7 @@ async function judgeEachRun(
   let memory = input.memory;
   const updates: PageUpdate[] = [];
   const failures: string[] = [];
+  const rows = new Map<string, DashboardRow>();
   for (const run of after ? runs : runs.slice(-1)) {
     const judged = await judge(run, memory.suites);
     memory = {
@@ -334,17 +362,18 @@ async function judgeEachRun(
     };
     updates.push(...judged.updates);
     failures.push(...judged.failures);
+    for (const row of judged.rows) rows.set(row.signal, row);
   }
-  return { updates, memory, failures };
+  return { updates, memory, failures, rows: [...rows.values()] };
 }
 
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
  *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
  *  summary, which a suite whose deploy did not finish never wrote (and `broken` when the E2E tests
- *  job ran but its summary proves nothing about them). When Depot still lists a deploy or
- *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
- *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
- *  started) has no verdict, and the state moves past it. */
+ *  job ran but its summary proves nothing about them). When Depot still lists a deploy or suite job
+ *  of `current` as queued or running, that run has not settled, and judging it throws. An older run
+ *  Depot lists as finished or failed with such a job (one Depot failed before its jobs started) has
+ *  no verdict, and the state moves past it. */
 export async function checkMainE2e(input: {
   depot: DepotApi;
   memory: E2eMemory;
@@ -437,6 +466,7 @@ export async function checkMainE2e(input: {
         // a run whose verdict is none leaves the suite's memory standing
         suites: { ...suites, "main e2e": main.memory, "slow e2e rows": slowRows.memory },
         failures: [],
+        rows: [main.row, slowRows.row].filter((row) => !!row),
       };
     },
   );
@@ -465,17 +495,26 @@ export async function checkRealModel(input: {
         .map(([, bytes]) => RawTelemetry.parse(JSON.parse(new TextDecoder().decode(bytes))));
       const outcome = suiteVerdict(telemetryRows(artifacts), { titlePrefix: "REAL:" });
       console.log(JSON.stringify({ run: run.workflowId, outcome }));
+      const commit = { sha: run.sha, subject: await input.subject(run.sha) };
+      // a broken probe leaves the memory standing, and its row grey
       if ("broken" in outcome)
         return {
           updates: [],
           suites,
           failures: [`real-model e2e: broken probe: ${outcome.broken}`],
+          rows: [
+            {
+              signal: "real-model e2e",
+              state: "grey",
+              text: `unjudged at ${rowCommitText(commit)}`,
+            },
+          ],
         };
       const realModel = suiteUpdate({
         suite: "real-model e2e",
         previous: suites["real-model e2e"],
         verdict: outcome.verdict,
-        commit: { sha: run.sha, subject: await input.subject(run.sha) },
+        commit,
         failedJobs: [],
         failingRows: outcome.failingRows,
         runUrl: depotWorkflowUrl(run.workflowId),
@@ -485,6 +524,7 @@ export async function checkRealModel(input: {
         updates: realModel.update ? [realModel.update] : [],
         suites: { ...suites, "real-model e2e": realModel.memory },
         failures: [],
+        rows: realModel.row ? [realModel.row] : [],
       };
     },
   );

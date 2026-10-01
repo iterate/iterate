@@ -15,14 +15,16 @@
 // Every measurement goes to PostHog (`os latency measured`: metric, percentile, value, sha, run). A
 // metric turns RED when it crossed a line in two runs in a row (one slow run is weather; the next one
 // confirms it — at most 3 hours later), and clears once it stayed under its lines two runs in a row.
-// Latency has one page while any metric is red (./page.ts `advance`): opened when the first turns,
-// edited with each run's readings, escalated in its thread when another metric turns, and resolved
-// once none is red. A BROKEN PROBE fails the health run instead: a row
-// that failed for anything but a budget, a metric no row recorded, no report — unless the platform
-// broke it (PLATFORM_FAILURES below): ONE row that a platform failure broke, and that did not break in
-// the run before, is RECORDED — a warning, a line of the step summary and a PostHog event (`os latency
-// probe broken`). The same probe broken two runs in a row, two probes broken in one run, or anything
-// else, is red. Recorded or red, every broken probe is on the step summary and in PostHog.
+// Latency is a row on #error-pulse's daily dashboard and pages nothing (./health.ts
+// ROW_ONLY_SIGNALS): red naming the red metrics, green once none is (`latencyRow`). Its page
+// (./page.ts `advance`: opened when the first metric turns, edited, escalated when another turns,
+// resolved once none is red) is what a 🧪 test run posts to #ci. A BROKEN PROBE fails the health run
+// and greys latency's dashboard row: a row that failed for anything but a budget, a metric no row
+// recorded, no report — unless the platform broke it (PLATFORM_FAILURES below): ONE row that a
+// platform failure broke, and that did not break in the run before, is RECORDED — a warning, a line
+// of the step summary and a PostHog event (`os latency probe broken`). The same probe broken two runs
+// in a row, two probes broken in one run, or anything else, is red. Recorded or red, every broken
+// probe is on the step summary and in PostHog.
 //
 // Its memory, in the health job's state, is the last 20 main runs' medians, what each crossed and
 // which probes broke, which metrics are red, and the newest report it judged.
@@ -46,7 +48,16 @@ import {
   platformFailureOf,
 } from "../ci/platform-failures.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
-import { advance, commitText, sinceText, SignalMemory, type PageUpdate } from "./page.ts";
+import { cutText, slackEscape } from "../ci/slack.ts";
+import {
+  advance,
+  commitText,
+  shortSha,
+  sinceText,
+  SignalMemory,
+  type DashboardRow,
+  type PageUpdate,
+} from "./page.ts";
 
 /** What the check reads: the scheduled runs of this workflow (its `name:`), and this file of the
  *  artifact each keeps. */
@@ -445,7 +456,6 @@ export function renderPage(input: {
       kind: "escalate",
       page,
       news: `latency: ${input.turnedRed.join(", ")} over its lines too at ${commit}`,
-      broadcast: false,
     };
   if (input.kind === "replace")
     throw new Error("latency is red or green: it has no unjudged page to replace");
@@ -521,7 +531,8 @@ export function latencyEvents(readings: Reading[], context: EventContext) {
 
 /** Judge one perf report (undefined when the run kept none) against `memory`: log every metric,
  *  and return the memory after it, the update it owes latency's page (on a test run, what crossed in
- *  this run alone, and no memory), its PostHog events and its broken probes. */
+ *  this run alone, and no memory), its dashboard row (`latencyRow`), its PostHog events and its
+ *  broken probes. */
 export function judgeReport(input: {
   report: unknown;
   memory: LatencyMemory;
@@ -586,14 +597,42 @@ export function judgeReport(input: {
   return {
     memory: { ...outcome.next, judgedAt: measured.at },
     update,
+    row: latencyRow({ red: outcome.next.red, broken, sha: measured.sha }),
     events: [...latencyEvents(readings, context), ...brokenEvents(broken, context)],
     broken,
   };
 }
 
+/** Latency's dashboard row after a report: red naming the red metrics; grey when a broken probe
+ *  fails the run (`judgeBroken`), since what it measures went unjudged; green under its lines.
+ *  Pure. */
+export function latencyRow(input: {
+  red: LatencyMetricName[];
+  broken: BrokenVerdict[];
+  sha: string;
+}): DashboardRow {
+  const at = `at ${shortSha(input.sha)}`;
+  if (input.red.length > 0)
+    return {
+      signal: "latency",
+      state: "red",
+      text: `over its lines ${at}: ${input.red.join(", ")}`,
+    };
+  const broken = input.broken.find((probe) => probe.redBecause);
+  if (broken)
+    return {
+      signal: "latency",
+      state: "grey",
+      // a probe is a test's full name, its describe blocks joined with " > ", which mrkdwn escapes
+      text: `unjudged ${at}: broken probe ${slackEscape(cutText(broken.probe, 60))}`,
+    };
+  return { signal: "latency", state: "green", text: `under its lines ${at}` };
+}
+
 /** Judge the OS latency reports measured since `memory.judgedAt`, oldest first (on a test run, the
  *  newest alone). With no `judgedAt` (the first run) every listed report builds the history, and only
- *  the newest pages, sends PostHog its events or fails the run (brokenReport). */
+ *  the newest pages, sets the row, sends PostHog its events or fails the run (brokenReport). The row
+ *  is the newest report's. */
 export async function checkLatency(input: {
   depot: DepotApi;
   memory: LatencyMemory;
@@ -608,6 +647,7 @@ export async function checkLatency(input: {
   const workflows = input.testRun ? settled.slice(-1) : settled;
   let memory = input.memory;
   const updates: PageUpdate[] = [];
+  const rows: DashboardRow[] = [];
   const events: ReturnType<typeof judgeReport>["events"] = [];
   const red: BrokenVerdict[] = [];
   for (const [index, workflow] of workflows.entries()) {
@@ -633,6 +673,7 @@ export async function checkLatency(input: {
     memory = judged.memory;
     if (!counts) continue;
     if (judged.update) updates.push(judged.update);
+    rows.push(judged.row);
     events.push(...judged.events);
     red.push(...judged.broken.filter((probe) => probe.redBecause));
     const reported = brokenReport(judged.broken);
@@ -643,6 +684,7 @@ export async function checkLatency(input: {
   return {
     memory,
     updates,
+    rows: rows.slice(-1),
     events,
     failures: red.map((probe) => `the latency probe is broken: ${brokenLine(probe)}`),
   };

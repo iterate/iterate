@@ -22,9 +22,10 @@ archive, even though its secret values are encrypted.
 
 The archive contains the project slug, organization name and members, the
 config repository's exact file tree, each project secret's current encrypted
-cell, and the project's own hostnames (`hostnames`, below). It contains no
-encryption key or plaintext secret material. Capture checks that each cell
-decrypts locally before declaring the archive usable.
+cell, the project's own hostnames (`hostnames`, below) and its fetch routes
+(`fetchRoutes`, below). It contains no encryption key or plaintext secret
+material. Capture checks that each cell decrypts locally before declaring the
+archive usable.
 
 Secret ciphertext authenticates its original context (project ID and path),
 URL restrictions and revision. Those fields travel with the archive. Restore
@@ -121,6 +122,27 @@ Hostnames are restored only when `apply` targets the deployment the archive was
 captured on (`source.platform`), because a custom hostname lives on that
 deployment's SaaS zone. Onto any other deployment, `apply` skips them and says so.
 
+## Fetch routes
+
+`fetchRoutes` lists the project's fetch routes at capture as `itx.fetchRoutes.list()`
+answers them: name, `requestMatcher`, `target`, `authRequirement` and `priority`.
+`capture` skips a route to a lent stub, such as `iterate tunnel`'s `tunnel-<name>`,
+and prints its name: the route ends with its lend, and a seed carries no lend. Run
+the tunnel again after `apply`. `check` validates each route with the platform's own
+rules, so an archive whose route `itx.fetchRoutes.set` would refuse fails before
+`apply` touches the deployment.
+
+After the config is published and before the hostnames, `apply` sets each archived
+route with `itx.fetchRoutes.set`, so a restored hostname's first request takes its
+route. A route of the same name becomes the archived one. `set` appends nothing for
+a route that already matches, so a rerun sets nothing. A route the archive lacks is
+left alone. `apply` reads each route back and prints whether it set it again.
+Routes are restored onto any deployment: a `url.hostname` matcher matches only
+requests on that host. `verify-structure` does not compare routes.
+
+An archive from before seeds carried routes has no `fetchRoutes` and fails `check`.
+Capture again; after an erase, add `"fetchRoutes": []` and set the routes by hand.
+
 ## Users and organizations
 
 A project seed carries its organization's name and members. The deployment's whole
@@ -153,7 +175,7 @@ erased with the deployment — so apply every project seed, then run
 
 Seeds intentionally omit stream histories, derived state, user/org secrets,
 OAuth sessions and grants, other repositories, files in R2, agents and workspaces.
-Routes and deployment configuration remain owned by `envs.ts`. This is a selected
+Worker routes and deployment configuration remain owned by `envs.ts`. This is a selected
 project recovery mechanism, not a complete database snapshot. Verify the restored
 websites and external integrations separately before declaring recovery complete.
 
@@ -168,7 +190,9 @@ An erase also removes what a project set up at runtime, and `apply` does not bri
   (`/integrations/<provider>/<connection>`), with the rewrite rules their installers wrote. For
   example the agents app, `@iterate-com/github-sync` and `@iterate-com/ai-linter`.
 - **A repo's origin** (`itx.repos.get(path).origin()`).
-- **Device client rules, schedules and fetch routes.**
+- **Device client rules and schedules.**
+- **Fetch routes to a lent stub**, such as `iterate tunnel`'s `tunnel-<name>`: run the tunnel
+  again.
 - **Config files that are not UTF-8.** `capture` refuses them, so a project that has one is
   captured with `capture --config-repo` from a checkout without it. The origin's history keeps
   it.

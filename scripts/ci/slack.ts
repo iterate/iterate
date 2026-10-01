@@ -3,6 +3,7 @@
 import slackWebApi, { WebAPIPlatformError, WebClient } from "@slack/web-api";
 import { z } from "zod";
 import { dopplerSecret } from "../lib/env-context.ts";
+import { findDashboards, PAGE_CLOSED_EVENT, todaysDashboard } from "./dashboard.ts";
 
 export const slackChannelIds = {
   "#error-pulse": "C09K1CTN4M7",
@@ -87,10 +88,10 @@ export function pageText(input: {
     .join("\n");
 }
 
-/** The thread reply that closes an incident, with both mentions. A test run's is marked 🧪 and
- *  mentions nobody. */
+/** Why an incident closed, as a line that mentions nobody: good news is not a page. A test run's is
+ *  marked 🧪. */
 export function resolvedText(why: string, testRun: boolean) {
-  return testRun ? `🧪 TEST RUN — ✅ resolved: ${why}` : `✅ resolved: ${why} ${onCallMention}`;
+  return testRun ? `🧪 TEST RUN — ✅ resolved: ${why}` : `✅ resolved: ${why}`;
 }
 
 /** The thread reply for an incident that got worse: what is new, with both mentions. A test run's is
@@ -106,6 +107,13 @@ export function markResolved(text: string) {
   return [`✅ resolved: ${first.replace(/^(🚨|:rotating_light:)\s*/, "")}`, ...rest].join("\n");
 }
 
+/** A page's text once its incident closed: markResolved's, then a line saying why. Mentions stay
+ *  as they were: an edit notifies nobody. */
+export function resolvedPageText(text: string, why: string) {
+  const [first = "", ...rest] = markResolved(text).split("\n");
+  return [first, `✅ ${why}`, ...rest].join("\n");
+}
+
 /** Whether a page's first line says it is resolved. Words, not the emoji: Slack's history spells ✅
  *  as `:white_check_mark:`. */
 function isResolved(text: string) {
@@ -113,11 +121,40 @@ function isResolved(text: string) {
 }
 
 /**
+ * Posts a page, or a reply about an open one, to #error-pulse: a reply in today's dashboard thread
+ * (./dashboard.ts), so the channel's top level stays one message a day, and sent to the channel too
+ * when `broadcast` (prd is down). In any other channel (a 🧪 test run's #ci) it is a top-level
+ * message. Resolves to its ts.
+ */
+export async function postPage(
+  slack: WebClient,
+  input: { channel: string; text: string; broadcast: boolean; now: Date },
+) {
+  const { channel, text } = input;
+  if (channel !== slackChannelIds["#error-pulse"]) {
+    const posted = await slack.chat.postMessage({ channel, text });
+    return z.string().parse(posted.ts);
+  }
+  const { ts: thread } = await todaysDashboard(slack, { channel, now: input.now });
+  // Slack's types take a broadcast reply and a plain one as two shapes
+  const posted = await slack.chat.postMessage(
+    input.broadcast
+      ? { channel, text, thread_ts: thread, reply_broadcast: true }
+      : { channel, text, thread_ts: thread },
+  );
+  return z.string().parse(posted.ts);
+}
+
+/** A PAGE_CLOSED_EVENT reply's metadata payload: the ts of the page it closes. */
+const ClosedPage = z.object({ ts: z.string() });
+
+/**
  * The pages this bot posted in the last `sinceHours` whose text has `marker` and that are not
- * closed, newest first, read page by page through the channel's history. A page is closed when its
- * first line says resolved, or when this bot's reply in its thread, sent to the channel too, says
- * resolved (closeFrozenPage: the page is past Slack's edit window). A 🧪 test page is never an
- * incident.
+ * closed, newest first: the replies in the dashboards' threads of that window (postPage), and the
+ * top-level pages posted before the dashboard. A page is closed when its first line says resolved,
+ * when a reply in a dashboard's thread names it in its metadata (closeFrozenPage), or, for a
+ * top-level page, when this bot's reply in its thread, sent to the channel too, says resolved (how
+ * a frozen page was closed before the dashboard). A 🧪 test page is never an incident.
  */
 export async function findOpenPages(
   slack: WebClient,
@@ -125,9 +162,20 @@ export async function findOpenPages(
 ): Promise<Array<{ ts: string; text: string }>> {
   const { bot_id: botId } = await slack.auth.test();
   const since = input.now.getTime() / 1000 - input.sinceHours * 3600;
-  const open: Array<{ ts: string; text: string }> = [];
-  // a reply is newer than its page, so newest first reads it before the page it closes
+  const candidates: Array<{ ts: string; text: string }> = [];
   const closed = new Set<string>();
+  const consider = (message: { ts?: string; text?: string; bot_id?: string }) => {
+    const text = message.text || "";
+    if (
+      message.ts &&
+      message.bot_id === botId &&
+      Number(message.ts) >= since &&
+      text.includes(input.marker) &&
+      !text.includes("TEST RUN") &&
+      !isResolved(text)
+    )
+      candidates.push({ ts: message.ts, text });
+  };
   let cursor: string | undefined;
   do {
     // no `oldest`: with it and no `latest`, Slack pages from the window's oldest end
@@ -138,23 +186,40 @@ export async function findOpenPages(
     });
     const messages = (history.messages || []).filter((message) => Number(message.ts) >= since);
     for (const message of messages) {
-      const text = message.text || "";
-      if (!message.ts || message.bot_id !== botId) continue;
+      if (message.bot_id !== botId) continue;
       const reply = message.thread_ts && message.thread_ts !== message.ts;
-      if (reply && isResolved(text)) closed.add(message.thread_ts!);
-      if (
-        !reply &&
-        text.includes(input.marker) &&
-        !text.includes("TEST RUN") &&
-        !isResolved(text) &&
-        !closed.has(message.ts)
-      )
-        open.push({ ts: message.ts, text });
+      if (reply && isResolved(message.text || "")) closed.add(message.thread_ts!);
+      if (!reply) consider(message);
     }
     const pastWindow = messages.length < (history.messages || []).length;
     cursor = pastWindow ? undefined : history.response_metadata?.next_cursor || undefined;
   } while (cursor);
-  return open;
+  // a page is a reply in its day's dashboard, which was posted that day's first: a day earlier at most
+  const dashboards = await findDashboards(slack, {
+    channel: input.channel,
+    oldest: since - 86_400,
+  });
+  for (const dashboard of dashboards) {
+    let replyCursor: string | undefined;
+    do {
+      const replies = await slack.conversations.replies({
+        channel: input.channel,
+        ts: dashboard.ts,
+        limit: 200,
+        include_all_metadata: true,
+        cursor: replyCursor,
+      });
+      for (const message of replies.messages || []) {
+        if (message.ts === dashboard.ts || message.bot_id !== botId) continue;
+        if (message.metadata?.event_type !== PAGE_CLOSED_EVENT) consider(message);
+        else closed.add(ClosedPage.parse(message.metadata.event_payload).ts);
+      }
+      replyCursor = replies.response_metadata?.next_cursor || undefined;
+    } while (replyCursor);
+  }
+  return candidates
+    .filter((page) => !closed.has(page.ts))
+    .sort((a, b) => Number(b.ts) - Number(a.ts));
 }
 
 /** Slack's answers to an edit of a page it can no longer edit: someone deleted it
@@ -192,74 +257,78 @@ export async function updatePage(
 }
 
 /** Closes a frozen page (updatePage), which no edit can mark resolved: `text`, starting
- *  `✅ resolved:`, goes in its thread and to the channel too, where findOpenPages reads it and
- *  counts the page closed. So the next run does not find the page open and close it again. */
+ *  `✅ resolved:`, goes in today's dashboard thread with the page's ts in its metadata, where
+ *  findOpenPages reads it and counts the page closed. So the next run does not find the page open
+ *  and close it again. */
 async function closeFrozenPage(
   slack: WebClient,
-  input: { channel: string; ts: string; text: string },
+  input: { channel: string; ts: string; text: string; now: Date },
 ) {
+  const { ts: thread } = await todaysDashboard(slack, { channel: input.channel, now: input.now });
   await slack.chat.postMessage({
     channel: input.channel,
-    thread_ts: input.ts,
+    thread_ts: thread,
     text: input.text,
-    reply_broadcast: true,
+    metadata: { event_type: PAGE_CLOSED_EVENT, event_payload: { ts: input.ts } },
   });
 }
 
-/** Edits the page at `ts` to `text`, resolving to the page's ts: a new top-level page's when Slack
- *  can no longer edit it (updatePage), so its thread moves there. A frozen page is closed, naming
+/** Edits the page at `ts` to `text`, resolving to the page's ts: a new page's (postPage, in today's
+ *  dashboard thread) when Slack can no longer edit it (updatePage). A frozen page is closed, naming
  *  no one, so no run edits it again. */
 export async function editPage(
   slack: WebClient,
-  page: { channel: string; ts: string; text: string },
+  page: { channel: string; ts: string; text: string; now: Date },
 ) {
-  const edited = await updatePage(slack, page);
-  if (edited === "edited") return page.ts;
-  const posted = await slack.chat.postMessage({ channel: page.channel, text: page.text });
-  const ts = z.string().parse(posted.ts);
+  const { channel, ts, text, now } = page;
+  const edited = await updatePage(slack, { channel, ts, text });
+  if (edited === "edited") return ts;
+  const moved = await postPage(slack, { channel, text, broadcast: false, now });
   if (edited === "frozen")
     await closeFrozenPage(slack, {
-      channel: page.channel,
-      ts: page.ts,
+      channel,
+      ts,
       text: "✅ resolved: this page moved to a new message, which Slack lets this bot edit",
+      now,
     });
-  return ts;
+  return moved;
 }
 
 /**
- * Closes an incident: its page's first line is edited to `✅ resolved:`, then the thread gets the
- * reply that says why, with both mentions. The edit comes first, so a failed edit leaves the page
- * open for the next run to resolve and never repeats the reply. A frozen page (updatePage) gets the
- * reply in its thread and the channel too, which closes it (closeFrozenPage); a deleted one gets it
- * top-level, and no run finds it again.
+ * Closes an incident by editing its page (resolvedPageText), which notifies nobody: a resolution
+ * is not worth a ping. A frozen page (updatePage) is closed by a reply naming no one
+ * (closeFrozenPage). A deleted page gets nothing: no run finds it again.
  */
 export async function resolvePage(
   slack: WebClient,
-  input: { channel: string; ts: string; text: string; why: string },
+  input: { channel: string; ts: string; text: string; why: string; now: Date },
 ) {
-  const { channel, ts } = input;
-  const edited = await updatePage(slack, { channel, ts, text: markResolved(input.text) });
+  const { channel, ts, now } = input;
+  const edited = await updatePage(slack, {
+    channel,
+    ts,
+    text: resolvedPageText(input.text, input.why),
+  });
   // a 🧪 test page is never open (findOpenPages), so this resolves a real one
-  const text = resolvedText(input.why, false);
-  if (edited === "edited") await slack.chat.postMessage({ channel, thread_ts: ts, text });
-  if (edited === "frozen") await closeFrozenPage(slack, { channel, ts, text });
-  if (edited === "deleted") await slack.chat.postMessage({ channel, text });
+  if (edited === "frozen")
+    await closeFrozenPage(slack, { channel, ts, text: resolvedText(input.why, false), now });
 }
 
 /** Resolves `pages`, the older open pages of an incident that has a newer page, naming no one: by
  *  an edit, or a frozen one by closeFrozenPage. A deleted one is already closed. */
 export async function resolveOlderPages(
   slack: WebClient,
-  channel: string,
-  pages: Array<{ ts: string; text: string }>,
+  input: { channel: string; pages: Array<{ ts: string; text: string }>; now: Date },
 ) {
-  for (const page of pages) {
+  const { channel, now } = input;
+  for (const page of input.pages) {
     const edited = await updatePage(slack, { channel, ts: page.ts, text: markResolved(page.text) });
     if (edited === "frozen")
       await closeFrozenPage(slack, {
         channel,
         ts: page.ts,
         text: "✅ resolved: a newer page follows this incident",
+        now,
       });
   }
 }
@@ -279,9 +348,9 @@ export function pageStep(
 }
 
 /**
- * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it,
- * edits it while the incident lasts (an edit notifies nobody), or resolves it with `why` once this
- * run finds the incident gone (pageStep). `render` is this run's page text, given the open page's
+ * Keeps one incident's #error-pulse page for a poster with no state but the channel: posts it
+ * (postPage, sent to the channel too when `broadcast`), edits it while the incident lasts (an edit
+ * notifies nobody), or resolves it with `why` once this run finds the incident gone (pageStep). `render` is this run's page text, given the open page's
  * (a poster that cannot see the whole incident in one run carries forward what the page names), or
  * undefined when the incident is gone. Older open pages of the same incident (a page per night from
  * before one was kept) are resolved naming no one (resolveOlderPages). A page Slack can no longer
@@ -296,16 +365,18 @@ export async function keepPage(
     now: Date;
     render: (openText: string | undefined) => Promise<string | undefined>;
     why: string;
+    broadcast: boolean;
   },
 ) {
   const channel = pageChannel(false);
   const { marker, sinceHours, now } = input;
   const [open, ...older] = await findOpenPages(slack, { channel, marker, sinceHours, now });
-  await resolveOlderPages(slack, channel, older);
+  await resolveOlderPages(slack, { channel, pages: older, now });
   const step = pageStep(open, await input.render(open?.text));
-  if (step.step === "post") await slack.chat.postMessage({ channel, text: step.text });
-  if (step.step === "edit") await editPage(slack, { channel, ts: step.ts, text: step.text });
+  if (step.step === "post")
+    await postPage(slack, { channel, text: step.text, broadcast: input.broadcast, now });
+  if (step.step === "edit") await editPage(slack, { channel, ts: step.ts, text: step.text, now });
   if (step.step === "resolve")
-    await resolvePage(slack, { channel, ts: step.ts, text: step.text, why: input.why });
+    await resolvePage(slack, { channel, ts: step.ts, text: step.text, why: input.why, now });
   return step.step;
 }

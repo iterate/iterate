@@ -1,5 +1,6 @@
-// scripts/monitors/health.ts — THE PAGES FOR CI AND PLATFORM HEALTH: one page in #error-pulse per red
-// signal. The hourly health job (`run`, .depot/workflows/health.yml) judges what the measuring
+// scripts/monitors/health.ts — CI AND PLATFORM HEALTH IN #error-pulse: a row per signal on the
+// channel's daily dashboard (../ci/dashboard.ts), and a page in the dashboard's thread while main e2e
+// is red. The hourly health job (`run`, .depot/workflows/health.yml) judges what the measuring
 // workflows left; Main OS e2e's page job (`main-e2e`, the `alert` job of
 // .depot/workflows/main-os-e2e.yml) judges its own run as soon as its suites have ended, so a red
 // main pages at once. The signals:
@@ -9,20 +10,25 @@
 //   latency                   the health job: each new report of OS latency's perf suite (./latency.ts)
 //   PR time to green          the health job: how long pull request pushes waited for their checks
 //                             (./ttg.ts)
-//   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), in
-//                             its own daily thread and pages
+//   DO cost                   the health job: Durable Object hours on both accounts (./do-cost.ts), with
+//                             its own daily thread in #ci, its row and its pages
 //
 // Each check returns what its verdict owes its signal's page (./page.ts `PageAction`), which
-// `sendUpdates` sends. A check that could not read what it judges, or found its probe broken, fails
-// the health job after the others have paged, so a page never turns a job red. Main OS e2e's page
-// job has its own broken-probe rule (./e2e.ts) and fails only when it cannot judge its run or post.
+// `sendUpdates` sends, and the signal's row, which a real run on main sets once they are sent
+// (`postThenKeep`). Only main e2e pages: a page or an escalation is a reply in today's dashboard
+// thread with both mentions, a ping that is never sent to the channel. The other signals are rows
+// alone (ROW_ONLY_SIGNALS). A check that could not read what it judges, or found its probe broken,
+// fails the health job after the others have paged, so a page never turns a job red. Main OS e2e's
+// page job has its own broken-probe rule (./e2e.ts) and fails only when it cannot judge its run or
+// post.
 //
 // Each job's memory between runs is its own state artifact (`stateArtifacts`, depot.ts
 // `saveNewestArtifactFile`), which only a real run on main writes, after its posts: its checks'
 // memory, and the Slack ts and text of each open page. A state of another `schemaVersion` is not
 // read: the job starts over, as a first run does, which may page once more a signal already paged. A
 // run off main posts nothing and prints what it would; `--test-page` posts every check's verdict now
-// to #ci, marked 🧪 TEST RUN and mentioning nobody, keeping no state and sending nothing to PostHog.
+// to #ci, marked 🧪 TEST RUN and mentioning nobody, keeping no state, setting no row and sending
+// nothing to PostHog.
 //
 // Every command reads Depot with the organization token (../ci/depot.ts `depotApi`):
 //   node scripts/monitors/health.ts await-older-runs [--workflow-id <id>]
@@ -33,6 +39,7 @@
 //     [--state <state.json>] [--state-out <next.json>] [--test-page] [--dry-run]
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { WebClient } from "@slack/web-api";
 import { createCli } from "trpc-cli";
 import { z } from "zod";
 import { osEnvs } from "../../envs.ts";
@@ -43,21 +50,24 @@ import {
   workflowsInProgress,
   type DepotApi,
 } from "../ci/depot.ts";
+import { setRow as setDashboardRow } from "../ci/dashboard.ts";
 import { getOctokit, getRepo } from "../ci/github.ts";
 import { sendPostHogEvents } from "../ci/posthog-events.ts";
 import {
   escalationText,
   getSlackClient,
-  markResolved,
   pageChannel,
   pageText,
+  postPage,
+  resolvedPageText,
   resolvedText,
+  slackChannelIds,
   updatePage,
 } from "../ci/slack.ts";
 import { checkDoCost } from "./do-cost.ts";
 import { checkMainE2e, checkRealModel, E2eMemory, mainE2eRecords } from "./e2e.ts";
 import { checkLatency, LatencyMemory } from "./latency.ts";
-import type { PageContent, PageUpdate } from "./page.ts";
+import type { DashboardRow, PageContent, PageUpdate } from "./page.ts";
 import { checkTtg, TtgMemory } from "./ttg.ts";
 
 /** Where each job leaves its state for its next run: the workflow's `name:`, its artifact, the file. */
@@ -67,7 +77,7 @@ export const stateArtifacts = {
 };
 
 /** Each open page, by its signal: its Slack ts in its channel, and its text as last posted, which
- *  its resolution marks resolved. */
+ *  its resolution edits to say resolved. */
 export const OpenPages = z.record(z.string(), z.object({ ts: z.string(), text: z.string() }));
 export type OpenPages = z.infer<typeof OpenPages>;
 
@@ -110,20 +120,34 @@ export function readMainE2eState(previous: unknown): MainE2eState {
   return MainE2eState.parse(previous);
 }
 
-/** What `sendUpdates` needs of Slack, in the pages' channel: post a message, or a reply in a
- *  page's thread (sent to the channel too when `broadcast`), answering its ts; edit one, answering
- *  "gone" when Slack can no longer edit it (../ci/slack.ts `updatePage`). */
+/** The signals that never page: their dashboard row is all the channel gets. A page in today's
+ *  dashboard thread mentions Jonas and Misha, who then follow the thread, so any reply in it
+ *  notifies them, and only a signal that needs someone at once replies there. */
+const ROW_ONLY_SIGNALS = new Set([
+  "slow e2e rows",
+  "real-model e2e",
+  "latency",
+  "PR time to green",
+]);
+
+/** What a run needs of Slack: post a page or an escalation, each a message of its own, answering
+ *  its ts; edit one, answering "gone" when Slack can no longer edit it (../ci/slack.ts
+ *  `updatePage`); and set a signal's row on today's dashboard. */
 export type PagePoster = {
-  post(text: string, thread?: { ts: string; broadcast: boolean }): Promise<string>;
+  post(text: string): Promise<string>;
   update(ts: string, text: string): Promise<"edited" | "gone">;
+  setRow(row: DashboardRow): Promise<void>;
 };
 
 /** Send the checks' updates in order, each to its signal's page in `pages`, and return the pages
- *  open after them. A resolution edits the page before it replies, so a failed edit sends no reply
- *  and the next run owes both again. An update whose signal has no open page, or whose page is
- *  gone, posts top-level: an edit or escalation a new page, with the escalation's reply in its
- *  thread; a resolution its reply, when the page is gone or the run is a test run's. A real run's
- *  resolution with no open page sends nothing: no page of this job is open to resolve. */
+ *  open after them. A resolution only edits the page to say resolved and why (resolvedPageText),
+ *  which notifies nobody. A page Slack can no longer edit leaves `pages` with nothing sent. With no
+ *  open page a resolution sends nothing, except a test run's, posted top-level in #ci. An
+ *  escalation is a message of its own beside the page, naming its signal, since a page is a reply
+ *  in today's dashboard thread and has no thread of its own. An edit or escalation whose signal has
+ *  no open page, or whose page is gone, opens a new page. On a real run a signal in
+ *  ROW_ONLY_SIGNALS sends only what closes a page it opened before the dashboard
+ *  (`sentOnARealRun`); a test run sends every update, to #ci. */
 export async function sendUpdates(
   poster: PagePoster,
   input: { updates: PageUpdate[]; pages: OpenPages; testRun: boolean },
@@ -136,16 +160,12 @@ export async function sendUpdates(
     return ts;
   };
   const textOf = (page: PageContent) => pageText({ ...page, link: page.link || null, testRun });
-  for (const update of input.updates) {
+  const updates = testRun ? input.updates : input.updates.flatMap(sentOnARealRun);
+  for (const update of updates) {
     const page = pages[update.signal];
     if (update.kind === "resolve" || update.kind === "replace") {
-      if (page) {
-        const edited = (await poster.update(page.ts, markResolved(page.text))) === "edited";
-        await poster.post(
-          resolvedText(update.why, testRun),
-          edited ? { ts: page.ts, broadcast: false } : undefined,
-        );
-      } else if (testRun) await poster.post(resolvedText(update.why, testRun));
+      if (page) await poster.update(page.ts, resolvedPageText(page.text, update.why));
+      else if (testRun) await poster.post(resolvedText(update.why, testRun));
       delete pages[update.signal];
       if (update.kind === "replace") await open(update.signal, textOf(update.page));
       continue;
@@ -155,17 +175,25 @@ export async function sendUpdates(
       update.kind !== "post" && page && (await poster.update(page.ts, text)) === "edited";
     const ts = edited ? page.ts : await open(update.signal, text);
     pages[update.signal] = { ts, text };
-    if (update.kind === "escalate")
-      await poster.post(escalationText(update.news, testRun), {
-        ts,
-        broadcast: update.broadcast,
-      });
+    if (update.kind === "escalate") await poster.post(escalationText(update.news, testRun));
   }
   return pages;
 }
 
-/** The health job: run every check, send their updates to their pages, keep the state and send
- *  PostHog the checks' events; then throw when a check failed. */
+/** What a real run sends of `update`: all of it, or for a signal in ROW_ONLY_SIGNALS only the
+ *  resolution of its open page, a replacement's included (opening no page), so a page it opened
+ *  before the dashboard does not stay 🚨. A resolution with no open page sends nothing. Pure. */
+function sentOnARealRun(update: PageUpdate): PageUpdate[] {
+  if (!ROW_ONLY_SIGNALS.has(update.signal) || update.kind === "resolve") return [update];
+  if (update.kind === "replace")
+    return [
+      { signal: update.signal, kind: "resolve", why: `${update.page.what}, on the dashboard` },
+    ];
+  return [];
+}
+
+/** The health job: run every check, send their updates to their pages, keep the state, set their
+ *  rows and send PostHog the checks' events; then throw when a check failed. */
 export async function run(options: {
   /** The run's git ref: only refs/heads/main pages, keeps state and sends PostHog events. */
   ref: string;
@@ -224,7 +252,15 @@ export async function run(options: {
     ...(latency?.updates || []),
     ...(ttg?.update ? [ttg.update] : []),
   ];
-  await postThenKeep({ updates, testRun, dryRun, keep, stateOut: options.stateOut, next });
+  const rows = [...(real?.rows || []), ...(latency?.rows || []), ...(ttg ? [ttg.row] : [])];
+  await postThenKeep(posterFor({ testRun, dryRun }), {
+    updates,
+    rows,
+    testRun,
+    keep,
+    stateOut: options.stateOut,
+    next,
+  });
   const events = [...(ttg?.events || []), ...(latency?.events || [])];
   if (!keep) console.log(`[health] ${events.length} PostHog events not sent`);
   // The iterate project in PostHog EU, as the CI telemetry sync reports to it.
@@ -261,7 +297,12 @@ export async function mainE2e(options: {
     testRun,
     subject: commitSubjects(),
   });
-  await postThenKeep({ ...judged, testRun, dryRun, keep, stateOut: options.stateOut });
+  await postThenKeep(posterFor({ testRun, dryRun }), {
+    ...judged,
+    testRun,
+    keep,
+    stateOut: options.stateOut,
+  });
   if (judged.failures.length > 0) throw new Error(`main e2e: ${judged.failures.join("; ")}`);
 }
 
@@ -277,7 +318,8 @@ const CurrentWorkflow = z.object({
 
 /** Main OS e2e's page job's verdicts: the run `workflowId`, whose deploy and suite jobs have just
  *  ended, judged after any settled push run `state` has not (./e2e.ts `checkMainE2e`), as the
- *  updates its pages owe, the state to keep once they are sent, and the broken probes. */
+ *  updates its pages owe, the state to keep once they are sent, the suites' rows and the broken
+ *  probes. */
 export async function judgeMainE2eRun(input: {
   depot: DepotApi;
   state: MainE2eState;
@@ -303,7 +345,7 @@ export async function judgeMainE2eRun(input: {
     },
   });
   const next: MainE2eState = { schemaVersion: 3, e2e: judged.memory, pages: input.state.pages };
-  return { updates: judged.updates, next, failures: judged.failures };
+  return { updates: judged.updates, next, failures: judged.failures, rows: judged.rows };
 }
 
 /** How often Main OS e2e's page job asks Depot whether the older runs have ended, and how long it
@@ -392,51 +434,68 @@ function readStateFile(path: string | undefined, schemaVersion: 2 | 3): unknown 
   return previous;
 }
 
-/** Send the run's updates, then keep its state with the pages open after them, in that order: a
- *  state records what was sent, so an update that could not be sent leaves the state as it was and
- *  the next run owes it again (and one sent before it, once more). A dry run prints each message
- *  instead. */
-async function postThenKeep(input: {
-  updates: PageUpdate[];
-  testRun: boolean;
-  dryRun: boolean;
-  keep: boolean;
-  stateOut?: string;
-  next: HealthState | MainE2eState;
-}) {
+/** Send the run's updates, keep its state with the pages open after them, then set its signals'
+ *  dashboard rows, in that order: a state records what was sent, so an update that could not be
+ *  sent leaves the state as it was and the next run owes it again (and one sent before it, once
+ *  more). The rows come after the state is kept, so a row Slack refused costs no page sent twice:
+ *  it is set at its signal's next verdict. A test run sets no row: its verdicts are posted to #ci.
+ *  A dry run's poster prints each message and row instead (`posterFor`). Returns the state with the
+ *  pages open after the updates. */
+export async function postThenKeep(
+  poster: PagePoster,
+  input: {
+    updates: PageUpdate[];
+    rows: DashboardRow[];
+    testRun: boolean;
+    keep: boolean;
+    stateOut: string | undefined;
+    next: HealthState | MainE2eState;
+  },
+) {
   if (input.updates.length === 0) console.log("\nno change of state, nothing to page");
-  const pages = await sendUpdates(input.dryRun ? printingPoster() : slackPoster(input.testRun), {
+  const pages = await sendUpdates(poster, {
     updates: input.updates,
     // a test run's posts are its own, in #ci: it never touches an open page
     pages: input.testRun ? {} : input.next.pages,
     testRun: input.testRun,
   });
+  const next = { ...input.next, pages };
   if (input.keep && input.stateOut) {
     mkdirSync(dirname(input.stateOut), { recursive: true });
-    writeFileSync(input.stateOut, `${JSON.stringify({ ...input.next, pages })}\n`);
+    writeFileSync(input.stateOut, `${JSON.stringify(next)}\n`);
   }
+  if (!input.testRun) for (const row of input.rows) await poster.setRow(row);
+  return next;
 }
 
-/** The pages' channel (`pageChannel`): #error-pulse, or #ci for a test run. */
-function slackPoster(testRun: boolean): PagePoster {
-  const slack = getSlackClient();
-  const channel = pageChannel(testRun);
+/** The poster for a run (`runMode`): Slack at the run's time, or one that prints for a dry run. */
+function posterFor(mode: { testRun: boolean; dryRun: boolean }) {
+  if (mode.dryRun) return printingPoster();
+  return slackPoster(getSlackClient(), { testRun: mode.testRun, now: new Date() });
+}
+
+/** Slack as a run's poster. A page or an escalation is a reply in the thread of `now`'s dashboard
+ *  (../ci/slack.ts `postPage`), never sent to the channel: a red signal of this job pings, but is
+ *  not "prd is down"; a test run's is a top-level message in #ci (`pageChannel`). A row is set on
+ *  `now`'s dashboard in #error-pulse. */
+export function slackPoster(slack: WebClient, input: { testRun: boolean; now: Date }): PagePoster {
+  const { now } = input;
+  const channel = pageChannel(input.testRun);
   return {
-    async post(text, thread) {
-      // Slack's types take a broadcast reply and a plain one as two shapes
-      const posted = await slack.chat.postMessage(
-        thread?.broadcast
-          ? { channel, text, thread_ts: thread.ts, reply_broadcast: true }
-          : { channel, text, thread_ts: thread?.ts },
-      );
-      console.log(`[health] posted ${posted.ts}${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
-      return z.string().parse(posted.ts);
+    async post(text) {
+      const ts = await postPage(slack, { channel, text, broadcast: false, now });
+      console.log(`[health] posted ${ts}:\n${text}`);
+      return ts;
     },
     async update(ts, text) {
       // this job keeps its pages in its own state, so a deleted page and a frozen one are alike
       if ((await updatePage(slack, { channel, ts, text })) !== "edited") return "gone";
       console.log(`[health] edited ${ts}:\n${text}`);
       return "edited";
+    },
+    async setRow(row) {
+      await setDashboardRow(slack, { channel: slackChannelIds["#error-pulse"], now, ...row });
+      console.log(`[health] row ${row.signal}: ${row.state}, ${row.text}`);
     },
   };
 }
@@ -445,13 +504,16 @@ function slackPoster(testRun: boolean): PagePoster {
 function printingPoster(): PagePoster {
   let posts = 0;
   return {
-    async post(text, thread) {
-      console.log(`\n[dry run] post${thread ? ` in ${thread.ts}` : ""}:\n${text}`);
+    async post(text) {
+      console.log(`\n[dry run] post:\n${text}`);
       return `dry-run-${++posts}`;
     },
     async update(ts, text) {
       console.log(`\n[dry run] edit ${ts}:\n${text}`);
       return "edited";
+    },
+    async setRow(row) {
+      console.log(`\n[dry run] row ${row.signal}: ${row.state}, ${row.text}`);
     },
   };
 }

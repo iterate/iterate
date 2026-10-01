@@ -1,12 +1,15 @@
 import { expect, onTestFinished, test, vi } from "vitest";
+import { fakeSlack } from "../ci/fake-slack.ts";
 import { fakeDepot, mainRun } from "./fake-depot.ts";
 import {
   AWAIT_OLDER_RUNS,
   awaitOlderMainE2eRuns,
   judgeMainE2eRun,
+  postThenKeep,
   readMainE2eState,
   readState,
   sendUpdates,
+  slackPoster,
   type OpenPages,
   type PagePoster,
 } from "./health.ts";
@@ -50,21 +53,17 @@ test.for<{
     },
   },
   {
-    name: "an escalation edits the page and replies in its thread with the mentions",
+    name: "an escalation edits the page and posts what got worse beside it, with the mentions",
     pages: open,
     update: {
       signal: "main e2e",
       kind: "escalate",
       page,
       news: "main e2e has new failures at `abc`: a row",
-      broadcast: false,
     },
     calls: [
       { update: "100.1", text: pageText },
-      {
-        post: "🚨 main e2e has new failures at `abc`: a row <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
-      },
+      { post: "🚨 main e2e has new failures at `abc`: a row <@U067G4QRFK2> <@U099JH9TAF2>" },
     ],
     after: open,
   },
@@ -76,20 +75,25 @@ test.for<{
     after: { "main e2e": { ts: "1", text: pageText } },
   },
   {
-    name: "a resolution marks the page resolved before it replies, and closes it",
+    name: "a resolution edits the page to say resolved and why, sends nothing else, and closes it",
     pages: open,
     update: { signal: "main e2e", kind: "resolve", why: "main e2e green again at `abc`" },
     calls: [
-      { update: "100.1", text: pageText.replace("🚨 ", "✅ resolved: ") },
       {
-        post: "✅ resolved: main e2e green again at `abc` <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
+        update: "100.1",
+        text: [
+          "✅ resolved: main e2e red at `012345678` <@U067G4QRFK2> <@U099JH9TAF2>",
+          "✅ main e2e green again at `abc`",
+          "Impact: failed: E2E tests",
+          "Do: fix or revert `012345678`",
+          "<https://depot.dev/main|run>",
+        ].join("\n"),
       },
     ],
     after: {},
   },
   {
-    name: "a replacement resolves the open page and opens another",
+    name: "a replacement resolves the open page by an edit and opens another",
     pages: open,
     update: {
       signal: "main e2e",
@@ -98,16 +102,21 @@ test.for<{
       page: { ...page, what: "main e2e unjudged" },
     },
     calls: [
-      { update: "100.1", text: pageText.replace("🚨 ", "✅ resolved: ") },
       {
-        post: "✅ resolved: unjudged, on a page of its own <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "100.1", broadcast: false },
+        update: "100.1",
+        text: [
+          "✅ resolved: main e2e red at `012345678` <@U067G4QRFK2> <@U099JH9TAF2>",
+          "✅ unjudged, on a page of its own",
+          "Impact: failed: E2E tests",
+          "Do: fix or revert `012345678`",
+          "<https://depot.dev/main|run>",
+        ].join("\n"),
       },
       { post: pageText.replace("main e2e red at `012345678`", "main e2e unjudged") },
     ],
     after: {
       "main e2e": {
-        ts: "2",
+        ts: "1",
         text: pageText.replace("main e2e red at `012345678`", "main e2e unjudged"),
       },
     },
@@ -160,6 +169,49 @@ test("a real run's resolution with no open page sends nothing: its state started
   expect({ calls: poster.calls, next }).toEqual({ calls: [], next: {} });
 });
 
+test("a row-only signal sends nothing on a real run but the edit that resolves a page it opened before the dashboard", async () => {
+  const poster = fakePoster();
+  const next = await sendUpdates(poster, {
+    updates: [
+      { signal: "PR time to green", kind: "post", page },
+      // its open page stays as it was until the signal resolves
+      {
+        signal: "latency",
+        kind: "escalate",
+        page,
+        news: "latency: context.wake over its lines too",
+      },
+      { signal: "latency", kind: "resolve", why: "latency under its lines at `abc`" },
+      // a replacement resolves the open page and opens none
+      {
+        signal: "slow e2e rows",
+        kind: "replace",
+        why: "slow e2e rows judged again at `abc`: red, on a page of its own",
+        page: { ...page, what: "slow e2e rows red at `abc`" },
+      },
+    ],
+    pages: {
+      latency: { ts: "100.1", text: "🚨 latency over its lines at `012345678`" },
+      "slow e2e rows": { ts: "100.2", text: "🚨 slow e2e rows unjudged at `012345678`" },
+    },
+    testRun: false,
+  });
+  // exact: two edits, no post
+  expect({ calls: poster.calls, next }).toEqual({
+    calls: [
+      {
+        update: "100.1",
+        text: "✅ resolved: latency over its lines at `012345678`\n✅ latency under its lines at `abc`",
+      },
+      {
+        update: "100.2",
+        text: "✅ resolved: slow e2e rows unjudged at `012345678`\n✅ slow e2e rows red at `abc`, on the dashboard",
+      },
+    ],
+    next: {},
+  });
+});
+
 test("an edit that fails sends nothing after it: the state is kept only once every update is sent", async () => {
   const poster = fakePoster({ update: "fails" });
   await expect(
@@ -180,22 +232,19 @@ test.for<{ name: string; update: PageUpdate; calls: unknown[]; after: OpenPages 
     after: { "main e2e": { ts: "1", text: pageText } },
   },
   {
-    name: "an escalation of a gone page opens a new one and replies in its thread",
-    update: { signal: "main e2e", kind: "escalate", page, news: "worse", broadcast: true },
+    name: "an escalation of a gone page opens a new one and posts what got worse beside it",
+    update: { signal: "main e2e", kind: "escalate", page, news: "worse" },
     calls: [
       { gone: "100.1" },
       { post: pageText },
-      {
-        post: "🚨 worse <@U067G4QRFK2> <@U099JH9TAF2>",
-        thread: { ts: "1", broadcast: true },
-      },
+      { post: "🚨 worse <@U067G4QRFK2> <@U099JH9TAF2>" },
     ],
     after: { "main e2e": { ts: "1", text: pageText } },
   },
   {
-    name: "a resolution of a gone page posts its reply top-level",
+    name: "a resolution of a gone page sends nothing more",
     update: { signal: "main e2e", kind: "resolve", why: "green again" },
-    calls: [{ gone: "100.1" }, { post: "✅ resolved: green again <@U067G4QRFK2> <@U099JH9TAF2>" }],
+    calls: [{ gone: "100.1" }],
     after: {},
   },
 ])(
@@ -303,11 +352,135 @@ test("Main OS e2e's page job owes a red run a page, and keeps the state its next
       pages: {},
     },
     failures: [],
+    rows: [
+      { signal: "main e2e", state: "red", text: "red at `redaaaaaa` (the subject of red)" },
+      {
+        signal: "slow e2e rows",
+        state: "green",
+        text: "green at `redaaaaaa` (the subject of red)",
+      },
+    ],
   });
   // the state as kept and read back: the same run owes nothing again
   expect(await judge(JSON.parse(JSON.stringify(judged.next)), "wf-red")).toMatchObject({
     updates: [],
     next: judged.next,
+  });
+});
+
+test("a red main e2e pages in today's dashboard thread with both mentions, never to the channel, and both suites set their rows", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-09-27T01:05:00Z") });
+  const judged = await judgeMainE2eRun({
+    depot: fakeDepot({
+      "Main OS e2e": [
+        mainRun("red", "2026-09-27T01:00:00Z", {
+          e2e: "failed",
+          e2eTests: [{ name: "a slow row", tags: ["slow"], failed: true }],
+          running: true,
+        }),
+      ],
+    }),
+    state: readMainE2eState(undefined),
+    workflowId: "wf-red",
+    testRun: false,
+    subject: async (sha) => `the subject of ${sha.slice(0, 3)}`,
+  });
+
+  const kept = await postThenKeep(
+    slackPoster(slack.client, { testRun: false, now: new Date(slack.clock.now) }),
+    { ...judged, testRun: false, keep: true, stateOut: undefined },
+  );
+
+  const [dashboard] = slack.channel("#error-pulse");
+  const redPage = [
+    "🚨 main e2e red at `redaaaaaa` (the subject of red) <@U067G4QRFK2> <@U099JH9TAF2>",
+    "Impact: failed: E2E tests; failing rows: a slow row",
+    "Do: fix or revert `redaaaaaa`; a flaky row gets a fix, not a retry",
+    "<https://depot.dev/orgs/0p91s0lz49/workflows/wf-red|run>",
+  ].join("\n");
+  // slow e2e rows is red too, but pages nothing: its row is all the channel gets
+  expect({
+    channel: slack.channel("#error-pulse").map((message) => message.text),
+    replies: dashboard!.replies.map(({ text, reply_broadcast }) => ({ text, reply_broadcast })),
+    pages: kept.pages,
+  }).toEqual({
+    channel: [
+      [
+        "📟 error-pulse · Sun 27 Sep · 01:05 UTC",
+        "🔴 main e2e: red at `redaaaaaa` (the subject of red)",
+        "🔴 slow e2e rows: red at `redaaaaaa` (the subject of red)",
+      ].join("\n"),
+    ],
+    replies: [{ text: redPage, reply_broadcast: undefined }],
+    pages: { "main e2e": { ts: dashboard!.replies[0]!.ts, text: redPage } },
+  });
+});
+
+test("row-only signals send #error-pulse nothing but their dashboard rows", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-10-01T09:41:00Z") });
+  const kept = await postThenKeep(
+    slackPoster(slack.client, { testRun: false, now: new Date(slack.clock.now) }),
+    {
+      updates: [
+        { signal: "real-model e2e", kind: "post", page },
+        { signal: "latency", kind: "post", page },
+        { signal: "PR time to green", kind: "escalate", page, news: "more than 20 s worse again" },
+      ],
+      rows: [
+        { signal: "real-model e2e", state: "red", text: "red at `012345678` (a subject)" },
+        { signal: "latency", state: "red", text: "over its lines at `012345678`: context.wake" },
+        { signal: "PR time to green", state: "amber", text: "p50 169 s (line 165 s)" },
+      ],
+      testRun: false,
+      keep: true,
+      stateOut: undefined,
+      next: readState(undefined),
+    },
+  );
+  // exact: the dashboard, with no reply in its thread, and no page open
+  expect({
+    channel: slack.timeline("#error-pulse").map((message) => message.text),
+    pages: kept.pages,
+  }).toEqual({
+    channel: [
+      [
+        "📟 error-pulse · Thu 1 Oct · 09:41 UTC",
+        "🔴 real-model e2e: red at `012345678` (a subject)",
+        "🔴 latency: over its lines at `012345678`: context.wake",
+        "🟡 PR time to green: p50 169 s (line 165 s)",
+      ].join("\n"),
+    ],
+    pages: {},
+  });
+});
+
+test("a test run posts its pages top-level in #ci, mentioning nobody, and sets no row", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-10-01T09:41:00Z") });
+  await postThenKeep(slackPoster(slack.client, { testRun: true, now: new Date(slack.clock.now) }), {
+    updates: [
+      { signal: "main e2e", kind: "post", page },
+      { signal: "latency", kind: "resolve", why: "latency under its lines at `abc`" },
+    ],
+    rows: [{ signal: "main e2e", state: "red", text: "red at `012345678`" }],
+    testRun: true,
+    keep: false,
+    stateOut: undefined,
+    next: readMainE2eState(undefined),
+  });
+  expect({
+    ci: slack.timeline("#ci").map(({ text, thread_ts }) => ({ text, thread_ts })),
+    pulse: slack.timeline("#error-pulse"),
+  }).toEqual({
+    ci: [
+      {
+        text: pageText
+          .replace("🚨", "🧪 TEST RUN — 🚨")
+          .replace(" <@U067G4QRFK2> <@U099JH9TAF2>", ""),
+        thread_ts: undefined,
+      },
+      { text: "🧪 TEST RUN — ✅ resolved: latency under its lines at `abc`", thread_ts: undefined },
+    ],
+    pulse: [],
   });
 });
 
@@ -405,10 +578,8 @@ test("an older run that never ends fails the wait after its bound, naming the ru
   expect((Date.now() - turns.started) / 1000).toBe(AWAIT_OLDER_RUNS.boundMs / 1000);
 });
 
-/** A poster that records each call and answers each post with the next ts, "1" first; with
- *  `failUpdate`, every edit fails as Slack refuses one. */
-/** A poster that records its calls; its edits succeed, answer "gone" as a deleted page's would, or
- *  fail with another Slack error. */
+/** A poster that records its calls and answers each post with the next ts, "1" first; its edits
+ *  succeed, answer "gone" as a deleted page's would, or fail with another Slack error. */
 function fakePoster(
   options: { update?: "edited" | "gone" | "fails" } = {},
 ): PagePoster & { calls: unknown[] } {
@@ -416,9 +587,12 @@ function fakePoster(
   let posts = 0;
   return {
     calls,
-    async post(text, thread) {
-      calls.push(thread ? { post: text, thread } : { post: text });
+    async post(text) {
+      calls.push({ post: text });
       return String(++posts);
+    },
+    async setRow(row) {
+      calls.push({ row });
     },
     async update(ts, text) {
       if (options.update === "fails") throw new Error("An API error occurred: ratelimited");

@@ -4,9 +4,11 @@
 // wrangler takes from CLOUDFLARE_ACCOUNT_ID. core/os names no account, so a self-host's local dev
 // uses its own; this is where iterate's is set. Arguments pass through: `pnpm dev -- --port 8799`,
 // `pnpm dev status`.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
+import { formatConfigRepoTemplateReference } from "iterate/config-repo-template";
+import { githubHeadOf } from "../core/os/scripts/build.ts";
 import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../envs.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -15,16 +17,13 @@ const args = process.argv.slice(2);
 // `--template-root`; core's own come with every build), a local creation's voice pinned to main's
 // newest build as it seeds
 const serves = !args[0] || args[0].startsWith("-") || ["start", "restart"].includes(args[0]);
-const commit = execFileSync("git", ["rev-parse", "HEAD"], {
-  cwd: repoRoot,
-  encoding: "utf8",
-}).trim();
+const head = githubHeadOf(repoRoot);
 const templates = serves
   ? readdirSync(path.join(repoRoot, "configs"), { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .flatMap((entry) => [
         "--template",
-        `github:iterate/iterate#${commit}&path:configs/${entry.name}`,
+        formatConfigRepoTemplateReference({ ...head, path: `configs/${entry.name}` }),
       ])
   : [];
 

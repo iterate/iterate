@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { ItxExpression } from "iterate/expression";
+import { parse, type ItxExpression } from "iterate/expression";
+import { FetchRouteConfiguredPayload } from "../src/fetch-routes.ts";
 import { hashObject, treeObjectsOf } from "../src/repo/git-wire.ts";
 import { HOSTNAME } from "../src/project/custom-hostnames.ts";
 import { decryptSecretMaterial, type MaterialKeys } from "../src/secret-at-rest.ts";
@@ -29,6 +30,18 @@ export const EncryptedSecretSeed = z.object({
     ciphertext: z.string().min(1),
   }),
 });
+/** A fetch route as `itx.fetchRoutes.list()` answers it, less the offset of the fact that set it:
+ *  what `itx.fetchRoutes.set(name, route)` takes back. Each field is the platform's own check
+ *  (src/fetch-routes.ts `FetchRouteConfiguredPayload`), so `check` refuses a route `set` would. */
+const fetchRouteFields = FetchRouteConfiguredPayload.shape;
+export const FetchRouteSeed = z.strictObject({
+  fetchRouteName: fetchRouteFields.fetchRouteName,
+  requestMatcher: fetchRouteFields.requestMatcher.unwrap(),
+  target: fetchRouteFields.target.unwrap(),
+  authRequirement: fetchRouteFields.authRequirement.unwrap(),
+  priority: fetchRouteFields.priority.unwrap(),
+});
+export type FetchRouteSeed = z.infer<typeof FetchRouteSeed>;
 export const ProjectSeed = z.object({
   version: z.literal(1),
   capturedAt: z.iso.datetime(),
@@ -50,6 +63,8 @@ export const ProjectSeed = z.object({
   /** The project's primary hostname at capture (`project/primary-hostname-configured`,
    *  src/project/contract.ts `primaryHostname`), one of `hostnames`, or null. */
   primaryHostname: z.string().regex(HOSTNAME).nullable(),
+  /** The project's fetch routes at capture (`captureFetchRoutes`): each one but a lent stub's. */
+  fetchRoutes: z.array(FetchRouteSeed),
 });
 export type ProjectSeed = z.infer<typeof ProjectSeed>;
 
@@ -95,6 +110,12 @@ export async function openProjectSeed(raw: unknown, keys: MaterialKeys) {
   if (duplicateHostname) throw new Error(`Duplicate hostname: ${duplicateHostname}`);
   if (seed.primaryHostname && !seed.hostnames.includes(seed.primaryHostname))
     throw new Error(`Primary hostname ${seed.primaryHostname} is not one of the hostnames.`);
+  const duplicateRoute = seed.fetchRoutes.find(
+    (route, index) =>
+      seed.fetchRoutes.findIndex((other) => other.fetchRouteName === route.fetchRouteName) !==
+      index,
+  );
+  if (duplicateRoute) throw new Error(`Duplicate fetch route: ${duplicateRoute.fetchRouteName}`);
   const paths = new Set<string>();
   const secrets = [];
   for (const secret of seed.secrets) {
@@ -325,4 +346,67 @@ export async function restorePrimaryHostname(
     asked: true,
     primary: (await projectHostnameState(root)).primaryHostname === hostname,
   };
+}
+
+/** A route as `itx.fetchRoutes.list()` answers it: the seed's fields and the offset of the fact that
+ *  set it. */
+const ListedFetchRoute = FetchRouteSeed.extend({ configuredOffset: z.number() });
+async function listFetchRoutes(root: SeedRoot) {
+  return z.array(ListedFetchRoute).parse(await root.invoke(["itx", "fetchRoutes", ["list"]]));
+}
+
+/** What `capture` records: every fetch route on the project's root but one to a lent stub, such as
+ *  `iterate tunnel`'s `tunnel-<name>`. The platform removes that route with its lend
+ *  (src/context/itx-expression-rewriting.ts `rowsNamingRpcStub`), and a seed carries no lend:
+ *  restored, the route would take its host with nothing behind it. Answers the routes, and the
+ *  skipped routes' names. */
+export async function captureFetchRoutes(
+  root: SeedRoot,
+): Promise<{ routes: FetchRouteSeed[]; lent: string[] }> {
+  const routes: FetchRouteSeed[] = [];
+  const lent: string[] = [];
+  for (const { configuredOffset: _configuredOffset, ...route } of await listFetchRoutes(root)) {
+    if (await reachesLentStub(root, route.target)) lent.push(route.fetchRouteName);
+    else routes.push(route);
+  }
+  return { routes, lent };
+}
+
+/** Whether `target`, resolved through the root's rewrite rules, ends at `itx.builtins.rpcStubs`,
+ *  where the rule `provide` writes for a lent stub points. A target no rule matches reaches
+ *  nothing; its route is recorded as it stands, and answers as it does now once restored. */
+async function reachesLentStub(root: SeedRoot, target: ItxExpression) {
+  try {
+    const steps = z
+      .array(z.string())
+      .min(1)
+      .parse(await root.invoke(["itx", "rewriteRules", ["resolve", target]]));
+    const [itx, builtins, rpcStubs] = parse(steps.at(-1)!);
+    return itx === "itx" && builtins === "builtins" && rpcStubs === "rpcStubs";
+  } catch (error) {
+    if (z.object({ code: z.literal("NO_ITX_EXPRESSION_MATCH") }).safeParse(error).success)
+      return false;
+    throw error;
+  }
+}
+
+/** What `apply` does with the archived fetch routes: `itx.fetchRoutes.set` each one as captured. A
+ *  route of the same name becomes the archived one; `set` appends nothing for a route that already
+ *  stands as given, so a rerun sets nothing. A route the archive lacks (a tunnel's, one added since
+ *  the capture) is left alone. Checks every archived route is there afterwards, and answers whether
+ *  each was set again. */
+export async function restoreFetchRoutes(
+  root: SeedRoot,
+  routes: FetchRouteSeed[],
+): Promise<{ fetchRouteName: string; set: boolean }[]> {
+  const before = await listFetchRoutes(root);
+  for (const { fetchRouteName, ...route } of routes)
+    await root.invoke(["itx", "fetchRoutes", ["set", fetchRouteName, route]]);
+  const after = await listFetchRoutes(root);
+  return routes.map(({ fetchRouteName }) => {
+    const restored = after.find((entry) => entry.fetchRouteName === fetchRouteName);
+    if (!restored) throw new Error(`Fetch route ${fetchRouteName} is missing after apply set it.`);
+    const earlier = before.find((entry) => entry.fetchRouteName === fetchRouteName);
+    return { fetchRouteName, set: restored.configuredOffset !== earlier?.configuredOffset };
+  });
 }

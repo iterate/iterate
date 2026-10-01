@@ -1,6 +1,9 @@
 import { WebAPIPlatformError, type WebClient } from "@slack/web-api";
 import { slackChannelIds } from "./slack.ts";
 
+/** A message's Slack metadata: an event type and its payload. */
+type Metadata = { event_type: string; event_payload: Record<string, unknown> };
+
 /** A message as the fake keeps it: top-level, with its thread's replies; a reply names its thread
  *  and whether it was sent to the channel too. With `updateError`, Slack answers that error to
  *  every edit of it. */
@@ -10,6 +13,7 @@ export type FakeMessage = {
   bot_id: string;
   thread_ts?: string;
   reply_broadcast?: boolean;
+  metadata?: Metadata;
   updateError?: string;
   replies: FakeMessage[];
 };
@@ -30,8 +34,9 @@ const SHORTCODES: Record<string, string> = {
  * thread reply with `thread_ts`, sent to the channel too with `reply_broadcast`), chat.update,
  * chat.delete, conversations.history (a channel's messages and its broadcast replies, each page
  * newest first, `limit` a page, with next_cursor; given `oldest`, the first page is the window's
- * oldest, as Slack's is) and conversations.replies. History spells the posters' emoji as Slack's
- * does. Every call is recorded in `calls`. A message's ts is `clock.now` in seconds plus a
+ * oldest, as Slack's is) and conversations.replies. A post or edit may carry `metadata`, which the
+ * reads return only when asked `include_all_metadata`, as Slack's do. History spells the posters'
+ * emoji as Slack's does. Every call is recorded in `calls`. A message's ts is `clock.now` in seconds plus a
  * counter, so messages keep their order. Slack's errors are its client's: an edit or delete of a
  * message that is not there answers `message_not_found`, and an edit of one with `updateError`
  * answers that.
@@ -47,6 +52,7 @@ export function fakeSlack(options: { now: number }) {
     text?: string;
     thread_ts?: string;
     reply_broadcast?: boolean;
+    metadata?: Metadata;
   }[] = [];
   const clock = { now: options.now };
   let counter = 0;
@@ -67,13 +73,16 @@ export function fakeSlack(options: { now: number }) {
     if (!found) throw slackError("message_not_found");
     return found;
   };
-  const asHistory = ({ replies: _, updateError: __, ...message }: FakeMessage) => ({
-    ...message,
-    text: Object.entries(SHORTCODES).reduce(
-      (text, [emoji, code]) => text.replaceAll(emoji, code),
-      message.text,
-    ),
-  });
+  const asHistory =
+    (withMetadata: boolean | undefined) =>
+    ({ replies: _, updateError: __, metadata, ...message }: FakeMessage) => ({
+      ...message,
+      ...(withMetadata && metadata && { metadata: structuredClone(metadata) }),
+      text: Object.entries(SHORTCODES).reduce(
+        (text, [emoji, code]) => text.replaceAll(emoji, code),
+        message.text,
+      ),
+    });
 
   const client = {
     auth: { test: async () => ({ ok: true, bot_id: "B0CIBOT" }) },
@@ -83,6 +92,7 @@ export function fakeSlack(options: { now: number }) {
         text: string;
         thread_ts?: string;
         reply_broadcast?: boolean;
+        metadata?: Metadata;
       }) => {
         calls.push({ method: "chat.postMessage", ...args });
         const message: FakeMessage = {
@@ -91,25 +101,28 @@ export function fakeSlack(options: { now: number }) {
           bot_id: "B0CIBOT",
           thread_ts: args.thread_ts,
           reply_broadcast: args.reply_broadcast,
+          metadata: args.metadata && structuredClone(args.metadata),
           replies: [],
         };
         if (args.thread_ts) find(args.channel, args.thread_ts).replies.push(message);
         else messages(args.channel).push(message);
         return { ok: true, ts: message.ts };
       },
-      update: async (args: { channel: string; ts: string; text: string }) => {
+      update: async (args: { channel: string; ts: string; text: string; metadata?: Metadata }) => {
         calls.push({ method: "chat.update", ...args });
         const message = find(args.channel, args.ts);
         if (message.updateError) throw slackError(message.updateError);
         message.text = args.text;
+        if (args.metadata) message.metadata = structuredClone(args.metadata);
         return { ok: true, ts: args.ts };
       },
       delete: async (args: { channel: string; ts: string }) => {
         calls.push({ method: "chat.delete", ...args });
-        const list = messages(args.channel);
-        const index = list.findIndex((message) => message.ts === args.ts);
-        if (index === -1) throw slackError("message_not_found");
-        list.splice(index, 1);
+        const message = find(args.channel, args.ts);
+        const list = message.thread_ts
+          ? find(args.channel, message.thread_ts).replies
+          : messages(args.channel);
+        list.splice(list.indexOf(message), 1);
         return { ok: true };
       },
     },
@@ -119,6 +132,7 @@ export function fakeSlack(options: { now: number }) {
         oldest?: string;
         limit?: number;
         cursor?: string;
+        include_all_metadata?: boolean;
       }) => {
         calls.push({ method: "conversations.history", channel: args.channel });
         // given `oldest` (and no `latest`), Slack pages from the window's oldest end
@@ -132,14 +146,17 @@ export function fakeSlack(options: { now: number }) {
         const page = ordered.slice(start, end);
         return {
           ok: true,
-          messages: (fromOldest ? page.reverse() : page).map(asHistory),
+          messages: (fromOldest ? page.reverse() : page).map(asHistory(args.include_all_metadata)),
           response_metadata: { next_cursor: end < ordered.length ? String(end) : "" },
         };
       },
-      replies: async (args: { channel: string; ts: string }) => {
+      replies: async (args: { channel: string; ts: string; include_all_metadata?: boolean }) => {
         calls.push({ method: "conversations.replies", channel: args.channel });
         const parent = find(args.channel, args.ts);
-        return { ok: true, messages: [parent, ...parent.replies].map(asHistory) };
+        return {
+          ok: true,
+          messages: [parent, ...parent.replies].map(asHistory(args.include_all_metadata)),
+        };
       },
     },
   } as unknown as WebClient; // the calls the CI posters make, not the whole client

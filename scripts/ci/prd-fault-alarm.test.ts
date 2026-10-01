@@ -12,6 +12,7 @@ import {
   alarm,
   type Exclusion,
   exclusionQueries,
+  faultRow,
   type FaultReading,
   filterNodes,
   incidentsOf,
@@ -27,7 +28,6 @@ import {
   triageIncidents,
 } from "./prd-fault-alarm.ts";
 import { fakeSlack } from "./fake-slack.ts";
-import { slackChannelIds } from "./slack.ts";
 
 const quiet: FaultReading = {
   serverErrors: [],
@@ -41,7 +41,6 @@ const quiet: FaultReading = {
 const now = new Date("2026-09-23T07:30:00Z");
 const window = { from: new Date("2026-09-23T07:00:00Z"), to: now };
 const credentials = { accountId: "account", apiToken: "token" };
-const channel = slackChannelIds["#error-pulse"];
 const mentions = "<@U067G4QRFK2> <@U099JH9TAF2>";
 const doLine =
   "Do: open <https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers-and-pages/observability|Workers Logs> for these rays; /debug-os-worker";
@@ -75,24 +74,31 @@ test("a window's page names its causes and totals, and lists each incident with 
       false,
     ),
   ).toMatchObject({
-    page: {
-      text: [
-        `🚨 prd: 13 visitor 5xx, 1201 errors, 1815 platform-failure heals ${mentions}`,
-        "Impact: since 07:30 UTC",
-        "• platform-failure heals: project 1279 · last 07:30 UTC",
-        "• errors: ProjectDurableObject.jsrpc 1199 · last 07:30 UTC",
-        "• platform-failure heals: repo 536 · last 07:30 UTC",
-        "• visitor 5xx: garple.com 7 · last 07:30 UTC",
-        "• visitor 5xx: lispwoso.com 6 · last 07:30 UTC",
-        "• errors: internal error; reference = … 2 · last 07:30 UTC",
-        doLine,
-      ].join("\n"),
-    },
+    posts: [
+      {
+        page: {
+          ts: "",
+          text: [
+            `🚨 prd: 13 visitor 5xx, 1201 errors, 1815 platform-failure heals ${mentions}`,
+            "Impact: since 07:30 UTC",
+            "• platform-failure heals: project 1279 · last 07:30 UTC",
+            "• errors: ProjectDurableObject.jsrpc 1199 · last 07:30 UTC",
+            "• platform-failure heals: repo 536 · last 07:30 UTC",
+            "• visitor 5xx: garple.com 7 · last 07:30 UTC",
+            "• visitor 5xx: lispwoso.com 6 · last 07:30 UTC",
+            "• errors: internal error; reference = … 2 · last 07:30 UTC",
+            doLine,
+          ].join("\n"),
+        },
+        broadcast: false,
+      },
+    ],
+    held: [],
     updates: [],
-    pages: [],
   });
 });
 
+// Whether a window is a fault at all: it opens a page, posted or held (which of them pings is below).
 test.for([
   { name: "a quiet prd pages nothing", reading: {}, pages: false },
   {
@@ -200,14 +206,14 @@ test("a repeat edits the page with its running count and posts nothing", () => {
   const repeat = triageAt("07:45", reading5xx(2), first.next);
   expect(repeat).toMatchObject({
     triage: {
-      page: null,
+      posts: [],
       updates: [
         {
           ts: "1.0",
           text: [
             `🚨 prd: 3 visitor 5xx ${mentions}`,
             "Impact: since 07:28 UTC",
-            "• visitor 5xx: lispwoso.com 3 · last 07:43 UTC",
+            "• visitor 5xx: os.iterate.com 3 · last 07:43 UTC",
             doLine,
           ].join("\n"),
           reply: null,
@@ -219,7 +225,7 @@ test("a repeat edits the page with its running count and posts nothing", () => {
         {
           ts: "1.0",
           incidents: {
-            "visitor 5xx: lispwoso.com": {
+            "visitor 5xx: os.iterate.com": {
               count: 3,
               told: 1,
               firstSeen: "2026-09-23T07:28:00.000Z",
@@ -235,10 +241,10 @@ test("a repeat edits the page with its running count and posts nothing", () => {
 
 test("an unchanged page is not edited: a window that saw nothing new owes nothing", () => {
   const first = triageAt("07:30", reading5xx(1), null);
-  expect(triageAt("07:45", quiet, first.next).triage).toMatchObject({ page: null, updates: [] });
+  expect(triageAt("07:45", quiet, first.next).triage).toMatchObject({ posts: [], updates: [] });
 });
 
-test("an incident grown tenfold since the channel last heard is broadcast in its thread", () => {
+test("an incident grown tenfold since the channel last heard is told in today's dashboard thread, not the channel", () => {
   const first = triageAt("07:30", reading5xx(1), null);
   const grown = triageAt("07:45", reading5xx(9), first.next);
   const after = triageAt("08:00", reading5xx(1), grown.next);
@@ -248,34 +254,34 @@ test("an incident grown tenfold since the channel last heard is broadcast in its
   }).toEqual({
     grown: [
       {
-        text: `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}\n• grew tenfold: visitor 5xx: lispwoso.com 10`,
-        broadcast: true,
+        text: `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}\n• grew tenfold: visitor 5xx: os.iterate.com 10`,
+        broadcast: false,
       },
     ],
     after: [null],
   });
 });
 
-test("a deploy's incident grown tenfold is broadcast with the hosts this window added", () => {
+test("a deploy's incident grown tenfold is told with the hosts this window added", () => {
   const reset = (hosts: [string, number][]): FaultReading => ({
     ...quiet,
     causes: [{ cause: "deploy reset", worker: "os-prd", serverErrors: hosts }],
   });
-  const first = triageAt("07:30", reset([["https://a.com/", 1]]), null);
+  const first = triageAt("07:30", reset([["https://os.iterate.com/", 1]]), null);
   const grown = triageAt(
     "07:45",
     reset([
-      ["https://a.com/", 4],
-      ["https://b.com/", 5],
+      ["https://os.iterate.com/", 4],
+      ["https://dash.iterate.com/", 5],
     ]),
     first.next,
   );
   expect(grown.triage.updates.map((update) => update.reply?.text.split("\n")[1])).toEqual([
-    "• grew tenfold: deploy reset (os-prd): 10 visitor 5xx on a.com 5, b.com 5",
+    "• grew tenfold: deploy reset (os-prd): 10 visitor 5xx on os.iterate.com 5, dash.iterate.com 5",
   ]);
 });
 
-test("an incident back in a burst after an hour's quiet is broadcast; a lone return, or a burst within six hours, only edits", () => {
+test("an incident back in a burst after an hour's quiet is told in today's dashboard thread; a lone return, or a burst within six hours, only edits", () => {
   const quietHour = (state: AlarmState, from: number) =>
     [0, 15, 30, 45, 60].reduce(
       (quieter, minutes) => triageAt(clock(from + minutes), quiet, quieter).next,
@@ -285,7 +291,7 @@ test("an incident back in a burst after an hour's quiet is broadcast; a lone ret
   // Four quiet windows: the page says so, by an edit.
   const quietOnce = quietHour(first.next, 7 * 60 + 45);
   expect(quietOnce.pages[0]!.text).toContain(
-    "• visitor 5xx: lispwoso.com 5 · quiet since 07:28 UTC",
+    "• visitor 5xx: os.iterate.com 5 · quiet since 07:28 UTC",
   );
   const lone = triageAt("09:00", reading5xx(1), quietOnce);
   const burst = triageAt("10:30", reading5xx(10), quietHour(lone.next, 9 * 60 + 15));
@@ -298,7 +304,8 @@ test("an incident back in a burst after an hour's quiet is broadcast; a lone ret
     lone: [null],
     burst: [
       {
-        text: `🚨 prd fault escalated, 10:13–10:28 UTC ${mentions}\n• back after quiet since 08:58 UTC: visitor 5xx: lispwoso.com 10`,
+        text: `🚨 prd fault escalated, 10:13–10:28 UTC ${mentions}\n• back after quiet since 08:58 UTC: visitor 5xx: os.iterate.com 10`,
+        // a first-party host's burst of 5xx: prd is down again
         broadcast: true,
       },
     ],
@@ -311,7 +318,7 @@ test("a page whose incidents all went a day unseen is resolved, and leaves the s
   const dayLater = triageAt("07:30", quiet, first.next, "2026-09-24");
   expect(dayLater).toMatchObject({
     triage: {
-      page: null,
+      posts: [],
       updates: [],
       resolved: [
         {
@@ -319,7 +326,7 @@ test("a page whose incidents all went a day unseen is resolved, and leaves the s
           text: [
             `🚨 prd: 1 visitor 5xx ${mentions}`,
             "Impact: since 09-23 07:28 UTC",
-            "• ✅ visitor 5xx: lispwoso.com 1 · quiet since 09-23 07:28 UTC",
+            "• ✅ visitor 5xx: os.iterate.com 1 · quiet since 09-23 07:28 UTC",
             doLine,
           ].join("\n"),
           why: "no sighting for a day, quiet since 09-23 07:28 UTC",
@@ -330,48 +337,250 @@ test("a page whose incidents all went a day unseen is resolved, and leaves the s
   });
 });
 
-test("an incident closed while its page stays open is ticked, and seen again it opens a new page", () => {
+test("an incident closed while its page stays open is ticked, and seen again the next day it opens that day's page", () => {
   const first = triageAt(
     "07:30",
-    { ...quiet, errors: [["boom", 1]], serverErrors: [["https://a.com/", 1]] },
+    { ...quiet, errors: [["boom", 1]], serverErrors: [["https://os.iterate.com/", 1]] },
     null,
   );
-  // boom goes on; a.com's 5xx stops.
+  // boom goes on; os.iterate.com's 5xx stops.
   const kept = ["12:00", "18:00"].reduce(
     (state, hhmm) => triageAt(hhmm, { ...quiet, errors: [["boom", 1]] }, state).next,
     first.next,
   );
   const dayLater = triageAt(
     "07:30",
-    { ...quiet, serverErrors: [["https://a.com/", 1]], errors: [["boom", 1]] },
+    { ...quiet, serverErrors: [["https://os.iterate.com/", 1]], errors: [["boom", 1]] },
     kept,
     "2026-09-24",
   );
   expect(dayLater.triage).toMatchObject({
-    page: { text: expect.stringContaining("• visitor 5xx: a.com 1 · last 07:28 UTC") },
+    posts: [
+      {
+        page: { text: expect.stringContaining("• visitor 5xx: os.iterate.com 1 · last 07:28 UTC") },
+      },
+    ],
     updates: [
       {
         ts: "1.0",
-        text: expect.stringContaining("• ✅ visitor 5xx: a.com 1 · quiet since 09-23 07:28 UTC"),
+        text: expect.stringContaining(
+          "• ✅ visitor 5xx: os.iterate.com 1 · quiet since 09-23 07:28 UTC",
+        ),
         reply: null,
       },
     ],
   });
-  expect(dayLater.triage.page?.text).not.toContain("boom");
+  expect(dayLater.triage.posts[0]?.page.text).not.toContain("boom");
+});
+
+test("a new incident the same UTC day joins that day's page by an edit; one that pings is told in today's dashboard thread", () => {
+  const first = triageAt("07:30", reading5xx(1), null);
+  const lone = triageAt(
+    "07:45",
+    { ...quiet, serverErrors: [["https://garple.com/", 1]] },
+    first.next,
+  );
+  const burst = triageAt("08:00", { ...quiet, errors: [["boom", 12]] }, lone.next);
+  // garple.com's 5xx, a lone one at 07:45, comes in a burst: a reply in the thread
+  const garpleBurst = triageAt(
+    "08:15",
+    { ...quiet, serverErrors: [["https://garple.com/", 12]] },
+    burst.next,
+  );
+  expect({
+    posts: [first, lone, burst, garpleBurst].map((run) => run.triage.posts.length),
+    lone: lone.triage.updates,
+    burst: burst.triage.updates,
+    garpleBurst: garpleBurst.triage.updates.map((update) => update.reply),
+  }).toMatchObject({
+    posts: [1, 0, 0, 0],
+    lone: [
+      { ts: "1.0", text: expect.stringContaining("• visitor 5xx: garple.com 1"), reply: null },
+    ],
+    burst: [
+      {
+        ts: "1.0",
+        text: expect.stringContaining("• errors: boom 12"),
+        reply: {
+          text: `🚨 prd fault escalated, 07:43–07:58 UTC ${mentions}\n• new: errors: boom 12`,
+          broadcast: false,
+        },
+      },
+    ],
+    garpleBurst: [
+      {
+        text: `🚨 prd fault escalated, 07:58–08:13 UTC ${mentions}\n• new: visitor 5xx: garple.com 13`,
+        broadcast: false,
+      },
+    ],
+  });
+  expect(garpleBurst.next.pages.map((page) => Object.keys(page.incidents))).toEqual([
+    ["visitor 5xx: os.iterate.com", "visitor 5xx: garple.com", "errors: boom"],
+  ]);
+});
+
+test("the first incident of a new UTC day opens that day's page, while yesterday's stays open for its own", () => {
+  const first = triageAt("23:30", reading5xx(1), null);
+  const nextDay = triageAt(
+    "00:15",
+    { ...quiet, serverErrors: [["https://garple.com/", 1]] },
+    first.next,
+    "2026-09-24",
+  );
+  expect(nextDay.triage).toMatchObject({
+    // garple.com's lone 5xx is minor: it waits on an unposted page
+    posts: [],
+    held: [{ ts: "", text: expect.stringContaining("• visitor 5xx: garple.com 1") }],
+    // the 09-23 page's times gain their date, and nothing else changes on it
+    updates: [{ ts: "1.0", text: expect.not.stringContaining("garple.com"), reply: null }],
+  });
+  expect(nextDay.next.pages).toHaveLength(2);
 });
 
 test("heals below a burst add nothing to an open heals incident", () => {
   const first = triageAt("07:30", { ...quiet, heals: [["repo", 10]] }, null);
   expect(triageAt("07:45", { ...quiet, heals: [["repo", 9]] }, first.next).triage).toMatchObject({
-    page: null,
+    posts: [],
     updates: [],
   });
 });
 
-test("a test run's page goes to #ci as 🧪 and mentions nobody", () => {
-  expect(triageIncidents(reading5xx(1), window, null, true).page?.text.split("\n")[0]).toBe(
-    "🧪 TEST RUN — 🚨 prd: 1 visitor 5xx",
+test.for([
+  {
+    name: "a lone 5xx on a project's own host",
+    reading: { serverErrors: [["https://lispwoso.com/", 1]] },
+    sent: "held",
+  },
+  {
+    name: "a lone 5xx on a made-up iterate.com name, a project's host",
+    reading: { serverErrors: [["https://build.iterate.com/.env", 1]] },
+    sent: "held",
+  },
+  { name: "a lone error", reading: { errors: [["boom", 1]] }, sent: "held" },
+  {
+    name: "a deploy's lone 5xx on a project's own host",
+    reading: {
+      causes: [
+        { cause: "deploy reset", worker: "os-prd", serverErrors: [["https://garple.com/", 1]] },
+      ],
+    },
+    sent: "held",
+  },
+  {
+    name: "a burst of 5xx on a project's own host",
+    reading: { serverErrors: [["https://lispwoso.com/", 10]] },
+    sent: "thread",
+  },
+  { name: "a burst of errors", reading: { errors: [["boom", 10]] }, sent: "thread" },
+  {
+    name: "a lone 5xx on iterate.com",
+    reading: { serverErrors: [["https://iterate.com/", 1]] },
+    sent: "thread",
+  },
+  {
+    name: "a lone 5xx on www.iterate.com",
+    reading: { serverErrors: [["https://www.iterate.com/", 1]] },
+    sent: "thread",
+  },
+  {
+    name: "a lone 5xx on a first-party app",
+    reading: { serverErrors: [["https://agents.iterate.com/", 1]] },
+    sent: "thread",
+  },
+  {
+    name: "a deploy's lone 5xx on a first-party app",
+    reading: {
+      causes: [
+        { cause: "deploy reset", worker: "dash", serverErrors: [["https://dash.iterate.com/", 1]] },
+      ],
+    },
+    sent: "thread",
+  },
+  {
+    name: "a burst of 5xx on iterate.com (prd is down)",
+    reading: { serverErrors: [["https://iterate.com/", 10]] },
+    sent: "channel too",
+  },
+  {
+    name: "a burst of 5xx on os.iterate.com (prd is down)",
+    reading: { serverErrors: [["https://os.iterate.com/api", 10]] },
+    sent: "channel too",
+  },
+  {
+    name: "a deploy's burst of 5xx on a first-party app (prd is down)",
+    reading: {
+      causes: [
+        {
+          cause: "version skew",
+          worker: "os-prd",
+          serverErrors: [
+            ["https://os.iterate.com/", 6],
+            ["https://mcp.iterate.com/", 4],
+          ],
+        },
+      ],
+    },
+    sent: "channel too",
+  },
+] satisfies { name: string; reading: Partial<FaultReading>; sent: string }[])(
+  "$name: $sent",
+  ({ reading, sent }) => {
+    const triage = triageIncidents({ ...quiet, ...reading }, window, null, false);
+    const [post] = triage.posts;
+    const posted = post?.broadcast ? "channel too" : "thread";
+    expect({ sent: post ? posted : "held" }).toEqual({ sent });
+  },
+);
+
+test("the dashboard's prd faults row names the two biggest open incidents: red while one was seen in the last hour, amber once all are quiet, green once none is open", () => {
+  const seen = triageAt(
+    "07:30",
+    {
+      ...quiet,
+      serverErrors: [
+        ["https://garple.com/", 3],
+        ["https://lispwoso.com/", 2],
+        ["https://ferovo.com/", 1],
+      ],
+      errors: [["boom", 12]],
+    },
+    null,
   );
+  const quietHour = triageAt("08:30", quiet, seen.next);
+  const dayLater = triageAt("07:30", quiet, quietHour.next, "2026-09-24");
+  expect(
+    [seen, quietHour, dayLater].map(({ next }) => faultRow(next.pages, Date.parse(next.readUntil))),
+  ).toEqual([
+    { state: "red", text: "errors: boom 12 · visitor 5xx: garple.com 3 · +2 more" },
+    { state: "amber", text: "errors: boom 12 · visitor 5xx: garple.com 3 · +2 more" },
+    { state: "green", text: "quiet" },
+  ]);
+});
+
+test("a long row is cut before its +N more", () => {
+  const long = triageAt(
+    "07:30",
+    {
+      ...quiet,
+      errors: [
+        ["x".repeat(40), 12],
+        ["y".repeat(40), 11],
+        ["z", 10],
+      ],
+    },
+    null,
+  );
+  expect(faultRow(long.next.pages, now.getTime())).toEqual({
+    state: "red",
+    text: `errors: ${"x".repeat(40)} 12 · errors: ${"y".repeat(28)}… · +1 more`,
+  });
+});
+
+test("a test run posts its page, minor or not, as 🧪 and mentioning nobody", () => {
+  const minor: FaultReading = { ...quiet, serverErrors: [["https://lispwoso.com/", 1]] };
+  expect(
+    triageIncidents(minor, window, null, true).posts.map(({ page }) => page.text.split("\n")[0]),
+  ).toEqual(["🧪 TEST RUN — 🚨 prd: 1 visitor 5xx"]);
 });
 
 test("a deploy's cause is one incident listing its visitor 5xx by host, at most five", () => {
@@ -388,7 +597,7 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
       window,
       null,
       false,
-    ).page?.text.split("\n"),
+    ).pages[0]?.text.split("\n"),
   ).toEqual([
     `🚨 prd: deploy reset (os-prd), 21 visitor 5xx ${mentions}`,
     "Impact: since 07:30 UTC",
@@ -548,86 +757,199 @@ test("a quiet run never builds a Slack client, so a broken token cannot turn it 
   expect(slack).not.toHaveBeenCalled();
 });
 
-test("a new incident's page is posted to #error-pulse; its repeat is a chat.update, never a new message", async () => {
+test("a page that pings is a reply in today's dashboard thread; its repeat is an edit, never a new message", async () => {
   const slack = fakeSlack({ now: now.getTime() });
-  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(10));
   await runAt("07:45", run1.next, slack, serverErrorsOnly(2));
-  const [page] = slack.channel("#error-pulse");
-  expect({ posts: posts(slack), updates: updates(slack) }).toMatchObject({
-    posts: [{ channel, text: expect.stringMatching(/^🚨 prd: 1 visitor 5xx /u) }],
-    updates: [{ channel, ts: page!.ts, text: expect.stringMatching(/^🚨 prd: 3 visitor 5xx /u) }],
-  });
-  expect(posts(slack)).toHaveLength(1);
+  expect(errorPulse(slack)).toEqual([
+    {
+      dashboard: [
+        "📟 error-pulse · Wed 23 Sep · 07:43 UTC",
+        "🔴 prd faults: visitor 5xx: lispwoso.com 12",
+      ],
+      replies: [`🚨 prd: 12 visitor 5xx ${mentions}`],
+    },
+  ]);
+  // the dashboard and the page
+  expect(posts(slack)).toHaveLength(2);
 });
 
-test("a resolved page's first line is edited to ✅ resolved:, then its thread says why", async () => {
+test("a minor incident pings nobody: its page stays unposted, the row shows it red, then amber once quiet, and it leaves with nothing sent", async () => {
   const slack = fakeSlack({ now: now.getTime() });
-  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
-  await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
-  const [page] = slack.channel("#error-pulse");
+  const seen = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const red = errorPulse(slack);
+  const callsBefore = slack.calls.length;
+  // 45 minutes on, the row still says the same: no call to Slack
+  const stillRed = await runAt("08:15", seen.next, slack);
+  const quietCalls = slack.calls.length - callsBefore;
+  const quietHour = await runAt("08:30", stillRed.next, slack);
+  const dayLater = await runAt("07:45", quietHour.next, slack, serverErrorsOnly(0), "2026-09-24");
   expect({
-    updates: updates(slack).map((update) => [update.ts, String(update.text).split("\n")[0]]),
-    replies: posts(slack)
-      .slice(1)
-      .map((post) => [post.thread_ts, post.text]),
+    red,
+    quietCalls,
+    channel: errorPulse(slack),
+    pages: [seen, dayLater].map((run) => run.next.pages.map((page) => page.ts)),
   }).toEqual({
-    updates: [[page!.ts, `✅ resolved: prd: 1 visitor 5xx ${mentions}`]],
-    replies: [
-      [page!.ts, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+    red: [
+      {
+        dashboard: [
+          "📟 error-pulse · Wed 23 Sep · 07:28 UTC",
+          "🔴 prd faults: visitor 5xx: lispwoso.com 1",
+        ],
+        replies: [],
+      },
     ],
+    quietCalls: 0,
+    channel: [
+      {
+        dashboard: [
+          "📟 error-pulse · Wed 23 Sep · 08:28 UTC",
+          "🟡 prd faults: visitor 5xx: lispwoso.com 1",
+        ],
+        replies: [],
+      },
+      {
+        dashboard: ["📟 error-pulse · Thu 24 Sep · 07:43 UTC", "🟢 prd faults: quiet"],
+        replies: [],
+      },
+    ],
+    pages: [[""], []],
   });
 });
 
-test("a page Slack refuses to edit is posted again, and its thread and state move there", async () => {
+test("a burst later posts the page its minor incident was held on", async () => {
   const slack = fakeSlack({ now: now.getTime() });
-  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
-  const [page] = slack.channel("#error-pulse");
-  page!.updateError = "edit_window_closed";
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(9));
-  const [, reposted] = slack.channel("#error-pulse");
+  const lone = await runAt("07:30", null, slack, serverErrorsOnly(1));
+  const burst = await runAt("07:45", lone.next, slack, serverErrorsOnly(12));
+  const [dashboard] = slack.channel("#error-pulse");
   expect({
-    posts: posts(slack).map((post) => [post.thread_ts, String(post.text).split("\n")[0]]),
+    page: dashboard!.replies.map((reply) => reply.text),
+    pages: burst.next.pages.map((page) => page.ts),
+  }).toEqual({
+    page: [
+      [
+        `🚨 prd: 13 visitor 5xx ${mentions}`,
+        "Impact: since 07:28 UTC",
+        "• visitor 5xx: lispwoso.com 13 · last 07:43 UTC",
+        doLine,
+      ].join("\n"),
+    ],
+    pages: [dashboard!.replies[0]!.ts],
+  });
+});
+
+test("a burst of 5xx on iterate.com is prd down: its page is sent to the channel too", async () => {
+  const slack = fakeSlack({ now: now.getTime() });
+  await runAt("07:30", null, slack, serverErrorsOnly(12, { url: "https://iterate.com/" }));
+  const [dashboard] = slack.channel("#error-pulse");
+  expect(posts(slack).filter((post) => post.thread_ts)).toMatchObject([
+    {
+      thread_ts: dashboard!.ts,
+      reply_broadcast: true,
+      text: expect.stringMatching(/^🚨 prd: 12 visitor 5xx /u),
+    },
+  ]);
+});
+
+test("prd down reaches the channel once a page: the same outage growing tenfold is told in the thread alone", async () => {
+  const slack = fakeSlack({ now: now.getTime() });
+  const run1 = await runAt(
+    "07:30",
+    null,
+    slack,
+    serverErrorsOnly(12, { url: "https://iterate.com/" }),
+  );
+  await runAt("07:45", run1.next, slack, serverErrorsOnly(150, { url: "https://iterate.com/" }));
+  expect(
+    posts(slack)
+      .filter((post) => post.thread_ts)
+      .map((post) => [String(post.text).split("\n")[0], Boolean(post.reply_broadcast)]),
+  ).toEqual([
+    [`🚨 prd: 12 visitor 5xx ${mentions}`, true],
+    [`🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`, false],
+  ]);
+});
+
+test("a page Slack refuses to edit is posted again, and its state moves there", async () => {
+  const slack = fakeSlack({ now: now.getTime() });
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(10));
+  const [dashboard] = slack.channel("#error-pulse");
+  dashboard!.replies[0]!.updateError = "edit_window_closed";
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const run2 = await runAt("07:45", run1.next, slack, serverErrorsOnly(90));
+  expect({
+    channel: errorPulse(slack),
     pages: run2.next.pages.map((open) => open.ts),
   }).toEqual({
-    posts: [
-      [undefined, `🚨 prd: 1 visitor 5xx ${mentions}`],
-      [undefined, `🚨 prd: 10 visitor 5xx ${mentions}`],
-      [page!.ts, "✅ resolved: this page moved to a new message, which Slack lets this bot edit"],
-      [reposted!.ts, `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`],
+    channel: [
+      {
+        dashboard: [
+          "📟 error-pulse · Wed 23 Sep · 07:43 UTC",
+          "🔴 prd faults: visitor 5xx: lispwoso.com 100",
+        ],
+        replies: [
+          `🚨 prd: 10 visitor 5xx ${mentions}`,
+          `🚨 prd: 100 visitor 5xx ${mentions}`,
+          "✅ resolved: this page moved to a new message, which Slack lets this bot edit",
+          `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}`,
+        ],
+      },
     ],
-    pages: [reposted!.ts],
+    pages: [dashboard!.replies[1]!.ts],
   });
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('"event":"slack.page-gone"'));
 });
 
-test("a resolved page Slack refuses to edit gets its resolution top-level, and leaves the state", async () => {
+test("a resolved page is edited to say ✅ resolved: and why, and nothing about it is posted", async () => {
   const slack = fakeSlack({ now: now.getTime() });
-  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
-  const [page] = slack.channel("#error-pulse");
-  page!.updateError = "message_not_found";
-  vi.spyOn(console, "warn").mockImplementation(() => {});
-  const run2 = await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(10));
+  await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  const [yesterday] = slack.channel("#error-pulse");
   expect({
-    replies: posts(slack)
-      .slice(1)
-      .map((post) => [post.thread_ts, post.text]),
-    pages: run2.next.pages,
+    channel: errorPulse(slack),
+    why: yesterday!.replies[0]!.text.split("\n")[1],
   }).toEqual({
-    replies: [
-      [undefined, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+    channel: [
+      {
+        dashboard: [
+          "📟 error-pulse · Wed 23 Sep · 07:28 UTC",
+          "🔴 prd faults: visitor 5xx: lispwoso.com 10",
+        ],
+        replies: [`✅ resolved: prd: 10 visitor 5xx ${mentions}`],
+      },
+      {
+        dashboard: ["📟 error-pulse · Thu 24 Sep · 07:28 UTC", "🟢 prd faults: quiet"],
+        replies: [],
+      },
     ],
-    pages: [],
+    why: "✅ no sighting for a day, quiet since 09-23 07:28 UTC",
   });
 });
 
-test("a dry run (no Slack client) resolves to the page it would post", async () => {
-  workersLogs(serverErrorsOnly(1));
-  await expect(summary()).resolves.toBe(pageFor({ serverErrors: [["https://lispwoso.com/", 1]] }));
+test("a resolved page someone deleted gets nothing in its place, and leaves the state", async () => {
+  const slack = fakeSlack({ now: now.getTime() });
+  const run1 = await runAt("07:30", null, slack, serverErrorsOnly(10));
+  slack.channel("#error-pulse")[0]!.replies[0]!.updateError = "message_not_found";
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const run2 = await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
+  expect({
+    replies: errorPulse(slack).map((dashboard) => dashboard.replies),
+    pages: run2.next.pages,
+  }).toEqual({ replies: [[`🚨 prd: 10 visitor 5xx ${mentions}`], []], pages: [] });
+});
+
+test("a dry run (no Slack client) resolves to what it would post and the row it would set", async () => {
+  workersLogs(serverErrorsOnly(10));
+  await expect(summary()).resolves.toBe(
+    [
+      `post:\n${pageFor({ serverErrors: [["https://lispwoso.com/", 10]] })}`,
+      "row prd faults: red, visitor 5xx: lispwoso.com 10",
+    ].join("\n\n"),
+  );
 });
 
 test("5xx the URL rows miss page as unknown", async () => {
-  workersLogs(serverErrorsOnly(1, 2));
+  workersLogs(serverErrorsOnly(1, { unlogged: 2 }));
   expect(await summary()).toContain("• visitor 5xx: unknown 2 · last 07:30 UTC");
 });
 
@@ -1541,7 +1863,7 @@ test("a run without a pin's state starts its count: a late post, never a false o
   ).toMatchObject({ posts: [] });
 });
 
-test("the held-alarm pin reads prd's heals by event and posts its one message to #error-pulse; the next run posts nothing", async () => {
+test("the held-alarm pin reads prd's heals by event and posts its one message in today's dashboard thread; the next run posts nothing", async () => {
   const slack = fakeSlack({ now: now.getTime() });
   // Another workaround's heal, by event: not the pinned one's.
   const anotherHeal = (groupBy: string | undefined, filters: LogFilter[]) =>
@@ -1552,14 +1874,12 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
   const run1 = await runAt("07:30", pinState(lastSeen), slack, anotherHeal);
   const run2 = await runAt("07:45", run1.next, slack, anotherHeal);
   expect({
-    posts: posts(slack).map((post) => [
-      post.channel,
-      post.thread_ts,
-      String(post.text).slice(0, 32),
-    ]),
+    replies: errorPulse(slack).map((dashboard) =>
+      dashboard.replies.map((reply) => reply.slice(0, 32)),
+    ),
     pin: run2.next.pins[heldAlarm!.event],
   }).toEqual({
-    posts: [[channel, undefined, "✅ Cloudflare seems to have fixed"]],
+    replies: [["✅ Cloudflare seems to have fixed"]],
     pin: { lastSeen: lastSeen.toISOString(), told: true },
   });
 });
@@ -1569,18 +1889,19 @@ test("the held-alarm pin reads prd's heals by event and posts its one message to
  *  (each of PINNED_LINES where it pages, and a socket close's reset, among them) and the pagers. */
 const QUIET_RUN_QUERIES = 20;
 
-/** The page a run without state owes for `reading` (quiet elsewhere) in the half hour to `now`. */
+/** The page, posted or held, a run without state opens for `reading` (quiet elsewhere) in the half
+ *  hour to `now`. */
 function pageFor(reading: Partial<FaultReading>) {
-  return triageIncidents({ ...quiet, ...reading }, window, null, false).page?.text ?? null;
+  return triageIncidents({ ...quiet, ...reading }, window, null, false).pages[0]?.text || null;
 }
 
-/** A reading of `count` visitor 5xx from lispwoso.com. */
+/** A reading of `count` visitor 5xx from os.iterate.com, a first-party host: its page is posted. */
 function reading5xx(count: number): FaultReading {
-  return { ...quiet, serverErrors: [["https://lispwoso.com/", count]] };
+  return { ...quiet, serverErrors: [["https://os.iterate.com/", count]] };
 }
 
-/** One run's triage at `hhmm` on `day` after `state`, and the state it leaves once its new page is
- *  posted as "N.0", N counting the pages this chain has posted. */
+/** One run's triage at `hhmm` on `day` after `state`, and the state it leaves once the pages it
+ *  posts are posted as "N.0", N counting up from the highest ts in the state. */
 function triageAt(
   hhmm: string,
   reading: FaultReading,
@@ -1589,17 +1910,9 @@ function triageAt(
 ) {
   const window = logWindow(new Date(`${day}T${hhmm}:00Z`), state);
   const triage = triageIncidents(reading, window, state, false);
-  const posted = (state?.pages.length ?? 0) + Number(Boolean(triage.page));
-  const next: AlarmState = {
-    readUntil: window.to.toISOString(),
-    pages: [
-      ...triage.pages,
-      ...(triage.page
-        ? [{ ts: `${posted}.0`, text: triage.page.text, incidents: triage.page.incidents }]
-        : []),
-    ],
-    pins: {},
-  };
+  const highest = Math.max(0, ...triage.pages.map((page) => Number(page.ts)));
+  for (const [index, { page }] of triage.posts.entries()) page.ts = `${highest + index + 1}.0`;
+  const next: AlarmState = { readUntil: window.to.toISOString(), pages: triage.pages, pins: {} };
   return { triage, next };
 }
 
@@ -1668,15 +1981,16 @@ function workersLogs(answer: (groupBy: string | undefined, filters: LogFilter[])
   return { fetch };
 }
 
-/** A prd whose only signal is `count` visitor 5xx from lispwoso.com, `unlogged` more without a
- *  URL: the 5xx total is the query without a group that reads the status. */
-function serverErrorsOnly(count: number, unlogged = 0) {
+/** A prd whose only signal is `count` visitor 5xx at `url` (lispwoso.com, a project's own host,
+ *  unless given), `unlogged` more without a URL: the 5xx total is the query without a group that
+ *  reads the status. */
+function serverErrorsOnly(count: number, { url = "https://lispwoso.com/", unlogged = 0 } = {}) {
   return (groupBy: string | undefined, filters: LogFilter[]) =>
     calculations(
       !groupBy
         ? [[[], JSON.stringify(filters).includes("response.status") ? count + unlogged : 0]]
         : groupBy === "$workers.event.request.url" && count
-          ? [[["https://lispwoso.com/"], count]]
+          ? [[[url], count]]
           : [],
     );
 }
@@ -1686,12 +2000,17 @@ function posts(slack: ReturnType<typeof fakeSlack>) {
   return slack.calls.filter((call) => call.method === "chat.postMessage");
 }
 
-/** The alarm's edits of its pages, in order. */
-function updates(slack: ReturnType<typeof fakeSlack>) {
-  return slack.calls.filter((call) => call.method === "chat.update");
+/** #error-pulse as a reader sees it: each dashboard's lines, and the first line of each reply in
+ *  its thread (the pages and the news about them). */
+function errorPulse(slack: ReturnType<typeof fakeSlack>) {
+  return slack.channel("#error-pulse").map((dashboard) => ({
+    dashboard: dashboard.text.split("\n"),
+    replies: dashboard.replies.map((reply) => reply.text.split("\n")[0]),
+  }));
 }
 
-/** One run at `hhmm` on `day` after `state`, Workers Logs answering with `answer`. */
+/** One run at `hhmm` on `day` after `state`, Workers Logs answering with `answer`, the fake Slack's
+ *  clock at that time. */
 async function runAt(
   hhmm: string,
   state: AlarmState | null,
@@ -1700,6 +2019,7 @@ async function runAt(
   day = "2026-09-23",
 ) {
   workersLogs(answer);
+  slack.clock.now = Date.parse(`${day}T${hhmm}:00Z`);
   return await alarm({
     window: logWindow(new Date(`${day}T${hhmm}:00Z`), state),
     state,

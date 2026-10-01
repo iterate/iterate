@@ -1,5 +1,5 @@
 import { expect, onTestFinished, test, vi } from "vitest";
-import { buildStanding, pinPkgPrNewVersion } from "./pkg-pr-new.ts";
+import { buildStanding, pinPkgPrNewVersion, pkgPrNewVersion } from "./pkg-pr-new.ts";
 
 const commit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
 
@@ -131,7 +131,7 @@ test.for([
   ["an npm range", "^1.2.0"],
   ["a branch, which the loader refuses", agentsAt("main")],
   ["a fork's build", `https://pkg.pr.new/someone/fork/@iterate-com/agents@${older}`],
-  ["another package's build", `https://pkg.pr.new/iterate/iterate/@iterate-com/voice@${older}`],
+  ["another package's build", pkgPrNewVersion("@iterate-com/voice", older)],
 ])("%s is the project's own, and pkg.pr.new is never asked", async ([, installed]) => {
   const head = vi.fn(async () => served(`iterate:iterate:${newer}`, 200, later));
   expect(await buildStanding("@iterate-com/agents", installed, head)).toEqual({
@@ -185,7 +185,7 @@ test("pkg.pr.new failing main's HEAD twice fails the standing within its bound, 
 });
 
 function agentsAt(ref: string) {
-  return `https://pkg.pr.new/iterate/iterate/@iterate-com/agents@${ref}`;
+  return pkgPrNewVersion("@iterate-com/agents", ref);
 }
 
 /** pkg.pr.new's answer to a HEAD: `status`, naming `key` in `x-commit-key`, and the build's

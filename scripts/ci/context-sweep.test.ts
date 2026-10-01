@@ -13,9 +13,12 @@ import contextSweep, {
   classifyContexts,
   identifyEach,
   reconnecting,
+  reportSweep,
   sweepPosts,
   type SweptContext,
 } from "./context-sweep.ts";
+import { fakeSlack } from "./fake-slack.ts";
+import { slackChannelIds } from "./slack.ts";
 
 test.for<{ name: string; contexts: SweptContext[]; expected: object }>([
   {
@@ -238,6 +241,7 @@ test.for([
       result:
         "🧹 context sweep of prd: 172 objects: 111 live, 18 global, 43 orphans (report-only) · <https://depot.dev/run|run>",
       page: undefined,
+      row: { state: "green", text: "43 orphans, report-only" },
     },
   },
   {
@@ -251,6 +255,21 @@ test.for([
       result:
         "🧹 context sweep of prd: 172 objects: 111 live, 18 global, 43 orphans (41 destroyed, 2 recent), 3 emptied · <https://depot.dev/run|run>",
       page: undefined,
+      row: { state: "green", text: "41 orphans destroyed, 2 recent" },
+    },
+  },
+  {
+    name: "a run that found no orphans is green and says so",
+    posts: sweepPosts({
+      ...run,
+      result: "success",
+      report: { ...report, orphans: 0, backups: "r2://b/prd/r/" },
+    }),
+    expected: {
+      result:
+        "🧹 context sweep of prd: 172 objects: 111 live, 18 global, 0 orphans (0 destroyed) · <https://depot.dev/run|run>",
+      page: undefined,
+      row: { state: "green", text: "no orphans" },
     },
   },
   {
@@ -266,6 +285,10 @@ test.for([
       page: failedPage(
         "context sweep failed on prd: 1 object(s) could not say who they are, 1 orphan(s) not destroyed",
       ),
+      row: {
+        state: "red",
+        text: "failed on prd: 1 object(s) could not say who they are, 1 orphan(s) not destroyed",
+      },
     },
   },
   {
@@ -275,6 +298,7 @@ test.for([
       result:
         "🚨 context sweep failed on prd (cancelled): 172 objects: 111 live, 18 global, 43 orphans (report-only) · <https://depot.dev/run|run>",
       page: failedPage("context sweep failed on prd: the job ended cancelled"),
+      row: { state: "red", text: "failed on prd: the job ended cancelled" },
     },
   },
   {
@@ -283,6 +307,7 @@ test.for([
     expected: {
       result: "🚨 context sweep failed before its report (cancelled) · <https://depot.dev/run|run>",
       page: failedPage("context sweep failed before its report (cancelled)"),
+      row: { state: "red", text: "failed before its report (cancelled)" },
     },
   },
   {
@@ -291,6 +316,7 @@ test.for([
     expected: {
       result: "🚨 context sweep failed before its report (success) · <https://depot.dev/run|run>",
       page: failedPage("context sweep failed before its report (success)"),
+      row: { state: "red", text: "failed before its report (success)" },
     },
   },
   {
@@ -305,11 +331,89 @@ test.for([
         "Do: open the run: its log names each object that could not say who it is and each orphan not destroyed, with the error",
         "<https://depot.dev/run|run>",
       ].join("\n"),
+      row: { state: "red", text: "failed before its report (failure)" },
     },
   },
 ])("$name", ({ posts, expected }) => {
   // exact: a stray mention on a routine post, or a missing one on a page, must fail
   expect(posts).toEqual(expected);
+});
+
+test("a failing sweep pages in today's dashboard thread, not sent to the channel, and turns its row red; the next sweep that succeeds resolves the page and turns the row green", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-09-28T03:00:00Z") });
+  const failing = sweepPosts({ ...run, result: "cancelled", report: undefined });
+  const succeeding = sweepPosts({
+    ...run,
+    result: "success",
+    report: { ...report, destroyed: 43, backups: "r2://b/" },
+  });
+
+  const failed = await reportSweep(slack.client, {
+    posts: failing,
+    testRun: false,
+    now: new Date(slack.clock.now),
+  });
+  const [dashboard] = slack.channel("#error-pulse");
+  const paged = {
+    pages: dashboard!.replies.map((reply) => [
+      reply.text.split("\n")[0],
+      Boolean(reply.reply_broadcast),
+    ]),
+    rows: dashboard!.text.split("\n").slice(1),
+  };
+  const resolved = await reportSweep(slack.client, {
+    posts: succeeding,
+    testRun: false,
+    now: new Date(slack.clock.now),
+  });
+
+  expect({
+    steps: [failed, resolved],
+    paged,
+    pages: dashboard!.replies.map((reply) => reply.text.split("\n").slice(0, 2)),
+    rows: dashboard!.text.split("\n").slice(1),
+    ci: slack.channel("#ci").map((message) => message.text),
+  }).toEqual({
+    steps: ["post", "resolve"],
+    paged: {
+      pages: [
+        [
+          "🚨 context sweep failed before its report (cancelled) <@U067G4QRFK2> <@U099JH9TAF2>",
+          false,
+        ],
+      ],
+      rows: ["🔴 context sweep: failed before its report (cancelled)"],
+    },
+    pages: [
+      [
+        "✅ resolved: context sweep failed before its report (cancelled) <@U067G4QRFK2> <@U099JH9TAF2>",
+        "✅ the context sweep succeeded",
+      ],
+    ],
+    rows: ["🟢 context sweep: 43 orphans destroyed"],
+    ci: [failing.result, succeeding.result],
+  });
+});
+
+test("a test run posts its line and page to #ci alone: #error-pulse is neither read nor written", async () => {
+  const slack = fakeSlack({ now: Date.parse("2026-09-28T03:00:00Z") });
+  const posts = sweepPosts({ ...run, testRun: true, result: "failure", report: undefined });
+
+  const step = await reportSweep(slack.client, {
+    posts,
+    testRun: true,
+    now: new Date(slack.clock.now),
+  });
+
+  expect({
+    step,
+    errorPulse: slack.calls.filter((call) => call.channel === slackChannelIds["#error-pulse"]),
+    ci: slack.channel("#ci").map((message) => message.text),
+  }).toEqual({
+    step: "test-run",
+    errorPulse: [],
+    ci: [posts.result, posts.page],
+  });
 });
 
 test("a routine night's #ci line, at five-digit counts, is one line of at most 120 characters besides its link", () => {

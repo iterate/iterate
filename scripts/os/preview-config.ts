@@ -238,26 +238,19 @@ export function configTemplateFolders(repoRoot: string) {
 }
 
 /** Where each template's quick-launch link lands: the Dash's New project sheet with it chosen
- *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). A template this PR changes
- *  is named by the PR head's copy instead (`github:iterate/iterate#<head>&path:<folder>`, the
- *  custom field prefilled), so the project is born from the unmerged template. `default` never is:
- *  the preview embeds this PR's copy (core/os/scripts/build.ts). */
+ *  (`/projects?new=1&template=<name>`, apps/dash `projects/index.tsx`). The preview's build offers
+ *  this PR's copy of every template (scripts/os/config-templates.ts, core/os/scripts/build.ts), so
+ *  a template the PR changes is born as the PR has it. */
 export function templateQuickLaunches(input: {
   dashUrl: string;
   /** Each template's folder (`configTemplateFolders`). */
   templates: string[];
-  changedPaths: string[];
-  headSha: string;
 }) {
   return input.templates.map((folder) => {
     const name = path.basename(folder);
-    const changed =
-      name !== "default" && input.changedPaths.some((file) => file.startsWith(`${folder}/`));
-    const template = changed ? `github:iterate/iterate#${input.headSha}&path:${folder}` : name;
     return {
       name,
-      ...(changed && { fromHead: input.headSha }),
-      next: `${input.dashUrl}/projects?${new URLSearchParams({ new: "1", template })}`,
+      next: `${input.dashUrl}/projects?${new URLSearchParams({ new: "1", template: name })}`,
     };
   });
 }
@@ -277,7 +270,7 @@ export function renderPullRequestSection(input: {
   /** the deployment's name, `pr<n>-<sha7>` */
   deployment: string;
   workers: { name: string; url: string; signIn: string; dashboardUrl: string }[];
-  templates: { name: string; link: string; fromHead?: string }[];
+  templates: { name: string; link: string }[];
   seed: { project: string; seeded: boolean };
 }) {
   return [
@@ -293,10 +286,7 @@ export function renderPullRequestSection(input: {
       ? [
           "",
           `New project from template: ${input.templates
-            .map(
-              (template) =>
-                `[${template.name}${template.fromHead ? ` at this PR's \`${template.fromHead.slice(0, 9)}\`` : ""} ↗](${template.link})`,
-            )
+            .map((template) => `[${template.name} ↗](${template.link})`)
             .join(" · ")}`,
         ]
       : []),

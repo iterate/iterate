@@ -24,11 +24,14 @@
 //   no Preview OS       no preview: the push changed no preview path, so its CI trace skipped, or it
 //                       ran no Preview OS at all
 //
-// THE PAGE: when the time to green of the pushes that skipped the slow rows, over the last 24 hours
-// and at least 20 of them, has a median over 165 s or a p90 over 200 s, the check opens a page, and
-// edits it with each hour's numbers while they stay over; whenever that median is more than 20 s
-// over the lowest judged since the page or its last escalation, it escalates in the page's thread,
-// broadcast to the channel; once both are back under their lines it resolves the page (`pageFor`).
+// THE ROW on #error-pulse's daily dashboard, set every hour from the time to green of the pushes that
+// skipped the slow rows over the last 24 hours: amber when its median is over 165 s or its p90 over
+// 200 s, green under both, grey below 20 such pushes (`ttgRow`). It pages nothing (./health.ts
+// ROW_ONLY_SIGNALS). THE PAGE, which a 🧪 test run posts to #ci and whose state the check still
+// keeps: opened when that median or p90 is more than 10% over its line, edited with each hour's
+// numbers while either is over its line, escalated whenever the median is more than 20 s over the
+// lowest judged since the page or its last escalation, resolved once both are back under their lines
+// (`judge`, `pageFor`), so a median that sits on its line neither pages nor resolves every few hours.
 // Fewer pushes change nothing. The page names the job that finished last on most of those pushes,
 // which ends their critical path.
 //
@@ -40,14 +43,15 @@ import { z } from "zod";
 import { mapConcurrent, workflowArtifact, type DepotApi } from "../ci/depot.ts";
 import { githubRepository } from "../ci/github.ts";
 import { systemEvent } from "../ci/posthog-events.ts";
-import { decide, type PageUpdate } from "./page.ts";
+import { decide, type DashboardRow, type PageUpdate } from "./page.ts";
 
 /** The page's lines on the time to green of the pushes that skipped the slow rows, in seconds; how
- *  far a median still over them must rise past the lowest judged since the last page to page red
- *  again; and the fewest such pushes in the last 24 hours it judges. The owner's rule is a push green within 3
- *  minutes: the p50 line pages with 15 s of it left, the p90 line once the slowest tenth are 20 s
- *  past it. */
-export const LINES = { p50: 165, p90: 200, worse: 20, minPushes: 20 };
+ *  far past a line, as a share of it, a page opens (`margin`: past 181.5 s or 220 s), while an open
+ *  page stays open until both are back under the lines themselves (`judge`); how far a median still
+ *  over them must rise past the lowest judged since the last page to page red again; and the fewest
+ *  such pushes in the last 24 hours it judges. The owner's rule is a push green within 3 minutes:
+ *  the p50 line is 15 s short of it, the p90 line 20 s past it. */
+export const LINES = { p50: 165, p90: 200, margin: 0.1, worse: 20, minPushes: 20 };
 /** The checks a push waits for, by their workflows' `name:`. LOC report and the PR dashboard gate
  *  nothing and finish within a minute; Kit Firmware runs only on firmware PRs. */
 export const CHECKS = ["Lint and Typecheck", "Test", "Preview OS"];
@@ -217,13 +221,16 @@ export function summarizePushes(pushes: Push[], window: { from: number; to: numb
 type PushSummary = ReturnType<typeof summarizePushes>;
 
 /** The last 24 hours against LINES: `over` when the time to green of the pushes that skipped the
- *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. Pure. */
+ *  slow rows crossed either line, with their median; `too-few` below LINES.minPushes of them. With
+ *  no page open (`paged` false) a line counts as crossed only past it by LINES.margin. Pure. */
 export function judge(
   summary: PushSummary,
+  paged: boolean,
 ): { judgement: "too-few" } | { judgement: "over" | "under"; p50: number } {
   const green = summary.byRows["slow-rows-skipped"].timeToGreen;
   if (!green || green.n < LINES.minPushes) return { judgement: "too-few" };
-  const over = green.p50 > LINES.p50 || green.p90 > LINES.p90;
+  const scale = paged ? 1 : 1 + LINES.margin;
+  const over = green.p50 > LINES.p50 * scale || green.p90 > LINES.p90 * scale;
   return { judgement: over ? "over" : "under", p50: green.p50 };
 }
 
@@ -289,9 +296,33 @@ export function renderPage(input: {
       kind: "escalate",
       page,
       news: `${signal} more than ${LINES.worse} s worse again: p50 ${green ? seconds(green.p50) : "none"}${best || ""}`,
-      broadcast: true,
     };
   return { signal, kind: input.kind, page };
+}
+
+/** PR time to green's dashboard row from the last 24 hours' pushes that skipped the slow rows: amber
+ *  over either line itself, as an open page judges it, since a row notifies nobody and needs no
+ *  margin; green under both; grey below LINES.minPushes of them. Pure. */
+export function ttgRow(summary: PushSummary): DashboardRow {
+  const signal = "PR time to green";
+  const green = summary.byRows["slow-rows-skipped"].timeToGreen;
+  if (!green || green.n < LINES.minPushes)
+    return {
+      signal,
+      state: "grey",
+      text: `not judged below ${LINES.minPushes} pushes: ${green?.n || 0} green`,
+    };
+  if (judge(summary, true).judgement === "under")
+    return {
+      signal,
+      state: "green",
+      text: `under its lines: p50 ${seconds(green.p50)}, p90 ${seconds(green.p90)}`,
+    };
+  return {
+    signal,
+    state: "amber",
+    text: `p50 ${seconds(green.p50)} (line ${LINES.p50} s), p90 ${seconds(green.p90)} (line ${LINES.p90} s)`,
+  };
 }
 
 /** One line per group, with the job that finished last on most of its green pushes, and a closing
@@ -349,8 +380,8 @@ export function pushEvents(pushes: Push[]) {
 
 /** Measure the pushes of the last 26 hours that `memory` has not, judge the last 24 hours, and
  *  return the update `pageFor` owes (on a test run, this run's judgement whatever it owes: a page
- *  when over or too few, the resolution when under), the memory after it, and a PostHog event per
- *  push measured. */
+ *  when over or too few, the resolution when under), the memory after it, the dashboard row
+ *  (`ttgRow`), and a PostHog event per push measured. */
 export async function checkTtg(input: {
   depot: DepotApi;
   memory: TtgMemory;
@@ -390,7 +421,7 @@ export async function checkTtg(input: {
   console.log(
     ["last 7 days:", ...renderGroups(week), "last 24 hours:", ...renderGroups(day)].join("\n"),
   );
-  const judged = judge(day);
+  const judged = judge(day, memory.lastPage?.judgement === "over");
   const owed = pageFor(memory.lastPage, judged);
   const kind = input.testRun
     ? ({ over: "post", "too-few": "post", under: "resolve" } as const)[judged.judgement]
@@ -407,6 +438,7 @@ export async function checkTtg(input: {
         lastPage: memory.lastPage,
         runUrl: input.runUrl,
       }),
+    row: ttgRow(day),
     events: pushEvents(measured),
   } as const;
 }

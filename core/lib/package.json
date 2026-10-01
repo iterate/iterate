@@ -6,12 +6,12 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/iterate/iterate",
+    "url": "git+https://github.com/iterate/core",
     "directory": "core/lib"
   },
-  "homepage": "https://github.com/iterate/iterate#readme",
+  "homepage": "https://github.com/iterate/core#readme",
   "bugs": {
-    "url": "https://github.com/iterate/iterate/issues"
+    "url": "https://github.com/iterate/core/issues"
   },
   "keywords": [
     "iterate",
