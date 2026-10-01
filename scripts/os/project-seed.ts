@@ -1,5 +1,5 @@
 /** Semantic project recovery: config Git tree, organization membership, encrypted current secret
- * cells and the project's own hostnames, with its primary one. No streams, offsets, OAuth sessions, files or processor
+ * cells, the project's own hostnames, with its primary one, and its fetch routes. No streams, offsets, OAuth sessions, files or processor
  * state are archived. */
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -15,12 +15,14 @@ import {
   DeploymentStructure,
   EncryptedSecretSeed,
   ProjectSeed,
+  captureFetchRoutes,
   captureHostnames,
   capturePrimaryHostname,
   compareStructure,
   configTree,
   openProjectSeed,
   restorableHostnames,
+  restoreFetchRoutes,
   restoreHostnames,
   restorePrimaryHostname,
 } from "../../core/os/scripts/project-seed-format.ts";
@@ -180,6 +182,7 @@ export async function capture(options: {
     throw new Error("Config head changed during capture; retry into a new archive.");
   const hostnames = await captureHostnames(root);
   const primaryHostname = await capturePrimaryHostname(root);
+  const fetchRoutes = await captureFetchRoutes(root);
   const seed = ProjectSeed.parse({
     version: 1,
     capturedAt: new Date().toISOString(),
@@ -193,6 +196,7 @@ export async function capture(options: {
     secrets,
     hostnames,
     primaryHostname,
+    fetchRoutes: fetchRoutes.routes,
   });
   await openProjectSeed(seed, context.keys);
   writeFileSync(file, JSON.stringify(seed, null, 2) + "\n", { mode: 0o600, flag: "wx" });
@@ -200,13 +204,20 @@ export async function capture(options: {
   // The pending marker is retained as a capture receipt; no archive is overwritten on reruns.
   writeFileSync(
     pending,
-    `Verified ${seed.project}: ${seed.config.files.length} files, ${seed.secrets.length} encrypted secrets, ${seed.hostnames.length} hostnames.\n`,
+    `Verified ${seed.project}: ${seed.config.files.length} files, ${seed.secrets.length} encrypted secrets, ${seed.hostnames.length} hostnames, ${seed.fetchRoutes.length} fetch routes.\n`,
     { mode: 0o600 },
   );
   console.log(
-    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets, hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"} → ${file}`,
+    `Captured ${seed.project}: ${seed.config.files.length} config files, ${seed.secrets.length} encrypted secrets, hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"}, fetch routes [${fetchRouteNames(seed)}] → ${file}`,
   );
+  if (fetchRoutes.lent.length)
+    console.log(
+      `Skipped fetch routes to a lent stub [${fetchRoutes.lent.join(", ")}]: each ends with its lend, and a seed carries none. Run each \`iterate tunnel\` again after apply.`,
+    );
 }
+
+const fetchRouteNames = (seed: ProjectSeed) =>
+  seed.fetchRoutes.map((route) => route.fetchRouteName).join(", ");
 
 /** Local archive and encryption-key verification. Prints counts only, never material. */
 export async function check(options: { env: string; file: string }) {
@@ -216,7 +227,7 @@ export async function check(options: { env: string; file: string }) {
     context.keys,
   );
   console.log(
-    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members; hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"}.`,
+    `Verified ${seed.project}: Git tree ${seed.config.tree}; ${seed.config.files.length} files; ${seed.secrets.length} decryptable secrets; ${seed.organization.members.length} members; hostnames [${seed.hostnames.join(", ")}], primary ${seed.primaryHostname || "none"}; fetch routes [${fetchRouteNames(seed)}].`,
   );
 }
 
@@ -401,6 +412,10 @@ export async function apply(options: {
       throw new Error("Config publication did not catch up to the restored commit.");
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  // Before the hostnames: a hostname a route matches (`url: { hostname }`) takes that route from
+  // its first request, never the config worker's fetch.
+  for (const { fetchRouteName, set } of await restoreFetchRoutes(root, seed.fetchRoutes))
+    console.log(`Fetch route ${fetchRouteName}: ${set ? "set again" : "already set"}.`);
   // A custom hostname is a Cloudflare for SaaS custom hostname on the capturing deployment's zone:
   // it is restored onto that deployment only (a recreation keeps its base URL).
   const hostnames = await restoreHostnames(root, restorableHostnames(seed, context.env.baseUrl));
@@ -428,7 +443,7 @@ export async function apply(options: {
       throw new Error(`Membership readback failed for ${member.email}.`);
   }
   console.log(
-    `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships, ${hostnames.length} hostnames, in its organization. Commit ${committed.commitOid}.`,
+    `Restored ${seed.project} (${seed.source.projectId}) into ${organization}: exact Git tree ${seed.config.tree}, ${secrets.length} verified secrets, ${members.length} verified memberships, ${hostnames.length} hostnames, ${seed.fetchRoutes.length} fetch routes, in its organization. Commit ${committed.commitOid}.`,
   );
 }
 
