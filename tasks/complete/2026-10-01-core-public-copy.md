@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
@@ -10,10 +10,9 @@ The payoff of the core pre-work. `core/` builds from a clone of itself (#3486, #
 Copybara, as the experiment (#3434, iterate/os0929) proved; `packages/` and the project templates
 in `configs/` go to a public `iterate/packages` the same way. Nothing flows back.
 
-Status: implemented; waiting on CI, then the first copies after merge. iterate/core (renamed from
-the iterate/os made earlier the same day) and iterate/packages exist, public and empty; core's check
-passes locally; the App mints a write token for both. Left: merge, and the first deploy's copy job
-seeding them.
+Status: done, pending the first copies. Both copies, their checks, the PR check and the
+self-host recipe are in, and CI is green. What no PR can exercise is the first push and the
+seeding of the empty repos, on the first Deploy OS run after the merge.
 
 ## Decisions
 
@@ -60,7 +59,8 @@ differences for the real thing, my calls where Misha didn't say:
 - [x] Deploy OS's copy job; Preview OS's folder-only check when the copy's inputs change _(its own workflow, `.depot/workflows/copybara.yml`, path-filtered, off the required checks)_
 - [x] create `iterate/core` and `iterate/packages` (public, empty) _(2026-10-01; iterate/os renamed)_
 - [x] the self-host recipe clones iterate/core and bakes templates from iterate/packages#main
-- [ ] typecheck, lint, knip, format, tests; CI green; after merge, the first copy and its checks
+- [x] typecheck, lint, knip, format, tests; CI green _(b091258)_
+- [ ] after merge: the first Deploy OS copy job seeds iterate/core and iterate/packages, and its checks pass
 
 ## Out of scope
 

@@ -1,5 +1,6 @@
-# THE ONE-WAY PUBLIC COPIES (tasks/core-public-copy.md): after every production deploy,
-# scripts/ci/copybara.ts copies the commits up to the deployed one. Nothing flows back.
+# THE ONE-WAY PUBLIC COPIES (tasks/complete/2026-10-01-core-public-copy.md): after every
+# production deploy, scripts/ci/copybara.ts copies the commits up to the deployed one. Nothing
+# flows back.
 #
 #   core       iterate/core: core/, and the root files it needs to install and build
 #   packages   iterate/packages: packages/ and the project templates in configs/

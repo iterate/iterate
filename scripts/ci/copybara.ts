@@ -1,5 +1,5 @@
 // THE ONE-WAY PUBLIC COPIES: core/ to iterate/core, and packages/ and configs/ to iterate/packages
-// (copybara/copy.bara.sky, tasks/core-public-copy.md).
+// (copybara/copy.bara.sky, tasks/complete/2026-10-01-core-public-copy.md).
 //
 //   node scripts/ci/copybara.ts sync --sha <deployed sha>
 //   node scripts/ci/copybara.ts check --sha <commit>

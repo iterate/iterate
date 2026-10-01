@@ -1,8 +1,8 @@
-# THE PUBLIC COPY, BEFORE IT MERGES (scripts/ci/copybara.ts check, tasks/core-public-copy.md): a pull
-# request that changes what iterate/core holds writes the copy it would make into a folder, pushing
-# nothing, and runs the self-host recipe against it (install from the copy's own lockfile, build,
-# dry-run deploy). So a change that would break the public copy's build is red here, before Deploy
-# OS copies it after the merge.
+# THE PUBLIC COPY, BEFORE IT MERGES (scripts/ci/copybara.ts check,
+# tasks/complete/2026-10-01-core-public-copy.md): a pull request that changes what iterate/core
+# holds writes the copy it would make into a folder, pushing nothing, and runs the self-host recipe
+# against it (install from the copy's own lockfile, build, dry-run deploy). So a change that would
+# break the public copy's build is red here, before Deploy OS copies it after the merge.
 #
 # Its own workflow, off the required checks: Copybara fetches this commit from GitHub, and the path
 # filter runs it only when the copy's files change.
