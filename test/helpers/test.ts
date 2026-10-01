@@ -51,10 +51,10 @@ export const test = base.extend<{
     /** A fresh person with a fresh project, signed in without driving the UI; `itx` is that
      *  project as the operator. With `app` (a client app's URL, usually the project's `baseURL`),
      *  also signed in to that app and on its page for the project; uncaught page errors then fail
-     *  the spec. */
+     *  the spec. `preset` names the template it starts from by its dash label (Default if none). */
     createFixture: (
       slugPrefix: string,
-      options?: { app?: string },
+      options?: { app?: string; preset?: string },
     ) => Promise<Awaited<ReturnType<typeof createProjectFixture>>>;
     /** A browser signed in as a fresh person with no project, without driving the sign-in page. */
     createSession: (slugPrefix: string) => ReturnType<typeof createSessionFixture>;

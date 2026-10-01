@@ -98,7 +98,7 @@ const FILES_OF_SEEING_CONFIG = {
 export default class extends WorkerEntrypoint { files() { return ${JSON.stringify(SEEING_CONFIG)}; } }`,
 };
 
-/** The default template's homepage (configs/default/worker.ts): the slug from the root's whoami. */
+/** The default template's homepage (core/configs/default/worker.ts): the slug from the root's whoami. */
 const WHOAMI_HOMEPAGE = {
   "package.json": '{"main":"worker.js"}',
   "worker.js": /* js */ `

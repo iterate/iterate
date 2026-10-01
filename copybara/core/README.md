@@ -1,8 +1,8 @@
 # iterate/core
 
-The platform behind [iterate](https://iterate.com): the Cloudflare Worker that serves `os.iterate.com` (`core/os`), and the `iterate` package (`core/lib`), which is the SDK that projects build on and the `iterate` CLI.
+The platform behind [iterate](https://iterate.com): the Cloudflare Worker that serves `os.iterate.com` (`core/os`), the `iterate` package (`core/lib`), which is the SDK that projects build on, the agents app and the `iterate` CLI, and the project templates every build offers (`core/configs`), which are also the plainest examples of configuring a project.
 
-The packages built on it, and the project templates, are in [iterate/packages](https://github.com/iterate/packages).
+The packages built on it, and the templates that use them, are in [iterate/packages](https://github.com/iterate/packages).
 
 To run your own, give your coding agent [`core/os/public/setup-prompt.md`](core/os/public/setup-prompt.md) ([self-hosting](core/os/SELF-HOSTING.md)).
 

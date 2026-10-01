@@ -1,9 +1,9 @@
 // Prepare source consumed by the Worker build: the platform packages loaded workers import and the
-// config templates it offers, which are this step's input (`--template`, or `build({ templates })`
-// from iterate's deploy tooling). Vite builds the Worker and Start client after this step; Vitest
-// runs that built Worker.
+// config templates it offers: core's own (core/configs), and any others this step is given
+// (`--template`, or `build({ templates })` from iterate's deploy tooling). Vite builds the Worker
+// and Start client after this step; Vitest runs that built Worker.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { build as esbuild } from "esbuild";
@@ -34,6 +34,11 @@ const PLATFORM_ENTRIES = [
   "iterate/lib",
   "iterate/expression",
   "iterate/principal",
+  "iterate/agents",
+  "iterate/agents/install",
+  "iterate/agents/contract",
+  "iterate/agents/processor",
+  "iterate/agents/codemode-format",
   "zod",
 ] as const;
 
@@ -108,20 +113,24 @@ async function platformModules() {
  *  files a creation naming it is seeded with, so seeding it asks GitHub nothing. */
 export type ConfigTemplate = { reference: string; files: Array<{ path: string; content: string }> };
 
-/** Everything above, written, with `templates` as the presets a creation may name. A creation that
- *  names none gets core's minimal config (src/project/minimal-config.ts), whatever is passed. */
+/** Everything above, written. The presets a creation may name are core's own configs, then
+ *  `templates`; a creation that names none gets core/configs/minimal. */
 export async function build(options: { templates: ConfigTemplate[] }) {
   mkdirSync(path.join(root, "src/generated"), { recursive: true });
-  const templates = options.templates.map(({ reference }) => ({
-    label: labelOf(reference),
-    reference,
-  }));
+  const presets = [...coreConfigTemplates(), ...options.templates];
+  const templates = presets.map(({ reference }) => ({ label: labelOf(reference), reference }));
   const templateFiles = Object.fromEntries(
-    options.templates.map(({ reference, files }) => [reference, files]),
+    presets.map(({ reference, files }) => [reference, files]),
   );
+  const minimalConfigFiles = trackedFiles(path.join(coreConfigs, "minimal"));
   writeFileSync(
     path.join(root, "src/generated/config-templates.js"),
-    `export const templates = ${JSON.stringify(templates)};\nexport const templateFiles = ${JSON.stringify(templateFiles)};\n`,
+    [
+      `export const templates = ${JSON.stringify(templates)};`,
+      `export const templateFiles = ${JSON.stringify(templateFiles)};`,
+      `export const minimalConfigFiles = ${JSON.stringify(minimalConfigFiles)};`,
+      "",
+    ].join("\n"),
   );
 
   writeFileSync(
@@ -130,7 +139,48 @@ export async function build(options: { templates: ConfigTemplate[] }) {
   );
 }
 
-/** A template's name in the dash: its folder (`configs/heartbeat` ⇒ `Heartbeat`), else its repo. */
+const coreConfigs = path.resolve(root, "../configs");
+
+/**
+ * Core's own configs (core/configs/<name>), each under its GitHub reference at this checkout's
+ * commit, in the repository the checkout's `origin` names: iterate/iterate in iterate's own
+ * checkouts, iterate/core in a self-host's clone of the copy, which keeps the same paths. Either
+ * way the reference resolves on GitHub, so another deployment can create from it too.
+ */
+function coreConfigTemplates(): ConfigTemplate[] {
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  const origin = git("remote", "get-url", "origin");
+  const repository = /github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(origin);
+  if (!repository)
+    throw new Error(
+      `core's configs are offered under a GitHub reference, so this checkout's origin must be a github.com repository, not ${origin}`,
+    );
+  const [, owner, repo] = repository;
+  const commit = git("rev-parse", "HEAD");
+  return readdirSync(coreConfigs, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      reference: formatConfigRepoTemplateReference({
+        owner: owner!,
+        repo: repo!,
+        ref: commit,
+        path: `core/configs/${entry.name}`,
+      }),
+      files: trackedFiles(path.join(coreConfigs, entry.name)),
+    }));
+}
+
+/** A folder's files as git tracks them: not the node_modules/ an `npm install` for a local `tsc`
+ *  leaves there. */
+function trackedFiles(folder: string) {
+  return execFileSync("git", ["ls-files", "-z"], { cwd: folder, encoding: "utf8" })
+    .split("\0")
+    .filter(Boolean)
+    .map((file) => ({ path: file, content: readFileSync(path.join(folder, file), "utf8") }));
+}
+
+/** A template's name in the dash: its folder (`core/configs/heartbeat` ⇒ `Heartbeat`), else its repo. */
 function labelOf(reference: string) {
   const { repo, path: folder } = parseConfigRepoTemplateReference(reference);
   const name = folder?.split("/").at(-1) || repo;
@@ -168,14 +218,9 @@ export async function templatesFromArgs(args: string[]) {
         throw new Error(
           `--template ${reference}: read from --template-root, its ref must be a commit`,
         );
-      const folder = path.resolve(checkout, parsed.path || ".");
-      const tracked = execFileSync("git", ["ls-files", "-z"], { cwd: folder, encoding: "utf8" });
       return {
         reference: formatConfigRepoTemplateReference(parsed),
-        files: tracked
-          .split("\0")
-          .filter(Boolean)
-          .map((file) => ({ path: file, content: readFileSync(path.join(folder, file), "utf8") })),
+        files: trackedFiles(path.resolve(checkout, parsed.path || ".")),
       };
     }),
   );

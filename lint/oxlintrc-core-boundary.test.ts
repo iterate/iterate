@@ -25,7 +25,7 @@ test("nothing in core/ imports outside core/ but npm packages", () => {
     },
     {
       path: "core/os/src/template.test.ts",
-      source: 'import { x } from "../../../configs/default/agents.ts";',
+      source: 'import { x } from "../../../configs/voice/voice.ts";',
     },
     {
       path: "core/os/src/sdk.ts",
@@ -61,7 +61,7 @@ test("nothing in core/ imports outside core/ but npm packages", () => {
     "packages/shared/src/x.ts",
     "apps/dash/src/x.ts",
     "test/helpers/x.ts",
-    "configs/default/agents.ts",
+    "configs/voice/voice.ts",
     "core/lib/src/lib.ts",
     "core/os/src/thing.ts",
   ])

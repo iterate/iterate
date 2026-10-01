@@ -124,10 +124,12 @@ export async function check(options: {
     const folder = join(work, "core");
     await writeToFolder("core", options.sha, folder);
     // the folder as a fresh clone has it: every file committed, so the recipe's `git status` check
-    // means what it does there
+    // means what it does there, and iterate/core as its origin, which the build names core's
+    // configs by (core/os/scripts/build.ts)
     const commit = ["-c", "user.name=copybara", "-c", "user.email=copybara@localhost"];
     for (const args of [
       ["init", "--quiet"],
+      ["remote", "add", "origin", urlOf("core")],
       ["add", "--all"],
       [...commit, "commit", "--quiet", "-m", "copy"],
     ])

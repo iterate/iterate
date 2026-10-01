@@ -174,7 +174,7 @@ options), and nothing is spent.
   `test/vitest/agents/voice-agent.e2e.test.ts` (a voice call's delegation, answered by the agent),
   `test/vitest/os/ai-root-shadow-and-fable.e2e.test.ts` and the pin of a Cloudflare streaming fault,
   `test/vitest/agents/ai-stream-hung-request.e2e.test.ts`, run only with `E2E_REAL_MODELS=1`, which only
-  `os-real-model.yml` sets, once a day and on main pushes to `packages/agents/**`. The soak strips
+  `os-real-model.yml` sets, once a day and on main pushes to `core/lib/src/agents/**`. The soak strips
   it. A run costs about $0.06.
 - **When the cap is spent anyway.** A real-model row fails at once, naming the cap and the
   gateway's message (`answeredLog` in `test/vitest/agents/fixtures.ts`): exhaustion is not a flake. The

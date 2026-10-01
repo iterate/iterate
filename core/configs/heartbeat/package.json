@@ -1,0 +1,11 @@
+{
+  "name": "@iterate-com/config-heartbeat",
+  "private": true,
+  "type": "module",
+  "main": "worker.ts",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260925.1",
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main",
+    "typescript": "^7.0.2"
+  }
+}

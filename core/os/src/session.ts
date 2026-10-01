@@ -1019,8 +1019,8 @@ class ProjectCollectionRpcTarget extends RpcTarget {
     );
   }
 
-  /** The config repo templates this deployment was built with (scripts/build.ts `--template`), which
-   *  a creation may name; naming none creates core's minimal config (project/minimal-config.ts). */
+  /** The config repo templates this deployment was built with (scripts/build.ts: core/configs, and
+   *  any `--template`), which a creation may name; naming none creates core/configs/minimal. */
   async templates() {
     return templates;
   }

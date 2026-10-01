@@ -64,7 +64,7 @@ export type ResolveOptions = {
 
 /** Where an entry is looked for when package.json names no `main`, in order. The platform, its
  *  templates and its installers always write `main`; a source that names none still loads through
- *  this list: a config repo seeded without `main`, and packages/agents' AI transport source.
+ *  this list: a config repo seeded without `main`, and iterate/agents' AI transport source.
  *  Remove it once no such source remains; the module-resolution.test.ts rows that pin it then
  *  become refusals. */
 const ENTRY_FILES = ["worker.ts", "worker.js", "index.ts", "index.js"];
@@ -485,7 +485,7 @@ async function resolveFromEsm(
 
   /** Load `href` once, under `name`. ONE MODULE PER URL: wanted again under another name — a
    *  requested subpath's entry that the package's own modules import by their name for it too
-   *  (the probe of a config whose `agents.ts` imports `@iterate-com/agents` and whose `worker.ts`
+   *  (the probe of a config whose `voice.ts` imports `@iterate-com/voice` and whose `worker.ts`
    *  imports its `/install`) — that name re-exports it (`aliasModule`), never a second copy, whose
    *  classes would be other classes. */
   const load = (href: string, name: string): void => {

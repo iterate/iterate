@@ -11,7 +11,7 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "c
 import { RpcTarget } from "capnweb";
 import { expect, test, vi } from "vitest";
 import type { StreamEvent } from "iterate/stream/processor";
-import { installAgents } from "@iterate-com/agents/install";
+import { installAgents } from "iterate/agents/install";
 import {
   adminCredentials,
   openSession,

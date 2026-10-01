@@ -20,7 +20,7 @@ agent wrote a comment. The old apps/docs had the same shape (Claude Code over MC
 brief per agent) and its lesson is that the brief is what makes it work.
 
 Not in this step: an `@agent` in a comment waking a project agent (step 2, the config's
-`processEvent`, as email reaches agents in configs/default/worker.ts), and agents showing as present
+`processEvent`, as email reaches agents in core/configs/default/worker.ts), and agents showing as present
 (step 3).
 
 ## The plan

@@ -13,7 +13,7 @@ const head = "h".repeat(40);
 test.for([
   {
     name: "a change to a published package pins the source commit",
-    changedPaths: ["core/os/src/worker.ts", "packages/agents/src/install.ts"],
+    changedPaths: ["core/os/src/worker.ts", "core/lib/src/agents/install.ts"],
     expected: head,
   },
   {
@@ -23,7 +23,7 @@ test.for([
   },
   {
     name: "no change to a published package pins the merge base, which main published",
-    changedPaths: ["core/os/src/worker.ts", "configs/default/worker.ts"],
+    changedPaths: ["core/os/src/worker.ts", "configs/voice/worker.ts"],
     expected: base,
   },
 ])("$name", ({ changedPaths, expected }) => {

@@ -34,7 +34,7 @@ export function pkgPrNewVersionOf(name: string, version: string) {
  *  name, and pkg.pr.new's `x-commit-key` echoes it rather than naming the commit. */
 export const isPkgPrNewCommit = (ref: string) => /^[0-9a-f]{40}$/.test(ref);
 
-/** A build of one of this repository's packages (`iterate`, `@iterate-com/agents`, …): the
+/** A build of one of this repository's packages (`iterate`, `@iterate-com/voice`, …): the
  *  pkg.pr.new workflow (.github/workflows/pkg-pr-new.yml) publishes every package together, for
  *  every main commit and for the head of a PR that changes one. */
 export const pkgPrNewVersion = (name: string, ref: string) =>

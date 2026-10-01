@@ -16,7 +16,6 @@
     "@cloudflare/vitest-plugin": "^1.3.2",
     "@cloudflare/workers-oauth-provider": "catalog:",
     "@cloudflare/workers-types": "catalog:",
-    "@iterate-com/agents": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/voice": "workspace:*",
     "@octokit/rest": "22.0.1",

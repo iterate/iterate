@@ -12,7 +12,8 @@ import { PREVIEW_AND_DEV_ACCOUNT_ID } from "../envs.ts";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
 // the commands that start a server build it: they get configs/* as this checkout has them (build.ts
-// `--template-root`), a local creation's agents and voice pinned to main's newest build as it seeds
+// `--template-root`; core's own come with every build), a local creation's voice pinned to main's
+// newest build as it seeds
 const serves = !args[0] || args[0].startsWith("-") || ["start", "restart"].includes(args[0]);
 const commit = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: repoRoot,

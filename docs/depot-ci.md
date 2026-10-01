@@ -52,7 +52,7 @@ Workflow-run and job-attempt history goes to PostHog from an hourly sync
 Two GitHub Actions workflows are left, both for what Depot cannot do:
 
 - `.github/workflows/pkg-pr-new.yml` is not CI; it publishes the `iterate` SDK, the
-  `@iterate-com/petshop-sdk`, `@iterate-com/agents`, `@iterate-com/voice`,
+  `@iterate-com/petshop-sdk`, `@iterate-com/voice`,
   `@iterate-com/github-sync` and `@iterate-com/ai-linter` packages to
   [pkg.pr.new](https://pkg.pr.new) for every `main` push, and for a PR that changes their inputs
   (their folders, `core/lib` and `packages/*`, `packages/shared`, the root manifests and lockfile, or the workflow

@@ -8,8 +8,8 @@
  * answers go back to the live model to speak.
  */
 // registers `itx.agents` on InstalledAppRoots
-import type {} from "@iterate-com/agents";
-import { AgentContract } from "@iterate-com/agents/contract";
+import type {} from "iterate/agents";
+import { AgentContract } from "iterate/agents/contract";
 import type { IterateContextApiWith } from "iterate/api";
 import { bytesToBase64 } from "iterate/lib";
 import { StreamProcessorDurableObject } from "iterate/sdk";

@@ -172,10 +172,10 @@ working until then. D1 Time Travel restores a database to any minute of the last
 repository; a commit to `/repos/config` publishes its `main` (`src/project/publication.ts`). A repo can remember
 a git remote as its origin and `pull()` or `push()` it, fast-forward only unless `force`, keeping one
 history with the same commits on both ([a config repo on GitHub](docs/project-creation.md#a-config-repo-on-github)). A project
-created with no template gets a homepage alone (`src/project/minimal-config.ts`); the presets a
-deployment offers are its build's input (`pnpm build --template <github reference>`), and iterate's
-own (`configs/`, whose `default` installs the userspace agents and voice apps from npm) come from
-its deploy tooling. See [project creation](docs/project-creation.md).
+created with no template gets a homepage alone (`core/configs/minimal`); the presets a deployment
+offers are core's configs (`core/configs/`, whose `default` installs the agents app from
+`iterate/agents`) and any others its build is given (`pnpm build --template <github reference>`),
+such as iterate's `configs/voice`. See [project creation](docs/project-creation.md).
 
 A context hosts Durable Object classes as facets (`itx.facets.get(name, { source, className })`, or
 a processor's row). A caller reaches a facet by itx expression only through the methods its class
