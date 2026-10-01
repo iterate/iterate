@@ -14,14 +14,24 @@
 # `GitOrigin-RevId: <origin sha>` trailer. A run copies whatever came after the newest trailer, so a
 # missed run is caught up by the next one.
 
-# The copy's message: the title, its `(#123)` pointing at the iterate/iterate PR, then only the
-# paragraphs a PR body wraps in `<!-- copybara -->` … `<!-- /copybara -->`, each marker on a line of
-# its own (one mentioned mid-sentence is text). A section with no closing marker is left out. A
-# squash merge's message is the PR's title and body, and HTML comments survive into it, as the
-# loc-report and os-preview sections do.
+# Set by scripts/ci/copybara.ts in the copy of this file each run reads: the repository the copies
+# are made from (this repository on GitHub for a sync, this checkout for a pull request's check), so
+# nothing here names iterate/iterate or iterate/private, and the repository whose pull requests a
+# copy commit's `(#123)` names, empty when that repository is private.
+ORIGIN = "set by scripts/ci/copybara.ts"
+PULL_REQUESTS = "set by scripts/ci/copybara.ts"
+
+# The copy's message: the title, its `(#123)` naming the PR in PULL_REQUESTS or dropped (a private
+# repository's PRs are no one else's to open, and iterate/private's numbers would name unrelated PRs
+# of the iterate/iterate archive), then only the paragraphs a PR body wraps in `<!-- copybara -->` …
+# `<!-- /copybara -->`, each marker on a line of its own (one mentioned mid-sentence is text). A
+# section with no closing marker is left out. A squash merge's message is the PR's title and body,
+# and HTML comments survive into it, as the loc-report and os-preview sections do.
 def copy_message(ctx):
     lines = ctx.message.split("\n")
-    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(lines[0]).replace_all(" (iterate/iterate#$1)")
+    title = re2.compile(" \\(#([0-9]+)\\)$").matcher(lines[0]).replace_all(
+        " (%s#$1)" % PULL_REQUESTS if PULL_REQUESTS else "",
+    )
     sections = []
     section = None
     for line in lines[1:]:
@@ -39,10 +49,10 @@ def copy_workflow(name, files):
     core.workflow(
         name = name,
         origin = git.origin(
-            url = "https://github.com/iterate/iterate",
+            url = ORIGIN,
             # the default ref; scripts/ci/copybara.ts always names the commit to copy up to
             ref = "main",
-            # fetch only what origin_files matches: iterate/iterate is 1.25 GB
+            # fetch only what origin_files matches: the whole repository is over a gigabyte
             partial_fetch = True,
         ),
         origin_files = glob(files + ["LICENSE", "copybara/%s/**" % name]),
