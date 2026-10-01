@@ -6,9 +6,9 @@ packages:
 
 catalog:
   '@base-ui/react': ^1.8.0
-  '@cloudflare/vite-plugin': 1.62.1
+  '@cloudflare/vite-plugin': 1.62.4
   '@cloudflare/workers-oauth-provider': 1.0.0
-  '@cloudflare/workers-types': ^5.20260929.1
+  '@cloudflare/workers-types': ^5.20261001.1
   '@modelcontextprotocol/server': 2.1.0
   '@tailwindcss/vite': ^4.3.3
   '@tanstack/react-router': 1.170.39
@@ -38,7 +38,7 @@ catalog:
   typescript: ^7.0.2
   vite: ^8.3.0
   vitest: ^4.1.11
-  wrangler: 4.143.1
+  wrangler: 4.146.0
   ws: 8.21.3
   zod: 4.6.5
 
