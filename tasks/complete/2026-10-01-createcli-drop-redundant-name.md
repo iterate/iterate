@@ -1,5 +1,5 @@
 ---
-status: ready
+status: done
 size: small
 ---
 
