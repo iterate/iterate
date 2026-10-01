@@ -14,11 +14,11 @@ it needs.
 This should be exceptional and rare; most things belong on one side of the line.
 
 No candidate yet. The first one, core's minimal config as strings, went when the configs moved into
-core (tasks/core-configs.md): the build bakes `core/configs/minimal` itself.
+core (tasks/complete/2026-10-01-core-configs.md): the build bakes `core/configs/minimal` itself.
 
 ## Checklist
 
 - [ ] eslint-plugin-codegen as an oxlint JS plugin (`.oxlintrc.json` `jsPlugins`), or the codegen CLI
       in CI if the plugin won't run under oxlint
-- [ ] ~~`minimal-config.ts`'s two files generated from `configs/minimal/{package.json,worker.ts}`~~ _gone: the build bakes `core/configs/minimal` (tasks/core-configs.md)_
+- [ ] ~~`minimal-config.ts`'s two files generated from `configs/minimal/{package.json,worker.ts}`~~ _gone: the build bakes `core/configs/minimal` (tasks/complete/2026-10-01-core-configs.md)_
 - [ ] a line in `core/AGENTS.md`: the pattern, and that it is the exception

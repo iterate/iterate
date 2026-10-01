@@ -1,5 +1,5 @@
 ---
-status: review
+status: done
 size: large
 base: main
 ---
@@ -11,11 +11,10 @@ From Misha and Jonas's Tuple call (2026-10-01): configs that depend only on core
 outside core. It follows #3493 (the public copies, merged), which predates the call and baked
 `configs/default` and `configs/heartbeat` from iterate/packages with `--template`.
 
-Status: implemented, rebased on main after #3493 merged, checked locally; no PR yet (Misha: "no PR"). Agents is `iterate/agents`,
-core's configs live in `core/configs` and every build bakes them, voice is the `configs/voice`
-template. Typecheck, lint, knip, format, the touched packages' unit tests, the Workers rows and the
-agents e2e rows pass locally. Not run: CI, a preview, and the deployed-only voice rows and the
-voice browser spec, which now pick the Voice preset.
+Status: done (#3496). Agents is `iterate/agents`, core's configs live in `core/configs` and every
+build bakes them, voice is the `configs/voice` template, and the setup prompt adds voice to a
+user's existing config. CI, the preview's e2e rows (the voice rows included) and the browser specs
+are green.
 
 ## Decisions
 
@@ -77,7 +76,8 @@ voice browser spec, which now pick the Voice preset.
 - [x] `tasks/core-codegen-sync.md`: its first candidate is gone
 - [x] typecheck, lint, knip, format, unit tests _(locally; scripts/'s toolchain and tracing rows
       fail on macOS's bash 3.2 before and after)_
-- [ ] CI green, and a preview's e2e rows, the deployed-only voice rows included
+- [x] CI green, and a preview's e2e rows, the deployed-only voice rows included _(session.e2e
+      needed the minimal seed's four files)_
 
 ## Out of scope
 
