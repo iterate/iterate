@@ -44,7 +44,7 @@ const SpeakerFrame = z.object({
 });
 
 /** The call's facts, as much of each payload as a caller reads (voice-agent.ts's contract and
- *  packages/agents' write them; their other fields pass through). */
+ *  iterate/agents' write them; their other fields pass through). */
 const VoiceCallFact = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("events.iterate.com/voice-agent/call-started"),
@@ -66,7 +66,7 @@ const VoiceCallFact = z.discriminatedUnion("type", [
     type: z.literal("events.iterate.com/voice-agent/answer-transcribed"),
     payload: z.looseObject({ text: z.string() }),
   }),
-  // What the relay hands the call's agent, and the agent's replies (packages/agents' contract).
+  // What the relay hands the call's agent, and the agent's replies (iterate/agents' contract).
   z.object({
     type: z.literal("events.iterate.com/agent/context-added"),
     payload: z.looseObject({

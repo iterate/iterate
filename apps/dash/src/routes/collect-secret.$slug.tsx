@@ -5,7 +5,7 @@
 // images, its links opening in a new tab with their host beside them.
 
 // registers `itx.agents` on InstalledAppRoots
-import type {} from "@iterate-com/agents";
+import type {} from "iterate/agents";
 import {
   lazy,
   Suspense,

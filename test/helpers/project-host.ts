@@ -132,7 +132,7 @@ const projectHostUrl = (scheme: "http" | "ws", host: string, path: string): stri
  *  session (the project lands in the deployment's own org) or as `as` (a user's session: their org,
  *  with them a member) — so its host serves, and return its minted id: the DO is addressed by the
  *  id (`openItx(id)`), the host by the slug (`site--<slug>.<base>`). Seeded from `configRepoTemplate`
- *  (`defaultPreset()` for the agents and voice apps), else core's minimal config. Idempotent;
+ *  (`preset("Default")` for the agents app), else core's minimal config. Idempotent;
  *  identical against the local and the deployed worker. */
 export async function registerProject(
   slug: string,
@@ -145,16 +145,16 @@ export async function registerProject(
   return (await itx.whoami()).projectId;
 }
 
-/** The Default preset among the templates the platform under test was built with
- *  (scripts/os/config-templates.ts): a project on it runs the agents and voice apps, as one a person
- *  creates in the dash or through an app's sign-in does. */
-export async function defaultPreset(): Promise<string> {
+/** A preset among the templates the platform under test was built with, by its label in the dash:
+ *  Default (core/configs/default, the agents app) is what a person creates in the dash or through
+ *  an app's sign-in; Voice (configs/voice) adds the voice app. */
+export async function preset(label: "Default" | "Voice"): Promise<string> {
   const presets: { label: string; reference: string }[] = await session()
     .authenticate(adminCredentials())
     .projects.templates();
-  const preset = presets.find(({ label }) => label === "Default");
-  if (!preset) throw new Error("the platform under test offers no Default preset (pnpm os:build)");
-  return preset.reference;
+  const found = presets.find((preset) => preset.label === label);
+  if (!found) throw new Error(`the platform under test offers no ${label} preset (pnpm os:build)`);
+  return found.reference;
 }
 
 /** A fresh project slug — a DNS label, the one the project's hosts carry (`freshCtx` names carry

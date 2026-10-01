@@ -8,10 +8,10 @@ The project processor creates `/repos/config`, then seeds it only when `main` is
 may be a public GitHub repository or subdirectory. Its ref is resolved to a commit before the
 request is recorded, so recovery always uses the same source. A template's `package.json` names
 its main module in `"main"`. A creation that names none gets core's minimal config, a homepage
-and nothing else (`src/project/minimal-config.ts`). The presets a deployment offers are its build's
-input (`scripts/build.ts` `--template`), seeded without a GitHub request; iterate's are
-[configs](../../../configs/README.md), and its dash and the consent page start a person's project
-from the one whose folder is `default`.
+and nothing else ([`core/configs/minimal`](../../configs/minimal)). The presets a deployment offers
+are [core's configs](../../configs/README.md) and any others its build is given (`scripts/build.ts`
+`--template`), all seeded without a GitHub request; the dash and the consent page start a person's
+project from the one whose folder is `default`.
 
 Once the seed's publication has landed, admitted or refused (below), the processor points the
 project's ingress at its published config, `itx.config`, once, and emits `project/created`. Interrupted attempts reuse the repository and seed commit; existing repositories

@@ -350,16 +350,23 @@
       }
     },
     {
-      "files": ["core/lib/src/stream/contract.ts", "packages/agents/src/contract.ts"],
+      "files": ["core/lib/src/stream/contract.ts", "core/lib/src/agents/contract.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
           {
             "patterns": [
               {
-                "group": ["**", "!zod", "!iterate/stream/contract", "!iterate/stream/run"],
+                "group": [
+                  "**",
+                  "!zod",
+                  "!iterate/stream/contract",
+                  "!iterate/stream/run",
+                  "!../stream/contract.ts",
+                  "!../stream/run.ts"
+                ],
                 "allowTypeImports": true,
-                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through @iterate-com/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (core/lib/src/stream/contract.ts). Type-only imports are free."
+                "message": "A browser loads processor contracts (the Agents page reads an agent's events and state through iterate/agents/contract), so at runtime a contract imports only zod, `iterate/stream/contract` and `iterate/stream/run`, never the processor engine: `iterate/stream/processor` carries causes on node:async_hooks (core/lib/src/stream/contract.ts). Type-only imports are free."
               }
             ]
           }

@@ -2,7 +2,7 @@
 // `/integrations/email` (core/os src/email/contract.ts), inbound as `email/received` and each
 // `itx.email.send` as `email/sent`, both appended by the platform (core/os integrations/email.ts).
 // The first-party `email` facet there folds them into threads (core/os email/processor.ts); a config
-// repo reads its state and parses a message with this contract (configs/default/worker.ts).
+// repo reads its state and parses a message with this contract (core/configs/default/worker.ts).
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "./stream/processor.ts";
 

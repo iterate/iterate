@@ -1,6 +1,6 @@
 # iterate/packages
 
-The packages built on [iterate](https://iterate.com)'s platform ([iterate/core](https://github.com/iterate/core)) that anyone can install: the agents and voice apps, docs, GitHub sync and more, in `packages/`. Alongside them are the project templates that use them, in `configs/`. A self-hosted platform offers those templates by building with `--template "github:iterate/packages#main&path:configs/<name>"`.
+The packages built on [iterate](https://iterate.com)'s platform ([iterate/core](https://github.com/iterate/core)) that anyone can install: the voice app, docs, GitHub sync and more, in `packages/`. Alongside them are the project templates that use them, in `configs/`. A self-hosted platform offers those templates by building with `--template "github:iterate/packages#main&path:configs/<name>"`; core's own templates, which need no packages, are in iterate/core's `core/configs`.
 
 The rendered components in `packages/ui` are a [shadcn GitHub registry](https://ui.shadcn.com/docs/registry/github): in an app set up with `shadcn init` and a Base UI style such as `base-nova`, install a component as your app's own copy.
 

@@ -36,7 +36,7 @@ on:
     # this suite.
     paths:
       - .depot/workflows/os-real-model.yml
-      - packages/agents/**
+      - core/lib/src/agents/**
       - core/os/src/itx-ai.ts
       - test/vitest/agents/agents-default-model.e2e.test.ts
       - test/vitest/agents/ai-stream-hung-request.e2e.test.ts

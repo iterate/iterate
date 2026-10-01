@@ -29,7 +29,7 @@ test("installing Docs commits docs.ts, the pin beside the config's other depende
   const files: Record<string, string> = {
     "package.json": JSON.stringify({
       name: "config",
-      dependencies: { "@iterate-com/agents": "1.0.0" },
+      dependencies: { "@iterate-com/voice": "1.0.0" },
     }),
     "AGENTS.md": "# Config\n\nThe project's own words.\n",
   };
@@ -65,7 +65,7 @@ test("installing Docs commits docs.ts, the pin beside the config's other depende
             {
               name: "config",
               dependencies: {
-                "@iterate-com/agents": "1.0.0",
+                "@iterate-com/voice": "1.0.0",
                 "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@abc",
               },
             },

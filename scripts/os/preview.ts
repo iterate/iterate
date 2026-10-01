@@ -73,7 +73,7 @@ import {
   APPS,
   appSignInLink,
   assertFreshInstall,
-  configTemplateNames,
+  configTemplateFolders,
   foldPreviewSection,
   MAIN_ON_DEV,
   previewDeploymentName,
@@ -445,7 +445,7 @@ async function deployPreviewSteps(
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
   };
-  // what an app installs in a project (Docs' "Install Docs"), as core/os/scripts/build.ts pins the template's agents:
+  // what an app installs in a project (Docs' "Install Docs"), pinned as config-templates.ts pins the voice template's:
   // worked out before the builds, since in a shallow CI checkout it fetches history
   const packagesCommit = checkoutPublishedPackageCommit(REPO_ROOT, process.env.PREVIEW_HEAD_SHA);
   const steps = [
@@ -611,7 +611,7 @@ function signInLinks(preview: {
     templates: dash
       ? templateQuickLaunches({
           dashUrl: dash.url,
-          templates: configTemplateNames(REPO_ROOT),
+          templates: configTemplateFolders(REPO_ROOT),
           changedPaths: preview.changedPaths,
           // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
           headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),

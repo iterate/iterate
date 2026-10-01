@@ -3,7 +3,7 @@
 // `itx/run-settled`, identified by the request's offset) alike, into messages and activities (an
 // LLM step that wrote a script, the code step that ran it, grouped into rounds).
 import { z } from "zod";
-import { AgentContract } from "@iterate-com/agents/contract";
+import { AgentContract } from "iterate/agents/contract";
 import { RunRequested, RunSettled, type RunSettlement } from "iterate/stream/run";
 import { sliceText, type StreamText } from "./chunked-text.ts";
 import {

@@ -47,6 +47,11 @@
     "./oauth": "./src/client/oauth.ts",
     "./stream/run": "./src/stream/run.ts",
     "./email": "./src/email.ts",
+    "./agents": "./src/agents/index.ts",
+    "./agents/install": "./src/agents/install.ts",
+    "./agents/contract": "./src/agents/contract.ts",
+    "./agents/processor": "./src/agents/processor.ts",
+    "./agents/codemode-format": "./src/agents/codemode-format.ts",
     "./node": "./src/node.ts"
   },
   "publishConfig": {
@@ -149,6 +154,26 @@
         "types": "./dist/email.d.mts",
         "import": "./dist/email.mjs",
         "default": "./dist/email.mjs"
+      },
+      "./agents": {
+        "types": "./dist/agents.d.mts",
+        "import": "./dist/agents.mjs"
+      },
+      "./agents/install": {
+        "types": "./dist/agents/install.d.mts",
+        "import": "./dist/agents/install.mjs"
+      },
+      "./agents/contract": {
+        "types": "./dist/agents/contract.d.mts",
+        "import": "./dist/agents/contract.mjs"
+      },
+      "./agents/processor": {
+        "types": "./dist/agents/processor.d.mts",
+        "import": "./dist/agents/processor.mjs"
+      },
+      "./agents/codemode-format": {
+        "types": "./dist/agents/codemode-format.d.mts",
+        "import": "./dist/agents/codemode-format.mjs"
       },
       "./node": {
         "types": "./dist/node.d.mts",

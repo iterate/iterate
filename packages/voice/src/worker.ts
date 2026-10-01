@@ -13,7 +13,7 @@
  * config, the module this worker is (install.ts `voiceAgentFacetSpec`).
  */
 // registers `itx.agents` on InstalledAppRoots
-import type {} from "@iterate-com/agents";
+import type {} from "iterate/agents";
 import type { IterateContextApiWith } from "iterate/api";
 import { bytesToBase64 } from "iterate/lib";
 import { IterateConfigEntrypoint } from "iterate/sdk";

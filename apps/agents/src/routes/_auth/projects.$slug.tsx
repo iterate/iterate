@@ -1,6 +1,6 @@
 // registers `itx.agents` on InstalledAppRoots
-import type {} from "@iterate-com/agents";
-import type { IterateContextApi, IterateContextApiWith } from "iterate/api";
+import type {} from "iterate/agents";
+import type { IterateContextApiWith } from "iterate/api";
 import {
   createFileRoute,
   getRouteApi,
@@ -8,13 +8,11 @@ import {
   useRouter,
   useRouterState,
 } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CircleIcon } from "lucide-react";
 import { z } from "zod";
 import type { AuthenticatedApp } from "iterate/app";
 import { useFacetLiveState, useIterateContext } from "iterate/react";
-import { AppBuild } from "@iterate-com/ui/components/app-build";
 import { AppShell } from "@iterate-com/ui/components/app-shell";
 import {
   Breadcrumb,
@@ -29,7 +27,6 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@iterate-com/ui/components/ui/empty";
-import { SidebarGroup, SidebarGroupContent } from "@iterate-com/ui/components/ui/sidebar";
 import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/ui/tabs";
 import { cn } from "cn";
@@ -38,8 +35,6 @@ import {
   ContextViewState,
   RIGHT_EDGE_CLOSED,
 } from "@iterate-com/ui/components/context-view/context-view-search";
-import { agentsVersion, upgradeAgents } from "@iterate-com/agents/install";
-import { buildStanding } from "iterate/pkg-pr-new";
 import type { AgentUiLlmStep } from "../../lib/events/agent-ui-reducer.ts";
 import {
   Conversation,
@@ -66,7 +61,7 @@ import { useAgentSummaries } from "../../lib/use-agent-summaries.ts";
 type Project = Awaited<ReturnType<AuthenticatedApp["api"]["projects"]["get"]>>;
 type Context = Awaited<ReturnType<Project["cd"]>>;
 
-/** The project with its `itx.agents` root typed (@iterate-com/agents api.ts). The root is there
+/** The project with its `itx.agents` root typed (iterate/agents api.ts). The root is there
  *  only by the project's rewrite rule, so the session's project stub cannot name it; the page calls
  *  it only where the rule is known to be there: the loader after reading it, the sidebar's create
  *  only when the loader found it, the composer only beside an agent. */
@@ -77,12 +72,6 @@ const withAgents = (itx: Project) =>
  *  and, named — a wildcard never sweeps an ephemeral — the streamed chunk windows the feed folds
  *  into the answer being written. */
 const FEED_SUBSCRIPTION = ["*", "events.iterate.com/agent/llm-response-frame"];
-
-/** Where the project's agents build stands against main's newest (`buildStanding`), asked in the
- *  app's Worker: a page cannot read pkg.pr.new's headers. */
-const agentsBuild = createServerFn({ method: "GET" })
-  .inputValidator(z.string())
-  .handler(({ data }) => buildStanding("@iterate-com/agents", data));
 
 export const Route = createFileRoute("/_auth/projects/$slug")({
   // THE PAGE IS A LINK: the agent, the tab, the two trace inspectors — and the context view's every
@@ -109,21 +98,14 @@ export const Route = createFileRoute("/_auth/projects/$slug")({
         agents: [],
         agent: undefined,
         installed: false,
-        build: undefined,
       };
-    // the agents build the project runs, for the sidebar's upgrade: capnweb's stub erases the type
-    // of the `project` facet it reads, as it does every facet's (iterate/api `facets.get`)
-    const [agents, build] = await Promise.all([
-      withAgents(itx).agents.list(),
-      agentsVersion(itx as unknown as IterateContextApi),
-    ]);
+    const agents = await withAgents(itx).agents.list();
     return {
       projects,
       project,
       agents,
       agent: deps.agent || agents[0]?.path,
       installed: true,
-      build,
     };
   },
   component: AgentsPage,
@@ -146,46 +128,26 @@ function AgentsPage() {
       activeProjectId={project}
       projectHref={(item) => `/projects/${item.slug}`}
       nav={
-        <>
-          <AgentsNav
-            project={project}
-            slug={data.project.slug}
-            agents={data.agents}
-            summaries={summaries}
-            installed={data.installed}
-            agent={data.agent}
-            onCreate={async () => {
-              // An agent is its path; a new one is born at this moment's path.
-              const path = newWebAgentPath(new Date());
-              using itx = await api.projects.get(project);
-              await withAgents(itx).agents.create(path);
-              await router.invalidate();
-              await navigate({
-                to: "/projects/$slug",
-                params: { slug: data.project.slug },
-                search: { agent: path },
-              });
-            }}
-          />
-          {data.build ? (
-            <SidebarGroup className="mt-auto group-data-[collapsible=icon]:hidden">
-              <SidebarGroupContent className="px-2">
-                <AppBuild
-                  // one project's upgrade and its outcome, never shown on the next project's page
-                  key={project}
-                  app="Agents"
-                  installed={data.build}
-                  check={(installed) => agentsBuild({ data: installed })}
-                  upgrade={async (version) => {
-                    using itx = await api.projects.get(project);
-                    await upgradeAgents(itx, version);
-                    await router.invalidate({ sync: true });
-                  }}
-                />
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ) : null}
-        </>
+        <AgentsNav
+          project={project}
+          slug={data.project.slug}
+          agents={data.agents}
+          summaries={summaries}
+          installed={data.installed}
+          agent={data.agent}
+          onCreate={async () => {
+            // An agent is its path; a new one is born at this moment's path.
+            const path = newWebAgentPath(new Date());
+            using itx = await api.projects.get(project);
+            await withAgents(itx).agents.create(path);
+            await router.invalidate();
+            await navigate({
+              to: "/projects/$slug",
+              params: { slug: data.project.slug },
+              search: { agent: path },
+            });
+          }}
+        />
       }
       header={
         data.agent ? (
@@ -353,7 +315,7 @@ function useAgentInterrupt(args: {
 }
 
 /** The agent facet's live state, the fields the header reads
- *  (@iterate-com/agents contract.ts `stateSchema`): a pause, the one open request, the one
+ *  (iterate/agents contract.ts `stateSchema`): a pause, the one open request, the one
  *  pending trigger. A script the agent asked for is the
  *  CONTEXT's obligation, not in this state — the feed's running code step says so. */
 const AgentLive = z.object({

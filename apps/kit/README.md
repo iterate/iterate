@@ -31,8 +31,8 @@ Preparing checks the project's voice. The form asks for an OpenAI API key as soo
 picked project turns out to have none. It verifies voice health before minting a token with no
 expiry, scoped to the chosen project, under the same OAuth client that was authorized. Existing
 voice services, secrets and project websites are preserved. Voice is the npm package
-`@iterate-com/voice`, on the agents app `@iterate-com/agents`, and the project's config repo
-installs both itself (configs/default does): a project whose config installs no voice is
+`@iterate-com/voice`, on the agents app `iterate/agents`, and the project's config repo
+installs both itself (configs/voice does): a project whose config installs no voice is
 refused. The check is `ensureVoiceAgent` (`@iterate-com/voice/install`), shared with
 voice.iterate.com, which sets voice up without a device.
 

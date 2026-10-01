@@ -163,11 +163,11 @@ read secrets.
 - PR sign-in links: every hosted client (Dash, Agents, Notes, Docs, Admin,
   Voice, Kit) is deployed next to the platform in each per-commit deployment and wired
   to it, and the PR body's section carries `Sign in ↗` links: one per worker
-  (core/os's into the Dash's project), and with the Dash one per `configs`
-  template ("New project from template"), which lands in the Dash's New project
+  (core/os's into the Dash's project), and with the Dash one per template in
+  `core/configs` and `configs` ("New project from template"), which lands in the Dash's New project
   sheet with that template chosen (`/projects?new=1&template=<name>`). A
   template the PR changes is linked at the PR head instead
-  (`template=github:iterate/iterate#<head>&path:configs/<name>`, the
+  (`template=github:iterate/iterate#<head>&path:<folder>`, the
   custom field prefilled), so the project is born from the unmerged template.
   Each link is the app's own sign-in naming the PR's test person,
   `<app>/.auth/login?next=<page>&login_hint=pr<N>@preview.iterate.test&provider_hint=os.iterate.com`
@@ -203,7 +203,7 @@ read secrets.
 - Template-carrying projects: a project can be born from a config template
   still in flight on a PR. `projects.create({ project, configRepoTemplate })`
   takes a public GitHub reference in pnpm's Git dependency syntax, such as
-  `github:iterate/iterate#<branch-or-sha>&path:configs/<name>`. Dash's
+  `github:iterate/iterate#<branch-or-sha>&path:core/configs/<name>`. Dash's
   New project sheet has a custom GitHub template field for the same thing.
   The ref resolves to a commit before the request is recorded, so recovery
   always uses the same source (`core/os/docs/project-creation.md`). A template
