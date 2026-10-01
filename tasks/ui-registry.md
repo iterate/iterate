@@ -53,7 +53,7 @@ pnpm dlx shadcn@4.21.0 add @iterate/context-view   # writes src/components/conte
 
 - `packages/ui/registry.json` lists the items. `shadcn build -o r` writes `packages/ui/r/<item>.json`,
   which is committed. CI fails when `r/` is out of date.
-- **packages/ui is laid out like an app after `shadcn add`**, so `shadcn build` serves its files
+- **packages/ui is laid out like an app after `shadcn add`**, so `shadcn build` takes its files
   unchanged:
   - shadcn's vendored components move to `src/components/ui/`. That is shadcn's convention and
     core/os's, and the folder the CLI writes `registryDependencies` into. Ours stay in
@@ -95,7 +95,7 @@ item.
 
 The table is the intent; `registry.json` is the source of truth.
 
-Not served:
+Not in the registry:
 
 - `src/apps/*` (the Worker entry, router, document and head every TanStack Start app shares). It
   is app framework rather than a component, and it imports the private `@iterate-com/shared`.
@@ -118,7 +118,7 @@ Not served:
 
 - The `@iterate` namespace and `iterate` registry name: the user's phrasing, and free in
   shadcn's public index.
-- `posthog` is a served item rather than part of `iterate/react`, because that would give core a
+- `posthog` is a registry item rather than part of `iterate/react`, because that would give core a
   `posthog-js` dependency. `app-shell` and `route-defaults` need it.
 - `plainLeftClick` moves out of `app-shell-palette-entries.ts` into a `plain-left-click` lib item,
   because both `app-shell` and `context-view` use it. The alternative was to make `context-view`

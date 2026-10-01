@@ -11,7 +11,7 @@
 //
 // `build` throws where an app installing an item would get a file that imports something it does
 // not have: a relative import of another item's file (the app's copy of that item may live elsewhere,
-// or not exist), a `#/` import of a file no item serves, or a private `@iterate-com/*` package. A file
+// or not exist), a `#/` import of a file that is in no item, or a private `@iterate-com/*` package. A file
 // in src/components (shadcn's ui/ aside) or src/lib that no item lists throws too.
 //
 // `round-trip` (.depot/workflows/shadcn-drift.yml; it needs shadcn's registry for `button` and the
@@ -76,7 +76,7 @@ export function withDependencies(registry: Registry, source: Map<string, string>
       itemOf.set(path, item.name);
     }
   for (const path of source.keys())
-    if (isServed(path) && !itemOf.has(path))
+    if (belongsInRegistry(path) && !itemOf.has(path))
       problems.push(`${path} is in no item: add it to one in registry.json`);
 
   const items = registry.items.map((item) => {
@@ -113,8 +113,8 @@ export function withDependencies(registry: Registry, source: Map<string, string>
   return { ...registry, items };
 }
 
-/** The registry serves src/components, but for shadcn's own ui/, and src/lib; tests stay home. */
-function isServed(path: string) {
+/** Every file in src/components (but shadcn's own ui/) and src/lib is in some item; tests are not. */
+function belongsInRegistry(path: string) {
   return (
     (path.startsWith("src/components/") || path.startsWith("src/lib/")) &&
     !path.startsWith("src/components/ui/") &&

@@ -5,13 +5,14 @@ our rendered components from, keeping its own copy (`shadcn add @iterate/context
 
 ## Layout and imports
 
-packages/ui is laid out the way an app looks after `shadcn add`, so the registry serves its files
+packages/ui is laid out the way an app looks after `shadcn add`, so the registry holds its files
 as they are:
 
 - `src/components/ui/`: shadcn's vendored components (below).
 - `src/components/`: our rendered components, one registry item each (a file, or a folder such as
   `context-view/`), and `src/lib/`: their plain helpers, items too.
-- `src/apps/` (every app's shell) and `src/hooks/`: imported through the workspace, not served.
+- `src/apps/` (every app's shell) and `src/hooks/`: not in the registry. Apps in this repo import
+  them through the workspace.
 
 Imports use package.json's `#/*` subpath imports (`"#/*": "./src/*"`), with extensions. A file
 imports another item's file as `#/components/ui/button.tsx` or `#/components/posthog.tsx`, which
@@ -54,8 +55,8 @@ pnpm dlx shadcn@4.21.0 add @iterate/context-view   # src/components/context-view
 
 - **To add an item**, put its files in `src/components/` (or a folder there) and add it to
   `registry.json` with a name, a one-line description and its files, then build. `build` throws on
-  a file no item lists, a relative import of another item's file, a `#/` import of a file no item
-  serves (`src/apps/`, `src/hooks/`), and an `@iterate-com/*` import. Each would leave the
+  a file no item lists, a relative import of another item's file, a `#/` import of a file that is
+  not in the registry (`src/apps/`, `src/hooks/`), and an `@iterate-com/*` import. Each would leave the
   installing app with an import it cannot resolve.
 - **Hooks and providers are not items.** They belong in `iterate/react`, which an app installs as a
   package; `use-context-explorer` is still here until it moves.

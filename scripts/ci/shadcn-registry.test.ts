@@ -58,7 +58,7 @@ export const loadEditor = () => import("@codemirror/view");`,
   });
 });
 
-// What an app installing the item could not resolve, or a file the registry would not serve.
+// What an app installing the item could not resolve, or a component left out of the registry.
 test.for<{
   name: string;
   items: Record<string, string[]>;
@@ -81,7 +81,7 @@ test.for<{
     problem: "src/components/a.tsx: #/components/a-part.tsx is a's own: import it relatively",
   },
   {
-    name: "a #/ import of a file no item serves",
+    name: "a #/ import of a file in no item",
     items: { a: ["src/components/a.tsx"] },
     source: {
       "src/components/a.tsx": `import "#/hooks/use-thing.ts";`,
