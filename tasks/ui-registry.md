@@ -165,3 +165,9 @@ Not served:
   lockfile (#3494 flipped it the other way). Hosting the script in `scripts/ci`, which already
   depends on oxc-parser, avoided that churn.
 - TypeScript 7 has no JS API (`ts.preProcessFile` is gone), hence oxc-parser for imports.
+- One-off end-to-end proof (not in CI): a fresh app with `@/` aliases and base-nova installed all
+  18 items (`shadcn add`, 81 files), and `tsc` passed. The installed files import
+  `@/components/ui/button` and `@/components/code-block`. It needed what `shadcn init` installs
+  (base-nova's items list only `cn`; the style brings `@base-ui/react` and the rest), lib
+  `ESNext.Disposable` (repo-ide's `using`), and a fresh `iterate`: the local pnpm store served a
+  stale 0.3.0 for `pkg.pr.new/...iterate@main`, whose live tarball is 0.4.1.

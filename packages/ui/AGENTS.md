@@ -27,8 +27,10 @@ each file's type, the packages they import (`dependencies`), and the items they 
 `shadcn build` writes `r/<item>.json`, each file's content inside. Commit both. Copybara copies
 `packages/` to github.com/iterate/packages after each deploy, which is where apps fetch from.
 
-An app installs an item with the `@iterate` registry in its `components.json`, and a Base UI style
-(`base-nova`), since our items name shadcn's components by name:
+An app installs an item once it has run `shadcn init` with a Base UI style (`base-nova`): our items
+name shadcn's components by name, and init installs the packages those use. It needs the `@iterate`
+registry in its `components.json`, and `allowImportingTsExtensions`, because an item's files import
+each other as `./filters.tsx`:
 
 ```jsonc
 {
