@@ -226,7 +226,6 @@ export function proxiedAppRoute(app: string, appUrl: string) {
 
 // ── template quick-launch links ────────────────────────────────────────────────────────────────
 
-/** The config templates a project can be born from: the directories of configs/. */
 /** Every config template's folder, core's (core/configs) and iterate's (configs), by name. */
 export function configTemplateFolders(repoRoot: string) {
   return ["core/configs", "configs"]
