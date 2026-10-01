@@ -30,7 +30,7 @@
     "react": "catalog:",
     "react-dom": "catalog:",
     "sonner": "catalog:",
-    "streamdown": "^2.6.0",
+    "streamdown": "catalog:",
     "tailwindcss": "catalog:",
     "use-stick-to-bottom": "^1.1.6",
     "yaml": "catalog:",

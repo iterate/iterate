@@ -22,7 +22,7 @@
     "lucide-react": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
-    "streamdown": "^2.6.0",
+    "streamdown": "catalog:",
     "tailwindcss": "catalog:",
     "zod": "catalog:"
   },

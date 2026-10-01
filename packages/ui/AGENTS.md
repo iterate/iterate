@@ -80,6 +80,51 @@ vendor another item, run `pnpm --dir <folder> exec shadcn add <item>`, then add 
 
 Everything else here is our own code.
 
+## The repo IDE
+
+`src/components/repo-ide/` is a small IDE over one of a project's repos: a file tree, an editable
+CodeMirror buffer with a diff against the last commit, staging, commit and history. Dash's
+`/projects/<slug>/repos/<name>` is the first host; any app that holds the project's root context can
+mount it the same way:
+
+```tsx
+import { RepoIde } from "@iterate-com/ui/components/repo-ide/repo-ide";
+import { RepoIdeSearch } from "@iterate-com/ui/components/repo-ide/repo-ide-search";
+
+// route: `validateSearch: RepoIdeSearch`, so the open file, the diff and the sidebar are the URL
+const context = useContextStub(() => api.projects.get(project.id), [api, project.id]);
+// in a flex row with `min-h-0 flex-1`; the IDE fills it
+<RepoIde
+  project={context.stub}
+  projectId={project.id}
+  repoPath="/repos/config"
+  author={{ name: email, email }}
+  search={search}
+  onSearchChange={(patch) => navigate({ search: (prev) => ({ ...prev, ...patch }), replace: true })}
+/>;
+```
+
+- **The host owns** the project stub, the route and the shell; the IDE owns everything inside its
+  box. It imports no SDK at runtime (`project` is typed from `iterate/app`), no router, and nothing
+  from an app. Its view state is the `search` prop, so a host without a router keeps it in state.
+- **Parts that stand alone**: `repo-file-tree` (pierre, with git-status marks and a right-click
+  menu), `repo-code-editor` (one file: language, gutter marks, inline diff), `markdown-preview` and
+  `html-preview` (sandboxed), and `repo-client` (`useRepoFiles` follows a repo's commits;
+  `readRepoFile`). Import the one you need by its path; the rest of the folder is the IDE's own.
+- **Client only**: the working tree is read from `localStorage` while rendering, so mount the IDE
+  where the page is not server rendered (a route under an `ssr: false` parent, as Dash's are, or
+  `ClientOnly`).
+- **CodeMirror loads when an editor first mounts** (every `@codemirror/*` import in the folder is
+  a dynamic `import()` in `codemirror.ts`), so a page that never shows a file never pays for it. In
+  a TanStack Start file route import `RepoIde` statically: the route's component is already its own
+  chunk, prefetched on link hover, and a `lazy()` inside it only starts the download after the
+  project opens. A host without route code splitting wraps it in `lazy()` itself.
+- **Markdown preview** renders through streamdown, whose classes Tailwind finds only if the app's
+  stylesheet scans it: `@source "../node_modules/streamdown/dist/*.js";` (dash's `styles.css`).
+- **Text only**: the repo's reads and commits carry text, so images and archives show a notice.
+- **React Doctor**: `npx react-doctor@latest --yes src/components/repo-ide/*.tsx src/components/repo-ide/*.ts`
+  from this package scores 100; keep it there.
+
 ## Every app's shell
 
 `src/apps/` is what each TanStack Start app's own shell files call with only what the app does
