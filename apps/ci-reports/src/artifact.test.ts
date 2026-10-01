@@ -253,12 +253,10 @@ test("a public trace URL serves HTML and JSON from the Depot ZIP without exposin
 });
 
 test.for([
-  { workflow: { repo: "iterate/private" } },
   { artifact: { name: "preview-os-test-artifacts" } },
   { artifact: { name: "ci-trace-source-execution" } },
 ])("%o is not public: nothing is read from its archive", async (mismatch) => {
   await using depot = await depotServer();
-  Object.assign(depot.data.workflow, mismatch.workflow);
   Object.assign(depot.data.artifact, mismatch.artifact);
   const response = await serveDepotArtifact(new Request(`${reportUrl}/`), {
     token: "secret",
@@ -338,7 +336,6 @@ async function depotServer(
       name: "public-ci-trace-preview-execution",
       sizeBytes: archive.length,
     },
-    workflow: { repo: "iterate/iterate" },
   };
   const server = createServer((req, res) => {
     requests.push({
@@ -353,8 +350,6 @@ async function depotServer(
       res.end(
         JSON.stringify({ artifact: data.artifact, url: "https://storage.depot.dev/archive.zip" }),
       );
-    else if (req.url === "/depot.ci.v1.CIService/GetWorkflow")
-      res.end(JSON.stringify(data.workflow));
     else if (req.url === "/archive.zip") {
       const range = req.headers.range?.match(/^bytes=(\d+)-(\d+)$/);
       if (range && data.failLocalHeader && range[1] === "0" && range[2] === "29") {

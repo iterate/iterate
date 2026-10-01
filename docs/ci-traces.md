@@ -19,10 +19,21 @@ changes no preview path gets no trace.
 `apps/ci-reports` is a Worker at
 `https://ci-reports.iterate-dev-preview.workers.dev` (dev/preview account,
 deployed by `deploy-ci-reports.yml`). `/<artifact-id>/` opens a public Depot
-artifact of `iterate/iterate`: `trace.html` for a CI trace, the root
+artifact of any repository's run: `trace.html` for a CI trace, the root
 `index.html` for a Playwright report, the only file of a one-file artifact, or a
 generated listing. `/<artifact-id>/<file>` serves that ZIP entry; append
-`?download` to download it instead. Only artifacts named `public-…` are served.
+`?download` to download it instead. Only artifacts named `public-…` are served:
+`public-` marks a report meant for this viewer, not for everyone.
+
+Cloudflare Access signs every visitor in first, on Cloudflare's own page: a `nustom.com` Google
+account, or a one-time code mailed to a `nustom.com` address. Access is the dev/preview account's
+Zero Trust (team `iterate-dev-preview`), with one application, `ci-reports`, covering this Worker's
+every URL, previews included, and allowing that email domain; edit who gets in there
+(**Zero Trust** › **Access** › **Applications**). The Worker refuses whatever Access did not
+authenticate (`ctx.access`, `src/worker.ts`), so turning Access off closes the viewer rather than
+opening it, and each deploy checks that `/` sends a visitor to Access's sign-in. A script or agent
+gets in with an Access service token, sent as `CF-Access-Client-Id` and `CF-Access-Client-Secret`
+headers, once the application has a policy for it.
 
 It reads the artifact through Depot's API with the organization token CI telemetry uses (the
 Worker's `DEPOT_CI_TELEMETRY_TOKEN` secret, from Doppler `_shared/preview`), with range reads of the

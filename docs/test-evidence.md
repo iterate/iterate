@@ -260,7 +260,7 @@ Lifecycle rules on `iterate-ci`, set when it was created ([setup](#setup)):
   ([#3110](https://github.com/iterate/iterate/issues/3110)).
 - **Traces**: a failing run's `trace.zip` holds the browser's network traffic, preview sign-in
   included. The bucket is private, but `public-playwright-report`, the same folder as a Depot
-  artifact, already exposes it to anyone with the viewer link.
+  artifact, already shows it to anyone Cloudflare Access lets into the viewer.
 
 ## Setup
 
