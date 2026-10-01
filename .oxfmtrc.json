@@ -20,6 +20,8 @@
     "build/",
     ".wrangler/",
     "routeTree.gen.ts",
+    "packages/ui/registry.json",
+    "packages/ui/r/",
     "**/.generated/",
     "apps/kit/firmware/components/avatar/src/face_avatar_catalog_generated.inc",
     "packages/ai-linter/src/fixtures/jev-cases.json",

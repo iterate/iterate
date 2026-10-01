@@ -8,7 +8,11 @@ size: large
 UI PR 2 (UI PR 1 was `tasks/complete/2026-09-30-os-owns-ui.md`). An app gets one of our rendered
 components with `shadcn add @iterate/<item>` and keeps its own copy.
 
-Status: spec only. Nothing implemented yet.
+Status: implemented, waiting on CI and review.
+
+- Done: packages/ui laid out like an app (vendored shadcn in `components/ui/`, `#/` imports between
+  items), 18 items in `registry.json`, `r/` built and committed, the build and its checks, and docs.
+- Left: CI on the PR. Moving the apps to their own copies is a follow-up.
 
 ## Context
 
@@ -89,7 +93,7 @@ item.
 | `stream-link`              | stream-link                                    |                                           |
 | `plain-left-click`         | `lib/plain-left-click.ts` (`registry:lib`)     |                                           |
 
-The table is the intent; `registry.json` and its test are the source of truth.
+The table is the intent; `registry.json` is the source of truth.
 
 Not served:
 
@@ -101,13 +105,10 @@ Not served:
 ### Checks
 
 - Lint and Typecheck: `shadcn build` leaves `packages/ui/r/` unchanged (offline, fast).
-- `packages/ui/src/registry.test.ts` (offline, pure) checks every item:
-  - each relative import is a file in the same item;
-  - each `#/` import is a file of an item it depends on, transitively, ours or shadcn's;
-  - each package import is in its `dependencies`;
-  - every non-test file in `src/components` outside `ui/` belongs to exactly one item, or is on the
-    not-served list.
-    So a fresh app gets every file an item imports.
+- ~~`packages/ui/src/registry.test.ts` checks each item's imports against registry.json~~ _(tests
+  don't read source text (docs/vitest-patterns.md rule 8), and when two files must agree one is the
+  source of the other. So `scripts/ci/shadcn-registry.ts build` derives each item's dependencies
+  from its imports, and throws on the same boundary problems. Its pure functions have unit tests.)_
 - The shadcn workflow (network, path filtered, not required; today's drift check): adding every
   `@iterate` item to a copy of packages/ui's config, from the freshly built registry served
   locally, writes back packages/ui's exact bytes. This proves the CLI rewrites and places files the
@@ -131,21 +132,36 @@ Not served:
 
 ## Checklist
 
-- [ ] Vendored components into `src/components/ui/` via the drift script's refresh, with the lint,
-      format, `rules/` and workflow lists following
-- [ ] `#/*` imports in packages/ui. Cross-item imports use `#/`, and same-item imports stay relative
-- [ ] Apps' imports of vendored components follow the move
-- [ ] `plainLeftClick` into `src/lib/plain-left-click.ts`
-- [ ] `registry.json`, the `registry:build` script, and the committed `r/`
-- [ ] Registry item test
-- [ ] Lint and Typecheck step: `r/` up to date
-- [ ] Round-trip check in the shadcn workflow
-- [ ] `packages/ui/AGENTS.md`: adding an item, and how an app installs one. Also the iterate/packages
+- [x] Vendored components into `src/components/ui/` via the drift script's refresh, with the lint,
+      format, `rules/` and workflow lists following _(refresh rewrote them through the new `#/` aliases; pure renames apart from their import lines)_
+- [x] `#/*` imports in packages/ui. Cross-item imports use `#/`, and same-item imports stay relative _(a one-off codemod; `build` now enforces it)_
+- [x] Apps' imports of vendored components follow the move _(`@iterate-com/ui/components/ui/<name>`, 38 files)_
+- [x] `plainLeftClick` into `src/lib/plain-left-click.ts` _(also the logo's svg beside `iterate-logo.tsx`)_
+- [x] `registry.json`, the build script, and the committed `r/` _(`node scripts/ci/shadcn-registry.ts build`, in scripts/ci beside the drift script: scripts already depends on oxc-parser, so the lockfile stays out of this PR)_
+- [x] ~~Registry item test~~ _(the boundary checks live in `build` instead; see Checks)_
+- [x] Lint and Typecheck step: `registry.json` and `r/` up to date
+- [x] Round-trip check in the shadcn workflow _(`shadcn-registry.ts round-trip`)_
+- [x] `packages/ui/AGENTS.md`: adding an item, and how an app installs one. Also the iterate/packages
       README (`copybara/packages/README.md`)
-- [ ] Typecheck, lint, format, knip, tests; build one app to prove `#/` resolves across packages
+- [x] Typecheck, lint, format, knip, tests; build one app to prove `#/` resolves across packages _(all seven apps typecheck; notes builds with Vite)_
 
 ## Out of scope (follow-ups)
 
 - Moving the monorepo apps from `@iterate-com/ui` imports to their own copies.
 - `use-context-explorer` into `iterate/react`, and the app shell (`src/apps/*`) into `iterate`.
 - A theme item for `globals.css`'s tokens.
+
+## Implementation notes
+
+- The CLI returns ts-morph's `sourceFile.getText()`, which starts at the first statement. So an
+  installed file loses its leading comment, including the JSDoc on its first export when it has no
+  imports. Upstream: shadcn-ui/ui#9206, open fix shadcn-ui/ui#11920. The round trip allows exactly
+  that loss.
+- Which `"use client"` lines shadcn's own items get depends on the batch `add` processes (also in
+  os-owns-ui's notes). So the round trip leaves shadcn's items to the drift check.
+- The round trip's local server runs in the same process as the CLI call, so that call has to be
+  async: `spawnSync` deadlocked it.
+- Adding `oxc-parser` to packages/ui made pnpm re-resolve crossws's optional `srvx` peer across the
+  lockfile (#3494 flipped it the other way). Hosting the script in `scripts/ci`, which already
+  depends on oxc-parser, avoided that churn.
+- TypeScript 7 has no JS API (`ts.preProcessFile` is gone), hence oxc-parser for imports.

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "project-app-shell",
+  "description": "The app shell for a page inside one project, with its breadcrumb.",
+  "dependencies": [
+    "iterate"
+  ],
+  "registryDependencies": [
+    "@iterate/app-shell",
+    "breadcrumb"
+  ],
+  "files": [
+    {
+      "path": "src/components/project-app-shell.tsx",
+      "content": "import type { ReactNode } from \"react\";\nimport type { Principal } from \"iterate/principal\";\nimport type { AppPaletteEntry } from \"#/components/app-shell-palette-entries.ts\";\nimport { AppShell, type AppShellProject } from \"#/components/app-shell.tsx\";\nimport {\n  Breadcrumb,\n  BreadcrumbItem,\n  BreadcrumbList,\n  BreadcrumbPage,\n  BreadcrumbSeparator,\n} from \"#/components/ui/breadcrumb.tsx\";\n\n/** A project's page in an app that shows one project at a time (Notes, Voice): the shared\n *  `AppShell` with that project picked in its switcher, each project at `/projects/<slug>` under\n *  the page's `basePath`, and `<app> › <slug>` in the header. */\nexport function ProjectAppShell({\n  app,\n  projects,\n  project,\n  basePath = \"\",\n  account,\n  locationKey,\n  nav,\n  paletteEntries,\n  children,\n}: {\n  app: string;\n  projects: AppShellProject[];\n  project: AppShellProject;\n  /** the path the page is served under when a project proxies the app (packages/ui/src/apps/base-path.ts) */\n  basePath?: string;\n  account: Principal;\n  /** the router's current href — a change closes the phone's sidebar sheet */\n  locationKey: string;\n  /** the app's own navigation in the sidebar, its `SidebarGroup`s (`AppShell`'s `nav`, which ⌘K\n   *  lists too) */\n  nav?: ReactNode;\n  /** rows for ⌘K the app hands over (`AppShell`'s `paletteEntries`) */\n  paletteEntries?: AppPaletteEntry[];\n  children: ReactNode;\n}) {\n  return (\n    <AppShell\n      app={app}\n      projects={projects}\n      activeProjectId={project.id}\n      projectHref={(item) => `${basePath}/projects/${item.slug}`}\n      header={\n        <Breadcrumb>\n          <BreadcrumbList>\n            <BreadcrumbItem className=\"hidden md:inline-flex\">{app}</BreadcrumbItem>\n            <BreadcrumbSeparator className=\"hidden md:inline-flex\" />\n            <BreadcrumbItem>\n              <BreadcrumbPage className=\"font-mono\">{project.slug}</BreadcrumbPage>\n            </BreadcrumbItem>\n          </BreadcrumbList>\n        </Breadcrumb>\n      }\n      nav={nav}\n      paletteEntries={paletteEntries}\n      account={account}\n      locationKey={locationKey}\n    >\n      {children}\n    </AppShell>\n  );\n}\n",
+      "type": "registry:component"
+    }
+  ],
+  "type": "registry:component"
+}

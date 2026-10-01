@@ -1,0 +1,13 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "plain-left-click",
+  "description": "Whether a click is a plain left click, not one that opens a new tab or window.",
+  "files": [
+    {
+      "path": "src/lib/plain-left-click.ts",
+      "content": "/** A plain left click — not a modified one (cmd/ctrl/shift/alt: a new tab or window), not the\n *  middle button, not one something else already handled. */\nexport function plainLeftClick(\n  event: Pick<\n    MouseEvent,\n    \"defaultPrevented\" | \"button\" | \"metaKey\" | \"ctrlKey\" | \"shiftKey\" | \"altKey\"\n  >,\n) {\n  return (\n    !event.defaultPrevented &&\n    event.button === 0 &&\n    !event.metaKey &&\n    !event.ctrlKey &&\n    !event.shiftKey &&\n    !event.altKey\n  );\n}\n",
+      "type": "registry:lib"
+    }
+  ],
+  "type": "registry:lib"
+}

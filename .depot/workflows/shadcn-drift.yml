@@ -7,6 +7,11 @@
 # printing each file's diff. The fix is a refresh (`node scripts/ci/shadcn-drift.ts refresh`), never
 # a hand edit.
 #
+# THE REGISTRY ROUND TRIP (scripts/ci/shadcn-registry.ts round-trip): `shadcn add @iterate/<every
+# item>` from the built packages/ui/r, served locally, writes packages/ui's own files back. It runs
+# when the registry changes (every item file is in r/) and needs shadcn's registry for the items
+# ours name, such as `button`.
+#
 # Why its own workflow: it calls shadcn's registry over the network, so it stays off the required
 # checks and off every other pull request's time to green. The path filter runs it only where the
 # answer can change; a registry blip fails it once, and a re-run asks again. Upstream moving with no
@@ -21,6 +26,9 @@ on:
     paths:
       - .depot/workflows/shadcn-drift.yml
       - scripts/ci/shadcn-drift.ts
+      - scripts/ci/shadcn-registry.ts
+      - packages/ui/registry.json
+      - packages/ui/r/**
       - packages/ui/components.json
       - packages/ui/package.json
       - packages/ui/tsconfig.json
@@ -84,3 +92,7 @@ jobs:
         uses: ./.depot/actions/setup
       - name: Compare the vendored files with shadcn add
         run: node scripts/ci/shadcn-drift.ts check
+      # its own answer even when upstream moved under the vendored files
+      - name: Add every @iterate item from the built registry
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/shadcn-registry.ts round-trip

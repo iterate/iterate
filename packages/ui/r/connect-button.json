@@ -1,0 +1,17 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "connect-button",
+  "description": "One button that connects an integration provider, or asks it for more scopes.",
+  "registryDependencies": [
+    "button",
+    "spinner"
+  ],
+  "files": [
+    {
+      "path": "src/components/connect-button.tsx",
+      "content": "import { useState, type ComponentProps, type ReactNode } from \"react\";\nimport { Button } from \"#/components/ui/button.tsx\";\nimport { Spinner } from \"#/components/ui/spinner.tsx\";\n\n/** CONNECT A PROVIDER — or ask it for more: one button that asks `connect` where to send the\n *  browser and goes there. `connect` is the caller's own call — `itx.integrations.connect(provider,\n *  { scopes, connection, next })` on a project's context or on `session.user` — so the button knows\n *  no SDK, no owner and no provider list: its label is the caller's. Naming an existing\n *  `connection` with more `scopes` asks the same account for them. The spinner stays up while the\n *  browser leaves; a refusal comes back to `onError`. */\nexport function ConnectButton<Provider extends string>({\n  provider,\n  scopes,\n  connection,\n  connect,\n  onError,\n  children,\n  disabled,\n  ...props\n}: Omit<ComponentProps<typeof Button>, \"onClick\" | \"onError\"> & {\n  provider: Provider;\n  scopes?: string[];\n  connection?: string;\n  children: ReactNode;\n  connect: (input: {\n    provider: Provider;\n    scopes?: string[];\n    connection?: string;\n  }) => Promise<{ authorizationUrl: string }>;\n  onError?: (error: unknown) => void;\n}) {\n  const [leaving, setLeaving] = useState(false);\n  const start = async () => {\n    setLeaving(true);\n    try {\n      const { authorizationUrl } = await connect({ provider, scopes, connection });\n      window.location.assign(authorizationUrl);\n    } catch (error) {\n      setLeaving(false);\n      onError?.(error);\n    }\n  };\n  return (\n    <Button {...props} disabled={disabled || leaving} onClick={() => void start()}>\n      {leaving ? <Spinner data-icon=\"inline-start\" /> : null}\n      {children}\n    </Button>\n  );\n}\n",
+      "type": "registry:component"
+    }
+  ],
+  "type": "registry:component"
+}

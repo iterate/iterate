@@ -1,6 +1,67 @@
 # packages/ui
 
-The UI kit every client app imports as `@iterate-com/ui/*`.
+The UI kit every client app imports as `@iterate-com/ui/*`, and the shadcn registry an app installs
+our rendered components from, keeping its own copy (`shadcn add @iterate/context-view`).
+
+## Layout and imports
+
+packages/ui is laid out the way an app looks after `shadcn add`, so the registry serves its files
+as they are:
+
+- `src/components/ui/`: shadcn's vendored components (below).
+- `src/components/`: our rendered components, one registry item each (a file, or a folder such as
+  `context-view/`), and `src/lib/`: their plain helpers, items too.
+- `src/apps/` (every app's shell) and `src/hooks/`: imported through the workspace, not served.
+
+Imports use package.json's `#/*` subpath imports (`"#/*": "./src/*"`), with extensions. A file
+imports another item's file as `#/components/ui/button.tsx` or `#/components/posthog.tsx`, which
+`shadcn add` rewrites to the installing app's aliases (`@/components/ui/button` in an app with `@/`
+aliases). Files of one item import each other relatively (`./filters.tsx`): they travel together.
+
+## The registry
+
+`registry.json` names each item, describes it and lists its files.
+`node scripts/ci/shadcn-registry.ts build` works out the rest from the files and writes it back:
+each file's type, the packages they import (`dependencies`), and the items they import through `#/`
+(`registryDependencies`: shadcn's by name, such as `button`, and ours as `@iterate/<item>`). Then
+`shadcn build` writes `r/<item>.json`, each file's content inside. Commit both. Copybara copies
+`packages/` to github.com/iterate/packages after each deploy, which is where apps fetch from.
+
+An app installs an item with the `@iterate` registry in its `components.json`, and a Base UI style
+(`base-nova`), since our items name shadcn's components by name:
+
+```jsonc
+{
+  "style": "base-nova",
+  "aliases": {
+    "components": "#/components",
+    "ui": "#/components/ui",
+    "hooks": "#/hooks",
+    "lib": "#/lib",
+    "utils": "cn",
+  },
+  "registries": {
+    "@iterate": "https://raw.githubusercontent.com/iterate/packages/main/packages/ui/r/{name}.json",
+  },
+}
+```
+
+```sh
+pnpm dlx shadcn@4.21.0 add @iterate/context-view   # src/components/context-view/*, and code-block, button, sheet, …
+```
+
+- **To add an item**, put its files in `src/components/` (or a folder there) and add it to
+  `registry.json` with a name, a one-line description and its files, then build. `build` throws on
+  a file no item lists, a relative import of another item's file, a `#/` import of a file no item
+  serves (`src/apps/`, `src/hooks/`), and an `@iterate-com/*` import. Each would leave the
+  installing app with an import it cannot resolve.
+- **Hooks and providers are not items.** They belong in `iterate/react`, which an app installs as a
+  package; `use-context-explorer` is still here until it moves.
+- **The CLI drops a file's leading comment** when it installs it (shadcn-ui/ui#9206, open fix
+  shadcn-ui/ui#11920). The copy here keeps it.
+- **Checks.** Lint and Typecheck fails when `registry.json` or `r/` is not what `build` writes. The
+  shadcn workflow (below) adds every item from the built `r/`, served locally, to an app with this
+  package's `components.json`, and fails unless that writes these files back.
 
 ## Vendored shadcn components
 
@@ -9,8 +70,9 @@ vendors them. Each of these files is byte for byte what the pinned shadcn CLI wr
 `components.json` (style `base-nova`, on Base UI), and nobody edits one here: alert-dialog, avatar,
 badge, breadcrumb, button, card, checkbox, command, dialog, dropdown-menu, empty, field, input,
 label, native-select, select, separator, sheet, sidebar, skeleton, sonner, spinner, table, tabs,
-textarea and tooltip in `src/components/`, plus `src/components/input-group.tsx` (command's
-dependency) and `src/hooks/use-mobile.ts` (sidebar's).
+textarea and tooltip in `src/components/ui/`, plus `src/components/ui/input-group.tsx` (command's
+dependency) and `src/hooks/use-mobile.ts` (sidebar's). Apps import them as
+`@iterate-com/ui/components/ui/<name>`.
 core/os keeps its own copies of the ones it uses (avatar, button, checkbox, field, input, label,
 native-select, separator and spinner) in `core/os/src/components/ui/`, written through its own
 `components.json`, and imports nothing from here. Everything below applies to both folders.
@@ -48,7 +110,7 @@ Review the diff instead of re-applying patches: there are none. Keep a dependenc
 first, without writing anything:
 
 ```sh
-pnpm --dir packages/ui exec shadcn add button --dry-run --diff src/components/button.tsx
+pnpm --dir packages/ui exec shadcn add button --dry-run --diff src/components/ui/button.tsx
 ```
 
 To bump the CLI, change the `shadcn` pin in the catalog (`pnpm-workspace.yaml`) and refresh. To
@@ -65,6 +127,9 @@ vendor another item, run `pnpm --dir <folder> exec shadcn add <item>`, then add 
   The fix is a refresh, even when the difference is upstream moving rather than a hand edit. It is
   not a required check, and a pull request that leaves these files alone never runs it: it needs
   the network.
+- **The same workflow runs the registry's round trip** (`shadcn-registry.ts round-trip`) when
+  `registry.json` or `r/` changes. That covers every item's files, because `r/` holds their
+  content. It needs the network for the shadcn items ours name.
 
 ### Where the local changes went
 

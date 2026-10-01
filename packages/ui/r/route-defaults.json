@@ -1,0 +1,18 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "route-defaults",
+  "description": "TanStack Router's pending, not-found and error components.",
+  "registryDependencies": [
+    "@iterate/posthog",
+    "button",
+    "spinner"
+  ],
+  "files": [
+    {
+      "path": "src/components/route-defaults.tsx",
+      "content": "import { useEffect, type ReactNode } from \"react\";\nimport { Button } from \"#/components/ui/button.tsx\";\nimport { capturePosthogException } from \"#/components/posthog.tsx\";\nimport { Spinner } from \"#/components/ui/spinner.tsx\";\n\nexport function DefaultPendingComponent() {\n  return (\n    <div className=\"flex min-h-screen items-center justify-center\">\n      <Spinner className=\"size-8\" />\n    </div>\n  );\n}\n\ntype NotFoundFallbackProps = {\n  action?: ReactNode;\n  [key: string]: unknown;\n};\n\nexport function DefaultNotFoundComponent({ action }: NotFoundFallbackProps = {}) {\n  return (\n    <div className=\"flex min-h-screen flex-col items-center justify-center gap-4 p-4 text-center\">\n      <div className=\"space-y-1\">\n        <h1 className=\"text-xl font-semibold\">Page not found</h1>\n        <p className=\"max-w-md text-sm text-muted-foreground\">\n          The page you&apos;re looking for doesn&apos;t exist.\n        </p>\n      </div>\n      {action}\n    </div>\n  );\n}\n\ntype ErrorFallbackProps = {\n  error: unknown;\n  reset: () => void;\n  secondaryAction?: ReactNode;\n};\n\nexport function DefaultErrorComponent({ error, reset, secondaryAction }: ErrorFallbackProps) {\n  const message = error instanceof Error ? error.message : \"An unexpected error occurred\";\n  useEffect(() => capturePosthogException(error), [error]);\n\n  return (\n    <div className=\"flex min-h-screen flex-col items-center justify-center gap-4 p-4 text-center\">\n      <div className=\"space-y-1\">\n        <h1 className=\"text-xl font-semibold\">Something went wrong</h1>\n        <p data-type=\"error\" className=\"max-w-md text-sm text-muted-foreground\">\n          {message}\n        </p>\n      </div>\n      <div className=\"flex items-center gap-3\">\n        <Button size=\"sm\" onClick={reset}>\n          Try again\n        </Button>\n        {secondaryAction}\n      </div>\n    </div>\n  );\n}\n",
+      "type": "registry:component"
+    }
+  ],
+  "type": "registry:component"
+}
