@@ -443,10 +443,10 @@ type PageUpdate = {
  * the channel last heard, or back in a burst after an hour's quiet (at most every six hours). An
  * incident with no open incident joins the open page first posted the same UTC day (todaysPage),
  * by an edit, and its thread hears of it when it came in a burst; with no such page, those
- * incidents open one new page. So a day has one fault page, however many hosts a scanner walks
- * (2026-09-30: ten pages in two hours, one per window). An incident unseen for a day closes; a page
- * whose incidents all closed is `resolved` (slack.ts resolvePage) and leaves the state. `pages` is
- * the next state's open pages, the new one to be added once posted. Pure.
+ * incidents open one new page. So a day has one fault page, however many hosts a scanner walks.
+ * An incident unseen for a day closes; a page whose incidents all closed is `resolved` (slack.ts
+ * resolvePage) and leaves the state. `pages` is the next state's open pages, the new one to be
+ * added once posted. Pure.
  */
 export function triageIncidents(
   reading: FaultReading,
