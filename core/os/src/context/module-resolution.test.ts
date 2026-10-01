@@ -7,7 +7,9 @@
 // npm imports are crawled from esm.sh ONCE per dependency set and locked in the store (a second
 // resolution fetches nothing), with esm.sh's own quirks (builtins as paths, cycles, the platform
 // packages left external) handled; a pkg.pr.new dependency loads only at a full commit, and a branch
-// or PR ref is refused naming the pin; what cannot work in a loaded worker is refused by name; and
+// or PR ref is refused naming the pin; an alias (`npm:<package>@<version>`, or a pkg.pr.new URL of
+// another package) loads the package it names under the listed name; what cannot work in a loaded
+// worker is refused by name; and
 // the loader starts every worker from a generated main that evaluates the platform's module first.
 // Like tsc, stripping elides an import whose bindings are never used as values.
 import { parse } from "es-module-lexer/js";
@@ -291,7 +293,7 @@ test("esm.sh's own /node/ polyfills (capnweb's Buffer) load as ordinary modules"
 
 const sdkCommit = "9f8e7d6c5b4a39281706f5e4d3c2b1a098765432";
 
-test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath imports at that commit, and pkg.pr.new is never asked; a URL naming another package is refused", async () => {
+test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath imports at that commit, and pkg.pr.new is never asked; a URL naming no package is refused", async () => {
   const esm = fakeEsm({
     [`/pr/acme/shop/@acme/sdk@${sdkCommit}`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs";`,
     // esm.sh's /pr/ route spells the package's import of its own exported subpath bare
@@ -315,9 +317,9 @@ test("a pkg.pr.new commit resolves through esm.sh's /pr/ route, its own subpath 
     await resolve(sdkSource(`https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}`), { store }),
   ).toEqual(modules);
   await expect(
-    resolve(sdkSource(`https://pkg.pr.new/acme/shop/other-sdk@${sdkCommit}`), esm),
+    resolve(sdkSource(`https://pkg.pr.new/acme/shop@${sdkCommit}`), esm),
   ).rejects.toThrow(
-    /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop\/other-sdk@9f8e7d6c5b4a\w+; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
+    /test: package\.json lists @acme\/sdk as https:\/\/pkg\.pr\.new\/acme\/shop@9f8e7d6c5b4a\w+; pin it as https:\/\/pkg\.pr\.new\/<owner>\/<repo>\/@acme\/sdk@<40-hex sha>/,
   );
 });
 
@@ -366,6 +368,130 @@ test.for([
     expect(store.put).not.toHaveBeenCalled();
   },
 );
+
+test("an npm: alias loads the package it names under the name it is listed by, subpaths too, and esm.sh is never asked for the listed name", async () => {
+  const esm = fakeEsm({
+    // esm.sh reads the alias as written as the listed name's own package, at its latest version
+    "/react@npm:@preact/compat@18.3.1": `export const createElement = () => "react";`,
+    "/@preact/compat@18.3.1": `export * from "/@preact/compat@18.3.1/es2022/compat.mjs";`,
+    "/@preact/compat@18.3.1/es2022/compat.mjs": `export const createElement = () => "preact";`,
+    "/@preact/compat@18.3.1/jsx-runtime": `export * from "/@preact/compat@18.3.1/es2022/jsx-runtime.mjs";`,
+    "/@preact/compat@18.3.1/es2022/jsx-runtime.mjs": `import { createElement } from "./compat.mjs"; export const jsx = createElement;`,
+  });
+  const modules = await resolve(
+    {
+      "worker.ts": `import { createElement } from "react"; import { jsx } from "react/jsx-runtime"; export default [createElement, jsx];`,
+      "package.json": JSON.stringify({
+        main: "worker.ts",
+        dependencies: { react: "npm:@preact/compat@18.3.1" },
+      }),
+    },
+    esm,
+  );
+  // exact: the listed name's own package is never asked for
+  expect(esm.fetched.map((path) => path.split("?")[0]).sort()).toEqual([
+    "/@preact/compat@18.3.1",
+    "/@preact/compat@18.3.1/es2022/compat.mjs",
+    "/@preact/compat@18.3.1/es2022/jsx-runtime.mjs",
+    "/@preact/compat@18.3.1/jsx-runtime",
+  ]);
+  expect(importedModules(modules, "worker.js")).toEqual([
+    "node_modules/react.js",
+    "node_modules/react/jsx-runtime.js",
+  ]);
+  expectLinked(modules);
+});
+
+test.for([
+  {
+    name: "an alias at a version asks for that version",
+    version: "npm:hono@4.9.0",
+    asked: "/hono@4.9.0",
+  },
+  {
+    name: "an alias of a scoped package at a range",
+    version: "npm:@acme/sdk@^2",
+    asked: "/@acme/sdk@^2",
+  },
+  {
+    name: "an alias that names no version asks for the latest",
+    version: "npm:hono",
+    asked: "/hono@latest",
+  },
+])("$name", async ({ version, asked }) => {
+  const esm = fakeEsm({ [asked]: `export default 1;` });
+  await resolve(
+    {
+      "worker.js": `import one from "alias"; export default one;`,
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { alias: version } }),
+    },
+    esm,
+  );
+  expect(esm.fetched.map((path) => path.split("?")[0])).toEqual([asked]);
+});
+
+test.for([
+  { name: "an alias of an alias", version: "npm:hono@npm:hono@4" },
+  { name: "an alias of a URL", version: `npm:https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}` },
+  { name: "an alias that names no package", version: "npm:" },
+])("refuses $name, naming the form an alias takes", async ({ version }) => {
+  await expect(
+    resolve({
+      "worker.js": `import "alias";`,
+      "package.json": JSON.stringify({ main: "worker.js", dependencies: { alias: version } }),
+    }),
+  ).rejects.toThrow(
+    `test: package.json lists alias as ${version}; an alias names a package on npm and its version: npm:<package>@<version>`,
+  );
+});
+
+test("an alias of a platform package imports its own subpaths at the aliased version; the worker's own iterate/* and the alias's zod stay this deployment's", async () => {
+  const esm = fakeEsm({
+    "/iterate@0.4.0/stream/processor": `export * from "/iterate@0.4.0/X-ZXh0/es2022/stream/processor.mjs";`,
+    // esm.sh leaves iterate external, so it spells the package's import of its own export bare
+    "/iterate@0.4.0/X-ZXh0/es2022/stream/processor.mjs": `import { lib } from "iterate/lib"; import { z } from "zod"; export const processor = [lib, z];`,
+    "/iterate@0.4.0/lib": `export * from "/iterate@0.4.0/X-ZXh0/es2022/lib.mjs";`,
+    "/iterate@0.4.0/X-ZXh0/es2022/lib.mjs": `export const lib = "lib@0.4.0";`,
+  });
+  const modules = await resolve(
+    {
+      "worker.ts": `import { processor } from "iterate-2026-10-01/stream/processor"; import { lib } from "iterate/lib"; export default [processor, lib];`,
+      "package.json": JSON.stringify({
+        main: "worker.ts",
+        dependencies: { "iterate-2026-10-01": "npm:iterate@0.4.0" },
+      }),
+    },
+    esm,
+  );
+  expect(importedModules(modules, "worker.js")).toEqual([
+    "node_modules/iterate-2026-10-01/stream/processor.js",
+    "node_modules/iterate/lib.js",
+  ]);
+  expect(
+    importedModules(modules, "node_modules/.esm/iterate@0.4.0/X-ZXh0/es2022/stream/processor.js"),
+  ).toEqual([
+    expect.stringMatching(/^node_modules\/\.esm\/iterate@0\.4\.0\/lib~target=es2022/),
+    "node_modules/zod.js",
+  ]);
+  expectLinked(modules);
+});
+
+test("a pkg.pr.new URL listed under another name is an alias: the package the URL names loads, and a moving ref is refused naming that package's pin", async () => {
+  const esm = fakeEsm({
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}`]: `export * from "/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs";`,
+    [`/pr/acme/shop/@acme/sdk@${sdkCommit}/es2022/sdk.mjs`]: `export const connect = () => "shop";`,
+  });
+  const source = (url: string) => ({
+    "worker.ts": `import { connect } from "shop-next"; export default connect;`,
+    "package.json": JSON.stringify({ main: "worker.ts", dependencies: { "shop-next": url } }),
+  });
+  const modules = await resolve(source(`https://pkg.pr.new/acme/shop/@acme/sdk@${sdkCommit}`), esm);
+  expect(importedModules(modules, "worker.js")).toEqual(["node_modules/shop-next.js"]);
+  expectLinked(modules);
+  await expect(resolve(source("https://pkg.pr.new/acme/shop/@acme/sdk@main"), esm)).rejects.toThrow(
+    `test: package.json lists shop-next at "main", which is not a commit, so it could name another build tomorrow; pin the commit: https://pkg.pr.new/<owner>/<repo>/@acme/sdk@<40-hex sha>`,
+  );
+});
 
 /** A fake esm.sh (path+query → module text). Records what was fetched. */
 function fakeEsm(files: Record<string, string>) {
@@ -421,6 +547,17 @@ function expectLinked(modules: Record<string, string>) {
       expect(Object.keys(modules), `${name} imports ${imp.n}`).toContain(dir.join("/"));
     }
   }
+}
+
+/** The modules module `name` imports, in the order it imports them (its specifiers are relative). */
+function importedModules(modules: Record<string, string>, name: string) {
+  return parse(modules[name]!)[0].map((imp) => {
+    const dir = name.split("/").slice(0, -1);
+    for (const part of imp.n!.split("/"))
+      if (part === "..") dir.pop();
+      else if (part !== ".") dir.push(part);
+    return dir.join("/");
+  });
 }
 
 /** A worker that imports @acme/sdk, listed in package.json at `url`. */
