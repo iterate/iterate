@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: review
 size: small
 ---
 
@@ -10,7 +10,8 @@ Every preview deploy creates its test person's project `pr<N>` (scripts/os/previ
 `configs/default`, which installs agents; since #3492 a creation naming no template gets core's
 minimal config. So every preview's Agents `Sign in ↗` now lands on "Agents are not installed".
 
-Status: spec only.
+Status: implemented; typecheck, lint and the preview tests pass locally. Left: this PR's own
+preview, whose Agents link should land on an installed app.
 
 ## Decisions
 
@@ -25,6 +26,7 @@ Status: spec only.
 
 ## Checklist
 
-- [ ] `seedSignIn` creates `pr<N>` from the Default preset
-- [ ] the stray docstring in preview-config.ts
+- [x] `seedSignIn` creates `pr<N>` from the Default preset _(found by folder name, as the consent
+      page finds it)_
+- [x] the stray docstring in preview-config.ts
 - [ ] typecheck, lint, format; the PR's own preview: the Agents link lands on an installed app
