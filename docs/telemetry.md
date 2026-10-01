@@ -79,7 +79,11 @@ Cloudflare's own record of each invocation (a fetch, an RPC call, an alarm). Key
 | `exception`, `stack`         | string                | `exception.type: exception.message`, `exception.stacktrace`                                                      |
 
 `project_id` and `path` come from the body when it has them; a line without them takes them from
-its span, joined on `span_id`. An invocation row is about 1 KB, so its fields answer to the guarded
+its span, joined on `span_id`. An invocation row names no project: Cloudflare writes it, and our
+code cannot add to it. Its span is the invocation's root, which carries no project either. A
+Durable Object's invocation carries the object's id (`cloudflare.durable_object.id`), which
+`spans.object_id` ties to a project and path; the Worker's own carries only the URL, and finds a
+project through its trace when the request reached a context. An invocation row is about 1 KB, so its fields answer to the guarded
 JSON functions: `json_get_int(body, 'http.response.status_code')`, `json_get_str(body, 'url.path')`.
 
 ### spans
@@ -277,6 +281,15 @@ FROM telemetry.spans WHERE rpc_method IS NOT NULL GROUP BY rpc_method ORDER BY n
 SELECT coalesce(l.project_id, s.project_id) AS project_id, l.event, count(*) AS n
 FROM telemetry.logs l JOIN telemetry.spans s ON l.span_id = s.span_id
 WHERE l.level = 'warn' GROUP BY 1, 2 ORDER BY n DESC
+
+-- each Durable Object invocation's project, by the object's id (16 of 18 in the sample resolved)
+-- scanned 1.9 MB, billed as 10 MB: $0.000025
+SELECT m.project_id, m.path, count(*) AS invocations
+FROM telemetry.logs l JOIN (
+  SELECT object_id, max(project_id) AS project_id, max(path) AS path
+  FROM telemetry.spans WHERE project_id IS NOT NULL GROUP BY object_id
+) m ON CASE WHEN l.body_bytes < 2000 THEN json_get_str(l.body, 'cloudflare.durable_object.id') END = m.object_id
+WHERE l.event = 'invocation' GROUP BY 1, 2
 
 -- one trace, the Worker's spans and the Durable Object's under them
 -- scanned 12.4 MB in 6 files: $0.000031
