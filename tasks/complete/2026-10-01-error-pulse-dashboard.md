@@ -1,13 +1,12 @@
 ---
-status: in-progress
+status: done
 size: large
 ---
 
 # #error-pulse: fewer pings, one daily dashboard
 
-Status: PR 1 (stop the worst noise, #3502) is done and ready for review; the stale pages are
-cleaned up. PR 2 (the daily dashboard, #3504) is built and in review: every poster pages in the
-dashboard's thread and keeps its row. The iterate.com site fix is live
+Status: done. #3502 (fewer pings) merged; #3504 (the daily dashboard) merges with this file moved;
+the stale pages are cleaned up. The iterate.com site fix is live
 (config repo commit 528dc1b).
 
 ## Why
@@ -139,8 +138,8 @@ Design (from mapping every poster, 2026-10-01):
 - [x] fake-slack: metadata, `include_all_metadata` _and deleting a reply; `latest` not needed_
 - [x] slack.ts: `postPage`, `findOpenPages` over dashboard threads and legacy pages, escalations
       and frozen pages into today's thread
-- [ ] fault alarm: row; unposted page for minor incidents; channel for a 5xx burst on the site's
-      apex/www or a first-party host
+- [x] fault alarm: row; unposted page for minor incidents; channel for a 5xx burst on the site's
+      apex/www or a first-party host _`FIRST_PARTY_HOSTS`, `loud` (once a page), held pages with `ts: ""`_
 - [x] health: a row per signal; latency, PR time to green, real-model e2e and slow e2e rows row only
       _`ROW_ONLY_SIGNALS` in sendUpdates; PR 1's `heldOnMainPage` went with it_
 - [x] do-cost: row; page into the thread; $50/h sent to the channel
