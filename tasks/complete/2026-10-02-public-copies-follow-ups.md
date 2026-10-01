@@ -12,9 +12,9 @@ the code. Three follow-ups from #3493.
 
 ## Status
 
-- Nearly done. Rulesets and secret scanning are live on both copies; licenses, docs and the
-  dead-link test are in this branch.
-- Missing: proof the App still pushes past the rulesets, which only the next Deploy OS copy gives.
+- Done in iterate/iterate#3508. Rulesets and secret scanning are live on both copies; licenses,
+  docs and the dead-link test are in the PR.
+- One check after the next Deploy OS copy: the App still pushes past the rulesets.
 
 ## 1. Only the iterate App writes the copies
 
