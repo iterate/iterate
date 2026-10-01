@@ -147,16 +147,35 @@ clock, which moves only across I/O: a delivery that crosses none reads 0 ms.
   queries past a million a month, whatever a query reads, and bills nothing yet; its answers say
   nothing of what a query read, so the page counts each panel's stored points in one more query and
   shows them beside the panel's price.
-- **In Cloudflare's dashboard** — nothing here feeds it: its Custom Dashboards chart Cloudflare's own
-  GraphQL datasets, never Analytics Engine or R2 SQL (for Analytics Engine, Cloudflare names
-  Grafana). What it charts live is Workers Logs, kept 7 days: the Observability page's Query Builder
-  takes a count, a sum or a percentile of any field of a log line, ours included, grouped by any
-  other, within seconds, and a saved query is a link; it has no page of several charts.
+- **In Cloudflare's dashboard** — nothing here feeds it. Its Custom Dashboards chart Cloudflare's own
+  datasets, and the Observability page's Query Builder charts Workers Logs live, our own log
+  fields included ("What Cloudflare already keeps", below); for Analytics Engine, Cloudflare names
+  Grafana.
 - **History** — R2 SQL over the four tables (`wrangler r2 sql query`, or its HTTP API), or DuckDB
   (1.4+) attached to the catalog. R2 SQL reads only the columns a query names, from the files whose
   statistics its filters cannot rule out, and answers with the bytes it scanned: $2.50 per TB, 10
   MB at least. Nothing is sorted, so a filter on an id (a trace, a project) reads that column of
   every file in range: bound such a query by `time`.
+
+## What Cloudflare already keeps
+
+The lake holds what only we have and what needs SQL across it: our events, our logs and spans, our
+metrics. Cloudflare measures the rest itself, for every account, and none of it is copied here: it
+is kept for us already, it is what Cloudflare's own dashboards chart, and it knows a Worker, a
+bucket or an object's id, never a project or a path, so beside our rows it would join to nothing.
+Read it where it is, with the Cloudflare MCP's `cloudflare.request` or the same call by hand.
+
+| source                  | holds                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | kept                | read with                                                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Analytics API (GraphQL) | 243 datasets an account, 60 a zone. For what `core/os` runs on: Workers (requests, errors, CPU and wall time, memory, subrequests), Durable Objects (each object's active time, WebSockets and memory a minute; invocations; stored bytes), Pipelines (rows in, delivered, dropped), R2 (operations, bytes, catalog maintenance, R2 SQL queries), D1, KV, AI Gateway (requests, errors, spend), Workers AI, Browser Rendering, email sending, Artifacts, Logpush health | 90 days, 32 a query | `POST /graphql`; `{ __type(name: "account") { fields { name } } }` lists the datasets                                        |
+| Workers Logs            | every log line and invocation of every Worker, any field of them counted, summed or ranked by percentile: the dashboard's Query Builder                                                                                                                                                                                                                                                                                                                                 | 7 days              | `POST /accounts/{id}/workers/observability/telemetry/query`                                                                  |
+| Analytics Engine        | `iterate_metrics`, before the hourly copy                                                                                                                                                                                                                                                                                                                                                                                                                               | 90 days             | `POST /accounts/{id}/analytics_engine/sql` with a token by hand: its answer is not the API's envelope, which the MCP refuses |
+
+Live Durable Objects are the Analytics API's: `durableObjectsPeriodicGroups` by `datetimeMinute`.
+Its `sum.activeTime`, in microseconds, divided by a minute's 60 million is how many objects ran at
+once on average, and its `max.activeWebsocketConnections` the sockets open. The one number worth
+copying some day is that active time by object: `spans.object_id` ties an object to its project,
+which makes it a project's cost.
 
 ## Settings
 
