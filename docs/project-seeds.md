@@ -304,6 +304,6 @@ applying seeds. No seed command erases or deploys anything implicitly.
 
 Artifacts deletes a repository asynchronously: its name stays taken for a while after
 the erase has verified the namespace empty. A config repo created meanwhile waits up to
-20 s for the name (`TAKEN_NAME_WAIT_MS` in `src/context/cf-artifacts.ts`), then fails the
+20 s for the name (`TAKEN_NAME_WAIT_MS` in `core/os/src/context/cf-artifacts.ts`), then fails the
 project's creation with that reason. Rerun `apply` for that seed once the deletion has
 landed.

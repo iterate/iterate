@@ -1,7 +1,8 @@
 # iterate's project templates
 
 Templates that depend on packages outside core. Core's own, which depend on nothing outside it,
-are in [core/configs](../core/configs/README.md), which also says how a template works.
+are in [iterate/core's core/configs](https://github.com/iterate/core/tree/main/core/configs), which also
+says how a template works.
 
 - `voice/` — core's `default` plus the voice app. `voice.ts` re-exports the voice service and its
   relay class from the npm package `@iterate-com/voice`, and the init case of `worker.ts` calls

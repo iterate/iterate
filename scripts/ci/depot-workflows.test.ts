@@ -249,7 +249,7 @@ test("deploy-os.yml runs for what reaches the Worker, not the app's docs, tests 
   for (const file of [
     "core/os/README.md",
     "core/os/SELF-HOSTING.md",
-    "core/os/docs/project-seeds.md",
+    "core/os/docs/residency.md",
     "test/AGENTS.md",
     "test/helpers/client.ts",
     "core/os/src/project/templates.test.ts",

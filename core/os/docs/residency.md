@@ -55,7 +55,7 @@ facet is never reset.
 On the edge, a facet that wrote a few dozen pages and then stops — aborted, or evicted with its
 context — makes one of the context's next commits fail with "Internal error in Durable Object
 storage caused object to be reset", and the whole context resets
-([`test/vitest/os/facet-abort-storage-reset.e2e.test.ts`](../../../test/vitest/os/facet-abort-storage-reset.e2e.test.ts) pins
+(`test/vitest/os/facet-abort-storage-reset.e2e.test.ts` pins
 it). A facet started again before the context commits anything more avoids it. So every abort the
 platform makes (5, 6, `itx.facets.abort`, the call watchdog, a new loaded identity) is followed by a
 start under `blockConcurrencyWhile`, and a birth starts every facet the last incarnation called,
@@ -119,11 +119,13 @@ preview, 2026-09-23). So:
 
 ## Tests
 
+The unit tests are in core; the lint rule and the suites under `test/` are in iterate's own repo.
+
 - Unit: `src/context/residency.test.ts` (the sweep's rule and clock, the pins' timer, the birth
   reset's record);
   [`itx-scope.test.ts`](../../lib/src/sdk/itx-scope.test.ts) (1);
   `src/context/dispatch.test.ts` (2).
-- Lint: [`lint/oxlint-plugin-no-raw-itx-get.test.ts`](../../../lint/oxlint-plugin-no-raw-itx-get.test.ts)
+- Lint: `lint/oxlint-plugin-no-raw-itx-get.test.ts`
   decides what `iterate/no-raw-itx-get` refuses, so no first-party code leans on 5 and 6.
 - Workers suite: `test/vitest/os-workers/alarm-and-pins.test.ts` (4),
   `test/vitest/os-workers/facets.test.ts` (5, 6, and the sweep's alarm waking a fresh

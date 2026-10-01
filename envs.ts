@@ -90,6 +90,22 @@ export const osEnvs: Record<string, OsEnv> = {
       dbId: "0189bd9e-baa4-48f5-b39c-f57b8829d864",
     },
   },
+  // PRODUCTION, and what it needs that is set up by hand outside this file:
+  // - the identity providers' callbacks, registered before a hostname cutover:
+  //   `<baseUrl>/.auth/identity/callback` (Google), `/.auth/identity/cloudflare/callback` and
+  //   `/.auth/identity/github/callback`;
+  // - Doppler os/prd's `APP_CONFIG` email-code sender, on a verified Iterate sending domain;
+  // - iterate.app, for project ingress and the Cloudflare for SaaS fallback: a custom apex in
+  //   another account points at cname.iterate.app and needs an active hostname and certificate on
+  //   that zone. A project's email is `<slug>@iterate.app` (core/os/src/integrations/email.ts): the
+  //   zone is onboarded for Email Sending, and its Email Routing catch-all delivers every inbound
+  //   message to os-prd's `email()` handler;
+  // - iterate.com, also the `iterate` project's email domain: onboarded for Email Sending, so that
+  //   project sends from any iterate.com address, and its catch-all delivers to os-prd too, which
+  //   records each message on that project's `/integrations/email` and forwards it to
+  //   `projectWildcard.forwardEmailTo`. A proxied `*.iterate.com` DNS record and Worker route, with
+  //   an active `*.iterate.com` edge certificate, serve the project's config worker; named routes
+  //   (os., mcp., dash., k.iterate.com …) take precedence.
   prd: {
     cloudflareAccountId: PRD_ACCOUNT_ID,
     dopplerConfig: "prd",

@@ -308,7 +308,7 @@ other suite green, and from `main` it posts on main's head. From the PR's branch
 `deploy`. Either way the dispatch updates the suite's line in the PR body and posts the CI trace
 statuses on the PR's head. A preview by name may be redeployed under the dispatch by its own
 workflow (Main OS e2e for `main`). From a laptop, `pnpm preview e2e` and `pnpm preview specs` do the same
-([core/os/README.md](../core/os/README.md)). `preview-delete.yml`
+([dev environments](dev-environments.md#story-2-run-what-ci-runs-locally)). `preview-delete.yml`
 (`--input pull-request-number=<pr-number>`) deletes a preview now, `preview-sweep.yml` sweeps now.
 
 Deploy a branch manually, or roll back by pushing a branch at the old commit first:
