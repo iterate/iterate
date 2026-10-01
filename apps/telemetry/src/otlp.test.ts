@@ -23,47 +23,6 @@ const crash = {
   trace_id: "f48ec96b8d15525c1dbf684f84247360",
 };
 /** The resource of oneLine's line and oneSpan's span. */
-/** The body of an `invocation` row: Cloudflare's record of one GET of the producer, whole. */
-function invocationBody(fetch: {
-  path: string;
-  query: string;
-  status: number;
-  invocation: string;
-  ray: string;
-  seq: number;
-}) {
-  const host = "telemetry-spike-producer.iterate-dev-preview.workers.dev";
-  return JSON.stringify({
-    message: `GET https://${host}${fetch.path}?${fetch.query}`,
-    "cloudflare.execution_model": "stateless",
-    "cloudflare.handler_type": "fetch",
-    "faas.invocation_id": fetch.invocation,
-    "cloudflare.ray_id": fetch.ray,
-    "faas.trigger": "http",
-    "url.full": `https://${host}${fetch.path}?${fetch.query}`,
-    "http.request.method": "GET",
-    "http.request.header.accept": "*/*",
-    "http.request.header.accept-encoding": "gzip, br",
-    "user_agent.original": "curl/8.7.1",
-    "cloudflare.colo": "LHR",
-    "cloudflare.verified_bot_category": "",
-    "cloudflare.asn": 64496,
-    "geo.timezone": "Europe/London",
-    "geo.continent.code": "EU",
-    "geo.country.code": "GB",
-    "geo.locality.name": "London",
-    "geo.locality.region": "England",
-    "server.port": "",
-    "server.address": host,
-    "url.path": fetch.path,
-    "url.query": fetch.query,
-    "url.scheme": "https",
-    "network.protocol.name": "https",
-    "http.response.status_code": fetch.status,
-    "cloudflare.invocation.sequence.number": fetch.seq,
-  });
-}
-
 const resource = {
   attributes: [
     { key: "cloudflare.script_name", value: { stringValue: "telemetry-spike-producer" } },
@@ -437,4 +396,45 @@ function oneSpan(span: object) {
     ...span,
   };
   return { resourceSpans: [{ resource, scopeSpans: [{ spans: [own] }] }] };
+}
+
+/** The body of an `invocation` row: Cloudflare's record of one GET of the producer, whole. */
+function invocationBody(fetch: {
+  path: string;
+  query: string;
+  status: number;
+  invocation: string;
+  ray: string;
+  seq: number;
+}) {
+  const host = "telemetry-spike-producer.iterate-dev-preview.workers.dev";
+  return JSON.stringify({
+    message: `GET https://${host}${fetch.path}?${fetch.query}`,
+    "cloudflare.execution_model": "stateless",
+    "cloudflare.handler_type": "fetch",
+    "faas.invocation_id": fetch.invocation,
+    "cloudflare.ray_id": fetch.ray,
+    "faas.trigger": "http",
+    "url.full": `https://${host}${fetch.path}?${fetch.query}`,
+    "http.request.method": "GET",
+    "http.request.header.accept": "*/*",
+    "http.request.header.accept-encoding": "gzip, br",
+    "user_agent.original": "curl/8.7.1",
+    "cloudflare.colo": "LHR",
+    "cloudflare.verified_bot_category": "",
+    "cloudflare.asn": 64496,
+    "geo.timezone": "Europe/London",
+    "geo.continent.code": "EU",
+    "geo.country.code": "GB",
+    "geo.locality.name": "London",
+    "geo.locality.region": "England",
+    "server.port": "",
+    "server.address": host,
+    "url.path": fetch.path,
+    "url.query": fetch.query,
+    "url.scheme": "https",
+    "network.protocol.name": "https",
+    "http.response.status_code": fetch.status,
+    "cloudflare.invocation.sequence.number": fetch.seq,
+  });
 }
