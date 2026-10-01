@@ -136,11 +136,13 @@ function deploymentWranglerConfig(env: OsEnv) {
     name: env.workerName,
     account_id: env.cloudflareAccountId,
     workers_dev: true,
-    // its traces and logs exported to its account's lake as well (docs/telemetry.md)
+    // Its logs are exported to its account's lake as well, and its traces to the lake ALONE
+    // (docs/telemetry.md "Settings"): kept in Cloudflare too, every span is billed there a second
+    // time, and the lake's `spans` holds each one.
     observability: telemetry
       ? {
           ...OBSERVABILITY,
-          traces: { ...OBSERVABILITY.traces, destinations: ["telemetry-traces"] },
+          traces: { ...OBSERVABILITY.traces, persist: false, destinations: ["telemetry-traces"] },
           logs: { ...OBSERVABILITY.logs, destinations: ["telemetry-logs"] },
         }
       : OBSERVABILITY,
@@ -172,7 +174,8 @@ function deploymentWranglerConfig(env: OsEnv) {
     vars: {
       WORKER_NAME: env.workerName,
       ...configVars(env),
-      // the two bindings above, by name: the Worker refuses to start without them (src/app-config.ts)
+      // the two bindings above, by name: without either, the Worker throws at its first read of its
+      // configuration (src/app-config.ts `appConfigOf`)
       ...(telemetry && {
         APP_CONFIG_TELEMETRY: JSON.stringify({
           eventsStreamBinding: "EVENTS",

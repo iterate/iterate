@@ -475,8 +475,8 @@ test.for([
       pipelines: [{ binding: "EVENTS", stream: telemetryEnvs.preview.streams.events }],
       analytics_engine_datasets: [{ binding: "METRICS", dataset: "iterate_metrics" }],
       observability: {
-        traces: { destinations: ["telemetry-traces"] },
-        logs: { destinations: ["telemetry-logs"] },
+        traces: { persist: false, destinations: ["telemetry-traces"] },
+        logs: { persist: true, destinations: ["telemetry-logs"] },
       },
       vars: {
         WORKER_NAME: worker,
@@ -492,6 +492,8 @@ test("prd binds no telemetry and exports nowhere: its account has no lake yet", 
   expect(config).not.toHaveProperty("analytics_engine_datasets");
   expect(config.observability.traces).not.toHaveProperty("destinations");
   expect(config.observability.logs).not.toHaveProperty("destinations");
+  // with no lake to hold them, its traces stay in Cloudflare
+  expect(config.observability.traces).toMatchObject({ persist: true });
   expect(config.vars).not.toHaveProperty("APP_CONFIG_TELEMETRY");
 });
 
