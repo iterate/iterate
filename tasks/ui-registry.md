@@ -5,14 +5,15 @@ size: large
 
 # packages/ui is a shadcn registry, served from iterate/packages
 
-UI PR 2 (UI PR 1 was `tasks/complete/2026-09-30-os-owns-ui.md`). An app gets one of our rendered
-components with `shadcn add @iterate/<item>` and keeps its own copy.
+UI PR 2 (UI PR 1 was `tasks/complete/2026-09-30-os-owns-ui.md`). An app in another repo gets one of
+our rendered components with `shadcn add @iterate/<item>` and keeps its own copy. Apps in this
+repo keep importing `@iterate-com/ui`.
 
 Status: implemented, waiting on CI and review.
 
 - Done: packages/ui laid out like an app (vendored shadcn in `components/ui/`, `#/` imports between
   items), 18 items in `registry.json`, `r/` built and committed, the build and its checks, and docs.
-- Left: CI on the PR. Moving the apps to their own copies is a follow-up.
+- Left: CI on the PR.
 
 ## Context
 
@@ -64,7 +65,9 @@ pnpm dlx shadcn@4.21.0 add @iterate/context-view   # writes src/components/conte
     text back. Checked against the pinned CLI.
   - An import of another item's file uses `#/`. Files in the same item import each other
     relatively (`./filters.tsx`), so an item in a folder keeps its folder.
-- Apps in the monorepo keep importing `@iterate-com/ui/*` through the workspace for now. The only
+- Apps in the monorepo keep importing `@iterate-com/ui/*` through the workspace (decided in review:
+  shadcn's own monorepo setup shares one `packages/ui` workspace, and a registry is for other
+  repos). The only
   change for them is the vendored components' new path (`@iterate-com/ui/components/ui/button`).
 
 ### Items
@@ -147,7 +150,6 @@ Not in the registry:
 
 ## Out of scope (follow-ups)
 
-- Moving the monorepo apps from `@iterate-com/ui` imports to their own copies.
 - `use-context-explorer` into `iterate/react`, and the app shell (`src/apps/*`) into `iterate`.
 - A theme item for `globals.css`'s tokens.
 

@@ -1,7 +1,8 @@
 # packages/ui
 
-The UI kit every client app imports as `@iterate-com/ui/*`, and the shadcn registry an app installs
-our rendered components from, keeping its own copy (`shadcn add @iterate/context-view`).
+The UI kit every client app in this repo imports as `@iterate-com/ui/*`, as shadcn's own monorepo
+setup shares one `packages/ui`. It is also the shadcn registry an app in another repo installs our
+rendered components from, keeping its own copy (`shadcn add @iterate/context-view`).
 
 ## Layout and imports
 
