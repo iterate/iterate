@@ -34,11 +34,16 @@ export function pkgPrNewVersionOf(name: string, version: string) {
  *  name, and pkg.pr.new's `x-commit-key` echoes it rather than naming the commit. */
 export const isPkgPrNewCommit = (ref: string) => /^[0-9a-f]{40}$/.test(ref);
 
+/** The repository whose pkg.pr.new workflow (.github/workflows/pkg-pr-new.yml) publishes this
+ *  repository's packages, as pkg.pr.new's URLs name it. It moves to iterate/private, which starts
+ *  with fresh history (tasks/package-urls-survive-repo-move.md). */
+export const pkgPrNewRepository = "iterate/iterate";
+
 /** A build of one of this repository's packages (`iterate`, `@iterate-com/voice`, …): the
- *  pkg.pr.new workflow (.github/workflows/pkg-pr-new.yml) publishes every package together, for
- *  every main commit and for the head of a PR that changes one. */
+ *  pkg.pr.new workflow publishes every package together, for every main commit and for the head of
+ *  a PR that changes one. */
 export const pkgPrNewVersion = (name: string, ref: string) =>
-  `https://pkg.pr.new/iterate/iterate/${name}@${ref}`;
+  `https://pkg.pr.new/${pkgPrNewRepository}/${name}@${ref}`;
 
 /**
  * `version` of package `name` as a writer writes it: a pkg.pr.new branch or PR at the commit

@@ -434,16 +434,6 @@ async function deployPreviewSteps(
 ) {
   assertFreshInstall(REPO_ROOT);
   const urls = previewDeploymentUrls(name);
-  // the paths this PR changes, for the Dash's template links (signInLinks), read beside the builds
-  const changed =
-    prNumber && apps.some((app) => app.name === "dash")
-      ? changedPaths(prNumber).catch((error: unknown) => {
-          console.warn(
-            `sign-in: ${describe(error)}; every template link names the deployment's own copy`,
-          );
-          return [];
-        })
-      : Promise.resolve([]);
   const credentials = {
     CLOUDFLARE_API_TOKEN: ctx.secrets.CLOUDFLARE_API_TOKEN!,
     CLOUDFLARE_ACCOUNT_ID: MAIN_ON_DEV.cloudflareAccountId,
@@ -510,7 +500,6 @@ async function deployPreviewSteps(
         providerHint: new URL(getOsEnv(name).adminIssuer!).host,
         prNumber,
         apps: deployedApps,
-        changedPaths: await changed,
       })
     : undefined;
   const publish = async (seeded: boolean) => {
@@ -594,7 +583,6 @@ function signInLinks(preview: {
   providerHint: string;
   prNumber: string;
   apps: { name: string; url: string }[];
-  changedPaths: string[];
 }) {
   const project = `pr${preview.prNumber}`;
   const email = `${project}@${TEST_EMAIL_DOMAIN}`;
@@ -615,12 +603,8 @@ function signInLinks(preview: {
       ? templateQuickLaunches({
           dashUrl: dash.url,
           templates: configTemplateFolders(REPO_ROOT),
-          changedPaths: preview.changedPaths,
-          // the PR head (the workflow's), which GitHub keeps; a laptop's checkout is its head
-          headSha: process.env.PREVIEW_HEAD_SHA || checkedOutCommit(),
-        }).map(({ name, fromHead, next }) => ({
+        }).map(({ name, next }) => ({
           name,
-          fromHead,
           link: appSignInLink(next, { provider_hint: preview.providerHint, login_hint: email }),
         }))
       : [],

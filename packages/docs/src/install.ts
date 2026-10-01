@@ -25,9 +25,10 @@ export const docsModule = {
 
 const RootManifest = z.object({ dependencies: z.record(z.string(), z.string()).optional() });
 
-/** The guide an agent follows to work on docs (this package's AGENTS.md), on main. */
+/** The guide an agent follows to work on docs (this package's AGENTS.md), on main of the public
+ *  copy of this repository's packages, which keeps their paths. */
 export const docsAgentGuide =
-  "https://raw.githubusercontent.com/iterate/iterate/main/packages/docs/AGENTS.md";
+  "https://raw.githubusercontent.com/iterate/packages/main/packages/docs/AGENTS.md";
 
 /** What `installDocs` adds to the config's AGENTS.md, which an agent on the platform's MCP server
  *  is told to read first: where the guide is. */

@@ -570,10 +570,11 @@ export class ProjectProcessor extends StreamProcessor<
       // The seed pins its pkg.pr.new dependencies: a template's `…@main` means main's newest
       // build, and the loader refuses a ref that moves (iterate/pkg-pr-new). A ref
       // that cannot be pinned fails the creation, like a download that fails. A preset comes from
-      // the build (scripts/build.ts), with no GitHub request; no template is core/configs/minimal.
+      // the build (scripts/build.ts), with no GitHub request (`presetFiles`); no template is
+      // core/configs/minimal.
       const changes = await pinPkgPrNewDependencies(
         reference
-          ? (templateFiles[reference] ??
+          ? (presetFiles(reference) ??
               (await this.downloadTemplate(parseConfigRepoTemplateReference(reference))))
           : minimalConfigFiles,
       );
@@ -818,4 +819,21 @@ async function landOnce(publisher: ProjectPublisher, ...events: StreamEventInput
   } catch (error) {
     if (errorCode(error) !== "IDEMPOTENCY_CONFLICT") throw error;
   }
+}
+
+/**
+ * The build's copy of the preset `reference` names, or undefined for a template the build doesn't
+ * offer. A reference to one of its presets at another commit gets the preset as this build has it:
+ * a Dash page loaded before a deploy names the previous build's commit, and downloading that fails
+ * when the preset's repository is private, as iterate's will be (iterate/private). So an old
+ * reference gets today's template, never a download.
+ */
+function presetFiles(reference: string) {
+  if (templateFiles[reference]) return templateFiles[reference];
+  const { owner, repo, path } = parseConfigRepoTemplateReference(reference);
+  const preset = Object.keys(templateFiles).find((candidate) => {
+    const offered = parseConfigRepoTemplateReference(candidate);
+    return offered.owner === owner && offered.repo === repo && offered.path === path;
+  });
+  return preset ? templateFiles[preset] : undefined;
 }
