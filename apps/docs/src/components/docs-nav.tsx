@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { Link, useNavigate, useRouteContext, useRouter } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -11,7 +11,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-} from "@iterate-com/ui/components/sidebar";
+} from "@iterate-com/ui/components/ui/sidebar";
 import { authorOf } from "../lib/author.ts";
 import { createDoc } from "../lib/create-doc.ts";
 import { useDocList } from "../lib/doc-list.ts";

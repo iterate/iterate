@@ -1,6 +1,6 @@
 import { useState, type ComponentProps, type ReactNode } from "react";
-import { Button } from "./button.tsx";
-import { Spinner } from "./spinner.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 /** CONNECT A PROVIDER — or ask it for more: one button that asks `connect` where to send the
  *  browser and goes there. `connect` is the caller's own call — `itx.integrations.connect(provider,

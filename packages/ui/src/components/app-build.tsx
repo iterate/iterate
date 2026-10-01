@@ -1,7 +1,7 @@
 import { useEffect, useEffectEvent, useState } from "react";
 import type { BuildStanding } from "iterate/pkg-pr-new";
-import { Button } from "./button.tsx";
-import { Spinner } from "./spinner.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 /** What `check` answered for one installed version, or why it could not. */
 type Checked = { installed: string } & ({ standing: BuildStanding } | { error: string });

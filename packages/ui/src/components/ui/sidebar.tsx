@@ -6,23 +6,23 @@ import { useRender } from "@base-ui/react/use-render"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
-import { useIsMobile } from "@iterate-com/ui/hooks/use-mobile"
-import { Button } from "@iterate-com/ui/components/button"
-import { Input } from "@iterate-com/ui/components/input"
-import { Separator } from "@iterate-com/ui/components/separator"
+import { useIsMobile } from "#/hooks/use-mobile.ts"
+import { Button } from "#/components/ui/button.tsx"
+import { Input } from "#/components/ui/input.tsx"
+import { Separator } from "#/components/ui/separator.tsx"
 import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet"
-import { Skeleton } from "@iterate-com/ui/components/skeleton"
+} from "#/components/ui/sheet.tsx"
+import { Skeleton } from "#/components/ui/skeleton.tsx"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@iterate-com/ui/components/tooltip"
+} from "#/components/ui/tooltip.tsx"
 import { PanelLeftIcon } from "lucide-react"
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"

@@ -12,7 +12,6 @@
 // One Pretty / Raw toggle for every state here: fields (pretty-state.tsx) or YAML.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { cn } from "cn";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../sheet.tsx";
 import { shortEventType } from "./filters.tsx";
 import { LiveStateValue } from "./live-state-value.tsx";
 import { record } from "./renderer-helpers.tsx";
@@ -22,6 +21,13 @@ import type {
   ContextViewProcessor,
   LiveStateView,
 } from "./types.tsx";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "#/components/ui/sheet.tsx";
 
 export function ProcessorsPanel({
   open,

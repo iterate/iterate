@@ -21,7 +21,7 @@ import {
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
-} from "@iterate-com/ui/components/dropdown-menu";
+} from "@iterate-com/ui/components/ui/dropdown-menu";
 import { usePosthogIdentity, type PosthogGroup } from "@iterate-com/ui/components/posthog";
 import { Identifier } from "../components/identifier.tsx";
 import { DashBreadcrumbs } from "../components/dash-breadcrumbs.tsx";

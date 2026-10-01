@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { GitCommitVerticalIcon, MinusIcon, PlusIcon, Undo2Icon } from "lucide-react";
-import { Button } from "../button.tsx";
-import { Input } from "../input.tsx";
 import { commitPlan, type FileEntry, type WorkingTreeChanges } from "./staged-changes.ts";
+import { Button } from "#/components/ui/button.tsx";
+import { Input } from "#/components/ui/input.tsx";
 
 type ChangeStatus = "added" | "deleted" | "modified";
 

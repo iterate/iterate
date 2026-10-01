@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
   "exports": {
     "./apps/base-path": "./src/apps/base-path.ts",
     "./apps/document": "./src/apps/document.tsx",

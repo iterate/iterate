@@ -1,7 +1,7 @@
 import { Suspense, lazy } from "react";
 import { cn } from "cn";
-import { Spinner } from "./spinner.tsx";
 import type { CodeBlockProps, SerializedObjectCodeBlockProps } from "./code-block.client.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 // Keep CodeMirror (languages, theme, search) out of the server bundle: the
 // worker script has a 10 MiB upload limit and the editor only mounts in the

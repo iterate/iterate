@@ -1,0 +1,528 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "iterate",
+  "homepage": "https://github.com/iterate/packages/tree/main/packages/ui",
+  "items": [
+    {
+      "name": "app-build",
+      "type": "registry:component",
+      "description": "One installed version of an app: its build's state, and Check to ask again.",
+      "dependencies": [
+        "iterate"
+      ],
+      "registryDependencies": [
+        "button",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/app-build.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "app-shell",
+      "type": "registry:component",
+      "description": "The client apps' shell: the sidebar with the project switcher, the app's pages and the account menu, and ⌘K over both.",
+      "dependencies": [
+        "cmdk",
+        "iterate",
+        "lucide-react"
+      ],
+      "registryDependencies": [
+        "avatar",
+        "button",
+        "command",
+        "dialog",
+        "dropdown-menu",
+        "iterate/packages/iterate-logo",
+        "iterate/packages/plain-left-click",
+        "iterate/packages/posthog",
+        "sidebar"
+      ],
+      "files": [
+        {
+          "path": "src/components/app-shell.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/app-shell-palette.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/app-shell-palette-entries.ts",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "code-block",
+      "type": "registry:component",
+      "description": "Read-only CodeMirror for a source file or a serialized object (YAML or JSON), loaded in the browser only.",
+      "dependencies": [
+        "@codemirror/lang-javascript",
+        "@codemirror/lang-json",
+        "@codemirror/lang-markdown",
+        "@codemirror/lang-yaml",
+        "@codemirror/language",
+        "@codemirror/search",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@fsegurai/codemirror-theme-bundle",
+        "cn",
+        "codemirror",
+        "lucide-react",
+        "sonner",
+        "yaml"
+      ],
+      "registryDependencies": [
+        "spinner",
+        "tooltip"
+      ],
+      "files": [
+        {
+          "path": "src/components/code-block.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/code-block.client.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "code-editor",
+      "type": "registry:component",
+      "description": "An editable CodeMirror buffer, loaded in the browser only.",
+      "dependencies": [
+        "@codemirror/autocomplete",
+        "@codemirror/lang-json",
+        "@codemirror/lang-yaml",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@fsegurai/codemirror-theme-bundle",
+        "cn",
+        "codemirror"
+      ],
+      "files": [
+        {
+          "path": "src/components/code-editor.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/code-editor.client.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "connect-button",
+      "type": "registry:component",
+      "description": "One button that connects an integration provider, or asks it for more scopes.",
+      "registryDependencies": [
+        "button",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/connect-button.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "context-view",
+      "type": "registry:component",
+      "description": "One context's event stream, its processors' live state and who is here: the Contexts page's view.",
+      "dependencies": [
+        "@tanstack/react-virtual",
+        "cn",
+        "lucide-react",
+        "yaml",
+        "zod"
+      ],
+      "registryDependencies": [
+        "button",
+        "dropdown-menu",
+        "input",
+        "input-group",
+        "iterate/packages/code-block",
+        "iterate/packages/code-editor",
+        "iterate/packages/plain-left-click",
+        "sheet",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/context-view/append-completions.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/append-composer.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/append-events.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/context-path.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/context-tree.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/context-view-search.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/context-view.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/core-renderers.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/event-inspector-log.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/event-inspector.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/event-row.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/feed-list.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/feed-rows.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/filter-row.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/filters.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/folds.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/live-state-value.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/presence-strip.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/pretty-state.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/processors-panel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/renderer-helpers.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/stick-to-bottom.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/context-view/types.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "environment-head-content",
+      "type": "registry:component",
+      "description": "<HeadContent /> that names the deployment off production, in the tab's title and icon.",
+      "dependencies": [
+        "@tanstack/react-router",
+        "iterate"
+      ],
+      "files": [
+        {
+          "path": "src/components/environment-head-content.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "first-project-redirect",
+      "type": "registry:component",
+      "description": "/projects in an app that shows one project at a time: the first project, or a note that there is none.",
+      "dependencies": [
+        "@tanstack/react-router"
+      ],
+      "registryDependencies": [
+        "iterate/packages/route-defaults"
+      ],
+      "files": [
+        {
+          "path": "src/components/first-project-redirect.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "iterate-logo",
+      "type": "registry:component",
+      "description": "The iterate mark.",
+      "dependencies": [
+        "cn"
+      ],
+      "files": [
+        {
+          "path": "src/components/iterate-logo.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/iterate-logo.svg",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "log-in-with-iterate",
+      "type": "registry:component",
+      "description": "The Log in with iterate button.",
+      "dependencies": [
+        "cn"
+      ],
+      "registryDependencies": [
+        "iterate/packages/iterate-logo"
+      ],
+      "files": [
+        {
+          "path": "src/components/log-in-with-iterate.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "not-recorded",
+      "type": "registry:component",
+      "description": "A block PostHog's session replay never records, for a secret shown on screen.",
+      "dependencies": [
+        "cn"
+      ],
+      "files": [
+        {
+          "path": "src/components/not-recorded.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "plain-left-click",
+      "type": "registry:lib",
+      "description": "Whether a click is a plain left click, not one that opens a new tab or window.",
+      "files": [
+        {
+          "path": "src/lib/plain-left-click.ts",
+          "type": "registry:lib"
+        }
+      ]
+    },
+    {
+      "name": "posthog",
+      "type": "registry:component",
+      "description": "PostHog in the browser: init, identity and exception capture, with secrets redacted from URLs.",
+      "dependencies": [
+        "iterate",
+        "posthog-js"
+      ],
+      "files": [
+        {
+          "path": "src/components/posthog.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "project-app-shell",
+      "type": "registry:component",
+      "description": "The app shell for a page inside one project, with its breadcrumb.",
+      "dependencies": [
+        "iterate"
+      ],
+      "registryDependencies": [
+        "breadcrumb",
+        "iterate/packages/app-shell"
+      ],
+      "files": [
+        {
+          "path": "src/components/project-app-shell.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "repo-ide",
+      "type": "registry:component",
+      "description": "A small IDE over one of a project's repos: file tree, editor, diff, staging, commit and history.",
+      "dependencies": [
+        "@codemirror/lang-css",
+        "@codemirror/lang-html",
+        "@codemirror/lang-javascript",
+        "@codemirror/lang-json",
+        "@codemirror/lang-markdown",
+        "@codemirror/lang-sql",
+        "@codemirror/lang-yaml",
+        "@codemirror/merge",
+        "@codemirror/state",
+        "@codemirror/view",
+        "@fsegurai/codemirror-theme-bundle",
+        "@pierre/trees",
+        "cn",
+        "codemirror",
+        "iterate",
+        "lucide-react",
+        "sonner",
+        "streamdown",
+        "zod"
+      ],
+      "registryDependencies": [
+        "badge",
+        "button",
+        "input",
+        "tabs"
+      ],
+      "files": [
+        {
+          "path": "src/components/repo-ide/codemirror.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/commit-diff-pane.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/commit-history-panel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/file-chrome.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/git-panel.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/html-preview.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/markdown-preview.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-client.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-code-editor.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-editor-pane.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-file-discard.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-file-kinds.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-file-tree-paths.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-file-tree.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-ide-activity-strip.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-ide-search.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/repo-ide.tsx",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/staged-changes.ts",
+          "type": "registry:component"
+        },
+        {
+          "path": "src/components/repo-ide/use-repo-ide-actions.ts",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "route-defaults",
+      "type": "registry:component",
+      "description": "TanStack Router's pending, not-found and error components.",
+      "registryDependencies": [
+        "button",
+        "iterate/packages/posthog",
+        "spinner"
+      ],
+      "files": [
+        {
+          "path": "src/components/route-defaults.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "standalone-page",
+      "type": "registry:component",
+      "description": "The frame of a page outside any app's shell, such as sign-in and consent.",
+      "dependencies": [
+        "cn"
+      ],
+      "files": [
+        {
+          "path": "src/components/standalone-page.tsx",
+          "type": "registry:component"
+        }
+      ]
+    },
+    {
+      "name": "stream-link",
+      "type": "registry:component",
+      "description": "Stream ↗: a link from a page to the context its data lives on, in the Dash's Contexts page.",
+      "files": [
+        {
+          "path": "src/components/stream-link.tsx",
+          "type": "registry:component"
+        }
+      ]
+    }
+  ]
+}

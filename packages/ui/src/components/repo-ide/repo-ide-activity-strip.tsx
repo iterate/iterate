@@ -1,6 +1,6 @@
 import { FilesIcon, GitBranchIcon, HistoryIcon, type LucideIcon } from "lucide-react";
-import { Button } from "../button.tsx";
 import type { RepoIdeSearch } from "./repo-ide-search.ts";
+import { Button } from "#/components/ui/button.tsx";
 
 /** The vscode-style strip of sidebars: Files, Source control, History. */
 export function RepoIdeActivityStrip({

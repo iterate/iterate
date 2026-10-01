@@ -8,11 +8,11 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from "@iterate-com/ui/components/dialog"
+} from "#/components/ui/dialog.tsx"
 import {
   InputGroup,
   InputGroupAddon,
-} from "@iterate-com/ui/components/input-group"
+} from "#/components/ui/input-group.tsx"
 import { SearchIcon, CheckIcon } from "lucide-react"
 
 function Command({

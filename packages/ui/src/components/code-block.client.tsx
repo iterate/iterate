@@ -13,7 +13,7 @@ import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { stringify as stringifyYaml } from "yaml";
 import { cn } from "cn";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "#/components/ui/tooltip.tsx";
 
 export interface CodeBlockProps {
   code: string;

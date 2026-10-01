@@ -11,10 +11,15 @@ import { createFileRoute, getRouteApi, Link, useNavigate } from "@tanstack/react
 import { ArrowUpRight, Plus } from "lucide-react";
 import { z } from "zod";
 import { parseConfigRepoTemplateReference } from "iterate/config-repo-template";
-import { Button } from "@iterate-com/ui/components/button";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
-import { Input } from "@iterate-com/ui/components/input";
-import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/ui/field";
+import { Input } from "@iterate-com/ui/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/ui/native-select";
 import {
   Sheet,
   SheetClose,
@@ -23,8 +28,8 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from "@iterate-com/ui/components/sheet";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+} from "@iterate-com/ui/components/ui/sheet";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -32,7 +37,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@iterate-com/ui/components/table";
+} from "@iterate-com/ui/components/ui/table";
 import { Identifier } from "../../../components/identifier.tsx";
 import { AllowOrganizations } from "../../../components/allow-organizations.tsx";
 import { ListPage } from "../../../components/list-page.tsx";

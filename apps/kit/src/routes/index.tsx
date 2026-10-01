@@ -8,7 +8,7 @@ import {
   FieldContent,
   FieldLabel,
   FieldDescription,
-} from "@iterate-com/ui/components/field";
+} from "@iterate-com/ui/components/ui/field";
 import {
   Select,
   SelectContent,
@@ -16,7 +16,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@iterate-com/ui/components/select";
+} from "@iterate-com/ui/components/ui/select";
 import { DEFAULT_DEVICE_ID, findFirmwareDevice, firmwareCatalog } from "../firmware/catalog.ts";
 
 export const Route = createFileRoute("/")({

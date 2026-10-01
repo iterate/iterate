@@ -1,14 +1,14 @@
 import type { ReactNode } from "react";
 import type { Principal } from "iterate/principal";
-import type { AppPaletteEntry } from "./app-shell-palette-entries.ts";
-import { AppShell, type AppShellProject } from "./app-shell.tsx";
+import type { AppPaletteEntry } from "#/components/app-shell-palette-entries.ts";
+import { AppShell, type AppShellProject } from "#/components/app-shell.tsx";
 import {
   Breadcrumb,
   BreadcrumbItem,
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from "./breadcrumb.tsx";
+} from "#/components/ui/breadcrumb.tsx";
 
 /** A project's page in an app that shows one project at a time (Notes, Voice): the shared
  *  `AppShell` with that project picked in its switcher, each project at `/projects/<slug>` under

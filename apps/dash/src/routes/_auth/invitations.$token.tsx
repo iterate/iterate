@@ -7,8 +7,8 @@
 import { useState, type ReactNode } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { UserPlus } from "lucide-react";
-import { Badge } from "@iterate-com/ui/components/badge";
-import { Button, buttonVariants } from "@iterate-com/ui/components/button";
+import { Badge } from "@iterate-com/ui/components/ui/badge";
+import { Button, buttonVariants } from "@iterate-com/ui/components/ui/button";
 import {
   Card,
   CardContent,
@@ -16,9 +16,9 @@ import {
   CardFooter,
   CardHeader,
   CardTitle,
-} from "@iterate-com/ui/components/card";
+} from "@iterate-com/ui/components/ui/card";
 import { NotRecorded } from "@iterate-com/ui/components/not-recorded";
-import { Spinner } from "@iterate-com/ui/components/spinner";
+import { Spinner } from "@iterate-com/ui/components/ui/spinner";
 import { AllowOrganizations } from "../../components/allow-organizations.tsx";
 import { reloadOrganizationTree } from "../../components/organization-tree.tsx";
 

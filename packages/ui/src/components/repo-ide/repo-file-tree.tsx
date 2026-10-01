@@ -6,8 +6,8 @@ import type {
 } from "@pierre/trees";
 import { FilePlusIcon } from "lucide-react";
 import { cn } from "cn";
-import { Button } from "../button.tsx";
 import { untitledPath } from "./repo-file-tree-paths.ts";
+import { Button } from "#/components/ui/button.tsx";
 
 /** The vscode-style git-status letter a changed row wears. */
 export type RepoFileStatus = "added" | "deleted" | "modified";

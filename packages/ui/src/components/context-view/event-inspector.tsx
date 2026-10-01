@@ -18,10 +18,6 @@
 // - CLOSING keeps the last event painted through the sheet's exit slide, with paging off.
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
-import { Button } from "../button.tsx";
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../sheet.tsx";
-import { SerializedObjectCodeBlock } from "../code-block.tsx";
-import { Spinner } from "../spinner.tsx";
 import {
   elapsedBetween,
   inspectedPlace,
@@ -35,6 +31,16 @@ import {
   type EventRenderers,
   rendererFor,
 } from "./types.tsx";
+import { Button } from "#/components/ui/button.tsx";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "#/components/ui/sheet.tsx";
+import { SerializedObjectCodeBlock } from "#/components/code-block.tsx";
+import { Spinner } from "#/components/ui/spinner.tsx";
 
 export function EventInspector({
   events,

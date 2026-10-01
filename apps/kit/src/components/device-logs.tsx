@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
-import { Button } from "@iterate-com/ui/components/button";
-import { DialogFooter } from "@iterate-com/ui/components/dialog";
+import { Button } from "@iterate-com/ui/components/ui/button";
+import { DialogFooter } from "@iterate-com/ui/components/ui/dialog";
 import type { openDeviceLogs } from "../firmware/flash-device.ts";
 
 /**
