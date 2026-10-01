@@ -7,11 +7,11 @@ import { z } from "zod";
  *  expanded commit, whose diff of the open file then shows. */
 export const RepoIdeSearch = z.object({
   file: z.string().optional().catch(undefined),
-  diff: z.boolean().optional().catch(undefined),
-  preview: z.boolean().optional().catch(undefined),
-  scm: z.boolean().optional().catch(undefined),
-  staged: z.boolean().optional().catch(undefined),
-  history: z.boolean().optional().catch(undefined),
+  diff: z.literal(true).optional().catch(undefined),
+  preview: z.literal(true).optional().catch(undefined),
+  scm: z.literal(true).optional().catch(undefined),
+  staged: z.literal(true).optional().catch(undefined),
+  history: z.literal(true).optional().catch(undefined),
   commit: z.string().optional().catch(undefined),
 });
 export type RepoIdeSearch = z.infer<typeof RepoIdeSearch>;

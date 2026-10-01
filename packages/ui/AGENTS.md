@@ -88,13 +88,10 @@ CodeMirror buffer with a diff against the last commit, staging, commit and histo
 mount it the same way:
 
 ```tsx
+import { RepoIde } from "@iterate-com/ui/components/repo-ide/repo-ide";
 import { RepoIdeSearch } from "@iterate-com/ui/components/repo-ide/repo-ide-search";
 
-// a route: `validateSearch: RepoIdeSearch`, so the open file, the diff and the sidebar are the URL
-const RepoIde = lazy(async () => ({
-  default: (await import("@iterate-com/ui/components/repo-ide/repo-ide")).RepoIde,
-}));
-
+// route: `validateSearch: RepoIdeSearch`, so the open file, the diff and the sidebar are the URL
 const context = useContextStub(() => api.projects.get(project.id), [api, project.id]);
 // in a flex row with `min-h-0 flex-1`; the IDE fills it
 <RepoIde
@@ -112,11 +109,16 @@ const context = useContextStub(() => api.projects.get(project.id), [api, project
   from an app. Its view state is the `search` prop, so a host without a router keeps it in state.
 - **Parts that stand alone**: `repo-file-tree` (pierre, with git-status marks and a right-click
   menu), `repo-code-editor` (one file: language, gutter marks, inline diff), `markdown-preview` and
-  `html-preview` (sandboxed), `repo-client` (`useRepoFiles` follows a repo's commits; `readRepoFile`)
-  and `staged-changes` (the in-browser working tree). Import the one you need by its path.
+  `html-preview` (sandboxed), and `repo-client` (`useRepoFiles` follows a repo's commits;
+  `readRepoFile`). Import the one you need by its path; the rest of the folder is the IDE's own.
+- **Client only**: the working tree is read from `localStorage` while rendering, so mount the IDE
+  where the page is not server rendered (a route under an `ssr: false` parent, as Dash's are, or
+  `ClientOnly`).
 - **CodeMirror loads when an editor first mounts** (every `@codemirror/*` import in the folder is
-  a dynamic `import()` in `codemirror.ts`), so a page that never shows a file never pays for it.
-  Mount the IDE lazily as above to keep the rest of its code out of the entry chunk too.
+  a dynamic `import()` in `codemirror.ts`), so a page that never shows a file never pays for it. In
+  a TanStack Start file route import `RepoIde` statically: the route's component is already its own
+  chunk, prefetched on link hover, and a `lazy()` inside it only starts the download after the
+  project opens. A host without route code splitting wraps it in `lazy()` itself.
 - **Markdown preview** renders through streamdown, whose classes Tailwind finds only if the app's
   stylesheet scans it: `@source "../node_modules/streamdown/dist/*.js";` (dash's `styles.css`).
 - **Text only**: the repo's reads and commits carry text, so images and archives show a notice.

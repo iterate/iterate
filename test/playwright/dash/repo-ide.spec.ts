@@ -84,8 +84,11 @@ test("a repo opens as an IDE: edit a file and see its diff, make a new file and 
   await test.step("make a new, empty repo from the Repos page and commit its first file", async () => {
     // the sidebar's link, not the breadcrumb's current page
     await page.getByRole("link", { name: "Repos", exact: true }).and(page.locator("a")).click();
-    await page.getByRole("textbox", { name: "New repo name" }).fill("scratch");
     await page.getByRole("button", { name: "New repo", exact: true }).click();
+    // Enter submits: the earlier commit's toast still sits over the sheet's button
+    const name = page.getByRole("textbox", { name: "Name", exact: true });
+    await name.fill("scratch");
+    await name.press("Enter");
     await page.getByRole("button", { name: "New file", exact: true }).click();
     await page.keyboard.type("hello.md");
     await page.keyboard.press("Enter");

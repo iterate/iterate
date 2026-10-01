@@ -14,8 +14,6 @@
     "./components/context-view/context-view-search": "./src/components/context-view/context-view-search.ts",
     "./components/repo-ide/repo-ide-search": "./src/components/repo-ide/repo-ide-search.ts",
     "./components/repo-ide/repo-client": "./src/components/repo-ide/repo-client.ts",
-    "./components/repo-ide/repo-file-kinds": "./src/components/repo-ide/repo-file-kinds.ts",
-    "./components/repo-ide/staged-changes": "./src/components/repo-ide/staged-changes.ts",
     "./components/repo-ide/*": "./src/components/repo-ide/*.tsx",
     "./components/*": "./src/components/*.tsx",
     "./hooks/*": "./src/hooks/*.ts"

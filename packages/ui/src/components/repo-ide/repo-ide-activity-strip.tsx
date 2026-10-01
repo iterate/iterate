@@ -12,8 +12,8 @@ export function RepoIdeActivityStrip({
   changeCount: number;
   onSearchChange: (patch: Partial<RepoIdeSearch>) => void;
 }) {
-  const scm = search.scm === true;
-  const history = search.history === true;
+  const scm = Boolean(search.scm);
+  const history = Boolean(search.history);
   return (
     <div className="flex shrink-0 flex-col items-center gap-1 border-r px-1 py-2">
       <StripButton

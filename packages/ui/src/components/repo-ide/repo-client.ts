@@ -59,9 +59,8 @@ function watchRepoCommits(
     .subscribe({
       consumes: ["events.iterate.com/repo/commit-completed"],
       target: (events: unknown) => {
-        // capnweb hands the events as proxies: a plain copy to parse
-        const plain = CommitsCompleted.parse(structuredClone(events));
-        if (plain.some((event) => event.payload.path === repoPath)) handlers.onCommit();
+        if (CommitsCompleted.parse(events).some((event) => event.payload.path === repoPath))
+          handlers.onCommit();
       },
     })
     .then((opened) => {

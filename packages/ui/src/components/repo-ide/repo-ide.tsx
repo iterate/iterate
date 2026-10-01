@@ -100,7 +100,7 @@ function LoadedRepoIde({
     selectedPath: search.file,
     onSearchChange,
   });
-  const commits = useRepoLog(project, repoPath, search.history === true, files.commitOid);
+  const commits = useRepoLog(project, repoPath, Boolean(search.history), files.commitOid);
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-row">
       <RepoIdeActivityStrip
@@ -163,7 +163,7 @@ function RepoIdeSidebar({
   search: RepoIdeSearch;
   onSearchChange: (patch: Partial<RepoIdeSearch>) => void;
 }) {
-  if (search.history === true) {
+  if (search.history) {
     if (commits.status !== "loaded") {
       return (
         <div className="p-3 text-xs text-muted-foreground" data-spinner="true">
@@ -185,7 +185,7 @@ function RepoIdeSidebar({
       />
     );
   }
-  if (search.scm === true) {
+  if (search.scm) {
     return (
       <GitPanel
         changes={changes}
@@ -253,7 +253,7 @@ function RepoIdeMain({
 
   const expandedCommit =
     commits.status === "loaded" ? commits.value.find((c) => c.oid === search.commit) : undefined;
-  if (search.history === true && expandedCommit) {
+  if (search.history && expandedCommit) {
     return (
       <CommitDiffPane
         key={`${path}:${expandedCommit.oid}`}
@@ -291,9 +291,9 @@ function RepoIdeMain({
       headHasPath={ide.headPathSet.has(path)}
       change={change}
       view={{
-        diff: search.diff === true,
-        preview: search.preview === true,
-        staged: search.staged === true && Boolean(change?.staged),
+        diff: Boolean(search.diff),
+        preview: Boolean(search.preview),
+        staged: Boolean(search.staged && change?.staged),
       }}
       handlers={handlers}
     />
