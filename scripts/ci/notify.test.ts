@@ -362,11 +362,22 @@ test("a page that cannot be read leaves the others to resolve, then fails the st
     }),
   ).rejects.toThrow("1 update(s) of the deploy's pages and row failed");
 
-  expect(shape(slack)).toEqual([
-    `🚨 prd deploy failed at ??? (x): OS ${mention}`,
-    "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
-    `  ↳ ✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS ${mention} (also sent to the channel)`,
-  ]);
+  expect({ errorPulse: shape(slack), rows: rows(slack) }).toEqual({
+    errorPulse: [
+      `🚨 prd deploy failed at ??? (x): OS ${mention}`,
+      "📟 error-pulse · Mon 28 Sep · 12:00 UTC",
+      `  ↳ ✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS ${mention} (also sent to the channel)`,
+    ],
+    // the page this run could not update is still open as far as anyone knows
+    rows: ["🔴 prd deploys: 1 page(s) not read"],
+  });
+});
+
+test("a failure on a later commit keeps the earlier commit's apps still down on the row", async () => {
+  const slack = fakeSlack({ now });
+  await pageDeployFailure(slack.client, failure("OS"));
+  await pageDeployFailure(slack.client, { ...failure("Agents"), sha: "fedcba9876543210" });
+  expect(rows(slack)).toEqual(["🔴 prd deploys: Agents failed at fedcba9; OS failed at 0123456"]);
 });
 
 test("a deploy page reads back from Slack's history as it was rendered", () => {

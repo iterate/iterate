@@ -327,8 +327,9 @@ function withFailure(page: DeployPage, app: { app: string; uploaded: boolean }):
 }
 
 /** A failed deploy's Slack side: `app`'s failure at `sha` paged (writeDeployPage), then the
- *  dashboard's "prd deploys" row red, naming that page's apps still down. A 🧪 test run posts the
- *  page it would post to #ci alone. */
+ *  dashboard's "prd deploys" row red, naming the apps still down on every open deploy page, this
+ *  commit's and any earlier one's (openDeployRow). A 🧪 test run posts the page it would post to #ci
+ *  alone. */
 export async function pageDeployFailure(
   slack: WebClient,
   input: {
@@ -346,14 +347,38 @@ export async function pageDeployFailure(
     await slack.chat.postMessage({ channel: slackChannelIds["#ci"], text });
     return;
   }
-  const page = await writeDeployPage(slack, input);
+  await writeDeployPage(slack, input);
+  const channel = slackChannelIds["#error-pulse"];
+  const open = await findOpenPages(slack, {
+    channel,
+    marker: DEPLOY_MARKER,
+    sinceHours: DEPLOY_PAGE_HOURS,
+    now: input.now,
+  });
   await setRow(slack, {
-    channel: slackChannelIds["#error-pulse"],
+    channel,
     now: input.now,
     signal: DEPLOY_SIGNAL,
     state: "red",
-    text: deployRowText([page]),
+    text: openDeployRow(open.map((found) => found.text)),
   });
+}
+
+/** The "prd deploys" row's text for the open pages `texts`: each page's apps still down, and how many
+ *  pages could not be read (a format from before), which are down too as far as anyone knows. Pure. */
+function openDeployRow(texts: string[]) {
+  const pages: DeployPage[] = [];
+  let unread = 0;
+  for (const text of texts) {
+    try {
+      pages.push(readDeployPage(text));
+    } catch {
+      unread += 1;
+    }
+  }
+  return [pages.length > 0 && deployRowText(pages), unread > 0 && `${unread} page(s) not read`]
+    .filter(Boolean)
+    .join("; ");
 }
 
 /** A commit's first page, for `app` that failed on it. Pure. */
@@ -434,19 +459,20 @@ export async function resolveDeployPages(
   });
   // one page that cannot be read or written leaves the others to resolve, and fails the step after
   const errors: unknown[] = [];
-  const stillOpen: DeployPage[] = [];
+  const stillOpen: string[] = [];
   for (const found of open) {
     try {
       const page = await resolveDeployPage(slack, { ...input, channel, found });
-      if (page) stillOpen.push(page);
+      if (page) stillOpen.push(deployPageText(page, false));
     } catch (error) {
       errors.push(error);
+      // its incident is still open as far as anyone knows: the row stays red for it
+      stillOpen.push(found.text);
     }
   }
-  // a page that could not be read names no apps: it fails the step instead
   const row: { state: RowState; text: string } =
     stillOpen.length > 0
-      ? { state: "red", text: deployRowText(stillOpen) }
+      ? { state: "red", text: openDeployRow(stillOpen) }
       : { state: "green", text: `${input.app} live at ${input.sha.slice(0, 7)}` };
   await setRow(slack, { channel, now: input.now, signal: DEPLOY_SIGNAL, ...row }).catch(
     (error: unknown) => errors.push(error),
