@@ -187,12 +187,12 @@ test("a failing check pages, the next failing check edits that page, and a pass 
   expect(page?.text).toContain("<https://depot.dev/run/bbbbbbb2222|run>");
 
   expect(await reportPostDeploy(slack.client, reading("ccccccc3333", false))).toBe("resolve");
-  expect(page?.text.split("\n")[0]).toBe(
+  expect(page?.text.split("\n").slice(0, 2)).toEqual([
     "✅ resolved: prd post-deploy check failed after the os-prd deploy at bbbbbbb <@U067G4QRFK2> <@U099JH9TAF2>",
-  );
-  expect(page?.replies.map((reply) => reply.text)).toEqual([
-    "✅ resolved: every project host answers on `1f3a9c21` <@U067G4QRFK2> <@U099JH9TAF2>",
+    "✅ every project host answers on `1f3a9c21`",
   ]);
+  // the resolution is the edit alone: no reply, so it notifies nobody
+  expect(page?.replies).toEqual([]);
   // the next failure is a new incident: a new page, counting from one
   expect(await reportPostDeploy(slack.client, reading("ddddddd4444", true))).toBe("post");
   expect(slack.channel("#error-pulse").at(-1)?.text).toContain("failing since ddddddd, 1 deploy");

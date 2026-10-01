@@ -8,9 +8,10 @@
 // Only an account at its page tier ($/hour) reaches a human: ONE page per incident in
 // #error-pulse, with both mentions and the top spenders. While it lasts, each run
 // edits the page with the rate now and the peak; the first run at 2× and at 5× the
-// page tier also replies in its thread, broadcast to the channel. Two complete
-// hours under the ceiling resolve it. The probe's hourly series and the page's own
-// text are the whole state: the page says the peak it has shown.
+// page tier also replies in its thread, with both mentions. Two complete hours
+// under the ceiling resolve it: an edit, which mentions nobody (../ci/slack.ts
+// `resolvePage`). The probe's hourly series and the page's own text are the whole
+// state: the page says the peak it has shown.
 // It exists because a runaway Durable Object can cost hundreds of dollars an
 // hour while every request stays green, and the bill shows it only days later.
 // A health test page runs it with a ceiling of 1 DO-hour, which forces a page: the
@@ -39,7 +40,7 @@ const LOOKBACK_HOURS = 26;
 const OPEN_PAGE_HOURS = 48;
 /** How far back a new page looks for its account's older open pages, which it resolves as expired. */
 const EXPIRED_PAGE_HOURS = 30 * 24;
-/** Multiples of the page tier whose first crossing is a broadcast reply in the page's thread. */
+/** Multiples of the page tier whose first crossing is a reply in the page's thread. */
 const ESCALATIONS = [2, 5];
 
 export const ACCOUNTS = [
@@ -440,12 +441,7 @@ async function upkeepPage(input: {
     await resolvePage(slack, { channel, ts: action.ts, text: action.text, why: action.why });
   if (action.kind === "edit") {
     if (action.escalation)
-      await slack.chat.postMessage({
-        channel,
-        thread_ts: action.ts,
-        text: action.escalation,
-        reply_broadcast: true,
-      });
+      await slack.chat.postMessage({ channel, thread_ts: action.ts, text: action.escalation });
     await editPage(slack, { channel, ts: action.ts, text: action.text });
   }
   return action.kind;

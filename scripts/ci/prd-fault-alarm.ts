@@ -4,12 +4,14 @@
 // most requests green through a Cloudflare fault, so the heals and errors it logs are the only sign.
 //
 // Each fault is an incident, keyed by its cause: a deploy's reset or version skew in a Worker, a
-// visitor 5xx's host, a healed facet's name or an error message. The incidents a run opens share
-// one page (slack.ts pageText), which later runs edit in place with each incident's running count
-// and when it was last seen. The page's thread hears only of a change of state, each reply
-// mentioning Jonas and Misha: an incident grown tenfold or back in a burst after an hour's quiet
-// (both broadcast to the channel), and the page's resolution once its last incident has gone a day
-// unseen. An incident seen after it closed opens a new page.
+// visitor 5xx's host (one for all of iterate.com's made-up subdomains), a healed facet's name or an
+// error message. A scanner's paths (`/.env`, `*.php`) count for nothing. A UTC day has one page
+// (slack.ts pageText): the first run that sees an incident that day posts it, and later runs edit it
+// in place with each incident's running count and when it was last seen, new incidents included.
+// The page's thread hears only of a change of state, each reply mentioning Jonas and Misha and
+// staying in the thread: a new incident in a burst, an incident grown tenfold, or back in a burst
+// after an hour's quiet. Once its last incident has gone a day unseen, the page is edited resolved,
+// which notifies nobody. An incident seen after it closed joins that day's page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
 // open pages with their incidents. Only a run on main posts and keeps it; any other run prints what
@@ -376,8 +378,42 @@ const RECOVERED_BY_REDIAL = [
 const ALARM_SUMMARY =
   /^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{2} \d{4} \d{2}:\d{2}:\d{2} GMT[+-]\d{4} \(.*\)$/u;
 
-/** The window's incidents: one per cause, visitor 5xx host, healed name or error message. Heals
- *  count only in a burst (10 or more in the window). Pure. */
+/** iterate.com's apex and every first-level name the platform does not keep for itself serve the
+ *  iterate project's site (envs.ts `projectWildcard`). A scanner walks made-up names (2026-09-30:
+ *  build., api2., inference.:8443, ~60 in two hours), so every such name but the apex and www is
+ *  one incident under SITE_SUBDOMAINS, listing its hosts, not an incident per name. */
+const siteWildcard = osEnvs.prd!.projectWildcard!;
+const SITE_SUBDOMAINS = `${siteWildcard.hostname} subdomains`;
+
+/** Whether `host` (a port is ignored) is one of the site's first-level names but the apex and www.
+ *  Pure. */
+function isSiteSubdomain(host: string) {
+  const name = host.replace(/:\d+$/u, "").toLowerCase();
+  const suffix = `.${siteWildcard.hostname}`;
+  if (!name.endsWith(suffix)) return false;
+  const label = name.slice(0, -suffix.length);
+  return (
+    !label.includes(".") &&
+    label !== "www" &&
+    !(siteWildcard.excludedHostnames || []).includes(name)
+  );
+}
+
+/** Paths only a vulnerability scanner asks for: a dotfile (but `/.well-known/`), PHP and its kin,
+ *  WordPress, Spring Boot's actuator, CGI, debug consoles, env files and backup copies. A 5xx there
+ *  says nothing the same host's `/` would not, and a scanner asks for thousands (2026-09-30: ~4,300
+ *  across 33 hosts), so they count for nothing. */
+const SCANNER_PATH =
+  /\/\.(?!well-known\/)|\.(?:php\d?|aspx?|jsp|cgi|env|bak|old|orig|swp|sql|config)(?:[.?#~/]|$)|\/(?:wp-|wordpress\/|actuator|cgi-bin\/|phpmyadmin|_profiler\/|telescope\/|_debugbar\/|vendor\/phpunit\/)|~$/iu;
+
+/** Whether `url`'s path is one only a scanner asks for (SCANNER_PATH). Pure. */
+function isScannerPath(url: string) {
+  return SCANNER_PATH.test(url.replace(/^https?:\/\/[^/?#]+/u, ""));
+}
+
+/** The window's incidents: one per cause, visitor 5xx host (SITE_SUBDOMAINS for the site's made-up
+ *  names), healed name or error message. Heals count only in a burst (10 or more in the window). A
+ *  scanner's paths (isScannerPath) count for nothing. Pure. */
 export function incidentsOf(reading: FaultReading) {
   const incidents = new Map<string, Sighting>();
   const add = (sighting: Sighting) => {
@@ -394,8 +430,15 @@ export function incidentsOf(reading: FaultReading) {
     for (const [url, count] of serverErrors)
       add({ what: cause, label: worker, count, hosts: { [host(url)]: count } });
   // prd answers no 5xx on purpose
-  for (const [url, count] of reading.serverErrors)
-    add({ what: "visitor 5xx", label: host(url), count, hosts: {} });
+  for (const [url, count] of reading.serverErrors) {
+    if (isScannerPath(url)) continue;
+    const name = host(url);
+    add(
+      isSiteSubdomain(name)
+        ? { what: "visitor 5xx", label: SITE_SUBDOMAINS, count, hosts: { [name]: count } }
+        : { what: "visitor 5xx", label: name, count, hosts: {} },
+    );
+  }
   if (reading.heals.reduce((sum, [, n]) => sum + n, 0) >= BURST)
     for (const [name, count] of reading.heals)
       add({ what: "platform-failure heals", label: name, count, hosts: {} });
@@ -405,14 +448,16 @@ export function incidentsOf(reading: FaultReading) {
     (pagers["rpc-stub-pager-redialed"] ?? 0) > 0 && (pagers[PAGER_GAVE_UP] ?? 0) === 0;
   // An error is keyed by what it says, not by the ids and places in it. A failed invocation's
   // summary is its request line: one incident per method and host, not per path — a scanner's
-  // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident. An
-  // alarm's summary is the time it was scheduled for: one incident for all. A stack's frames move
-  // with every deploy, and an id (a reference, an event, a project) is new with every error.
+  // paths (2026-09-24: ~4,300 across 17 project hosts) would otherwise each open an incident — and
+  // one for all the site's made-up names. An alarm's summary is the time it was scheduled for: one
+  // incident for all. A stack's frames move with every deploy, and an id (a reference, an event, a
+  // project) is new with every error.
   for (const [message, count] of [...reading.errors, ...(recovered ? [] : reading.closeResets)]) {
     if (recovered && RECOVERED_BY_REDIAL.some((pattern) => pattern.test(message))) continue;
-    const requestLine = /^([A-Z]+ https?:\/\/[^/?#\s]+)\S*$/u.exec(message);
+    const requestLine = /^([A-Z]+) (https?):\/\/([^/?#\s]+)\S*$/u.exec(message);
+    if (requestLine && isScannerPath(message.slice(requestLine[1]!.length + 1))) continue;
     const label = requestLine
-      ? `${requestLine[1]}/…`
+      ? `${requestLine[1]} ${requestLine[2]}://${isSiteSubdomain(requestLine[3]!) ? `(subdomain).${siteWildcard.hostname}` : requestLine[3]}/…`
       : message
           .replace(ALARM_SUMMARY, "a Durable Object alarm failed")
           .replace(/(?<=\S)\s{2,}at\s.*$/su, "")
@@ -439,10 +484,13 @@ type PageUpdate = {
 /**
  * What a window owes Slack. Each incident it sees that is open on a page counts there: the page is
  * edited with the running count, and its thread hears of a change of state — grown tenfold since
- * the channel last heard, or back in a burst after an hour's quiet (at most every six hours) —
- * broadcast to the channel. An incident unseen for a day closes; a page whose incidents all closed
- * is `resolved` (slack.ts resolvePage) and leaves the state. The incidents with no open page open
- * one new page. `pages` is the next state's open pages, the new one to be added once posted. Pure.
+ * the channel last heard, or back in a burst after an hour's quiet (at most every six hours). An
+ * incident with no open incident joins the open page first posted the same UTC day (todaysPage),
+ * by an edit, and its thread hears of it when it came in a burst; with no such page, those
+ * incidents open one new page. So a day has one fault page, however many hosts a scanner walks
+ * (2026-09-30: ten pages in two hours, one per window). An incident unseen for a day closes; a page
+ * whose incidents all closed is `resolved` (slack.ts resolvePage) and leaves the state. `pages` is
+ * the next state's open pages, the new one to be added once posted. Pure.
  */
 export function triageIncidents(
   reading: FaultReading,
@@ -457,10 +505,11 @@ export function triageIncidents(
       if (now - Date.parse(incident.lastSeen) >= CLOSE_AFTER_MS) incident.closed = true;
   const opened: Record<string, Incident> = {};
   const replies = new Map<string, string[]>();
+  const today = todaysPage(pages, window.to);
   for (const [key, sighting] of incidentsOf(reading)) {
     const page = pages.find((open) => open.incidents[key]?.closed === false);
     if (!page) {
-      opened[key] = {
+      const incident = {
         ...sighting,
         told: sighting.count,
         firstSeen: window.to.toISOString(),
@@ -468,6 +517,13 @@ export function triageIncidents(
         back: null,
         closed: false,
       };
+      if (!today) {
+        opened[key] = incident;
+        continue;
+      }
+      today.incidents[key] = incident;
+      if (sighting.count >= BURST)
+        replies.set(today.ts, [...(replies.get(today.ts) ?? []), `• new: ${describe(sighting)}`]);
       continue;
     }
     const incident = page.incidents[key]!;
@@ -524,7 +580,7 @@ export function triageIncidents(
               ),
               ...lines,
             ].join("\n"),
-            broadcast: true,
+            broadcast: false,
           }
         : null,
     });
@@ -541,15 +597,30 @@ export function triageIncidents(
   };
 }
 
-/** An incident in words: `<what>: <label> <count>`, a cause's with its visitor 5xx by host, at most
- *  five hosts. Pure. */
+/** The open page the window's new incidents join: the newest one first posted on `to`'s UTC day,
+ *  by its earliest incident. Pure. */
+function todaysPage(pages: Page[], to: Date) {
+  const day = to.toISOString().slice(0, 10);
+  return pages.findLast(
+    (page) =>
+      Object.values(page.incidents)
+        .map((incident) => incident.firstSeen)
+        .sort()[0]
+        ?.slice(0, 10) === day,
+  );
+}
+
+/** An incident in words: `<what>: <label> <count>`, with its visitor 5xx by host when it has them,
+ *  at most five hosts: a cause's as `<cause> (<worker>): <count> visitor 5xx on …`. Pure. */
 function describe(incident: Pick<Incident, "what" | "label" | "count" | "hosts">) {
   const label = slackEscape(incident.label);
   const hosts = Object.entries(incident.hosts).sort(([, a], [, b]) => b - a);
   if (!hosts.length) return `${incident.what}: ${label} ${incident.count}`;
   const named = hosts.slice(0, 5).map(([host, n]) => `${slackEscape(host)} ${n}`);
-  const more = hosts.length > 5 ? ` +${hosts.length - 5}` : "";
-  return `${incident.what} (${label}): ${incident.count} visitor 5xx on ${named.join(", ")}${more}`;
+  const on = `${named.join(", ")}${hosts.length > 5 ? ` +${hosts.length - 5}` : ""}`;
+  return incident.what in CAUSES
+    ? `${incident.what} (${label}): ${incident.count} visitor 5xx on ${on}`
+    : `${incident.what}: ${label} ${incident.count} on ${on}`;
 }
 
 /** At most this many incidents are listed on a page, biggest first. */

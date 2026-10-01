@@ -255,12 +255,12 @@ test("each app live again is an edit; the page resolves when the last app is bac
   expect(page?.replies).toEqual([]);
 
   await resolveDeployPages(slack.client, { app: "Agents", sha: fix, now: new Date(now), descends });
-  expect(page?.text.split("\n")[0]).toBe(
+  expect(page?.text.split("\n").slice(0, 2)).toEqual([
     `✅ resolved: prd deploy failed at 0123456 (A change &amp; more): OS, Agents ${mention}`,
-  );
-  expect(page?.replies.map((reply) => reply.text)).toEqual([
-    `✅ resolved: every app is live again: OS at 89abcde, Agents at 89abcde ${mention}`,
+    "✅ every app is live again: OS at 89abcde, Agents at 89abcde",
   ]);
+  // the resolution is the edit alone: no reply, so it notifies nobody
+  expect(page?.replies).toEqual([]);
 });
 
 test("a re-run of an older commit resolves nothing", async () => {
@@ -299,15 +299,15 @@ test.for(["edit_window_closed", "cant_update_message"])(
     expect({
       pages: pages.map((message) => message.text.split(" (")[0]),
       closed: stuck!.replies.map((reply) => [reply.text, reply.reply_broadcast]),
-      resolved: pages[1]!.replies.map((reply) => reply.text),
+      resolved: pages[1]!.text.split("\n")[1],
+      replies: pages[1]!.replies,
     }).toEqual({
       pages: ["🚨 prd deploy failed at 0123456", "✅ resolved: prd deploy failed at 0123456"],
       closed: [
         ["✅ resolved: this page moved to a new message, which Slack lets this bot edit", true],
       ],
-      resolved: [
-        `✅ resolved: every app is live again: OS at 89abcde, Agents at 89abcde ${mention}`,
-      ],
+      resolved: "✅ every app is live again: OS at 89abcde, Agents at 89abcde",
+      replies: [],
     });
   },
 );
@@ -392,12 +392,14 @@ test("a red workflow pages, repeats edit the page, other failing jobs reply, gre
     sha: "ddddddd4",
     now: new Date(now),
   });
-  expect(page?.text.split("\n")[0]).toBe(
+  expect(page?.text.split("\n").slice(0, 2)).toEqual([
     `✅ resolved: OS crash hunt failed: plan, crash-hunt ${mention}`,
-  );
-  expect(page?.replies.at(-1)?.text).toBe(
-    `✅ resolved: OS crash hunt green again at ddddddd ${mention}`,
-  );
+    "✅ OS crash hunt green again at ddddddd",
+  ]);
+  // the escalation is the thread's one reply: the resolution only edits the page
+  expect(page?.replies.map((reply) => [reply.text, Boolean(reply.reply_broadcast)])).toEqual([
+    [`🚨 OS crash hunt now fails in plan, crash-hunt ${mention}`, false],
+  ]);
   // the next red run is a new incident; another workflow's green run resolves nothing of it
   await run(["crash-hunt"], "eeeeeee5");
   await resolveWorkflowPage(slack.client, {

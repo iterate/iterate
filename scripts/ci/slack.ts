@@ -87,10 +87,10 @@ export function pageText(input: {
     .join("\n");
 }
 
-/** The thread reply that closes an incident, with both mentions. A test run's is marked 🧪 and
- *  mentions nobody. */
+/** Why an incident closed, as a line that mentions nobody: good news is not a page. A test run's is
+ *  marked 🧪. */
 export function resolvedText(why: string, testRun: boolean) {
-  return testRun ? `🧪 TEST RUN — ✅ resolved: ${why}` : `✅ resolved: ${why} ${onCallMention}`;
+  return testRun ? `🧪 TEST RUN — ✅ resolved: ${why}` : `✅ resolved: ${why}`;
 }
 
 /** The thread reply for an incident that got worse: what is new, with both mentions. A test run's is
@@ -104,6 +104,13 @@ export function escalationText(news: string, testRun: boolean) {
 export function markResolved(text: string) {
   const [first = "", ...rest] = text.split("\n");
   return [`✅ resolved: ${first.replace(/^(🚨|:rotating_light:)\s*/, "")}`, ...rest].join("\n");
+}
+
+/** A page's text once its incident closed: markResolved's, then a line saying why. Mentions stay
+ *  as they were: an edit notifies nobody. */
+export function resolvedPageText(text: string, why: string) {
+  const [first = "", ...rest] = markResolved(text).split("\n");
+  return [first, `✅ ${why}`, ...rest].join("\n");
 }
 
 /** Whether a page's first line says it is resolved. Words, not the emoji: Slack's history spells ✅
@@ -227,23 +234,24 @@ export async function editPage(
 }
 
 /**
- * Closes an incident: its page's first line is edited to `✅ resolved:`, then the thread gets the
- * reply that says why, with both mentions. The edit comes first, so a failed edit leaves the page
- * open for the next run to resolve and never repeats the reply. A frozen page (updatePage) gets the
- * reply in its thread and the channel too, which closes it (closeFrozenPage); a deleted one gets it
- * top-level, and no run finds it again.
+ * Closes an incident by editing its page (resolvedPageText), which notifies nobody: a resolution
+ * is not worth a ping. A frozen page (updatePage) gets why in its thread and the channel too,
+ * naming no one, which closes it (closeFrozenPage). A deleted page gets nothing: no run finds it
+ * again.
  */
 export async function resolvePage(
   slack: WebClient,
   input: { channel: string; ts: string; text: string; why: string },
 ) {
   const { channel, ts } = input;
-  const edited = await updatePage(slack, { channel, ts, text: markResolved(input.text) });
+  const edited = await updatePage(slack, {
+    channel,
+    ts,
+    text: resolvedPageText(input.text, input.why),
+  });
   // a 🧪 test page is never open (findOpenPages), so this resolves a real one
-  const text = resolvedText(input.why, false);
-  if (edited === "edited") await slack.chat.postMessage({ channel, thread_ts: ts, text });
-  if (edited === "frozen") await closeFrozenPage(slack, { channel, ts, text });
-  if (edited === "deleted") await slack.chat.postMessage({ channel, text });
+  if (edited === "frozen")
+    await closeFrozenPage(slack, { channel, ts, text: resolvedText(input.why, false) });
 }
 
 /** Resolves `pages`, the older open pages of an incident that has a newer page, naming no one: by

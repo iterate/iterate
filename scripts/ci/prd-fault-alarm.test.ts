@@ -238,7 +238,7 @@ test("an unchanged page is not edited: a window that saw nothing new owes nothin
   expect(triageAt("07:45", quiet, first.next).triage).toMatchObject({ page: null, updates: [] });
 });
 
-test("an incident grown tenfold since the channel last heard is broadcast in its thread", () => {
+test("an incident grown tenfold since the channel last heard is told in its thread, not the channel", () => {
   const first = triageAt("07:30", reading5xx(1), null);
   const grown = triageAt("07:45", reading5xx(9), first.next);
   const after = triageAt("08:00", reading5xx(1), grown.next);
@@ -249,14 +249,14 @@ test("an incident grown tenfold since the channel last heard is broadcast in its
     grown: [
       {
         text: `🚨 prd fault escalated, 07:28–07:43 UTC ${mentions}\n• grew tenfold: visitor 5xx: lispwoso.com 10`,
-        broadcast: true,
+        broadcast: false,
       },
     ],
     after: [null],
   });
 });
 
-test("a deploy's incident grown tenfold is broadcast with the hosts this window added", () => {
+test("a deploy's incident grown tenfold is told with the hosts this window added", () => {
   const reset = (hosts: [string, number][]): FaultReading => ({
     ...quiet,
     causes: [{ cause: "deploy reset", worker: "os-prd", serverErrors: hosts }],
@@ -275,7 +275,7 @@ test("a deploy's incident grown tenfold is broadcast with the hosts this window 
   ]);
 });
 
-test("an incident back in a burst after an hour's quiet is broadcast; a lone return, or a burst within six hours, only edits", () => {
+test("an incident back in a burst after an hour's quiet is told in its thread; a lone return, or a burst within six hours, only edits", () => {
   const quietHour = (state: AlarmState, from: number) =>
     [0, 15, 30, 45, 60].reduce(
       (quieter, minutes) => triageAt(clock(from + minutes), quiet, quieter).next,
@@ -299,7 +299,7 @@ test("an incident back in a burst after an hour's quiet is broadcast; a lone ret
     burst: [
       {
         text: `🚨 prd fault escalated, 10:13–10:28 UTC ${mentions}\n• back after quiet since 08:58 UTC: visitor 5xx: lispwoso.com 10`,
-        broadcast: true,
+        broadcast: false,
       },
     ],
     burstAgain: [null],
@@ -330,7 +330,7 @@ test("a page whose incidents all went a day unseen is resolved, and leaves the s
   });
 });
 
-test("an incident closed while its page stays open is ticked, and seen again it opens a new page", () => {
+test("an incident closed while its page stays open is ticked, and seen again the next day it opens that day's page", () => {
   const first = triageAt(
     "07:30",
     { ...quiet, errors: [["boom", 1]], serverErrors: [["https://a.com/", 1]] },
@@ -358,6 +358,55 @@ test("an incident closed while its page stays open is ticked, and seen again it 
     ],
   });
   expect(dayLater.triage.page?.text).not.toContain("boom");
+});
+
+test("a new incident the same UTC day joins that day's page by an edit; one that came in a burst is told in its thread", () => {
+  const first = triageAt("07:30", reading5xx(1), null);
+  const lone = triageAt(
+    "07:45",
+    { ...quiet, serverErrors: [["https://garple.com/", 1]] },
+    first.next,
+  );
+  const burst = triageAt("08:00", { ...quiet, errors: [["boom", 12]] }, lone.next);
+  expect({
+    pages: [first, lone, burst].map((run) => run.triage.page),
+    lone: lone.triage.updates,
+    burst: burst.triage.updates,
+  }).toMatchObject({
+    pages: [{ text: expect.stringContaining("lispwoso.com") }, null, null],
+    lone: [
+      { ts: "1.0", text: expect.stringContaining("• visitor 5xx: garple.com 1"), reply: null },
+    ],
+    burst: [
+      {
+        ts: "1.0",
+        text: expect.stringContaining("• errors: boom 12"),
+        reply: {
+          text: `🚨 prd fault escalated, 07:43–07:58 UTC ${mentions}\n• new: errors: boom 12`,
+          broadcast: false,
+        },
+      },
+    ],
+  });
+  expect(burst.next.pages.map((page) => Object.keys(page.incidents))).toEqual([
+    ["visitor 5xx: lispwoso.com", "visitor 5xx: garple.com", "errors: boom"],
+  ]);
+});
+
+test("the first incident of a new UTC day opens that day's page, while yesterday's stays open for its own", () => {
+  const first = triageAt("23:30", reading5xx(1), null);
+  const nextDay = triageAt(
+    "00:15",
+    { ...quiet, serverErrors: [["https://garple.com/", 1]] },
+    first.next,
+    "2026-09-24",
+  );
+  expect(nextDay.triage).toMatchObject({
+    page: { text: expect.stringContaining("• visitor 5xx: garple.com 1") },
+    // yesterday's page only restamps its times with their date
+    updates: [{ ts: "1.0", text: expect.not.stringContaining("garple.com"), reply: null }],
+  });
+  expect(nextDay.next.pages).toHaveLength(2);
 });
 
 test("heals below a burst add nothing to an open heals incident", () => {
@@ -399,9 +448,9 @@ test("a deploy's cause is one incident listing its visitor 5xx by host, at most 
 
 test.for([
   {
-    name: "a scanner's paths on one host",
-    message: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1",
-    label: "GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
+    name: "a request line's path",
+    message: "GET https://garple.com/api/projects?x=1",
+    label: "GET https://garple.com/…",
   },
   {
     name: "a workerd reference",
@@ -430,23 +479,98 @@ test.for([
   ]);
 });
 
-test("a failed invocation's request line is one incident per method and host, not per path", () => {
+test("a failed invocation's request line is one incident per method and host, not per path, and one for all of iterate.com's made-up subdomains", () => {
   expect([
     ...incidentsOf({
       ...quiet,
       errors: [
         ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/credentials.csv", 10],
-        ["GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/.env?x=1", 1],
+        ["GET https://build.iterate.com/api/config", 3],
+        ["GET https://garple.com/", 1],
+        ["GET https://garple.com/d/ferovo.com", 1],
         ["POST https://k.iterate.com/?rest_route=%2Fbatch%2Fv1", 1],
         ["call timed out", 2],
       ],
-    }).keys(),
+    }),
   ]).toEqual([
-    "errors: GET https://est-01k4yj6assfqfshsahjshe9pdp.iterate.com/…",
-    "errors: POST https://k.iterate.com/…",
-    "errors: call timed out",
+    [
+      "errors: GET https://(subdomain).iterate.com/…",
+      expect.objectContaining({ label: "GET https://(subdomain).iterate.com/…", count: 13 }),
+    ],
+    ["errors: GET https://garple.com/…", expect.objectContaining({ count: 2 })],
+    ["errors: POST https://k.iterate.com/…", expect.objectContaining({ count: 1 })],
+    ["errors: call timed out", expect.objectContaining({ count: 2 })],
   ]);
 });
+
+test("iterate.com's made-up subdomains are one incident listing its hosts; the apex, www and the first-party hosts keep their own", () => {
+  // 2026-09-30 21:05–21:35Z: the iterate project's site answered 500 on every name a scanner tried.
+  expect(
+    triageIncidents(
+      {
+        ...quiet,
+        serverErrors: [
+          ["https://build.iterate.com/v1/graphql", 6],
+          ["https://backend.iterate.com/", 5],
+          ["https://inference.iterate.com:8443/", 4],
+          ["https://cf-tunnel-plugin-os2-jonas--dev2.iterate.com/", 3],
+          ["https://art.iterate.com/", 2],
+          ["https://andy.iterate.com/api/session/properties", 2],
+          ["https://iterate.com/", 5],
+          ["https://www.iterate.com/", 1],
+          ["https://dash.iterate.com/", 1],
+        ],
+      },
+      window,
+      null,
+      false,
+    ).page?.text.split("\n"),
+  ).toEqual([
+    `🚨 prd: 29 visitor 5xx ${mentions}`,
+    "Impact: since 07:30 UTC",
+    "• visitor 5xx: iterate.com subdomains 22 on build.iterate.com 6, backend.iterate.com 5, inference.iterate.com:8443 4, cf-tunnel-plugin-os2-jonas--dev2.iterate.com 3, art.iterate.com 2 +1 · last 07:30 UTC",
+    "• visitor 5xx: iterate.com 5 · last 07:30 UTC",
+    "• visitor 5xx: www.iterate.com 1 · last 07:30 UTC",
+    "• visitor 5xx: dash.iterate.com 1 · last 07:30 UTC",
+    doLine,
+  ]);
+});
+
+test.for([
+  { path: "/.env", scanner: true },
+  { path: "/.env.live", scanner: true },
+  { path: "/agent/.env", scanner: true },
+  { path: "//.env", scanner: true },
+  { path: "/.git/config", scanner: true },
+  { path: "/wp-login.php", scanner: true },
+  { path: "/wp-content/plugins/api_keys.json", scanner: true },
+  { path: "/index.php?p=", scanner: true },
+  { path: "/cae2.3.php", scanner: true },
+  { path: "/config.php.bak", scanner: true },
+  { path: "/wp-config.php~", scanner: true },
+  { path: "/actuator/configprops", scanner: true },
+  { path: "/cgi-bin/luci", scanner: true },
+  { path: "/_profiler/phpinfo", scanner: true },
+  { path: "/telescope/requests", scanner: true },
+  { path: "/backup.sql", scanner: true },
+  { path: "/web.config", scanner: true },
+  { path: "/", scanner: false },
+  { path: "/.well-known/oauth-authorization-server", scanner: false },
+  { path: "/api/env", scanner: false },
+  { path: "/environment", scanner: false },
+  { path: "/v1/graphql", scanner: false },
+  { path: "/docs/php-setup", scanner: false },
+  { path: "/_iterate/auth/refresh", scanner: false },
+])(
+  "a 5xx on $path counts for nothing when only a scanner asks for it: $scanner",
+  ({ path, scanner }) => {
+    expect(
+      incidentsOf({ ...quiet, serverErrors: [[`https://garple.com${path}`, 1]] }),
+    ).toMatchObject({
+      size: scanner ? 0 : 1,
+    });
+  },
+);
 
 // ── which runs post ──
 
@@ -560,21 +684,26 @@ test("a new incident's page is posted to #error-pulse; its repeat is a chat.upda
   expect(posts(slack)).toHaveLength(1);
 });
 
-test("a resolved page's first line is edited to ✅ resolved:, then its thread says why", async () => {
+test("a resolved page is edited to say ✅ resolved: and why, and nothing is posted", async () => {
   const slack = fakeSlack({ now: now.getTime() });
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
   const [page] = slack.channel("#error-pulse");
   expect({
-    updates: updates(slack).map((update) => [update.ts, String(update.text).split("\n")[0]]),
-    replies: posts(slack)
-      .slice(1)
-      .map((post) => [post.thread_ts, post.text]),
+    updates: updates(slack).map((update) => [
+      update.ts,
+      ...String(update.text).split("\n").slice(0, 2),
+    ]),
+    posts: posts(slack).length,
   }).toEqual({
-    updates: [[page!.ts, `✅ resolved: prd: 1 visitor 5xx ${mentions}`]],
-    replies: [
-      [page!.ts, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
+    updates: [
+      [
+        page!.ts,
+        `✅ resolved: prd: 1 visitor 5xx ${mentions}`,
+        "✅ no sighting for a day, quiet since 09-23 07:28 UTC",
+      ],
     ],
+    posts: 1,
   });
 });
 
@@ -601,24 +730,14 @@ test("a page Slack refuses to edit is posted again, and its thread and state mov
   expect(warn).toHaveBeenCalledWith(expect.stringContaining('"event":"slack.page-gone"'));
 });
 
-test("a resolved page Slack refuses to edit gets its resolution top-level, and leaves the state", async () => {
+test("a resolved page someone deleted gets nothing in its place, and leaves the state", async () => {
   const slack = fakeSlack({ now: now.getTime() });
   const run1 = await runAt("07:30", null, slack, serverErrorsOnly(1));
   const [page] = slack.channel("#error-pulse");
   page!.updateError = "message_not_found";
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const run2 = await runAt("07:30", run1.next, slack, serverErrorsOnly(0), "2026-09-24");
-  expect({
-    replies: posts(slack)
-      .slice(1)
-      .map((post) => [post.thread_ts, post.text]),
-    pages: run2.next.pages,
-  }).toEqual({
-    replies: [
-      [undefined, `✅ resolved: no sighting for a day, quiet since 09-23 07:28 UTC ${mentions}`],
-    ],
-    pages: [],
-  });
+  expect({ posts: posts(slack).length, pages: run2.next.pages }).toEqual({ posts: 1, pages: [] });
 });
 
 test("a dry run (no Slack client) resolves to the page it would post", async () => {
@@ -1300,7 +1419,7 @@ test.for([
       ...rpcStubOfflineRequest("offline-7").slice(1),
       ...failedDocsRequest(),
     ],
-    page: ["• visitor 5xx: docs.iterate.com 1 · last 07:30 UTC"],
+    page: ["• visitor 5xx: iterate.com subdomains 1 on docs.iterate.com 1 · last 07:30 UTC"],
     most: 15,
   },
   {
