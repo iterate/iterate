@@ -7,17 +7,14 @@
 //
 // --dry-run prints the body instead of writing the issue. The bucket is read with its account's
 // Cloudflare API token (envs.ts `ciBucketEnvs`). The issue is written as the iterate GitHub App, the
-// platform's own: the writer takes the App's id and key from prd's configuration (Doppler os/prd's
-// APP_CONFIG `integrations.github`) and mints an installation token that can only write issues in
-// this repository. The Depot app's job token has no Issues permission.
-import { createSign } from "node:crypto";
+// platform's own, with an installation token that can only write issues in this repository
+// (../iterate-app-token.ts). The Depot app's job token has no Issues permission.
 import type { Octokit } from "@octokit/rest";
 import { createCli } from "trpc-cli";
-import { z } from "zod";
-import { parseAppConfig } from "../../../core/os/src/app-config.ts";
-import { ciBucketEnvs, getEnv, OS_DOPPLER_PROJECT, osEnvs } from "../../../envs.ts";
-import { dopplerSecret, resolveEnvContext } from "../../lib/env-context.ts";
+import { ciBucketEnvs } from "../../../envs.ts";
+import { dopplerSecret } from "../../lib/env-context.ts";
 import { createOctokit } from "../github.ts";
+import { iterateAppFromPrd, iterateAppToken } from "../iterate-app-token.ts";
 import { DASHBOARD_MARKER, renderDashboard } from "./dashboard.ts";
 import { readSuiteRuns } from "./evidence.ts";
 
@@ -34,22 +31,11 @@ export default async function update(
   const [owner, repo] = repository.split("/");
   if (!owner || !repo) throw new Error(`GITHUB_REPOSITORY is not owner/repo: ${repository}`);
   const bucket = ciBucketEnvs.ci;
-  const prd = await resolveEnvContext(getEnv("prd", osEnvs), {
-    dopplerProject: OS_DOPPLER_PROJECT,
-  });
-  const iterateApp = parseAppConfig({
-    APP_CONFIG: prd.secrets.APP_CONFIG,
-    APP_CONFIG_SECRETS__KEY: prd.secrets.APP_CONFIG_SECRETS__KEY,
-  }).integrations.github;
-  if (!iterateApp)
-    throw new Error(
-      "prd's APP_CONFIG has no integrations.github: the dashboard is the App's to write",
-    );
-  const app = await iterateAppIssuesToken({
-    appId: iterateApp.appId,
-    privateKey: iterateApp.privateKey.exposeSecret(),
+  const app = await iterateAppToken({
+    ...(await iterateAppFromPrd()),
     owner,
-    repo,
+    repositories: [repo],
+    permissions: { issues: "write" },
   });
   console.log(
     `[flake-dashboard] iterate app token for ${app.repositories.join(", ")}: ${JSON.stringify(app.permissions)}`,
@@ -91,60 +77,6 @@ export default async function update(
     console.log(`[flake-dashboard] opened ${created.data.html_url}`);
   }
   if (dryRun) console.log(`[flake-dashboard] the body:\n${body}`);
-}
-
-/**
- * An installation token of the iterate GitHub App, narrowed to writing issues in this one
- * repository.
- */
-export async function iterateAppIssuesToken(input: {
-  appId: string;
-  privateKey: string;
-  owner: string;
-  repo: string;
-}) {
-  const now = Math.floor(Date.now() / 1000);
-  const segment = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  // GitHub App JWT: RS256, issued a minute back for clock drift, valid for less than ten minutes.
-  const unsigned = `${segment({ alg: "RS256", typ: "JWT" })}.${segment({
-    iat: now - 60,
-    exp: now + 540,
-    iss: input.appId,
-  })}`;
-  const signature = createSign("RSA-SHA256").update(unsigned).sign(input.privateKey, "base64url");
-  const github = async (path: string, body?: object) => {
-    const response = await fetch(`https://api.github.com${path}`, {
-      method: body ? "POST" : "GET",
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${unsigned}.${signature}`,
-        "x-github-api-version": "2022-11-28",
-      },
-      ...(body && { body: JSON.stringify(body) }),
-    });
-    if (!response.ok) throw new Error(`GitHub ${path} returned HTTP ${response.status}`);
-    return response.json();
-  };
-  const installation = z
-    .object({ id: z.number() })
-    .parse(await github(`/repos/${input.owner}/${input.repo}/installation`));
-  const access = z
-    .object({
-      token: z.string().min(1),
-      permissions: z.record(z.string(), z.string()),
-      repositories: z.array(z.object({ name: z.string() })),
-    })
-    .parse(
-      await github(`/app/installations/${installation.id}/access_tokens`, {
-        repositories: [input.repo],
-        permissions: { issues: "write" },
-      }),
-    );
-  return {
-    token: access.token,
-    permissions: access.permissions,
-    repositories: access.repositories.map(({ name }) => name),
-  };
 }
 
 /** The open issue whose body starts with the dashboard marker, whatever its title. */

@@ -6,7 +6,11 @@ set, list, update and delete — the platform's `itx.secrets`, whose values neve
 agent's collection link opens `/collect-secret/<slug>`, one card outside the shell, framed like the
 issuer's sign-in and consent pages), and its integrations
 (`/projects/<slug>/integrations`: connect Slack, Google and GitHub through iterate's app or your own,
-listed from the project root's `integrations` state). It is an ordinary OAuth client of the
+listed from the project root's `integrations` state), and its repos (`/projects/<slug>/repos`: the
+repos list, and `/projects/<slug>/repos/<name>`, the `RepoIde` of `@iterate-com/ui` — a file tree, an
+editable CodeMirror buffer with a diff against the last commit, staging, commit and history, reusable
+in any app, see `packages/ui/AGENTS.md`; the working tree is kept in the browser until it commits
+through `itx.repos.get(path).commitFiles`, and the repo's reads and commits are text only). It is an ordinary OAuth client of the
 headless platform at `https://os.iterate.com` (which serves only sign-in and
 consent; everything else lives in apps like this one), asking for the `iterate`,
 `account` and `organizations:write` scopes; the last two are optional and can be unticked at

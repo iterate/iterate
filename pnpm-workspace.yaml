@@ -72,6 +72,7 @@ catalog:
   shadcn: 4.21.0
   sonner: ^2.0.8
   sqlfu: 0.1.1
+  streamdown: ^2.6.0
   tailwindcss: ^4.3.3
   trpc-cli: 0.17.0
   tsdown: 0.23.0
