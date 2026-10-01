@@ -1,19 +1,20 @@
-// THE ONE-WAY COPY OF core/ TO THE PUBLIC iterate/os (copybara/copy.bara.sky,
-// tasks/core-public-copy.md).
+// THE ONE-WAY PUBLIC COPIES: core/ to iterate/core, and packages/ and configs/ to iterate/packages
+// (copybara/copy.bara.sky, tasks/core-public-copy.md).
 //
 //   node scripts/ci/copybara.ts sync --sha <deployed sha>
 //   node scripts/ci/copybara.ts check --sha <commit>
 //   node scripts/ci/copybara.ts workspace-files [--check]
 //
 // `sync` (Deploy OS, after a production deploy) copies iterate/iterate's commits up to the deployed
-// one into iterate/os's main, then checks the copy holds exactly that commit's files and that a
-// fresh clone passes the self-host recipe. An empty copy (its first run) starts as one snapshot of
-// that commit. It pushes as the iterate GitHub App, with a token that can only write iterate/os.
+// one into each copy's main, then checks each copy holds exactly that commit's files, and that a
+// fresh clone of iterate/core passes the self-host recipe. An empty copy (its first run) starts as
+// one snapshot of that commit. It pushes as the iterate GitHub App, with a token that can only write
+// the two copies.
 //
-// `check` (a pull request's check, .depot/workflows/copybara.yml) writes what the copy would hold at
-// a commit into a folder, pushing nothing, and runs the self-host recipe against it.
+// `check` (a pull request's check, .depot/workflows/copybara.yml) writes what iterate/core would hold
+// at a commit into a folder, pushing nothing, and runs the self-host recipe against it.
 //
-// `workspace-files` writes the copy's pnpm-workspace.yaml and pnpm-lock.yaml (copybara/os/).
+// `workspace-files` writes iterate/core's pnpm-workspace.yaml and pnpm-lock.yaml (copybara/core/).
 //
 // Copybara runs on $JAVA_HOME's Java, 25 or newer (its jar's class files are version 69).
 import { execFile, spawn } from "node:child_process";
@@ -40,17 +41,17 @@ const COPYBARA = {
 };
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const CONFIG = join(REPO_ROOT, "copybara/copy.bara.sky");
-/** copy.bara.sky's workflow, and the iterate/<repo> it pushes to. */
-const WORKFLOW = "os";
-const REPO = "os";
-const COPY_URL = `https://github.com/iterate/${REPO}`;
+/** copy.bara.sky's workflows, each named after the iterate/<repo> it pushes to. */
+const COPIES = ["core", "packages"];
+const urlOf = (copy: string) => `https://github.com/iterate/${copy}`;
 // The App's bot user (`gh api 'users/iterate[bot]'`), so its commits link to it.
 const COMMITTER = {
   name: "iterate[bot]",
   email: "233973017+iterate[bot]@users.noreply.github.com",
 };
 
-/** Copies the commits up to `sha` into iterate/os, then checks the copy is `sha`'s and builds. */
+/** Copies the commits up to `sha` into each copy, checks each is `sha`'s, and that iterate/core
+ *  builds from a fresh clone. */
 export async function sync(options: {
   /** The deployed commit to copy up to. */
   sha: string;
@@ -58,7 +59,7 @@ export async function sync(options: {
   const app = await iterateAppToken({
     ...(await iterateAppFromPrd()),
     owner: "iterate",
-    repositories: [REPO],
+    repositories: COPIES,
     permissions: { contents: "write" },
   });
   console.log(
@@ -70,46 +71,55 @@ export async function sync(options: {
     const credentials = join(work, "git-credentials");
     writeFileSync(credentials, `https://x-access-token:${app.token}@github.com\n`, { mode: 0o600 });
     const withToken = ["-c", `credential.helper=store --file=${credentials}`];
-    // An empty copy starts as this commit's snapshot: its history begins after the commit's parent.
-    const empty = !(await output("git", [...withToken, "ls-remote", "--heads", COPY_URL, "main"]));
-    const migrate = await copybara([
-      options.sha,
-      ...(empty ? ["--force", "--last-rev", await parentOf(options.sha)] : []),
-      "--git-credential-helper-store-file",
-      credentials,
-      "--nogit-prompt",
-      "--git-committer-name",
-      COMMITTER.name,
-      "--git-committer-email",
-      COMMITTER.email,
-    ]);
-    process.stdout.write(migrate.stderr);
-    if (migrate.status === 4)
-      console.log(`[copybara] ${REPO}: nothing new to copy up to ${options.sha}`);
-    else if (migrate.status !== 0) throw new Error(`Copybara exited with ${migrate.status}`);
+    for (const copy of COPIES) {
+      // An empty copy starts as this commit's snapshot: its history begins after its parent.
+      const empty = !(await output("git", [
+        ...withToken,
+        "ls-remote",
+        "--heads",
+        urlOf(copy),
+        "main",
+      ]));
+      const migrate = await copybara(copy, [
+        options.sha,
+        ...(empty ? ["--force", "--last-rev", await parentOf(options.sha)] : []),
+        "--git-credential-helper-store-file",
+        credentials,
+        "--nogit-prompt",
+        "--git-committer-name",
+        COMMITTER.name,
+        "--git-committer-email",
+        COMMITTER.email,
+      ]);
+      process.stdout.write(migrate.stderr);
+      if (migrate.status === 4)
+        console.log(`[copybara] ${copy}: nothing new to copy up to ${options.sha}`);
+      else if (migrate.status !== 0)
+        throw new Error(`Copybara's ${copy} exited with ${migrate.status}`);
 
-    const expected = join(work, "expected");
-    await writeToFolder(options.sha, expected);
-    await checkCopy({ sha: options.sha, expected, withToken, work });
+      const expected = join(work, `${copy}-expected`);
+      await writeToFolder(copy, options.sha, expected);
+      await checkCopy({ copy, sha: options.sha, expected, withToken, work });
+    }
 
     const clone = join(work, "clone");
-    await run("git", [...withToken, "clone", "--quiet", "--depth", "1", COPY_URL, clone]);
+    await run("git", [...withToken, "clone", "--quiet", "--depth", "1", urlOf("core"), clone]);
     await checkSelfHost(clone);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
-/** What iterate/os would hold at `sha`, written to a folder and run through the self-host recipe,
- *  pushing nothing: a pull request's check that the copy still installs and builds. */
+/** What iterate/core would hold at `sha`, written to a folder and run through the self-host
+ *  recipe, pushing nothing: a pull request's check that the copy still installs and builds. */
 export async function check(options: {
   /** The commit to copy, which must be on GitHub (Copybara fetches it). */
   sha: string;
 }) {
   const work = mkdtempSync(join(tmpdir(), "copybara-check-"));
   try {
-    const folder = join(work, REPO);
-    await writeToFolder(options.sha, folder);
+    const folder = join(work, "core");
+    await writeToFolder("core", options.sha, folder);
     // the folder as a fresh clone has it: every file committed, so the recipe's `git status` check
     // means what it does there
     const commit = ["-c", "user.name=copybara", "-c", "user.email=copybara@localhost"];
@@ -125,9 +135,9 @@ export async function check(options: {
   }
 }
 
-/** Copybara's `migrate` of the os workflow with `args`: its exit status (4: nothing to migrate) and
- *  what it printed. */
-async function copybara(args: string[]) {
+/** Copybara's `migrate` of a copy's workflow with `args`: its exit status (4: nothing to migrate)
+ *  and what it printed. */
+async function copybara(copy: string, args: string[]) {
   const javaHome = process.env.JAVA_HOME;
   if (!javaHome) throw new Error("JAVA_HOME is unset: Copybara needs Java 25 or newer");
   const jar = await copybaraJar();
@@ -137,7 +147,7 @@ async function copybara(args: string[]) {
       jar,
       "migrate",
       CONFIG,
-      WORKFLOW,
+      copy,
       ...args,
     ]);
     let stderr = "";
@@ -147,13 +157,13 @@ async function copybara(args: string[]) {
   });
 }
 
-/** What the copy holds at `sha`, as Copybara writes it: the same file selection and
+/** What a copy holds at `sha`, as Copybara writes it: the same file selection and
  *  transformations as a migration. */
-async function writeToFolder(sha: string, folder: string) {
-  const written = await copybara([sha, "--to-folder", "--folder-dir", folder, "--squash"]);
+async function writeToFolder(copy: string, sha: string, folder: string) {
+  const written = await copybara(copy, [sha, "--to-folder", "--folder-dir", folder, "--squash"]);
   if (written.status === 0) return;
   process.stdout.write(written.stderr);
-  throw new Error(`Copybara --to-folder exited with ${written.status}`);
+  throw new Error(`Copybara's ${copy} --to-folder exited with ${written.status}`);
 }
 
 /** `command args`, its output streamed to ours (an install, a build), throwing unless it exits 0. */
@@ -199,7 +209,7 @@ async function parentOf(sha: string) {
 }
 
 /**
- * The self-host recipe (core/os/public/setup-prompt.md) against a checkout of iterate/os, as far
+ * The self-host recipe (core/os/public/setup-prompt.md) against a checkout of iterate/core, as far
  * as it goes without a Cloudflare account: the install (with --frozen-lockfile, which proves the
  * copy's lockfile), the self-host build, a dry-run deploy, and the SDK imports its later steps run.
  * After all that, `git status` in the checkout must be clean.
@@ -223,27 +233,29 @@ async function checkSelfHost(checkout: string) {
   const status = await output("git", ["status", "--porcelain"], { cwd: checkout });
   if (status)
     throw new Error(
-      `the recipe left ${REPO}'s checkout dirty (copybara/os/.gitignore, or an install that rewrites a tracked file):\n${status.split("\n").slice(0, 20).join("\n")}`,
+      `the recipe left iterate/core's checkout dirty (copybara/core/.gitignore, or an install that rewrites a tracked file):\n${status.split("\n").slice(0, 20).join("\n")}`,
     );
-  console.log(`[copybara] ${REPO}: it installs, builds and deploys (dry run), and stays clean`);
+  console.log(`[copybara] core: it installs, builds and deploys (dry run), and stays clean`);
 }
 
 /**
- * The copy is in sync when its head's tree hash equals the hash of the folder Copybara wrote for
+ * A copy is in sync when its head's tree hash equals the hash of the folder Copybara wrote for
  * `sha`. A git tree hash is a hash of the content alone, so equal hashes mean every file is the
  * same, and a file added by hand shows up too. Only the copy's head commit and its trees are
  * fetched, and its `GitOrigin-RevId` trailer must name the iterate/iterate commit it came from.
  */
 async function checkCopy(input: {
+  copy: string;
   sha: string;
   expected: string;
   withToken: string[];
   work: string;
 }) {
-  const gitDir = join(input.work, `${REPO}.git`);
+  const url = urlOf(input.copy);
+  const gitDir = join(input.work, `${input.copy}.git`);
   const git = (...args: string[]) =>
     output("git", ["--git-dir", gitDir, ...args], {
-      env: { ...process.env, GIT_INDEX_FILE: join(input.work, `${REPO}.index`) },
+      env: { ...process.env, GIT_INDEX_FILE: join(input.work, `${input.copy}.index`) },
     });
   await run("git", ["init", "--quiet", "--bare", gitDir]);
   await git(
@@ -253,7 +265,7 @@ async function checkCopy(input: {
     "--no-tags",
     "--depth=1",
     "--filter=blob:none",
-    COPY_URL,
+    url,
     "main",
   );
   const copiedCommit = await git(
@@ -263,16 +275,16 @@ async function checkCopy(input: {
     "FETCH_HEAD",
   );
   if (!/^[0-9a-f]{40}$/.test(copiedCommit))
-    throw new Error(`${COPY_URL}'s main names no GitOrigin-RevId: ${JSON.stringify(copiedCommit)}`);
+    throw new Error(`${url}'s main names no GitOrigin-RevId: ${JSON.stringify(copiedCommit)}`);
   const head = await git("rev-parse", "FETCH_HEAD");
   const tree = await git("rev-parse", "FETCH_HEAD^{tree}");
   await git("--work-tree", input.expected, "add", "--all", ".");
   const expectedTree = await git("write-tree");
   if (tree !== expectedTree)
     throw new Error(
-      `${COPY_URL}/commit/${head} is not what ${input.sha} should copy: ${await git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
+      `${url}/commit/${head} is not what ${input.sha} should copy: ${await git("diff-tree", "-r", "--name-status", expectedTree, tree)}`,
     );
-  console.log(`[copybara] in sync: ${COPY_URL}/commit/${head} is ${input.sha}'s (tree ${tree})`);
+  console.log(`[copybara] in sync: ${url}/commit/${head} is ${input.sha}'s (tree ${tree})`);
 }
 
 /** The pinned Copybara release's jar, downloaded once per machine and checked against its SHA-256. */
@@ -295,14 +307,14 @@ async function copybaraJar() {
   return jar;
 }
 
-/** The copy's workspace packages. */
-const OS_PACKAGES = ["core/os", "core/lib"];
-const OS_WORKSPACE_HEADER =
-  "# iterate/os's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for\n" +
+/** iterate/core's workspace packages. */
+const CORE_PACKAGES = ["core/os", "core/lib"];
+const CORE_WORKSPACE_HEADER =
+  "# iterate/core's workspace: generated in iterate's own repo from its pnpm-workspace.yaml, for\n" +
   "# these packages alone, with the same settings and the catalog trimmed to what they use.\n";
 
 /**
- * Generates the copy's pnpm-workspace.yaml and pnpm-lock.yaml into copybara/os/: this repo's two,
+ * Generates iterate/core's pnpm-workspace.yaml and pnpm-lock.yaml into copybara/core/: this repo's two,
  * cut down to core/os and core/lib. With `check`, fails if the committed ones are out of date.
  *
  * How: pnpm makes them in a scratch folder (`pnpm install --lockfile-only` with only the copy's
@@ -310,16 +322,16 @@ const OS_WORKSPACE_HEADER =
  * checkSubset proves the copy resolves nothing this repo doesn't.
  */
 export async function workspaceFiles(options: {
-  /** Fail when copybara/os/'s files are out of date, instead of writing them. */
+  /** Fail when copybara/core/'s files are out of date, instead of writing them. */
   check?: boolean;
 }) {
-  const out = join(REPO_ROOT, "copybara/os");
+  const out = join(REPO_ROOT, "copybara/core");
   const scratch = mkdtempSync(join(tmpdir(), "copybara-workspace-"));
   try {
     cpSync(join(out, "package.json"), join(scratch, "package.json"));
     cpSync(join(REPO_ROOT, "pnpm-lock.yaml"), join(scratch, "pnpm-lock.yaml"));
     cpSync(join(REPO_ROOT, "patches"), join(scratch, "patches"), { recursive: true });
-    for (const pkg of OS_PACKAGES) {
+    for (const pkg of CORE_PACKAGES) {
       mkdirSync(join(scratch, pkg), { recursive: true });
       cpSync(join(REPO_ROOT, pkg, "package.json"), join(scratch, pkg, "package.json"));
     }
@@ -331,7 +343,7 @@ export async function workspaceFiles(options: {
       join(scratch, "pnpm-workspace.yaml"),
       workspace.replace(
         packagesList,
-        `packages:\n${OS_PACKAGES.map((p) => `  - ${p}\n`).join("")}`,
+        `packages:\n${CORE_PACKAGES.map((p) => `  - ${p}\n`).join("")}`,
       ),
     );
     // With an empty metadata cache of its own, pnpm reads each package's manifest from the registry,
@@ -375,7 +387,7 @@ export async function workspaceFiles(options: {
     await lockfileOnly([]);
     const files = {
       "pnpm-workspace.yaml":
-        OS_WORKSPACE_HEADER + readFileSync(join(scratch, "pnpm-workspace.yaml"), "utf8"),
+        CORE_WORKSPACE_HEADER + readFileSync(join(scratch, "pnpm-workspace.yaml"), "utf8"),
       "pnpm-lock.yaml": readFileSync(join(scratch, "pnpm-lock.yaml"), "utf8"),
     };
     checkSubset(files);
@@ -398,12 +410,12 @@ export async function workspaceFiles(options: {
         ]).catch(() => {});
       }
       throw new Error(
-        `copybara/os/{${stale.map(([name]) => name).join(",")}} are out of date: run \`node scripts/ci/copybara.ts workspace-files\` and commit them`,
+        `copybara/core/{${stale.map(([name]) => name).join(",")}} are out of date: run \`node scripts/ci/copybara.ts workspace-files\` and commit them`,
       );
     }
     for (const [name, content] of stale) writeFileSync(join(out, name), content);
     console.log(
-      `[copybara] copybara/os/: ${stale.length === 0 ? "current" : `wrote ${stale.map(([name]) => name).join(", ")}`}`,
+      `[copybara] copybara/core/: ${stale.length === 0 ? "current" : `wrote ${stale.map(([name]) => name).join(", ")}`}`,
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -437,7 +449,7 @@ function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": s
         ([key, entry]) => !isDeepStrictEqual(ours.packages?.[key]?.resolution, entry.resolution),
       )
       .map(([key]) => `${key} is not locked here with the same integrity`),
-    ...OS_PACKAGES.flatMap((pkg) =>
+    ...CORE_PACKAGES.flatMap((pkg) =>
       Object.entries(theirs.importers[pkg] || {}).flatMap(([kind, dependencies]) =>
         Object.entries(dependencies)
           .filter(
@@ -463,17 +475,17 @@ function checkSubset(files: { "pnpm-workspace.yaml": string; "pnpm-lock.yaml": s
       devDependencies?: Record<string, string>;
     };
   const ourRoot = rootManifest(join(REPO_ROOT, "package.json"));
-  const theirRoot = rootManifest(join(REPO_ROOT, "copybara/os/package.json"));
+  const theirRoot = rootManifest(join(REPO_ROOT, "copybara/core/package.json"));
   if (theirRoot.packageManager !== ourRoot.packageManager)
     problems.push(`packageManager ${theirRoot.packageManager} is not ${ourRoot.packageManager}`);
   for (const [name, spec] of Object.entries(theirRoot.devDependencies || {}))
     if (ourRoot.devDependencies?.[name] !== spec)
       problems.push(
-        `copybara/os/package.json asks for ${name}@${spec}, this repo for ${ourRoot.devDependencies?.[name]}`,
+        `copybara/core/package.json asks for ${name}@${spec}, this repo for ${ourRoot.devDependencies?.[name]}`,
       );
   if (problems.length > 0)
     throw new Error(
-      `iterate/os's dependencies must be a subset of this repo's:\n${problems.join("\n")}`,
+      `iterate/core's dependencies must be a subset of this repo's:\n${problems.join("\n")}`,
     );
 }
 

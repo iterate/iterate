@@ -281,7 +281,7 @@ test.each(
       ? "steps.deploy.outcome != 'success' || (steps.check.outcome != 'success' && steps.check.outputs.paged != 'true')"
       : "steps.deploy.outcome != 'success'";
 
-  // Deploy OS's one other job copies core/ to iterate/os once the deploy succeeded
+  // Deploy OS's one other job updates the public copies once the deploy succeeded
   // (scripts/ci/copybara.ts); it never touches the deploy's own posts.
   expect(Object.keys(workflow.jobs)).toEqual(app === "os" ? ["deploy", "copybara"] : ["deploy"]);
   expect(steps.filter((step) => step.id === "deploy")).toHaveLength(1);
