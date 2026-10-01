@@ -19,12 +19,12 @@ apps/os iterate/metrics ─▶ Analytics Engine ─▶ health job, hourly ──
                            Analytics Engine ─▶ apps/admin /telemetry, health-job alerts
 ```
 
-| from the thing happening to       |                                                          |
-| --------------------------------- | -------------------------------------------------------- |
-| a queryable `events` row          | 1–2 minutes (the sink rolls every 60 s)                  |
-| a queryable `logs` or `spans` row | 3–5 minutes (Cloudflare posts OTLP about 2 minutes late) |
-| a queryable `metrics` row         | up to 2 hours (copied once an hour closes)               |
-| an Analytics Engine answer        | under 1 minute                                           |
+| from the thing happening to       |                                                                                                                                               |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| a queryable `events` row          | 1–2 minutes (the sink rolls every 60 s)                                                                                                       |
+| a queryable `logs` or `spans` row | 2.5–4.5 minutes, the same for both: Cloudflare posts a batch a minute, about 90 s after its newest record, and the sink takes about 75 s more |
+| a queryable `metrics` row         | up to 2 hours (copied once an hour closes)                                                                                                    |
+| an Analytics Engine answer        | under 1 minute                                                                                                                                |
 
 Out of scope: code a context loads through the Worker Loader exports no logs or spans (measured);
 its telemetry needs the loader's `tails`, a later step. Offloading a context's old events to R2
