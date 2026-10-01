@@ -223,11 +223,15 @@ prd):
 | Doppler          | project `telemetry` (the catalog token, the OTLP secret); `admin`'s `APP_CONFIG_METRICS__API_TOKEN`                    |
 | the health job   | two steps an hour: the alert check and the metrics copy                                                                |
 
-A `core/os` deployment takes part only when its `envs.ts` entry names a lake (`telemetry:`): it
-then gets the `EVENTS` and `METRICS` bindings and the two destinations. Without them, as on prd,
+A `core/os` deployment takes part only when its `APP_CONFIG` names the lake's two bindings:
+`telemetry: { eventsStreamBinding, metricsDatasetBinding }`. Unset, the default, it has no lake:
 the platform hook returns before it builds a row, `metrics` writes nothing, and what is left is a
 `WORKER_NAME` var, `iterate.project_id` and `iterate.path` on each context's spans, and one number
-kept per fan-out row.
+kept per fan-out row. A name the Worker holds no binding under throws at its first request, naming
+the field: a lake that silently received nothing would look like a quiet day. For iterate's own
+deployments the config generator writes `telemetry`, with the bindings and the two destinations,
+for an `envs.ts` entry that names a lake (`telemetry:`); prd's names none, and a self-hosted
+deployment's config has none of it.
 
 Nothing waits on telemetry and no failure of it reaches a caller: the hook's send is never awaited
 and its rejection is logged, a refused metric point is dropped, and the OTLP export is Cloudflare's

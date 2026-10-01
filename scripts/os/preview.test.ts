@@ -445,6 +445,7 @@ test("a deployment's core/os config parses as its worker parses it, with the two
     urls: { os: "https://pr3144-a1b2c3d-os.iterate-dev-preview.workers.dev" },
     login: { adminIssuer: "https://os.iterate.com", testEmailDomain: "preview.iterate.test" },
     admins: ["jonas@nustom.com", "misha@nustom.com", "admin@preview.iterate.test"],
+    telemetry: { eventsStreamBinding: "EVENTS", metricsDatasetBinding: "METRICS" },
   });
 });
 
@@ -477,7 +478,10 @@ test.for([
         traces: { destinations: ["telemetry-traces"] },
         logs: { destinations: ["telemetry-logs"] },
       },
-      vars: { WORKER_NAME: worker },
+      vars: {
+        WORKER_NAME: worker,
+        APP_CONFIG_TELEMETRY: '{"eventsStreamBinding":"EVENTS","metricsDatasetBinding":"METRICS"}',
+      },
     });
   },
 );
@@ -488,6 +492,7 @@ test("prd binds no telemetry and exports nowhere: its account has no lake yet", 
   expect(config).not.toHaveProperty("analytics_engine_datasets");
   expect(config.observability.traces).not.toHaveProperty("destinations");
   expect(config.observability.logs).not.toHaveProperty("destinations");
+  expect(config.vars).not.toHaveProperty("APP_CONFIG_TELEMETRY");
 });
 
 // Preview OS deploys of #2934, #2939 and #2943 (2026-09-24): the PR head's older lockfile, then

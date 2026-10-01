@@ -6,22 +6,36 @@
 // that reacts to a project's events starts here. The first sends each event to the telemetry
 // lake's `events` table (docs/telemetry.md#events).
 import type { StreamEvent } from "iterate/stream/processor";
-import type { BuildBuiltInsDeps } from "./context/built-ins.ts";
+import type { Pipeline } from "cloudflare:pipelines";
+import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
 
 /** A row over 1 MB fails its whole batch, so a payload is cut at half that
  *  (docs/telemetry.md#tables). */
 const EVENTS_PAYLOAD_MAX_BYTES = 512 * 1024;
 
+/** THE TELEMETRY LAKE'S BINDINGS on `env`, under the names the configuration gives them
+ *  (app-config.ts `telemetry`), where its parse found them; undefined where the deployment names
+ *  no lake. */
+export function telemetryBindingsOf(env: AppConfigEnv) {
+  const names = appConfigOf(env).telemetry;
+  if (!names) return undefined;
+  const bindings = env as unknown as Record<string, unknown>;
+  return {
+    eventsStream: bindings[names.eventsStreamBinding] as Pipeline,
+    metricsDataset: bindings[names.metricsDatasetBinding] as AnalyticsEngineDataset,
+  };
+}
+
 export function deliverToPlatformHook(
-  env: BuildBuiltInsDeps["env"],
+  lake: { eventsStream: Pipeline | undefined; worker: string },
   projectId: string,
   event: StreamEvent,
 ): void {
-  if (!env.EVENTS) return; // local dev and the tests bind no stream
-  const row = eventsRow(event, { worker: env.WORKER_NAME, projectId });
+  if (!lake.eventsStream) return; // the deployment names no lake (app-config.ts `telemetry`)
+  const row = eventsRow(event, { worker: lake.worker, projectId });
   // Never awaited (docs/telemetry.md#failures): an event in flight when the context resets is lost,
   // and this line says so.
-  void env.EVENTS.send([row]).catch((error: unknown) =>
+  void lake.eventsStream.send([row]).catch((error: unknown) =>
     console.error({
       event: "telemetry.send-failed",
       projectId,

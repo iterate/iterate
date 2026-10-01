@@ -468,6 +468,30 @@ test.for([
   else expect(parseAppConfig(vars)).toMatchObject({ contextBirthEvents: becomes });
 });
 
+// THE TELEMETRY LAKE, named by its bindings (the Worker checks they exist: `appConfigOf`, below).
+test.for([
+  {
+    name: "both names",
+    vars: {
+      ...MINIMAL,
+      APP_CONFIG_TELEMETRY: '{"eventsStreamBinding":"EVENTS","metricsDatasetBinding":"METRICS"}',
+    },
+    becomes: { eventsStreamBinding: "EVENTS", metricsDatasetBinding: "METRICS" },
+  },
+  {
+    name: "one name without the other is refused",
+    vars: { ...MINIMAL, APP_CONFIG_TELEMETRY: '{"eventsStreamBinding":"EVENTS"}' },
+    throws: /^APP_CONFIG telemetry\.metricsDatasetBinding/,
+  },
+])("parseAppConfig telemetry: $name", ({ vars, becomes, throws }) => {
+  if (throws) expect(() => parseAppConfig(vars)).toThrow(throws);
+  else expect(parseAppConfig(vars)).toMatchObject({ telemetry: becomes });
+});
+
+test("parseAppConfig telemetry: unset, the deployment has no lake", () => {
+  expect(parseAppConfig(MINIMAL)).not.toHaveProperty("telemetry");
+});
+
 test("parseAppConfig: a secret never prints", () => {
   const { secrets } = parseAppConfig(MINIMAL);
   expect(String(secrets.key)).toBe("REDACTED");
@@ -764,6 +788,23 @@ test("appConfigOf — once per env object: reads the version-metadata binding, b
   expect(appConfigOf(deployed)).toBe(appConfigOf(deployed)); // the same object, parsed once
   expect(appConfigOf(deployed)).not.toBe(appConfigOf(local));
 });
+test("appConfigOf: a telemetry lake whose bindings the Worker holds is taken; one it lacks throws at first use, naming the field and the binding", () => {
+  const lake = {
+    ...MINIMAL,
+    APP_CONFIG_TELEMETRY: '{"eventsStreamBinding":"EVENTS","metricsDatasetBinding":"METRICS"}',
+  };
+  const [both, one] = [
+    { ...lake, EVENTS: {}, METRICS: {} },
+    { ...lake, EVENTS: {} },
+  ];
+  expect(appConfigOf(both)).toMatchObject({
+    telemetry: { eventsStreamBinding: "EVENTS", metricsDatasetBinding: "METRICS" },
+  });
+  expect(() => appConfigOf(one)).toThrow(
+    /^APP_CONFIG telemetry\.metricsDatasetBinding \(APP_CONFIG_TELEMETRY__METRICS_DATASET_BINDING\): this Worker has no binding named "METRICS"$/,
+  );
+});
+
 test("appConfigOf — once per env object: a malformed field throws at first use, naming it", () => {
   expect(() => appConfigOf({ ...MINIMAL, APP_CONFIG_SECRETS__KEY: "" })).toThrow(
     /^APP_CONFIG secrets\.key \(APP_CONFIG_SECRETS__KEY\): required, but unset or blank$/,

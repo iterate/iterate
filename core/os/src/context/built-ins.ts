@@ -552,10 +552,12 @@ export interface BuildBuiltInsDeps {
     DB: D1Database;
     /** Email Sending — `itx.email`; absent where a deployment has no mailbox. */
     EMAIL?: SendEmail;
-    /** The telemetry lake's `events` stream and this Worker's name (the platform hook). */
-    EVENTS?: Pipeline;
+    /** This Worker's name: every row the platform hook sends carries it. */
     WORKER_NAME: string;
   };
+  /** The telemetry lake's `events` stream (app-config.ts `telemetryBindingsOf`), which the platform
+   *  hook sends every durable event to; unset where the deployment names no lake. */
+  telemetryEventsStream?: Pipeline;
   /** The deploy identity every loader cacheKey folds in (worker.ts `AppConfig`). */
   deployId: string;
   /** How projects are reached over HTTP (app-config.ts `urls.ingressRouting`) — `itx.url`. */
@@ -2042,7 +2044,11 @@ export function buildBuiltIns(deps: BuildBuiltInsDeps): Record<string, unknown> 
           "platformHook.deliverEvent",
           JSON.stringify(event),
         );
-        deliverToPlatformHook(env, projectId, event);
+        deliverToPlatformHook(
+          { eventsStream: deps.telemetryEventsStream, worker: env.WORKER_NAME },
+          projectId,
+          event,
+        );
       },
     },
     webhooks: {

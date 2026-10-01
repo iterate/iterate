@@ -169,7 +169,17 @@ function deploymentWranglerConfig(env: OsEnv) {
       { binding: "OAUTH_KV", ...(env.resources && { id: env.resources.oauthKvId }) },
       { binding: "ITX_KV", ...(env.resources && { id: env.resources.itxKvId }) },
     ],
-    vars: { WORKER_NAME: env.workerName, ...configVars(env) },
+    vars: {
+      WORKER_NAME: env.workerName,
+      ...configVars(env),
+      // the two bindings above, by name: the Worker refuses to start without them (src/app-config.ts)
+      ...(telemetry && {
+        APP_CONFIG_TELEMETRY: JSON.stringify({
+          eventsStreamBinding: "EVENTS",
+          metricsDatasetBinding: "METRICS",
+        }),
+      }),
+    },
   };
 }
 

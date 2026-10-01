@@ -22,6 +22,7 @@
 //     },
 //     secrets: { key, previousKey, adminBearer },
 //     contextBirthEvents,
+//     telemetry: { eventsStreamBinding, metricsDatasetBinding },
 //   }
 //
 // Any key can also be set ALONE as a var, the path joined by `__`: `APP_CONFIG_URLS__OS`,
@@ -418,6 +419,17 @@ export const AppConfig = z.object({
         }
       }),
     ),
+  /** THE TELEMETRY LAKE this deployment sends to (docs/telemetry.md), by the names of its bindings:
+   *  the Pipelines stream the platform hook sends every durable event to, and the Analytics Engine
+   *  dataset iterate/metrics writes. Unset ⇒ no lake: nothing is sent and nothing written. A name
+   *  the Worker has no binding under throws at its first use (`appConfigOf`): silence there would
+   *  look like a quiet day. */
+  telemetry: z
+    .object({
+      eventsStreamBinding: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+      metricsDatasetBinding: z.string({ error: REQUIRED }).trim().min(1, REQUIRED),
+    })
+    .optional(),
 });
 
 /** THE WORKER'S CONFIGURATION: the parsed object (secrets as `Redacted`), the ingress routing
@@ -547,6 +559,13 @@ export function appConfigOf(env: AppConfigEnv): AppConfig {
   let appConfig = appConfigByEnv.get(env);
   if (!appConfig) {
     appConfig = parseAppConfig(env, env.CF_VERSION_METADATA?.id?.trim() || "unversioned");
+    // Checked here, on the Worker's own env, and not in the parse: the deploy's scripts parse a
+    // deployment's configuration too, and hold no bindings.
+    for (const [key, binding] of Object.entries(appConfig.telemetry || {}))
+      if (!(env as Record<string, unknown>)[binding])
+        throw new Error(
+          `${fieldNameOf(["telemetry", key])}: this Worker has no binding named ${JSON.stringify(binding)}`,
+        );
     appConfigByEnv.set(env, appConfig);
   }
   return appConfig;

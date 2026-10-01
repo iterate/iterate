@@ -30,7 +30,6 @@ import {
   reportIssue,
 } from "iterate/lib";
 import { DurableObject, tracing } from "cloudflare:workers";
-import type { Pipeline } from "cloudflare:pipelines";
 import { metrics } from "iterate/metrics";
 import type { StreamEvent, StreamEventInput } from "iterate/stream/processor";
 import {
@@ -95,6 +94,7 @@ import {
 } from "./context/paths.ts";
 import { LEND_USE_HEADER, LENT_AS_HEADER, verifyLendUse } from "./secrets.ts";
 import { expressionFetchErrorAnswer } from "./unavailable.ts";
+import { telemetryBindingsOf } from "./platform-hook.ts";
 import {
   appConfigOf,
   iterateAppScopesOf,
@@ -230,11 +230,6 @@ export interface Env extends AppConfigEnv {
   /** This Worker's own name, which the runtime does not tell it: every config names it
    *  (scripts/generate-wrangler-config.ts), and every telemetry row carries it. */
   WORKER_NAME: string;
-  /** The telemetry lake (docs/telemetry.md): the `events` stream the platform hook sends every
-   *  durable event to (platform-hook.ts), and the Analytics Engine dataset iterate/metrics writes.
-   *  Bound where a deployment exports telemetry; local dev and the tests bind neither. */
-  EVENTS?: Pipeline;
-  METRICS?: AnalyticsEngineDataset;
 }
 
 /** How far the clock of the machine a context wakes on may be from the one it last ran on: a wake
@@ -299,6 +294,8 @@ export class IterateContextDurableObject extends DurableObject<Env> {
   }
   /** This deployment's configuration (worker.ts `appConfigOf`) — a malformed var throws here, naming it. */
   readonly #appConfig = appConfigOf(this.env);
+  /** The telemetry lake's bindings (docs/telemetry.md), where the configuration names one. */
+  readonly #telemetry = telemetryBindingsOf(this.env);
   /** This context's reach into its project (context/stateless-context.ts `contextReach`). */
   readonly #reach = contextReach({
     env: this.env,
@@ -1098,6 +1095,7 @@ export class IterateContextDurableObject extends DurableObject<Env> {
     iterateContextName: this.#durableObjectAddress.name,
     ai: itxAiFor(this.ctx, this.#durableObjectAddress.projectId),
     env: this.env,
+    telemetryEventsStream: this.#telemetry?.eventsStream,
     deployId: this.#appConfig.deployId,
     dashOrigin: this.#appConfig.urls.dash,
     platformAdmins: () => this.#appConfig.admins,
@@ -1248,10 +1246,13 @@ export class IterateContextDurableObject extends DurableObject<Env> {
       return this.#callerStorage.run(this.#withPlatformOrigin(caller), call);
     },
     abortIncarnation: (reason) => this.#abortAfterTheAnswer(reason),
-    metrics: metrics(this.env, {
-      projectId: this.#durableObjectAddress.projectId,
-      path: this.#durableObjectAddress.path,
-    }),
+    metrics: metrics(
+      { METRICS: this.#telemetry?.metricsDataset, WORKER_NAME: this.env.WORKER_NAME },
+      {
+        projectId: this.#durableObjectAddress.projectId,
+        path: this.#durableObjectAddress.path,
+      },
+    ),
   });
 
   // ── THE ONE ALARM (alarm-coordinator.ts): derived from five deadline sources, traced ──
