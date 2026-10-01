@@ -144,6 +144,38 @@ test.for([
     expected: { status: 200, logs: [1] },
   },
   {
+    name: "a row that a field no cut bounds takes over 1 MB is skipped, and the others land",
+    request: post(
+      "/v1/logs",
+      JSON.stringify(
+        lines(
+          {},
+          {
+            body: {
+              kvlistValue: {
+                values: [{ key: "event", value: { stringValue: "e".repeat(1_100_000) } }],
+              },
+            },
+          },
+          {},
+        ),
+      ),
+    ),
+    expected: {
+      status: 200,
+      logs: [2],
+      warned: [
+        {
+          event: "telemetry.records-skipped",
+          pathname: "/v1/logs",
+          skipped: 1,
+          landed: 2,
+          first: "a row over 1 MB, which no stream takes",
+        },
+      ],
+    },
+  },
+  {
     name: "a batch over a send's 5 MB goes in sends under it",
     request: post(
       "/v1/logs",

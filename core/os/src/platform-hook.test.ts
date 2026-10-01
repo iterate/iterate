@@ -131,7 +131,20 @@ test.for([
       { succeeds: true },
     ],
     sent: [[1], [2, 3, 4, 5, 6, 7, 8, 9], [10, 11, 12, 13, 14, 15, 16, 17]],
-    logged: [{ level: "warn", event: "telemetry.events-dropped", projectId: "prj_1", count: 3 }],
+    logged: [
+      // the first drop, as it happens: a send that never settled would start no other
+      { level: "warn", event: "telemetry.events-dropped", path: "/agents/web/1" },
+      { level: "warn", event: "telemetry.events-dropped", projectId: "prj_1", count: 3 },
+    ],
+  },
+  {
+    name: "a row over 1 MB, which would fail its whole send, is dropped: an event type of 1.1 MB",
+    steps: [{ events: [1] }, { events: [2], typeKb: 1100 }, { events: [3] }, { succeeds: true }],
+    sent: [[1], [3]],
+    logged: [
+      { level: "warn", event: "telemetry.events-dropped", path: "/agents/web/1" },
+      { level: "warn", event: "telemetry.events-dropped", projectId: "prj_1", count: 1 },
+    ],
   },
   {
     name: "a send a storage reset failed is the platform's failure, a warn, and the next goes",
@@ -198,7 +211,7 @@ function committed(overrides: Partial<Omit<StreamEvent, "payload">> & { payload?
 
 /** An outbox over a stream that answers no send until a step does. `run` takes a row's steps in
  *  turn, letting what each sets off land: `events` commits one event per offset, each with `kb` KB
- *  of payload; `succeeds` resolves the send that is out and `fails` rejects it with the error;
+ *  of payload and, with `typeKb`, a type that long; `succeeds` resolves the send that is out and `fails` rejects it with the error;
  *  after `throws`, `send` throws that instead of returning a promise. `sent` is every send's rows,
  *  by offset, and `logged` every console line, with its level. */
 function outboxRig() {
@@ -227,15 +240,22 @@ function outboxRig() {
       steps: {
         events?: number[];
         kb?: number;
+        typeKb?: number;
         succeeds?: boolean;
         fails?: Error;
         throws?: Error;
       }[],
     ) {
-      for (const { events = [], kb = 0, succeeds, fails, throws } of steps) {
+      for (const { events = [], kb = 0, typeKb, succeeds, fails, throws } of steps) {
         thrown = throws || thrown;
         for (const offset of events)
-          outbox(committed({ offset, payload: { text: "a".repeat(kb * 1000) } }));
+          outbox(
+            committed({
+              offset,
+              payload: { text: "a".repeat(kb * 1000) },
+              ...(typeKb && { type: "t".repeat(typeKb * 1000) }),
+            }),
+          );
         if (succeeds) out.shift()?.resolve();
         if (fails) out.shift()?.reject(fails);
         await new Promise((resolve) => setTimeout(resolve));

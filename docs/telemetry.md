@@ -51,7 +51,8 @@ FROM telemetry.events GROUP BY 1
 
 A row over 1 MB fails its whole batch, so a JSON column is cut to fit 512 KB as the row's JSON
 carries it, escaped (a value full of quotes is twice its size there), and `<column>_bytes` stays
-the whole value's size. Nothing is specific to one event type.
+the whole value's size. A row some other field still takes over 1 MB is not sent. Nothing is
+specific to one event type.
 
 ### events
 
@@ -209,13 +210,13 @@ Nothing waits on telemetry, and no failure of it reaches a caller.
   to 4 MB. A send that fails loses its rows and is logged under its kind
   (`telemetry.platform-failure-send`, `telemetry.deploy-reset-send`, or an issue); rows of a send
   that is out when the context resets are lost and nothing says so. An event that finds 8 MB
-  already waiting is dropped and counted (`telemetry.events-dropped`).
+  already waiting, or whose row is over 1 MB, is dropped and counted (`telemetry.events-dropped`).
 - **`apps/telemetry`** answers 503 when a send fails or the secret is wrong
   (`telemetry.secret-refused`), so Cloudflare sends the batch again (it did through a 12-minute
   outage) and rotating the secret loses nothing. A batch it cannot read at all is answered 400
   (`telemetry.batch-unreadable`), since sending it again cannot help; a record that does not parse
-  is skipped and counted (`telemetry.records-skipped`). A batch sent twice lands twice: dedupe on
-  each table's key.
+  or whose row is over 1 MB, is skipped and counted (`telemetry.records-skipped`). A batch sent
+  twice lands twice: dedupe on each table's key.
 - **A stream** accepts a row that breaks its schema and drops it silently, so tests check every row
   against its schema, and the health job alerts on dropped rows.
 - **The metrics copy** runs after the job's pages are posted. It copies the closed hours after a

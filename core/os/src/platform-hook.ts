@@ -15,6 +15,10 @@ import { appConfigOf, type AppConfigEnv } from "./app-config.ts";
  *  (docs/telemetry.md#tables). */
 const EVENTS_PAYLOAD_MAX_BYTES = 512 * 1024;
 
+/** A stream takes no row over 1 MB, and fails the whole send that carries one. The payload's cut
+ *  keeps a row under it unless another field is that big (an event type, a path). */
+const ROW_MAX_BYTES = 1_000_000;
+
 /** Pipelines takes at most 5 MB a send; this leaves room for the array around the rows, as
  *  apps/telemetry's sends do. */
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
@@ -36,8 +40,9 @@ const OUTBOX_MAX_BYTES = 8 * 1024 * 1024;
  * Nothing waits on a send and nothing a send does reaches the delivery loop. A send that fails is
  * logged (`logSendFailure`) and its rows are lost, as are the rows of a send that is out when the
  * context resets; the next send goes all the same. An event that finds OUTBOX_MAX_BYTES already
- * waiting is dropped, and the next send to start logs how many were. No timer: a pending one would
- * keep the Durable Object resident.
+ * waiting, or whose row is over ROW_MAX_BYTES, is dropped: the first drop is logged as it happens,
+ * since a send that never settles would start no other, and the next send to start logs how many
+ * there were. No timer: a pending one would keep the Durable Object resident.
  */
 export function eventsOutbox(lake: { eventsStream: Pipeline; worker: string; projectId: string }) {
   const waiting: { row: ReturnType<typeof eventsRow>; bytes: number }[] = [];
@@ -48,7 +53,7 @@ export function eventsOutbox(lake: { eventsStream: Pipeline; worker: string; pro
     if (dropped > 0) {
       console.warn({
         event: "telemetry.events-dropped",
-        message: "the events outbox was full: these events never reach the telemetry lake",
+        message: "these events never reach the telemetry lake",
         projectId: lake.projectId,
         count: dropped,
       });
@@ -74,8 +79,17 @@ export function eventsOutbox(lake: { eventsStream: Pipeline; worker: string; pro
   return (event: StreamEvent): void => {
     const row = eventsRow(event, lake);
     const bytes = jsonBytes(row) + 1; // and the comma after it
-    if (waitingBytes + bytes > OUTBOX_MAX_BYTES) {
-      dropped++;
+    if (bytes > ROW_MAX_BYTES || waitingBytes + bytes > OUTBOX_MAX_BYTES) {
+      if (dropped++ === 0)
+        console.warn({
+          event: "telemetry.events-dropped",
+          message:
+            bytes > ROW_MAX_BYTES
+              ? "an event's row is over 1 MB, which no stream takes"
+              : "the events outbox is full: events are dropped until a send settles",
+          projectId: lake.projectId,
+          path: event.path,
+        });
       return;
     }
     waiting.push({ row, bytes });

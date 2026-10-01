@@ -21,6 +21,10 @@ import { logRows, OtlpLogs, OtlpTraces, spanRows } from "./otlp.ts";
 /** Pipelines takes at most 5 MB a send; this leaves room for the array around the rows. */
 const SEND_MAX_BYTES = 4 * 1024 * 1024;
 
+/** A stream takes no row over 1 MB, and fails the whole send that carries one. The texts' cuts
+ *  (otlp.ts) keep a row far under it unless a field no cut bounds is that big (a span's name). */
+const ROW_MAX_BYTES = 1_000_000;
+
 export default {
   async fetch(request: Request, env) {
     const { pathname } = new URL(request.url);
@@ -53,12 +57,21 @@ export default {
         console.warn({ event: "telemetry.batch-unreadable", pathname, message });
       });
     if (!batch) return new Response(null, { status: 400 });
-    const { rows, skipped } = batch;
+    const encoder = new TextEncoder();
+    const sized = batch.rows.map((row) => ({
+      row,
+      bytes: encoder.encode(JSON.stringify(row)).byteLength + 1, // and the comma after it
+    }));
+    const rows = sized.filter(({ bytes }) => bytes <= ROW_MAX_BYTES);
+    const skipped = [
+      ...batch.skipped,
+      ...(rows.length < sized.length ? ["a row over 1 MB, which no stream takes"] : []),
+    ];
     if (skipped.length > 0)
       console.warn({
         event: "telemetry.records-skipped",
         pathname,
-        skipped: skipped.length,
+        skipped: batch.skipped.length + sized.length - rows.length,
         landed: rows.length,
         first: skipped[0],
       });
@@ -91,18 +104,16 @@ function secretMatches(given: string | null, secret: string | undefined) {
 }
 
 /** `rows` in sends of at most SEND_MAX_BYTES of JSON. */
-function* sends(rows: Record<string, unknown>[]) {
-  const encoder = new TextEncoder();
+function* sends(rows: { row: Record<string, unknown>; bytes: number }[]) {
   let chunk: Record<string, unknown>[] = [];
-  let bytes = 0;
-  for (const row of rows) {
-    const rowBytes = encoder.encode(JSON.stringify(row)).byteLength + 1;
-    if (chunk.length > 0 && bytes + rowBytes > SEND_MAX_BYTES) {
+  let chunkBytes = 0;
+  for (const { row, bytes } of rows) {
+    if (chunk.length > 0 && chunkBytes + bytes > SEND_MAX_BYTES) {
       yield chunk;
-      [chunk, bytes] = [[], 0];
+      [chunk, chunkBytes] = [[], 0];
     }
     chunk.push(row);
-    bytes += rowBytes;
+    chunkBytes += bytes;
   }
   if (chunk.length > 0) yield chunk;
 }
