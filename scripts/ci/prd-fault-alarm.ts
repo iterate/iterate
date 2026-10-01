@@ -509,7 +509,7 @@ type PageUpdate = {
  * What a window owes Slack. Each incident it sees that is open on a page counts there, and the page
  * is edited with the running count. An incident with no open incident joins today's page
  * (todaysPage), or opens a new one, unposted. So a day has one fault page, however many hosts a
- * scanner walks (2026-09-30: ten pages in two hours, one per window).
+ * scanner walks.
  *
  * A sighting pings when it is a burst or has a first-party host's visitor 5xx. The channel hears of
  * an incident first when it pings: a page still unposted is posted then (`posts`), and a posted
