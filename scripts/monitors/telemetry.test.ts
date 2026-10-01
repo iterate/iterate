@@ -10,6 +10,7 @@ import {
   evaluateRule,
   judgeTelemetry,
   pipelineFindings,
+  stalledSinkFindings,
   type AnalyticsEngineRow,
   type Finding,
 } from "./telemetry.ts";
@@ -157,6 +158,77 @@ test.for<{ name: string; groups: unknown[]; findings: Finding[] }>([
     { id: "e6b2", name: "telemetry_spike_logs_pipeline" },
   ];
   expect(droppedRowFindings(data, pipelines)).toEqual(findings);
+});
+
+// What each pipeline took in and what its sink wrote, as [pipelineId, records] pairs.
+test.for<{
+  name: string;
+  taken: [string, number][];
+  written: [string, number][];
+  findings: Finding[];
+}>([
+  {
+    name: "a quiet lake, nothing in and nothing written, is no finding",
+    taken: [],
+    written: [],
+    findings: [],
+  },
+  {
+    name: "a pipeline that took records in and wrote some is no finding",
+    taken: [["1a37", 9_000]],
+    written: [["1a37", 3_000]],
+    findings: [],
+  },
+  {
+    name: "a pipeline that took records in and whose sink wrote none is a finding",
+    taken: [["1a37", 9_000]],
+    written: [["1a37", 0]],
+    findings: [
+      {
+        key: "telemetry_metrics_pipeline's sink wrote nothing",
+        text: "telemetry_metrics_pipeline's sink wrote nothing of the records it took in the last 70 minutes",
+      },
+    ],
+  },
+  {
+    name: "a sink the dataset does not list at all wrote none",
+    taken: [["1a37", 12]],
+    written: [],
+    findings: [
+      {
+        key: "telemetry_metrics_pipeline's sink wrote nothing",
+        text: "telemetry_metrics_pipeline's sink wrote nothing of the records it took in the last 70 minutes",
+      },
+    ],
+  },
+  {
+    name: "another pipeline on the account is not the lake's",
+    taken: [["e6b2", 500]],
+    written: [],
+    findings: [],
+  },
+])("stalled sinks: $name", ({ taken, written, findings }) => {
+  const data = {
+    viewer: {
+      accounts: [
+        {
+          pipelinesOperatorAdaptiveGroups: taken.map(([pipelineId, recordsIn]) => ({
+            sum: { recordsIn },
+            dimensions: { pipelineId },
+          })),
+          pipelinesSinkAdaptiveGroups: written.map(([pipelineId, recordsWritten]) => ({
+            sum: { recordsWritten },
+            dimensions: { pipelineId },
+          })),
+        },
+      ],
+    },
+  };
+  const pipelines = [
+    { id: "1a37", name: "telemetry_metrics_pipeline" },
+    { id: "e6b2", name: "telemetry_spike_logs_pipeline" },
+  ];
+  expect(stalledSinkFindings(data, pipelines)).toEqual(findings);
 });
 
 test.for<{ name: string; destinations: unknown[]; findings: Finding[] }>([

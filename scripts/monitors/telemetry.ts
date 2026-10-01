@@ -4,11 +4,12 @@
 //                  Worker (envs.ts `alertRulesWorkerName`), against its line
 //   pipelines      each of the lake's four pipelines that is missing or not running
 //   dropped rows   Pipelines' user errors: rows one of the lake's streams accepted and dropped
+//   stalled sinks  each of the lake's pipelines that took records in and whose sink wrote none
 //   destinations   each of the lake's two OTLP destinations that is missing, disabled, or failing
 //                  (its `last_error`, set while a push fails)
-// The rules and the dropped rows look back LOOKBACK_MINUTES, the time since the run before; the
-// rest is the account's listings now. Nothing asks whether rows arrived lately: a dev lake is
-// quiet at night. One page, `telemetry`, is open while anything is red and names each finding
+// The rules, the dropped rows and the stalled sinks look back LOOKBACK_MINUTES, the time since the
+// run before; the rest is the account's listings now. Nothing asks whether rows arrived lately: a
+// dev lake is quiet at night. One page, `telemetry`, is open while anything is red and names each finding
 // (./page.ts `advance`): a finding the open page has not named escalates it. The hourly copy of the
 // metrics into the lake is ./metrics-copy.ts.
 import { z } from "zod";
@@ -137,10 +138,15 @@ export function pipelineFindings(pipelines: Pipeline[]): Finding[] {
   });
 }
 
-/** Pipelines' user errors since `$since`: the rows each pipeline dropped, by kind of error. */
-const DROPPED_ROWS = `query ($accountTag: string!, $since: Time!) { viewer { accounts(filter: { accountTag: $accountTag }) { pipelinesUserErrorsAdaptiveGroups(limit: 100, filter: { datetime_geq: $since }, orderBy: [count_DESC]) { count dimensions { pipelineId errorFamily errorType } } } } }`;
+/** What each pipeline did since `$since`: the rows it dropped, by kind of error (its user errors);
+ *  whether it took records in, up to `$settled`; and the records its sink wrote. */
+const PIPELINE_COUNTS = `query ($accountTag: string!, $since: Time!, $settled: Time!) { viewer { accounts(filter: { accountTag: $accountTag }) { pipelinesUserErrorsAdaptiveGroups(limit: 100, filter: { datetime_geq: $since }, orderBy: [count_DESC]) { count dimensions { pipelineId errorFamily errorType } } pipelinesOperatorAdaptiveGroups(limit: 100, filter: { datetime_geq: $since, datetime_leq: $settled }) { sum { recordsIn } dimensions { pipelineId } } pipelinesSinkAdaptiveGroups(limit: 100, filter: { datetime_geq: $since }) { sum { recordsWritten } dimensions { pipelineId } } } } }`;
 
-/** The data of Cloudflare's GraphQL answer to DROPPED_ROWS. */
+/** How long before the check a record must have come in to be owed a row by now: a sink writes
+ *  what it took when its file rolls, every 60 s (docs/telemetry.md "Settings"). */
+const SINK_SETTLE_MINUTES = 5;
+
+/** The dropped rows in the data of Cloudflare's GraphQL answer to PIPELINE_COUNTS. */
 const DroppedRows = z.object({
   viewer: z.object({
     accounts: z.array(
@@ -174,6 +180,54 @@ export function droppedRowFindings(data: unknown, pipelines: { id: string; name:
       const key = `${name} dropped rows (${dimensions.errorFamily}/${dimensions.errorType})`;
       return [{ key, text: `${key}: ${count} in the last ${LOOKBACK_MINUTES} minutes` }];
     }),
+  );
+}
+
+/** The records in and written in the data of Cloudflare's GraphQL answer to PIPELINE_COUNTS. */
+const SinkCounts = z.object({
+  viewer: z.object({
+    accounts: z.array(
+      z.object({
+        pipelinesOperatorAdaptiveGroups: z.array(
+          z.object({
+            sum: z.object({ recordsIn: z.number() }),
+            dimensions: z.object({ pipelineId: z.string() }),
+          }),
+        ),
+        pipelinesSinkAdaptiveGroups: z.array(
+          z.object({
+            sum: z.object({ recordsWritten: z.number() }),
+            dimensions: z.object({ pipelineId: z.string() }),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+
+/** Each of the lake's pipelines that took records in and whose sink wrote none. A sink that cannot
+ *  write (its catalog token revoked, the catalog down) drops nothing its stream reports and fails
+ *  no send: its table only goes quiet. Only whether records came in is read, never how many: the
+ *  dataset counts a record at each of a pipeline's stages. Pure. */
+export function stalledSinkFindings(data: unknown, pipelines: { id: string; name: string }[]) {
+  return SinkCounts.parse(data).viewer.accounts.flatMap((account) =>
+    pipelines
+      .filter(({ name }) => LAKE_PIPELINES.includes(name))
+      .flatMap(({ id, name }): Finding[] => {
+        const of = (group: { dimensions: { pipelineId: string } }) =>
+          group.dimensions.pipelineId === id;
+        const tookRecordsIn = account.pipelinesOperatorAdaptiveGroups.some(
+          (group) => of(group) && group.sum.recordsIn > 0,
+        );
+        const wrote = account.pipelinesSinkAdaptiveGroups.some(
+          (group) => of(group) && group.sum.recordsWritten > 0,
+        );
+        if (!tookRecordsIn || wrote) return [];
+        const key = `${name}'s sink wrote nothing`;
+        return [
+          { key, text: `${key} of the records it took in the last ${LOOKBACK_MINUTES} minutes` },
+        ];
+      }),
   );
 }
 
@@ -227,19 +281,21 @@ async function findingsOf(env: TelemetryEnv, now: Date) {
     ),
   );
   const pipelines = await cf<Pipeline[]>(`${account}/pipelines/v1/pipelines?per_page=100`);
-  const dropped = await cfGraphql<unknown>({
+  const counts = await cfGraphql<unknown>({
     apiToken,
-    query: DROPPED_ROWS,
+    query: PIPELINE_COUNTS,
     variables: {
       accountTag: env.cloudflareAccountId,
       since: new Date(now.getTime() - LOOKBACK_MINUTES * 60_000).toISOString(),
+      settled: new Date(now.getTime() - SINK_SETTLE_MINUTES * 60_000).toISOString(),
     },
   });
   const destinations = await cf<unknown>(`${account}/workers/observability/destinations`);
   return [
     ...rules.flat(),
     ...pipelineFindings(pipelines),
-    ...droppedRowFindings(dropped, pipelines),
+    ...droppedRowFindings(counts, pipelines),
+    ...stalledSinkFindings(counts, pipelines),
     ...destinationFindings(destinations),
   ];
 }
