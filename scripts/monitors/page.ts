@@ -9,8 +9,9 @@ export type PageState = z.infer<typeof PageState>;
 /** What a signal's verdict owes the channel (`decide`):
  *    post      open a page
  *    edit      edit the open page in place, which notifies nobody
- *    escalate  edit it and reply in its thread: it got worse
- *    resolve   reply `✅ resolved: …` in its thread and mark its first line resolved
+ *    escalate  edit it and reply in its thread, with both mentions: it got worse
+ *    resolve   edit it to say resolved and why (../ci/slack.ts `resolvedPageText`), which
+ *              notifies nobody
  *    replace   resolve the open page and open another: red and unjudged are two incidents, so an
  *              unjudged page never hides a red one */
 export type PageAction = "post" | "edit" | "escalate" | "resolve" | "replace";
@@ -74,8 +75,6 @@ export type PageUpdate =
       page: PageContent;
       /** The thread reply: what got worse. */
       news: string;
-      /** Whether the reply is also sent to the channel. */
-      broadcast: boolean;
     }
   | { signal: string; kind: "resolve"; why: string }
   | { signal: string; kind: "replace"; why: string; page: PageContent };

@@ -4,12 +4,13 @@
 // most requests green through a Cloudflare fault, so the heals and errors it logs are the only sign.
 //
 // Each fault is an incident, keyed by its cause: a deploy's reset or version skew in a Worker, a
-// visitor 5xx's host, a healed facet's name or an error message. The incidents a run opens share
-// one page (slack.ts pageText), which later runs edit in place with each incident's running count
-// and when it was last seen. The page's thread hears only of a change of state, each reply
-// mentioning Jonas and Misha: an incident grown tenfold or back in a burst after an hour's quiet
-// (both broadcast to the channel), and the page's resolution once its last incident has gone a day
-// unseen. An incident seen after it closed opens a new page.
+// visitor 5xx's host, a healed facet's name or an error message. A UTC day has one page
+// (slack.ts pageText): the first run that sees an incident that day posts it, and later runs edit it
+// in place with each incident's running count and when it was last seen, new incidents included.
+// The page's thread hears only of a change of state, each reply mentioning Jonas and Misha and
+// staying in the thread: a new incident in a burst, an incident grown tenfold, or back in a burst
+// after an hour's quiet. Once its last incident has gone a day unseen, the page is edited resolved,
+// which notifies nobody. An incident seen after it closed joins that day's page.
 //
 // The memory is the run's `prd-fault-alarm-state` artifact: where the next read starts, and the
 // open pages with their incidents. Only a run on main posts and keeps it; any other run prints what
@@ -439,10 +440,13 @@ type PageUpdate = {
 /**
  * What a window owes Slack. Each incident it sees that is open on a page counts there: the page is
  * edited with the running count, and its thread hears of a change of state — grown tenfold since
- * the channel last heard, or back in a burst after an hour's quiet (at most every six hours) —
- * broadcast to the channel. An incident unseen for a day closes; a page whose incidents all closed
- * is `resolved` (slack.ts resolvePage) and leaves the state. The incidents with no open page open
- * one new page. `pages` is the next state's open pages, the new one to be added once posted. Pure.
+ * the channel last heard, or back in a burst after an hour's quiet (at most every six hours). An
+ * incident with no open incident joins the open page first posted the same UTC day (todaysPage),
+ * by an edit, and its thread hears of it when it came in a burst; with no such page, those
+ * incidents open one new page. So a day has one fault page, however many hosts a scanner walks.
+ * An incident unseen for a day closes; a page whose incidents all closed is `resolved` (slack.ts
+ * resolvePage) and leaves the state. `pages` is the next state's open pages, the new one to be
+ * added once posted. Pure.
  */
 export function triageIncidents(
   reading: FaultReading,
@@ -457,10 +461,11 @@ export function triageIncidents(
       if (now - Date.parse(incident.lastSeen) >= CLOSE_AFTER_MS) incident.closed = true;
   const opened: Record<string, Incident> = {};
   const replies = new Map<string, string[]>();
+  const today = todaysPage(pages, window.to);
   for (const [key, sighting] of incidentsOf(reading)) {
     const page = pages.find((open) => open.incidents[key]?.closed === false);
     if (!page) {
-      opened[key] = {
+      const incident = {
         ...sighting,
         told: sighting.count,
         firstSeen: window.to.toISOString(),
@@ -468,6 +473,13 @@ export function triageIncidents(
         back: null,
         closed: false,
       };
+      if (!today) {
+        opened[key] = incident;
+        continue;
+      }
+      today.incidents[key] = incident;
+      if (sighting.count >= BURST)
+        replies.set(today.ts, [...(replies.get(today.ts) ?? []), `• new: ${describe(sighting)}`]);
       continue;
     }
     const incident = page.incidents[key]!;
@@ -524,7 +536,7 @@ export function triageIncidents(
               ),
               ...lines,
             ].join("\n"),
-            broadcast: true,
+            broadcast: false,
           }
         : null,
     });
@@ -539,6 +551,19 @@ export function triageIncidents(
     resolved,
     pages: open,
   };
+}
+
+/** The open page the window's new incidents join: the newest one first posted on `to`'s UTC day,
+ *  by its earliest incident. Pure. */
+function todaysPage(pages: Page[], to: Date) {
+  const day = to.toISOString().slice(0, 10);
+  return pages.findLast(
+    (page) =>
+      Object.values(page.incidents)
+        .map((incident) => incident.firstSeen)
+        .sort()[0]
+        ?.slice(0, 10) === day,
+  );
 }
 
 /** An incident in words: `<what>: <label> <count>`, a cause's with its visitor 5xx by host, at most

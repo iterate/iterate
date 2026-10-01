@@ -8,8 +8,9 @@
 //                   E2E tests and Browser specs all passed. Its page names the failed jobs and the
 //                   failing rows.
 //   slow e2e rows   the rows tagged `slow` in that run's E2E tests job, which most PRs skip
-//                   (docs/testing.md#slow-rows): a suite of their own, so a slow row that breaks while
-//                   main is already red still pages.
+//                   (docs/testing.md#slow-rows): a suite of their own, but a red slow row fails E2E
+//                   tests, so while main e2e is red their red verdict has no page: main e2e's page
+//                   names the row, and its escalation a slow row that breaks later (`heldOnMainPage`).
 //   real-model e2e  the `REAL:` rows of each settled scheduled or push run of OS real model
 //                   (.depot/workflows/os-real-model.yml).
 //
@@ -254,7 +255,6 @@ export function suiteUpdate(input: {
         kind,
         page,
         news: `${suite} has new failures at ${commit}: ${advanced.news.join("; ")}`,
-        broadcast: false,
       },
       memory,
     };
@@ -341,10 +341,11 @@ async function judgeEachRun(
 /** Judge each push run of Main OS e2e that `memory` has not, the settled ones and then `current`
  *  (`judgeEachRun`): main e2e from its jobs, and its slow rows from its E2E tests job's suite
  *  summary, which a suite whose deploy did not finish never wrote (and `broken` when the E2E tests
- *  job ran but its summary proves nothing about them). When Depot still lists a deploy or
- *  suite job of `current` as queued or running, that run has not settled, and judging it throws. An
- *  older run Depot lists as finished or failed with such a job (one Depot failed before its jobs
- *  started) has no verdict, and the state moves past it. */
+ *  job ran but its summary proves nothing about them), held on main e2e's page while both are red
+ *  (`heldOnMainPage`). When Depot still lists a deploy or suite job of `current` as queued or
+ *  running, that run has not settled, and judging it throws. An older run Depot lists as finished
+ *  or failed with such a job (one Depot failed before its jobs started) has no verdict, and the
+ *  state moves past it. */
 export async function checkMainE2e(input: {
   depot: DepotApi;
   memory: E2eMemory;
@@ -432,14 +433,34 @@ export async function checkMainE2e(input: {
         runUrl: depotWorkflowUrl(run.workflowId),
         testRun: input.testRun,
       });
+      const held = main.memory?.state === "red" && slowRows.memory?.state === "red";
       return {
-        updates: [main.update, slowRows.update].filter((update) => !!update),
+        updates: [
+          main.update,
+          held ? heldOnMainPage(slowRows.update, commit) : slowRows.update,
+        ].filter((update) => !!update),
         // a run whose verdict is none leaves the suite's memory standing
         suites: { ...suites, "main e2e": main.memory, "slow e2e rows": slowRows.memory },
         failures: [],
       };
     },
   );
+}
+
+/** Slow e2e rows' update at a run where it and main e2e are both red (the header says why): none,
+ *  or, for a replacement of its unjudged page, that page's resolution. Its memory advances all the
+ *  same, so once main e2e is green its next update finds no open page and posts one if it is still
+ *  red (./health.ts `sendUpdates`). Pure. */
+function heldOnMainPage(
+  update: PageUpdate | null,
+  commit: { sha: string; subject: string },
+): PageUpdate | null {
+  if (update?.kind !== "replace") return null;
+  return {
+    signal: update.signal,
+    kind: "resolve",
+    why: `${update.signal} judged again at ${commitText(commit)}: red, on main e2e's page`,
+  };
 }
 
 /** Judge the `REAL:` rows of each settled scheduled or push run of OS real model that `memory` has

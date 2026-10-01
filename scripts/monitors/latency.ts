@@ -445,7 +445,6 @@ export function renderPage(input: {
       kind: "escalate",
       page,
       news: `latency: ${input.turnedRed.join(", ")} over its lines too at ${commit}`,
-      broadcast: false,
     };
   if (input.kind === "replace")
     throw new Error("latency is red or green: it has no unjudged page to replace");

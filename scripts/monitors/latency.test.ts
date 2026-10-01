@@ -636,7 +636,6 @@ test.for([
     expected: {
       kind: "escalate",
       news: "latency: rules.300.newest over its lines too at `3b6b1c8b0` (A &lt;change&gt;)",
-      broadcast: false,
     },
   },
   {
