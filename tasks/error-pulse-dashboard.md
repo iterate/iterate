@@ -5,8 +5,9 @@ size: large
 
 # #error-pulse: fewer pings, one daily dashboard
 
-Status: PR 1 (stop the worst noise, #3502) is done and in review; only the one-off cleanup of stale
-pages waits on Misha. PR 2 (the daily dashboard) is stacked on it: designed below, being built. The iterate.com site fix is live
+Status: PR 1 (stop the worst noise, #3502) is done and ready for review; the stale pages are
+cleaned up. PR 2 (the daily dashboard, #3504) is built and in review: every poster pages in the
+dashboard's thread and keeps its row. The iterate.com site fix is live
 (config repo commit 528dc1b).
 
 ## Why
@@ -76,7 +77,10 @@ Assumptions (mine, not Misha's; flag if wrong):
 - [x] health: PR time to green pages only past its line by more than 10% _ttg.ts `LINES.margin`,
       `judge(summary, paged)`; resolves under the plain line_
 - [x] docs/depot-ci.md "Slack channels" and "Health" say what changed
-- [ ] once merged (needs Misha's yes): edit the 34 stale 🚨 pages to ✅ resolved, no replies
+- [x] once merged (needs Misha's yes): edit the 34 stale 🚨 pages to ✅ resolved, no replies _done
+      2026-10-01 with Misha's yes, before merging: 157 top-level 🚨/🔴 pages of the last 30 days
+      (GitHub Actions-era e2e posts and old main e2e pages included) edited resolved; the 4 live
+      ones kept (preview sweep, prd: 33 errors, real-model e2e, today's PR time to green)_
 
 ## PR 2: the daily dashboard (stacked on PR 1)
 
@@ -148,8 +152,8 @@ Design (from mapping every poster, 2026-10-01):
 - [x] `dashboard.ts close-legacy-pages`: list the top-level 🚨 pages nothing tracks; `--resolve`
       edits them resolved (run only with Misha's yes)
 - [x] docs/depot-ci.md "Slack channels" rewritten around the dashboard
-- [ ] fold quiet green rows into one line? (asked Misha after the DM preview, 2026-10-01)
-- [ ] pin the dashboard: needs the Slack app reinstalled with `pins:write`
+- [ ] ~~fold quiet green rows into one line~~ _Misha, 2026-10-01: a line per row is fine for now_
+- [ ] ~~pin the dashboard~~ _Misha, 2026-10-01: no need for a real pin_
 
 ## iterate.com site (the iterate project's config repo)
 
