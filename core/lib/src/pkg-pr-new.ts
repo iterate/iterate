@@ -9,15 +9,24 @@
 import { z } from "zod";
 import { fetchRetryingPlatformFailures, UPSTREAM_ONCE } from "./platform-retry.ts";
 
-/** A pkg.pr.new version of package `name`, in parts, or undefined for any other version: an npm
- *  range, an exact version or a dist-tag, and a pkg.pr.new URL of another shape or package. */
-export function pkgPrNewVersionOf(name: string, version: string) {
+/** A pkg.pr.new build as its URL names it, in parts, or undefined for any other version and for a
+ *  pkg.pr.new URL of another shape. A package.json may list it under another name: an alias, as npm
+ *  installs a tarball URL under the name it is listed by. */
+export function pkgPrNewBuildOf(version: string) {
   if (!version.startsWith("https://pkg.pr.new/")) return undefined;
   const [owner, repo, ...rest] = new URL(version).pathname.slice(1).split("/");
   const listed = rest.join("/");
-  const ref = listed.startsWith(`${name}@`) ? listed.slice(name.length + 1) : "";
-  if (!owner || !repo || !ref) return undefined;
-  return { owner, repo, ref };
+  // the `@` before the ref, after a scope's own
+  const at = listed.indexOf("@", 1);
+  if (!owner || !repo || at < 0 || at === listed.length - 1) return undefined;
+  return { owner, repo, name: listed.slice(0, at), ref: listed.slice(at + 1) };
+}
+
+/** A pkg.pr.new version of package `name`, in parts, or undefined for any other version: an npm
+ *  range, an exact version or a dist-tag, and a pkg.pr.new URL of another shape or package. */
+export function pkgPrNewVersionOf(name: string, version: string) {
+  const build = pkgPrNewBuildOf(version);
+  return build?.name === name ? build : undefined;
 }
 
 /** Whether a pkg.pr.new ref names one build: all 40 hex digits of a commit. A branch or a PR number

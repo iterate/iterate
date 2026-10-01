@@ -21,7 +21,7 @@ test.for([
   ["a commit", "@iterate-com/agents", agentsAt(commit)],
   ["an npm range", "hono", "^4"],
   ["a dist-tag", "hono", "latest"],
-  ["a URL of another package, which the loader refuses", "@iterate-com/voice", agentsAt("main")],
+  ["a URL of another package (an alias)", "@iterate-com/voice", agentsAt("main")],
 ])("%s is written as it is, and pkg.pr.new is never asked", async ([, name, version]) => {
   const head = vi.fn(async () => served(`iterate:iterate:${commit}`));
   expect(await pinPkgPrNewVersion(name, version, head)).toBe(version);
