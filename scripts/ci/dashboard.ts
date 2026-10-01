@@ -1,8 +1,7 @@
 // scripts/ci/dashboard.ts — #ERROR-PULSE'S DAILY DASHBOARD: one top-level message per UTC day, one row
 // per signal, edited in place by every poster that judges one (an edit notifies nobody). Pages are
 // replies in its thread (./slack.ts `postPage`), so the channel's top level is one readable message a
-// day. It exists because a page per incident made the channel unreadable: on 2026-10-01, 38 messages
-// still said 🚨 and 4 were live.
+// day. It exists because a top-level page per incident makes the channel unreadable at a glance.
 //
 //   📟 error-pulse · Thu 1 Oct · 15:02 UTC
 //   🔴 main e2e: red at `916a48f20` (packages/ui is a shadcn registry…)
@@ -215,9 +214,9 @@ export async function closeLegacyPages(options: { resolve?: boolean; sinceDays?:
 }
 
 /**
- * The top-level pages this bot posted before the dashboard that still say 🚨, oldest first: no
- * poster tracks the fault alarm's pages from before 2026-09-28, and the others resolve theirs as
- * they always did. With `resolve`, each is edited to say it is resolved, which notifies nobody.
+ * The top-level pages this bot posted before the dashboard that still say 🚨 or 🔴, oldest first:
+ * a page no poster's state or marker still names (an older format's, a lost state's) never
+ * resolves on its own. With `resolve`, each is edited to say it is resolved, which notifies nobody.
  */
 export async function legacyPages(
   slack: WebClient,
