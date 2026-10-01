@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
@@ -9,11 +9,11 @@ Misha decided on 2026-10-01: iterate/iterate becomes a public archive, and work 
 private iterate/private, created as one fresh initial commit (no shared history; PR numbers
 restart). These changes land on iterate/iterate first and behave the same there until the cutover.
 
-Status: built; PR #3507 green before the Access commits. Done: Depot and GitHub calls name the
-running repository, workflow YAML read with the job's token, release without tags, Copybara's
-per-run origin and re-seed (tested against the real jar), the MCP examples in core, and ci-reports
-behind Cloudflare Access, its application created and checked. Left: CI on the latest push, and at
-the cutover a GitHub token for private explainers.
+Status: done (iterate/iterate#3507). Depot and GitHub calls name the running repository, workflow
+YAML is read with the job's token, the release needs no tags, Copybara's origin is set per run and a
+copy re-seeds from a fresh history (tested against the real jar), the MCP examples ship in core, and
+ci-reports sits behind Cloudflare Access, its application created and checked. What the cutover
+itself still needs is listed under "For the cutover".
 
 Out of scope: package URLs (`tasks/package-urls-survive-repo-move.md`, in Misha's root checkout),
 kit firmware (its own repo later).
@@ -82,11 +82,12 @@ kit firmware (its own repo later).
 - [x] create the `ci-reports` Access application (worker destination, allow `nustom.com`), with
       Misha's OK _(2026-10-01, app `37aa685f-1a68-454c-abb2-1a3529dc6749`; `/`, an artifact path, an
       explainer and a version preview URL each 302 to Access's sign-in)_
-- [ ] at the cutover: explainers read iterate/private with a GitHub token (`explainer.ts` reads
-      iterate/iterate anonymously until then)
+- [ ] ~~at the cutover: explainers read iterate/private with a GitHub token (`explainer.ts` reads
+      iterate/iterate anonymously until then)~~ _moved to "For the cutover": it needs iterate/private
+      and a token only Misha can create_
 - [x] MCP example in `core/os/examples/`, link, e2e, `core/os/README.md` _(`mcp-run-scripts.mjs`)_
 - [x] typecheck, lint, knip, format, tests _(locally; see notes for the two local-only failures)_
-- [ ] CI green on the PR
+- [x] CI green on the PR _(merged once green, auto-merge)_
 
 ## ci-reports after the move
 
