@@ -345,6 +345,17 @@ test("words sent while a script runs are answered at once: the feed shows the re
     "Still waiting for go.",
   ]);
   await support.provide("itx.ai", ai);
+  // The script's `await itx.go.wait()` answers once the test calls `open()`. Not a KV key: Workers KV
+  // caches the script's first "not found" reads, for up to a minute after the put.
+  class Gate extends RpcTarget {
+    #opened = Promise.withResolvers<void>();
+    wait() {
+      return this.#opened.promise;
+    }
+    open() {
+      this.#opened.resolve();
+    }
+  }
   const go = new Gate();
   await support.provide("itx.go", go);
   await itx.agents.create("/agents/support");
@@ -810,15 +821,3 @@ test("a deleted agent's refusals keep neither the root nor the agent's context r
     agentWakes.map(() => []),
   );
 }, 90_000);
-
-/** Lent to a script as `itx.go`: its `await itx.go.wait()` answers once the test calls `open()`. Not a
- *  KV key: Workers KV caches the script's first "not found" reads, for up to a minute after the put. */
-class Gate extends RpcTarget {
-  #opened = Promise.withResolvers<void>();
-  wait() {
-    return this.#opened.promise;
-  }
-  open() {
-    this.#opened.resolve();
-  }
-}
